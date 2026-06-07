@@ -17,7 +17,16 @@ Point claude at it:
   NODE_EXTRA_CA_CERTS=.../certs/ca.pem \
   claude --remote-control phase0 --verbose
 """
-import argparse, datetime, os, select, socket, ssl, sys, threading
+
+import argparse
+import contextlib
+import datetime
+import os
+import select
+import socket
+import ssl
+import sys
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CERTS = os.path.join(HERE, "certs")
@@ -25,39 +34,49 @@ MITM_HOST = "api.anthropic.com"
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, default=8888)
-ap.add_argument("--logfile", default=os.path.join(HERE, "captures",
-                "mitm-" + datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + ".log"))
-ap.add_argument("--log-all-bodies", action="store_true",
-                help="log bodies for ALL paths (default: only /v1/code/*)")
+ap.add_argument(
+    "--logfile",
+    default=os.path.join(
+        HERE, "captures", "mitm-" + datetime.datetime.now().strftime("%Y%m%dT%H%M%S") + ".log"
+    ),
+)
+ap.add_argument(
+    "--log-all-bodies", action="store_true", help="log bodies for ALL paths (default: only /v1/code/*)"
+)
 args = ap.parse_args()
 os.makedirs(os.path.dirname(args.logfile), exist_ok=True)
 _loglock = threading.Lock()
 _logf = open(args.logfile, "a", buffering=1)
 
+
 def log(msg):
-    line = "[%s] %s" % (datetime.datetime.now().isoformat(), msg)
+    line = f"[{datetime.datetime.now().isoformat()}] {msg}"
     with _loglock:
-        sys.stdout.write(line + "\n"); sys.stdout.flush()
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
         _logf.write(line + "\n")
+
 
 def logblock(label, body):
     with _loglock:
         for sink in (sys.stdout, _logf):
-            sink.write("----- %s -----\n" % label)
+            sink.write(f"----- {label} -----\n")
             for ln in body.split("\n"):
                 sink.write("    " + ln + "\n")
         sys.stdout.flush()
 
+
 # ---- server-side TLS ctx (presents our leaf to claude) ----
 srv_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 srv_ctx.load_cert_chain(os.path.join(CERTS, "leaf.pem"), os.path.join(CERTS, "leaf.key"))
-srv_ctx.set_alpn_protocols(["http/1.1"])      # force HTTP/1.1 (avoid h2 MITM)
+srv_ctx.set_alpn_protocols(["http/1.1"])  # force HTTP/1.1 (avoid h2 MITM)
 
 # ---- client-side TLS ctx (we -> real upstream, verified) ----
 up_ctx = ssl.create_default_context()
 up_ctx.set_alpn_protocols(["http/1.1"])
 
 REDACT = ("authorization", "cookie", "x-api-key", "anthropic-")
+
 
 def dump_headers(raw_headers):
     out = []
@@ -68,6 +87,7 @@ def dump_headers(raw_headers):
         else:
             out.append(ln)
     return "\n".join(out)
+
 
 def recv_headers(sock):
     """Read until end of HTTP headers. Returns (head_bytes, leftover_body_bytes) or None."""
@@ -82,6 +102,7 @@ def recv_headers(sock):
     head, _, rest = buf.partition(b"\r\n\r\n")
     return head + b"\r\n\r\n", rest
 
+
 def parse_headers(head_bytes):
     text = head_bytes.decode("latin1")
     line, _, hdrs = text.partition("\r\n")
@@ -91,6 +112,7 @@ def parse_headers(head_bytes):
             k, v = ln.split(":", 1)
             h[k.strip().lower()] = v.strip()
     return line.strip(), hdrs.rstrip("\r\n"), h
+
 
 def read_body(sock, headers, already):
     """Read a request body given content-length / chunked. Returns full body bytes."""
@@ -113,19 +135,24 @@ def read_body(sock, headers, already):
         return body
     return already  # no body
 
+
 def force_close(hdrs, drop=()):
-    skip = set(("connection", "proxy-connection", "keep-alive")) | set(drop)
-    keep = [ln for ln in hdrs.split("\r\n")
-            if ln and ln.split(":", 1)[0].lower().strip() not in skip]
+    skip = {"connection", "proxy-connection", "keep-alive"} | set(drop)
+    keep = [ln for ln in hdrs.split("\r\n") if ln and ln.split(":", 1)[0].lower().strip() not in skip]
     keep.append("Connection: close")
     return "\r\n".join(keep)
 
+
 class Dechunker:
     """Incrementally decode HTTP chunked transfer-encoding for logging."""
+
     def __init__(self):
-        self.buf = b""; self.done = False
+        self.buf = b""
+        self.done = False
+
     def feed(self, data):
-        self.buf += data; out = b""
+        self.buf += data
+        out = b""
         while True:
             if b"\r\n" not in self.buf:
                 break
@@ -135,12 +162,14 @@ class Dechunker:
             except ValueError:
                 break
             if n == 0:
-                self.done = True; break
+                self.done = True
+                break
             if len(rest) < n + 2:
                 break
             out += rest[:n]
-            self.buf = rest[n + 2:]
+            self.buf = rest[n + 2 :]
         return out
+
 
 def handle_mitm(client_tls, conn_id):
     """One request/response over a MITM'd TLS connection, then close."""
@@ -154,12 +183,16 @@ def handle_mitm(client_tls, conn_id):
     is_rc = "/v1/code/" in path
     want_body = is_rc or args.log_all_bodies
 
-    log("REQ #%d %s %s://%s%s (host=%s, len=%d)" %
-        (conn_id, method, "https", MITM_HOST, path, H.get("host", ""), len(body)))
+    log(
+        "REQ #%d %s %s://%s%s (host=%s, len=%d)"
+        % (conn_id, method, "https", MITM_HOST, path, H.get("host", ""), len(body))
+    )
     logblock("REQ headers #%d" % conn_id, dump_headers(hdrs))
     if want_body and body:
-        try: logblock("REQ body #%d" % conn_id, body.decode("utf-8"))
-        except Exception: logblock("REQ body #%d (bytes)" % conn_id, repr(body[:4000]))
+        try:
+            logblock("REQ body #%d" % conn_id, body.decode("utf-8"))
+        except Exception:
+            logblock("REQ body #%d (bytes)" % conn_id, repr(body[:4000]))
 
     # connect to real upstream
     raw = socket.create_connection((MITM_HOST, 443), timeout=300)
@@ -171,13 +204,16 @@ def handle_mitm(client_tls, conn_id):
     # read response head
     rr = recv_headers(up)
     if not rr:
-        up.close(); return
+        up.close()
+        return
     rhead, rrest = rr
     statusline, rhdrs, RH = parse_headers(rhead)
     is_sse = "text/event-stream" in RH.get("content-type", "")
     is_chunked = RH.get("transfer-encoding", "").lower() == "chunked"
-    log("RESP #%d %s  (%s, ct=%s%s)" % (conn_id, statusline, path,
-        RH.get("content-type", ""), ", SSE" if is_sse else ""))
+    log(
+        "RESP #%d %s  (%s, ct=%s%s)"
+        % (conn_id, statusline, path, RH.get("content-type", ""), ", SSE" if is_sse else "")
+    )
     logblock("RESP headers #%d" % conn_id, dump_headers(rhdrs))
 
     client_tls.sendall((statusline + "\r\n" + force_close(rhdrs) + "\r\n\r\n").encode("latin1"))
@@ -185,6 +221,7 @@ def handle_mitm(client_tls, conn_id):
     dec = Dechunker() if is_chunked else None
     collected = bytearray()
     sse_buf = b""
+
     def decode(chunk):
         return dec.feed(chunk) if dec else chunk
 
@@ -207,28 +244,35 @@ def handle_mitm(client_tls, conn_id):
                 sse_buf += d
                 while b"\n\n" in sse_buf:
                     evt, sse_buf = sse_buf.split(b"\n\n", 1)
-                    logblock("SSE EVENT #%d (%s)" % (conn_id, path.split("/")[-1]),
-                             evt.decode("utf-8", "replace"))
+                    logblock(
+                        "SSE EVENT #%d (%s)" % (conn_id, path.split("/")[-1]), evt.decode("utf-8", "replace")
+                    )
             elif want_body:
                 collected += d
     up.close()
     if is_sse and sse_buf.strip():
         logblock("SSE TAIL #%d" % conn_id, sse_buf.decode("utf-8", "replace"))
     if want_body and not is_sse and collected:
-        try: logblock("RESP body #%d" % conn_id, bytes(collected).decode("utf-8"))
-        except Exception: logblock("RESP body #%d (bytes)" % conn_id, repr(bytes(collected)[:4000]))
+        try:
+            logblock("RESP body #%d" % conn_id, bytes(collected).decode("utf-8"))
+        except Exception:
+            logblock("RESP body #%d (bytes)" % conn_id, repr(bytes(collected)[:4000]))
+
 
 def blind_tunnel(client, host, port):
     try:
         up = socket.create_connection((host, port), timeout=30)
     except Exception as e:
-        log("tunnel connect failed %s:%s %s" % (host, port, e)); client.close(); return
+        log(f"tunnel connect failed {host}:{port} {e}")
+        client.close()
+        return
     client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
     socks = [client, up]
     try:
         while True:
             r, _, _ = select.select(socks, [], [], 60)
-            if not r: break
+            if not r:
+                break
             for s in r:
                 data = s.recv(65536)
                 if not data:
@@ -237,19 +281,26 @@ def blind_tunnel(client, host, port):
     except Exception:
         pass
     finally:
-        client.close(); up.close()
+        client.close()
+        up.close()
+
 
 _counter = [0]
+
+
 def handle(client):
     try:
         r = recv_headers(client)
         if not r:
-            client.close(); return
+            client.close()
+            return
         head, rest = r
         reqline = head.split(b"\r\n", 1)[0].decode("latin1")
         parts = reqline.split(" ")
         if parts[0] != "CONNECT":
-            log("non-CONNECT request ignored: %s" % reqline); client.close(); return
+            log(f"non-CONNECT request ignored: {reqline}")
+            client.close()
+            return
         hostport = parts[1]
         host, _, port = hostport.partition(":")
         port = int(port or 443)
@@ -258,7 +309,9 @@ def handle(client):
             try:
                 tls = srv_ctx.wrap_socket(client, server_side=True)
             except Exception as e:
-                log("TLS handshake with client failed: %s" % e); client.close(); return
+                log(f"TLS handshake with client failed: {e}")
+                client.close()
+                return
             _counter[0] += 1
             cid = _counter[0]
             try:
@@ -266,14 +319,15 @@ def handle(client):
             except Exception as e:
                 log("mitm error #%d: %s" % (cid, e))
             finally:
-                try: tls.close()
-                except Exception: pass
+                with contextlib.suppress(Exception):
+                    tls.close()
         else:
             blind_tunnel(client, host, port)
     except Exception as e:
-        log("handle error: %s" % e)
-        try: client.close()
-        except Exception: pass
+        log(f"handle error: {e}")
+        with contextlib.suppress(Exception):
+            client.close()
+
 
 def main():
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -284,6 +338,7 @@ def main():
     while True:
         c, _ = srv.accept()
         threading.Thread(target=handle, args=(c,), daemon=True).start()
+
 
 if __name__ == "__main__":
     main()

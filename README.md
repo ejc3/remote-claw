@@ -37,9 +37,13 @@ automated test.
 ```bash
 cd phase0
 ./remote-claw doctor      # check claude/openssl/certs/ports/auth
-./remote-claw up mysession   # relay + TUI; open http://127.0.0.1:9100/
-./remote-claw test        # automated round-trip test
+./remote-claw up mysession   # relay + TUI; prints a tokenised UI URL (:9100)
+./remote-claw test        # automated tests (e2e + two-surface)
 ```
+
+Hardened: stdlib-only `remote_claw` package, token-gated client face, secret-redacted
+logs, 0600 cert keys, graceful shutdown, unit + integration tests, and CI
+(`.github/workflows/ci.yml`). See [`phase0/README.md`](phase0/README.md).
 
 📄 **[`phase0/README.md`](phase0/README.md)** — how to run it ·
 **[`docs/phase0-findings.md`](docs/phase0-findings.md)** — the full reverse-engineered
