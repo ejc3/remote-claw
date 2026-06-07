@@ -49,7 +49,7 @@ metadata privacy (timing/sizes/seq are visible to the broker).
   │ claude --remote-control                  │         │  ingest Functions (auth: token) │        │  web app (Next.js) │
   │      ▲  MITM (phase0 core/mitm)          │  wss/   │  per-session Workflow (durable) │  SSE/  │  paste secret →    │
   │      │                                   │  https  │  ciphertext store (Redis/SS)    │ stream │  derive keys →     │
-  │ remote-claw serve --hostname <app> ──────┼────────▶│  realtime fan-out (stream/Ably) │◀──────▶│  decrypt & render  │
+  │ remote-claw serve --hostname <app> ──────┼────────▶│  live fan-out (SSE + workflow)   │◀──────▶│  decrypt & render  │
   │   (machine identity: secret S, 0600)     │ ciphertext only                          │        │  encrypt & send    │
   └──────────────────────────────────────────┘         └─────────────────────────────────┘        └────────────────────┘
         multiple such servers = multiple "spaces"
@@ -214,11 +214,15 @@ connect — verified: `replaysOnReconnect` / `backfill` / `catch-up` / `replayLo
      **Claude worker to replay** via the RC backfill mechanism (`replayLog` /
      `historical:true` events), ingests those, and relays them.
   Frames stream back as `historical`, then live tailing resumes. No cloud history.
-- **The cloud = relay + short live buffer only.** A per-session Vercel **Workflow
-  durable resumable stream** carries live ciphertext frames and lets a client
-  resume by `startIndex` after a brief disconnect (Ably rewind is the fallback).
-  Its 1–7 day retention is irrelevant because it is **not** the history store —
-  just an in-flight buffer.
+- **The cloud = relay + short live buffer only (Vercel-native, no third party).**
+  Live ciphertext frames go out over **SSE from a streaming Vercel Function**,
+  backed by the per-session **Workflow durable resumable stream**. When the SSE
+  connection hits Vercel's duration cap (or drops), the client simply
+  **reconnects and resumes by `seq`** — any gap is refilled by the wrapper's
+  `catch_up` (the wrapper is the history source, so we need no provider-side
+  message history). Trivial fallback if streaming is ever a problem: plain
+  polling `GET /messages?since=seq`. Stream retention (1–7 d) is irrelevant — it's
+  an in-flight buffer, not the record.
 - **The web client caches what it has seen** (IndexedDB, keyed by `seq`) purely as
   an optimization: a reconnect pulls only the delta; a fresh device asks the TUI
   for everything. The TUI stays authoritative.
@@ -258,26 +262,47 @@ nonces / stream reads break replay determinism).
    catch-up via message-passing; the Claude worker transcript is the deep-history
    fallback (RC backfill). Cloud is a dumb ciphertext pipe + short live buffer.
    Optional Upstash Redis ciphertext log can be added later for offline browsing.
-2. **Realtime transport → Vercel workflow durable streams, Ably fallback.** Spike
-   the native durable-stream multi-reader semantics; fall back to Ably (raw
-   SSE-over-HTTP, rewind) if needed.
+2. **Realtime transport → Vercel-native only (no third party).** SSE from a
+   streaming Function backed by the Workflow durable stream; client
+   reconnects and resumes by `seq` (gaps refilled by the wrapper's `catch_up`).
+   Plain polling `GET /messages?since=seq` is the trivial fallback. No Ably/Pusher.
 3. **Browser secret storage → `localStorage` + "forget" button** (with a clear
    risk warning); PIN-wrapped storage is a later option.
 4. **Web framework → Next.js on Vercel** (assumed; confirm if not).
 
-## 10. Phased plan
-- **P1 — Crypto core (shared).** `clawsec` module (TS + Python): secret gen/parse/
-  checksum, HKDF hierarchy, AES-GCM encrypt/decrypt, AAD, envelope format. Unit
-  tests + **cross-language test vectors** (TS encrypts → Python decrypts and vice
-  versa). No network.
-- **P2 — CLI: `identity`.** Generate/store `S`, derive ids, print `rc1_…`,
-  register host. Local only (mock app).
-- **P3 — Vercel app skeleton.** Ingest/read Functions + auth (`sha256(auth_token)`),
-  the chosen store (§9.1), and the per-session workflow with hook + durable stream.
-  Deploy; curl round-trip with hand-rolled ciphertext.
-- **P4 — CLI: `serve` relay.** Swap `client_api`→`vercel_relay`: encrypt worker
-  events → POST; subscribe inbound → decrypt → ingest. Reuse Phase 0 core/mitm.
-  End-to-end: a curl "web" drives a real Claude session through Vercel.
+## 10. Language & layout
+
+**TypeScript everywhere** — one language for the CLI wrapper (Node), the shared
+crypto, and the web app. No Python. The crypto core is genuinely shared code (both
+Node and the browser use the same WebCrypto API), so there are no cross-language
+test vectors to maintain. The Phase 0 Python relay (`phase0/remote_claw`) stays as
+the **reference implementation** of the Claude-interception protocol; v2
+reimplements that protocol fresh in Node/TS.
+
+Proposed monorepo (pnpm workspaces) in this repo:
+```
+packages/clawsec   shared crypto (TS, WebCrypto; runs in Node + browser)
+packages/cli       the Node CLI: `remote-claw identity` + `serve` (MITM + relay)
+apps/web           Next.js app (Vercel): API routes, workflow, web client UI
+phase0/            unchanged — the Python reference + protocol findings
+```
+
+## 11. Phased plan
+- **P1 — Crypto core.** `packages/clawsec` (TypeScript): secret gen/parse/checksum,
+  HKDF hierarchy, AES-256-GCM encrypt/decrypt, AAD, envelope format. Vitest unit
+  tests (incl. round-trip + tamper/AAD-rejection). No network. Runs in Node +
+  browser unchanged.
+- **P2 — CLI: `identity`.** `packages/cli` in Node/TS: generate/store `S`, derive
+  ids, print `rc1_…`, register host. Local only (mock app).
+- **P3 — Vercel app skeleton.** `apps/web` (Next.js): ingest/read API routes + auth
+  (`sha256(auth_token)`), per-session workflow with hook + durable stream, SSE
+  endpoint. Deploy; curl round-trip with hand-rolled ciphertext.
+- **P4 — CLI: `serve` relay.** Node/TS reimplementation of the Phase 0 MITM +
+  relay: terminate TLS with our leaf (worker trusts it via `NODE_EXTRA_CA_CERTS`),
+  intercept `/v1/code/sessions*`, pass `/v1/messages` through; encrypt worker
+  events → POST to the app; subscribe inbound (SSE) → decrypt → ingest; maintain
+  the per-session catch-up log. End-to-end: a curl "web" drives a real Claude
+  session through Vercel.
 - **P5 — Web client.** Paste/fragment secret, spaces list, session list, message
   view (history + live), send. Mobile/PWA.
 - **P6 — Multi-host + polish.** Add-host, friendly names, reconnect/resume, replay
@@ -286,7 +311,7 @@ nonces / stream reads break replay determinism).
   auth/abuse on ingest routes, replay-window correctness, at-least-once dedupe,
   rate-limiting, secret-handling hygiene.
 
-## 11. Risks / inherited fragility
+## 12. Risks / inherited fragility
 - **Anthropic RC interception** (the Phase 0 MITM of `/v1/code/sessions`, pinned to
   `claude` 2.1.168) underpins v2 too — it can break or be re-gated on any Claude
   upgrade. Keep the capture tool (`mitm/capture-proxy.py`) to re-verify.
@@ -302,13 +327,13 @@ nonces / stream reads break replay determinism).
 - **Vercel Queues / WDK surface** still moving (Queues beta); Workflows GA is
   stable — pin SDK versions, isolate behind a thin transport interface.
 
-## 12. Sources (verified 2026-06-07)
+## 13. Sources (verified 2026-06-07)
 - Vercel Workflows docs / concepts / pricing+limits — https://vercel.com/docs/workflows ·
   /workflows/concepts · /workflows/pricing (GA 2026-04-16; retention & caps as cited)
 - Workflow Development Kit (public beta 2025-10-23) — https://vercel.com/changelog/open-source-workflow-dev-kit-is-now-in-public-beta · https://workflow-sdk.dev
 - "A new programming model for durable execution" (GA) — https://vercel.com/blog/a-new-programming-model-for-durable-execution
 - Vercel Queues (public beta) — https://vercel.com/docs/queues
 - Storage: Upstash Redis / Neon via Vercel Marketplace (KV/Postgres retired 2024)
-- Realtime constraints (no native WS; SSE duration caps) — Vercel Functions docs; Ably SSE/history docs
+- Realtime constraints (no native WS; SSE duration caps) — Vercel Functions docs
 - HKDF RFC 5869; AES-GCM nonce limits (NIST SP 800-38D); WebCrypto SubtleCrypto
 - Prior art: Happy (https://github.com/slopus/happy ; security review Discussion #680 — server-side key handling = what to avoid); OpenCode E2EE RC proposal #15236 (secret-in-URL-fragment, blind relay)
