@@ -431,13 +431,19 @@ phase0/            unchanged — the Python reference + protocol findings
 ```
 
 ## 11. Phased plan
-- **P0.5 — Capture spike (DONE 2026-06-07).** Settled the open questions on `claude`
-  2.1.168: the RC-API-client bridge is *viable* (`phase0/spikes/rc_api_bridge.py`:
-  inject + cursor history + live client SSE all PASS) — but **rejected** because it
-  routes the remote channel through Anthropic's relay (§14). MITM is the chosen
-  path (Phase 0 already proved it end-to-end). **Remaining spike for P4:** confirm
-  the worker re-backfills `historical` frames to OUR relay on reconnect (WAL reseed
-  after a wrapper restart of a pre-existing session); harden there.
+- **P0.5 — Capture spikes (DONE 2026-06-07, all PASS).** Settled every open
+  TUI-side question on `claude` 2.1.168:
+  - `rc_api_bridge.py` — the RC-API-client bridge is *viable* but **rejected**
+    (routes remote through Anthropic's relay, §14). MITM is chosen.
+  - `tui_remote_control.py` — drove a **real interactive TUI** through our MITM and
+    proved all 6 claims: **C1** `/remote-control` (mid-session slash command) enables
+    RC on our relay; **C2** the wrapper receives the **prior** chat history (worker
+    backfill); **C3** a **generic client message reaches the real TUI and the reply
+    comes back**; **C4** the same exchange shows in the local TUI (one synced
+    session); **C5** kill **both** wrapper+CLI, reboot (`claude --continue` +
+    `/remote-control`) → the **full transcript recovers from claude's persisted
+    session** → both components are stateless / in-memory is sufficient. Verdict:
+    *TUI-SIDE MODEL FULLY VERIFIED*.
 - **P1 — Crypto core.** `packages/clawsec` (TypeScript): secret gen/parse/checksum,
   HKDF hierarchy, AES-256-GCM encrypt/decrypt, AAD, envelope format. Vitest unit
   tests (incl. round-trip + tamper/AAD-rejection). No network. Runs in Node +
