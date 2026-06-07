@@ -17,6 +17,10 @@ _REDACTIONS = [
     (re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)\S+"), r"\1***"),
     (re.compile(r"(?i)(\"?(?:access|refresh)_?token\"?\s*[:=]\s*\"?)[^\"\s,}]+"), r"\1***"),
     (re.compile(r"(?i)(\"?worker_jwt\"?\s*[:=]\s*\"?)[^\"\s,}]+"), r"\1***"),
+    # client access token carried in a URL query (?token=) or rc_token cookie
+    (re.compile(r"(?i)(token=)[A-Za-z0-9._-]+"), r"\1***"),
+    (re.compile(r"(?i)(rc_token=)[A-Za-z0-9._-]+"), r"\1***"),
+    (re.compile(r"(?i)(x-api-key\s*[:=]\s*\"?)[^\"\s,}]+"), r"\1***"),
     (re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+"), "<jwt>"),
 ]
 

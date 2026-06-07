@@ -13,11 +13,13 @@ import hmac
 import http.cookies
 import json
 import re
+import threading
+import urllib.parse
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from .core import Event, RelayCore
+from .core import Event, RelayCore, assistant_text
 from .log import get
 
 log = get()
@@ -86,10 +88,12 @@ class _Handler(BaseHTTPRequestHandler):
     token: str
     server_version = "remote-claw"
     protocol_version = "HTTP/1.1"
+    timeout = 30  # per-request socket timeout — bounds slow/idle clients
 
-    def __init__(self, *a: Any, core: RelayCore, token: str, **kw: Any):
+    def __init__(self, *a: Any, core: RelayCore, token: str, stop: threading.Event, **kw: Any):
         self.core = core
         self.token = token
+        self.stop = stop
         super().__init__(*a, **kw)
 
     def log_message(self, *a: Any) -> None:  # quiet; we use our own logger
@@ -105,9 +109,10 @@ class _Handler(BaseHTTPRequestHandler):
             ck = http.cookies.SimpleCookie(c)
             if "rc_token" in ck:
                 return ck["rc_token"].value
-        m = re.search(r"[?&]token=([^&]+)", self.path)
-        if m:
-            return m.group(1)
+        qs = urllib.parse.urlparse(self.path).query
+        vals = urllib.parse.parse_qs(qs).get("token")
+        if vals:
+            return vals[0]  # parse_qs URL-decodes the value
         return None
 
     def _authed(self) -> bool:
@@ -133,7 +138,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         if path == "/healthz":
-            return self._json({"ok": True, "sessions": len(self.core.list())})
+            return self._json({"ok": True})  # liveness only — no session info leak
         if path == "/":
             tok = self._presented_token()
             if tok and hmac.compare_digest(tok, self.token):
@@ -173,7 +178,7 @@ class _Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("content-length", 0))
         except ValueError:
             return None
-        if n > MAX_INPUT * 2:
+        if n < 0 or n > MAX_INPUT * 2:  # reject negative (read(-1) would block on EOF)
             return None
         raw = self.rfile.read(n) if n else b"{}"
         try:
@@ -232,7 +237,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         try:
-            for ev in s.follow_upstream(lambda: False):
+            for ev in s.follow_upstream(self.stop.is_set):  # unwinds on relay shutdown
                 if ev is None:
                     self.wfile.write(b": keepalive\n\n")
                 else:
@@ -247,11 +252,7 @@ def _client_event(e: Event) -> dict[str, Any]:
     t = p.get("type")
     out: dict[str, Any] = {"type": t, "seq": e.sequence_num, "source": e.source}
     if t == "assistant":
-        out["text"] = "".join(
-            b.get("text", "")
-            for b in p.get("message", {}).get("content", [])
-            if isinstance(b, dict) and b.get("type") == "text"
-        )
+        out["text"] = assistant_text(p)
     elif t == "user":
         msg = p.get("message", {}).get("content")
         out["text"] = msg if isinstance(msg, str) else "[tool_result]"
@@ -271,9 +272,9 @@ class _ThreadingHTTPServer(ThreadingHTTPServer):
 
 
 class ClientServer:
-    def __init__(self, cfg, core: RelayCore, token: str):
+    def __init__(self, cfg, core: RelayCore, token: str, stop: threading.Event):
         host = "0.0.0.0" if cfg.expose else cfg.client_host
-        handler = partial(_Handler, core=core, token=token)
+        handler = partial(_Handler, core=core, token=token, stop=stop)
         self._httpd = _ThreadingHTTPServer((host, cfg.client_port), handler)
         self.host = host
         self.port = cfg.client_port

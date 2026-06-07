@@ -46,6 +46,30 @@ class TestRedaction(unittest.TestCase):
     def test_access_token(self):
         self.assertNotIn("SECRETVAL", log.redact('"access_token":"SECRETVAL"'))
 
+    def test_client_token_in_url_and_cookie(self):
+        self.assertNotIn("deadbeef", log.redact("client UI: http://h:9100/?token=deadbeef"))
+        self.assertNotIn("c0ffee", log.redact("Cookie: rc_token=c0ffee; Path=/"))
+
+
+class TestMitmHelpers(unittest.TestCase):
+    def test_split_authority_ipv4(self):
+        from remote_claw.mitm import _split_authority
+
+        self.assertEqual(_split_authority("api.anthropic.com:443"), ("api.anthropic.com", 443))
+        self.assertEqual(_split_authority("example.com"), ("example.com", 443))
+
+    def test_split_authority_ipv6(self):
+        from remote_claw.mitm import _split_authority
+
+        self.assertEqual(_split_authority("[::1]:8443"), ("::1", 8443))
+
+    def test_connection_tokens(self):
+        from remote_claw.mitm import _connection_tokens
+
+        toks = _connection_tokens("Host: x\r\nConnection: keep-alive, X-Foo\r\nX-Foo: 1")
+        self.assertIn("x-foo", toks)
+        self.assertIn("keep-alive", toks)
+
 
 class TestCore(unittest.TestCase):
     def test_create_and_get(self):
@@ -76,10 +100,39 @@ class TestCore(unittest.TestCase):
 
     def test_ack_skips_downstream(self):
         s = Session("cse_x", "t", {})
-        ev = s.push_user_input("x")
-        s.ack(ev.event_id)
-        got = list(s.follow_downstream(lambda: True))  # stop immediately
-        self.assertEqual(got, [])
+        e1 = s.push_user_input("a")
+        s.ack(e1.event_id)  # already delivered
+        s.push_user_input("b")
+        gen = s.claim_worker_stream()
+        out = []
+        for ev in s.follow_downstream(gen, lambda: len(out) >= 1):
+            if ev is not None:
+                out.append(ev)
+                break
+        self.assertEqual([e.payload["message"]["content"] for e in out], ["b"])
+
+    def test_supersede_stops_old_follower(self):
+        s = Session("cse_x", "t", {})
+        g1 = s.claim_worker_stream()
+        s.claim_worker_stream()  # supersedes g1
+        # old follower must exit immediately (no duplicate delivery)
+        self.assertEqual(list(s.follow_downstream(g1, lambda: False)), [])
+
+    def test_close_stops_followers(self):
+        s = Session("cse_x", "t", {})
+        g = s.claim_worker_stream()
+        s.close()
+        self.assertEqual(list(s.follow_downstream(g, lambda: False)), [])
+        self.assertEqual(list(s.follow_upstream(lambda: False)), [])
+
+    def test_initialize_is_first(self):
+        s = Session("cse_x", "t", {})
+        s.push_initialize()
+        s.push_user_input("hi")
+        # initialize must occupy sequence 1 (atomic enqueue under lock)
+        first = s._downstream[0]
+        self.assertEqual(first.payload["request"]["subtype"], "initialize")
+        self.assertEqual(first.sequence_num, 1)
 
 
 class TestClientEvent(unittest.TestCase):

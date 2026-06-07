@@ -12,7 +12,7 @@ from . import certs
 from .client_api import ClientServer
 from .config import Config
 from .core import RelayCore
-from .log import get, setup
+from .log import setup
 from .mitm import MitmProxy
 
 
@@ -37,44 +37,55 @@ def load_or_create_token(cfg: Config) -> str:
 def run(cfg: Config) -> int:
     """Run the relay in the foreground until SIGINT/SIGTERM."""
     log = setup(cfg.verbose, logfile=cfg.relay_log)
+    with contextlib.suppress(OSError):
+        os.chmod(cfg.relay_log, 0o600)  # the log may carry session content
     certs.ensure(cfg)
     token = load_or_create_token(cfg)
     core = RelayCore()
     stop = threading.Event()
 
     proxy = MitmProxy(cfg, core, stop)
-    client = ClientServer(cfg, core, token)
+    client = ClientServer(cfg, core, token, stop)
 
     t_proxy = threading.Thread(target=proxy.serve, name="mitm-proxy", daemon=True)
     t_client = threading.Thread(target=client.serve, name="client-api", daemon=True)
     t_proxy.start()
     t_client.start()
 
-    url = f"http://{'<this-host>' if cfg.expose else '127.0.0.1'}:{cfg.client_port}/?token={token}"
-    log.info("client UI: %s", url)
+    # NEVER log the token (the relay log is persisted). The token lives 0600 in
+    # token_file; `remote-claw up` reads it and prints the URL to the user's terminal.
+    host = "<this-host>" if cfg.expose else "127.0.0.1"
+    log.info("client UI on http://%s:%d/ (token in %s)", host, cfg.client_port, cfg.token_file)
     if cfg.expose:
         log.warning(
-            "client face EXPOSED on 0.0.0.0:%d — token-gated, but prefer SSH forwarding", cfg.client_port
+            "client face EXPOSED on 0.0.0.0:%d over PLAINTEXT HTTP — the token rides "
+            "the wire in clear. Prefer SSH forwarding; only expose on a trusted network.",
+            cfg.client_port,
         )
 
     with open(cfg.pid_file, "w") as f:
         f.write(str(os.getpid()))
 
-    def _shutdown(*_a):
-        log.info("shutting down…")
+    # Signal handlers must be cheap and async-signal-safe: only flip the flag.
+    # The actual teardown runs below on the main thread after stop.wait().
+    def _on_signal(*_a):
         stop.set()
-        core.close_all()
-        proxy.shutdown()
-        client.shutdown()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(ValueError):  # ValueError if not in the main thread
-            signal.signal(sig, _shutdown)
+            signal.signal(sig, _on_signal)
 
-    stop.wait()
-    # give SSE threads a moment to unwind
-    t_proxy.join(timeout=2)
+    try:
+        stop.wait()
+    except KeyboardInterrupt:
+        stop.set()
+    log.info("shutting down…")
+    core.close_all()  # wake worker/client SSE followers so they exit promptly
+    proxy.shutdown()
+    client.shutdown()
+    t_proxy.join(timeout=3)
+    t_client.join(timeout=3)
     with contextlib.suppress(OSError):
         os.remove(cfg.pid_file)
-    get().info("stopped")
+    log.info("stopped")
     return 0

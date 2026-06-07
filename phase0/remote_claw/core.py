@@ -28,6 +28,15 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def assistant_text(payload: dict[str, Any]) -> str:
+    """Concatenate the text blocks of an assistant message payload."""
+    return "".join(
+        b.get("text", "")
+        for b in payload.get("message", {}).get("content", [])
+        if isinstance(b, dict) and b.get("type") == "text"
+    )
+
+
 @dataclass
 class Event:
     event_id: str
@@ -69,6 +78,10 @@ class Session:
         self.initialized = False
         #: event_ids the worker has acknowledged (so reconnects don't re-deliver).
         self.acked: set[str] = set()
+        #: id of the active worker SSE stream. A new stream supersedes any older
+        #: one so exactly ONE follower delivers events — prevents duplicate turns
+        #: on the reconnect race (old stream still alive when the new one opens).
+        self._worker_gen = 0
 
     # ---- producers ----
     def push_downstream(self, event_type: str, payload: dict[str, Any]) -> Event:
@@ -94,18 +107,29 @@ class Session:
         )
 
     def push_initialize(self) -> Event | None:
+        # Append atomically under the lock so `initialize` is guaranteed to be the
+        # first downstream event — a concurrent push_user_input cannot slip ahead.
         with self._cv:
             if self.initialized:
                 return None
             self.initialized = True
-        return self.push_downstream(
-            "control_request",
-            {
-                "type": "control_request",
-                "request": {"subtype": "initialize"},
-                "request_id": new_uuid(),
-            },
-        )
+            self._ds_seq += 1
+            eid = new_uuid()
+            ev = Event(
+                eid,
+                self._ds_seq,
+                "control_request",
+                "client",
+                {
+                    "type": "control_request",
+                    "request": {"subtype": "initialize"},
+                    "request_id": new_uuid(),
+                    "uuid": eid,
+                },
+            )
+            self._downstream.append(ev)
+            self._cv.notify_all()
+            return ev
 
     def push_control_response(self, request_id: str, behavior: str = "allow") -> Event:
         return self.push_downstream(
@@ -138,25 +162,41 @@ class Session:
         with self._cv:
             self.acked.add(event_id)
 
+    def claim_worker_stream(self) -> int:
+        """Register a new worker SSE stream, superseding any prior one.
+
+        Returns the generation id this stream must pass to follow_downstream;
+        older followers stop as soon as the generation advances.
+        """
+        with self._cv:
+            self._worker_gen += 1
+            self._cv.notify_all()
+            return self._worker_gen
+
     def close(self) -> None:
         with self._cv:
             self.closed = True
             self._cv.notify_all()
 
     # ---- consumers (generators that block until new events) ----
-    def follow_downstream(self, stop: Callable[[], bool]):
-        """Yield downstream events for the worker, skipping already-acked ones.
+    def follow_downstream(self, gen: int, stop: Callable[[], bool]):
+        """Yield downstream events for the worker stream identified by `gen`.
 
-        Resumable across reconnects: a fresh follower replays only un-acked events.
+        Skips already-acked events (resumable across reconnects) and exits
+        promptly when superseded by a newer stream, on close, or on `stop`.
         """
         sent: set[str] = set()
-        while not stop() and not self.closed:
+        while True:
             with self._cv:
+                if self.closed or stop() or gen != self._worker_gen:
+                    return
                 pending = [
                     e for e in self._downstream if e.event_id not in sent and e.event_id not in self.acked
                 ]
                 if not pending:
                     self._cv.wait(timeout=10.0)
+                    if self.closed or stop() or gen != self._worker_gen:
+                        return
                     pending = [
                         e for e in self._downstream if e.event_id not in sent and e.event_id not in self.acked
                     ]
@@ -169,10 +209,14 @@ class Session:
     def follow_upstream(self, stop: Callable[[], bool]):
         """Yield upstream events for a client (live; multi-client safe)."""
         idx = 0
-        while not stop() and not self.closed:
+        while True:
             with self._cv:
+                if self.closed or stop():
+                    return
                 if idx >= len(self._upstream):
                     self._cv.wait(timeout=10.0)
+                    if self.closed or stop():
+                        return
                 pending = self._upstream[idx:]
                 idx = len(self._upstream)
             if pending:

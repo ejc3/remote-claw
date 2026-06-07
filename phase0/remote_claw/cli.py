@@ -140,7 +140,6 @@ def cmd_up(a) -> int:
         _bad("relay ports busy — run `remote-claw stop` first")
         return 1
     _info("starting relay…")
-    log = open(cfg.relay_log, "w")  # noqa: SIM115 — handed to Popen; lives with the child
     relay_cmd = [
         sys.executable,
         "-m",
@@ -154,11 +153,15 @@ def cmd_up(a) -> int:
     ]
     if cfg.expose:
         relay_cmd.append("--expose")
-    proc = subprocess.Popen(
-        relay_cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True, cwd=ROOT
-    )
+    with open(cfg.relay_log, "w") as log:  # parent closes its copy; child keeps its own fd
+        proc = subprocess.Popen(
+            relay_cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True, cwd=ROOT
+        )
     if not _healthz(cfg.client_port, 10):
         _bad("relay failed to start; see " + cfg.relay_log)
+        proc.terminate()  # don't orphan the spawned relay holding the ports
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=5)
         return 1
     token = server.load_or_create_token(cfg)
     _ok(f"relay up (pid {proc.pid})")
@@ -177,21 +180,21 @@ def cmd_up(a) -> int:
 def cmd_stop(a) -> int:
     setup(False)
     cfg = _cfg(a)
-    stopped = False
-    if os.path.exists(cfg.pid_file):
-        try:
-            with open(cfg.pid_file) as f:
-                pid = int(f.read().strip())
-            os.kill(pid, signal.SIGTERM)
-            stopped = True
-            _ok(f"stopped relay (pid {pid})")
-        except (ProcessLookupError, ValueError):
-            pass
-        with contextlib.suppress(OSError):
-            os.remove(cfg.pid_file)
-    subprocess.run(["pkill", "-f", "remote-control"], check=False)
-    if not stopped:
-        _info("no tracked relay; signalled any matching workers")
+    # Only the relay we tracked — never a broad `pkill -f remote-control`, which
+    # would also kill the user's OTHER `claude --remote-control` sessions.
+    if not os.path.exists(cfg.pid_file):
+        _info("no tracked relay running")
+        return 0
+    try:
+        with open(cfg.pid_file) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, signal.SIGTERM)
+        _ok(f"stopped relay (pid {pid})")
+    except (ProcessLookupError, ValueError):
+        _info("tracked relay not running")
+    with contextlib.suppress(OSError):
+        os.remove(cfg.pid_file)
+    _info("workers stop when you close their TUI")
     return 0
 
 
@@ -215,35 +218,40 @@ def cmd_test(a) -> int:
 
 # ---------------- parser ----------------
 def build_parser() -> argparse.ArgumentParser:
-    # Shared options usable before OR after the subcommand.
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--proxy-port", type=int, default=8888)
-    common.add_argument("--client-port", type=int, default=9100)
+    # Ports are accepted both before AND after the subcommand. The top-level
+    # parser carries the real defaults; the subcommand copy uses SUPPRESS so that
+    # `remote-claw --proxy-port N relay` is NOT silently overwritten by a default.
+    top_ports = argparse.ArgumentParser(add_help=False)
+    top_ports.add_argument("--proxy-port", type=int, default=8888)
+    top_ports.add_argument("--client-port", type=int, default=9100)
+    sub_ports = argparse.ArgumentParser(add_help=False)
+    sub_ports.add_argument("--proxy-port", type=int, default=argparse.SUPPRESS)
+    sub_ports.add_argument("--client-port", type=int, default=argparse.SUPPRESS)
 
     ap = argparse.ArgumentParser(
         prog="remote-claw",
-        parents=[common],
+        parents=[top_ports],
         description="Self-hosted relay + client for Claude Code Remote Control.",
     )
     ap.add_argument("--version", action="version", version=f"remote-claw {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("doctor", parents=[common], help="check environment + auth")
-    pc = sub.add_parser("certs", parents=[common], help="generate the MITM CA + leaf cert")
+    sub.add_parser("doctor", parents=[sub_ports], help="check environment + auth")
+    pc = sub.add_parser("certs", parents=[sub_ports], help="generate the MITM CA + leaf cert")
     pc.add_argument("--force", action="store_true")
-    pr = sub.add_parser("relay", parents=[common], help="run the relay in the foreground")
+    pr = sub.add_parser("relay", parents=[sub_ports], help="run the relay in the foreground")
     pr.add_argument("-v", "--verbose", action="store_true")
     pr.add_argument("--expose", action="store_true", help="bind client face to 0.0.0.0 (token-gated)")
     for name, helptext in (("worker", "launch the TUI worker"), ("up", "relay (bg) + worker (TUI)")):
-        sp = sub.add_parser(name, parents=[common], help=helptext)
+        sp = sub.add_parser(name, parents=[sub_ports], help=helptext)
         sp.add_argument("name", nargs="?", default="remote-claw")
         sp.add_argument("--permission-mode", choices=["default", "acceptEdits", "plan", "bypassPermissions"])
         sp.add_argument("-v", "--verbose", action="store_true")
         if name == "up":
             sp.add_argument("--expose", action="store_true")
-    sub.add_parser("stop", parents=[common], help="stop the background relay + workers")
-    sub.add_parser("test", parents=[common], help="run the integration tests")
-    sub.add_parser("logs", parents=[common], help="tail the relay event flow")
+    sub.add_parser("stop", parents=[sub_ports], help="stop the background relay + workers")
+    sub.add_parser("test", parents=[sub_ports], help="run the integration tests")
+    sub.add_parser("logs", parents=[sub_ports], help="tail the relay event flow")
     return ap
 
 

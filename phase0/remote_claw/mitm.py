@@ -19,7 +19,7 @@ from typing import Any
 
 from . import http_util as hu
 from .config import INTERCEPT_PREFIXES, MITM_HOST, Config
-from .core import RelayCore, Session
+from .core import RelayCore, Session, assistant_text
 from .log import get
 
 log = get()
@@ -64,6 +64,10 @@ class MitmProxy:
 
     # ---------------- connection handling ----------------
     def _safe_client(self, client: socket.socket) -> None:
+        # Bound the TLS handshake + initial request read so a peer that connects
+        # and stalls can't pin a thread/fd indefinitely.
+        with contextlib.suppress(OSError):
+            client.settimeout(30)
         try:
             self._handle_client(client)
         except Exception as e:  # never let a worker thread crash silently
@@ -76,14 +80,13 @@ class MitmProxy:
         if not r:
             client.close()
             return
-        head, _ = r
+        head, rest = r
         line = head.split(b"\r\n", 1)[0].decode("latin1")
         parts = line.split(" ")
         if len(parts) < 2 or parts[0] != "CONNECT":
             client.close()
             return
-        host, _, port_s = parts[1].partition(":")
-        port = int(port_s or 443)
+        host, port = _split_authority(parts[1])
         if host == MITM_HOST:
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             try:
@@ -98,7 +101,7 @@ class MitmProxy:
                 with contextlib.suppress(OSError):
                     tls.close()
         else:
-            self._blind_tunnel(client, host, port)
+            self._blind_tunnel(client, host, port, rest)
 
     def _mitm_conn(self, tls: ssl.SSLSocket) -> None:
         r = hu.recv_headers(tls)
@@ -174,14 +177,18 @@ class MitmProxy:
                     s.ack(upd["event_id"])
             return _send_json(tls, {})
         if sub == "/worker/events" and method == "POST":
+            results = []
             for ev in data.get("events", []):
                 payload = ev.get("payload", {})
-                s.push_upstream(payload)
+                up = s.push_upstream(payload)
+                results.append(
+                    {"event_id": up.event_id, "sequence_num": str(up.sequence_num), "duplicate": False}
+                )
                 if payload.get("type") == "assistant":
-                    txt = _assistant_text(payload)
+                    txt = assistant_text(payload)
                     if txt:
                         log.info("⇠ assistant (%s): %s", s.id[:12], _clip(txt))
-            return _send_json(tls, {})
+            return _send_json(tls, {"results": results})
         if sub == "/worker/events/stream" and method == "GET":
             return self._stream_worker(tls, s)
 
@@ -192,10 +199,11 @@ class MitmProxy:
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
             b"Cache-Control: no-cache\r\nConnection: close\r\n\r\n"
         )
+        gen = s.claim_worker_stream()  # supersede any prior stream → single deliverer
         s.push_initialize()
-        log.info("worker SSE connected: %s", s.id)
+        log.info("worker SSE connected: %s (gen %d)", s.id, gen)
         try:
-            for ev in s.follow_downstream(self.stop.is_set):
+            for ev in s.follow_downstream(gen, self.stop.is_set):
                 if ev is None:
                     tls.sendall(b":keepalive\n\n")
                     continue
@@ -210,10 +218,22 @@ class MitmProxy:
     # ---------------- passthrough / tunnel ----------------
     def _passthrough(self, tls: ssl.SSLSocket, method: str, path: str, head: bytes, body: bytes) -> None:
         hdrs_text = head.decode("latin1").split("\r\n", 1)[1].rstrip("\r\n")
-        # strip accept-encoding so we never have to gunzip; force close framing
-        lines = hu.headers_without(
-            hdrs_text, ("connection", "proxy-connection", "keep-alive", "accept-encoding")
-        )
+        # Drop: hop-by-hop headers (incl. any named in Connection), accept-encoding
+        # (so upstream replies identity), and the original framing headers — `body`
+        # is already a flat, fully-read payload, so we set an exact Content-Length
+        # and never forward Transfer-Encoding/stale Content-Length.
+        drop = [
+            "connection",
+            "proxy-connection",
+            "keep-alive",
+            "accept-encoding",
+            "transfer-encoding",
+            "content-length",
+        ]
+        for tok in _connection_tokens(hdrs_text):
+            drop.append(tok)
+        lines = hu.headers_without(hdrs_text, tuple(drop))
+        lines.append(f"Content-Length: {len(body)}")
         lines.append("Connection: close")
         req = (f"{method} {path} HTTP/1.1\r\n" + "\r\n".join(lines) + "\r\n\r\n").encode("latin1")
         try:
@@ -234,13 +254,19 @@ class MitmProxy:
         finally:
             up.close()
 
-    def _blind_tunnel(self, client: socket.socket, host: str, port: int) -> None:
+    def _blind_tunnel(self, client: socket.socket, host: str, port: int, rest: bytes = b"") -> None:
         try:
             up = socket.create_connection((host, port), timeout=30)
         except OSError:
             client.close()
             return
         client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        if rest:  # bytes the client pipelined after the CONNECT line
+            up.sendall(rest)
+        # blocking select loop; clear per-op timeout so the relay (not the 30s
+        # handshake timeout) governs an idle tunnel
+        with contextlib.suppress(OSError):
+            client.settimeout(None)
         socks = [client, up]
         try:
             while not self.stop.is_set():
@@ -274,12 +300,24 @@ def _send_status(tls: ssl.SSLSocket, status: str) -> None:
     tls.sendall(f"HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode())
 
 
-def _assistant_text(payload: dict[str, Any]) -> str:
-    return "".join(
-        b.get("text", "")
-        for b in payload.get("message", {}).get("content", [])
-        if isinstance(b, dict) and b.get("type") == "text"
-    )
+def _split_authority(authority: str) -> tuple[str, int]:
+    """Parse a CONNECT authority into (host, port), IPv6-literal safe."""
+    if authority.startswith("["):  # [::1]:443
+        host, _, rest = authority[1:].partition("]")
+        port = rest.lstrip(":")
+        return host, int(port or 443)
+    host, _, port = authority.partition(":")
+    return host, int(port or 443)
+
+
+def _connection_tokens(hdrs_text: str) -> list[str]:
+    """Header names listed in any `Connection:` header (hop-by-hop, must be dropped)."""
+    out: list[str] = []
+    for ln in hdrs_text.split("\r\n"):
+        k, _, v = ln.partition(":")
+        if k.strip().lower() == "connection":
+            out += [t.strip().lower() for t in v.split(",") if t.strip()]
+    return out
 
 
 def _clip(s: str, n: int = 80) -> str:
