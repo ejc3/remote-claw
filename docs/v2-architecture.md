@@ -751,3 +751,37 @@ Frame kinds per §6A. `→` one message; steps are ordered.
 2. C→V `GET /api/hosts|sessions` → `online=false` (`now − last_seen > TTL`)
 3. C→V `POST /api/relay {dir:in,…}` → V: no live hook → `202 queued` or `409 host-offline` → C shows "offline"
 4. host returns: relaunch + `/remote-control` → heartbeat → online; C `catch_up` fills the gap
+
+### 16.1 Primitives used (per scenario)
+
+Compact map of the building blocks each scenario exercises. Vocabulary: `HKDF`
+(derive) · `GCM` (AES-256-GCM seal/open) · `AAD` · `sha256` · `CSPRNG` ·
+`checksum` · broker: `/api/hosts` `/api/sessions` `/api/relay` `/api/stream`(SSE)
+`/api/heartbeat` `bearer` · workflow: `hook` `wf-stream`(durable resumable)
+`online=last_seen+TTL` · host/MITM: `intercept`(/v1/code/sessions*)
+`passthrough`(/v1/messages) `bridge`(worker_jwt) `worker-SSE` `/worker/events`
+`initialize` `backfill`(historical) `WAL` `dedup`(msg_id) `seq-alloc`
+`/remote-control`.
+
+| # | Scenario | Primitives |
+| --- | --- | --- |
+| 1 | Fresh machine bootstrap | `CSPRNG(S)`, `HKDF`→{host_id,auth_token,content_root,control_key,K_*_meta}, `sha256`, `GCM(name)`, `checksum`, `/api/hosts`, `bearer` |
+| 2 | Wrapper launches TUI, RC off | MITM `passthrough`, CA trust, `/api/heartbeat`, `online` |
+| 3 | Work locally, RC off | `passthrough`, claude on-disk transcript (no /v1/code) |
+| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `backfill`, `WAL`, `GCM`, `/api/sessions` |
+| 5 | Launch with RC on | `intercept`, `bridge`, `worker-SSE`, `initialize`, `WAL` |
+| 6 | Client first connection | `HKDF`, `bearer`, `/api/hosts`, `GCM-open(name)`, `localStorage` |
+| 7 | Discover 5 wrappers | 5× `HKDF`, 5× `bearer`, `online=last_seen+TTL`, `GCM-open` |
+| 8 | List sessions | `/api/sessions`, `GCM-open(title/cwd)`, `online` |
+| 9 | Cold full history sync | `GCM(control_key)`, `hook`, `WAL-read`, `GCM(content)`, `/api/relay`, `wf-stream/SSE`, `seq` |
+| 10 | Reopen — delta sync | `catch_up`, `WAL-read(>N)`, `IndexedDB` cache, `wf-stream` resume(`startIndex`) |
+| 11 | Client → claude → back | `GCM(content)`, `hook`, `dedup(msg_id)`, `WAL`, `seq-alloc`, `intercept`-inject, `passthrough`, `accepted`, `wf-stream/SSE`, `AAD` |
+| 12 | Type in TUI → client | `worker-SSE`(upstream), `WAL`, `GCM`, `wf-stream/SSE` |
+| 13 | Two clients (fan-out) | `wf-stream` multi-reader, `SSE`, `seq`/`dedup` |
+| 14 | Add a host | `HKDF(S₂)`, `bearer₂`, `/api/hosts` |
+| 15 | Rename host/session | `GCM(K_host_meta)`, `/api/hosts` update |
+| 16 | Tool permission | `control_request/response`, `GCM(control_key)`, `hook`, `worker-SSE` |
+| 17 | Remote control verbs | control frames (`control_key`), `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`) |
+| 18 | Network blip resume | `wf-stream` resume(`startIndex`), `seq` reorder, `dedup` |
+| 19 | Wrapper/CLI restart recovery | `--continue`, `/remote-control`, `intercept`, `backfill`, `WAL-rebuild`, `catch_up` |
+| 20 | Host offline → back | heartbeat `TTL`, `online` flag, offline reject/queue, `catch_up` |
