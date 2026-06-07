@@ -12,7 +12,7 @@ help:
 	@echo "make clean             remove caches / runtime state"
 
 lint:
-	@if command -v ruff >/dev/null 2>&1; then ruff check .; \
+	@if command -v ruff >/dev/null 2>&1; then ruff check . && ruff format --check .; \
 	else echo "ruff not installed — byte-compile check only"; fi
 	@$(PY) -m compileall -q remote_claw tests remote-claw
 

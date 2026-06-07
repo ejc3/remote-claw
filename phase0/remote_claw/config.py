@@ -1,4 +1,5 @@
 """Configuration and on-disk paths for remote-claw."""
+
 from __future__ import annotations
 
 import os

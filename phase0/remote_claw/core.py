@@ -9,13 +9,15 @@ One `Session` holds the authoritative event log for a Remote Control session:
 Thread-safe; multiple worker SSE streams (reconnects) and multiple client streams
 can wait on the same session concurrently.
 """
+
 from __future__ import annotations
 
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 
 def now_iso() -> str:
@@ -80,37 +82,54 @@ class Session:
             return ev
 
     def push_user_input(self, content: str) -> Event:
-        return self.push_downstream("user", {
-            "type": "user",
-            "message": {"role": "user", "content": content},
-            "session_id": self.id,
-            "timestamp": now_iso(),
-            "parent_tool_use_id": None,
-        })
+        return self.push_downstream(
+            "user",
+            {
+                "type": "user",
+                "message": {"role": "user", "content": content},
+                "session_id": self.id,
+                "timestamp": now_iso(),
+                "parent_tool_use_id": None,
+            },
+        )
 
     def push_initialize(self) -> Event | None:
         with self._cv:
             if self.initialized:
                 return None
             self.initialized = True
-        return self.push_downstream("control_request", {
-            "type": "control_request",
-            "request": {"subtype": "initialize"},
-            "request_id": new_uuid(),
-        })
+        return self.push_downstream(
+            "control_request",
+            {
+                "type": "control_request",
+                "request": {"subtype": "initialize"},
+                "request_id": new_uuid(),
+            },
+        )
 
     def push_control_response(self, request_id: str, behavior: str = "allow") -> Event:
-        return self.push_downstream("control_response", {
-            "type": "control_response",
-            "response": {"subtype": "success", "request_id": request_id,
-                         "response": {"behavior": behavior}},
-        })
+        return self.push_downstream(
+            "control_response",
+            {
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": request_id,
+                    "response": {"behavior": behavior},
+                },
+            },
+        )
 
     def push_upstream(self, payload: dict[str, Any]) -> Event:
         with self._cv:
             self._us_seq += 1
-            ev = Event(payload.get("uuid") or new_uuid(), self._us_seq,
-                       payload.get("type", "unknown"), "worker", payload)
+            ev = Event(
+                payload.get("uuid") or new_uuid(),
+                self._us_seq,
+                payload.get("type", "unknown"),
+                "worker",
+                payload,
+            )
             self._upstream.append(ev)
             self._cv.notify_all()
             return ev
@@ -133,12 +152,14 @@ class Session:
         sent: set[str] = set()
         while not stop() and not self.closed:
             with self._cv:
-                pending = [e for e in self._downstream
-                           if e.event_id not in sent and e.event_id not in self.acked]
+                pending = [
+                    e for e in self._downstream if e.event_id not in sent and e.event_id not in self.acked
+                ]
                 if not pending:
                     self._cv.wait(timeout=10.0)
-                    pending = [e for e in self._downstream
-                               if e.event_id not in sent and e.event_id not in self.acked]
+                    pending = [
+                        e for e in self._downstream if e.event_id not in sent and e.event_id not in self.acked
+                    ]
             for e in pending:
                 sent.add(e.event_id)
                 yield e
@@ -165,13 +186,22 @@ class Session:
 
     def session_obj(self) -> dict[str, Any]:
         return {
-            "id": self.id, "title": self.title, "status": "active",
-            "environment_kind": "bridge", "environment_id": "",
-            "worker_status": self.worker_status, "connection_status": "connected",
-            "created_at": self.created_at, "updated_at": now_iso(),
-            "last_event_at": now_iso(), "participants": [], "client_presence": [],
-            "tags": ["remote-control-repl"], "security_tier": "standard",
-            "unread": False, "config": self.config,
+            "id": self.id,
+            "title": self.title,
+            "status": "active",
+            "environment_kind": "bridge",
+            "environment_id": "",
+            "worker_status": self.worker_status,
+            "connection_status": "connected",
+            "created_at": self.created_at,
+            "updated_at": now_iso(),
+            "last_event_at": now_iso(),
+            "participants": [],
+            "client_presence": [],
+            "tags": ["remote-control-repl"],
+            "security_tier": "standard",
+            "unread": False,
+            "config": self.config,
         }
 
 

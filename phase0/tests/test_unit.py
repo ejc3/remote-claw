@@ -1,4 +1,5 @@
 """Fast unit tests (stdlib unittest; no network / no claude)."""
+
 import os
 import sys
 import unittest
@@ -7,8 +8,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from remote_claw import http_util, log  # noqa: E402
-from remote_claw.core import RelayCore, Session  # noqa: E402
 from remote_claw.client_api import _client_event  # noqa: E402
+from remote_claw.core import RelayCore, Session  # noqa: E402
 
 
 class TestDechunk(unittest.TestCase):
@@ -68,8 +69,7 @@ class TestCore(unittest.TestCase):
 
     def test_upstream_and_snapshot(self):
         s = Session("cse_x", "t", {})
-        s.push_upstream({"type": "assistant",
-                         "message": {"content": [{"type": "text", "text": "hi"}]}})
+        s.push_upstream({"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}})
         snap = s.snapshot_upstream()
         self.assertEqual(len(snap), 1)
         self.assertEqual(_client_event(snap[0])["text"], "hi")
@@ -85,8 +85,13 @@ class TestCore(unittest.TestCase):
 class TestClientEvent(unittest.TestCase):
     def test_control_request_shape(self):
         s = Session("cse_x", "t", {})
-        s.push_upstream({"type": "control_request", "request_id": "r1",
-                         "request": {"subtype": "can_use_tool", "tool_name": "Bash"}})
+        s.push_upstream(
+            {
+                "type": "control_request",
+                "request_id": "r1",
+                "request": {"subtype": "can_use_tool", "tool_name": "Bash"},
+            }
+        )
         ev = _client_event(s.snapshot_upstream()[0])
         self.assertEqual(ev["tool_name"], "Bash")
         self.assertEqual(ev["request_id"], "r1")

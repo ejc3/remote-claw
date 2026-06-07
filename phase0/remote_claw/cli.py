@@ -1,7 +1,9 @@
 """Command-line interface for remote-claw."""
+
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shutil
 import signal
@@ -16,9 +18,19 @@ from .config import Config
 from .log import setup
 
 C = {"g": "\033[32m", "r": "\033[31m", "y": "\033[33m", "b": "\033[1m", "x": "\033[0m"}
-def _ok(m): print(f"{C['g']}✓{C['x']} {m}")
-def _bad(m): print(f"{C['r']}✗{C['x']} {m}")
-def _info(m): print(f"{C['y']}•{C['x']} {m}")
+
+
+def _ok(m):
+    print(f"{C['g']}✓{C['x']} {m}")
+
+
+def _bad(m):
+    print(f"{C['r']}✗{C['x']} {m}")
+
+
+def _info(m):
+    print(f"{C['y']}•{C['x']} {m}")
+
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -35,8 +47,12 @@ def _port_free(port: int) -> bool:
 
 
 def _cfg(a: argparse.Namespace) -> Config:
-    return Config(proxy_port=a.proxy_port, client_port=a.client_port,
-                  verbose=getattr(a, "verbose", False), expose=getattr(a, "expose", False))
+    return Config(
+        proxy_port=a.proxy_port,
+        client_port=a.client_port,
+        verbose=getattr(a, "verbose", False),
+        expose=getattr(a, "expose", False),
+    )
 
 
 # ---------------- commands ----------------
@@ -44,21 +60,33 @@ def cmd_doctor(a) -> int:
     setup(False)
     cfg = _cfg(a)
     okall = True
+
     cl = shutil.which("claude")
     if cl:
         v = subprocess.run([cl, "--version"], capture_output=True, text=True).stdout.strip()
         _ok(f"claude: {cl} ({v})")
     else:
-        _bad("claude not found on PATH"); okall = False
-    _ok("openssl present") if shutil.which("openssl") else (_bad("openssl missing") or 0)
-    if not shutil.which("openssl"):
+        _bad("claude not found on PATH")
         okall = False
-    _ok(f"certs present ({cfg.certs_dir})") if os.path.exists(cfg.ca_pem) else \
+
+    if shutil.which("openssl"):
+        _ok("openssl present")
+    else:
+        _bad("openssl missing")
+        okall = False
+
+    if os.path.exists(cfg.ca_pem):
+        _ok(f"certs present ({cfg.certs_dir})")
+    else:
         _info("certs not generated — run: remote-claw certs")
+
     for p in (cfg.proxy_port, cfg.client_port):
-        _ok(f"port {p} free") if _port_free(p) else (_bad(f"port {p} in use") or setattr(a, "_b", okall))
-        if not _port_free(p):
+        if _port_free(p):
+            _ok(f"port {p} free")
+        else:
+            _bad(f"port {p} in use")
             okall = False
+
     print(f"\n{C['b']}auth:{C['x']}")
     if cl:
         r = subprocess.run([cl, "auth", "status"], capture_output=True, text=True)
@@ -109,28 +137,40 @@ def cmd_up(a) -> int:
     cfg = _cfg(a)
     certs.ensure(cfg)
     if not _port_free(cfg.proxy_port) or not _port_free(cfg.client_port):
-        _bad("relay ports busy — run `remote-claw stop` first"); return 1
+        _bad("relay ports busy — run `remote-claw stop` first")
+        return 1
     _info("starting relay…")
-    log = open(cfg.relay_log, "w")
-    relay_cmd = [sys.executable, "-m", "remote_claw", "relay",
-                 "--proxy-port", str(cfg.proxy_port), "--client-port", str(cfg.client_port), "-v"]
+    log = open(cfg.relay_log, "w")  # noqa: SIM115 — handed to Popen; lives with the child
+    relay_cmd = [
+        sys.executable,
+        "-m",
+        "remote_claw",
+        "relay",
+        "--proxy-port",
+        str(cfg.proxy_port),
+        "--client-port",
+        str(cfg.client_port),
+        "-v",
+    ]
     if cfg.expose:
         relay_cmd.append("--expose")
-    proc = subprocess.Popen(relay_cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-                            start_new_session=True, cwd=ROOT)
+    proc = subprocess.Popen(
+        relay_cmd, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True, cwd=ROOT
+    )
     if not _healthz(cfg.client_port, 10):
-        _bad("relay failed to start; see " + cfg.relay_log); return 1
+        _bad("relay failed to start; see " + cfg.relay_log)
+        return 1
     token = server.load_or_create_token(cfg)
     _ok(f"relay up (pid {proc.pid})")
     _ok(f"client UI: http://127.0.0.1:{cfg.client_port}/?token={token}")
     _info(f"forward it:  ssh -L {cfg.client_port}:127.0.0.1:{cfg.client_port} <this-box>")
-    print(f"{C['y']}launching the TUI below; closing it stops the worker. "
-          f"relay stays up — `remote-claw stop` to end it.{C['x']}\n")
+    print(
+        f"{C['y']}launching the TUI below; closing it stops the worker. "
+        f"relay stays up — `remote-claw stop` to end it.{C['x']}\n"
+    )
     cmd, env = _worker_argv(a)
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         subprocess.run(cmd, env=env)
-    except KeyboardInterrupt:
-        pass
     return 0
 
 
@@ -140,16 +180,15 @@ def cmd_stop(a) -> int:
     stopped = False
     if os.path.exists(cfg.pid_file):
         try:
-            pid = int(open(cfg.pid_file).read().strip())
+            with open(cfg.pid_file) as f:
+                pid = int(f.read().strip())
             os.kill(pid, signal.SIGTERM)
             stopped = True
             _ok(f"stopped relay (pid {pid})")
         except (ProcessLookupError, ValueError):
             pass
-        try:
+        with contextlib.suppress(OSError):
             os.remove(cfg.pid_file)
-        except OSError:
-            pass
     subprocess.run(["pkill", "-f", "remote-control"], check=False)
     if not stopped:
         _info("no tracked relay; signalled any matching workers")
@@ -159,11 +198,10 @@ def cmd_stop(a) -> int:
 def cmd_logs(a) -> int:
     cfg = _cfg(a)
     if not os.path.exists(cfg.relay_log):
-        _info("no relay log yet — start one with `remote-claw up` or `relay`"); return 1
-    try:
+        _info("no relay log yet — start one with `remote-claw up` or `relay`")
+        return 1
+    with contextlib.suppress(KeyboardInterrupt):
         subprocess.call(["tail", "-f", cfg.relay_log])
-    except KeyboardInterrupt:
-        pass
     return 0
 
 
@@ -183,8 +221,10 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--client-port", type=int, default=9100)
 
     ap = argparse.ArgumentParser(
-        prog="remote-claw", parents=[common],
-        description="Self-hosted relay + client for Claude Code Remote Control.")
+        prog="remote-claw",
+        parents=[common],
+        description="Self-hosted relay + client for Claude Code Remote Control.",
+    )
     ap.add_argument("--version", action="version", version=f"remote-claw {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -197,8 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, helptext in (("worker", "launch the TUI worker"), ("up", "relay (bg) + worker (TUI)")):
         sp = sub.add_parser(name, parents=[common], help=helptext)
         sp.add_argument("name", nargs="?", default="remote-claw")
-        sp.add_argument("--permission-mode",
-                        choices=["default", "acceptEdits", "plan", "bypassPermissions"])
+        sp.add_argument("--permission-mode", choices=["default", "acceptEdits", "plan", "bypassPermissions"])
         sp.add_argument("-v", "--verbose", action="store_true")
         if name == "up":
             sp.add_argument("--expose", action="store_true")
@@ -211,6 +250,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     return {
-        "doctor": cmd_doctor, "certs": cmd_certs, "relay": cmd_relay, "worker": cmd_worker,
-        "up": cmd_up, "stop": cmd_stop, "logs": cmd_logs, "test": cmd_test,
+        "doctor": cmd_doctor,
+        "certs": cmd_certs,
+        "relay": cmd_relay,
+        "worker": cmd_worker,
+        "up": cmd_up,
+        "stop": cmd_stop,
+        "logs": cmd_logs,
+        "test": cmd_test,
     }[a.cmd](a) or 0

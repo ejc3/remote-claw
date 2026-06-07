@@ -1,6 +1,8 @@
 """Process orchestration: token, MITM proxy + client face, graceful shutdown."""
+
 from __future__ import annotations
 
+import contextlib
 import os
 import secrets
 import signal
@@ -10,7 +12,7 @@ from . import certs
 from .client_api import ClientServer
 from .config import Config
 from .core import RelayCore
-from .log import setup, get
+from .log import get, setup
 from .mitm import MitmProxy
 
 
@@ -21,7 +23,8 @@ def load_or_create_token(cfg: Config) -> str:
         return env
     path = cfg.token_file
     if os.path.exists(path):
-        tok = open(path).read().strip()
+        with open(path) as f:
+            tok = f.read().strip()
         if tok:
             return tok
     tok = secrets.token_hex(32)
@@ -50,8 +53,9 @@ def run(cfg: Config) -> int:
     url = f"http://{'<this-host>' if cfg.expose else '127.0.0.1'}:{cfg.client_port}/?token={token}"
     log.info("client UI: %s", url)
     if cfg.expose:
-        log.warning("client face EXPOSED on 0.0.0.0:%d — token-gated, but prefer SSH forwarding",
-                    cfg.client_port)
+        log.warning(
+            "client face EXPOSED on 0.0.0.0:%d — token-gated, but prefer SSH forwarding", cfg.client_port
+        )
 
     with open(cfg.pid_file, "w") as f:
         f.write(str(os.getpid()))
@@ -64,17 +68,13 @@ def run(cfg: Config) -> int:
         client.shutdown()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        with contextlib.suppress(ValueError):  # ValueError if not in the main thread
             signal.signal(sig, _shutdown)
-        except ValueError:
-            pass  # not in main thread
 
     stop.wait()
     # give SSE threads a moment to unwind
     t_proxy.join(timeout=2)
-    try:
+    with contextlib.suppress(OSError):
         os.remove(cfg.pid_file)
-    except OSError:
-        pass
     get().info("stopped")
     return 0

@@ -1,14 +1,14 @@
 """Minimal HTTP/1.1 helpers for the MITM proxy (stdlib sockets, no frameworks)."""
+
 from __future__ import annotations
 
 import socket
-from typing import Optional
 
 MAX_HEADER = 256 * 1024
 MAX_BODY = 64 * 1024 * 1024  # 64 MiB safety cap on intercepted request bodies
 
 
-def recv_headers(sock: socket.socket) -> Optional[tuple[bytes, bytes]]:
+def recv_headers(sock: socket.socket) -> tuple[bytes, bytes] | None:
     """Read until end-of-headers. Returns (header_bytes, leftover_body) or None."""
     buf = b""
     while b"\r\n\r\n" not in buf:
@@ -74,7 +74,7 @@ def dechunk(data: bytes) -> bytes:
         if n == 0:
             break
         out += b[:n]
-        b = b[n + 2:]
+        b = b[n + 2 :]
     return out
 
 

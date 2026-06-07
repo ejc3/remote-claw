@@ -4,6 +4,7 @@ The relay handles short-lived credentials (`worker_jwt`, oauth bearer tokens) an
 user message content. Nothing sensitive should ever reach a log sink, so all
 records pass through a redacting filter before formatting.
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,8 +43,9 @@ def setup(verbose: bool, logfile: str | None = None) -> logging.Logger:
     logger = logging.getLogger("remote_claw")
     logger.setLevel(logging.DEBUG if verbose else logging.INFO)
     logger.handlers.clear()
-    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-                            datefmt="%Y-%m-%dT%H:%M:%S%z")
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z"
+    )
     redactor = _RedactFilter()
 
     sh = logging.StreamHandler(sys.stdout)

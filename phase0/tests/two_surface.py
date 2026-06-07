@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Two-surface test: TUI wrapper + our client drive one synced session, both ways."""
+
 import json
 import os
 import pty
@@ -13,8 +14,10 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from remote_claw.config import Config  # noqa: E402
+import contextlib
+
 from remote_claw import certs  # noqa: E402
+from remote_claw.config import Config  # noqa: E402
 
 PROXY, CLIENT = 8899, 9111
 TOKEN = "test-token-" + str(os.getpid())
@@ -24,9 +27,17 @@ CLI_TOK = "PLUM" + str(os.getpid())
 H = {"Authorization": f"Bearer {TOKEN}", "content-type": "application/json"}
 
 
-def _ok(m): print(f"  \033[32m✓\033[0m {m}", flush=True)
-def _step(m): print(f"\033[1m▶ {m}\033[0m", flush=True)
-def _fail(m): print(f"  \033[31m✗ {m}\033[0m", flush=True); raise SystemExit(1)
+def _ok(m):
+    print(f"  \033[32m✓\033[0m {m}", flush=True)
+
+
+def _step(m):
+    print(f"\033[1m▶ {m}\033[0m", flush=True)
+
+
+def _fail(m):
+    print(f"  \033[31m✗ {m}\033[0m", flush=True)
+    raise SystemExit(1)
 
 
 def get(path):
@@ -46,11 +57,11 @@ relay = worker = master = None
 
 def cleanup():
     if worker:
-        try: os.kill(worker.pid, signal.SIGTERM)
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            os.kill(worker.pid, signal.SIGTERM)
     if relay:
-        try: os.killpg(os.getpgid(relay.pid), signal.SIGTERM)
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            os.killpg(os.getpgid(relay.pid), signal.SIGTERM)
 
 
 def client_has(kind, token, timeout):
@@ -76,13 +87,28 @@ def main():
     _step(f"start relay (proxy {PROXY}, client {CLIENT})")
     env = dict(os.environ, REMOTE_CLAW_TOKEN=TOKEN)
     relay = subprocess.Popen(
-        [sys.executable, "-m", "remote_claw", "relay", "--proxy-port", str(PROXY),
-         "--client-port", str(CLIENT), "-v"],
-        cwd=ROOT, env=env, stdout=open("/tmp/two-surface-relay.log", "w"),
-        stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        [
+            sys.executable,
+            "-m",
+            "remote_claw",
+            "relay",
+            "--proxy-port",
+            str(PROXY),
+            "--client-port",
+            str(CLIENT),
+            "-v",
+        ],
+        cwd=ROOT,
+        env=env,
+        stdout=open("/tmp/two-surface-relay.log", "w"),
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     for _ in range(50):
         try:
-            urllib.request.urlopen(f"{BASE}/healthz", timeout=2); break
+            urllib.request.urlopen(f"{BASE}/healthz", timeout=2)
+            break
         except Exception:
             time.sleep(0.2)
     else:
@@ -90,22 +116,34 @@ def main():
     _ok("relay up")
 
     _step("launch the TUI wrapper (claude --remote-control under a pty)")
-    wenv = dict(os.environ,
-                HTTPS_PROXY=f"http://127.0.0.1:{PROXY}", HTTP_PROXY=f"http://127.0.0.1:{PROXY}",
-                NODE_EXTRA_CA_CERTS=cfg.ca_pem)
+    wenv = dict(
+        os.environ,
+        HTTPS_PROXY=f"http://127.0.0.1:{PROXY}",
+        HTTP_PROXY=f"http://127.0.0.1:{PROXY}",
+        NODE_EXTRA_CA_CERTS=cfg.ca_pem,
+    )
     master, slave = pty.openpty()
     worker = subprocess.Popen(
         ["claude", "--remote-control", "two-surface", "--permission-mode", "bypassPermissions"],
-        stdin=slave, stdout=slave, stderr=slave, env=wenv, start_new_session=True, close_fds=True)
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        env=wenv,
+        start_new_session=True,
+        close_fds=True,
+    )
     os.close(slave)
 
     _step("wait for TUI to reach 'Remote Control active'")
-    buf = b""; end = time.time() + 25
+    buf = b""
+    end = time.time() + 25
     while time.time() < end:
         r, _, _ = select.select([master], [], [], 0.5)
         if r:
-            try: buf += os.read(master, 4096)
-            except OSError: break
+            try:
+                buf += os.read(master, 4096)
+            except OSError:
+                break
         if b"Remote Control active" in re.sub(rb"\x1b\[[0-9;?]*[a-zA-Z]", b"", buf):
             break
     else:
@@ -138,7 +176,8 @@ if __name__ == "__main__":
     except SystemExit as e:
         rc = e.code
     except Exception as e:
-        print(f"\033[31mERROR: {e}\033[0m"); rc = 1
+        print(f"\033[31mERROR: {e}\033[0m")
+        rc = 1
     finally:
         cleanup()
     sys.exit(rc)

@@ -1,4 +1,5 @@
 """`python -m remote_claw …` entrypoint."""
+
 import sys
 
 from .cli import main

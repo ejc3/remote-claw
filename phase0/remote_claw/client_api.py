@@ -5,8 +5,10 @@ Security:
   • `/healthz` is unauthenticated (liveness only).
   • Binds to localhost unless explicitly exposed; constant-time token compare.
 """
+
 from __future__ import annotations
 
+import contextlib
 import hmac
 import http.cookies
 import json
@@ -15,7 +17,7 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from .core import RelayCore, Event
+from .core import Event, RelayCore
 from .log import get
 
 log = get()
@@ -121,10 +123,8 @@ class _Handler(BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        try:
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
 
     def _json(self, obj: Any, code: int = 200) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
@@ -138,8 +138,7 @@ class _Handler(BaseHTTPRequestHandler):
             tok = self._presented_token()
             if tok and hmac.compare_digest(tok, self.token):
                 cookie = f"rc_token={self.token}; Path=/; HttpOnly; SameSite=Strict"
-                return self._send(200, UI_HTML.encode(), "text/html; charset=utf-8",
-                                  {"Set-Cookie": cookie})
+                return self._send(200, UI_HTML.encode(), "text/html; charset=utf-8", {"Set-Cookie": cookie})
             return self._send(401, UNAUTH_HTML.encode(), "text/html; charset=utf-8")
         if not self._authed():
             return self._json({"error": "unauthorized"}, 401)
@@ -237,7 +236,7 @@ class _Handler(BaseHTTPRequestHandler):
                 if ev is None:
                     self.wfile.write(b": keepalive\n\n")
                 else:
-                    self.wfile.write(("data: %s\n\n" % json.dumps(_client_event(ev))).encode())
+                    self.wfile.write((f"data: {json.dumps(_client_event(ev))}\n\n").encode())
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
@@ -248,15 +247,21 @@ def _client_event(e: Event) -> dict[str, Any]:
     t = p.get("type")
     out: dict[str, Any] = {"type": t, "seq": e.sequence_num, "source": e.source}
     if t == "assistant":
-        out["text"] = "".join(b.get("text", "") for b in p.get("message", {}).get("content", [])
-                              if isinstance(b, dict) and b.get("type") == "text")
+        out["text"] = "".join(
+            b.get("text", "")
+            for b in p.get("message", {}).get("content", [])
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
     elif t == "user":
         msg = p.get("message", {}).get("content")
         out["text"] = msg if isinstance(msg, str) else "[tool_result]"
     elif t == "control_request":
         req = p.get("request", {})
-        out.update(subtype=req.get("subtype"), tool_name=req.get("tool_name"),
-                   request_id=p.get("request_id") or req.get("request_id"))
+        out.update(
+            subtype=req.get("subtype"),
+            tool_name=req.get("tool_name"),
+            request_id=p.get("request_id") or req.get("request_id"),
+        )
     return out
 
 

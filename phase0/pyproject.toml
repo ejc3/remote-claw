@@ -20,7 +20,8 @@ packages = ["remote_claw"]
 [tool.ruff]
 line-length = 110
 target-version = "py310"
-extend-exclude = ["captures", "mitm/certs", ".state"]
+# mitm/ holds the legacy capture tool + generated certs (research artifacts, not the package).
+extend-exclude = ["captures", "mitm", ".state"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
@@ -30,5 +31,6 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["E402", "B008"]
-"remote_claw/cli.py" = ["E402", "E731"]
+# tests open log files handed to subprocess.Popen (must outlive the with-block);
+# E402 = sys.path shim before imports.
+"tests/*" = ["E402", "B008", "SIM115"]

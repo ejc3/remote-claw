@@ -4,12 +4,14 @@ Generates a throwaway CA and a leaf for `api.anthropic.com`. The CA is trusted b
 the worker process only, via `NODE_EXTRA_CA_CERTS` — never installed system-wide.
 Private keys are written 0600.
 """
+
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 
-from .config import Config, MITM_HOST
+from .config import MITM_HOST, Config
 from .log import get
 
 log = get()
@@ -27,26 +29,52 @@ def ensure(cfg: Config, force: bool = False) -> bool:
     d = cfg.certs_dir
 
     def run(*args: str) -> None:
-        subprocess.run(["openssl", *args], check=True, cwd=d,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["openssl", *args], check=True, cwd=d, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
 
     run("genrsa", "-out", "ca.key", "2048")
-    run("req", "-x509", "-new", "-nodes", "-key", "ca.key", "-sha256",
-        "-days", _VALIDITY_DAYS, "-out", "ca.pem", "-subj", "/CN=remote-claw-CA")
+    run(
+        "req",
+        "-x509",
+        "-new",
+        "-nodes",
+        "-key",
+        "ca.key",
+        "-sha256",
+        "-days",
+        _VALIDITY_DAYS,
+        "-out",
+        "ca.pem",
+        "-subj",
+        "/CN=remote-claw-CA",
+    )
     run("genrsa", "-out", "leaf.key", "2048")
-    run("req", "-new", "-key", "leaf.key", "-out", "leaf.csr",
-        "-subj", f"/CN={MITM_HOST}")
+    run("req", "-new", "-key", "leaf.key", "-out", "leaf.csr", "-subj", f"/CN={MITM_HOST}")
     with open(os.path.join(d, "leaf.ext"), "w") as f:
         f.write(f"subjectAltName=DNS:{MITM_HOST}\nextendedKeyUsage=serverAuth\n")
-    run("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key",
-        "-CAcreateserial", "-out", "leaf.pem", "-days", _VALIDITY_DAYS,
-        "-sha256", "-extfile", "leaf.ext")
+    run(
+        "x509",
+        "-req",
+        "-in",
+        "leaf.csr",
+        "-CA",
+        "ca.pem",
+        "-CAkey",
+        "ca.key",
+        "-CAcreateserial",
+        "-out",
+        "leaf.pem",
+        "-days",
+        _VALIDITY_DAYS,
+        "-sha256",
+        "-extfile",
+        "leaf.ext",
+    )
 
     for name in ("ca.key", "leaf.key"):
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(os.path.join(d, name), 0o600)
-        except OSError:
-            pass
     log.info("generated CA + leaf cert in %s", d)
     return True
 
