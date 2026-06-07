@@ -1,0 +1,7 @@
+# Secrets & generated artifacts — never commit.
+# Raw protocol captures (contain worker_jwt, session data):
+captures/
+# CA + leaf private keys:
+mitm/certs/
+__pycache__/
+*.pyc
