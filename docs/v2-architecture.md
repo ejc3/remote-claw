@@ -47,7 +47,7 @@ metadata privacy (timing/sizes/seq are visible to the broker).
 ```
   ┌── server A (your machine) ──────────────┐         ┌──────── Vercel (broker) ────────┐        ┌── phone / laptop ──┐
   │ claude --remote-control                  │         │  ingest Functions (auth: token) │        │  web app (Next.js) │
-  │      ▲  MITM or RC-API bridge (§14)      │  wss/   │  per-session Workflow (buffer)  │  SSE/  │  paste secret →    │
+  │      ▲  MITM (our relay = RC backend)    │  wss/   │  per-session Workflow (buffer)  │  SSE/  │  paste secret →    │
   │      │  + on-disk WAL (the record)       │  https  │  (no history — relay only)      │ stream │  derive keys →     │
   │ remote-claw serve --hostname <app> ──────┼────────▶│  live fan-out (SSE + workflow)   │◀──────▶│  decrypt & render  │
   │   (machine identity: secret S, 0600)     │ ciphertext only                          │        │  encrypt & send    │
@@ -68,10 +68,11 @@ metadata privacy (timing/sizes/seq are visible to the broker).
      devices. Re-running prints `host_id` + status (never reprints `S` unless
      `--show`).
 
-2. **`remote-claw serve --hostname <vercel-app-url>`** — the **wrapper / host
-   bridge**. Runs `claude --remote-control` and bridges its RC traffic to the app.
-   Its host-side coupling to Claude is **either the Phase-0 MITM or an RC-API
-   client bridge — decision pending in §14** (P0.5 informs it).
+2. **`remote-claw serve --hostname <vercel-app-url>`** — the **wrapper**. Runs the
+   **real interactive `claude` TUI** and, when the user enables remote control,
+   makes it RC-eligible **pointed at our local MITM** (not Anthropic's RC relay —
+   §14). Our relay is the RC backend; it bridges that traffic E2E-encrypted to the
+   app.
    - Encodes the relay logic in Node/TS (reimplementing the Phase-0 interception
      knowledge): on each worker→relay event, WAL it, allocate `seq`, encrypt with
      the per-session key, and `POST /api/relay`; subscribe (SSE) to the host's
@@ -80,7 +81,7 @@ metadata privacy (timing/sizes/seq are visible to the broker).
    - Maintains local state: the **on-disk per-session WAL** (keyed by `seq`, the
      catch-up record, durable across restarts), the `msg_id` seen-set, registered
      sessions, crypto state. Answers encrypted `catch_up{since=seq}` from its WAL,
-     falling back to the Phase-0-verified events-cursor API (§6). Reconnects on drop.
+     falling back to worker backfill to our relay (§6). Reconnects on drop.
 
 ### 3.2 Vercel app (the broker — relays ciphertext, stores no chat history)
 - **Ingest Functions** (Node runtime, fast + die): `POST /api/relay` (a ciphertext
@@ -92,7 +93,7 @@ metadata privacy (timing/sizes/seq are visible to the broker).
   not the record** (§6).
 - **Catch-up is proxied to the wrapper, not served from the cloud.** A
   `catch_up{since=seq}` control frame is relayed to the wrapper, which replies with
-  `historical` frames from its WAL (then the events-cursor API). There is **no**
+  `historical` frames from its WAL (then worker backfill). There is **no**
   `GET /api/messages` history store.
 - **Read Functions:** `GET /api/hosts`, `GET /api/sessions?host=` (return the
   latest *encrypted* registry snapshot the wrapper published — names/titles only,
@@ -225,11 +226,12 @@ log — never on an unproven replay primitive. See §14.)
   sees every frame both directions and persists each to an **on-disk write-ahead
   log** on the TUI host (per session, keyed by `seq`) — durable across wrapper
   restarts. This is the authoritative catch-up source.
-- **Deep history beyond the WAL** comes from the **Phase-0-verified events cursor
-  API** (`GET /v1/code/sessions/{id}/events?cursor=`), read by the host. The local
-  `~/.claude/projects/<cwd>/<session>.jsonl` transcript is a secondary fallback
-  *only if* a Phase-0.5 spike proves it maps to the relay `seq` space. The TUI owns
-  sessions and `seq` ordering; **the cloud stores no history.**
+- **Deep history beyond the WAL** is reseeded by the **worker backfilling
+  `historical` frames to OUR relay** on RC connect (Phase 0 observed `historical:
+  true` events arriving at the relay; reconnect-reseed hardened in P4). The local
+  `~/.claude/projects/<cwd>/<session>.jsonl` transcript is a last-resort fallback.
+  We do **not** use Anthropic's `/events?cursor=` (we're off Anthropic's relay —
+  §14). The TUI owns sessions and `seq` ordering; **the cloud stores no history.**
 - **`seq` is allocated solely by the wrapper.** Clients never assign transcript
   order: a web client sends a `client_msg_id`; the wrapper decrypts, commits to its
   WAL, assigns the canonical `seq`, then echoes an `accepted{client_msg_id, seq}`.
@@ -241,8 +243,8 @@ log — never on an unproven replay primitive. See §14.)
 - **Catch-up is an encrypted control frame to the wrapper.** A client sends an
   **AEAD-encrypted** `catch_up{since=<last-seen seq | 0>, msg_id, expiry}` (control
   frames use a derived control key + replay check — never plaintext the broker
-  could inject); the wrapper serves the delta from its WAL (then the events-cursor
-  API for ranges older than the WAL), streaming `historical` frames, then live.
+  could inject); the wrapper serves the delta from its WAL (then worker-backfill
+  for ranges older than the WAL), streaming `historical` frames, then live.
 - **The cloud = relay + short live buffer only (Vercel-native, no third party).**
   Live ciphertext frames go out over **SSE from a streaming Vercel Function**,
   backed by the per-session **Workflow durable resumable stream**. When the SSE
@@ -334,15 +336,13 @@ phase0/            unchanged — the Python reference + protocol findings
 ```
 
 ## 11. Phased plan
-- **P0.5 — Capture spike (do before P4).** On `claude` 2.1.168, empirically settle
-  the history/replay question that the plan review flagged: (a) confirm the
-  Phase-0-verified `GET /v1/code/sessions/{id}/events?cursor=` returns full
-  cursor-paginated history reliably; (b) test whether/how the worker re-emits
-  `historical` frames on reconnect with a `since` (document the exact request or
-  conclude it doesn't exist); (c) check whether `~/.claude/projects/.../*.jsonl`
-  maps to the relay `seq`. Output decides whether the wrapper WAL + events-cursor
-  is sufficient (expected) and **whether the MITM is even needed** (see decision
-  below). Save artifacts under `phase0/captures/`.
+- **P0.5 — Capture spike (DONE 2026-06-07).** Settled the open questions on `claude`
+  2.1.168: the RC-API-client bridge is *viable* (`phase0/spikes/rc_api_bridge.py`:
+  inject + cursor history + live client SSE all PASS) — but **rejected** because it
+  routes the remote channel through Anthropic's relay (§14). MITM is the chosen
+  path (Phase 0 already proved it end-to-end). **Remaining spike for P4:** confirm
+  the worker re-backfills `historical` frames to OUR relay on reconnect (WAL reseed
+  after a wrapper restart of a pre-existing session); harden there.
 - **P1 — Crypto core.** `packages/clawsec` (TypeScript): secret gen/parse/checksum,
   HKDF hierarchy, AES-256-GCM encrypt/decrypt, AAD, envelope format. Vitest unit
   tests (incl. round-trip + tamper/AAD-rejection). No network. Runs in Node +
@@ -352,16 +352,15 @@ phase0/            unchanged — the Python reference + protocol findings
 - **P3 — Vercel app skeleton.** `apps/web` (Next.js): ingest/read API routes + auth
   (`sha256(auth_token)`), per-session workflow with hook + durable stream, SSE
   endpoint. Deploy; curl round-trip with hand-rolled ciphertext.
-- **P4 — CLI: `serve` relay.** The host-side bridge. **Architecture pending the §14
-  decision:** either (a) **MITM** — Node/TS reimpl of the Phase 0 interception
-  (terminate TLS with our leaf via `NODE_EXTRA_CA_CERTS`, intercept
-  `/v1/code/sessions*`, pass `/v1/messages` through), or (b) **RC-API client
-  bridge** — run `claude --remote-control` normally and have the wrapper act as a
-  *client* of the Phase-0-verified RC API (read output via the events-cursor/SSE,
-  inject input via `POST .../events`), no TLS MITM. Either way: WAL each frame,
-  allocate `seq`, encrypt → `POST /api/relay`; subscribe inbound (SSE) → dedup by
-  `msg_id` → decrypt → deliver to Claude only after WAL commit, then echo
-  `accepted`. End-to-end: a curl "web" drives a real Claude session through Vercel.
+- **P4 — CLI: `serve` relay (MITM — §14).** Node/TS reimpl of the Phase 0
+  interception: the wrapper runs the real interactive `claude` and, when RC is
+  enabled, points it at our local MITM (`HTTPS_PROXY` → our proxy with a trusted
+  leaf cert; intercept `/v1/code/sessions*`; pass `/v1/messages` through to
+  Anthropic for inference). Our relay is the RC backend — Anthropic's RC relay is
+  never used. Then: WAL each frame, allocate `seq`, encrypt → `POST /api/relay`;
+  subscribe inbound (SSE) → dedup by `msg_id` → decrypt → deliver to Claude only
+  after WAL commit, then echo `accepted`. End-to-end: a curl "web" drives a real
+  Claude session through Vercel.
 - **P5 — Web client.** Paste/fragment secret, spaces list, session list, message
   view (history + live), send. Mobile/PWA.
 - **P6 — Multi-host + polish.** Add-host, friendly names, reconnect/resume, replay
@@ -413,11 +412,11 @@ tightening. Accepted fixes are already folded into §3–§8 above:
 - **Control frames are encrypted** under a derived `control_key` with `msg_id` +
   `expiry` + replay-check (catch_up/permission can't be server-injected). (§4.2,§8)
 - **Cloud-history contradiction removed.** The broker stores **no message bodies**;
-  catch-up is wrapper-served (WAL → events-cursor). Dropped `GET /api/messages`.
+  catch-up is wrapper-served (WAL → worker backfill). Dropped `GET /api/messages`.
   (§3.2,§6,§8)
 - **Overstated "verified replay" corrected.** Only string-presence was confirmed in
-  the binary, not a usable seq-range replay; design now relies on the wrapper WAL +
-  the Phase-0-verified events-cursor API; a P0.5 spike settles the rest. (§6,§11)
+  the binary, not a usable seq-range replay; design relies on the wrapper WAL +
+  worker backfill to our relay — NOT Anthropic's cursor API (we're off their relay). (§6,§11,§14)
 - **AAD/envelope canonicalized** (binds v, host_id, session_id, dir, record_kind,
   seq, msg_id, key_epoch via one serialization). (§4.3,§8)
 - **Encrypted-metadata keys** added (`K_host_meta`, `K_session_meta`). (§4.2,§8)
@@ -435,14 +434,28 @@ tightening. Accepted fixes are already folded into §3–§8 above:
   chat rooms — batch frames; SSE needs heartbeat/reconnect/`startIndex`/polling
   fallback). (§6)
 
-### Open architectural decision (your call): MITM vs RC-API-client bridge
-Both reviewers raised that the **MITM may be unnecessary**. Phase 0 *proved* you
-can drive a live RC session purely as a **client of Anthropic's RC API** (the
-BANANA/MANGO tests + the `GET …/events?cursor=` history read). So the host wrapper
-could be a thin **bridge** — `claude --remote-control` runs normally against
-Anthropic, the wrapper reads its output and injects input via that verified API,
-then E2E-encrypts to/from Vercel — **dropping the TLS-MITM, the cert, and the
-worker-protocol reimplementation** entirely (Anthropic already sees inference
-content, so this doesn't weaken the *Vercel* zero-knowledge property). The MITM
-keeps everything on your relay but is more fragile and more code. P0.5 informs
-this; pick before P4.
+### RESOLVED decision: MITM (not the RC-API bridge)
+Both reviewers raised that an RC-API-client bridge could avoid the MITM, and the
+**P0.5 spike confirmed it works** (`phase0/spikes/rc_api_bridge.py` →
+`captures/spike-rc-api-bridge.log`: inject + cursor-history catch-up + live client
+SSE all PASS as a pure client). **But the bridge routes the remote channel through
+Anthropic's RC relay, which is exactly what we will NOT do.** Decision (user,
+2026-06-07): **all remote traffic goes through OUR MITM**; Anthropic's RC relay is
+never in the loop — only model inference (`/v1/messages`) passes through to
+Anthropic.
+
+So the wrapper runs the **real interactive `claude` TUI** and, when the user
+enables remote control, makes it RC-eligible **pointed at our local MITM** (Phase
+0 method: `HTTPS_PROXY` → our proxy intercepts `/v1/code/sessions*`; our relay is
+the RC backend — verified end-to-end in Phase 0, the MANGO test). The wrapper is
+the RC backend, so it sees and WALs **every** frame; it then E2E-encrypts to
+Vercel. The bridge is recorded as a **rejected alternative** (keeps the protocol
+shapes it validated; we serve the same shapes ourselves).
+
+Consequence for history (supersedes earlier "events-cursor" wording): since we are
+**off Anthropic's relay**, deep history does **not** come from Anthropic's
+`/events?cursor=` API. Sources are: (1) the wrapper's **on-disk WAL** (the record,
+survives wrapper restart); (2) for a session that predates the WAL, the worker
+**backfills `historical` frames to OUR relay on RC connect** (Phase 0 observed
+`historical:true` events arriving at the relay) — harden reconnect-reseed in P4;
+(3) the local `.jsonl` transcript as a last resort. No Anthropic cloud history.
