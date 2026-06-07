@@ -39,6 +39,39 @@ exhaustive hand-off doc:
 - Native `stream-json` reference (the documented cousin) for cross-checking
 - Proposed `remote-claw` architecture + a **phased implementation plan**
 - Security considerations and open questions to verify empirically
+- **§9 — Authentication & Remote Control eligibility** (read before setup)
+
+## Getting started
+
+Clone on your server and check out `main`:
+
+```bash
+# git
+git clone https://github.com/ejc3/remote-claw.git
+cd remote-claw && git checkout main
+
+# or GitHub CLI
+gh repo clone ejc3/remote-claw -- --branch main
+```
+
+Then read the docs and begin at Phase 0:
+
+```bash
+cat README.md
+cat docs/remote-control-research.md
+```
+
+**Auth (do this first).** A real end-to-end test needs `claude` authenticated
+with a **full claude.ai login** — an inference-only `CLAUDE_CODE_OAUTH_TOKEN` or
+an `ANTHROPIC_API_KEY` **cannot establish a Remote Control session**:
+
+```bash
+claude auth login      # full-scope; uses your Pro/Max subscription
+claude auth status
+```
+
+Whether the undocumented `--sdk-url` path relaxes this (Case A vs Case B) is an
+open question — see **§9** of the research doc, and settle it during Phase 0.
 
 ## Implementation plan (summary)
 

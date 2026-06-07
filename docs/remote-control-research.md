@@ -338,6 +338,9 @@ into Anthropic's private cloud).
   request shape → `success` response shape → user-message shape →
   assistant/partial shapes → `can_use_tool` shape → control verbs.
 - **Pin the Claude Code version** you captured against.
+- This same run also **settles the auth Case A/B question** (see §9): note
+  whether it errors on RC eligibility *before* any WS connects, or proceeds
+  straight to the `initialize` handshake against your logger.
 
 **Phase 1 — Minimal relay.**
 - Implement the handshake (respond/initiate correctly), keep-alive, and a
@@ -394,7 +397,8 @@ into Anthropic's private cloud).
    mode still also render a local TUI?
 3. Does `--sdk-url ws://localhost` **bypass the claude.ai-subscription
    eligibility check** (since we never touch Anthropic's relay)? If yes, an
-   inference-only token might suffice for dev. **Verify.**
+   inference-only token might suffice for dev. **Verify.** See **§9** for the
+   full two-layer model (Case A vs Case B) and the exact test.
 4. Exact `user` message schema for a turn (string vs content-block array; how
    attachments / `@file` references are represented).
 5. `can_use_tool` full schema and the deny / "ask again" response variants.
@@ -410,7 +414,66 @@ into Anthropic's private cloud).
 
 ---
 
-## 9. Research-environment notes
+## 9. Authentication & Remote Control eligibility (the two-layer model)
+
+The single most likely setup blocker. There are **two separate auth checks**,
+with different requirements.
+
+- **Layer 1 — Inference auth (always required).** Model calls always go to
+  `api.anthropic.com`; the CLI needs a valid credential to run inference *no
+  matter how you connect*. Every auth type below satisfies this.
+- **Layer 2 — Remote Control eligibility (the strict gate).** Official RC
+  additionally **registers the session with Anthropic's relay** and verifies the
+  account is allowed to use RC. This is the step with the hard requirements.
+
+| Auth type | Layer 1 (inference) | Layer 2 (official RC) |
+| --- | --- | --- |
+| **Full claude.ai login** (`claude auth login`) | ✅ | ✅ supported (uses Pro/Max sub) |
+| **`ANTHROPIC_API_KEY`** (Console billing) | ✅ | ❌ *"requires a claude.ai subscription"* |
+| **`CLAUDE_CODE_OAUTH_TOKEN` / `setup-token`** (long-lived) | ✅ | ❌ *"requires a full-scope login token"* — inference-only, cannot establish RC |
+
+(This research container has the inference-only token → runs inference fine, but
+cannot establish official RC.)
+
+### 9.1 The `--sdk-url` open question — Case A vs Case B
+When redirected via `--sdk-url ws://localhost`, we replace Anthropic's relay with
+our own. **Unknown** whether the CLI still performs the Layer-2 eligibility
+handshake with Anthropic:
+
+- **Case A — bypassed.** The CLI only needs inference + our relay → *any* working
+  inference auth suffices (even an inference-only token or API key). Ideal for
+  servers/CI.
+- **Case B — still enforced.** The CLI checks RC eligibility against Anthropic
+  regardless → a **full `claude auth login` is required** even when pointed at
+  our own relay.
+
+### 9.2 How to settle it (do during Phase 0)
+On the target box, point a real RC launch at a throwaway logging WS server and
+watch **where** it fails:
+```bash
+# tiny logger first, e.g.:  npx wscat -l 8787   (or a ~10-line ws server)
+claude --remote-control --sdk-url ws://localhost:8787 \
+  --input-format stream-json --output-format stream-json --verbose
+```
+- Errors *"requires a full-scope login token / claude.ai subscription"* **before**
+  any WS connects → **Case B** (need `claude auth login`).
+- **Opens the WS and sends `initialize`** to your logger → **Case A**
+  (inference-only auth is enough). Bonus: you capture the real handshake frames
+  at the same time.
+
+### 9.3 Recommendations
+- **Safe default for the server:** run `claude auth login` with your claude.ai
+  (Max) account — full-scope, works under *both* cases, uses your subscription.
+- **Only if you need fully non-interactive auth** (headless/CI) do Case A vs B
+  matter — `setup-token`/API key work for RC *only if Case A holds*.
+- **Billing note:** interactive `--remote-control` counts as normal interactive
+  usage. But `claude -p` / Agent-SDK usage on subscription plans draws from a
+  **separate monthly Agent SDK credit pool as of 2026-06-15** — relevant only if
+  the `--sdk-url` path turns out to require `-p`.
+
+---
+
+## 10. Research-environment notes
 
 - `claude` present at `/opt/node22/bin/claude`, **v2.1.168**.
 - Auth = `CLAUDE_CODE_OAUTH_TOKEN` (inference-only, file-descriptor). Per docs
@@ -424,7 +487,7 @@ into Anthropic's private cloud).
 
 ---
 
-## 10. Reference commands (copy/paste starters)
+## 11. Reference commands (copy/paste starters)
 
 ```bash
 # Version pin check
@@ -455,7 +518,7 @@ export CLAUDE_CODE_USE_CCR_V2=1   # switch relay transport to SSE/HTTPS (CCRv2)
 
 ---
 
-## 11. Sources
+## 12. Sources
 
 - Official Remote Control docs — https://code.claude.com/docs/en/remote-control
 - Official Security (Remote Control section) — https://code.claude.com/docs/en/security
