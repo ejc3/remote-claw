@@ -350,13 +350,16 @@ Decision: build the self-hosted relay (own the sync layer). Implemented in
 ⇒ **Parallel input from the TUI and our own remote client on one session, over a
 relay we host.** The original requirement, achieved via Option 2.
 
-**Run it:**
+**Run it** (hardened CLI; see `phase0/README.md`):
 ```bash
-python3 phase0/relay/relay.py --verbose                 # starts :8888 proxy + :9100 UI
-HTTPS_PROXY=http://127.0.0.1:8888 NODE_EXTRA_CA_CERTS=phase0/mitm/certs/ca.pem \
-  claude --remote-control mysession --verbose           # TUI worker -> our relay
-# open http://127.0.0.1:9100/  (forward the port if remote)
+cd phase0
+./remote-claw up mysession     # certs + relay (bg) + claude --remote-control (TUI)
+# prints a tokenised URL; forward the port → http://127.0.0.1:9100/?token=…
+./remote-claw test             # automated e2e + two-surface tests
 ```
+The relay is the `remote_claw` package (config/log/certs/core/mitm/client_api/
+server/cli); `relay.py` was refactored into it during hardening. The client face
+is token-gated; logs are secret-redacted; cert keys are 0600.
 
 **Relay endpoints implemented** (worker side): `POST /sessions`, `GET
 /sessions/{id}`, `POST /sessions/{id}/bridge`, `GET|PUT /sessions/{id}/worker`,

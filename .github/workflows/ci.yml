@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main, phase0-own-relay]
+  pull_request:
+
+jobs:
+  lint-and-unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: phase0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+      - name: Byte-compile
+        run: python -m compileall -q remote_claw tests remote-claw
+      - name: Unit tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+    # Integration tests (e2e / two_surface) require a logged-in `claude` and a
+    # claude.ai account, so they run locally (`make test-integration`), not in CI.

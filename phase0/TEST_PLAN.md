@@ -1,7 +1,7 @@
 # remote-claw — Test Plan
 
-Scope: the Phase 0 own-relay implementation (`relay/relay.py` + `remote-claw`
-CLI). Goal under test: **a real `claude --remote-control` worker and our own
+Scope: the Phase 0 own-relay implementation (the `remote_claw` package +
+`remote-claw` CLI). Goal under test: **a real `claude --remote-control` worker and our own
 client drive one synced session through a relay we host**, with inference passing
 through to the real API.
 
@@ -11,9 +11,17 @@ Environment: a box with `claude` (≥ 2.1.51, tested 2.1.168) logged in via a fu
 
 ---
 
+## 0. Unit tests (fast, no claude/network)
+
+`make test`  →  `python -m unittest discover -s tests` (`tests/test_unit.py`)
+
+Covers the pure logic: chunked decoding, request parsing, **secret redaction**,
+the session event bus (downstream/upstream, initialize-once, ack-skips-redelivery),
+and client-event shaping. 13 tests, run in CI on every push/PR (with `ruff`).
+
 ## 1. Automated end-to-end test (primary)
 
-`./remote-claw test`  (wraps `test/e2e.py`)
+`./remote-claw test`  (runs `tests/e2e.py` then `tests/two_surface.py`)
 
 Fully self-contained; private ports (proxy 8899, client 9111) so it won't collide
 with a running instance. Steps & assertions:
@@ -23,7 +31,7 @@ with a running instance. Steps & assertions:
 | ensure certs | CA/leaf exist (generated if missing) |
 | start relay | client API answers on the client port |
 | launch worker under a pty, pointed at the relay via `HTTPS_PROXY`+`NODE_EXTRA_CA_CERTS` | process starts |
-| poll `GET /api/sessions` | the `e2e-test` session **registers with our relay** (proves the worker's RC backend is us, not Anthropic) |
+| poll `GET /api/sessions` | the `e2e` session **registers with our relay** (proves the worker's RC backend is us, not Anthropic) |
 | `POST /api/sessions/{id}/input` a unique token | HTTP 200 |
 | poll `GET /api/sessions/{id}/events` | an `assistant` event **contains the token** (proves: downstream delivery → worker → inference passthrough → upstream delivery → client read) |
 | teardown | worker + relay killed |
@@ -60,7 +68,7 @@ fan-out, reconnect, and the permission prompt path (see §3).
 
 ## 2b. Two-surface test (bidirectional sync)
 
-`python3 test/two_surface.py`
+`python3 tests/two_surface.py` (or `make test-integration`)
 
 Runs the TUI wrapper (`claude --remote-control` under a controlled pty) against
 our relay and proves **both surfaces drive one session**:
@@ -93,8 +101,13 @@ approval step to implement.
 
 ## 4. Negative / robustness checks
 
+- **Auth enforced:** `e2e.py` asserts `GET /api/sessions` without a token returns
+  **401** before proceeding. (Tested: PASS.)
 - `./remote-claw doctor` flags: missing `claude`, missing certs, busy ports, auth
   status. (Tested: reports each correctly.)
+- Secret redaction is unit-tested (`tests/test_unit.py`).
+- Graceful shutdown: relay exits cleanly on SIGINT/SIGTERM (closes proxy + client
+  face); verified by the integration teardown.
 - `up` refuses to start if relay ports are busy (`remote-claw stop` first).
 - Non-`api.anthropic.com` hosts are blind-tunneled (not MITM'd) — other traffic
   unaffected.
