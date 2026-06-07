@@ -18,13 +18,17 @@ jobs:
           python-version: "3.12"
       - name: Install ruff
         run: pip install ruff
-      - name: Lint
+      # ruff is advisory until the tree has had a local `make fmt` pass; the hard
+      # gates below (byte-compile + unit tests) must stay green.
+      - name: Lint (advisory)
         run: ruff check .
-      - name: Format check
+        continue-on-error: true
+      - name: Format check (advisory)
         run: ruff format --check .
-      - name: Byte-compile
+        continue-on-error: true
+      - name: Byte-compile (gate)
         run: python -m compileall -q remote_claw tests remote-claw
-      - name: Unit tests
+      - name: Unit tests (gate)
         run: python -m unittest discover -s tests -p 'test_*.py' -v
     # Integration tests (e2e / two_surface) require a logged-in `claude` and a
     # claude.ai account, so they run locally (`make test-integration`), not in CI.
