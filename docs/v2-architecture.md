@@ -15,16 +15,91 @@ ciphertext**.
 
 Goals:
 - Mobile-friendly web app (Vercel) to chat with your sessions.
-- Paste one **per-host shared secret** → access that host's sessions + decrypt.
-- **Multiple hosts** listed like chat "spaces"; add more by pasting more secrets;
-  name each (default = hostname).
+- Paste one **secret** → access **every claude instance under that secret** and
+  decrypt it.
+- **Each claude instance is its own space / chat** (gchat-style). Instances are
+  grouped by the **secret** they run under.
 - **E2E encrypted** from the secret; **non-guessable** secrets; Vercel
   zero-knowledge.
-- Stateless web client; the **TUI host is the brain** (the wrapper's on-disk WAL
-  is the durable record); the cloud is a stateless ciphertext relay (see §6).
+- Stateless web client **and** stateless wrapper; **claude's on-disk session is the
+  durable record**; the cloud is a stateless ciphertext relay (see §6).
+
+> **Terminology (the core abstraction = the SECRET).** A *secret* derives an
+> **identity** — `host_id` / `auth_token` / content keys — that authenticates and
+> unlocks **all instances under it**. By default a machine has one secret
+> (`remote-claw identity`), so "host" ≈ "machine"; **but you can override the
+> secret per wrapper** (`serve --secret …`), so one machine can carry **several**
+> identities (and, conversely, one secret could span machines). A *claude instance*
+> = a *session* = a *space* = **one chat** (a single running `claude` with remote
+> control enabled). So **2 secrets × 10 instances = 20 spaces**. The web lists
+> spaces (instances), grouped by secret/identity. (`host_id` below = a secret's
+> identity, **not** a hardware id.)
 
 Non-goals (v1): forward secrecy, per-device revocation, group/sender-key crypto,
 metadata privacy (timing/sizes/seq are visible to the broker).
+
+## 1A. User experience & ergonomics (the flow we're building)
+
+The whole design serves this human flow. Two roles (often the same person): the
+**operator** runs claude on a machine; the **driver** chats from a phone/laptop.
+
+### A. Operator — on the machine
+1. **One-time:** install, run `remote-claw identity` → copy the printed `rc1_…`
+   secret. (That's the default machine identity; you can make more.)
+2. **Daily:** instead of `claude`, run `remote-claw serve`. You get the **exact
+   normal claude TUI**, locally, as always — *nothing is remote until you opt in*.
+3. **Share a session:** hit `/remote-control` in that TUI → it flips to "Remote
+   Control active," and that instance becomes a chat in the web app. (Or launch it
+   already-shared.)
+4. Run **as many instances as you like** — one per repo/branch/task; each is its
+   own chat. Close the TUI → that chat goes offline.
+
+*Ergonomic promises:* zero change to the local workflow; **opt-in per session**;
+the wrapper is invisible until RC is on; nothing leaves the box unencrypted.
+
+### B. Driver — on phone/laptop (the web app)
+1. **First time:** open the app, paste the `rc1_…` (or open a link with the secret
+   in the URL `#fragment`). Keys derive **in the browser**; the secret never hits
+   the server.
+2. You land on a **list of chats** — every claude instance under that secret,
+   most-active first, each with a name + an online dot. Reads like Slack/iMessage.
+3. **Tap one** → history decrypts locally and live messages stream in. **Type** →
+   your message shows in the chat *and* in the real terminal; claude works and the
+   reply streams back to your phone.
+4. **Add a machine:** paste its secret → its chats join the list (grouped by
+   identity).
+
+*Ergonomic promises:* mobile-first, instant, **no login** beyond the pasted secret;
+feels like a messaging app; spans many machines.
+
+### C. Naming & organization
+- Each chat's default name is meaningful — repo + branch / cwd + the gist of the
+  first prompt (the title claude already generates). Editable; stored **encrypted**.
+- Identities (machines) are named too (default = hostname); chats group under them.
+- **Online/offline per chat** via heartbeat TTL: green when the host is up and the
+  instance live; greyed when offline (the chat stays in your list).
+
+### D. Reconnect / offline (what it feels like)
+- Phone drops Wi-Fi mid-reply → on reconnect it **silently catches up**; you never
+  lose the thread.
+- Host sleeps / you close the TUI → the chat shows **offline**; sending says "host
+  offline."
+- Bring the host back (`serve` → `/remote-control`, or `--continue`) → the chat
+  goes live and **history is intact** (it lives with claude, not the cloud).
+
+### E. Security ergonomics (honest with the user)
+- The pasted secret is powerful (read + write + decrypt every chat under it) —
+  treat it like a password. The app offers **"forget identity"** (wipes it from the
+  device).
+- Lost/leaked secret → **rotate**: a new secret = a new identity (fresh chats); the
+  old one is dead. No partial revoke in v1.
+- The cloud never sees plaintext or the secret — only ciphertext + routing metadata
+  (who/when/sizes), which it cannot read.
+
+### F. Explicitly NOT in v1 (so we don't over-build)
+- Push notifications (nice later; for v1 you open the app to see new messages).
+- Per-device revocation / sharing one identity with separately-revocable people.
+- Editing/branching past turns from the phone beyond what claude's RC already does.
 
 ## 2. Threat model & the zero-knowledge property
 
@@ -48,36 +123,37 @@ metadata privacy (timing/sizes/seq are visible to the broker).
   ┌── server A (your machine) ──────────────┐         ┌──────── Vercel (broker) ────────┐        ┌── phone / laptop ──┐
   │ claude --remote-control                  │         │  ingest Functions (auth: token) │        │  web app (Next.js) │
   │      ▲  MITM (our relay = RC backend)    │  wss/   │  per-session Workflow (buffer)  │  SSE/  │  paste secret →    │
-  │      │  + on-disk WAL (the record)       │  https  │  (no history — relay only)      │ stream │  derive keys →     │
+  │      │  + in-memory log (claude=record) │  https  │  (no history — relay only)      │ stream │  derive keys →     │
   │ remote-claw serve --hostname <app> ──────┼────────▶│  live fan-out (SSE + workflow)   │◀──────▶│  decrypt & render  │
   │   (machine identity: secret S, 0600)     │ ciphertext only                          │        │  encrypt & send    │
   └──────────────────────────────────────────┘         └─────────────────────────────────┘        └────────────────────┘
-        multiple such servers = multiple "spaces"
+    one machine = one secret/auth; each claude instance on it = one "space"/chat
 ```
 
 ### 3.1 CLI — two commands (as requested)
 
-1. **`remote-claw identity`** — create the **machine identity**, used by *all*
-   sessions on the machine and for encryption.
-   - Generates the per-host **root secret `S`** (32 bytes CSPRNG) once, stores it
-     `0600` in the state dir, derives `host_id`/`auth_token`/`content_root` (§4).
-   - Registers the host with the app (`POST /api/hosts` with `host_id`,
-     `sha256(auth_token)`, and an **encrypted** friendly name defaulting to the
-     hostname).
-   - Prints the **pasteable secret** `rc1_…` once, for the web app and other
-     devices. Re-running prints `host_id` + status (never reprints `S` unless
-     `--show`).
+1. **`remote-claw identity`** — create an **identity** (the default machine
+   identity). The **secret is the boundary**, not the hardware.
+   - Generates a **root secret `S`** (32 bytes CSPRNG), stores it `0600` in the
+     state dir, derives `host_id`/`auth_token`/`content_root` (§4).
+   - Registers the identity (`POST /api/hosts` with `host_id`, `sha256(auth_token)`,
+     and an **encrypted** friendly name, default = hostname).
+   - Prints the **pasteable secret** `rc1_…` once. Re-running prints `host_id` +
+     status (never reprints `S` unless `--show`). You can create **more than one**
+     identity and pick among them with `--secret` below — so one machine can present
+     several "accounts."
 
-2. **`remote-claw serve --hostname <vercel-app-url>`** — the **wrapper**. Runs the
-   **real interactive `claude` TUI** and, when the user enables remote control,
-   makes it RC-eligible **pointed at our local MITM** (not Anthropic's RC relay —
-   §14). Our relay is the RC backend; it bridges that traffic E2E-encrypted to the
-   app.
+2. **`remote-claw serve --hostname <app> [--secret rc1_… | --id NAME]`** — the
+   **wrapper**. Runs the **real interactive `claude` TUI** and, when the user
+   enables remote control, makes it RC-eligible **pointed at our local MITM** (not
+   Anthropic's RC relay — §14). Our relay is the RC backend; it bridges that traffic
+   E2E-encrypted to the app **under the chosen secret** (default = the machine
+   identity; override to run instances under a different identity on the same box).
    - Encodes the relay logic in Node/TS (reimplementing the Phase-0 interception
-     knowledge): on each worker→relay event, WAL it, allocate `seq`, encrypt with
+     knowledge): on each worker→relay event, log it, allocate `seq`, encrypt with
      the per-session key, and `POST /api/relay`; subscribe (SSE) to the host's
      inbound channel, **dedup by `msg_id`**, decrypt, and deliver to Claude **after
-     WAL commit**, then echo `accepted`.
+     log commit**, then echo `accepted`.
    - Maintains in-memory relay state (catch-up log, `msg_id` seen-set, registered
      sessions, crypto state) — **recoverable from the claude session** by
      re-enabling `/remote-control` (the worker re-backfills), so no durable store is
@@ -100,7 +176,7 @@ metadata privacy (timing/sizes/seq are visible to the broker).
   not the record** (§6).
 - **Catch-up is proxied to the wrapper, not served from the cloud.** A
   `catch_up{since=seq}` control frame is relayed to the wrapper, which replies with
-  `historical` frames from its WAL (then worker backfill). There is **no**
+  `historical` frames from its log (then worker backfill). There is **no**
   `GET /api/messages` history store.
 - **Presence / heartbeat (TTL):** the wrapper `POST /api/heartbeat {host_id,
   session_ids[], ts}` every `HEARTBEAT_INTERVAL` (≈15 s); the broker updates
@@ -116,16 +192,17 @@ metadata privacy (timing/sizes/seq are visible to the broker).
 ### 3.3 Web client (stateless, mobile-first)
 - Paste secret (or open a link with the secret in the **URL fragment** `#…`, which
   browsers never send to the server). Derive keys in-browser (WebCrypto).
-- **Spaces list** = the set of pasted secrets → one host each (names decrypted
-  client-side). **Add host** = paste another secret. Secrets persist in
-  `localStorage` (documented risk) or memory-only (re-paste).
-- Per host → session list (gchat-style) → message view: load history
-  (decrypt) + subscribe live (decrypt) + send (encrypt → POST).
+- **Spaces** = **every claude instance across all your machines**, grouped by
+  machine (one pasted secret unlocks all of a machine's instances). **Add a
+  machine** = paste its secret. Secrets persist in `localStorage` (documented
+  risk) or memory-only (re-paste).
+- Pick a space (instance) → message view: load history (decrypt) + subscribe live
+  (decrypt) + send (encrypt → POST).
 - PWA, responsive; no server-side session state.
 
 ## 4. The secret & key hierarchy (token approach)
 
-One **root secret `S`** per host is the only thing copied/pasted. Everything is
+One **root secret `S`** per identity is the only thing copied/pasted. Everything is
 derived deterministically with **HKDF-SHA256** (RFC 5869), identical code on CLI
 host and web client.
 
@@ -236,11 +313,13 @@ overstatement. Phase 0 confirmed those **strings exist in the binary** but did
 sort_order=&cursor=` API. The design below relies only on that + the wrapper's own
 log — never on an unproven replay primitive. See §14.)
 
-- **The wrapper's own durable WAL is the source of truth.** The `serve` wrapper
-  sees every frame both directions and persists each to an **on-disk write-ahead
-  log** on the TUI host (per session, keyed by `seq`) — durable across wrapper
-  restarts. This is the authoritative catch-up source.
-- **Deep history beyond the WAL** is reseeded by the **worker backfilling
+- **The durable record is claude's on-disk session; the wrapper's log is
+  in-memory.** The `serve` wrapper sees every frame both directions and keeps an
+  **in-memory per-session log** (keyed by `seq`) as the live catch-up source. It is
+  **not** persisted: both wrapper and CLI are stateless, and the in-memory log is
+  rebuilt from claude on (re)connect (next bullet). The authoritative transcript is
+  claude's own `~/.claude/projects/.../<session>.jsonl`.
+- **History (and recovery) comes from claude, reseeded by the worker backfilling
   `historical` frames to OUR relay** on RC connect (Phase 0 observed `historical:
   true` events arriving at the relay; reconnect-reseed hardened in P4). The local
   `~/.claude/projects/<cwd>/<session>.jsonl` transcript is a last-resort fallback.
@@ -248,17 +327,17 @@ log — never on an unproven replay primitive. See §14.)
   §14). The TUI owns sessions and `seq` ordering; **the cloud stores no history.**
 - **`seq` is allocated solely by the wrapper.** Clients never assign transcript
   order: a web client sends a `client_msg_id`; the wrapper decrypts, commits to its
-  WAL, assigns the canonical `seq`, then echoes an `accepted{client_msg_id, seq}`.
+  in-memory log, assigns the canonical `seq`, then echoes an `accepted{client_msg_id, seq}`.
   Clients retry until `accepted`; the wrapper forwards a prompt to Claude **only
-  after** its WAL commit (so POST-accepted-by-broker ≠ delivered).
+  after** its log commit (so POST-accepted-by-broker ≠ delivered).
 - **Replay/idempotency:** delivery is at-least-once and the broker can *replay a
   valid old ciphertext*, so the wrapper keeps a **durable seen-set keyed by
   `msg_id`** and drops duplicate inbound/control frames **before** any side effect.
 - **Catch-up is an encrypted control frame to the wrapper.** A client sends an
   **AEAD-encrypted** `catch_up{since=<last-seen seq | 0>, msg_id, expiry}` (control
   frames use a derived control key + replay check — never plaintext the broker
-  could inject); the wrapper serves the delta from its WAL (then worker-backfill
-  for ranges older than the WAL), streaming `historical` frames, then live.
+  could inject); the wrapper serves the delta from its log (then worker-backfill
+  for ranges older than the log), streaming `historical` frames, then live.
 - **The cloud = relay + short live buffer only (Vercel-native, no third party).**
   Live ciphertext frames go out over **SSE from a streaming Vercel Function**,
   backed by the per-session **Workflow durable resumable stream**. When the SSE
@@ -344,7 +423,7 @@ out after the session goes offline past TTL). It holds ONLY:
    dedups authoritatively — this just avoids obvious buffer dupes).
 5. **presence/`last_seen`** for the online flag.
 
-It deliberately does **not** hold: the durable transcript (wrapper WAL + claude),
+It deliberately does **not** hold: the durable transcript (claude's on-disk session),
 long-term history, or any plaintext. Its 1–7 day retention is irrelevant because
 everything in it is reconstructible from the claude session via `catch_up`. That is
 the "just enough ephemeral state to be natural" line: the **workflow** makes live
@@ -354,15 +433,15 @@ correct.
 ### Lifecycle (the natural flow)
 RC enabled → wrapper registers host/session + starts/relinks the session workflow →
 streams open. Live turn → `assistant`/`result` flow out-stream, `user` flows
-in-queue via the hook; clients tail; wrapper WALs + echoes `accepted`. Brief
+in-queue via the hook; clients tail; wrapper logs + echoes `accepted`. Brief
 reconnect (web or wrapper) → resume by `seq` from the workflow buffer. Gap older
-than the buffer / cold device → `catch_up` → wrapper replays from WAL (or worker
+than the buffer / cold device → `catch_up` → wrapper replays from its log (or worker
 backfill). Session ends / wrapper exits (it never outlives the CLI) → heartbeats
 stop → `online=false` after TTL → workflow idles and its retention expires; nothing
 is lost because claude holds the transcript.
 
 ## 7. Multi-host "spaces" & onboarding
-- Each pasted secret = one host = one space. The web stores the set of secrets
+- Each pasted secret = one **identity**; **each claude instance under it = one space**. The web stores the set of secrets
   (client-side) and renders spaces with decrypted friendly names (default
   hostname, editable; name stored **encrypted** in the host registry).
 - **Add a host:** paste another `rc1_…`; the checksum validates it, keys derive,
@@ -458,9 +537,9 @@ phase0/            unchanged — the Python reference + protocol findings
   enabled, points it at our local MITM (`HTTPS_PROXY` → our proxy with a trusted
   leaf cert; intercept `/v1/code/sessions*`; pass `/v1/messages` through to
   Anthropic for inference). Our relay is the RC backend — Anthropic's RC relay is
-  never used. Then: WAL each frame, allocate `seq`, encrypt → `POST /api/relay`;
+  never used. Then: log each frame, allocate `seq`, encrypt → `POST /api/relay`;
   subscribe inbound (SSE) → dedup by `msg_id` → decrypt → deliver to Claude only
-  after WAL commit, then echo `accepted`. End-to-end: a curl "web" drives a real
+  after log commit, then echo `accepted`. End-to-end: a curl "web" drives a real
   Claude session through Vercel.
 - **P5 — Web client.** Paste/fragment secret, spaces list, session list, message
   view (history + live), send. Mobile/PWA.
@@ -505,18 +584,18 @@ The crypto/secret core was judged **sound**; the protocol/reliability layer need
 tightening. Accepted fixes are already folded into §3–§8 above:
 
 - **`seq` is wrapper-allocated, with commit semantics.** Clients never assign
-  transcript order; they send `client_msg_id`, the wrapper WALs + assigns `seq` +
-  echoes `accepted{client_msg_id, seq}`; Claude receives a prompt only after WAL
+  transcript order; they send `client_msg_id`, the wrapper logs + assigns `seq` +
+  echoes `accepted{client_msg_id, seq}`; Claude receives a prompt only after log
   commit. (§6)
 - **Replay protection ≠ AEAD.** The broker can replay a valid old ciphertext →
   durable `msg_id` seen-set; drop dupes before side effects. (§6)
 - **Control frames are encrypted** under a derived `control_key` with `msg_id` +
   `expiry` + replay-check (catch_up/permission can't be server-injected). (§4.2,§8)
 - **Cloud-history contradiction removed.** The broker stores **no message bodies**;
-  catch-up is wrapper-served (WAL → worker backfill). Dropped `GET /api/messages`.
+  catch-up is wrapper-served (log → worker backfill). Dropped `GET /api/messages`.
   (§3.2,§6,§8)
 - **Overstated "verified replay" corrected.** Only string-presence was confirmed in
-  the binary, not a usable seq-range replay; design relies on the wrapper WAL +
+  the binary, not a usable seq-range replay; design relies on the wrapper log +
   worker backfill to our relay — NOT Anthropic's cursor API (we're off their relay). (§6,§11,§14)
 - **AAD/envelope canonicalized** (binds v, host_id, session_id, dir, record_kind,
   seq, msg_id, key_epoch via one serialization). (§4.3,§8)
@@ -549,14 +628,14 @@ So the wrapper runs the **real interactive `claude` TUI** and, when the user
 enables remote control, makes it RC-eligible **pointed at our local MITM** (Phase
 0 method: `HTTPS_PROXY` → our proxy intercepts `/v1/code/sessions*`; our relay is
 the RC backend — verified end-to-end in Phase 0, the MANGO test). The wrapper is
-the RC backend, so it sees and WALs **every** frame; it then E2E-encrypts to
+the RC backend, so it sees and logs **every** frame; it then E2E-encrypts to
 Vercel. The bridge is recorded as a **rejected alternative** (keeps the protocol
 shapes it validated; we serve the same shapes ourselves).
 
 Consequence for history (supersedes earlier "events-cursor" wording): since we are
 **off Anthropic's relay**, deep history does **not** come from Anthropic's
-`/events?cursor=` API. Sources are: (1) the wrapper's **on-disk WAL** (the record,
-survives wrapper restart); (2) for a session that predates the WAL, the worker
+`/events?cursor=` API. Sources are: (1) the wrapper's **in-memory log** (a live buffer,
+rebuilt from claude on restart); (2) for a session that predates the log, the worker
 **backfills `historical` frames to OUR relay on RC connect** (Phase 0 observed
 `historical:true` events arriving at the relay) — harden reconnect-reseed in P4;
 (3) the local `.jsonl` transcript as a last resort. No Anthropic cloud history.
@@ -581,7 +660,7 @@ rc_api_bridge); others are specs to build/test.
 **Enabling remote control**
 4. **Enable RC mid-session via `/remote-control`.** Wrapper points the inner claude
    at the local MITM → our relay is the RC backend; worker backfills the existing
-   transcript as `historical` frames → WAL seeds; `POST /api/sessions {enc(title),
+   transcript as `historical` frames → log seeds; `POST /api/sessions {enc(title),
    enc(cwd)}`; session goes online. **[V]** C1+C2
 5. **Launch with RC on.** `serve --remote-control` → fresh session, our relay is the
    backend from the start, empty history. **[V]** (Phase 0)
@@ -591,14 +670,14 @@ rc_api_bridge); others are specs to build/test.
    derive keys in-browser → `GET /api/hosts` → one space, online via heartbeat;
    store secret in localStorage.
 7. **Client second connection, 5 wrappers.** 5 secrets pasted over time → web lists
-   **5 hosts/wrappers as spaces**, each with online/offline (heartbeat TTL §3.2) +
+   all their **instances as spaces** (grouped by secret), each with online/offline (heartbeat TTL §3.2) +
    last-activity. (the "know the 5 separate claude-code wrappers" case)
 8. **List sessions in a host.** Select space → `GET /api/sessions?host=` → decrypt
    titles/cwd client-side → gchat-style session list with online + last-activity.
 
 **History sync**
 9. **Open a session cold (full sync).** Client sends encrypted `catch_up{since=0}`
-   → Vercel → wrapper replays full WAL (or triggers worker backfill) as `historical`
+   → Vercel → wrapper replays full log (or triggers worker backfill) as `historical`
    → client decrypts/renders, then tails live. (the "grab current history to sync")
 10. **Reopen a session (delta sync).** Client cached up to `seq=N` (IndexedDB) →
     `catch_up{since=N}` → wrapper sends only `>N`; or resume from the workflow buffer
@@ -607,7 +686,7 @@ rc_api_bridge); others are specs to build/test.
 **Messaging (the core loop)**
 11. **Send from client → underlying claude.** Client encrypts a `user` frame
     (`client_msg_id`) → `POST /api/relay` → workflow in-queue → wrapper hook → dedup
-    by `msg_id` → WAL → decrypt → inject into claude via MITM downstream → echo
+    by `msg_id` → log → decrypt → inject into claude via MITM downstream → echo
     `accepted{client_msg_id, seq}`; claude replies → `assistant`/`result` out-stream
     → client renders. **[V]** C3 (the "how a message routes to the underlying CLI")
 12. **Type in the local TUI → appears in client.** Worker emits `user`+`assistant`
@@ -632,7 +711,7 @@ rc_api_bridge); others are specs to build/test.
     seq` → resume from the workflow buffer; at-least-once → dedup by `msg_id`; no
     missed/dup frames.
 19. **Wrapper/CLI restart (both stateless).** Reboot/crash → relaunch `claude
-    --continue` + `/remote-control` → worker re-backfills → WAL rebuilt; clients
+    --continue` + `/remote-control` → worker re-backfills → log rebuilt; clients
     reconnect + `catch_up`; heartbeat resumes → online. **[V]** C5
 20. **Host offline → back.** Wrapper exits (never outlives the CLI) → heartbeat
     stops → after TTL the space/sessions show **offline**, client sends rejected
@@ -672,7 +751,7 @@ Frame kinds per §6A. `→` one message; steps are ordered.
 3. T→W `POST …/{sid}/bridge` → W `200 {worker_jwt, api_base_url}`
 4. T→W `GET …/{sid}/worker/events/stream` (SSE); W→T `control_request{initialize}`
 5. T→W `POST …/worker/events [{user historical}, {assistant historical}, …]` *(backfill of prior chat)*
-6. W: WAL+encrypt each; W→V `POST /api/sessions {host_id, sid, enc(title), enc(cwd), status:active}`; `POST /api/heartbeat {session_ids:[sid]}` → session online
+6. W: log+encrypt each; W→V `POST /api/sessions {host_id, sid, enc(title), enc(cwd), status:active}`; `POST /api/heartbeat {session_ids:[sid]}` → session online
 
 **5. Launch with RC ON** (`serve --remote-control`) — as #4 steps 2–4 (register→bridge→stream→initialize), **no backfill** (empty history).
 
@@ -692,28 +771,28 @@ Frame kinds per §6A. `→` one message; steps are ordered.
 **9. Open a session cold — full history sync**
 1. C: encrypt `catch_up{since:0, msg_id, expiry}` (control_key) → C→V `POST /api/relay {dir:in, kind:control}`
 2. V→W via hook; W decrypts `catch_up`
-3. W replays WAL from 0: for each frame W→V `POST /api/relay {dir:out, kind:user|assistant|result, historical:true, seq}`
+3. W replays its log from 0: for each frame W→V `POST /api/relay {dir:out, kind:user|assistant|result, historical:true, seq}`
 4. V→C SSE out-stream → C decrypts + renders history, then tails live
 
 **10. Reopen — delta sync**
 1. C cached to `seq=N` → C→V `POST /api/relay catch_up{since:N}`
-2. V→W hook → W replays WAL `seq>N` → out-stream → C
+2. V→W hook → W replays log `seq>N` → out-stream → C
    *(or, if within the workflow buffer window: C→V `GET /api/stream?since=N` resumes from the buffer, W untouched)*
 
 **11. Send from client → underlying claude** *(verified C3 — the core loop)*
 1. C: encrypt `user{content}` → C→V `POST /api/relay {dir:in, kind:user, client_msg_id}`
 2. V appends in-queue → `hook.resume(sid, frame)`
-3. W: hook fires → **dedup by msg_id** → decrypt → **WAL** → allocate `seq`
+3. W: hook fires → **dedup by msg_id** → decrypt → **log** → allocate `seq`
 4. W→T inject the user message on the worker SSE *(MITM downstream)*
 5. W→V `POST /api/relay {dir:out, kind:accepted, client_msg_id, seq}` → V→C SSE → C clears "pending"
 6. T→A `POST /v1/messages` *(inference, passthrough)*
 7. T→W `POST …/worker/events [{assistant},{result}]`
-8. W: WAL+encrypt → W→V `POST /api/relay {dir:out, kind:assistant, seq}` then `{result, seq}`
+8. W: log+encrypt → W→V `POST /api/relay {dir:out, kind:assistant, seq}` then `{result, seq}`
 9. V→C SSE → C decrypts + renders
 
 **12. Type in the local TUI → appears in client** *(verified C4)*
 1. user↔T; T→A inference; T→W `POST …/worker/events [{user source:worker},{assistant},{result}]`
-2. W WAL+encrypt → W→V `POST /api/relay {dir:out …}` → V→C SSE → all clients render
+2. W log+encrypt → W→V `POST /api/relay {dir:out …}` → V→C SSE → all clients render
 
 **13. Two clients, one session (fan-out)**
 1. C₁,C₂ each: C→V `GET /api/stream?session=sid&since=seq` (two readers on the workflow out-stream)
@@ -743,8 +822,8 @@ Frame kinds per §6A. `→` one message; steps are ordered.
 **19. Wrapper/CLI restart (both stateless)** *(verified C5)*
 1. both die → W relaunches **T** as `claude --continue` *(resume on-disk session)* through the MITM
 2. user `/remote-control` → register→bridge→stream (as #4) → T→W backfill `POST …/worker/events [full historical transcript]`
-3. W rebuilds WAL from backfill; W→V re-`POST /api/sessions` + heartbeat → online
-4. C reconnects → `catch_up` → W replays rebuilt WAL → C re-renders *(state recovered from claude)*
+3. W rebuilds the log from backfill; W→V re-`POST /api/sessions` + heartbeat → online
+4. C reconnects → `catch_up` → W replays the rebuilt log → C re-renders *(state recovered from claude)*
 
 **20. Host offline → back**
 1. W/CLI exit → heartbeats stop
@@ -760,7 +839,7 @@ Compact map of the building blocks each scenario exercises. Vocabulary: `HKDF`
 `/api/heartbeat` `bearer` · workflow: `hook` `wf-stream`(durable resumable)
 `online=last_seen+TTL` · host/MITM: `intercept`(/v1/code/sessions*)
 `passthrough`(/v1/messages) `bridge`(worker_jwt) `worker-SSE` `/worker/events`
-`initialize` `backfill`(historical) `WAL` `dedup`(msg_id) `seq-alloc`
+`initialize` `backfill`(historical) `log` `dedup`(msg_id) `seq-alloc`
 `/remote-control`.
 
 | # | Scenario | Primitives |
@@ -768,20 +847,20 @@ Compact map of the building blocks each scenario exercises. Vocabulary: `HKDF`
 | 1 | Fresh machine bootstrap | `CSPRNG(S)`, `HKDF`→{host_id,auth_token,content_root,control_key,K_*_meta}, `sha256`, `GCM(name)`, `checksum`, `/api/hosts`, `bearer` |
 | 2 | Wrapper launches TUI, RC off | MITM `passthrough`, CA trust, `/api/heartbeat`, `online` |
 | 3 | Work locally, RC off | `passthrough`, claude on-disk transcript (no /v1/code) |
-| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `backfill`, `WAL`, `GCM`, `/api/sessions` |
-| 5 | Launch with RC on | `intercept`, `bridge`, `worker-SSE`, `initialize`, `WAL` |
+| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `backfill`, `log`, `GCM`, `/api/sessions` |
+| 5 | Launch with RC on | `intercept`, `bridge`, `worker-SSE`, `initialize`, `log` |
 | 6 | Client first connection | `HKDF`, `bearer`, `/api/hosts`, `GCM-open(name)`, `localStorage` |
-| 7 | Discover 5 wrappers | 5× `HKDF`, 5× `bearer`, `online=last_seen+TTL`, `GCM-open` |
+| 7 | Discover instances across secrets | 5× `HKDF`, 5× `bearer`, `online=last_seen+TTL`, `GCM-open` |
 | 8 | List sessions | `/api/sessions`, `GCM-open(title/cwd)`, `online` |
-| 9 | Cold full history sync | `GCM(control_key)`, `hook`, `WAL-read`, `GCM(content)`, `/api/relay`, `wf-stream/SSE`, `seq` |
-| 10 | Reopen — delta sync | `catch_up`, `WAL-read(>N)`, `IndexedDB` cache, `wf-stream` resume(`startIndex`) |
-| 11 | Client → claude → back | `GCM(content)`, `hook`, `dedup(msg_id)`, `WAL`, `seq-alloc`, `intercept`-inject, `passthrough`, `accepted`, `wf-stream/SSE`, `AAD` |
-| 12 | Type in TUI → client | `worker-SSE`(upstream), `WAL`, `GCM`, `wf-stream/SSE` |
+| 9 | Cold full history sync | `GCM(control_key)`, `hook`, `log-read`, `GCM(content)`, `/api/relay`, `wf-stream/SSE`, `seq` |
+| 10 | Reopen — delta sync | `catch_up`, `log-read(>N)`, `IndexedDB` cache, `wf-stream` resume(`startIndex`) |
+| 11 | Client → claude → back | `GCM(content)`, `hook`, `dedup(msg_id)`, `log`, `seq-alloc`, `intercept`-inject, `passthrough`, `accepted`, `wf-stream/SSE`, `AAD` |
+| 12 | Type in TUI → client | `worker-SSE`(upstream), `log`, `GCM`, `wf-stream/SSE` |
 | 13 | Two clients (fan-out) | `wf-stream` multi-reader, `SSE`, `seq`/`dedup` |
 | 14 | Add a host | `HKDF(S₂)`, `bearer₂`, `/api/hosts` |
 | 15 | Rename host/session | `GCM(K_host_meta)`, `/api/hosts` update |
 | 16 | Tool permission | `control_request/response`, `GCM(control_key)`, `hook`, `worker-SSE` |
 | 17 | Remote control verbs | control frames (`control_key`), `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`) |
 | 18 | Network blip resume | `wf-stream` resume(`startIndex`), `seq` reorder, `dedup` |
-| 19 | Wrapper/CLI restart recovery | `--continue`, `/remote-control`, `intercept`, `backfill`, `WAL-rebuild`, `catch_up` |
+| 19 | Wrapper/CLI restart recovery | `--continue`, `/remote-control`, `intercept`, `backfill`, `log-rebuild`, `catch_up` |
 | 20 | Host offline → back | heartbeat `TTL`, `online` flag, offline reject/queue, `catch_up` |
