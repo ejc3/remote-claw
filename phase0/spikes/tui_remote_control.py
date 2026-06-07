@@ -50,9 +50,19 @@ CWD = f"/tmp/rc-verify-{os.getpid()}"  # dedicated dir so `--continue` resumes O
 results = {}
 
 
-def ok(m): print(f"  \033[32m✓\033[0m {m}", flush=True)
-def bad(m): print(f"  \033[31m✗ {m}\033[0m", flush=True)
-def step(m): print(f"\033[1m▶ {m}\033[0m", flush=True)
+_LOGF = open("/tmp/tui-verify.log", "a", buffering=1)
+_T0 = time.time()
+
+
+def log(m):
+    line = f"[{time.time() - _T0:6.1f}s] {m}"
+    sys.stdout.write(line + "\n"); sys.stdout.flush()
+    _LOGF.write(line + "\n")
+
+
+def ok(m): log(f"  \033[32m✓\033[0m {m}")
+def bad(m): log(f"  \033[31m✗ {m}\033[0m")
+def step(m): log(f"\033[1m▶ {m}\033[0m")
 
 
 def get(path):
@@ -104,10 +114,15 @@ class Tui:
 
     def wait_for(self, token, timeout):
         end = time.time() + timeout
+        nxt = time.time() + 5
         while time.time() < end:
             if token in self.screen():
                 return True
+            if time.time() >= nxt:
+                log(f"    … TUI waiting for {token!r} ({int(end - time.time())}s left)")
+                nxt += 5
             time.sleep(0.4)
+        log(f"    … TUI gave up on {token!r} after {timeout}s")
         return False
 
     def send(self, text, enter=True, settle=0.6):
@@ -169,10 +184,15 @@ def events_text(sid):
 
 def has_token(sid, kind, token, timeout):
     end = time.time() + timeout
+    nxt = time.time() + 5
     while time.time() < end:
-        for e in events_text(sid):
+        evs = events_text(sid)
+        for e in evs:
             if e.get("type") == kind and token in (e.get("text") or ""):
                 return True
+        if time.time() >= nxt:
+            log(f"    … relay events={len(evs)}, waiting for {kind}:{token!r} ({int(end - time.time())}s left)")
+            nxt += 5
         time.sleep(0.6)
     return False
 
@@ -217,7 +237,8 @@ def main():
     (ok if recalled else bad)("local session recalled ELEPHANT (history exists pre-RC)")
 
     step("[C1] enable /remote-control (slash command, mid-session)")
-    time.sleep(20)                                   # ensure the prior turn finished (claude idle)
+    log("    napping 20s for claude to go idle before /remote-control")
+    time.sleep(20)
     os.write(tui.master, b"\x1b"); time.sleep(1.5)   # Escape — clear any leftover input/palette state
     tui.send("/remote-control", settle=3.0)
     rc_active = tui.wait_for("Remote Control active", 45)
@@ -263,7 +284,8 @@ def main():
         # relaunch claude resuming the SAME on-disk session, then re-enable RC
         tui = Tui(env, extra=["--continue"])
         tui.accept_trust()
-        time.sleep(12)                                   # let --continue resume + reach idle
+        log("    napping 12s for --continue to resume + reach idle")
+        time.sleep(12)
         os.write(tui.master, b"\x1b"); time.sleep(1.5)
         tui.send("/remote-control", settle=3.0)
         rc2 = tui.wait_for("Remote Control active", 45)
