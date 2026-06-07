@@ -78,10 +78,17 @@ metadata privacy (timing/sizes/seq are visible to the broker).
      the per-session key, and `POST /api/relay`; subscribe (SSE) to the host's
      inbound channel, **dedup by `msg_id`**, decrypt, and deliver to Claude **after
      WAL commit**, then echo `accepted`.
-   - Maintains local state: the **on-disk per-session WAL** (keyed by `seq`, the
-     catch-up record, durable across restarts), the `msg_id` seen-set, registered
-     sessions, crypto state. Answers encrypted `catch_up{since=seq}` from its WAL,
-     falling back to worker backfill to our relay (§6). Reconnects on drop.
+   - Maintains in-memory relay state (catch-up log, `msg_id` seen-set, registered
+     sessions, crypto state) — **recoverable from the claude session** by
+     re-enabling `/remote-control` (the worker re-backfills), so no durable store is
+     required; both wrapper and CLI are stateless (claude's on-disk session is the
+     durable layer). Answers encrypted `catch_up{since=seq}` from its log, falling
+     back to worker backfill (§6).
+   - **Heartbeats with a TTL:** while RC is enabled, the wrapper `POST
+     /api/heartbeat {host_id, session_ids[], ts}` every ≈15 s so the broker/web can
+     show which hosts/sessions are online (§3.2). Stops when the wrapper/CLI exits
+     (the wrapper does **not** outlive the CLI) → the session goes offline after the
+     TTL.
 
 ### 3.2 Vercel app (the broker — relays ciphertext, stores no chat history)
 - **Ingest Functions** (Node runtime, fast + die): `POST /api/relay` (a ciphertext
@@ -95,9 +102,16 @@ metadata privacy (timing/sizes/seq are visible to the broker).
   `catch_up{since=seq}` control frame is relayed to the wrapper, which replies with
   `historical` frames from its WAL (then worker backfill). There is **no**
   `GET /api/messages` history store.
+- **Presence / heartbeat (TTL):** the wrapper `POST /api/heartbeat {host_id,
+  session_ids[], ts}` every `HEARTBEAT_INTERVAL` (≈15 s); the broker updates
+  `last_seen` on the host + each active session. **Online ≡ `now − last_seen <
+  HEARTBEAT_TTL`** (≈45 s = 3 missed beats), computed at read time — so the web can
+  show which hosts/sessions are up without any push. The heartbeat carries only
+  routing metadata (ids + ts), no content → zero-knowledge holds. (Distinct from
+  the worker→relay keep-alive of the RC protocol; this is host→broker presence.)
 - **Read Functions:** `GET /api/hosts`, `GET /api/sessions?host=` (return the
   latest *encrypted* registry snapshot the wrapper published — names/titles only,
-  not message history).
+  not message history — **plus a computed `online` flag** from `last_seen`+TTL).
 
 ### 3.3 Web client (stateless, mobile-first)
 - Paste secret (or open a link with the secret in the **URL fragment** `#…`, which
@@ -269,6 +283,84 @@ TUI-assigned `seq`; live delivery is **at-least-once** so clients dedupe by
 Functions/steps, **never** inside the deterministic `'use workflow'` body (random
 nonces / stream reads break replay determinism).
 
+## 6A. Message types, channels & ephemeral workflow state
+
+The broker stays dumb and the wrapper/claude stay authoritative. Here is every
+frame, every channel, and exactly what (little) state the workflow keeps so that
+live delivery + reconnection feel natural without the workflow becoming the record.
+
+### Frame types (`record_kind`)
+All frames share the §8 envelope (AEAD ciphertext + cleartext routing header).
+`dir`: **out** = wrapper→web, **in** = web→wrapper.
+
+Content frames (**out** — from the claude worker, via our relay; encrypted under the per-session content key):
+| kind | seq | source | notes |
+| --- | --- | --- | --- |
+| `user` | ✓ | RC | user-message echo; `historical:true` on backfill |
+| `assistant` | ✓ | RC | model output (+ partial deltas if we enable them) |
+| `result` | ✓ | RC | turn complete (cost / usage) |
+| `system` / `status` / `rate_limit` | ✓ | RC | lifecycle (init, "requesting", limits) |
+| `can_use_tool` | ✓ | RC | permission request, *if* a mode ever gates a tool |
+
+Control frames (**in** — from the web client → wrapper → worker; encrypted under `control_key`, carry `msg_id` + `expiry`, replay-checked):
+| kind | maps to RC verb | notes |
+| --- | --- | --- |
+| `user` | (prompt) | a typed message; carries `client_msg_id` |
+| `catch_up` | — (ours) | request history `since=seq` |
+| `permission` | `control_response` | allow/deny a `can_use_tool` |
+| `interrupt` | `interrupt` | ESC / stop the current turn |
+| `set_mode` | `set_permission_mode` | e.g. bypassPermissions toggle |
+| `set_model` | `set_model` | switch model |
+| `command` | (slash) | `/compact` `/clear` `/context` … |
+| `end` | `end_session` | terminate the session |
+
+Our non-content meta frames:
+| kind | dir | notes |
+| --- | --- | --- |
+| `accepted` | out | wrapper ack of a client frame: `{client_msg_id, seq}` |
+| `heartbeat` | wrapper→broker | presence `{host_id, session_ids[], ts}` (TTL, §3.2) |
+| `host_register` / `session_register` / `session_update` | wrapper→broker | latest-wins **encrypted** name/title/cwd/status snapshots |
+
+(`historical` is a **flag** on replayed content frames, not a separate kind.)
+
+### Channels / queues (per session; names derived from `host_id`+`session_id`)
+- **out-stream** (wrapper→web): the per-session **Workflow durable resumable
+  stream**; web tails by `startIndex`/`seq`.
+- **in-queue** (web→wrapper): web `POST /api/relay`; delivered to the wrapper via a
+  Workflow **hook** (`defineHook`/`resume`) — or a second resumable stream the
+  wrapper tails. No polling.
+- **presence**: heartbeats update `last_seen` (not a stream).
+- **registry**: host/session snapshot rows (latest-wins, not a stream).
+
+### Ephemeral state the workflow holds — and why it's "enough"
+**One workflow run per active session** (started on RC-enable/registration; idles
+out after the session goes offline past TTL). It holds ONLY:
+1. the **recent in-flight frame buffer** (both directions), as the durable
+   resumable streams — bounded to a recent window, so a client reconnecting within
+   the window resumes seamlessly by `startIndex`; anything older → `catch_up`.
+2. **resume cursors** (last out-`seq` delivered, last in-`seq` accepted).
+3. the inbound **hook** so web frames wake the wrapper's tail without polling.
+4. a small **recent `msg_id` dedup window** (broker is at-least-once; the wrapper
+   dedups authoritatively — this just avoids obvious buffer dupes).
+5. **presence/`last_seen`** for the online flag.
+
+It deliberately does **not** hold: the durable transcript (wrapper WAL + claude),
+long-term history, or any plaintext. Its 1–7 day retention is irrelevant because
+everything in it is reconstructible from the claude session via `catch_up`. That is
+the "just enough ephemeral state to be natural" line: the **workflow** makes live
+delivery + short-window reconnection seamless; the **wrapper** makes deep history
+correct.
+
+### Lifecycle (the natural flow)
+RC enabled → wrapper registers host/session + starts/relinks the session workflow →
+streams open. Live turn → `assistant`/`result` flow out-stream, `user` flows
+in-queue via the hook; clients tail; wrapper WALs + echoes `accepted`. Brief
+reconnect (web or wrapper) → resume by `seq` from the workflow buffer. Gap older
+than the buffer / cold device → `catch_up` → wrapper replays from WAL (or worker
+backfill). Session ends / wrapper exits (it never outlives the CLI) → heartbeats
+stop → `online=false` after TTL → workflow idles and its retention expires; nothing
+is lost because claude holds the transcript.
+
 ## 7. Multi-host "spaces" & onboarding
 - Each pasted secret = one host = one space. The web stores the set of secrets
   (client-side) and renders spaces with decrypted friendly names (default
@@ -299,10 +391,13 @@ Control/`catch_up` frames are AEAD-encrypted under a derived **control key** wit
 field via a single canonical serialization (length-prefixed or CBOR) — no ad-hoc
 `a|b|c` concatenation (ambiguous).
 
+Registry rows also carry `last_seen` (updated by heartbeat) → `online` is computed
+`now − last_seen < HEARTBEAT_TTL` (§3.2).
+
 Endpoints (all bearer `auth_token`, all ciphertext): `POST /api/hosts`,
 `GET /api/hosts`, `POST /api/sessions`, `GET /api/sessions`, `POST /api/relay`,
-`GET /api/stream?session=&since=seq`. (No `GET /api/messages` — history is
-wrapper-served, §6.)
+`POST /api/heartbeat`, `GET /api/stream?session=&since=seq`. (No `GET /api/messages`
+— history is wrapper-served, §6.)
 
 ## 9. Decisions (resolved 2026-06-07)
 1. **Durable store / history → W′ (TUI is the brain).** No cloud history. The
