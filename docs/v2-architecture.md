@@ -20,8 +20,8 @@ Goals:
   name each (default = hostname).
 - **E2E encrypted** from the secret; **non-guessable** secrets; Vercel
   zero-knowledge.
-- Stateless web client + stateless CLI relay; durable state concentrated in the
-  Vercel workflow spine (+ a ciphertext store — see §6).
+- Stateless web client; the **TUI host is the brain** (the wrapper's on-disk WAL
+  is the durable record); the cloud is a stateless ciphertext relay (see §6).
 
 Non-goals (v1): forward secrecy, per-device revocation, group/sender-key crypto,
 metadata privacy (timing/sizes/seq are visible to the broker).
@@ -47,8 +47,8 @@ metadata privacy (timing/sizes/seq are visible to the broker).
 ```
   ┌── server A (your machine) ──────────────┐         ┌──────── Vercel (broker) ────────┐        ┌── phone / laptop ──┐
   │ claude --remote-control                  │         │  ingest Functions (auth: token) │        │  web app (Next.js) │
-  │      ▲  MITM (phase0 core/mitm)          │  wss/   │  per-session Workflow (durable) │  SSE/  │  paste secret →    │
-  │      │                                   │  https  │  ciphertext store (Redis/SS)    │ stream │  derive keys →     │
+  │      ▲  MITM or RC-API bridge (§14)      │  wss/   │  per-session Workflow (buffer)  │  SSE/  │  paste secret →    │
+  │      │  + on-disk WAL (the record)       │  https  │  (no history — relay only)      │ stream │  derive keys →     │
   │ remote-claw serve --hostname <app> ──────┼────────▶│  live fan-out (SSE + workflow)   │◀──────▶│  decrypt & render  │
   │   (machine identity: secret S, 0600)     │ ciphertext only                          │        │  encrypt & send    │
   └──────────────────────────────────────────┘         └─────────────────────────────────┘        └────────────────────┘
@@ -68,31 +68,35 @@ metadata privacy (timing/sizes/seq are visible to the broker).
      devices. Re-running prints `host_id` + status (never reprints `S` unless
      `--show`).
 
-2. **`remote-claw serve --hostname <vercel-app-url>`** — the **wrapper**: launches
-   `claude --remote-control` with the Phase 0 MITM, and instead of a localhost UI,
-   relays to the app.
-   - Reuses Phase 0 `remote_claw/core.py` + `mitm.py` verbatim (Claude
-     interception, session registration, the `/v1/code/sessions*` endpoints).
-   - Replaces `client_api.py` with **`vercel_relay.py`**: on each worker→relay
-     event, encrypt with the per-session key and `POST` ciphertext to the app;
-     subscribe (SSE/stream) to the host's inbound channel, decrypt, and ingest into
-     the worker via the existing downstream path (`Session.push_user_input` /
-     `push_control_response`).
-   - Maintains local state: a **durable per-session message log** (keyed by `seq`,
-     the catch-up source), registered sessions, crypto state, last acked `seq`.
-     Answers `catch_up` control frames from its log, falling back to worker RC
-     replay for ranges it doesn't hold. Reconnects on drop.
+2. **`remote-claw serve --hostname <vercel-app-url>`** — the **wrapper / host
+   bridge**. Runs `claude --remote-control` and bridges its RC traffic to the app.
+   Its host-side coupling to Claude is **either the Phase-0 MITM or an RC-API
+   client bridge — decision pending in §14** (P0.5 informs it).
+   - Encodes the relay logic in Node/TS (reimplementing the Phase-0 interception
+     knowledge): on each worker→relay event, WAL it, allocate `seq`, encrypt with
+     the per-session key, and `POST /api/relay`; subscribe (SSE) to the host's
+     inbound channel, **dedup by `msg_id`**, decrypt, and deliver to Claude **after
+     WAL commit**, then echo `accepted`.
+   - Maintains local state: the **on-disk per-session WAL** (keyed by `seq`, the
+     catch-up record, durable across restarts), the `msg_id` seen-set, registered
+     sessions, crypto state. Answers encrypted `catch_up{since=seq}` from its WAL,
+     falling back to the Phase-0-verified events-cursor API (§6). Reconnects on drop.
 
-### 3.2 Vercel app (the broker)
-- **Ingest Functions** (Node runtime, fast + die): `POST /api/hosts`,
-  `POST /api/sessions`, `POST /api/messages` (worker→ and web→), all
+### 3.2 Vercel app (the broker — relays ciphertext, stores no chat history)
+- **Ingest Functions** (Node runtime, fast + die): `POST /api/relay` (a ciphertext
+  frame in either direction), `POST /api/hosts`, `POST /api/sessions`, all
   bearer-authed by `auth_token`, all accepting **ciphertext only**.
-- **Per-session Vercel Workflow** (the durable spine, §6): ingests each message
-  via a `defineHook()`/`hook.resume()`, persists it (step → store), and emits it on
-  the run's **durable resumable stream** for live delivery.
-- **Read Functions**: `GET /api/hosts`, `GET /api/sessions?host=`,
-  `GET /api/messages?session=&since=seq` (history), and a streaming `GET
-  /api/stream?session=&since=seq` (live).
+- **Live fan-out:** a per-session Vercel **Workflow durable resumable stream**
+  carries in-flight frames; a streaming `GET /api/stream?session=&since=seq`
+  delivers live and lets a client resume by `seq` after a drop. This is a **buffer,
+  not the record** (§6).
+- **Catch-up is proxied to the wrapper, not served from the cloud.** A
+  `catch_up{since=seq}` control frame is relayed to the wrapper, which replies with
+  `historical` frames from its WAL (then the events-cursor API). There is **no**
+  `GET /api/messages` history store.
+- **Read Functions:** `GET /api/hosts`, `GET /api/sessions?host=` (return the
+  latest *encrypted* registry snapshot the wrapper published — names/titles only,
+  not message history).
 
 ### 3.3 Web client (stateless, mobile-first)
 - Paste secret (or open a link with the secret in the **URL fragment** `#…`, which
@@ -121,15 +125,26 @@ human-readable *backup* export.)
 
 ### 4.2 Derivation (domain-separated siblings)
 ```
-PRK          = HKDF-Extract(salt="remote-claw/v1", IKM=S)
-host_id      = HKDF-Expand(PRK, "remote-claw/v1/host-id",  16B)  → PUBLIC routing id (the "space")
-auth_token   = HKDF-Expand(PRK, "remote-claw/v1/auth",     32B)  → bearer to the Vercel API
-content_root = HKDF-Expand(PRK, "remote-claw/v1/content",  32B)  → CLIENT-ONLY master content key
+PRK           = HKDF-Extract(salt="remote-claw/v1", IKM=S)
+host_id       = HKDF-Expand(PRK, "remote-claw/v1/host-id",       16B)  → PUBLIC routing id (the "space")
+auth_token    = HKDF-Expand(PRK, "remote-claw/v1/auth",          32B)  → bearer to the Vercel API
+content_root  = HKDF-Expand(PRK, "remote-claw/v1/content",       32B)  → CLIENT-ONLY master content key
+control_key   = HKDF-Expand(PRK, "remote-claw/v1/control",       32B)  → AEAD key for control frames (catch_up, permission)
+K_host_meta   = HKDF-Expand(PRK, "remote-claw/v1/meta/host",     32B)  → encrypts host friendly name
+K_session_meta= HKDF-Expand(PRK, "remote-claw/v1/meta/session",  32B)  → encrypts session title/cwd
 ```
-- The server is **given** `host_id` + `auth_token`, never `S`/`PRK`/`content_root`.
-  It stores **`sha256(auth_token)`** (so a DB leak isn't replayable). Recovering
-  `content_root` from the siblings requires inverting HMAC-SHA256 (preimage
-  resistance) — infeasible. **That is the zero-knowledge guarantee.**
+- **Confidentiality (zero-knowledge) is scoped to `content_root`/`control_key`/
+  meta-keys.** The server is given `host_id` + `auth_token` only, never `S`/`PRK`/
+  the content keys. Recovering a content key from the siblings requires inverting
+  HMAC-SHA256 (preimage resistance) — infeasible. So the broker **cannot read
+  message or metadata bodies**.
+- **Honest scope of `auth_token`:** it's *authorization*, not confidentiality. The
+  server stores `sha256(auth_token)` so a **DB-at-rest** leak isn't replayable —
+  but the live bearer is presented on every request, so Vercel's TLS-terminating
+  edge (and any request log) **sees a replayable token**. Treat the broker as able
+  to act with that token (write/route to this host) — it still can't decrypt.
+  Mitigations: never log the `Authorization` header, constant-time hash compare,
+  rate-limit, and (later) short-lived scoped tokens minted from `auth_token`.
 
 ### 4.3 Session → message key flow (answers "do we need a session→key flow?")
 Yes — a 3-level hierarchy:
@@ -137,21 +152,24 @@ Yes — a 3-level hierarchy:
 content_root
    └─ K_session = HKDF-Expand(content_root, "session:" + session_id, 32B)
          └─ per message:  salt = random 32B
-                          K_msg = HKDF-Expand(K_session, "msg:" + salt, 32B)
-                          ct = AES-256-GCM(K_msg, nonce=random 12B,
-                                           AAD = host_id|session_id|dir|seq|type)
+                          K_msg = HKDF-Expand(IKM=K_session, salt=salt,
+                                              info="remote-claw/v1/msg" + canonical_AAD, 32B)
+                          ct = AES-256-GCM(K_msg, nonce=random 12B, AAD = canonical_AAD)
+   canonical_AAD = canonical-encode(v, host_id, session_id, dir, record_kind, seq, msg_id, key_epoch)
 ```
 **Why per-message subkeys instead of a global counter nonce:** the web client is
 *stateless* and the secret can be pasted into *several devices/tabs at once* →
-multiple concurrent senders share a key. A monotonic-counter nonce (the other
-candidate) would collide across those senders and AES-GCM nonce reuse is
-catastrophic. Deriving a fresh `K_msg` from a random 256-bit salt makes a
-collision require the same salt **and** nonce (~2⁻³⁵²) — safe for unlimited
-concurrent stateless senders, with **zero per-sender state**, all in WebCrypto
-(no libsodium/WASM). `seq` is carried in cleartext metadata + bound into AAD for
-ordering/replay; it is **not** the nonce, so ordering is decoupled from crypto
-safety. (Alternative if we ever want misuse-resistance without per-message HKDF:
-XChaCha20-Poly1305 192-bit random nonces via libsodium — heavier; not needed.)
+multiple concurrent senders share a key. A monotonic-counter nonce would collide
+across those senders and AES-GCM nonce reuse is catastrophic. A fresh random
+256-bit `salt` per message gives an independent `K_msg`, so a fatal nonce reuse
+requires the **same 256-bit salt and the same 96-bit nonce on the same key** —
+negligible for any realistic message volume, with **zero per-sender state**, all
+in WebCrypto (no libsodium/WASM). Folding `canonical_AAD` into the `K_msg` `info`
+adds key-level domain separation at no cost. `seq` is cleartext metadata bound
+into AAD for ordering/replay — **not** the nonce, so ordering is decoupled from
+crypto safety. (We will publish formal limits + cross-runtime test vectors in P1
+rather than rely on a back-of-envelope bound. Alternative for misuse-resistance
+without per-message HKDF: XChaCha20-Poly1305 — heavier; not needed.)
 
 ### 4.4 Rotation / revocation
 Rotation = generate a **new `S`** ⇒ new `host_id` ⇒ a new space; delete the old.
@@ -195,25 +213,36 @@ Verified Vercel facts that shape this:
 **DECISION (chosen): W′ — the TUI is the brain; the cloud is a dumb,
 zero-knowledge pipe; the web is a thin renderer.**
 
-This mirrors how official RC already works (the worker backfills its transcript on
-connect — verified: `replaysOnReconnect` / `backfill` / `catch-up` / `replayLog` /
-`historical:true` in the binary) and concentrates every "smart" on the TUI host.
+It concentrates every "smart" on the TUI host. (⚠️ Plan-review correction: an
+earlier draft claimed the worker's "replay/backfill" was *verified* — that was an
+overstatement. Phase 0 confirmed those **strings exist in the binary** but did
+**not** prove a usable seq-range replay request; the only worker-side history we
+*actually verified* is the cursor-paginated `GET /v1/code/sessions/{id}/events?
+sort_order=&cursor=` API. The design below relies only on that + the wrapper's own
+log — never on an unproven replay primitive. See §14.)
 
-- **State lives in the wrapper (primary), worker transcript is the fallback.**
-  The `serve` wrapper sits in the MITM and sees every frame both directions, so it
-  keeps its **own durable per-session log** (on the TUI host, keyed by `seq`) — the
-  fast catch-up source. The worker's local transcript (`~/.claude/projects/<cwd>/
-  <session>.jsonl`) is the ultimate source of truth for deep history / cold start.
-  The TUI owns sessions, `seq` ordering, history, and replay; **the cloud stores no
-  history.**
-- **Catch-up is message-passing to the wrapper, on demand.** A connecting client
-  sends a `catch_up{since=<last-seen seq | 0>}` control frame; the cloud relays it
-  to the wrapper, which:
-  1. serves the delta from its own per-session log (the normal path), or
-  2. if the range predates its log (fresh/restarted wrapper, trimmed log), asks the
-     **Claude worker to replay** via the RC backfill mechanism (`replayLog` /
-     `historical:true` events), ingests those, and relays them.
-  Frames stream back as `historical`, then live tailing resumes. No cloud history.
+- **The wrapper's own durable WAL is the source of truth.** The `serve` wrapper
+  sees every frame both directions and persists each to an **on-disk write-ahead
+  log** on the TUI host (per session, keyed by `seq`) — durable across wrapper
+  restarts. This is the authoritative catch-up source.
+- **Deep history beyond the WAL** comes from the **Phase-0-verified events cursor
+  API** (`GET /v1/code/sessions/{id}/events?cursor=`), read by the host. The local
+  `~/.claude/projects/<cwd>/<session>.jsonl` transcript is a secondary fallback
+  *only if* a Phase-0.5 spike proves it maps to the relay `seq` space. The TUI owns
+  sessions and `seq` ordering; **the cloud stores no history.**
+- **`seq` is allocated solely by the wrapper.** Clients never assign transcript
+  order: a web client sends a `client_msg_id`; the wrapper decrypts, commits to its
+  WAL, assigns the canonical `seq`, then echoes an `accepted{client_msg_id, seq}`.
+  Clients retry until `accepted`; the wrapper forwards a prompt to Claude **only
+  after** its WAL commit (so POST-accepted-by-broker ≠ delivered).
+- **Replay/idempotency:** delivery is at-least-once and the broker can *replay a
+  valid old ciphertext*, so the wrapper keeps a **durable seen-set keyed by
+  `msg_id`** and drops duplicate inbound/control frames **before** any side effect.
+- **Catch-up is an encrypted control frame to the wrapper.** A client sends an
+  **AEAD-encrypted** `catch_up{since=<last-seen seq | 0>, msg_id, expiry}` (control
+  frames use a derived control key + replay check — never plaintext the broker
+  could inject); the wrapper serves the delta from its WAL (then the events-cursor
+  API for ranges older than the WAL), streaming `historical` frames, then live.
 - **The cloud = relay + short live buffer only (Vercel-native, no third party).**
   Live ciphertext frames go out over **SSE from a streaming Vercel Function**,
   backed by the per-session **Workflow durable resumable stream**. When the SSE
@@ -249,12 +278,29 @@ nonces / stream reads break replay determinism).
   the broker — minimized and documented.
 
 ## 8. Data model / API (sketch)
-- `host`     : `{ host_id, sha256(auth_token), enc(name), created_at, last_seen }`
-- `session`  : `{ host_id, session_id, enc(title), enc(cwd), status, last_activity }`
-- `message`  : `{ host_id, session_id, dir, seq, msg_id, salt, nonce, ct, ts }`
-- Endpoints (all bearer `auth_token`, all ciphertext): `POST /api/hosts`,
-  `GET /api/hosts`, `POST /api/sessions`, `GET /api/sessions`,
-  `POST /api/messages`, `GET /api/messages?since=`, `GET /api/stream?since=`.
+Cloud-persistent (registry snapshots only — **no message bodies kept**):
+- `host`    : `{ host_id, sha256(auth_token), enc(name), created_at, last_seen }`
+  (name encrypted under `K_host_meta`)
+- `session` : `{ host_id, session_id, enc(title), enc(cwd), status, last_activity }`
+  (title/cwd encrypted under `K_session_meta`; `status`/timestamps are cleartext
+  metadata — visible to broker)
+
+Transient relay **frame** (buffered in the live stream, not a durable row):
+```
+{ v, host_id, session_id, dir, record_kind, seq|null, msg_id, client_msg_id?,
+  key_epoch, salt, nonce, ct }      // ct includes the GCM tag
+AAD = canonical-encode(v, host_id, session_id, dir, record_kind, seq, msg_id, key_epoch)
+```
+`record_kind` ∈ `user | assistant | result | control | accepted | catch_up`.
+Control/`catch_up` frames are AEAD-encrypted under a derived **control key** with
+`msg_id` + `expiry` and are replay-checked. AAD binds **every** cleartext header
+field via a single canonical serialization (length-prefixed or CBOR) — no ad-hoc
+`a|b|c` concatenation (ambiguous).
+
+Endpoints (all bearer `auth_token`, all ciphertext): `POST /api/hosts`,
+`GET /api/hosts`, `POST /api/sessions`, `GET /api/sessions`, `POST /api/relay`,
+`GET /api/stream?session=&since=seq`. (No `GET /api/messages` — history is
+wrapper-served, §6.)
 
 ## 9. Decisions (resolved 2026-06-07)
 1. **Durable store / history → W′ (TUI is the brain).** No cloud history. The
@@ -288,6 +334,15 @@ phase0/            unchanged — the Python reference + protocol findings
 ```
 
 ## 11. Phased plan
+- **P0.5 — Capture spike (do before P4).** On `claude` 2.1.168, empirically settle
+  the history/replay question that the plan review flagged: (a) confirm the
+  Phase-0-verified `GET /v1/code/sessions/{id}/events?cursor=` returns full
+  cursor-paginated history reliably; (b) test whether/how the worker re-emits
+  `historical` frames on reconnect with a `since` (document the exact request or
+  conclude it doesn't exist); (c) check whether `~/.claude/projects/.../*.jsonl`
+  maps to the relay `seq`. Output decides whether the wrapper WAL + events-cursor
+  is sufficient (expected) and **whether the MITM is even needed** (see decision
+  below). Save artifacts under `phase0/captures/`.
 - **P1 — Crypto core.** `packages/clawsec` (TypeScript): secret gen/parse/checksum,
   HKDF hierarchy, AES-256-GCM encrypt/decrypt, AAD, envelope format. Vitest unit
   tests (incl. round-trip + tamper/AAD-rejection). No network. Runs in Node +
@@ -297,12 +352,16 @@ phase0/            unchanged — the Python reference + protocol findings
 - **P3 — Vercel app skeleton.** `apps/web` (Next.js): ingest/read API routes + auth
   (`sha256(auth_token)`), per-session workflow with hook + durable stream, SSE
   endpoint. Deploy; curl round-trip with hand-rolled ciphertext.
-- **P4 — CLI: `serve` relay.** Node/TS reimplementation of the Phase 0 MITM +
-  relay: terminate TLS with our leaf (worker trusts it via `NODE_EXTRA_CA_CERTS`),
-  intercept `/v1/code/sessions*`, pass `/v1/messages` through; encrypt worker
-  events → POST to the app; subscribe inbound (SSE) → decrypt → ingest; maintain
-  the per-session catch-up log. End-to-end: a curl "web" drives a real Claude
-  session through Vercel.
+- **P4 — CLI: `serve` relay.** The host-side bridge. **Architecture pending the §14
+  decision:** either (a) **MITM** — Node/TS reimpl of the Phase 0 interception
+  (terminate TLS with our leaf via `NODE_EXTRA_CA_CERTS`, intercept
+  `/v1/code/sessions*`, pass `/v1/messages` through), or (b) **RC-API client
+  bridge** — run `claude --remote-control` normally and have the wrapper act as a
+  *client* of the Phase-0-verified RC API (read output via the events-cursor/SSE,
+  inject input via `POST .../events`), no TLS MITM. Either way: WAL each frame,
+  allocate `seq`, encrypt → `POST /api/relay`; subscribe inbound (SSE) → dedup by
+  `msg_id` → decrypt → deliver to Claude only after WAL commit, then echo
+  `accepted`. End-to-end: a curl "web" drives a real Claude session through Vercel.
 - **P5 — Web client.** Paste/fragment secret, spaces list, session list, message
   view (history + live), send. Mobile/PWA.
 - **P6 — Multi-host + polish.** Add-host, friendly names, reconnect/resume, replay
@@ -337,3 +396,53 @@ phase0/            unchanged — the Python reference + protocol findings
 - Realtime constraints (no native WS; SSE duration caps) — Vercel Functions docs
 - HKDF RFC 5869; AES-GCM nonce limits (NIST SP 800-38D); WebCrypto SubtleCrypto
 - Prior art: Happy (https://github.com/slopus/happy ; security review Discussion #680 — server-side key handling = what to avoid); OpenCode E2EE RC proposal #15236 (secret-in-URL-fragment, blind relay)
+
+## 14. Plan review (2026-06-07) — findings, revisions, open decision
+
+Two independent reviewers (the `/code-review` multi-agent design workflow + codex
+gpt-5.5) evaluated this plan and **converged** on the same load-bearing issues.
+The crypto/secret core was judged **sound**; the protocol/reliability layer needed
+tightening. Accepted fixes are already folded into §3–§8 above:
+
+- **`seq` is wrapper-allocated, with commit semantics.** Clients never assign
+  transcript order; they send `client_msg_id`, the wrapper WALs + assigns `seq` +
+  echoes `accepted{client_msg_id, seq}`; Claude receives a prompt only after WAL
+  commit. (§6)
+- **Replay protection ≠ AEAD.** The broker can replay a valid old ciphertext →
+  durable `msg_id` seen-set; drop dupes before side effects. (§6)
+- **Control frames are encrypted** under a derived `control_key` with `msg_id` +
+  `expiry` + replay-check (catch_up/permission can't be server-injected). (§4.2,§8)
+- **Cloud-history contradiction removed.** The broker stores **no message bodies**;
+  catch-up is wrapper-served (WAL → events-cursor). Dropped `GET /api/messages`.
+  (§3.2,§6,§8)
+- **Overstated "verified replay" corrected.** Only string-presence was confirmed in
+  the binary, not a usable seq-range replay; design now relies on the wrapper WAL +
+  the Phase-0-verified events-cursor API; a P0.5 spike settles the rest. (§6,§11)
+- **AAD/envelope canonicalized** (binds v, host_id, session_id, dir, record_kind,
+  seq, msg_id, key_epoch via one serialization). (§4.3,§8)
+- **Encrypted-metadata keys** added (`K_host_meta`, `K_session_meta`). (§4.2,§8)
+- **Honest zero-knowledge scope:** confidentiality covers content/meta keys only;
+  `auth_token` is authz and the **live bearer is visible to the broker** (sha256
+  protects only the at-rest DB). Never log it; rate-limit; constant-time compare.
+  (§4.2)
+- **Crypto claims toned down:** formal limits + cross-runtime test vectors in P1
+  instead of a back-of-envelope bound; `K_msg` info now folds the canonical AAD.
+  (§4.3)
+- Labeling: treat `(v1)` non-goals as **"this release / MVP"**; reserve "v2" for
+  the doc title. No-forward-secrecy / single-secret-blast-radius called out louder
+  in §12.
+- Keep realtime behind a **transport interface** (Workflows are event-log runs, not
+  chat rooms — batch frames; SSE needs heartbeat/reconnect/`startIndex`/polling
+  fallback). (§6)
+
+### Open architectural decision (your call): MITM vs RC-API-client bridge
+Both reviewers raised that the **MITM may be unnecessary**. Phase 0 *proved* you
+can drive a live RC session purely as a **client of Anthropic's RC API** (the
+BANANA/MANGO tests + the `GET …/events?cursor=` history read). So the host wrapper
+could be a thin **bridge** — `claude --remote-control` runs normally against
+Anthropic, the wrapper reads its output and injects input via that verified API,
+then E2E-encrypts to/from Vercel — **dropping the TLS-MITM, the cert, and the
+worker-protocol reimplementation** entirely (Anthropic already sees inference
+content, so this doesn't weaken the *Vercel* zero-knowledge property). The MITM
+keeps everything on your relay but is more fragile and more code. P0.5 informs
+this; pick before P4.
