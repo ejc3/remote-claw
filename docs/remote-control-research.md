@@ -10,6 +10,18 @@
 > undocumented flags are **reverse-engineered and unsupported** — pin a Claude
 > Code version and verify empirically before relying on any frame shape.
 
+> ⛔ **PHASE 0 RESULT (2026-06-07, v2.1.168) — THE CORE PREMISE IS PATCHED.**
+> `--sdk-url` now enforces a **hardcoded 5-host allowlist** (`api.anthropic.com`,
+> `api-staging.anthropic.com`, `beacon.claude-ai.staging.ant.dev`,
+> `claude.fedstart.com`, `claude-staging.fedstart.com`) + **wss/https-only**,
+> rejecting any self-hosted relay *before any socket opens* (and firing a
+> `tengu_sdk_url_host_rejected` telemetry event). No env/setting extends it.
+> **You can no longer point `--sdk-url` at your own server on this version.**
+> Parts 3, 5, 6 below describe the *old, now-unreachable* behavior — read them as
+> history. The viable path forward is the documented `stream-json` cousin
+> (Part 4). **See [`phase0-findings.md`](phase0-findings.md) for the full
+> empirical result, the de-minified validator, and corrected frame shapes.**
+
 > **Date captured:** 2026-06-07 · **Claude Code version in research env:** 2.1.168
 
 ---

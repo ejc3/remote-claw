@@ -24,8 +24,30 @@ connection to a relay *you* run instead of Anthropic's cloud:
 
 ## Status
 
-🔬 **Research / pre-implementation.** No client or relay code yet. The protocol
-details are **reverse-engineered and version-sensitive** — verify before building.
+✅ **Phase 0 done — working own-relay (Claude Code v2.1.168).** The original
+`--sdk-url` trick is **patched** (hardcoded 5-host allowlist + wss/https-only,
+rejected before any socket opens). But the real Remote Control transport turned
+out to be a plain HTTPS API on `api.anthropic.com` (`/v1/code/sessions/…`), so
+`remote-claw` instead **MITMs that host per-process**: it intercepts the RC
+endpoints to become your own relay, while passing `/v1/messages` through to real
+inference. A local `claude --remote-control` TUI and our own web client now drive
+**one synced session** — empirically verified end-to-end and covered by an
+automated test.
+
+```bash
+cd phase0
+./remote-claw doctor      # check claude/openssl/certs/ports/auth
+./remote-claw up mysession   # relay + TUI; open http://127.0.0.1:9100/
+./remote-claw test        # automated round-trip test
+```
+
+📄 **[`phase0/README.md`](phase0/README.md)** — how to run it ·
+**[`docs/phase0-findings.md`](docs/phase0-findings.md)** — the full reverse-engineered
+protocol, the de-minified `--sdk-url` validator, and the build writeup (§4a–4c) ·
+**[`phase0/TEST_PLAN.md`](phase0/TEST_PLAN.md)** — test plan.
+
+🔬 The notes below are the **pre-investigation** research — read Parts 3/5/6 of the
+research doc as history; the verified protocol is in `phase0-findings.md`.
 
 ## Start here
 
