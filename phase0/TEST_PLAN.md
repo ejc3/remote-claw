@@ -58,21 +58,36 @@ fan-out, reconnect, and the permission prompt path (see §3).
 
 ---
 
-## 3. Permission flow (Phase 2 — partial)
+## 2b. Two-surface test (bidirectional sync)
 
-Finding (Phase 0): with our minimal `initialize`, the worker executes tools
-without emitting `can_use_tool` upstream — even under `--permission-mode default`
-(verified: `Bash(echo …)` ran with no prompt). So full client-side approval is
-not yet exercised end-to-end.
+`python3 test/two_surface.py`
 
-- Plumbing present: relay forwards any upstream `control_request` to the client
-  stream (with `request_id`, `tool_name`, `tool_input`) and accepts decisions via
-  `POST /api/sessions/{id}/permission {request_id, behavior}` →
-  pushes a `control_response` downstream.
-- Practical control today: choose the worker's mode via
-  `./remote-claw worker --permission-mode {default|acceptEdits|plan|bypassPermissions}`.
-- TODO: reverse-engineer the handshake capability that makes the worker route
-  `can_use_tool` to the relay, then assert allow/deny in an automated test.
+Runs the TUI wrapper (`claude --remote-control` under a controlled pty) against
+our relay and proves **both surfaces drive one session**:
+- **types a message in the TUI** → asserts it is answered and the reply appears in
+  **our client** (TUI → client);
+- **sends a message via our client API** → asserts it is answered and appears
+  (client → TUI).
+
+Pass = `PASS — both surfaces (TUI + our client) drive one synced session.` Last
+run: **PASS** (`KIWI…` typed in TUI seen by client; `PLUM…` from client answered).
+`./remote-claw test` runs this after the e2e test.
+
+## 3. Permission flow — RESOLVED (matches real relay)
+
+Finding (verified against BOTH our relay and Anthropic's **real** relay): in
+Remote Control, tools **auto-execute with no `can_use_tool` prompt**, even under
+`--permission-mode default`. Captured real flow for `echo REALPERM-987`:
+`user → assistant(tool_use Bash) → user(tool_result) → assistant` — no permission
+gate on the wire. So our relay is **faithful** to real RC; there was no missing
+approval step to implement.
+
+- Control today: `./remote-claw worker --permission-mode
+  {default|acceptEdits|plan|bypassPermissions}`.
+- Plumbing kept for completeness: relay forwards any upstream `control_request`
+  to the client stream (`request_id`, `tool_name`, `tool_input`) and accepts
+  `POST /api/sessions/{id}/permission {request_id, behavior}` → `control_response`
+  downstream. (Not currently triggered, since RC doesn't gate.)
 
 ---
 

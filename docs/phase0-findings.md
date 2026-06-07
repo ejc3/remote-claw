@@ -364,10 +364,24 @@ HTTPS_PROXY=http://127.0.0.1:8888 NODE_EXTRA_CA_CERTS=phase0/mitm/certs/ca.pem \
 /sessions/{id}/worker/events`, `POST /sessions/{id}/worker/events/delivery`,
 `POST /sessions/{id}/worker/heartbeat`, `GET /triggers`.
 
-**Still TODO (Phase 2+):** `can_use_tool` permission flow (forward to UI /
-bypassPermissions), TUI→client echo verification, reconnect/`worker_epoch`
-handling, multi-client fan-out, auth hardening on the client face, and graceful
-session teardown.
+**Bidirectional sync verified.** `test/two_surface.py` runs the TUI wrapper under
+a controlled pty + our client against the relay and asserts both directions on one
+session: a message **typed in the TUI** is answered and appears in **our client**
+(`KIWI…`), and a message **sent from our client** is answered (`PLUM…`). PASS.
+
+**Permission flow — resolved (faithful).** Verified against BOTH our relay and
+Anthropic's real relay: Remote Control **auto-executes tools with no
+`can_use_tool` prompt**, even in `--permission-mode default` (real flow for
+`echo REALPERM-987`: `user → assistant(tool_use) → user(tool_result) →
+assistant`). Our relay matches this; `--permission-mode` controls the posture.
+Relay keeps the `control_request`→client→`control_response` plumbing for
+completeness, though RC doesn't currently gate.
+
+**Roles.** The **TUI wrapper** (`remote-claw worker`/`up`/`logs`) is the
+testing/introspection harness; **our client** (web chat UI) is the proof.
+
+**Still TODO (Phase 2+):** client-face auth, reconnect/`worker_epoch` handling,
+multi-client fan-out, graceful session teardown, streaming deltas in the client UI.
 
 ## 5. Artifacts
 - `phase0/ws-logger.js` — zero-dep WebSocket logger (unused for capture since the

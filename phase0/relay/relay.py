@@ -441,10 +441,14 @@ class ClientHandler(BaseHTTPRequestHandler):
             out = []
             with s.lock:
                 for ev in s.upstream:
-                    p = ev["payload"]; t = p.get("type"); item = {"type": t, "seq": ev["sequence_num"]}
+                    p = ev["payload"]; t = p.get("type")
+                    item = {"type": t, "seq": ev["sequence_num"], "source": ev.get("source")}
                     if t == "assistant":
                         item["text"] = "".join(b.get("text", "") for b in p.get("message", {}).get("content", [])
                                               if isinstance(b, dict))
+                    elif t == "user":
+                        msg = p.get("message", {}).get("content")
+                        item["text"] = msg if isinstance(msg, str) else "[tool_result]"
                     out.append(item)
             return self._json({"events": out})
         m = re.match(r"^/api/sessions/([^/]+)/stream$", self.path)

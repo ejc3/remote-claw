@@ -48,7 +48,8 @@ Type in the web UI *or* the local TUI — both drive the same session.
 | `remote-claw worker [NAME] [--permission-mode M]` | launch the worker pointed at the relay |
 | `remote-claw up [NAME] [--permission-mode M]` | relay (bg) + worker (TUI), one shot |
 | `remote-claw stop` | stop the background relay + workers |
-| `remote-claw test` | run the automated end-to-end test |
+| `remote-claw test` | run the automated tests (e2e + two-surface) |
+| `remote-claw logs` | tail the relay event flow (introspection) |
 
 `--permission-mode` ∈ `default · acceptEdits · plan · bypassPermissions`.
 Ports: `--proxy-port` (8888), `--client-port` (9100).
@@ -81,5 +82,15 @@ TEST_PLAN.md           test plan
   against `../docs/phase0-findings.md` §4b.
 - The client face has **no auth** yet — bind to localhost / forward over SSH; do
   not expose it. (Phase 2.)
-- Full `can_use_tool` client-side approval isn't exercised yet (see TEST_PLAN §3);
-  use `--permission-mode` meanwhile.
+- Tools **auto-execute** in Remote Control (no `can_use_tool` gate) — this matches
+  Anthropic's real relay, verified (see TEST_PLAN §3). Use `--permission-mode` to
+  choose the worker's posture.
+
+## Two roles
+
+- **The TUI wrapper** (`remote-claw worker`/`up` + `logs`) is for **testing &
+  introspection** — run the real Claude Code TUI against the relay and watch the
+  wire (`logs` tails the `⇢`/`⇠` event flow).
+- **Our client** (the web chat UI on :9100) is the **proof that remote works** —
+  the chat response flow runs on top of the relay, driving the same session as the
+  TUI. Verified bidirectionally by `test/two_surface.py`.

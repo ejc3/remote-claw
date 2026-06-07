@@ -15,7 +15,8 @@ Commands:
   remote-claw worker [NAME] [...]    launch claude --remote-control pointed at the relay
   remote-claw up [NAME] [...]        start the relay (background) + worker (foreground TUI)
   remote-claw stop                   stop a background relay and any workers
-  remote-claw test                   run the automated end-to-end test
+  remote-claw test                   run the automated tests (e2e + two-surface)
+  remote-claw logs                   tail the relay event flow (introspection)
 
 Common options:
   --permission-mode {default,acceptEdits,plan,bypassPermissions}
@@ -104,8 +105,8 @@ def relay_cmd(a, background=False):
     gen_certs()
     cmd = [sys.executable, RELAY, "--proxy-port", str(a.proxy_port),
            "--client-port", str(a.client_port)]
-    if getattr(a, "verbose", False):
-        cmd.append("--verbose")
+    if getattr(a, "verbose", False) or background:
+        cmd.append("--verbose")  # background relay is always verbose for `logs` introspection
     if background:
         f = open("/tmp/remote-claw-relay.log", "w")
         p = subprocess.Popen(cmd, stdout=f, stderr=f, stdin=subprocess.DEVNULL,
@@ -179,7 +180,22 @@ def stop(a):
     return 0
 
 def test_cmd(a):
-    return subprocess.call([sys.executable, TEST])
+    rc = subprocess.call([sys.executable, TEST])
+    if rc != 0:
+        return rc
+    print()
+    return subprocess.call([sys.executable, os.path.join(ROOT, "test", "two_surface.py")])
+
+def logs_cmd(a):
+    """Tail the background relay log (introspection of the wire/event flow)."""
+    f = "/tmp/remote-claw-relay.log"
+    if not os.path.exists(f):
+        info("no relay log yet — start one with `remote-claw up` or `relay`"); return 1
+    try:
+        subprocess.call(["tail", "-f", f])
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 # ───────────────────────── argparse ─────────────────────────
 def main():
@@ -199,6 +215,7 @@ def main():
         sp.add_argument("-v", "--verbose", action="store_true")
     sub.add_parser("stop")
     sub.add_parser("test")
+    sub.add_parser("logs")
 
     a = ap.parse_args()
     if a.cmd == "doctor": return doctor(a)
@@ -208,6 +225,7 @@ def main():
     if a.cmd == "up": return up(a)
     if a.cmd == "stop": return stop(a)
     if a.cmd == "test": return test_cmd(a)
+    if a.cmd == "logs": return logs_cmd(a)
 
 if __name__ == "__main__":
     sys.exit(main() or 0)
