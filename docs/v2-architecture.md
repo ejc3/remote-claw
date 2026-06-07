@@ -78,8 +78,10 @@ metadata privacy (timing/sizes/seq are visible to the broker).
      subscribe (SSE/stream) to the host's inbound channel, decrypt, and ingest into
      the worker via the existing downstream path (`Session.push_user_input` /
      `push_control_response`).
-   - Maintains local state: registered sessions, per-direction crypto epoch, last
-     acked `seq`. Reconnects on drop.
+   - Maintains local state: a **durable per-session message log** (keyed by `seq`,
+     the catch-up source), registered sessions, crypto state, last acked `seq`.
+     Answers `catch_up` control frames from its log, falling back to worker RC
+     replay for ranges it doesn't hold. Reconnects on drop.
 
 ### 3.2 Vercel app (the broker)
 - **Ingest Functions** (Node runtime, fast + die): `POST /api/hosts`,
@@ -190,28 +192,47 @@ Verified Vercel facts that shape this:
   **Vercel Queues** exists but is **beta** (`queue/v2beta`), at-least-once, no FIFO,
   7-day retention.
 
-**Two viable shapes — pick one (this is the main open decision, §9):**
+**DECISION (chosen): W′ — the TUI is the brain; the cloud is a dumb,
+zero-knowledge pipe; the web is a thin renderer.**
 
-- **(R) Workflows-orchestrate + Redis-as-record (recommended, robust).** Durable
-  system of record = **Upstash Redis sorted sets** (`session:{h}:{s}:log` scored by
-  `seq` → strict order, long-lived), holding ciphertext envelopes. The per-session
-  **Workflow** ingests via hook, does a `'use step'` ZADD into Redis, and emits on
-  its **durable stream** for live delivery. Workflow state stays small (it
-  delegates history to Redis), sidestepping the retention/replay caps. Realtime =
-  the workflow durable stream (fallback: **Ably**, which gives raw SSE-over-HTTP
-  ideal for the CLI relay + reconnect/rewind). *Slight deviation from "only
-  workflows hold state," but it's the durable, scalable choice.*
+This mirrors how official RC already works (the worker backfills its transcript on
+connect — verified: `replaysOnReconnect` / `backfill` / `catch-up` / `replayLog` /
+`historical:true` in the binary) and concentrates every "smart" on the TUI host.
 
-- **(W) Workflow-only (purest "stateless except workflows").** History lives in
-  the workflow event log + durable stream; no external store. Matches the stated
-  preference exactly, but inherits the **7-day history cap** and per-run event
-  limits ⇒ segment into child workflows per conversation chunk; older history is
-  gone. Good for a v1 spike; risky as the long-term record.
+- **State lives in the wrapper (primary), worker transcript is the fallback.**
+  The `serve` wrapper sits in the MITM and sees every frame both directions, so it
+  keeps its **own durable per-session log** (on the TUI host, keyed by `seq`) — the
+  fast catch-up source. The worker's local transcript (`~/.claude/projects/<cwd>/
+  <session>.jsonl`) is the ultimate source of truth for deep history / cold start.
+  The TUI owns sessions, `seq` ordering, history, and replay; **the cloud stores no
+  history.**
+- **Catch-up is message-passing to the wrapper, on demand.** A connecting client
+  sends a `catch_up{since=<last-seen seq | 0>}` control frame; the cloud relays it
+  to the wrapper, which:
+  1. serves the delta from its own per-session log (the normal path), or
+  2. if the range predates its log (fresh/restarted wrapper, trimmed log), asks the
+     **Claude worker to replay** via the RC backfill mechanism (`replayLog` /
+     `historical:true` events), ingests those, and relays them.
+  Frames stream back as `historical`, then live tailing resumes. No cloud history.
+- **The cloud = relay + short live buffer only.** A per-session Vercel **Workflow
+  durable resumable stream** carries live ciphertext frames and lets a client
+  resume by `startIndex` after a brief disconnect (Ably rewind is the fallback).
+  Its 1–7 day retention is irrelevant because it is **not** the history store —
+  just an in-flight buffer.
+- **The web client caches what it has seen** (IndexedDB, keyed by `seq`) purely as
+  an optimization: a reconnect pulls only the delta; a fresh device asks the TUI
+  for everything. The TUI stays authoritative.
 
-Either way: **the broker stores ciphertext only**, ordering is by client-bound
-`seq`, delivery is **at-least-once** so consumers dedupe by `msg_id` and reorder
-by `seq`; crypto happens in Functions/steps (never inside the deterministic
-`'use workflow'` body — random nonces/stream reads break replay determinism).
+Consequence (accepted): browsing history requires the TUI to be **online** — which
+a live Claude session needs anyway (RC sessions end ~10 min after the worker goes
+offline). If offline history-browsing is ever wanted, add an optional Upstash
+Redis ciphertext log later (drop-in; the cloud already speaks ciphertext+`seq`).
+
+Invariants either way: **the broker sees ciphertext only**; ordering is by
+TUI-assigned `seq`; live delivery is **at-least-once** so clients dedupe by
+`msg_id` and reorder by `seq`; crypto happens in the TUI + browser and in thin
+Functions/steps, **never** inside the deterministic `'use workflow'` body (random
+nonces / stream reads break replay determinism).
 
 ## 7. Multi-host "spaces" & onboarding
 - Each pasted secret = one host = one space. The web stores the set of secrets
@@ -231,20 +252,18 @@ by `seq`; crypto happens in Functions/steps (never inside the deterministic
   `GET /api/hosts`, `POST /api/sessions`, `GET /api/sessions`,
   `POST /api/messages`, `GET /api/messages?since=`, `GET /api/stream?since=`.
 
-## 9. Open decisions (need your call)
-1. **Durable store:** (R) Redis-as-record + workflows orchestrate (robust, scales,
-   long history) **vs** (W) workflow-only (purest "stateless except workflows", but
-   7-day history cap). *Recommend R.*
-2. **Realtime transport:** Vercel-native **workflow durable streams** (fewest
-   moving parts, matches your preference; concurrent-reader semantics are newer/
-   under-documented — needs a spike) **vs** **Ably** (battle-tested, raw SSE over
-   HTTP perfect for the CLI relay, rewind/history). *Recommend: spike durable
-   streams first, Ably as fallback.*
-3. **Secret persistence in the browser:** `localStorage` (convenient, survives
-   reloads, but the all-powerful secret sits on disk) **vs** memory-only (re-paste
-   each visit). *Recommend localStorage with a clear warning + a "forget" button;
-   PIN-wrapped storage later.*
-4. **Web framework / hosting:** Next.js on Vercel (assumed). Confirm.
+## 9. Decisions (resolved 2026-06-07)
+1. **Durable store / history → W′ (TUI is the brain).** No cloud history. The
+   `serve` wrapper holds a durable per-session log on the TUI host and serves
+   catch-up via message-passing; the Claude worker transcript is the deep-history
+   fallback (RC backfill). Cloud is a dumb ciphertext pipe + short live buffer.
+   Optional Upstash Redis ciphertext log can be added later for offline browsing.
+2. **Realtime transport → Vercel workflow durable streams, Ably fallback.** Spike
+   the native durable-stream multi-reader semantics; fall back to Ably (raw
+   SSE-over-HTTP, rewind) if needed.
+3. **Browser secret storage → `localStorage` + "forget" button** (with a clear
+   risk warning); PIN-wrapped storage is a later option.
+4. **Web framework → Next.js on Vercel** (assumed; confirm if not).
 
 ## 10. Phased plan
 - **P1 — Crypto core (shared).** `clawsec` module (TS + Python): secret gen/parse/
