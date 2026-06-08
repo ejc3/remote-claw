@@ -1779,3 +1779,103 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 25 | Two wrappers race bus create | `resumeHook`→`HookNotFound`→`start()`, 1:1 token, `HookConflictError`→resume-tail (bounded backoff), no announce lost |
 | 26 | Clean session end (vs crash) | stop-broadcast → `grey-local`+drop within `FRESH_WINDOW+SKEW`; optional `end` control frame tears down RC |
 | 27 | Control reorder / expired | client-serialized order-dependent controls, `dedup(msg_id)`, `expiry`-reject → timeout+re-send (no hang) |
+
+## 17. Appendix — Claude's Remote Control protocol (reverse-engineered)
+
+> **What this is.** The Anthropic-side protocol that `claude --remote-control` speaks, which the
+> remote-claw wrapper MITMs to become the RC backend (§3.1, §14). Empirically captured on **Claude
+> Code v2.1.168** (Phase 0 — `docs/phase0-findings.md`, `docs/remote-control-research.md`);
+> **undocumented and version-sensitive** — re-verify on any claude upgrade. Inference
+> (`/v1/messages`) and OAuth are **not** part of this; the wrapper passes those straight through to
+> Anthropic untouched.
+
+### 17.1 Two transports — and which one we intercept
+
+Claude Code has two distinct RC transports:
+
+- **Interactive RC = a plain HTTPS sessions API** on `api.anthropic.com` under `/v1/code/sessions*`.
+  This is what `claude --remote-control` (and the `/remote-control` slash command) actually use,
+  and **what remote-claw intercepts.** It shares the host with inference, so interception is a TLS
+  **MITM of `api.anthropic.com`**: serve `/v1/code/sessions*` ourselves, pass `/v1/messages` + the
+  OAuth/token endpoints through to the real upstream.
+- **`--sdk-url` worker WebSocket (CCRv1 — NDJSON over WS):** a *separate* transport for server-mode
+  worker fan-out. On v2.1.168 it is locked to a **hardcoded 5-host Anthropic allowlist + wss/https
+  only**, rejecting any self-hosted relay *before a socket opens* (with a `tengu_sdk_url_host_rejected`
+  telemetry event). So it is **not usable** for a self-hosted relay and is **not** how interactive RC
+  works — history only.
+
+### 17.2 Endpoint map (the HTTPS sessions API, v2.1.168)
+
+Auth: `Authorization: Bearer <claude.ai OAuth accessToken>` + `anthropic-version: 2023-06-01`
+(first-party provider only — `ANTHROPIC_API_KEY` and inference-only `CLAUDE_CODE_OAUTH_TOKEN`/
+`setup-token` are **rejected** for RC). Worker endpoints instead use a session-scoped `worker_jwt`
+(`sk-ant-si-…`) minted by `/bridge`.
+
+**Worker / host side** — what `claude --remote-control` calls; **what our MITM relay serves**:
+
+| Method · Path | Purpose |
+| --- | --- |
+| `POST /v1/code/sessions` | register a session → `{id:"cse_…", status, environment_kind:"bridge"}` |
+| `POST /v1/code/sessions/{id}/bridge` | mint `{api_base_url, worker_jwt:"sk-ant-si-…", worker_epoch, expires_in:14400}` |
+| `GET  /v1/code/sessions/{id}/worker/events/stream` | **SSE downstream** (relay→host): `event: client_event`, `data:{event_type, source:"client", payload}`; the **first frame** is `control_request{subtype:"initialize"}` |
+| `POST /v1/code/sessions/{id}/worker/events` | host→relay **output** (user-echo, `assistant`, `result`) |
+| `POST /v1/code/sessions/{id}/worker/events/delivery` | host acks downstream delivery |
+| `PUT  /v1/code/sessions/{id}/worker` | host status `{worker_status:"idle"\|"busy", worker_epoch}` |
+| `POST /v1/code/sessions/{id}/worker/heartbeat` | keepalive (~20 s) |
+
+**Client / remote side** — what the official web app calls; **what a remote client could call
+directly** (this side needs **no** interception — Phase 0 §4b drove a live session with just the
+OAuth token):
+
+| Method · Path | Purpose |
+| --- | --- |
+| `POST /v1/code/sessions/{id}/events` | **send input** — `{events:[{payload:{type:"user", message:{role:"user", content}, uuid, session_id, timestamp}}]}` |
+| `GET  /v1/code/sessions/{id}/events?sort_order=asc\|desc[&cursor=]` | read events (history + cursor poll) |
+| `GET  /v1/code/sessions/{id}/events/stream` | **SSE** live output stream |
+| `GET  /v1/code/sessions` · `GET /v1/code/sessions/{id}` | list / detail |
+| `POST …/client/presence` · `…/mark_read` · `…/archive` · `…/unarchive` | presence / receipts / lifecycle |
+
+### 17.3 Event envelope & turn sequence
+
+Every event (from `GET …/events`) shares one envelope:
+
+```jsonc
+{ "event_id": "uuid",
+  "event_type": "user|assistant|result|control_request|control_response",
+  "sequence_num": "3", "source": "client|worker", "created_at": "…",
+  "payload": { /* type-specific; user → {type:"user", message:{role,content}, uuid, session_id, timestamp} */ } }
+```
+
+A turn, verified end-to-end: `control_request(initialize)` → `control_response` → `user`
+(`source:"client"`) → `assistant` → `result`. Streaming deltas arrive as raw **Anthropic
+Messages-API** events (`message_start` → `content_block_delta`×N → `message_stop`), wrapped in a
+`stream_event`.
+
+### 17.4 Permissions — RC auto-executes (no approve gate)
+
+Verified against both our relay and Anthropic's real relay: in Remote Control, tools
+**auto-execute with no `can_use_tool` prompt**, even under `--permission-mode default`. The real
+flow for a tool turn is `user → assistant(tool_use) → user(tool_result) → assistant`.
+`--permission-mode` sets the posture; the `control_request`/`control_response` plumbing exists but
+RC does not currently gate on it.
+
+### 17.5 How remote-claw maps onto it (§3.1, §6A, §14)
+
+The wrapper runs the **real** `claude --remote-control` behind a TLS MITM of `api.anthropic.com`:
+it **serves** the worker `/v1/code/sessions*` endpoints itself (becoming the RC backend) and
+**passes** `/v1/messages` + OAuth through, so inference and auth keep working. It maps these worker
+events onto its own E2E-encrypted frame types (§6A):
+
+- the SSE `initialize` and client `user` events → inbound (`dir:in`) frames delivered to claude;
+- the host's `assistant` / `result` / `system`·`status` outputs → outbound (`dir:out`) content
+  frames broadcast to subscribers;
+- the cursor-paginated `GET …/events` → the catch-up / **worker backfill** source (§6) that seeds
+  the in-memory log + `msg_id` seen-set on (re)connect.
+
+Phase 0 verified this two-surface sync end-to-end on v2.1.168 (the **MANGO** own-relay test, and
+the **KIWI**/**PLUM** bidirectional TUI↔client tests).
+
+> **Pinned to v2.1.168.** Every shape here is reverse-engineered from a single binary and can change
+> on any claude upgrade — the original `--sdk-url` premise was already patched out once (§17.1). Keep
+> `phase0/` (the capture tooling + `mitm/capture-proxy.py`) to re-verify, and have the wrapper **fail
+> loudly** on an unrecognized RC-API shape rather than guessing (§12).

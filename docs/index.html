@@ -100,8 +100,11 @@
   @media (max-width:880px){
     .wrap{grid-template-columns:1fr;padding-top:8px}
     nav.toc{display:none;position:fixed;inset:56px 0 0 0;z-index:25;max-height:none;
+      overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
       border-radius:0;background:var(--bg)}
     nav.toc.open{display:block}
+    /* while the drawer is open, lock the page behind it so a scroll moves the menu, not the doc */
+    body.nav-open{overflow:hidden}
     #menu{display:inline-block}
     .tabs{display:none}
     .tabs.open{display:flex;position:absolute;top:54px;left:0;right:0;background:var(--bg);
@@ -199,6 +202,7 @@ function buildToc(){
   ).join("");
   tocEl.querySelectorAll("a").forEach(a=>a.addEventListener("click",()=>{
     document.getElementById("toc").classList.remove("open");
+    document.body.classList.remove("nav-open");
   }));
   spy();
 }
@@ -224,6 +228,8 @@ DOCS.forEach(d=>{
 document.getElementById("menu").onclick=()=>{
   if(window.innerWidth<=880 && location.hash){tocEl.classList.toggle("open");}
   else tabsEl.classList.toggle("open");
+  // keep the body scroll-lock in sync with the open drawer (scroll stays inside the menu)
+  document.body.classList.toggle("nav-open", tocEl.classList.contains("open"));
 };
 
 load((location.hash||"#v2").slice(1).split(":")[0]);
