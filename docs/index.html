@@ -99,7 +99,8 @@
 
   @media (max-width:880px){
     .wrap{grid-template-columns:1fr;padding-top:8px}
-    nav.toc{display:none;position:fixed;inset:56px 0 0 0;z-index:25;max-height:none;
+    nav.toc{display:none;position:fixed;top:56px;left:0;right:0;z-index:25;
+      height:calc(100vh - 56px);height:calc(100dvh - 56px);max-height:none;
       overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
       border-radius:0;background:var(--bg)}
     nav.toc.open{display:block}
