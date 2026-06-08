@@ -42,6 +42,27 @@ export function strFlag(rc: Record<string, RcValue>, name: string): string | und
   return typeof v === "string" ? v : undefined;
 }
 
+/**
+ * Validate a local rc action's args (shared by --rc-identity/--rc-show-secret/…): it must not
+ * forward any claude token (it doesn't launch claude), and only its `allowed` --rc-* flags may
+ * accompany it. Returns an error string (for `remote-claw: <msg>`, exit 2) or null if OK.
+ */
+export function rcActionArgError(
+  cmd: string,
+  rc: Record<string, RcValue>,
+  claudeArgs: readonly string[],
+  allowed: ReadonlySet<string>,
+): string | null {
+  if (claudeArgs.length > 0) {
+    return `${cmd} does not launch claude; remove the extra argument(s)`;
+  }
+  const unsupported = Object.keys(rc).filter((k) => !allowed.has(k));
+  if (unsupported.length > 0) {
+    return `${cmd} does not support ${unsupported.map((k) => `--${k}`).join(", ")} in this build`;
+  }
+  return null;
+}
+
 /** Split argv into the consumed `--rc-*` flags and the args forwarded to `claude`. */
 export function classifyArgs(
   argv: readonly string[],
