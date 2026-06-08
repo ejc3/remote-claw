@@ -1,0 +1,32 @@
+name: clawsec
+
+on:
+  push:
+    branches: [main]
+    paths: ["packages/clawsec/**", ".github/workflows/clawsec.yml"]
+  pull_request:
+    paths: ["packages/clawsec/**", ".github/workflows/clawsec.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/clawsec
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: packages/clawsec/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Lint + format check (Biome)
+        run: pnpm run check
+      - name: Type check
+        run: pnpm run typecheck
+      - name: Unit tests
+        run: pnpm run test:run
