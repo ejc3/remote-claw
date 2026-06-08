@@ -32,8 +32,8 @@ Goals:
 > derives a **user identity** — `identity_id` / `auth_token` / content keys — that
 > **binds *all* of that user's sessions across *all* of their hosts** and is the one
 > thing you **share across machines**. The identity is the boundary, **not** the
-> machine: one secret can run on many hosts, and (by overriding `remote-claw
-> --rc-secret …`) one machine can carry several identities. A *session* = a *space* =
+> machine: one secret can run on many hosts, and (by pointing `remote-claw --rc-file`
+> at another secret file) one machine can carry several identities. A *session* = a *space* =
 > a *claude instance* = **one chat**: a single running `claude --remote-control`
 > **wrapped 1:1 by its own `remote-claw` process** — the *wrapper* is that per-session
 > shim, **not** a machine or a daemon. **Every session is fully independent of every
@@ -71,7 +71,7 @@ The whole design serves this human flow. Two roles (often the same person): the
    Paste it into the web app, or — for a phone — `--rc-web` also prints a **QR /
    `#fragment` deep link** (treat the QR like the raw secret; it's not screen-share-safe).
    Lost the printout? `remote-claw --rc-show-secret` re-reveals it. Need a *different*
-   identity for one run? `--rc-secret rc1_…` overrides the local file just for that run.
+   identity for one run? Point `--rc-file <path>` at a different secret file for that run.
 3. **Share a session:** in any `remote-claw` TUI, hit `/remote-control` → it flips
    to "Remote Control active," and **that instance becomes a chat in the web app**.
    (Or launch already-shared with `--rc-share`.)
@@ -180,7 +180,7 @@ feels like a messaging app; spans many machines.
   │   (identity: secret S, 0600; spans hosts)│ ciphertext only — no store/no history    │        │  encrypt & send    │
   └──────────────────────────────────────────┘         └──────────────────────────────────┘        └────────────────────┘
     one secret = one identity (identity_id/auth); each claude instance under it = one "space"/chat
-    (one host secret in a local file; override per run with --rc-secret)
+    (one host secret in a local file; override per run with --rc-file)
 ```
 
 ### 3.1 CLI — one transparent wrapper around `claude`
@@ -203,11 +203,11 @@ remote-claw [ANY claude args/flags/prompt] [--rc-* wrapper flags]
 security review — §14A.)
 
 - **`--rc-identity`** — *the identity command: local, idempotent, create-once,
-  **never destructive**.* Ensures the selected identity's **root secret `S`** exists,
+  **never destructive**.* Ensures your host's **root secret `S`** exists in its file,
   shows you how to use it, and **exits without launching claude** (spawns no TUI,
   arms no MITM, **zero network I/O** — host registration stays lazy; works
-  air-gapped). There are **no named slots** — one host-level secret per user, kept in a
-  single local file.
+  air-gapped). The secret lives in a **single local file** — the default, or a specific
+  one chosen with `--rc-file`.
   - *Secret absent →* generate `S` (32 B CSPRNG), derive `identity_id`/`auth_token`/
     `content_root`/`control_key`/`K_meta` (§4.2), write `S` `0600` with
     `O_CREAT|O_EXCL` (atomic; never clobbers a concurrent create) at the **local secret
@@ -226,12 +226,10 @@ security review — §14A.)
     Rotation is **not** here — it's the separate, destructive `--rc-rotate`.
   - **Arg rule:** allowed only alongside identity-relevant `--rc-*` flags; **errors**
     if any non-`--rc-*` token (a positional, or anything after `--`) is present, since
-    it doesn't launch claude. `--rc-secret` + `--rc-identity` is a usage error.
-- **`--rc-secret rc1_…`** — run this instance under an **externally-held** secret,
-  ignoring the local file for this run (the per-run override; not a creation input to
-  `--rc-identity`). The persistent default is always the local file; there is nothing to
-  "select". ⚠️ a value on argv is visible in `ps`/shell history — prefer the
-  `REMOTE_CLAW_SECRET` env var, or just rely on the local file.
+    it doesn't launch claude.
+- **`--rc-file <path>`** — use a **specific** secret file instead of the default, for both
+  creating (`--rc-identity`) and using an identity. The secret stays in the file and never
+  appears on argv (`REMOTE_CLAW_SECRET_FILE` sets the same path).
 - **`--rc-show-secret`** — the **only** post-creation reveal of `S` (+ deep link/QR),
   for re-onboarding a device. On a TTY: a shoulder-surf/scrollback warning (STDERR) +
   Enter pause (skip with `--rc-yes`); non-TTY: bare token to STDOUT, warning to STDERR.
@@ -255,7 +253,7 @@ security review — §14A.)
 - The identity's friendly name defaults to the **hostname**, carried as `identity_label`
   inside the `K_meta`-encrypted `session_announce` once RC is on (never sent to the broker
   in the clear). A custom label is a **client-local alias** in the web app (§1A C), not a
-  CLI flag — so there's no `--rc-name`/`--rc-list` slot machinery.
+  CLI flag.
 - **`--rc-json` / `--rc-quiet`** — machine-readable / minimal output. **Never emit the
   raw secret** in either (a script that truly needs it reads the `0600` file directly)
   — JSON/quiet output is exactly what leaks into CI logs. `--rc-json` takes precedence
@@ -357,7 +355,7 @@ human-readable *backup* export.)
 ```
 PRK           = HKDF-Extract(salt="remote-claw/v1", IKM=S)
 auth_token    = HKDF-Expand(PRK, "remote-claw/v1/auth",          32B)  → bearer to the Vercel API
-identity_id   = trunc(SHA256(auth_token), 16B)                          → PUBLIC identity id — a FUNCTION of auth_token (so the broker self-verifies the bearer with NO store)
+identity_id   = trunc(SHA256(auth_token), 16B)                          → PUBLIC identity id = the FIRST (leftmost) 16 bytes of SHA256(auth_token); a FUNCTION of auth_token (so the broker self-verifies the bearer with NO store)
 content_root  = HKDF-Expand(PRK, "remote-claw/v1/content",       32B)  → CLIENT-ONLY master content key
 control_key   = HKDF-Expand(PRK, "remote-claw/v1/control",       32B)  → AEAD key for control frames (dir:in)
 K_meta        = HKDF-Expand(PRK, "remote-claw/v1/meta-frame",    32B)  → AEAD key for ALL meta frames (accepted/session_announce); their whole payload (title/cwd/identity_label/status/last_activity/sent_at) is encrypted+authenticated under it, so the broker can neither read nor forge them
@@ -392,6 +390,7 @@ content_root
                                               info="remote-claw/v1/msg" + canonical_AAD, 32B)
                           ct = AES-256-GCM(K_msg, nonce=random 12B, AAD = canonical_AAD)
    canonical_AAD = canonical-encode(v, identity_id, session_id, dir, record_kind, seq, msg_id, client_msg_id?, key_epoch, part, parts)
+                   ↑ canonical-encode is the **length-prefixed, injective** serialization defined in §8 (NOT ad-hoc concatenation)
 ```
 *(One canonical AAD, used identically in §8: it binds **every** cleartext header field,
 including `part`/`parts` (so chunk indices can't be swapped — §8) and `client_msg_id`
@@ -1065,7 +1064,7 @@ phase0/            unchanged — the Python reference + protocol findings
   forward all other args to `claude`, `--` escape), and the identity surface (§3.1):
   `--rc-identity` (idempotent `O_CREAT|O_EXCL` create-once into the single local secret
   file, derive ids, print `rc1_…` + optional `--rc-web` QR/deep-link; host registration
-  deferred to first RC), `--rc-secret` (per-run override), `--rc-show-secret`,
+  deferred to first RC), `--rc-file` (use a specific secret file), `--rc-show-secret`,
   `--rc-rotate` (secure-delete + `--rc-confirm`), `--rc-json/--rc-quiet` (never emit `S`). **Depends on P1 `clawsec`** for all key work (HKDF derivation +
   `rc1_` parse/checksum); also wires the broker config (`--rc-app` / `--rc-app-key` →
   `T_app`, §3.1/§4.5) used later in P4. Local only (mock app); unit-test the token
@@ -1131,7 +1130,7 @@ phase0/            unchanged — the Python reference + protocol findings
 - **Anthropic RC interception** (the Phase 0 MITM of `/v1/code/sessions`, pinned to
   `claude` 2.1.168) underpins v2 too — it can break or be re-gated on any Claude
   upgrade. Keep the capture tool (`mitm/capture-proxy.py`) to re-verify.
-- **Single secret per host** (one local file; override per run with `--rc-secret`) = single
+- **Single secret per host** (one local file; override per run with `--rc-file`) = single
   point of failure; rotating = a new identity (no partial/per-device revocation). Pasting
   into a browser exposes it to that device's XSS/extension/clipboard surface. `rc1_`
   high-entropy tokens trip secret scanners if pasted into a repo.
@@ -1341,12 +1340,6 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   re-derives a live credential — not "keys to dead data"); the deep-link uses a
   separate **`--rc-web`** URL, not the broker `--rc-app`; `--rc-confirm <identity_id>` is an
   accident guard (identity_id is public), so rotate also requires a TTY.
-  - **Slot concept dropped (2026-06-08, user call):** the earlier named-slot design
-    (`--rc-id`/`--rc-list`/`--rc-name`, a per-slot state dir) was **too much**. Replaced by
-    **one host-level secret in a single local file** (`$XDG_STATE_HOME/remote-claw/secret`),
-    overridable per-run with `--rc-secret`. A normal run auto-creates that one file silently;
-    there is nothing to select or list, and the friendly name is just the hostname (custom
-    labels are client-local aliases in the web app).
 - **Registry / state expression (2026-06-07 → -08).** Three research→design→verify
   panels, ending against the **SDK type definitions** (and later **web-verified against the
   live docs**, §13). Evolution: (1) a Workflow can't be a *queryable* registry
