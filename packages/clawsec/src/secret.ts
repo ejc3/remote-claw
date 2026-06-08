@@ -3,6 +3,7 @@
 // before any network call; the 256-bit CSPRNG secret is the actual unguessable credential.
 
 import { base64urlDecode, base64urlEncode } from "./base64url.js";
+import { sha256 } from "./bytes.js";
 
 const PREFIX = "rc1_";
 const SECRET_BYTES = 32;
@@ -23,10 +24,6 @@ export class SecretError extends Error {
   static is(e: unknown): e is SecretError {
     return e instanceof SecretError;
   }
-}
-
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", data as BufferSource));
 }
 
 /** 4 Crockford-base32 chars encoding the top 20 bits of the digest. */
