@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>remote-claw — how it keeps your sessions private (plain-language design)</title>
-<meta name="description" content="Watch and steer a terminal AI session from your phone, without the relay server in the middle being able to read it. A plain-language explanation of the privacy model: per-machine identity, limited viewer passes, and three trust modes.">
+<meta name="description" content="Watch and steer a terminal AI session from your phone, without the relay server in the middle being able to read it. A plain-language explanation of the privacy model: per-machine identity, a limited pass for viewers, and three trust modes.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
 <style>
   :root{
@@ -126,12 +126,9 @@ The important rule: **you do not share one secret across all your machines.** Ea
 
 ## A viewer gets a limited pass, not the master key
 
-Your machine's secret is the **master key** — whoever holds it can read everything *and* send commands. Your phone doesn't need all of that, and you don't want a lost phone to hand over the master key. So a viewer never receives the master secret. Instead it gets a **limited pass** worked out from the master:
+Your machine's secret is the **master key** — it can read everything, send commands, *and* re-create the machine's identity. Your phone doesn't need all of that, and you don't want a lost phone to hand over the master key. So a viewer never receives the master secret. Instead it gets a **pass** worked out from the master: with it, a viewer can **read the live session, see which sessions are online, and send prompts** — but the pass is **not** the master key. It **cannot** be turned back into the master key, and it **cannot** reset or re-create the machine's identity.
 
-- **View pass** — read the live session and see which of your sessions are online. **Cannot** send commands. **Cannot** be turned back into the master key.
-- **Control pass** — everything a view pass can do, **plus** send prompts and commands. Still **cannot** be turned back into the master key.
-
-The math behind the keys is one-directional (a key can produce a narrower key, but a narrower key can never reproduce the key it came from). So a stolen phone is limited to exactly what its pass allows — it can never widen its own access or recover the master key.
+The math behind the keys is one-directional (the master can produce the narrower keys a pass carries, but those keys can never reproduce the master). So a lost phone is limited to driving the session — it can never widen into the master key or take over the machine's identity — and you cut it off by resetting the machine.
 
 ## Three privacy modes
 
@@ -158,8 +155,7 @@ It **cannot** read your transcripts, your prompts, your keys, or which session y
 
 | What's taken | What the thief can do | How you stop it |
 |---|---|---|
-| A phone's **view pass** | Read that machine's sessions (until you reset). No commands. No master key. | Reset the machine. |
-| A phone's **control pass** | Read **and** send commands (until you reset). Still no master key. | Reset the machine. |
+| A phone's **pass** | Read and steer that machine's sessions (until you reset). Not the master key; can't reset the machine. | Reset the machine. |
 | A machine's **master secret** | They effectively *are* that machine — read and control it. | Reset that machine. Your other machines are untouched. |
 
 Note that **reset is all-or-nothing** — it cuts off *every* viewer of that machine, not just the lost device; you then reconnect the devices you still trust. The blast radius is always **one machine**, never the whole fleet — that's the point of one-identity-per-machine.
@@ -168,7 +164,7 @@ Note that **reset is all-or-nothing** — it cuts off *every* viewer of that mac
 
 To cut everyone off a machine — you lost a device, or a secret leaked — you **reset that machine's identity**. It makes a brand-new secret; the old one is abandoned. Then you reconnect the viewers you still want, using the new secret.
 
-Two honest caveats:
+Two caveats:
 
 - Reset protects **what happens next**. Anyone who already watched your screen already saw it — resetting can't un-see the past.
 - Until you reset, a leaked secret keeps working on the old channel. Reset promptly.
@@ -181,7 +177,7 @@ Keeping the design small is a feature. Three things we considered and chose **no
 - **"Forward secrecy" (old messages staying safe if a key leaks later).** Because your master secret can always re-derive its keys — that's exactly what lets you "paste the secret to reconnect on a new device" — there is no forward secrecy to be had without giving that convenience up. We chose easy reconnection.
 - **Accounts.** No login and no server-side list of your machines. The relay stays a dumb mailbox, which is what keeps it unable to learn anything about you.
 
-## Honest limits
+## Limits
 
 - **Open mode** sees everything — it is a trust-the-server mode, and is labeled as one. (The loud "no encryption" banner is only there so you can't switch it on by accident; the banner is *not* protection.)
 - A **leaked pass or secret keeps working** until you reset that machine.
@@ -205,16 +201,21 @@ A machine's secret is 256 bits of CSPRNG randomness, written as a short `rc1_…
 
 The four are independent one-way outputs of the secret: holding one (or all) never lets you invert back to the secret, nor derive a sibling you weren't handed (HMAC preimage resistance).
 
-### The two passes, concretely
+### The pass
 
-A "pass" is a bundle carrying a **subset** of those keys — never the secret. It's a separate serialized form from `rc1_` (QR/file-sized, since it carries several keys):
+A "pass" is a bundle carrying the operational keys derived from the secret — the **address, content, command, and presence keys** — but **not the secret itself**. It's a separate serialized form from `rc1_` (QR/file-sized, since it carries several keys). A pass-holder can subscribe, decrypt transcript content, read presence, and send commands the machine accepts. What it **cannot** do: recover the secret (each key is a one-way output of it) or reset/re-mint the machine's identity (that needs the secret). You revoke a pass by resetting the machine.
 
-- **View pass** = address key + content key + presence key. It can subscribe, decrypt transcript content, and read presence. **No command key.**
-- **Control pass** = view pass **+ command key**. The same reads, plus it can produce commands your machine will accept.
+One residual worth stating plainly: the content and presence keys are *symmetric*, so a pass-holder can also *produce* valid-looking content or presence for that machine, not only read it — on the wire, a pass is about as capable as the machine itself, minus the secret. Preventing a holder from injecting content that others accept as the machine's would need separate per-writer signing keys, which we deliberately omit to keep the scheme symmetric and small.
 
-The view-vs-control boundary is enforced **at your machine, by key possession** — not by the relay, which can't tell the two passes apart. An inbound command is authenticated under the **command key**, and the machine acts only on a command that verifies under it; a view-pass holder lacks that key, so any command it emits is rejected at the receiver. Neither pass can recover the secret or widen its own scope.
+### The message flow, both ways
 
-**Honest residual:** the content and presence keys are *symmetric*, so a pass-holder can also *produce* valid-looking content or presence for that machine, not only read it. The hard line a pass draws is **commands** (the command key) — not write-vs-read on the content channel. Stopping a malicious viewer from injecting content that others accept as the machine's would need per-writer signing keys; we deliberately don't add them, to keep the scheme symmetric and small.
+A session is a two-way stream carried by the relay; in Sealed/Managed every frame below is sealed and opaque to it.
+
+- **Machine → viewers (the transcript).** The wrapper watches the real AI session's output and, for each chunk, seals a frame under the **content key**, stamps it with the next **sequence number** and a unique **message id**, and posts it to the relay on that session's channel. Viewers subscribe to the channel, skip any id they've already seen, decrypt with the content key, and render live. A viewer that just joined or fell behind catches up by sequence from the wrapper's recent in-memory log (and, failing that, the on-disk transcript).
+- **Viewers → machine (prompts & control).** A viewer seals a prompt or control action (interrupt, switch model, …) under the **command key** and posts it to the same session's inbound direction. The machine subscribes, de-dupes by message id, and acts **only if the frame authenticates under the command key** — which is what stops the relay, or anyone without a pass, from injecting commands. It decrypts, feeds the prompt into the real session, and the resulting output flows back out along the machine → viewers path.
+- **Presence** rides alongside on the machine's bus — a sealed, timestamped "online" announce viewers tail (covered below).
+
+Throughout, the relay only moves these sealed frames between the two ends, matching each to a channel by the cleartext routing label — it never learns which direction carries what *content*, only the labels.
 
 ### Locking a message
 
