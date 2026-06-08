@@ -53,7 +53,7 @@ test("§15 scenarios render as list items, not run-on paragraphs (jumble fix)", 
   await page.goto("/index.html#v2");
   await expect(page.locator("article ol li")).not.toHaveCount(0, { timeout: 15000 });
   // these scenarios were previously trapped inside the <p> of their bold category header
-  for (const t of ["Client first connection", "Enable RC mid-session", "One identity, 5 independent"]) {
+  for (const t of ["Client first connection", "Enable RC mid-session", "5 independent sessions"]) {
     await expect(page.locator("article li", { hasText: t }).first()).toBeVisible();
   }
   // no article <p> is a stranded multi-item numbered run-on
