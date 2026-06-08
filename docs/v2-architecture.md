@@ -773,36 +773,42 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
 
 - **Creation is explicit `start()`, not `resumeHook`.** The first wrapper to enable RC
   for an identity calls **`start()`** to create the bus run, which immediately
-  `createHook("bus:"+identity_id)`. `resumeHook` only *wakes* an existing run; it never
-  creates one. So a wrapper coming online does **resume-or-start**: try
-  `getHookByToken`/`resumeHook`; on `HookNotFound` (or `HookConflictError` racing a
-  concurrent create) `start()` then retry **with bounded exponential backoff + jitter**
-  (**50 ms base, ×2, ≤2 s ceiling, ±25% jitter**, a few rounds → a two-wrapper create race
-  converges in well under a second, not a storm). The token is **1:1** (`HookConflictError`
-  blocks a second), which *enforces* one bus per identity.
-- **Long-lived, with two defined endings.** The bus run loops awaiting its hook, and **each
-  publish (`resumeHook`) re-wakes it and resets the run's idle-timer** (it's *idle*-time, not
-  absolute wall-clock — a P3 acceptance criterion, §11). The run is **shared by all of the
-  identity's sessions**, so *any one* session's announce (≤ `ANNOUNCE_INTERVAL` apart) keeps
-  it alive for everyone — `getHookByToken` keeps resolving and `start()`'s random runId is
-  irrelevant because the **token** is the durable address. It ends in two cases: (i) **last
-  broadcaster leaves** → no publish for the **idle-timeout** (target **3× `ANNOUNCE_INTERVAL`
-  = 60 s**) → the run completes, disposing the hook (token frees); the *next* session to come
-  up just resume-or-starts it again. (ii) **deliberate cap-roll** — see below. ("Holds the
-  hook" above is shorthand for *keeps re-waking the run via periodic publishes*; no wrapper
-  owns the run — the exact idle-timeout value/reset semantics are a P3 acceptance criterion,
-  §11, with the §12 fallback if Vercel's behavior differs.)
+  `createHook("bus:"+identity_id)` (custom token — verified, §13). `resumeHook` only *wakes*
+  an existing run; it never creates one (verified). So a wrapper coming online does
+  **resume-or-start**: try `getHookByToken`/`resumeHook`; on a missing/dead run `start()`
+  then retry **with bounded exponential backoff + jitter** (**50 ms base, ×2, ≤2 s ceiling,
+  ±25% jitter**). The docs confirm a **live hook owns its token until disposal** ("its token
+  becomes available for other workflows to use" only after `dispose()`), which gives us one
+  bus per identity; the **exact behavior of a duplicate `createHook` on a held token** (a
+  conflict error vs. silent) is **not documented → a P3 verify**, but either way the loser
+  resume-tails the winner.
+- **Long-lived; durable, no idle reaper (verified §13).** The bus run loops awaiting its
+  hook. Vercel sets **no max run duration and no idle-timeout** — a suspended run waits
+  **indefinitely** and **consumes no compute while idle** (only storage-retained billing).
+  The run is **shared by all of the identity's sessions** (each publish just emits a
+  `hook_received` event and resumes it); `getHookByToken` keeps resolving and `start()`'s
+  random runId is irrelevant because the **token** is the durable address. **Consequence:**
+  when the last session leaves, the bus run does **not** auto-end — it simply goes quiet and
+  the token stays resolvable; a cold client then reads the recent window, finds **no fresh
+  announce**, and renders empty (presence is "fresh announce," not "bus exists" — below), so
+  a lingering idle bus is harmless. The run therefore ends in just **one** way in normal
+  operation: (ii) **deliberate cap-roll** (below). *Optional* self-cleanup: to free the token
+  on inactivity we can race the hook against a **durable `sleep`** (the documented pattern for
+  a hook timeout, vercel/workflow#553) and complete the run if no publish arrives for, say,
+  a few `ANNOUNCE_INTERVAL`s — but it's not required for correctness. ("Holds the hook"
+  elsewhere = the run stays alive awaiting its hook; no wrapper owns it.)
 - **Cap-roll protocol.** Because each inbound publish is an event, before the bus nears
   the 25k-events/run cap a connected wrapper **completes** the current run (which
   **closes its stream and disposes the hook → frees the token**), then immediately
   `start()`s a fresh run (re-`createHook("bus:"+identity_id)`); if two wrappers race, one
-  wins and the loser catches `HookConflictError` and resume-tails the winner. **No new
-  frame kind is needed: tailing clients (and wrappers) see the stream EOF**, reconnect
-  `GET /api/stream?identity=…` → `getHookByToken` now resolves the new run → re-tail (and
-  wrappers resume broadcasting; a brief `HookNotFound` during the swap → retry). Open
-  **per-session** chats are untouched (separate runs). So "the bus never completes *except*
-  on last-wrapper-exit or a deliberate roll" — the token is always either live or
-  re-creatable, and the bus still carries only `session_announce` broadcasts.
+  wins and the loser (its duplicate create on the held token — behavior P3-verified, §11)
+  resume-tails the winner. **No new frame kind is needed: tailing clients (and wrappers) see
+  the stream EOF**, reconnect `GET /api/stream?identity=…` → `getHookByToken` now resolves the
+  new run → re-tail (and wrappers resume broadcasting; a brief `HookNotFound` during the swap
+  → retry). Open **per-session** chats are untouched (separate runs). So "the bus never
+  completes *except* on a **deliberate roll**" (there is no idle-timeout — §13 — so an idle
+  bus just persists) — the token is always either live or re-creatable, and the bus still
+  carries only `session_announce` broadcasts.
 - **"Online" = a fresh announce, not mere bus existence.** A resolvable bus only means *a*
   wrapper once created it; the client treats a session as online iff it holds a
   `session_announce` whose `sent_at` is within `FRESH_WINDOW`. `HookNotFound` and "bus
@@ -879,8 +885,11 @@ interval generous (§12).
   wrapper/client clocks within ~`FRESH_WINDOW` (NTP), and a dead session can show online for
   ≤ `FRESH_WINDOW + SKEW` (≈65 s at defaults) before greying. Scoped to the dot only — never
   message security (§12).
-- **Two-call composition** (`getHookByToken`→`getRun`→`getReadable`) is real but shown
-  in **no official example** — integration risk; verify in a P3 spike.
+- **Two-call composition** (`getHookByToken`→`getRun`→`getReadable`): each call is
+  **docs-confirmed** (§13) — incl. the `getRun(id).getReadable({startIndex})` reconnect in
+  the resumable-streams guide — but the *cross-process bus wiring* (resolve a derived token to
+  another process's runId, then tail it) is **our** composition, so it's a P3 integration
+  check, not a re-derivation.
 - **Run-roll handoff.** Inbound publishes are events (25k/run cap); the bus rolls
   occasionally. On roll the old run completes → its hook disposes → a new run re-creates
   `bus:${identity_id}`; a brief window may `HookNotFound` → client retries. Keeping
@@ -1076,24 +1085,26 @@ phase0/            unchanged — the Python reference + protocol findings
   `sess:${identity_id}:${session_id}` creates the run + hook; same 1:1-token / backoff rules
   as §6B). Deploy; curl the cold-start (subscribe → recent-window `session_announce`
   broadcasts) + a relay round-trip with hand-rolled ciphertext.
-  **First, a build-time spike** with explicit **acceptance criteria** — these are the §6B
-  linchpins that are verified-by-types only, and the design must be re-confirmed against the
-  live SDK before building on them (pin `workflow`/`@workflow/*` SDK versions):
-  1. `getHookByToken→getRun→getReadable` composition resolves a derived token to a live
-     readable stream from an API route (with server World creds).
-  2. `getReadable({startIndex:recent})` yields a **recent window spanning ≥ one
-     `ANNOUNCE_INTERVAL`** of events (so a cold client sees each live session's last
-     announce), and a rolled-past window degrades to ≤ `ANNOUNCE_INTERVAL` latency, not a miss.
-  3. **`resumeHook` resets the run's idle-timeout** (it is *idle*-time, not absolute
-     wall-clock), so periodic publishes keep the run alive; confirm the idle-timeout is
-     `> ANNOUNCE_INTERVAL` (target **3× = 60 s**) and that on expiry the run **completes →
-     hook disposes → token frees**.
-  4. **Cap-roll handoff** is observable: tailing readers see a stream **EOF** (or a clean
-     disconnect) when the old run completes, and `getHookByToken` resolves the new run after
-     re-`start()`; the brief `HookNotFound` swap window is retryable.
-  5. Browser path: the `GET /api/stream` Function obtains World creds (per-request vs cached
-     — measure) and pipes SSE; `HookNotFound` ⇒ `200` empty.
-  6. Size/chunk limits (hook ≤ 4.5 MB, stream chunk ≤ 10 MB) and the `(msg_id, part)` dedup.
+  **First, a small build-time spike.** Most of the §6B linchpins are now **docs-confirmed**
+  (web-verified 2026-06-08, §13) — `getHookByToken→getRun→getReadable`, custom hook tokens,
+  `resumeHook` (resume-not-create), negative-`startIndex` recent window, stream-writes-bypass-
+  events, no-max-run-duration/idle-free, no caller-chosen `runId`, and the caps. So the spike
+  is **integration + the few undocumented bits**, not a re-derivation (pin `workflow`/`@workflow/*`):
+  1. End-to-end **`getHookByToken→getRun→getReadable` from an API route** with server World
+     creds (the composition is ours; each call is documented, the wiring is what we prove).
+  2. **`getReadable({startIndex:-N})`** delivers the last *N* chunks and keeps streaming new
+     ones — pick *N* so the window spans ≥ one `ANNOUNCE_INTERVAL`; a rolled/short window
+     degrades to ≤ `ANNOUNCE_INTERVAL` latency, not a miss (negatives are docs-confirmed §13).
+  3. **Duplicate `createHook` on a held token** — the *one* genuinely undocumented behavior:
+     confirm it errors (or is otherwise safe) so the create-race loser deterministically
+     resume-tails the winner. (No idle-timeout exists, §13 — so there is nothing to "reset";
+     the run just persists, and the only token-free path is the cap-roll.)
+  4. **Cap-roll handoff** observable: readers see stream **EOF** on the old run's completion
+     and `getHookByToken` resolves the new run after re-`start()`; brief `HookNotFound` → retry.
+  5. Browser path: `GET /api/stream` obtains World creds (per-request vs cached — measure),
+     pipes SSE within the Function `maxDuration` (300s Hobby / 800s Pro, §13 — reconnect by
+     `seq` past it); `HookNotFound` ⇒ `200` empty.
+  6. Size/chunk limits (hook ≤ 4.5 MB, stream chunk ≤ 10 MB, payload ≤ 50 MB) + `(msg_id, part)` dedup.
 - **P4 — CLI: `serve` behavior = relay on `/remote-control` (MITM — §14).** Node/TS
   reimpl of the Phase 0 interception: `remote-claw` runs the real interactive
   `claude` (full passthrough) and, when RC is enabled, points it at our local MITM
@@ -1149,15 +1160,14 @@ phase0/            unchanged — the Python reference + protocol findings
   pattern composition**, and the run-roll **hook re-bind** has a brief `HookNotFound`
   window → client retry. Both are P3 spike items (§11); a stale resolve is at worst
   "reconnect + `catch_up`," never a wrong attach.
-- **Bus idle-timeout is load-bearing but unverified** (§6B): liveness assumes `resumeHook`
-  **resets an idle-timer** (not an absolute wall-clock cap) and that the run completes →
-  hook disposes → token frees after the timeout. P3 acceptance criterion (§11). **Fallback
-  if Vercel differs:** a shorter/absolute timeout just makes the run end while a session is
-  still live → the next announce's `resumeHook` hits `HookNotFound` → **resume-or-`start()`
-  re-creates the bus** under the same token (the path already exists for cold-start and
-  cap-roll). Worst case is a brief presence blip + retry, never lost messages or a wrong
-  attach. If the token *fails to free* on completion, the next `start()` gets
-  `HookConflictError` → resume-tail instead — also already handled.
+- **Bus run never auto-frees its token** (verified §13: no idle-timeout, no max run
+  duration): a bus run, once started, lives **indefinitely** (idle = free compute, but
+  storage-retained is billed), so the token stays held even with no connected sessions. This
+  is benign — a cold client just sees "no fresh announce → empty" — and the token is freed
+  only by the **cap-roll** (deliberate complete + re-`start()`). If we want idle buses to
+  self-clean, race the hook against a durable `sleep` (§6B). Residual unknown: the **exact
+  behavior of a duplicate `createHook` on a held token** (conflict error vs. silent) is
+  undocumented → a P3 verify; either way the create-race loser resume-tails the winner.
 - **Workflow per-run caps** (25k events / 10k steps / 2 GB; replay degrades past
   ~2k events): each **inbound publish is an event**, so the bus **rolls** before the
   cap (re-creating `bus:${identity_id}`); keep high-volume turn frames on per-session
@@ -1173,9 +1183,11 @@ phase0/            unchanged — the Python reference + protocol findings
 - **Counter/nonce safety:** resolved by per-message HKDF subkeys (§4.3); do **not**
   regress to a shared counter nonce with stateless/multi-device senders.
 - **Vercel Queues / WDK surface** still moving (Queues beta); Workflows GA is
-  stable — pin SDK versions, isolate behind a thin transport interface. The §6B
-  feasibility rests on moving GA numbers (caps/retention, stream event-bypass) +
-  the `getHookByToken`→`getRun`→`getReadable` composition — re-verify at build (§11 P3).
+  stable — pin SDK versions, isolate behind a thin transport interface. The §6B caps,
+  retention, stream-event-bypass and the API primitives are now **web-verified against the
+  live docs** (§13, 2026-06-08); only the *integration* (cross-process token→stream wiring +
+  the duplicate-`createHook` behavior) remains a P3 build check, and SDK versions can still
+  drift — re-confirm at build (§11 P3).
 - **Relay flooding / DoS.** The broadcast model removes the old `identify?`
   request-triggered fan-out (no client request exists), but any caller past the soft web
   `T_app` can still `POST /api/relay` junk. Mitigate with a broker-side per-`identity_id`
@@ -1195,15 +1207,41 @@ phase0/            unchanged — the Python reference + protocol findings
   rolls at the cost of a larger presence fuzz. Quantify Events vs Data-Written per active
   identity in P3.
 
-## 13. Sources (verified 2026-06-07)
+## 13. Sources (verified 2026-06-07; Workflow runtime semantics **web-verified 2026-06-08**)
 - Vercel Workflows docs / concepts / pricing+limits — https://vercel.com/docs/workflows ·
-  /workflows/concepts · /workflows/pricing (GA 2026-04-16; retention & caps as cited)
+  /workflows/concepts · /workflows/pricing (GA 2026-04-16; retention & caps as cited).
+  The official docs delegate the SDK/API reference to the open-source **Workflow SDK** at
+  https://workflow-sdk.dev (linked verbatim from vercel.com/docs/workflows).
+- **Web-verified 2026-06-08 (the §6B linchpins — now docs-confirmed, not just type-confirmed):**
+  - `getHookByToken(token): Promise<Hook>` is a runtime fn callable **from outside a workflow**
+    (an API route); the returned `Hook` carries `runId` — workflow-sdk.dev/docs/api-reference/workflow-api/get-hook-by-token.
+  - Hooks accept a **caller-chosen custom token** ("a custom token that external systems can
+    reconstruct"); `resumeHook(token,data)` resumes an existing run (emits `hook_received`),
+    does **not** create one — /docs/foundations/hooks · /docs/api-reference/workflow-api/resume-hook.
+  - `getRun(id).getReadable({startIndex})` reconnects by `runId`+`startIndex`; **`startIndex`
+    supports negatives** ("`-5` starts 5 chunks before the current end", "only fetch the last
+    20 chunks") — so the **recent-window read is a native, client-chosen offset**, and
+    later chunks still stream — /docs/foundations/streaming · /docs/ai/resumable-streams.
+  - **Stream data bypasses the event log** ("flows directly without being stored in the event
+    log"), so out-stream writes do **not** count toward the 25k event cap (billed as Data
+    Written; max stream storage Unlimited; **chunk ≤10 MB**, ≤1,000 chunks/s/stream).
+  - **No idle-timeout / no max run duration** ("Maximum run duration: No limit"; suspended
+    runs wait indefinitely; **a built-in hook timeout is an open request, vercel/workflow#553**
+    — the documented bound is racing the hook against a durable `sleep`). A suspended run
+    **suspends without consuming resources** (idle = free compute; storage-retained still billed).
+  - **`start()` takes no caller-chosen `runId`/idempotency key** (only `deploymentId`;
+    vercel/workflow#85 open) → value-addressing **must** be by token, not runId.
+  - Run caps confirmed exactly: **25k events / 10k steps / 2 GB per run**; replay degrades
+    past **2k events or 1 GB**; **max payload 50 MB**; **max replay duration 240s**; retention
+    **1d/7d/30d** Hobby/Pro/Ent — vercel.com/docs/workflows/pricing.
+  - Functions SSE (Node runtime, Fluid): **maxDuration 300s Hobby / 800s Pro·Ent**; idle CPU
+    not billed, provisioned memory billed for the stream window — vercel.com/docs/functions/limitations · /usage-and-pricing.
 - Workflow Development Kit (public beta 2025-10-23) — https://vercel.com/changelog/open-source-workflow-dev-kit-is-now-in-public-beta · https://workflow-sdk.dev
 - "A new programming model for durable execution" (GA) — https://vercel.com/blog/a-new-programming-model-for-durable-execution
 - Vercel Queues (public beta) — https://vercel.com/docs/queues
 - Storage: Upstash Redis / Neon via Vercel Marketplace (KV/Postgres retired 2024)
 - **Registry-feasibility (why a Workflow can't be the registry — §6B/§14A):**
-  `runs.list()` status-only filter + ~50-run enumeration limit (community.vercel.com/t/…/34690);
+  `world.runs.list()` is **cursor-paginated only — no status/key filter** (workflow-sdk.dev/docs/api-reference/workflow-api/world/storage);
   no internal-state read, write-only hooks (workflow-sdk.dev/docs/api-reference/workflow-api/get-run · /docs/foundations/hooks);
   `hook_received` is a persisted event (workflow-sdk.dev/docs/how-it-works/event-sourcing);
   out-stream bypasses the event cap (workflow-sdk.dev/docs/foundations/streaming);
@@ -1299,9 +1337,11 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   typo-mints-identity footgun; `--rc-confirm <identity_id>` is an accident guard (identity_id
   is public), so rotate also requires a TTY.
 - **Registry / state expression (2026-06-07 → -08).** Three research→design→verify
-  panels, ending against the **SDK type definitions**. Evolution: (1) a Workflow can't
-  be a *queryable* registry (`runs.list()` is status-only, `start()` no custom key,
-  heartbeats-as-events blow the 25k cap) → first concluded a managed KV was needed;
+  panels, ending against the **SDK type definitions** (and later **web-verified against the
+  live docs**, §13). Evolution: (1) a Workflow can't be a *queryable* registry
+  (`world.runs.list()` is cursor-paginated only — no status/key filter; `start()` takes no
+  custom `runId`; heartbeats-as-events blow the 25k cap) → first concluded a managed KV was
+  needed;
   (2) the user simplified to **one user identity binding all sessions across hosts** +
   **an announce bus** (connected wrappers self-identify on request); (3) the linchpin —
   whether the bus is addressable by a derived value — resolved **yes**:
@@ -1457,8 +1497,11 @@ Offline *listing* across cold starts is deferred (§6C).
 20. **Host offline → back.** Wrapper exits (never outlives the CLI) → **stops
     broadcasting** → its announces age out of `FRESH_WINDOW` → a client *watching* its
     spaces **greys them locally**, then drops them; a *fresh* cold open just won't list
-    them (offline *listing* deferred §6C). The bus run survives if **another** wrapper
-    under the identity is still broadcasting; only the *last* one leaving empties the bus.
+    them (offline *listing* deferred §6C). The bus run **persists either way** (no
+    idle-timeout — §6B/§13): with other sessions still broadcasting it stays active; with the
+    last one gone it just goes **quiet** (token still resolvable) and a cold open reads the
+    recent window, finds no fresh announce, and renders empty — "online = fresh announce," not
+    "bus exists."
     A send to the gone session is rejected **client-side** (greyed → send disabled). If a
     frame is sent anyway it is **best-effort**: while the session run is still alive (wrapper
     briefly offline) it *may* land when the wrapper returns and read it, deduped by `msg_id`;
@@ -1626,7 +1669,7 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 
 **20. Host offline → back**
 1. W/CLI exit → W **stops broadcasting**; its announces age out of `FRESH_WINDOW`
-2. C (tailing the bus) **greys** the session locally, then drops it; a fresh open just won't list it (`getHookByToken` resolves the bus only if another W keeps it alive, else `HookNotFound` → empty)
+2. C (tailing the bus) **greys** the session locally, then drops it; a fresh open reads the recent window and finds no fresh announce → empty (the bus run **persists** regardless — no idle-timeout, §6B/§13; `HookNotFound` only if the bus was *never* created or mid-roll)
 3. send is blocked **client-side** (greyed → disabled); if sent anyway it is **best-effort**: it *may* land if W returns while the run is still alive (deduped by `msg_id`), but once the session run idles out the hook disposes → `POST /api/relay` → `resumeHook` **`HookNotFound`** → **`409`, send lost** (no durable queue; idempotency can't save a frame dropped at a dead hook) → client re-sends after the session re-appears
 4. host returns: relaunch + `/remote-control` → W **rejoins the bus** → broadcasts again; C un-greys on the next fresh announce; `catch_up` fills the gap
 
