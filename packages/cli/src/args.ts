@@ -9,6 +9,7 @@ export type RcFlagKind = "boolean" | "value";
 export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-identity": "boolean",
   "rc-show-secret": "boolean",
+  "rc-pass": "boolean",
   "rc-json": "boolean",
   "rc-quiet": "boolean",
   "rc-yes": "boolean",
