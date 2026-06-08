@@ -206,8 +206,9 @@ remote-claw [ANY claude args/flags/prompt] [--rc-* wrapper flags]
 **Wrapper-only flags (`--rc-*`).** (Design settled via a 3-lens panel + adversarial
 security review — §14A.)
 
-- **`--rc-identity`** — *the identity command: local, idempotent, create-once,
-  **never destructive**.* Ensures your host's **root secret `S`** exists in its file,
+- **`--rc-identity`** — *the identity command: local; create-once + idempotent by default, and
+  the home of the destructive **replace** (behind the `--rc-confirm` guard).* Ensures your host's
+  **root secret `S`** exists in its file,
   shows you how to use it, and **exits without launching claude** (spawns no TUI,
   arms no MITM, **zero network I/O** — host registration stays lazy; works
   air-gapped). The secret lives in a **single local file** — the default, or a specific
@@ -225,13 +226,22 @@ security review — §14A.)
     (`--rc-app`), also print the `https://<app>/#<secret>` deep link + a terminal **QR** of it
     for phone onboarding. ⚠️ The QR/deep-link **encode the secret verbatim** — treat them like
     the raw token (shoulder-surf/recording risk); a QR is **not** "safe to screen-share."*) The
-    create itself is local-only; the current build's `--rc-identity` accepts only
-    `--rc-file`/`--rc-json`/`--rc-quiet`. Exit 0.
-  - *Secret exists (idempotent re-run) →* **never** regenerates/overwrites `S`; prints
-    status only (no secret/QR), ending with "re-show with `--rc-show-secret`."
-    Re-running can never lose an identity or its chats — the core anti-footgun.
-  - The secret prints **once**, at creation; thereafter only via `--rc-show-secret`.
-    Rotation is **not** here — it's the separate, destructive `--rc-rotate`.
+    create itself is local-only; `--rc-identity` accepts `--rc-file`/`--rc-json`/`--rc-quiet` plus
+    the replace controls (`--rc-confirm`/`--rc-keep-old`/`--rc-force-noninteractive`). Exit 0.
+  - *Secret exists, no `--rc-confirm` (idempotent re-run) →* **never** regenerates/overwrites `S`;
+    prints status only (no secret/QR), notes an identity already exists, and shows the exact
+    command to **replace** it. A bare re-run can never lose an identity or its chats — the core
+    anti-footgun.
+  - *Secret exists, `--rc-confirm <identity_id>` →* the **destructive replace** (the honest
+    "rotation"): mint a **new, unrelated** identity and **abandon** the old one (§4.4). The confirm
+    must match the current **public** `identity_id` (a typo/accident guard — it is not an authz
+    control, so a replace also needs a TTY unless `--rc-force-noninteractive`). **Securely deletes**
+    the old secret by default (overwrite + unlink); keep a `0600` backup only with explicit
+    `--rc-keep-old` (flagged as still-live). This is **replace, not revocation** — a leaked old
+    secret keeps working until every device re-onboards (§4.4).
+  - The secret prints **once**, at create or replace; thereafter only via `--rc-show-secret`. There
+    is **no separate `--rc-rotate` verb** — "rotating" in a store-free, single-secret model is just
+    re-creating the identity, so it lives here under the confirm guard.
   - **Arg rule:** allowed only alongside identity-relevant `--rc-*` flags; **errors**
     if any non-`--rc-*` token (a positional, or anything after `--`) is present, since
     it doesn't launch claude.
@@ -246,14 +256,6 @@ security review — §14A.)
   for re-onboarding a device. On a TTY: a shoulder-surf/scrollback warning (STDERR) +
   Enter pause (skip with `--rc-yes`); non-TTY: bare token to STDOUT, warning to STDERR.
   Never regenerates.
-- **`--rc-rotate`** — *the only destructive path:* new `S` ⇒ **new identity**; the old
-  identity and **all** its spaces die (§4.4). Bare `--rc-rotate` is a **dry-run
-  preview** naming exactly what dies; execution requires `--rc-confirm <identity_id>`
-  (a typo/accident guard — `identity_id` is public, **not** an authz control, so rotate
-  also requires a TTY unless `--rc-force-noninteractive`). **Securely deletes** the
-  old secret by default (overwrite + unlink) — because the same `S` re-derives the
-  *same* live keys, a retained copy is a full credential, not "keys to dead data";
-  keep a `0600` backup only with explicit `--rc-keep-old` (flagged as still-live).
 - **`--rc-app <url>`** — the **single app origin** (else `REMOTE_CLAW_APP` env / config): its
   `/api/*` is the Vercel broker the wrapper POSTs ciphertext to, and its web UI is what the
   `https://<app>/#<secret>` deep-link/QR points at (the UI reads the `#fragment` client-side).
@@ -371,7 +373,7 @@ human-readable *backup* export.)
 ```
 PRK           = HKDF-Extract(salt="remote-claw/v1", IKM=S)
 auth_token    = HKDF-Expand(PRK, "remote-claw/v1/auth",          32B)  → bearer to the Vercel API
-identity_id   = trunc(SHA256(auth_token), 16B)                          → PUBLIC identity id = the FIRST (leftmost) 16 bytes of SHA256(auth_token); a FUNCTION of auth_token (so the broker self-verifies the bearer with NO store)
+identity_id   = trunc(SHA256(auth_token), 16B)                          → PUBLIC identity id = the FIRST (leftmost) 16 bytes of SHA256(auth_token); a FUNCTION of auth_token (so the broker self-verifies the bearer with NO store — hence a leaked bearer can't be revoked without changing identity_id or adding a store, §4.4)
 content_root  = HKDF-Expand(PRK, "remote-claw/v1/content",       32B)  → CLIENT-ONLY master content key
 control_key   = HKDF-Expand(PRK, "remote-claw/v1/control",       32B)  → AEAD key for control frames (dir:in)
 K_meta        = HKDF-Expand(PRK, "remote-claw/v1/meta-frame",    32B)  → AEAD key for ALL meta frames (accepted/session_announce); their whole payload (title/cwd/identity_label/status/last_activity/sent_at) is encrypted+authenticated under it, so the broker can neither read nor forge them
@@ -486,23 +488,64 @@ check** (no `identify?`, no challenge, no `beat_seq`, no `wrapper_instance_id`).
   ≤ `FRESH_WINDOW + SKEW` before it greys — the price of dropping the round-trip. (A
   zero-clock-trust challenge-handshake variant is recorded in §14A if ever needed.)
 
-### 4.4 Rotation / revocation
-Rotation = generate a **new `S`** ⇒ new `identity_id` ⇒ a **new identity** (a fresh,
-empty set of spaces); the old identity and **all** its spaces are dead. The CLI verb
-is **`--rc-rotate`** (§3.1) — guarded (dry-run preview + `--rc-confirm <identity_id>` +
-TTY) and it **securely deletes** the old `S` by default: because the same `S`
-deterministically re-derives the *same* keys, a retained copy is a **full live
-credential** (it can still decrypt/forge any ciphertext that survives — buffered
-frames, the web IndexedDB cache), so keeping it would defeat a leak-driven rotation.
-**Running relays re-read the secret file each turn** (the secret is never cached for the
-process's lifetime), so `--rc-rotate` — or simply deleting/replacing the file — takes effect on
-an **already-running** relay: it stops serving the now-dead identity the moment the file changes
-(a changed secret ⇒ a different identity, which its in-flight sessions don't belong to; a
-removed secret ⇒ it stops broadcasting and its sessions age out). No stale process keeps a
-rotated-away identity alive. No per-device revocation without rotating (single-secret tradeoff).
-`info` labels carry `/v1/` for future migration. Optional v2: split `S` into a
-server-registered half + a paste half so a leaked paste can be revoked without
-losing stored ciphertext (adds onboarding friction).
+### 4.4 Identity replace (a "burn", not a true rotation) & the revocation tension
+"Rotating" an identity here is a credential **replace**, not a rotation: generate a **new `S`** ⇒
+new `identity_id` ⇒ a **new, unrelated identity** (a fresh, empty set of spaces) and **abandon**
+the old one. There is no stable identity with a swapped credential, and **no broker-side
+revocation** — see the tension below. The CLI surface is **`--rc-identity --rc-confirm
+<identity_id>`** (§3.1) — there is no separate `--rc-rotate` verb, because in a store-free,
+single-secret model "rotating" *is* re-creating the identity. It is guarded (the confirm typo-check
++ a TTY, unless `--rc-force-noninteractive`) and **securely deletes** the old `S` by default:
+because the same `S` deterministically re-derives the *same* keys, a retained copy is a **full live
+credential** (it can still decrypt/forge any ciphertext that survives — buffered frames, the web
+IndexedDB cache).
+
+**What a replace does and does *not* do.** It moves *you* to a new bus; it does **not** revoke the
+old one. Because the broker is store-free (§4.5), `bus:${old_identity_id}` is never torn down and
+the old `auth_token` still self-verifies **forever** — anyone still holding the old `S` keeps the
+full live credential (`auth_token` + `K_meta` + `control_key` + `content_root`) and can keep
+subscribing to, publishing on, and forging authenticated `session_announce` on the abandoned bus.
+So this is **abandonment, not revocation**: it contains a leak only for your *future* traffic (the
+attacker can't follow you to the new `identity_id`), and only once you re-onboard every device. It
+gives **no forward secrecy** for past frames and does **nothing** against a *host* compromise (the
+§6 worker re-backfills claude's plaintext `.jsonl` history into the new identity, which a
+host-resident attacker reads anyway). Secure-deleting *your* copy never denies an attacker who
+already has theirs — re-onboard every device promptly.
+
+**Running relays re-read the secret file each turn** (the secret is never cached for the process's
+lifetime), so a replace — or simply deleting/replacing the file — takes effect on an
+**already-running** relay: it stops serving the now-abandoned identity the moment the file changes
+(a changed secret ⇒ a different identity its in-flight sessions don't belong to; a removed secret ⇒
+it stops broadcasting and its sessions age out). No stale process keeps a replaced-away identity
+alive.
+
+**The revocation tension (store-free is the constraint).** `identity_id = f(auth_token) = f(S)` and
+the broker self-verifies with **no store** (§4.5), so **{ store-free · stable `identity_id` ·
+revoke-a-leak } are mutually exclusive — pick two** (an information-theoretic result: a store-free
+broker's admit decision is a *pure function* of the bearer, and a pure function with a fixed output
+address can't have a shrinking accept-set). To deny a leaked credential you must *either* (a) change
+`auth_token` ⇒ change `identity_id` (this replace — sacrifices continuity), *or* (b) give the broker
+per-identity memory (a registered admission half / `paste_epoch` — sacrifices store-free). Two
+scoped upgrades, each spending exactly one property on purpose:
+
+1. **Stable-identity epoch ratchet** — split the token into a stable `id_seed` and a rotatable
+   `epoch_secret` + counter, and stamp the already-reserved `key_epoch` AAD field (§4.3/§8) on every
+   frame. Keeps `identity_id`/discovery **stable** and re-keys *new* content store-free +
+   zero-knowledge — but does **not** revoke a leaked token's bus access (so it is a *separate* verb,
+   never called "rotate").
+2. **Server-registered split** — `S_server` (broker) + `S_paste` (user); delivers real
+   paste-(content)-revocation with a stable identity, but **requires a broker store and weakens
+   zero-knowledge** (the broker then holds a content-key input), and never revokes `auth_token`
+   itself.
+
+Re-encryption/migration is **moot** here: nothing durable is encrypted under `S` (history is
+claude's plaintext `.jsonl`, re-backfilled — §6), so there is no at-rest ciphertext to re-key. (Cf.
+the **Happy/Codex mobile app**, which *does* offer per-device revocation — but only because it is
+**account-based and not store-free**: a phone-held master secret, per-machine DEKs wrapped to an
+account content key, and "remove machine from account" revokes that machine's DEK server-side. That
+is the asymmetric, server-stateful end of this same tradeoff — the opposite corner from our
+paste-and-go, store-free `S`; see **§18** for the full comparison.) `info` labels carry `/v1/` for
+future migration.
 
 ### 4.5 Web-app admission (SSO) & broker authz
 Two distinct gates — and **no shared bearer baked into a public bundle**. We don't ship an
@@ -527,7 +570,9 @@ SSO**, and the broker authorizes per-identity off the user's own `auth_token`.
   and (b) needing the matching `auth_token` to publish/subscribe — so an anonymous rando with
   no valid `auth_token` is rejected, and **no separate app-key is needed to stop blind
   scanning**. The broker sees `identity_id` + the bearer (it *could* route/replay on a bus) but
-  **can't decrypt or forge** (E2E keys, §4.2).
+  **can't decrypt or forge** (E2E keys, §4.2). Because admission is a pure function of the bearer
+  with **no store**, the broker has **nothing to revoke** — a leaked `auth_token` is denied only by
+  changing `identity_id` (a whole-identity replace, §4.4), never per-credential.
 - **The CLI is headless:** the wrapper authenticates to the broker with the per-identity
   `auth_token` it derives from its secret (no interactive SSO, no app-key). `--rc-app` only
   names the broker/web origin.
@@ -1081,8 +1126,9 @@ phase0/            unchanged — the Python reference + protocol findings
   forward all other args to `claude`, `--` escape), and the identity surface (§3.1):
   `--rc-identity` (idempotent `O_CREAT|O_EXCL` create-once into the single local secret
   file, derive ids, print `rc1_…` + optional `--rc-app` QR/deep-link; host registration
-  deferred to first RC), `--rc-file` (use a specific secret file), `--rc-show-secret`,
-  `--rc-rotate` (secure-delete + `--rc-confirm`), `--rc-json/--rc-quiet` (never emit `S`). **Depends on P1 `clawsec`** for all key work (HKDF derivation +
+  deferred to first RC; and `--rc-confirm <identity_id>` to **replace** it — secure-delete +
+  re-create, §4.4), `--rc-file` (use a specific secret file), `--rc-show-secret`,
+  `--rc-json/--rc-quiet` (never emit `S`). **Depends on P1 `clawsec`** for all key work (HKDF derivation +
   `rc1_` parse/checksum); also wires the broker config (the `--rc-app` origin,
   §3.1/§4.5) used later in P4. Local only (mock app); unit-test the token
   classifier + the create-once/never-reveal/secure-delete invariants.
@@ -1356,8 +1402,8 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   registration), prints `S` only at creation, quiet status re-runs. Security fixes the
   review forced in (now reflected in §3.1/§4.4): a **QR/deep-link is not
   screen-share-safe** (it encodes `S` verbatim); **`--rc-json`/`--rc-quiet` never emit
-  `S`** (CI-log leak); **`--rc-rotate` securely deletes** the old `S` (same secret
-  re-derives a live credential — not "keys to dead data"); the deep-link is built from the
+  `S`** (CI-log leak); **the replace (`--rc-identity --rc-confirm`) securely deletes** the old
+  `S` (same secret re-derives a live credential — not "keys to dead data"); the deep-link is built from the
   **one `--rc-app` origin** (its web UI reads the `#fragment`; its `/api` is the broker — one
   Vercel deployment, so no separate `--rc-web`); `--rc-confirm <identity_id>` is an
   accident guard (identity_id is public), so rotate also requires a TTY.
@@ -1879,3 +1925,83 @@ the **KIWI**/**PLUM** bidirectional TUI↔client tests).
 > on any claude upgrade — the original `--sdk-url` premise was already patched out once (§17.1). Keep
 > `phase0/` (the capture tooling + `mitm/capture-proxy.py`) to re-verify, and have the wrapper **fail
 > loudly** on an unrecognized RC-API shape rather than guessing (§12).
+
+## 18. Appendix — Happy/Codex (the account-based alternative) & the revocation tradeoff
+
+**Happy** (`happy.engineering`, open-source `slopus/happy`) is the closest existing system to
+remote-claw: a mobile + web client that drives **Claude Code / Codex** running on your machine
+through an **E2E-encrypted relay**, with realtime + voice. It sits at the *opposite corner* of the
+same design space — **account-based and server-stateful** where remote-claw is **store-free and
+single-secret** — so it is the clearest mirror for what our model gives up (revocation, §4.4) and
+what it gains (paste-and-go, no accounts).
+
+> Drawn from Happy's public docs (security / how-it-works); a few protocol details (exact ECDH /
+> derivation) are marked "diagram needed" there, so the crypto specifics below are the **documented
+> model**, not a verified wire spec.
+
+### 18.1 Happy's approach (asymmetric, per-device, account-rooted)
+
+- **Master secret — once per account, phone-only.** A 32-byte master secret is generated at signup,
+  **lives only on the mobile device, and never leaves it**. Everything derives from it via HKDF,
+  including an **asymmetric content keypair** (the secret half stays on the phone; only the
+  `content_public_key` is ever shared).
+- **Per-machine DEK.** Each CLI machine mints its own **Data Encryption Key** (32-byte random
+  AES-256) and encrypts that machine's session content under it. The DEK is **wrapped to the account
+  `content_public_key`**, and the *wrapped* copy is parked on the server — so the phone (holding the
+  content secret key) can recover any machine's DEK, but the server never sees a usable one. A
+  separate **local machine key** encrypts the CLI's on-disk cache and is never sent anywhere.
+- **Pairing = QR + ECDH.** `happy` shows a QR carrying an **ephemeral public key + session id**; the
+  phone scans it, runs an ECDH exchange (the ephemeral keypair discarded right after), and a shared
+  secret is established **without the server seeing it**.
+- **Auth = zero-round-trip challenge-response.** Each device picks its **own** random challenge,
+  signs it with its secret key, and sends `challenge + signature + public key` in one shot; the
+  server verifies the signature and matches it against a stored **hash** of the public key. No
+  back-and-forth.
+- **What the server stores.** Encrypted DEKs, encrypted content (timestamped, for history replay),
+  and a **hash of each device's public key**. It is zero-knowledge for content ("even if someone
+  hacks the server, they can't read your data") but it is **not store-free** — there is an account, a
+  device list, and a per-machine encrypted-DEK store.
+
+### 18.2 Message flow (what travels)
+
+1. You type on the phone → the phone **encrypts** the prompt E2E → POSTs ciphertext to the relay.
+2. The relay sees only an **encrypted blob + routing metadata + timestamp**; it stores and forwards.
+3. The subscribed machine **decrypts** with its DEK and feeds the prompt to the real local Claude
+   Code / Codex session it wraps.
+4. Output is **encrypted chunk-by-chunk** by the machine and relayed back; the phone decrypts and
+   renders the live stream (and voice). A reconnecting device **replays from the server's stored
+   encrypted blobs**.
+
+### 18.3 The tradeoff vs remote-claw (opposite corners)
+
+remote-claw and Happy answer the same problem with inverted primitives:
+
+| dimension | **remote-claw** | **Happy** |
+|---|---|---|
+| Root of trust | one symmetric `S` (a ~52-char paste) | phone-held asymmetric master + content keypair |
+| Per-device keys | none — `S` is the whole identity | per-machine DEK, wrapped to the account key |
+| Broker state | **store-free** (self-verifying `identity_id`, no registry) | account + device list + encrypted-DEK store |
+| Durable history | none on the broker (claude's own `.jsonl`, re-backfilled) | **server stores** encrypted history (timestamped, replayable) |
+| Onboarding | **paste-and-go** (any device, no account) | scan a QR → pair a device → account |
+| Steal one key | total: `S` reads/forges **everything**, all sessions | scoped: one DEK reads **that machine's** content only |
+| Revoke a leak | **impossible** without changing identity (burn + re-onboard, §4.4) | **"remove machine from account"** revokes that DEK server-side |
+| Forward secrecy | none | future-only after a device removal |
+
+The honest summary: **Happy spends a server-side store + a pairing step to buy per-device, revocable,
+*scoped* compromise and a stable account identity; remote-claw spends revocability to buy a
+store-free broker and a one-string, account-less, paste-and-go cold start.** Neither is strictly
+better — they are the two ends of the §4.4 impossibility (`{ store-free · stable id · revoke-a-leak
+}`, pick two). Happy picks *stable id + revoke* (and pays with the store); remote-claw picks
+*store-free* (and pays with revocation).
+
+### 18.4 If remote-claw ever needs revocation
+
+The migration target is **Happy-shaped**, and it maps onto the two upgrades already named in §4.4:
+the **server-registered split** (`S_server` + `S_paste`) is the account half + paste half, and
+**per-device DEKs** are the multi-host story (§6/P6). Adopting them means accepting an
+account/registry and a pairing step — i.e. moving toward Happy's corner — and is a deliberate,
+deferred decision, **not** a v1 default. Until a hard need appears (revoke a shared paste, manage
+many devices), the paste-and-go, store-free model stands.
+
+**Sources:** Happy docs — `https://happy.engineering/docs/security/`,
+`https://happy.engineering/docs/how-it-works/`; repo `https://github.com/slopus/happy`.

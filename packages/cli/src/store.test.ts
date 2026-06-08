@@ -354,6 +354,23 @@ describe("rotateIdentity (functional)", () => {
     await expect(rotateIdentity(secretPath, deps)).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("expectOldId mismatch: aborts (IO) without touching the file (TOCTOU guard)", async () => {
+    const before = await seed();
+    const wrongId = new Uint8Array(16); // all-zero — can't match any real identity_id
+    await expect(
+      rotateIdentity(secretPath, { now: deps.now, keepOld: false, expectOldId: wrongId }),
+    ).rejects.toMatchObject({ code: "IO" });
+    expect(readFileSync(secretPath, "utf8").trim()).toBe(before.token); // unchanged
+  });
+
+  it("expectOldId match: proceeds with the replace when it equals the current identity", async () => {
+    const before = await seed();
+    const id = (await deriveIdentity(await parseSecret(before.token))).identityId;
+    const r = await rotateIdentity(secretPath, { now: deps.now, keepOld: false, expectOldId: id });
+    expect(toHex(r.identityId)).not.toBe(before.id);
+    expect(readFileSync(secretPath, "utf8").trim()).not.toBe(before.token);
+  });
+
   // A raw fs error while staging the new secret (e.g. a read-only parent dir → EACCES on the temp
   // create) must surface as a mapped StoreError, not escape unmapped and crash the caller.
   it.skipIf(process.getuid?.() === 0)(

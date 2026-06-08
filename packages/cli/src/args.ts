@@ -8,7 +8,6 @@ export type RcFlagKind = "boolean" | "value";
 /** The reserved `--rc-*` namespace. Keys omit the leading `--`. */
 export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-identity": "boolean",
-  "rc-rotate": "boolean",
   "rc-show-secret": "boolean",
   "rc-json": "boolean",
   "rc-quiet": "boolean",

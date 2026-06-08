@@ -9,13 +9,17 @@ describe("RC_HELP banner", () => {
     for (const f of [
       "--rc-identity",
       "--rc-show-secret",
-      "--rc-rotate",
+      "--rc-confirm",
       "--rc-file",
       "--rc-json",
       "--rc-quiet",
     ]) {
       expect(RC_HELP).toContain(f);
     }
+  });
+
+  it("no longer advertises --rc-rotate (replace folded into --rc-identity --rc-confirm)", () => {
+    expect(RC_HELP).not.toContain("--rc-rotate");
   });
 
   it("points at claude's --remote-control and explains the passthrough", () => {

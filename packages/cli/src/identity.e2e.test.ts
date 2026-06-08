@@ -154,3 +154,69 @@ describe("remote-claw --rc-identity (e2e)", () => {
     expect(statSync(defaultPath).mode & 0o777).toBe(0o600);
   });
 });
+
+describe("remote-claw --rc-identity replace (--rc-confirm, e2e)", () => {
+  /** Create an identity; return its token + id (the id via the idempotent --rc-quiet re-run). */
+  function create(env: NodeJS.ProcessEnv): { token: string; id: string } {
+    const c = runCli(["--rc-identity"], env);
+    expect(c.status).toBe(0);
+    const id = runCli(["--rc-identity", "--rc-quiet"], env).stdout.trim();
+    return { token: c.stdout.trim(), id };
+  }
+
+  it("a forced non-interactive replace mints a new identity (stdout is the new token only)", () => {
+    const { env, defaultPath } = freshEnv();
+    const { token: oldToken, id: oldId } = create(env);
+    const r = runCli(["--rc-identity", "--rc-confirm", oldId, "--rc-force-noninteractive"], env);
+    expect(r.status).toBe(0);
+    const lines = r.stdout.split(/\r?\n/).filter((l) => l.length > 0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(TOKEN_RE);
+    expect(lines[0]).not.toBe(oldToken);
+    // the file now holds the new token; --rc-show-secret confirms it
+    const newToken = readFileSync(defaultPath, "utf8").trim();
+    expect(newToken).toBe(lines[0]);
+    expect(runCli(["--rc-show-secret"], env).stdout.trim()).toBe(newToken);
+    // and the new id differs from the old
+    expect(runCli(["--rc-identity", "--rc-quiet"], env).stdout.trim()).not.toBe(oldId);
+  });
+
+  it("a non-TTY replace is refused without --rc-force-noninteractive", () => {
+    const { env, defaultPath } = freshEnv();
+    const { token, id } = create(env);
+    const r = runCli(["--rc-identity", "--rc-confirm", id], env);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/interactive terminal/);
+    expect(readFileSync(defaultPath, "utf8").trim()).toBe(token); // unchanged
+  });
+
+  it("--rc-keep-old keeps the OLD secret as a live backup", () => {
+    const { env, defaultPath } = freshEnv();
+    const { token: oldToken, id: oldId } = create(env);
+    const r = runCli(
+      ["--rc-identity", "--rc-confirm", oldId, "--rc-keep-old", "--rc-force-noninteractive"],
+      env,
+    );
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/LIVE CREDENTIAL/);
+    expect(readFileSync(`${defaultPath}.old`, "utf8").trim()).toBe(oldToken); // backup is the old
+    expect(readFileSync(defaultPath, "utf8").trim()).not.toBe(oldToken); // canonical is the new one
+  });
+
+  it("a wrong --rc-confirm exits 2 (mismatch, before the TTY guard) and changes nothing", () => {
+    const { env, defaultPath } = freshEnv();
+    const { token } = create(env);
+    const r = runCli(["--rc-identity", "--rc-confirm", "deadbeefdeadbeefdeadbeefdeadbeef"], env);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/does not match/);
+    expect(readFileSync(defaultPath, "utf8").trim()).toBe(token);
+  });
+
+  it("--rc-confirm with no identity exits 1 (nothing to replace)", () => {
+    const { env } = freshEnv();
+    const r = runCli(["--rc-identity", "--rc-confirm", "x"], env);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toMatch(/to replace/);
+  });
+});
