@@ -23,8 +23,10 @@ Goals:
 - **Each claude instance is its own space / chat** (gchat-style). Instances are
   grouped by the **secret** they run under.
 - **E2E encrypted** from the secret; **non-guessable** secrets; Vercel
-  zero-knowledge. A separate **app access token** (Vercel secret) keeps anonymous
-  randos off the API entirely (admission, not confidentiality — §4.5).
+  zero-knowledge. The web app gates on **proper SSO** (Better Auth SSO plugin); the
+  broker authorizes each request off the per-identity `auth_token` (the unguessable
+  128-bit `identity_id` + required `auth_token` *is* the anti-scanning gate — no
+  separate app-key) (admission, not confidentiality — §4.5).
 - Stateless web client **and** stateless wrapper; **claude's on-disk session is the
   durable record**; the cloud is a stateless ciphertext relay (see §6).
 
@@ -59,8 +61,8 @@ The whole design serves this human flow. Two roles (often the same person): the
 ### A. Operator — on the machine
 1. **Use `remote-claw` exactly like `claude`.** It's a **transparent wrapper**:
    every `claude` flag, arg, env var and positional prompt **passes straight
-   through** (`remote-claw --continue`, `remote-claw --model opus`, `remote-claw -p
-   "…"`, `remote-claw .` …). You get the **exact normal claude TUI** — same
+   through** (`remote-claw --continue`, `remote-claw --model opus`,
+   `remote-claw -p "…"`, `remote-claw .` …). You get the **exact normal claude TUI** — same
    behavior, same options. The wrapper consumes only a small reserved **`--rc-*`**
    namespace (§3.1) and forwards the rest. There is **no separate `serve`
    command** — `remote-claw` *is* claude, plus remote-control.
@@ -68,13 +70,13 @@ The whole design serves this human flow. Two roles (often the same person): the
    host's identity exists (the secret lives in one local file, created on first use — a
    plain `remote-claw` run also auto-creates it **silently**, so if you've already
    launched once, this is a quiet status re-run) and prints the `rc1_…` secret to copy.
-   Paste it into the web app, or — for a phone — `--rc-web` also prints a **QR /
+   Paste it into the web app, or — for a phone — with `--rc-app` set it also prints a **QR /
    `#fragment` deep link** (treat the QR like the raw secret; it's not screen-share-safe).
    Lost the printout? `remote-claw --rc-show-secret` re-reveals it. Need a *different*
    identity for one run? Point `--rc-file <path>` at a different secret file for that run.
 3. **Share a session:** in any `remote-claw` TUI, hit `/remote-control` → it flips
    to "Remote Control active," and **that instance becomes a chat in the web app**.
-   (Or launch already-shared with `--rc-share`.)
+   (Or launch already remote-controlled with claude's own `--remote-control`.)
 4. Run **as many instances as you like** — one per repo/branch/task; each is its
    own chat. Close the TUI → that chat goes offline.
 
@@ -163,18 +165,20 @@ feels like a messaging app; spans many machines.
   = new secret = new identity (a fresh, empty set of spaces) (§4.4).
 - **Admission vs. confidentiality (two independent gates).** Confidentiality is the
   zero-knowledge property above (content keys; broker never reads bodies).
-  *Admission* — keeping anonymous randos off the API entirely — is a separate gate:
-  an **app access token `T_app`** (a Vercel secret, §4.5) required on every request,
-  layered before the per-identity `auth_token`. `T_app` adds no confidentiality; it
-  shrinks the attack/abuse surface (strong for wrappers, soft for the public web
-  bundle — §4.5). Future: mTLS client identities for per-client, revocable admission.
+  *Admission* — keeping anonymous randos off the API entirely — has two parts (§4.5):
+  the **web app** gates on **proper SSO** (Better Auth SSO plugin; OIDC via the IdP
+  discovery document, plus SAML 2.0 / OAuth2), while the **broker** authorizes each
+  `/api/*` request off the per-identity **`auth_token`** alone — self-verifying
+  (`identity_id = trunc(SHA256(auth_token))`), so the unguessable 128-bit `identity_id`
+  + required `auth_token` *is* the anti-scanning gate (no separate app-key). Neither adds
+  confidentiality. Future: mTLS client identities for per-client, revocable admission.
 
 ## 3. Components
 
 ```
   ┌── server A (your machine) ──────────────┐         ┌──────── Vercel (broker) ─────────┐        ┌── phone / laptop ──┐
   │ claude --remote-control                  │         │  POST /api/relay + GET /api/stream│       │  web app (Next.js) │
-  │      ▲  MITM (our relay = RC backend)    │  wss/   │   (T_app + auth_token gate)       │  SSE/  │  paste secret →    │
+  │      ▲  MITM (our relay = RC backend)    │  wss/   │   (auth_token gate)               │  SSE/  │  paste secret →    │
   │      │  + in-memory log (claude=record) │  https  │  per-identity BUS (discover/pres) │ stream │  derive keys →     │
   │ remote-claw [claude args] --rc-app <app> ┼────────▶│  per-session WF (live buffer)     │◀──────▶│  decrypt & render  │
   │   (identity: secret S, 0600; spans hosts)│ ciphertext only — no store/no history    │        │  encrypt & send    │
@@ -217,11 +221,12 @@ security review — §14A.)
     `~/.local/state/remote-claw/secret`; reads refuse symlinks (`O_NOFOLLOW`) and
     group/other-readable modes; a `0600` sidecar holds `created_at`). Print a
     summary (**public** `identity_id`, created-at, path) and **the `rc1_…` on its own bare line** (the
-    onboarding step). If a **web** URL is configured (`--rc-web`), also print the
-    `https://<web>/#<secret>` deep link + a terminal **QR** of it for phone
-    onboarding. ⚠️ The QR/deep-link **encode the secret verbatim** — treat them like
-    the raw token (shoulder-surf/recording risk); a QR is **not** "safe to
-    screen-share." Exit 0.
+    onboarding step). *(Later, with the broker phase:* if the app origin is configured
+    (`--rc-app`), also print the `https://<app>/#<secret>` deep link + a terminal **QR** of it
+    for phone onboarding. ⚠️ The QR/deep-link **encode the secret verbatim** — treat them like
+    the raw token (shoulder-surf/recording risk); a QR is **not** "safe to screen-share."*) The
+    create itself is local-only; the current build's `--rc-identity` accepts only
+    `--rc-file`/`--rc-json`/`--rc-quiet`. Exit 0.
   - *Secret exists (idempotent re-run) →* **never** regenerates/overwrites `S`; prints
     status only (no secret/QR), ending with "re-show with `--rc-show-secret`."
     Re-running can never lose an identity or its chats — the core anti-footgun.
@@ -249,14 +254,16 @@ security review — §14A.)
   old secret by default (overwrite + unlink) — because the same `S` re-derives the
   *same* live keys, a retained copy is a full credential, not "keys to dead data";
   keep a `0600` backup only with explicit `--rc-keep-old` (flagged as still-live).
-- **`--rc-web <url>`** — the **web-app** origin used to build the `#fragment` deep
-  link/QR (else `REMOTE_CLAW_WEB`). Distinct from `--rc-app` (the broker/API URL); read
-  as an opaque local string (no probe). Unset ⇒ QR/deep-link of the bare token, or omit.
-- **`--rc-app <url>`** — the Vercel broker URL (else `REMOTE_CLAW_APP` env / config).
-- **`--rc-app-key <T_app>`** — the **app access token** (§4.5) sent as `X-RC-App-Key`
-  on every broker call (else `REMOTE_CLAW_APP_KEY` env). Required to reach the app.
-- **`--rc-share`** — launch **already remote-controlled** (auto-enable RC at startup;
-  equivalent to typing `/remote-control` immediately).
+- **`--rc-app <url>`** — the **single app origin** (else `REMOTE_CLAW_APP` env / config): its
+  `/api/*` is the Vercel broker the wrapper POSTs ciphertext to, and its web UI is what the
+  `https://<app>/#<secret>` deep-link/QR points at (the UI reads the `#fragment` client-side).
+  One deployment serves both, so there is **one** URL — read as an opaque local string (no
+  probe). Unset ⇒ deep-link/QR of the bare token, or omit it.
+  The CLI presents its per-identity `auth_token` to the broker (no app-wide key — §4.5).
+- **Starting already remote-controlled** is just claude's own **`--remote-control`** flag,
+  which the wrapper forwards verbatim (no separate `--rc-share`).
+- **`--help` / `-h`** prints this `--rc-*` help and then **falls through to `claude --help`**,
+  so you see both layers in one go.
 - The identity's friendly name defaults to the **hostname**, carried as `identity_label`
   inside the `K_meta`-encrypted `session_announce` once RC is on (never sent to the broker
   in the clear). A custom label is a **client-local alias** in the web app (§1A C), not a
@@ -271,7 +278,7 @@ security review — §14A.)
   **identity is auto-created on first run** if absent (local only — no network).
 - **Nothing is sent to the broker until you enable remote control.** Running
   `remote-claw` like `claude` registers nothing and sends no heartbeat.
-- When you hit `/remote-control` (or pass `--rc-share`), it makes the inner claude
+- When you hit `/remote-control` (or pass claude's `--remote-control`), it makes the inner claude
   RC-eligible **pointed at our local MITM** (not Anthropic's RC relay — §14) by
   **automatically** setting `HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS` for the child
   process. Our relay is the RC backend; it bridges that traffic E2E-encrypted to the
@@ -299,15 +306,17 @@ security review — §14A.)
 The broker collapses to **two** ciphertext endpoints over Vercel Workflows; there is
 **no registry store, no heartbeat, no read/list functions** — discovery + presence are
 answered live on the per-identity **bus** (§6B).
-- **Front-door gate (`T_app`, §4.5):** edge middleware rejects **any** `/api/*`
-  request lacking the app access token (`X-RC-App-Key`) with `401` before any
-  per-identity logic — so randos can't reach the API to push frames or scrape state.
-  `T_app` is a **Vercel secret** (env var on the deployment).
+- **Admission gate (per-identity `auth_token`, §4.5):** every `/api/*` request carries
+  the bearer `auth_token`; the broker recomputes `identity_id = trunc(SHA256(auth_token))`
+  and rejects anything without a valid token with `401` before any per-identity logic — so
+  randos can't reach the API to push frames or scrape state. The unguessable 128-bit
+  `identity_id` + required `auth_token` *is* the anti-scanning gate; no separate app-key.
+  (The web app separately gates human callers on SSO — §4.5.)
 - **`POST /api/relay`** (Node, fast + die) — publish one ciphertext frame by
   **value-addressed** `resumeHook(token, frame)`: the per-identity bus token
   `bus:${identity_id}` (a wrapper's periodic `session_announce` broadcast) or a per-session
   token `sess:${identity_id}:${session_id}` (a prompt/control to one session). Gated by
-  `T_app` **and** `auth_token`; **ciphertext only**.
+  `Bearer auth_token`; **ciphertext only**.
 - **`GET /api/stream?identity=… | session=…`** — subscribe: the Function resolves the
   derived token via **`getHookByToken(token).runId` → `getRun(runId).getReadable()`**
   and pipes the durable stream back as SSE (resume by `startIndex`). `HookNotFound` ⇒
@@ -333,12 +342,12 @@ answered live on the per-identity **bus** (§6B).
 ### 3.3 Web client (stateless, mobile-first)
 - Paste secret (or open a link with the secret in the **URL fragment** `#…`, which
   browsers never send to the server). Derive keys in-browser (WebCrypto).
-- **Spaces** = **every claude instance under the pasted secret**, grouped by
-  **identity** (one pasted secret = one identity, unlocking all its instances). The client
-  holds **exactly one secret at a time** — to view a different identity you **replace** the
-  current secret (forget + paste), not accumulate several. A just-pasted identity with
-  nothing shared shows empty until a session is `/remote-control`-ed. The secret persists in
-  `localStorage` (documented risk) or memory-only (re-paste).
+- **Spaces** = **every claude instance under the pasted secret** — one pasted secret = one
+  identity, so the view is simply a **flat list of that one identity's instances** (nothing to
+  "group by": the client holds **exactly one secret at a time**). To view a different identity
+  you **replace** the current secret (forget + paste), not accumulate several. A just-pasted
+  identity with nothing shared shows empty until a session is `/remote-control`-ed. The secret
+  persists in `localStorage` (documented risk) or memory-only (re-paste).
 - Pick a space (instance) → message view: load history (decrypt) + subscribe live
   (decrypt) + send (encrypt → POST).
 - PWA, responsive; no server-side session state.
@@ -375,8 +384,8 @@ fields, so there's nothing to double-encrypt and nothing left cleartext.)*
   `S`/`PRK`/the content keys. Recovering a content key requires inverting HMAC-SHA256
   (preimage resistance) — infeasible. So the broker **cannot read message or metadata
   bodies, nor forge meta/presence frames**.
-- **Self-verifying auth — NO store** (the key to "store-free", §6B). `identity_id =
-  trunc(SHA256(auth_token))`, so on a request targeting `bus:${identity_id}` the broker
+- **Self-verifying auth — NO store** (the key to "store-free", §6B).
+  `identity_id = trunc(SHA256(auth_token))`, so on a request targeting `bus:${identity_id}` the broker
   recomputes `identity_id` from the presented bearer and checks it matches — **no
   per-identity `sha256(auth_token)` table, no registration**. Knowing the **public**
   `identity_id` alone never grants access (you need `auth_token`; preimage-resistant).
@@ -433,14 +442,14 @@ check** (no `identify?`, no challenge, no `beat_seq`, no `wrapper_instance_id`).
   wrapped 1:1 by its own `remote-claw` process, **independent of every other session**
   (§1) — there is no per-host aggregator, so each one publishes **its own** announce. While
   RC is on, a session (every `ANNOUNCE_INTERVAL`, and immediately on any change) broadcasts
-  `session_announce{session_id, title, cwd, identity_label, status, last_activity,
-  sent_at}` on the identity bus — the *whole* payload AEAD under `K_meta`, `sent_at` = the
+  `session_announce{session_id, title, cwd, identity_label, status, last_activity, sent_at}`
+  on the identity bus — the *whole* payload AEAD under `K_meta`, `sent_at` = the
   wrapper's wall clock **inside the ciphertext** (broker can't forge a fresh one). No
   client→wrapper request.
 - **Online = a fresh announce.** A client tails the bus, builds its list keyed by
   `session_id` (globally unique, so independent sessions never collide), and treats a
-  session as **online iff its latest announce is fresh** — `now − FRESH_WINDOW ≤ sent_at ≤
-  now + SKEW`. No fresh announce within the window ⇒ the client **greys** that session
+  session as **online iff its latest announce is fresh** —
+  `now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`. No fresh announce within the window ⇒ the client **greys** that session
   locally.
 - **Concrete sizing (defaults; the only knobs).** `ANNOUNCE_INTERVAL = 20 s` (capped
   **≤ 60 s**, so the fuzz below can't balloon), `FRESH_WINDOW = 60 s` (≈3× the interval, so
@@ -473,9 +482,9 @@ check** (no `identify?`, no challenge, no `beat_seq`, no `wrapper_instance_id`).
   sized bound (≫ `FRESH_WINDOW`) on a *delayed-first-delivery* control command, whose worst
   case is a stale command **rejected** (availability), never a breach. A badly-skewed clock
   yields at worst a wrong dot / empty list / a send that bounces `409` — **never** a message
-  breach. Residual: a replayed announce can keep a dead session shown for ≤ `FRESH_WINDOW +
-  SKEW` before it greys — the price of dropping the round-trip. (A zero-clock-trust
-  challenge-handshake variant is recorded in §14A if ever needed.)
+  breach. Residual: a replayed announce can keep a dead session shown for
+  ≤ `FRESH_WINDOW + SKEW` before it greys — the price of dropping the round-trip. (A
+  zero-clock-trust challenge-handshake variant is recorded in §14A if ever needed.)
 
 ### 4.4 Rotation / revocation
 Rotation = generate a **new `S`** ⇒ new `identity_id` ⇒ a **new identity** (a fresh,
@@ -485,52 +494,50 @@ TTY) and it **securely deletes** the old `S` by default: because the same `S`
 deterministically re-derives the *same* keys, a retained copy is a **full live
 credential** (it can still decrypt/forge any ciphertext that survives — buffered
 frames, the web IndexedDB cache), so keeping it would defeat a leak-driven rotation.
-No per-device revocation without rotating (single-secret tradeoff). `info` labels
-carry `/v1/` for future migration. Optional v2: split `S` into a
+**Running relays re-read the secret file each turn** (the secret is never cached for the
+process's lifetime), so `--rc-rotate` — or simply deleting/replacing the file — takes effect on
+an **already-running** relay: it stops serving the now-dead identity the moment the file changes
+(a changed secret ⇒ a different identity, which its in-flight sessions don't belong to; a
+removed secret ⇒ it stops broadcasting and its sessions age out). No stale process keeps a
+rotated-away identity alive. No per-device revocation without rotating (single-secret tradeoff).
+`info` labels carry `/v1/` for future migration. Optional v2: split `S` into a
 server-registered half + a paste half so a leaked paste can be revoked without
 losing stored ciphertext (adds onboarding friction).
 
-### 4.5 App access token (`T_app`) — the front-door gate
-A second token, **independent of any user secret**, gates the API as a whole so
-**anonymous internet randos can't POST frames or pull (encrypted) state** at all.
+### 4.5 Web-app admission (SSO) & broker authz
+Two distinct gates — and **no shared bearer baked into a public bundle**. We don't ship an
+app-wide token to the browser (it can't be a secret there); instead the web app uses **proper
+SSO**, and the broker authorizes per-identity off the user's own `auth_token`.
 
-- **What it is:** one high-entropy `T_app`, generated once and stored as a **Vercel
-  secret / environment variable** on the deployment (not derived from `S`, the same
-  for every identity). Every `/api/*` request must carry it (header
-  `X-RC-App-Key: T_app`) or be rejected **`401` at the edge/middleware, before** any
-  per-identity `auth_token` or storage logic runs.
-- **Two layers, two jobs:** `T_app` = *coarse, app-wide admission* (is the caller
-  even allowed to talk to this deployment); `auth_token` = *per-identity
-  authorization* (may this caller touch **this** host). Both are required.
-- **Confidentiality unchanged:** `T_app` adds **no** confidentiality — zero-knowledge
-  still rests entirely on the content/meta keys (§4.2). It's an abuse / cost /
-  attack-surface gate, not crypto. The broker still sees only ciphertext.
-- **How each side gets it:**
-  - **Wrapper (the server):** the operator supplies `T_app` out-of-band
-    (`REMOTE_CLAW_APP_KEY` env / `--rc-app-key`). This is a **strong** gate — a
-    wrapper/client without it can't reach the **API surface** at all (blind scanning,
-    hammering `/api/relay`, driving cost). It's **coarse admission, not the per-bus
-    gate** — what actually protects a *specific* identity's bus is (a) its 128-bit
-    `identity_id` being unguessable and (b) needing the matching `auth_token` to
-    publish/subscribe (`identity_id = trunc(SHA256(auth_token))`, §4.2). The broker
-    itself sees `identity_id` + the bearer, so it *could* route/replay on a bus — but it
-    can't decrypt or forge (E2E keys, §4.2).
-  - **Browser:** the web app injects `T_app` from its **server-side** env into the
-    page it serves (or its same-origin route handlers attach it). Be honest: because
-    the web bundle is public, `T_app` there is a **soft** gate — it blocks blind API
-    scanning, bots, and drive-by abuse, but a determined human who loads the page can
-    extract it. The per-identity `auth_token` (which the browser only obtains by
-    holding a valid pasted secret) remains the real authz; pasting nothing ⇒ no
-    `auth_token` ⇒ nothing readable. Optional hardening: put the **web app itself**
-    behind Vercel password/SSO, or mint short-lived per-load tokens.
-- **Rotation:** rotate `T_app` by updating the Vercel secret + redeploying and
-  redistributing it to wrappers; it's orthogonal to per-identity secret rotation
-  (§4.4) and revokes *all* current API access at once.
-- **Future (stronger admission): mTLS client identities.** Replace/augment the
-  shared `T_app` with **mutual-TLS client certificates** so each wrapper (and,
-  later, device) authenticates with its own cert — per-client, individually
-  revocable admission instead of one shared bearer. Deferred (cert provisioning +
-  Vercel mTLS support add friction); `T_app` is the v1 gate.
+- **Web app — proper login (SSO via [Better Auth](https://www.better-auth.com)).** The web UI
+  sits behind a real auth layer. We use the **Better Auth SSO plugin**, which is
+  provider-pluggable: it speaks **OIDC** (auto-configured from the IdP's
+  `{issuer}/.well-known/openid-configuration` discovery document), **SAML 2.0**, and OAuth2, so
+  any OIDC identity provider (Auth0/Keycloak/Okta/Entra/Google/…) plugs in via
+  `registerSSOProvider` with just `{issuer, clientId, clientSecret, domain}` — including
+  per-organization providers and domain-based routing. A human authenticates **once** to the
+  app; its **same-origin server route handlers** then call the broker. Nothing app-wide is ever
+  exposed to the public bundle — there's nothing to extract. This is the coarse *"is this caller
+  allowed to use this deployment"* gate (blocks bots, drive-by abuse, cost-runners), done
+  honestly rather than via a leakable shared token.
+- **Broker — per-identity `auth_token`, self-verifying, no store.** Every `/api/*` request
+  carries the bearer `auth_token`; the broker recomputes
+  `identity_id = trunc(SHA256(auth_token))` and constant-time-compares it to the requested bus (§4.2). What
+  protects a *specific* identity's bus is (a) its 128-bit `identity_id` being **unguessable**
+  and (b) needing the matching `auth_token` to publish/subscribe — so an anonymous rando with
+  no valid `auth_token` is rejected, and **no separate app-key is needed to stop blind
+  scanning**. The broker sees `identity_id` + the bearer (it *could* route/replay on a bus) but
+  **can't decrypt or forge** (E2E keys, §4.2).
+- **The CLI is headless:** the wrapper authenticates to the broker with the per-identity
+  `auth_token` it derives from its secret (no interactive SSO, no app-key). `--rc-app` only
+  names the broker/web origin.
+- **Confidentiality unchanged:** this is *authorization*, not confidentiality — zero-knowledge
+  still rests entirely on the content/meta keys (§4.2). The broker sees only ciphertext.
+- **Future (stronger CLI admission): mTLS client identities.** For the headless CLI path,
+  augment the per-identity `auth_token` with **mutual-TLS client certificates** so each wrapper
+  (and, later, device) authenticates with its own cert — per-client, individually revocable
+  admission. Deferred (cert provisioning + Vercel mTLS support add friction); the per-identity
+  `auth_token` is the v1 gate, and the web app's SSO covers human admission.
 
 ## 5. Message flow (both directions, ciphertext only)
 
@@ -540,8 +547,8 @@ The broker keeps **no message bodies** — every frame goes through `POST /api/r
 
 **Worker → web** (assistant output): worker emits event → the wrapper's relay
 **logs it (in-memory), allocates `seq`, encrypts** (`K_session`, fresh `K_msg`) →
-`POST /api/relay {identity_id, session_id, dir:"out", record_kind, seq, salt, nonce,
-ct}` → ingest Fn appends to the session workflow's **out-stream** → web clients
+`POST /api/relay {identity_id, session_id, dir:"out", record_kind, seq, salt, nonce, ct}`
+→ ingest Fn appends to the session workflow's **out-stream** → web clients
 tailing the stream decrypt & render.
 
 **Web → worker** (your prompt): web encrypts a `user` content frame (`dir:"in"`,
@@ -580,8 +587,8 @@ It concentrates every "smart" on the TUI host. (⚠️ Plan-review correction: a
 earlier draft claimed the worker's "replay/backfill" was *verified* — that was an
 overstatement. Phase 0 confirmed those **strings exist in the binary** but did
 **not** prove a usable seq-range replay request; the only worker-side history we
-*actually verified* is the cursor-paginated `GET /v1/code/sessions/{id}/events?
-sort_order=&cursor=` API. The design below relies only on that + the wrapper's own
+*actually verified* is the cursor-paginated
+`GET /v1/code/sessions/{id}/events?sort_order=&cursor=` API. The design below relies only on that + the wrapper's own
 log — never on an unproven replay primitive. See §14.)
 
 - **The durable record is claude's on-disk session; the wrapper's log is
@@ -591,8 +598,8 @@ log — never on an unproven replay primitive. See §14.)
   rebuilt from claude on (re)connect (next bullet). The authoritative transcript is
   claude's own `~/.claude/projects/.../<session>.jsonl`.
 - **History (and recovery) comes from claude, reseeded by the worker backfilling
-  `historical` frames to OUR relay** on RC connect (Phase 0 observed `historical:
-  true` events arriving at the relay; reconnect-reseed hardened in P4). The local
+  `historical` frames to OUR relay** on RC connect (Phase 0 observed
+  `historical: true` events arriving at the relay; reconnect-reseed hardened in P4). The local
   `~/.claude/projects/<cwd>/<session>.jsonl` transcript is a last-resort fallback.
   We do **not** use Anthropic's `/events?cursor=` (we're off Anthropic's relay —
   §14). The TUI owns sessions and `seq` ordering; **the cloud stores no history.**
@@ -818,7 +825,7 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   resolves but no fresh announces" both render empty.
 - **Browser path.** `getHookByToken` needs server-side World credentials, so the browser
   doesn't call it directly — it hits our **`GET /api/stream?identity=…`** Function, which
-  resolves the token and pipes the run's stream back as SSE (gated by `T_app` + `auth_token`).
+  resolves the token and pipes the run's stream back as SSE (gated by `Bearer auth_token`).
 
 So the durable cloud "registry" is **nothing**: no rows, no presence keys, no pointer.
 State lives on the bus (announced live) and with claude (transcript via `catch_up`).
@@ -837,10 +844,10 @@ registry — the bus is reached by a derived token, not a stored id.
 ### Cold-start sequence (paste secret → live list)
 Computed live from the bus — **no store, no enumeration, no request, lazy** (nothing
 exists until a wrapper enables `/remote-control` and starts broadcasting):
-1. **Derive (no network).** Checksum `rc1_…`; HKDF → `identity_id, auth_token,
-   K_meta, …` (§4.2). Secret never leaves the device.
-2. **Subscribe to the bus.** `GET /api/stream?identity=identity_id` (`X-RC-App-Key` gate;
-   `Bearer auth_token` — broker recomputes `identity_id=trunc(SHA256(auth_token))` and
+1. **Derive (no network).** Checksum `rc1_…`; HKDF →
+   `identity_id, auth_token, K_meta, …` (§4.2). Secret never leaves the device.
+2. **Subscribe to the bus.** `GET /api/stream?identity=identity_id`
+   (`Bearer auth_token` — broker recomputes `identity_id=trunc(SHA256(auth_token))` and
    checks it matches, §4.2). The Function `getHookByToken("bus:"+identity_id)` →
    **HookNotFound ⇒ no bus ⇒ nothing connected ⇒ `200` empty**; else
    `getRun(runId).getReadable({startIndex:recent})` → SSE, **reading the recent stream
@@ -856,8 +863,8 @@ exists until a wrapper enables `/remote-control` and starts broadcasting):
    immediately and stays fresh from the wrappers' periodic broadcasts + on-change ones.
    No client→wrapper request is ever sent.
 4. **Open a chat.** Tap a session → subscribe to **its per-session stream**, addressed by
-   the **derived token** `sess:${identity_id}:${session_id}` (`GET
-   /api/stream?identity=…&session=…` → `getHookByToken`→`getRun`→`getReadable`) + send
+   the **derived token** `sess:${identity_id}:${session_id}`
+   (`GET /api/stream?identity=…&session=…` → `getHookByToken`→`getRun`→`getReadable`) + send
    `catch_up{since}` for history. High-volume turn frames flow there, **not** on the bus.
 
 ### Live greying (timestamp-driven, client-local)
@@ -865,8 +872,8 @@ While RC is on, each **independent session** (its own `remote-claw` process) **b
 `session_announce{…, sent_at}` on the bus every `ANNOUNCE_INTERVAL` (=20 s default, §4.3) +
 immediately on change, AEAD under `K_meta` (`sent_at` = wrapper wall clock, inside the
 ciphertext). A client keeps, per `session_id`, the freshest valid `sent_at` it has seen, and
-shows the session **online iff that `sent_at` is within `FRESH_WINDOW`** (`now − FRESH_WINDOW
-≤ sent_at ≤ now + SKEW`; `FRESH_WINDOW = 60 s`, `SKEW = 5 s`, §4.3). When broadcasts stop
+shows the session **online iff that `sent_at` is within `FRESH_WINDOW`**
+(`now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`; `FRESH_WINDOW = 60 s`, `SKEW = 5 s`, §4.3). When broadcasts stop
 (host sleeps/crashes), the freshest `sent_at` ages past the window → the client **greys** it
 — visibly "goes away"; when it resumes, or a new session starts, the next fresh announce
 **un-greys/adds it automatically** — no request, no epoch, no `beat_seq`.
@@ -971,16 +978,16 @@ re-serving never corrupts the transcript.
   the message plane; worst case = a stale command rejected, never a breach — §4.3/§6A); the
   clock-free `msg_id` seen-set is the actual replay defense.
 - **meta** (AEAD under `K_meta`, `dir:out`): `accepted` `{client_msg_id, seq}`;
-  `session_announce` (bus, the **periodic broadcast**) `{session_id, title, cwd,
-  identity_label, status, last_activity, sent_at}` — **the whole payload is inside the
+  `session_announce` (bus, the **periodic broadcast**)
+  `{session_id, title, cwd, identity_label, status, last_activity, sent_at}` — **the whole payload is inside the
   ciphertext**, so the broker reads none of it.
 
 AAD binds **every** cleartext header field via a single canonical serialization
 (length-prefixed or CBOR) — no ad-hoc `a|b|c` concatenation (ambiguous). The presence
 fields (`sent_at`, names/titles/status) live **inside** the `K_meta` payload, not the
 cleartext header. Presence replay-protection (§4.3) is **one check**: a `session_announce`
-counts only if AEAD-valid **and** `sent_at` is in-window (`now − FRESH_WINDOW ≤ sent_at ≤
-now + SKEW`) — a replayed/withheld announce carries a stale `sent_at` and is ignored (worst
+counts only if AEAD-valid **and** `sent_at` is in-window
+(`now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`) — a replayed/withheld announce carries a stale `sent_at` and is ignored (worst
 dead-session false-online = `FRESH_WINDOW + SKEW`, §4.3).
 
 Presence is **not stored on the server**: a session is online iff its own broadcast
@@ -989,7 +996,7 @@ that session's announces stop, and the next fresh broadcast un-greys/adds it aut
 (§6B). No server-side `heartbeat`/`last_seen`; `last_activity` (in the decrypted announce)
 drives client-side "most-active first" sorting.
 
-Endpoints — **just two** (both gated by `X-RC-App-Key` §4.5 + `Bearer auth_token`,
+Endpoints — **just two** (both gated by `Bearer auth_token` §4.5, self-verifying,
 ciphertext only): **`POST /api/relay`** (publish a frame via `resumeHook(token,…)` —
 bus or per-session token) and **`GET /api/stream?identity=… | session=…`** (subscribe
 via `getHookByToken→getRun→getReadable`, SSE; resume by `startIndex`). No
@@ -1016,9 +1023,12 @@ presence and history are all on the bus / wrapper-served (§6B).
 5. **CLI shape → one transparent passthrough wrapper, not subcommands** (§3.1).
    `remote-claw` *is* `claude` (all args forwarded); a reserved `--rc-*` namespace
    is consumed by the wrapper (`--rc-identity` does identity work). No `serve`.
-6. **API admission → app access token `T_app`** held as a **Vercel secret**,
-   required on every `/api/*` call layered before per-identity `auth_token` (§4.5).
-   Strong for wrappers, soft for the public web bundle; no confidentiality role.
+6. **API admission → SSO (web) + per-identity `auth_token` (broker).** The web app
+   gates human callers behind **proper SSO** (Better Auth SSO plugin — OIDC via the IdP
+   discovery document, plus SAML 2.0 / OAuth2); the broker authorizes each `/api/*` call
+   off the bearer `auth_token` alone (`identity_id = trunc(SHA256(auth_token))`), and the
+   unguessable 128-bit `identity_id` + required `auth_token` *is* the anti-scanning gate —
+   no separate app-key (§4.5). No confidentiality role.
    Future option: mTLS client identities for per-client revocable admission.
 7. **Nothing remote until RC is enabled** (lazy). Running `remote-claw` like `claude`
    sends nothing to the broker; only on first `/remote-control` does the wrapper join
@@ -1070,17 +1080,18 @@ phase0/            unchanged — the Python reference + protocol findings
   transparent wrapper skeleton (parse/strip the `--rc-*` namespace, classify tokens,
   forward all other args to `claude`, `--` escape), and the identity surface (§3.1):
   `--rc-identity` (idempotent `O_CREAT|O_EXCL` create-once into the single local secret
-  file, derive ids, print `rc1_…` + optional `--rc-web` QR/deep-link; host registration
+  file, derive ids, print `rc1_…` + optional `--rc-app` QR/deep-link; host registration
   deferred to first RC), `--rc-file` (use a specific secret file), `--rc-show-secret`,
   `--rc-rotate` (secure-delete + `--rc-confirm`), `--rc-json/--rc-quiet` (never emit `S`). **Depends on P1 `clawsec`** for all key work (HKDF derivation +
-  `rc1_` parse/checksum); also wires the broker config (`--rc-app` / `--rc-app-key` →
-  `T_app`, §3.1/§4.5) used later in P4. Local only (mock app); unit-test the token
+  `rc1_` parse/checksum); also wires the broker config (the `--rc-app` origin,
+  §3.1/§4.5) used later in P4. Local only (mock app); unit-test the token
   classifier + the create-once/never-reveal/secure-delete invariants.
-- **P3 — Vercel app skeleton (the bus).** `apps/web` (Next.js): **app-key middleware
-  (`X-RC-App-Key` = `T_app`, a Vercel secret)** in front of the **two** routes
-  (`POST /api/relay`, `GET /api/stream`) + per-identity auth (recompute `identity_id =
-  trunc(SHA256(auth_token))` from the bearer, constant-time compare to the target token —
-  **no stored hash**, §4.2); the
+- **P3 — Vercel app skeleton (the bus).** `apps/web` (Next.js): **per-identity bearer
+  auth (recompute `identity_id = trunc(SHA256(auth_token))` from the bearer, constant-time
+  compare to the target token — **no stored hash**, §4.2)** in front of the **two** routes
+  (`POST /api/relay`, `GET /api/stream`) — the unguessable `identity_id` + required
+  `auth_token` is the anti-scanning gate, no app-key; SSO gates the web UI separately
+  (Better Auth SSO plugin, §4.5); the
   per-identity bus relay workflow (`bus:${identity_id}` hook + out-stream) and the
   token→stream resolver (`getHookByToken→getRun→getReadable`); **per-session runs are
   resume-or-`start()`ed exactly like the bus** (first inbound/out frame on
@@ -1121,8 +1132,8 @@ phase0/            unchanged — the Python reference + protocol findings
   rule), **then join the identity bus** (resume-or-`start()` `bus:${identity_id}`) **and open
   the per-session run/out-stream** (`sess:${identity_id}:${session_id}`, resume-or-`start()`),
   and only then **periodically broadcast** a signed `session_announce{…, sent_at}` for the
-  session; per frame log it, allocate `seq`, encrypt → `POST /api/relay` (with `T_app` +
-  `auth_token`) on the session token; subscribe inbound (SSE) → dedup by `msg_id` → decrypt →
+  session; per frame log it, allocate `seq`, encrypt → `POST /api/relay` (with
+  `Bearer auth_token`) on the session token; subscribe inbound (SSE) → dedup by `msg_id` → decrypt →
   deliver to Claude only after log commit, then echo `accepted`. End-to-end: a curl "web"
   drives a real Claude session through Vercel.
 - **P5 — Web client.** Paste/fragment secret, identity + spaces list (each space =
@@ -1141,20 +1152,22 @@ phase0/            unchanged — the Python reference + protocol findings
   point of failure; rotating = a new identity (no partial/per-device revocation). Pasting
   into a browser exposes it to that device's XSS/extension/clipboard surface. `rc1_`
   high-entropy tokens trip secret scanners if pasted into a repo.
-- **App-key (`T_app`) in the web bundle is a soft gate** (§4.5): public JS means a
-  page visitor can extract it, so it stops scanners/bots but not a determined human.
-  It is admission, not authz/confidentiality (those stay with `auth_token`/content
-  keys). Harden later with web-app SSO/password or mTLS client identities.
+- **Web-app admission is SSO, not a baked-in token** (§4.5): the web UI sits behind the
+  Better Auth SSO plugin (OIDC via the IdP discovery document, plus SAML 2.0 / OAuth2), so
+  nothing app-wide is exposed to the public bundle. The broker's own gate is the
+  per-identity `auth_token` (unguessable `identity_id` + required token = anti-scanning);
+  it is admission, not authz/confidentiality (those stay with `auth_token`/content keys).
+  Harden later with mTLS client identities.
 - **At-least-once, no FIFO** from the broker ⇒ dedupe + reorder is mandatory.
 - **The bus is online-only** (§6B): discovery+presence are answered by *connected*
   sessions, so an offline session shows **nothing** (no greyed rows). Intended this phase;
   offline listing is **deferred** (§6C).
 - **Presence is timestamp-driven — its one assumption** (§4.3/§6B): online = a signed
-  `session_announce` whose `sent_at` is in-window (`now − FRESH_WINDOW ≤ sent_at ≤ now +
-  SKEW`). This **assumes wrapper/client clocks are NTP-synced within ~seconds**;
+  `session_announce` whose `sent_at` is in-window
+  (`now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`). This **assumes wrapper/client clocks are NTP-synced within ~seconds**;
   concretely (§4.3) `FRESH_WINDOW = 60 s`, `SKEW = 5 s`, `ANNOUNCE_INTERVAL = 20 s` (capped
-  ≤ 60 s), with **both** `FRESH_WINDOW` and `SKEW` ≥ max expected skew and `SKEW ≪
-  FRESH_WINDOW`. A replayed/withheld announce carries a stale `sent_at` → ignored, so the
+  ≤ 60 s), with **both** `FRESH_WINDOW` and `SKEW` ≥ max expected skew and
+  `SKEW ≪ FRESH_WINDOW`. A replayed/withheld announce carries a stale `sent_at` → ignored, so the
   broker can't resurrect a dead session beyond a **`FRESH_WINDOW + SKEW`** fuzz (≈65 s). The
   assumption's **blast radius is the online dot only** — message **confidentiality/integrity**
   are clock-free (`K_session`/`control_key` AEAD) and **replay** defense is `msg_id`-based
@@ -1195,8 +1208,8 @@ phase0/            unchanged — the Python reference + protocol findings
   *integration* (our cross-process token→stream wiring) remains a P3 smoke-test, and SDK
   versions can still drift — re-confirm at build (§11 P3).
 - **Relay flooding / DoS.** The broadcast model removes the old `identify?`
-  request-triggered fan-out (no client request exists), but any caller past the soft web
-  `T_app` can still `POST /api/relay` junk. Mitigate with a broker-side per-`identity_id`
+  request-triggered fan-out (no client request exists), but any caller holding a valid
+  `auth_token` can still `POST /api/relay` junk. Mitigate with a broker-side per-`identity_id`
   rate-limit on `/api/relay` and per-session debounce of redundant on-change
   `session_announce`s (sessions are independent processes, so there is no cross-session
   coalescer — each only debounces its own). (P7; named explicitly so it isn't lost in
@@ -1204,8 +1217,8 @@ phase0/            unchanged — the Python reference + protocol findings
 - **Bus event budget / roll.** Each `session_announce` broadcast is a bus event — **one per
   session per `ANNOUNCE_INTERVAL`** (sessions are independent processes with no per-host
   aggregator — §1), **sent even when no client is watching** (push model). So the bus event
-  rate scales with **total live sessions** under an identity: `Σ sessions × 86400 /
-  ANNOUNCE_INTERVAL`. At the 20 s default that's ~4 320/day **per session** → the
+  rate scales with **total live sessions** under an identity:
+  `Σ sessions × 86400 / ANNOUNCE_INTERVAL`. At the 20 s default that's ~4 320/day **per session** → the
   25k-events/run cap in ~5.8 d for a single session, proportionally faster with more (e.g.
   5 sessions → ~1.2 d). So the bus **must** roll (re-`start()` under the same token — §6B);
   keep all high-volume turn frames on per-session out-streams (stream writes bypass the event
@@ -1292,8 +1305,8 @@ tightening. Accepted fixes are already folded into §3–§8 above:
   into it). (§4.2,§6A,§8)
 - **Honest zero-knowledge scope:** confidentiality covers `content_root`/`control_key`/
   `K_meta`; `auth_token` is authz and the **live bearer is visible to the broker** —
-  there is **no stored token**: the broker recomputes `identity_id =
-  trunc(SHA256(auth_token))` and constant-time-compares it to the requested bus (§4.2,
+  there is **no stored token**: the broker recomputes
+  `identity_id = trunc(SHA256(auth_token))` and constant-time-compares it to the requested bus (§4.2,
   §6B). Never log it; rate-limit.
 - **Crypto claims toned down:** formal limits + cross-runtime test vectors in P1
   instead of a back-of-envelope bound; `K_msg` info now folds the canonical AAD.
@@ -1344,9 +1357,14 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   review forced in (now reflected in §3.1/§4.4): a **QR/deep-link is not
   screen-share-safe** (it encodes `S` verbatim); **`--rc-json`/`--rc-quiet` never emit
   `S`** (CI-log leak); **`--rc-rotate` securely deletes** the old `S` (same secret
-  re-derives a live credential — not "keys to dead data"); the deep-link uses a
-  separate **`--rc-web`** URL, not the broker `--rc-app`; `--rc-confirm <identity_id>` is an
+  re-derives a live credential — not "keys to dead data"); the deep-link is built from the
+  **one `--rc-app` origin** (its web UI reads the `#fragment`; its `/api` is the broker — one
+  Vercel deployment, so no separate `--rc-web`); `--rc-confirm <identity_id>` is an
   accident guard (identity_id is public), so rotate also requires a TTY.
+  - **CLI surface trim (2026-06-08, user call):** dropped `--rc-share` (claude's own
+    `--remote-control`, forwarded verbatim by the wrapper, already starts a session
+    remote-controlled) and `--rc-web` (collapsed into the one `--rc-app` origin). `--help`/`-h`
+    prints the `--rc-*` help and then falls through to `claude --help` so both layers show.
 - **Registry / state expression (2026-06-07 → -08).** Three research→design→verify
   panels, ending against the **SDK type definitions** (and later **web-verified against the
   live docs**, §13). Evolution: (1) a Workflow can't be a *queryable* registry
@@ -1408,8 +1426,8 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   (4) **completion → dispose → token frees** — after a `__close` the run completes, the token
   stops resolving (`getHookByToken` → `HookNotFound`), and a subscribe renders empty — the
   cap-roll/teardown path. So the bus is no longer just docs-confirmed but **observed working**;
-  the only remaining build-out is wiring it into the real broker (P3 proper) with `T_app`/auth,
-  chunking, and the per-session streams.
+  the only remaining build-out is wiring it into the real broker (P3 proper) with
+  per-identity `auth_token` auth, chunking, and the per-session streams.
 
 ## 15. Use cases / scenario matrix (also the v2 test plan)
 
@@ -1442,7 +1460,7 @@ Offline *listing* across cold starts is deferred (§6C).
    **broadcasting** `session_announce` for the session + open its stream
    (`sess:${identity_id}:${session_id}`) — so an announce never precedes a complete log
    (§16 #4). **[V]** C1+C2
-5. **Launch with RC on.** `remote-claw --rc-share` → fresh session, relay is the
+5. **Launch with RC on.** `remote-claw --remote-control` → fresh session, relay is the
    backend from the start, empty history, joins the bus + broadcasts. **[V]** (Phase 0)
 
 **Client onboarding & discovery (the bus)**
@@ -1507,11 +1525,11 @@ Offline *listing* across cold starts is deferred (§6C).
     / `command` (`/compact`,`/clear`) control frames (session channel) → wrapper → claude.
 
 **Resilience**
-18. **Network blip mid-turn.** Client SSE drops → reconnect `GET
-    /api/stream?identity=id&session=sid` (resolve token → run → resume by `startIndex`);
+18. **Network blip mid-turn.** Client SSE drops → reconnect
+    `GET /api/stream?identity=id&session=sid` (resolve token → run → resume by `startIndex`);
     at-least-once → dedup by `msg_id`; no missed/dup frames.
-19. **Wrapper/CLI restart (both stateless).** Reboot/crash → relaunch `remote-claw
-    --continue` + `/remote-control` → worker re-backfills → log **and `msg_id` seen-set**
+19. **Wrapper/CLI restart (both stateless).** Reboot/crash → relaunch
+    `remote-claw --continue` + `/remote-control` → worker re-backfills → log **and `msg_id` seen-set**
     rebuilt. The backfill must be **complete before W resumes** (claude's on-disk transcript
     is authoritative; a partial/failed backfill POST is retried, not served) — otherwise the
     rebuilt seen-set would miss a `msg_id` and a broker replay of that gap frame could
@@ -1590,14 +1608,14 @@ when the broker returns — nothing lost since claude holds the transcript).
 Actors: **C**=web/generic client · **V**=Vercel broker (functions+workflow) ·
 **W**=wrapper/relay (host side: MITM + relay client) · **T**=real claude TUI ·
 **A**=Anthropic API (**inference only**, passthrough). All C↔V↔W payloads are
-ciphertext (`{…}` = decrypted view); every C/W→V call carries the **app key**
-(`X-RC-App-Key`, §4.5) **and** `Bearer auth_token`. Frame kinds per §6A. `→` one
+ciphertext (`{…}` = decrypted view); every C/W→V call carries
+`Bearer auth_token` (§4.5; the web app additionally gates human callers on SSO). Frame kinds per §6A. `→` one
 message; steps are ordered.
 
 Channels are addressed by **derived tokens** (§6B): the identity **bus**
 `bus:${identity_id}` and per-session `sess:${identity_id}:${session_id}`.
-`POST /api/relay` = `resumeHook(token, frame)` (publish); `GET /api/stream?identity=|
-session=` = `getHookByToken(token)→getRun(runId)→getReadable()` over SSE (subscribe).
+`POST /api/relay` = `resumeHook(token, frame)` (publish);
+`GET /api/stream?identity=|session=` = `getHookByToken(token)→getRun(runId)→getReadable()` over SSE (subscribe).
 No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 
 **1. Fresh identity bootstrap** (`remote-claw --rc-identity`)
@@ -1622,7 +1640,7 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 5. T→W `POST …/worker/events [{user historical}, {assistant historical}, …]` *(backfill of prior chat)*
 6. W **commits the backfill to its in-memory log first** (log+encrypt all `historical` frames + seed the `msg_id` seen-set), **then** joins the bus: `resumeHook("bus:"+identity_id, …)` (resume-or-**start** the bus run, bounded-backoff retry on `HookNotFound`/`HookConflictError`); opens the session stream `sess:${identity_id}:${sid}`. Only **after** the log is seeded does W **broadcast** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change) — so a client that races in with `catch_up{since=0}` the instant it sees the announce gets the *complete* history, never a partial log.
 
-**5. Launch with RC ON** (`remote-claw --rc-share`) — as #4 steps 2–4 + the join-bus/broadcast of step 6, **no backfill** (empty history).
+**5. Launch with RC ON** (`remote-claw --remote-control`) — as #4 steps 2–4 + the join-bus/broadcast of step 6, **no backfill** (empty history).
 
 **6. Client first connection**
 1. user pastes `rc1_…`; C derives `identity_id, auth_token, content_root, K_*`
@@ -1719,8 +1737,8 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 Compact map of the building blocks each scenario exercises. Vocabulary: `HKDF`
 (derive) · `GCM` (AES-256-GCM seal/open) · `AAD` · `sha256` · `CSPRNG` ·
 `checksum` · broker (2 endpoints): `/api/relay`(`resumeHook`) `/api/stream`(SSE via
-`getHookByToken`→`getRun`→`getReadable`) `app-key`(`X-RC-App-Key`=`T_app`)
-`bearer`(`auth_token`) · bus: `bus:${id}` `sess:${id}:${sid}` (derived tokens)
+`getHookByToken`→`getRun`→`getReadable`) `bearer`(`auth_token`, self-verifying)
+`sso`(web UI, Better Auth) · bus: `bus:${id}` `sess:${id}:${sid}` (derived tokens)
 `session_announce`(periodic broadcast, `sent_at`) `online=fresh-announce`(within
 `FRESH_WINDOW`) `grey-local` ·
 workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
@@ -1733,17 +1751,17 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 1 | Fresh identity bootstrap (`--rc-identity`) | `CSPRNG(S)`, `HKDF`→{identity_id,auth_token,content_root,control_key,K_meta}, `checksum`, print `rc1_…` *(local only; no broker call)* |
 | 2 | Wrapper launches TUI, RC off | `args-passthrough`, MITM `passthrough`, CA trust *(no broker traffic; not on bus)* |
 | 3 | Work locally, RC off | `passthrough`, claude on-disk transcript (no /v1/code; broker sees nothing) |
-| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `backfill`, `log`, `GCM`, **join-bus**(`resumeHook bus:${id}`), broadcast `session_announce`, `app-key`+`bearer` |
-| 5 | Launch with RC on (`--rc-share`) | `intercept`, `bridge`, `worker-SSE`, `initialize`, `log`, join-bus + broadcast |
-| 6 | Client first connection | `HKDF`, `app-key`, `bearer`, `/api/stream`(`getHookByToken bus:${id}`, recent window), `session_announce`(fresh), `GCM-open(name)`, `localStorage` |
-| 7 | One identity, 5 independent sessions | 1× `HKDF`, `app-key`, **1× bus subscribe**, 5× per-session `session_announce`, `online=fresh-announce`, `GCM-open`, no aggregator (§1) |
+| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `backfill`, `log`, `GCM`, **join-bus**(`resumeHook bus:${id}`), broadcast `session_announce`, `bearer` |
+| 5 | Launch with RC on (`--remote-control`) | `intercept`, `bridge`, `worker-SSE`, `initialize`, `log`, join-bus + broadcast |
+| 6 | Client first connection | `HKDF`, `sso`, `bearer`, `/api/stream`(`getHookByToken bus:${id}`, recent window), `session_announce`(fresh), `GCM-open(name)`, `localStorage` |
+| 7 | One identity, 5 independent sessions | 1× `HKDF`, `bearer`, **1× bus subscribe**, 5× per-session `session_announce`, `online=fresh-announce`, `GCM-open`, no aggregator (§1) |
 | 8 | List an identity's spaces | broadcast `session_announce` (bus), `online=fresh-announce`, `GCM-open(title/cwd)`, `grey-local` |
 | 9 | Cold full history sync | `GCM(control_key)`, `catch_up`, session `hook`, `log-read`, `GCM(content)`, `/api/relay`, `wf-stream/SSE`, `seq` |
 | 10 | Reopen — delta sync | `catch_up`, `log-read(>N)`, `IndexedDB` cache, `wf-stream` resume(`startIndex`) |
 | 11 | Client → claude → back | `GCM(content)`, `resumeHook sess:`, `dedup(msg_id)`, `log`, `seq-alloc`, `intercept`-inject, `passthrough`, `accepted`, `wf-stream/SSE`, `AAD` |
 | 12 | Type in TUI → client | `worker-SSE`(upstream), `log`, `GCM`, session `wf-stream/SSE` |
 | 13 | Two clients (fan-out) | `wf-stream` multi-reader (session), `SSE`, `seq`/`dedup` |
-| 14 | Switch identity (replace) | forget prior secret, `HKDF(S₂)`, `app-key`, **new** bus subscribe → broadcast `session_announce`s (one secret on client) |
+| 14 | Switch identity (replace) | forget prior secret, `HKDF(S₂)`, `sso`, `bearer`, **new** bus subscribe → broadcast `session_announce`s (one secret on client) |
 | 15 | Rename identity/space | client-local `alias` in `localStorage` *(no broker write; cross-device deferred §6C)* |
 | 16 | Tool permission | `control_request/response`, `GCM(control_key)`, session `hook`, `worker-SSE` |
 | 17 | Remote control verbs | control frames (`control_key`), session `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`) |
