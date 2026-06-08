@@ -7,7 +7,6 @@ export {
   type RcValue,
 } from "./args.js";
 export { type IdentityOptions, runIdentity } from "./identity.js";
-export { type RotateOptions, runRotate } from "./rotate.js";
 export { type RunOptions, runWrapper, type SpawnFn } from "./run.js";
 export { runShowSecret, type ShowSecretOptions } from "./showsecret.js";
 export {

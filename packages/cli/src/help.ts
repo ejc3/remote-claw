@@ -9,11 +9,13 @@ literal --rc-* through). To start a session already remote-controlled, pass clau
 \`--remote-control\`.
 
 Identity (local; never launches claude, never touches the network):
-  --rc-identity      ensure this host's secret exists and print it once (create-once, idempotent)
+  --rc-identity      ensure this host's secret exists and print it once (create-once, idempotent).
+                     Re-run with --rc-confirm <identity_id> to REPLACE it: mint a new, unrelated
+                     identity and abandon the old one (DESTRUCTIVE; not a true rotation and NOT a
+                     revocation — a leaked old secret keeps working until you re-onboard every
+                     device). Needs a terminal unless --rc-force-noninteractive; --rc-keep-old
+                     keeps the old secret as a live backup.
   --rc-show-secret   re-reveal this host's secret (warns first; --rc-yes skips the prompt)
-  --rc-rotate        DESTRUCTIVE: new secret = new identity (old one + all its spaces die). Bare
-                     is a dry-run preview; execute with --rc-confirm <identity_id> (+ a terminal,
-                     or --rc-force-noninteractive). --rc-keep-old keeps the old as a live backup.
   --rc-file <path>   use a specific secret file (default: $XDG_STATE_HOME/remote-claw/secret;
                      or set REMOTE_CLAW_SECRET_FILE)
   --rc-json          machine-readable output for an rc action (never prints the secret)

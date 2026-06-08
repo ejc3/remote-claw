@@ -407,12 +407,19 @@ function writeSidecar(sidecarPath: string, createdAt: string): void {
   }
 }
 
+/** Byte-equal two public ids (identity_id is public, so a plain compare is fine). */
+function sameId(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 export interface RotatedIdentity {
-  /** The NEW `rc1_…` token — emitted to the user ONCE, on a successful rotate. */
+  /** The NEW `rc1_…` token — emitted to the user ONCE, on a successful replace. */
   token: string;
   /** The NEW public identity_id. */
   identityId: Uint8Array;
-  /** The OLD (now-destroyed) public identity_id, for the summary. */
+  /** The OLD (now-abandoned) public identity_id, for the summary. */
   oldIdentityId: Uint8Array;
   createdAt: string;
   /** Where the old secret was kept (`--rc-keep-old`), or null when it was scrubbed. */
@@ -420,9 +427,10 @@ export interface RotatedIdentity {
 }
 
 /**
- * Rotate the identity at `secretPath` (§3.1 `--rc-rotate`, the ONLY destructive path): generate a
- * NEW S — a NEW identity — write it durably, and either best-effort scrub the old secret (default)
- * or keep it as a `0600` `<path>.old` backup (still a live credential). The NEW token is durable
+ * Replace the identity at `secretPath` (§3.1/§4.4, the destructive path behind `--rc-identity
+ * --rc-confirm`): generate a NEW S — a NEW, unrelated identity — write it durably, and either
+ * best-effort scrub the old secret (default) or keep it as a `0600` `<path>.old` backup (still a
+ * live credential). The NEW token is durable
  * on disk BEFORE the old is replaced, and the canonical path is only ever the old or the new
  * secret (atomic rename) — never missing or garbage. The old identity and all its spaces are gone.
  *
@@ -433,10 +441,21 @@ export interface RotatedIdentity {
  */
 export async function rotateIdentity(
   secretPath: string,
-  deps: { now: () => Date; keepOld: boolean },
+  deps: { now: () => Date; keepOld: boolean; expectOldId?: Uint8Array },
 ): Promise<RotatedIdentity> {
   const old = await loadSecret(secretPath);
   const oldId = await deriveIdentity(old.secret);
+
+  // Make a caller's confirm authoritative against a TOCTOU: if the on-disk identity changed since
+  // the caller derived/confirmed it (a concurrent swap to a *different* valid secret between their
+  // load and this one), abort BEFORE destroying anything — never replace an unconfirmed identity.
+  const expect = deps.expectOldId;
+  if (expect !== undefined && !sameId(oldId.identityId, expect)) {
+    throw new StoreError(
+      "IO",
+      "the on-disk identity changed since it was confirmed; aborting the replace (re-run --rc-identity)",
+    );
+  }
 
   const { secret: newSecret, token: newToken } = await generateSecret();
   const createdAt = deps.now().toISOString();

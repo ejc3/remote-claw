@@ -63,7 +63,7 @@ describe("classifyArgs (unit)", () => {
     expect(classifyArgs(["--rc-file"]).errors).toHaveLength(1);
     expect(classifyArgs(["--rc-file"]).errors[0]).toMatch(/--rc-file requires a value/);
     // crucially, a value flag must NOT eat a following claude flag (--model / -p) or rc flag
-    for (const next of ["--rc-rotate", "--", "--model", "-p", "-"]) {
+    for (const next of ["--rc-show-secret", "--", "--model", "-p", "-"]) {
       const c = classifyArgs(["--rc-file", next]);
       expect(c.errors).toHaveLength(1);
       expect(c.rc["rc-file"]).toBeUndefined();

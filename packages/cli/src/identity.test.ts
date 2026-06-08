@@ -199,15 +199,25 @@ describe("runIdentity (functional)", () => {
     expect(statSync(xdgPath).mode & 0o777).toBe(0o600);
   });
 
-  it("rejects an unsupported rc modifier (e.g. --rc-rotate) with exit 2 and writes no file", async () => {
+  it("rejects an unsupported rc modifier (e.g. --rc-yes) with exit 2 and writes no file", async () => {
     const e = capture();
-    const code = await runIdentity(rc({ "rc-rotate": true }), [], {
+    const code = await runIdentity(rc({ "rc-yes": true }), [], {
       stdout: () => {},
       stderr: e.write,
     });
     expect(code).toBe(2);
-    expect(e.text()).toMatch(/does not support --rc-rotate/);
+    expect(e.text()).toMatch(/does not support --rc-yes/);
     expect(existsSync(secretPath)).toBe(false); // rejected before any disk work
+  });
+
+  it("IDEMPOTENT default: also prints how to REPLACE (the confirm-guarded re-create)", async () => {
+    await runIdentity(rc(), [], { stdout: () => {}, stderr: () => {}, now: () => FIXED });
+    const { secret } = await diskIdentity();
+    const idHex = toHex(await idOf(secret));
+    const e = capture();
+    await runIdentity(rc(), [], { stdout: () => {}, stderr: e.write });
+    expect(e.text()).toMatch(/To REPLACE it/);
+    expect(e.text()).toContain(`--rc-identity --rc-confirm ${idHex}`);
   });
 
   it("--rc-json on an error keeps STDOUT empty (parseable-or-empty), message to STDERR, exit 1", async () => {
@@ -236,5 +246,181 @@ describe("runIdentity (functional)", () => {
     expect(parsed.created).toBe(false);
     expect("created_at" in parsed).toBe(true);
     expect(parsed.created_at).toBeNull();
+  });
+});
+
+describe("runIdentity — replace (--rc-confirm)", () => {
+  const FIXED2 = new Date("2027-01-02T03:04:05.000Z");
+
+  /** Seed an identity and return its token + id hex. */
+  async function seed(): Promise<{ token: string; id: string }> {
+    await runIdentity(rc(), [], { stdout: () => {}, stderr: () => {}, now: () => FIXED });
+    const token = readFileSync(secretPath, "utf8").trim();
+    const id = toHex((await deriveIdentity(await parseSecret(token))).identityId);
+    return { token, id };
+  }
+
+  it("default success: NEW token on one STDOUT line, abandon summary on STDERR (no leak)", async () => {
+    const { token: oldToken, id: oldId } = await seed();
+    const out = capture();
+    const e = capture();
+    const code = await runIdentity(rc({ "rc-confirm": oldId }), [], {
+      stdout: out.write,
+      stderr: e.write,
+      isTty: true,
+      now: () => FIXED2,
+    });
+    expect(code).toBe(0);
+    const newToken = out.text().trim();
+    expect(newToken).toMatch(TOKEN_RE);
+    expect(newToken).not.toBe(oldToken);
+    expect(out.text()).toBe(`${newToken}\n`); // token is the ONLY thing on stdout
+    expect(e.text()).toMatch(/replaced identity/);
+    expect(e.text()).toContain(`abandoned:   ${oldId}`);
+    expect(e.text()).toMatch(/NOT revoked/);
+    assertNoSecretLeak(e.text(), await diskIdentity()); // summary never repeats the new secret
+    expect(toHex(await idOf((await diskIdentity()).secret))).not.toBe(oldId);
+  });
+
+  it("--rc-json success: created:true, replaced:true, public scalars only, no token", async () => {
+    const { id: oldId } = await seed();
+    const out = capture();
+    const code = await runIdentity(rc({ "rc-confirm": oldId, "rc-json": true }), [], {
+      stdout: out.write,
+      stderr: () => {},
+      isTty: true,
+      now: () => FIXED2,
+    });
+    expect(code).toBe(0);
+    const j = JSON.parse(out.text());
+    expect(j).toMatchObject({
+      created: true,
+      replaced: true,
+      old_identity_id: oldId,
+      kept_old: false,
+    });
+    expect(j.identity_id).toMatch(/^[0-9a-f]{32}$/);
+    expect(j.identity_id).not.toBe(oldId);
+    assertNoSecretLeak(out.text(), await diskIdentity());
+  });
+
+  it("--rc-quiet success: just the new identity_id (not the token)", async () => {
+    const { id: oldId } = await seed();
+    const out = capture();
+    await runIdentity(rc({ "rc-confirm": oldId, "rc-quiet": true }), [], {
+      stdout: out.write,
+      stderr: () => {},
+      isTty: true,
+    });
+    expect(out.text()).toMatch(/^[0-9a-f]{32}\n$/);
+    expect(out.text()).not.toMatch(TOKEN_RE);
+    assertNoSecretLeak(out.text(), await diskIdentity());
+  });
+
+  it("--rc-keep-old: keeps the old secret as a live backup; loudly flagged", async () => {
+    const { token: oldToken, id: oldId } = await seed();
+    const out = capture();
+    const e = capture();
+    const code = await runIdentity(rc({ "rc-confirm": oldId, "rc-keep-old": true }), [], {
+      stdout: out.write,
+      stderr: e.write,
+      isTty: true,
+    });
+    expect(code).toBe(0);
+    expect(e.text()).toMatch(/LIVE CREDENTIAL/);
+    expect(readFileSync(`${secretPath}.old`, "utf8").trim()).toBe(oldToken);
+  });
+
+  it("confirm mismatch: exit 2, names only the expected id, never the supplied value, no change", async () => {
+    const { token, id } = await seed();
+    const out = capture();
+    const e = capture();
+    const code = await runIdentity(rc({ "rc-confirm": "deadbeefdeadbeefdeadbeefdeadbeef" }), [], {
+      stdout: out.write,
+      stderr: e.write,
+      isTty: true,
+    });
+    expect(code).toBe(2);
+    expect(out.text()).toBe("");
+    expect(e.text()).toMatch(/does not match/);
+    expect(e.text()).toContain(`expected: ${id}`);
+    expect(e.text()).not.toContain("deadbeef"); // supplied value not echoed
+    expect(readFileSync(secretPath, "utf8").trim()).toBe(token); // unchanged
+  });
+
+  it("confirm is case/whitespace tolerant (a paste with newline + uppercase still matches)", async () => {
+    const { id } = await seed();
+    const out = capture();
+    const code = await runIdentity(rc({ "rc-confirm": `  ${id.toUpperCase()}\n` }), [], {
+      stdout: out.write,
+      stderr: () => {},
+      isTty: true,
+    });
+    expect(code).toBe(0);
+    expect(out.text().trim()).toMatch(TOKEN_RE);
+  });
+
+  it("TTY guard: non-interactive without --rc-force-noninteractive exits 2, no change", async () => {
+    const { token, id } = await seed();
+    const e = capture();
+    const code = await runIdentity(rc({ "rc-confirm": id }), [], {
+      stdout: () => {},
+      stderr: e.write,
+      isTty: false,
+    });
+    expect(code).toBe(2);
+    expect(e.text()).toMatch(/interactive terminal/);
+    expect(readFileSync(secretPath, "utf8").trim()).toBe(token);
+  });
+
+  it("TTY override: --rc-force-noninteractive lets a non-TTY replace", async () => {
+    const { id } = await seed();
+    const out = capture();
+    const code = await runIdentity(rc({ "rc-confirm": id, "rc-force-noninteractive": true }), [], {
+      stdout: out.write,
+      stderr: () => {},
+      isTty: false,
+    });
+    expect(code).toBe(0);
+    expect(out.text().trim()).toMatch(TOKEN_RE);
+  });
+
+  it("confirm-mismatch is checked before the TTY guard", async () => {
+    const { id } = await seed();
+    const e = capture();
+    const code = await runIdentity(rc({ "rc-confirm": `wrong-${id}` }), [], {
+      stdout: () => {},
+      stderr: e.write,
+      isTty: false, // would also fail the TTY guard, but mismatch wins
+    });
+    expect(code).toBe(2);
+    expect(e.text()).toMatch(/does not match/);
+    expect(e.text()).not.toMatch(/interactive terminal/);
+  });
+
+  it("no identity present: --rc-confirm exits 1 with a create hint, writes nothing", async () => {
+    const out = capture();
+    const e = capture();
+    const code = await runIdentity(rc({ "rc-confirm": "x" }), [], {
+      stdout: out.write,
+      stderr: e.write,
+      isTty: true,
+    });
+    expect(code).toBe(1);
+    expect(out.text()).toBe("");
+    expect(e.text()).toMatch(/to replace.*drop --rc-confirm/);
+    expect(existsSync(secretPath)).toBe(false);
+  });
+
+  it("corrupt secret: --rc-confirm exits 1 and changes nothing (refuses an unverifiable identity)", async () => {
+    writeFileSync(secretPath, "not-a-real-token\n", { mode: 0o600 });
+    const e = capture();
+    const code = await runIdentity(rc({ "rc-confirm": "x" }), [], {
+      stdout: () => {},
+      stderr: e.write,
+      isTty: true,
+    });
+    expect(code).toBe(1);
+    expect(readFileSync(secretPath, "utf8")).toBe("not-a-real-token\n");
   });
 });

@@ -114,16 +114,16 @@ describe("runShowSecret (functional)", () => {
     expect(e.text()).toMatch(/does not launch claude/);
   });
 
-  it("rejects an unsupported modifier (e.g. --rc-rotate) with exit 2", async () => {
+  it("rejects an unsupported modifier (e.g. --rc-keep-old) with exit 2", async () => {
     await seed();
     const e = capture();
-    const code = await runShowSecret(rc({ "rc-rotate": true }), [], {
+    const code = await runShowSecret(rc({ "rc-keep-old": true }), [], {
       stdout: () => {},
       stderr: e.write,
       isTty: false,
     });
     expect(code).toBe(2);
-    expect(e.text()).toMatch(/does not support --rc-rotate/);
+    expect(e.text()).toMatch(/does not support --rc-keep-old/);
   });
 
   it("no identity yet: exits 1 with a 'run --rc-identity first' hint, no token", async () => {
