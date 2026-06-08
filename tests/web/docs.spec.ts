@@ -65,3 +65,33 @@ test("§15 scenarios render as list items, not run-on paragraphs (jumble fix)", 
   );
   expect(jumbled).toBe(0);
 });
+
+test.describe("mobile layout", () => {
+  test("no horizontal overflow — the page cannot scroll left/right", async ({ page }) => {
+    await page.goto("/index.html#v2");
+    await expect(page.locator("article h1")).toBeVisible({ timeout: 15000 });
+    await page.waitForTimeout(300);
+    const m = await page.evaluate(() => {
+      const de = document.documentElement;
+      window.scrollTo(9999, 0);
+      const scrollX = window.scrollX;
+      window.scrollTo(0, 0);
+      return { vw: de.clientWidth, docW: de.scrollWidth, bodyW: document.body.scrollWidth, scrollX };
+    });
+    expect(m.scrollX).toBe(0); // attempting to scroll right does nothing
+    expect(m.docW).toBeLessThanOrEqual(m.vw + 1); // no document-level horizontal overflow
+    expect(m.bodyW).toBeLessThanOrEqual(m.vw + 1);
+  });
+
+  test("the sticky header stays pinned when the page scrolls", async ({ page }) => {
+    await page.goto("/index.html#v2");
+    await expect(page.locator("article h1")).toBeVisible({ timeout: 15000 });
+    const top = await page.evaluate(() => {
+      window.scrollTo(0, 800);
+      const t = Math.round(document.querySelector("header.top")!.getBoundingClientRect().top);
+      window.scrollTo(0, 0);
+      return t;
+    });
+    expect(top).toBe(0); // overflow-x guard on .wrap didn't break the sticky header
+  });
+});

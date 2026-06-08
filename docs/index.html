@@ -58,7 +58,8 @@
 
   /* layout */
   .wrap{max-width:1280px;margin:0 auto;display:grid;
-    grid-template-columns:260px minmax(0,1fr);gap:28px;padding:14px 20px 80px}
+    grid-template-columns:260px minmax(0,1fr);gap:28px;padding:14px 20px 80px;
+    overflow-x:hidden}
   nav.toc{position:sticky;top:64px;align-self:start;max-height:calc(100vh - 80px);
     overflow:auto;padding:14px 12px;background:var(--panel);border:1px solid var(--edge);
     border-radius:12px}
@@ -84,7 +85,8 @@
     background:var(--panel2);border-radius:0 8px 8px 0;color:var(--soft)}
   article hr{border:0;border-top:1px solid var(--edge);margin:1.6em 0}
   article :not(pre)>code{background:var(--panel2);border:1px solid var(--edge);
-    padding:.1em .4em;border-radius:6px;font-size:.88em;color:#e9c8ff}
+    padding:.1em .4em;border-radius:6px;font-size:.88em;color:#e9c8ff;
+    overflow-wrap:anywhere;word-break:break-word}
   article pre{background:#0a0c16;border:1px solid var(--edge);border-radius:10px;
     padding:14px 16px;overflow:auto;font-size:13px;line-height:1.5}
   article pre code{background:none;border:0;padding:0;color:#cdd3f5}
