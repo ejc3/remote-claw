@@ -3,7 +3,9 @@ name: ci
 on:
   push:
     branches: [main, phase0-own-relay]
+    paths: ["phase0/**", ".github/workflows/ci.yml"]
   pull_request:
+    paths: ["phase0/**", ".github/workflows/ci.yml"]
 
 jobs:
   lint-and-unit:
