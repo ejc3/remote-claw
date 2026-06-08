@@ -555,7 +555,7 @@ tailing the stream decrypt & render.
 `client_msg_id`, under `K_session`) → `POST /api/relay` → the workflow **hook**
 wakes the wrapper → wrapper **dedups by `msg_id`**, decrypts, **commits to its log +
 assigns `seq`**, **injects into Claude via the Phase-0-verified MITM downstream** (a write
-to the worker `/worker/events` path — see `phase0-findings.md`), and emits
+to the worker `/worker/events` path — see [`phase0-findings.md`](phase0-findings.md)), and emits
 `accepted{client_msg_id, seq}` on the out-stream. The frame is **logged before the inject**,
 so an inject that fails after log-commit is simply **re-injected** (the log is authoritative;
 no rollback, `msg_id` keeps it idempotent). Claude replies → the worker→web path above.
@@ -1784,7 +1784,7 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 
 > **What this is.** The Anthropic-side protocol that `claude --remote-control` speaks, which the
 > remote-claw wrapper MITMs to become the RC backend (§3.1, §14). Empirically captured on **Claude
-> Code v2.1.168** (Phase 0 — `docs/phase0-findings.md`, `docs/remote-control-research.md`);
+> Code v2.1.168** (Phase 0 — [`docs/phase0-findings.md`](phase0-findings.md), [`docs/remote-control-research.md`](remote-control-research.md));
 > **undocumented and version-sensitive** — re-verify on any claude upgrade. Inference
 > (`/v1/messages`) and OAuth are **not** part of this; the wrapper passes those straight through to
 > Anthropic untouched.

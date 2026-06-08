@@ -95,3 +95,15 @@ test.describe("mobile layout", () => {
     expect(top).toBe(0); // overflow-x guard on .wrap didn't break the sticky header
   });
 });
+
+test("a doc-reference link opens that doc in the viewer, not the raw markdown", async ({ page }) => {
+  await page.goto("/index.html#v2");
+  await expect(page.locator("article h1")).toContainText("remote-claw v2", { timeout: 15000 });
+  // §17 references phase0-findings.md as a relative link; clicking it should switch tabs in-place
+  await page.locator('article a[href="phase0-findings.md"]').first().click();
+  await expect(page.locator("article h1")).toContainText("Phase 0 — Empirical Findings");
+  await expect(page.locator(".tab.active")).toHaveText("Phase 0 Findings");
+  await expect(page).toHaveURL(/#phase0$/);
+  // crucially we did NOT navigate away to /phase0-findings.md (the raw file)
+  expect(new URL(page.url()).pathname).toBe("/index.html");
+});

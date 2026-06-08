@@ -235,6 +235,17 @@ document.getElementById("menu").onclick=()=>{
   document.body.classList.toggle("nav-open", tocEl.classList.contains("open"));
 };
 
+// In-doc links to a sibling doc (e.g. phase0-findings.md) open that tab in-viewer instead of
+// navigating away to the raw markdown. Relative links still resolve normally on GitHub.
+const FILE_TO_ID = Object.fromEntries(DOCS.map(d=>[d.file,d.id]));
+docEl.addEventListener("click",(e)=>{
+  const a = e.target.closest("a"); if(!a) return;
+  const href = a.getAttribute("href")||"";
+  if(/^[a-z]+:\/\//i.test(href)) return;            // leave external (http(s):) links alone
+  const file = href.split(/[#?]/)[0].split("/").pop();
+  if(file && FILE_TO_ID[file]){ e.preventDefault(); load(FILE_TO_ID[file]); }
+});
+
 load((location.hash||"#v2").slice(1).split(":")[0]);
 </script>
 </body>

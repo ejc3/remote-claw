@@ -6,7 +6,7 @@
 > `apiProvider: firstParty`).
 
 This records what we *actually observed* running Phase 0, versus the
-reverse-engineered hypotheses in `remote-control-research.md`. **The headline
+reverse-engineered hypotheses in [`remote-control-research.md`](remote-control-research.md). **The headline
 result invalidates the project's original premise on this version.**
 
 ---
