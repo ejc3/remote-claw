@@ -1,4 +1,4 @@
-# remote-claw v2 — cloud-brokered, zero-knowledge, multi-host
+# remote-claw v2 — cloud-brokered, zero-knowledge, multi-host (many independent machines, each its own secret)
 
 > Status: **design** (researched 2026-06-07; Vercel facts verified against official
 > docs dated 2026-05/06). Supersedes the localhost MITM-relay of Phase 0 for the
@@ -10,48 +10,52 @@ Phase 0 put a relay on `localhost` and you reached it over SSH. v2 keeps the sam
 trick for talking to Claude (MITM `api.anthropic.com`, intercept
 `/v1/code/sessions*`) but replaces the localhost client face with a **cloud broker
 on Vercel** so you can chat from anywhere — phone included — across **multiple
-servers**, with **end-to-end encryption** where **Vercel only ever sees
-ciphertext**.
+independent machines** (each with its own secret), with **end-to-end encryption** (in
+the **Sealed** mode — §2A) where **Vercel only ever sees ciphertext**.
 
 Goals:
 - **`remote-claw` is a transparent wrapper around `claude`** — invoke it exactly
   like `claude` (all flags/args pass through); a reserved `--rc-*` namespace is the
   only thing it consumes. No separate `serve`/`identity` commands.
 - Mobile-friendly web app (Vercel) to chat with your sessions.
-- Paste one **secret** → access **every claude instance under that secret** and
-  decrypt it.
+- Paste a machine's **pass** → watch/steer **every session on THAT machine** and
+  decrypt it. (The pass is a derived viewer credential, not the master secret — §4.2a.)
 - **Each claude instance is its own space / chat** (gchat-style). Instances are
-  grouped by the **secret** they run under.
-- **E2E encrypted** from the secret; **non-guessable** secrets; Vercel
-  zero-knowledge. The web app gates on **proper SSO** (Better Auth SSO plugin); the
+  grouped by the **machine** they run on (its single identity).
+- **Three trust modes behind one seam (§2A):** **Sealed** = today's E2E from the secret
+  (Vercel sees only ciphertext); **Open** = trust-the-server, no encryption, loud banner,
+  never a silent default; **Managed** (future) = Sealed plus relay-delivered wrapped keys.
+  **Non-guessable** secrets; in Sealed/Managed the broker is zero-knowledge. The web app
+  gates on **proper SSO** (Better Auth SSO plugin); the
   broker authorizes each request off the per-identity `auth_token` (the unguessable
   128-bit `identity_id` + required `auth_token` *is* the anti-scanning gate — no
   separate app-key) (admission, not confidentiality — §4.5).
 - Stateless web client **and** stateless wrapper; **claude's on-disk session is the
   durable record**; the cloud is a stateless ciphertext relay (see §6).
 
-> **Terminology (the core abstraction = the SECRET = a USER IDENTITY).** A *secret*
-> derives a **user identity** — `identity_id` / `auth_token` / content keys — that
-> **binds *all* of that user's sessions across *all* of their hosts** and is the one
-> thing you **share across machines**. The identity is the boundary, **not** the
-> machine: one secret can run on many hosts, and (by pointing `remote-claw --rc-file`
-> at another secret file) one machine can carry several identities. A *session* = a *space* =
+> **Terminology (the core abstraction = the SECRET = one MACHINE's identity).** A *secret*
+> derives a **machine identity** — `identity_id` / `auth_token` / content keys. **Each
+> machine owns its own secret**, so the secret is the boundary **and** the machine: one
+> machine = one secret = one `identity_id`. (You can still point `remote-claw --rc-file`
+> at another secret file to run a *different* machine identity on the same box, but the
+> norm is one identity per machine.) A *session* = a *space* =
 > a *claude instance* = **one chat**: a single running `claude --remote-control`
 > **wrapped 1:1 by its own `remote-claw` process** — the *wrapper* is that per-session
 > shim, **not** a machine or a daemon. **Every session is fully independent of every
 > other**: it holds only its own in-memory relay state and knows nothing about its
-> siblings, whether they run on the same box or different ones. **The host/box is
-> irrelevant** — sessions are grouped **only** by the user identity, so one identity's
-> chats may be spread across one box or hundreds, all equal peers; a session belongs to
-> the **identity**, not the host. There is **no per-host aggregator/daemon** between the
-> identity and its independent sessions. The hierarchy is **identity → its spaces
+> siblings, whether they run on the same box or different ones. **Sessions on one machine
+> share that machine's single identity** — they are grouped by the machine's secret; there
+> is **no per-host aggregator/daemon** between the identity and its independent sessions.
+> The hierarchy is **machine identity → its spaces
 > (chats)** (a space *is* one chat, not a folder of sessions); the web client holds **one
-> secret at a time** and lists every space under that one pasted secret (to view another
-> identity you replace the secret, §7). So `identity_id` is the public id of the **user
-> identity** spanning all their hosts — **not** a hardware/host id.
+> machine's pass at a time** and lists every space on that machine (to watch another
+> machine you onboard *its* pass, §7). So `identity_id` is the **machine's public routing
+> id** — **not** a "user identity spanning all hosts."
 
-Non-goals (v1): forward secrecy, per-device revocation, group/sender-key crypto,
-metadata privacy (timing/sizes/seq are visible to the broker).
+Non-goals (v1): forward secrecy, group/sender-key crypto, metadata privacy
+(timing/sizes/seq are visible to the broker). **Fine-grained per-viewer revocation** is
+also out of scope — viewers hold a **pass** (§4.2a), but there is no way to cut one pass
+without the others; to remove a viewer you **reset the machine** (a new secret — §4.4).
 
 ## 1A. User experience & ergonomics (the flow we're building)
 
@@ -66,14 +70,16 @@ The whole design serves this human flow. Two roles (often the same person): the
    behavior, same options. The wrapper consumes only a small reserved **`--rc-*`**
    namespace (§3.1) and forwards the rest. There is **no separate `serve`
    command** — `remote-claw` *is* claude, plus remote-control.
-2. **Get your secret (one-time):** run `remote-claw --rc-identity` → it ensures your
-   host's identity exists (the secret lives in one local file, created on first use — a
-   plain `remote-claw` run also auto-creates it **silently**, so if you've already
-   launched once, this is a quiet status re-run) and prints the `rc1_…` secret to copy.
-   Paste it into the web app, or — for a phone — with `--rc-app` set it also prints a **QR /
-   `#fragment` deep link** (treat the QR like the raw secret; it's not screen-share-safe).
-   Lost the printout? `remote-claw --rc-show-secret` re-reveals it. Need a *different*
-   identity for one run? Point `--rc-file <path>` at a different secret file for that run.
+2. **Get your machine's identity (one-time):** run `remote-claw --rc-identity` → it ensures
+   this **machine's** identity exists (the master secret lives in one local file, created on
+   first use — a plain `remote-claw` run also auto-creates it **silently**, so if you've already
+   launched once, this is a quiet status re-run). The raw master secret is the **operator's**
+   and is shown only to the operator — `--rc-identity` prints the `rc1_…` master at create, and
+   `--rc-show-secret` re-reveals it. The artifact you hand a **viewer** (phone/browser) is a
+   **pass**, not the master: with `--rc-app` set it also prints a **QR / `#fragment` deep link**
+   carrying the pass for phone onboarding (treat it like a credential; it's not screen-share-safe).
+   Need a *different* machine identity for one run? Point `--rc-file <path>` at a different secret
+   file for that run.
 3. **Share a session:** in any `remote-claw` TUI, hit `/remote-control` → it flips
    to "Remote Control active," and **that instance becomes a chat in the web app**.
    (Or launch already remote-controlled with claude's own `--remote-control`.)
@@ -83,27 +89,27 @@ The whole design serves this human flow. Two roles (often the same person): the
 *Ergonomic promises:* **zero change to the local workflow** (full claude
 passthrough); **opt-in per session** — running `remote-claw` like claude sends
 **nothing** to the broker (not even presence) until you `/remote-control`; the MITM
-setup is **automatic and invisible**; nothing leaves the box unencrypted.
+setup is **automatic and invisible**; in **Sealed**/**Managed** nothing leaves the box
+unencrypted (in **Open** you deliberately trust the server, behind a loud banner — §2A).
 
 ### B. Driver — on phone/laptop (the web app)
-1. **First time:** open the app, paste the `rc1_…` (or open a link with the secret
-   in the URL `#fragment`). Keys derive **in the browser**; the secret never hits
-   the server.
-2. You land on a **list of chats** — every claude instance under that secret,
+1. **First time:** open the app, paste (or scan) the machine's **pass** (or open a link
+   with the pass in the URL `#fragment`). The pass carries the operational keys; they
+   load **in the browser** and never hit the server.
+2. You land on a **list of chats** — every claude instance on that machine,
    most-active first, each with a name + an online dot. Reads like Slack/iMessage.
-   (A freshly-pasted identity with nothing shared yet shows up empty — chats appear
+   (A freshly-onboarded machine with nothing shared yet shows up empty — chats appear
    as you `/remote-control` sessions on the host.)
 3. **Tap one** → history decrypts locally and live messages stream in. **Type** →
    your message shows in the chat *and* in the real terminal; claude works and the
    reply streams back to your phone.
-4. **Switch identity:** the client holds **one secret at a time** — paste a different
-   secret to **replace** the current one (the previous identity is forgotten from the
-   device; §1A E "forget identity"). An identity is *one user*, spanning all their hosts —
-   it's the *secret* that groups, not the hardware; one pasted secret shows that user's
-   every chat across every host at once, so there's no need to juggle several on the client.
+4. **Switch machine:** the client holds **one pass at a time** — onboard a different
+   machine's pass to **replace** the current one (the previous machine is forgotten from the
+   device; §1A E "forget identity"). One pass shows that **one machine's** every chat at once;
+   to watch a second machine you hold its pass too — switch between them, one active at a time.
 
-*Ergonomic promises:* mobile-first, instant, **no login** beyond the pasted secret;
-feels like a messaging app; spans many machines.
+*Ergonomic promises:* mobile-first, instant, **no login** beyond the onboarded pass;
+feels like a messaging app; one pass per machine, onboard as many machines as you run.
 
 ### C. Naming & organization
 - Each chat's default name is meaningful — the wrapper reads the inner session's
@@ -113,8 +119,8 @@ feels like a messaging app; spans many machines.
   (kept in the device's `localStorage`); cross-device/persistent rename rides the
   deferred store (§6C).
 - Identities default to **hostname** (an `identity_label` inside the `K_meta` announce, announced by the
-  wrapper); chats group under them. One identity = one user, spanning all their hosts;
-  it's the secret that groups (not the machine). Renaming an identity is likewise a
+  wrapper); chats group under them. The label is the machine's name because the identity **is**
+  the machine (one secret per machine). Renaming an identity is likewise a
   client-local alias this phase.
 - **Online = connected:** a chat shows because its wrapper is **broadcasting** a fresh
   signed announce on the identity bus (§6B). If a chat you're looking at goes quiet
@@ -131,14 +137,18 @@ feels like a messaging app; spans many machines.
   goes live and **history is intact** (it lives with claude, not the cloud).
 
 ### E. Security ergonomics (honest with the user)
-- The pasted secret is powerful (read + write + decrypt every chat under it) —
-  treat it like a password. The app offers **"forget identity"** — wipes the secret
+- A viewer holds a **pass** (§4.2a): read + steer every chat on that **one machine**, but
+  **not** the master secret — a lost phone can't recover `S` or reset the machine. Treat a
+  pass like a credential. The app offers **"forget identity"** — wipes the pass
   from `localStorage` **and** the decrypted-message cache (IndexedDB) for that
-  identity, leaving no plaintext on the device.
-- Lost/leaked secret → **rotate**: a new secret = a new identity (fresh chats); the
-  old one is dead. No partial revoke in v1.
-- The cloud never sees plaintext or the secret — only ciphertext + routing metadata
-  (who/when/sizes), which it cannot read.
+  machine, leaving no plaintext on the device. (The raw master secret is the machine's,
+  shown only to the operator via `--rc-show-secret`/`--rc-identity`.)
+- Lost/leaked pass or secret → **reset the machine**: a new secret = a new, unrelated
+  identity for **that machine** (fresh chats); the old one is dead; your **other machines
+  are untouched**. No partial/per-pass revoke in v1.
+- In **Sealed**/**Managed** the cloud never sees plaintext or keys — only ciphertext +
+  routing metadata (who/when/sizes), which it cannot read; in **Open** it sees everything
+  (you trust the server — §2A).
 
 ### F. Explicitly NOT in v1 (so we don't over-build)
 - Push notifications (nice later; for v1 you open the app to see new messages).
@@ -147,22 +157,37 @@ feels like a messaging app; spans many machines.
 
 ## 2. Threat model & the zero-knowledge property
 
-- **Broker (Vercel + any managed realtime/store) is untrusted for confidentiality.**
-  It routes and persists **ciphertext + routing metadata only** (`identity_id`,
-  `session_id`, `seq`, `dir`, sizes, timestamps). It can drop/withhold/reorder **and
-  replay captured frames** (availability + replay), but it cannot read or forge
-  **anything inside a frame** — content,
+All confidentiality claims below are **mode-relative** (§2A): they hold under **Sealed**
+(today's E2E) and **Managed** (future). Under **Open** there is deliberately no
+encryption — you trust the server, which sees and can forge everything (loud banner,
+never a silent default).
+
+- **Broker (Vercel + any managed realtime/store) is untrusted for confidentiality
+  (Sealed/Managed).** It routes and persists **ciphertext + routing metadata only**
+  (`identity_id`, `session_id`, `seq`, `dir`, sizes, timestamps). It can
+  drop/withhold/reorder **and replay captured frames** (availability + replay), but in
+  Sealed/Managed it cannot read or forge **anything inside a frame** — content,
   control, and meta/presence are all AEAD-authenticated under client-held keys, so it
-  can't read bodies/titles/status or forge `session_announce`/`accepted`.
+  can't read bodies/titles/status or forge `session_announce`/`accepted`. (In **Open**
+  it can read and forge all of these — that is the trade Open makes.)
 - ⚠️ **Vercel's own "Workflow E2E encryption" is NOT zero-knowledge** — keys are
   Vercel/deployment-managed and decryptable via the dashboard/CLI. We treat it as
   defense-in-depth only and do **all** crypto ourselves, client-side, passing only
   ciphertext into `start()`, hooks, steps, streams. (Verified: Vercel docs +
   security review of Happy, which got this wrong for stored API keys — see §11.)
-- **Trust roots:** the CLI host (holds the secret + runs Claude) and any device
-  the user pastes the secret into. A leaked secret = full compromise of that host
-  (read + write + decrypt past/future retained ciphertext). Mitigation: rotation
-  = new secret = new identity (a fresh, empty set of spaces) (§4.4).
+- **Trust roots:** the CLI host (holds the **machine's** master secret + runs Claude) and
+  any device the user onboards. **Split by what leaks:**
+  - A leaked **pass** (§4.2a, a viewer credential) = read **and** steer that **one
+    machine's** sessions — and, because the content/presence keys are symmetric, the holder
+    can also *produce* valid-looking content/presence for that machine (the symmetric-key
+    forge residual). But a pass **cannot** recover the master secret `S` or reset/re-mint
+    the machine (HKDF one-wayness, §4.2a).
+  - A leaked **machine secret** = full compromise of **that machine only** (read + write +
+    decrypt past/future retained ciphertext; can also reset/re-mint it). **Other machines
+    are untouched** — blast radius is exactly one machine.
+
+  Mitigation either way: **reset the machine** = new secret = a new, unrelated identity for
+  that machine (a fresh, empty set of spaces); other machines keep working (§4.4).
 - **Admission vs. confidentiality (two independent gates).** Confidentiality is the
   zero-knowledge property above (content keys; broker never reads bodies).
   *Admission* — keeping anonymous randos off the API entirely — has two parts (§4.5):
@@ -173,18 +198,39 @@ feels like a messaging app; spans many machines.
   + required `auth_token` *is* the anti-scanning gate (no separate app-key). Neither adds
   confidentiality. Future: mTLS client identities for per-client, revocable admission.
 
+## 2A. Trust modes (one seam, three policies)
+
+The same machine, viewers, and relay run in **three trust modes**, chosen by how much you
+trust the relay. A single **`SecurityProvider`** seam sits between the wrapper/app and the
+crypto: **the wire format, the channels, and the relay code are identical across all three
+modes** — only `seal`/`open` differ. So "E2E" in this doc means specifically the **Sealed**
+mode; every unconditional confidentiality claim elsewhere is Sealed/Managed-relative.
+
+| Mode | `seal`/`open` | What the relay sees |
+| --- | --- | --- |
+| **Open** | pass-through, **no encryption** (loud banner; **never** a silent default) | **Everything** — and it can read, alter, or forge any frame. You are trusting the server. |
+| **Sealed** | today's E2E crypto core (§4) — AEAD under the client-held keys | only ciphertext + the cleartext routing header; can't read or forge content/control/meta/presence. |
+| **Managed** *(future, not built)* | Sealed, **plus** the relay delivers each device the content key **wrapped to that device's X25519 public key** (an HPKE-style envelope the relay can't open), gated on an out-of-band **device-pairing fingerprint compare** | same as Sealed — it moves sealed key-envelopes it can't open. |
+
+**Open** is for local testing or a server you fully own; its banner is a footgun guard, not
+protection. **Sealed** is the default private mode — you hand viewers their keys yourself
+(the pass, §4.2a). **Managed** keeps Sealed's secrecy but removes the manual key-passing; its
+open problem is safe device pairing (learning a device's real public key without the relay
+swapping in its own), so it is **deferred**.
+
 ## 3. Components
 
 ```
   ┌── server A (your machine) ──────────────┐         ┌──────── Vercel (broker) ─────────┐        ┌── phone / laptop ──┐
   │ claude --remote-control                  │         │  POST /api/relay + GET /api/stream│       │  web app (Next.js) │
-  │      ▲  MITM (our relay = RC backend)    │  wss/   │   (auth_token gate)               │  SSE/  │  paste secret →    │
-  │      │  + in-memory log (claude=record) │  https  │  per-identity BUS (discover/pres) │ stream │  derive keys →     │
+  │      ▲  MITM (our relay = RC backend)    │  wss/   │   (auth_token gate)               │  SSE/  │  paste PASS →      │
+  │      │  + in-memory log (claude=record) │  https  │  per-identity BUS (discover/pres) │ stream │  load keys →       │
   │ remote-claw [claude args] --rc-app <app> ┼────────▶│  per-session WF (live buffer)     │◀──────▶│  decrypt & render  │
-  │   (identity: secret S, 0600; spans hosts)│ ciphertext only — no store/no history    │        │  encrypt & send    │
+  │   (per-machine identity: secret S, 0600) │ ciphertext only — no store/no history    │        │  encrypt & send    │
   └──────────────────────────────────────────┘         └──────────────────────────────────┘        └────────────────────┘
-    one secret = one identity (identity_id/auth); each claude instance under it = one "space"/chat
-    (one host secret in a local file; override per run with --rc-file)
+    one secret = one machine's identity (identity_id/auth); each claude instance on it = one "space"/chat
+    (one secret per machine in a local file; override per run with --rc-file)
+    the phone holds a PASS derived from S (keys, not S) — §4.2a; Sealed/Managed seal frames, Open does not — §2A
 ```
 
 ### 3.1 CLI — one transparent wrapper around `claude`
@@ -207,12 +253,13 @@ remote-claw [ANY claude args/flags/prompt] [--rc-* wrapper flags]
 security review — §14A.)
 
 - **`--rc-identity`** — *the identity command: local; create-once + idempotent by default, and
-  the home of the destructive **replace** (behind the `--rc-confirm` guard).* Ensures your host's
-  **root secret `S`** exists in its file,
+  the home of the destructive **reset** (a "machine reset", behind the `--rc-confirm` guard).*
+  Ensures this **machine's root secret `S`** exists in its file,
   shows you how to use it, and **exits without launching claude** (spawns no TUI,
   arms no MITM, **zero network I/O** — host registration stays lazy; works
   air-gapped). The secret lives in a **single local file** — the default, or a specific
-  one chosen with `--rc-file`.
+  one chosen with `--rc-file`. This is the **operator** surface: it prints the raw master
+  `S` (at create/reset). The artifact you hand a **viewer** is a **pass** (§4.2a), not `S`.
   - *Secret absent →* generate `S` (32 B CSPRNG), derive `identity_id`/`auth_token`/
     `content_root`/`control_key`/`K_meta` (§4.2), write the **`rc1_…` token** (the §4.1
     encoding of `S`, not raw bytes — so the file *is* the shareable artifact and a
@@ -223,25 +270,30 @@ security review — §14A.)
     group/other-readable modes; a `0600` sidecar holds `created_at`). Print a
     summary (**public** `identity_id`, created-at, path) and **the `rc1_…` on its own bare line** (the
     onboarding step). *(Later, with the broker phase:* if the app origin is configured
-    (`--rc-app`), also print the `https://<app>/#<secret>` deep link + a terminal **QR** of it
-    for phone onboarding. ⚠️ The QR/deep-link **encode the secret verbatim** — treat them like
-    the raw token (shoulder-surf/recording risk); a QR is **not** "safe to screen-share."*) The
+    (`--rc-app`), also print the `https://<app>/#<pass>` deep link + a terminal **QR** of it
+    for phone onboarding — the artifact you hand a **viewer** carries the **pass** (§4.2a), not
+    `S`. ⚠️ The QR/deep-link **encode the pass verbatim** — treat it like a credential
+    (shoulder-surf/recording risk); a QR is **not** "safe to screen-share." (A raw-`S` deep
+    link exists only on the **operator** path, under `--rc-show-secret` for re-onboarding your
+    own device.)*) The
     create itself is local-only; `--rc-identity` accepts `--rc-file`/`--rc-json`/`--rc-quiet` plus
     the replace controls (`--rc-confirm`/`--rc-keep-old`/`--rc-force-noninteractive`). Exit 0.
   - *Secret exists, no `--rc-confirm` (idempotent re-run) →* **never** regenerates/overwrites `S`;
     prints status only (no secret/QR), notes an identity already exists, and shows the exact
-    command to **replace** it. A bare re-run can never lose an identity or its chats — the core
+    command to **reset** it. A bare re-run can never lose an identity or its chats — the core
     anti-footgun.
-  - *Secret exists, `--rc-confirm <identity_id>` →* the **destructive replace** (the honest
-    "rotation"): mint a **new, unrelated** identity and **abandon** the old one (§4.4). The confirm
+  - *Secret exists, `--rc-confirm <identity_id>` →* the **destructive machine reset**: mint a
+    **new, unrelated** identity for **this machine** and **abandon** the old one (§4.4); other
+    machines are untouched. The confirm
     must match the current **public** `identity_id` (a typo/accident guard — it is not an authz
-    control, so a replace also needs a TTY unless `--rc-force-noninteractive`). **Securely deletes**
+    control, so a reset also needs a TTY unless `--rc-force-noninteractive`). **Securely deletes**
     the old secret by default (overwrite + unlink); keep a `0600` backup only with explicit
-    `--rc-keep-old` (flagged as still-live). This is **replace, not revocation** — a leaked old
-    secret keeps working until every device re-onboards (§4.4).
-  - The secret prints **once**, at create or replace; thereafter only via `--rc-show-secret`. There
-    is **no separate `--rc-rotate` verb** — "rotating" in a store-free, single-secret model is just
-    re-creating the identity, so it lives here under the confirm guard.
+    `--rc-keep-old` (flagged as still-live). This is **abandonment, not revocation** — a leaked old
+    secret keeps working until you reconnect the viewers you still trust to the new identity (§4.4).
+  - The secret prints **once**, at create or reset; thereafter only via `--rc-show-secret`. There
+    is **no separate `--rc-rotate` verb** (rotation was cut) — "resetting" in a store-free,
+    single-secret-per-machine model is just re-creating the identity, so it lives here under the
+    confirm guard.
   - **Arg rule:** allowed only alongside identity-relevant `--rc-*` flags; **errors**
     if any non-`--rc-*` token (a positional, or anything after `--`) is present, since
     it doesn't launch claude.
@@ -258,9 +310,10 @@ security review — §14A.)
   Never regenerates.
 - **`--rc-app <url>`** — the **single app origin** (else `REMOTE_CLAW_APP` env / config): its
   `/api/*` is the Vercel broker the wrapper POSTs ciphertext to, and its web UI is what the
-  `https://<app>/#<secret>` deep-link/QR points at (the UI reads the `#fragment` client-side).
-  One deployment serves both, so there is **one** URL — read as an opaque local string (no
-  probe). Unset ⇒ deep-link/QR of the bare token, or omit it.
+  viewer-facing `https://<app>/#<pass>` deep-link/QR points at (the UI reads the `#fragment`
+  client-side; the fragment carries the **pass**, not `S`). One deployment serves both, so
+  there is **one** URL — read as an opaque local string (no probe). Unset ⇒ print the bare
+  pass for manual onboarding, or omit the link.
   The CLI presents its per-identity `auth_token` to the broker (no app-wide key — §4.5).
 - **Starting already remote-controlled** is just claude's own **`--remote-control`** flag,
   which the wrapper forwards verbatim (no separate `--rc-share`).
@@ -342,23 +395,26 @@ answered live on the per-identity **bus** (§6B).
   history store. (The bus carries only `session_announce` broadcasts — §6B.)
 
 ### 3.3 Web client (stateless, mobile-first)
-- Paste secret (or open a link with the secret in the **URL fragment** `#…`, which
-  browsers never send to the server). Derive keys in-browser (WebCrypto).
-- **Spaces** = **every claude instance under the pasted secret** — one pasted secret = one
-  identity, so the view is simply a **flat list of that one identity's instances** (nothing to
-  "group by": the client holds **exactly one secret at a time**). To view a different identity
-  you **replace** the current secret (forget + paste), not accumulate several. A just-pasted
-  identity with nothing shared shows empty until a session is `/remote-control`-ed. The secret
-  persists in `localStorage` (documented risk) or memory-only (re-paste).
+- Onboard a machine's **pass** (paste/scan, or open a link with the pass in the **URL
+  fragment** `#…`, which browsers never send to the server). Load keys in-browser (WebCrypto).
+- **Spaces** = **the running instances of ONE machine** — one onboarded pass = one machine, so
+  the view is simply a **flat list of that machine's instances** (nothing to
+  "group by": the client holds **exactly one pass at a time**). To view a different machine
+  you onboard **that machine's pass** (forget + onboard), not accumulate several active at once.
+  A just-onboarded machine with nothing shared shows empty until a session is `/remote-control`-ed.
+  The pass persists in `localStorage` (documented risk) or memory-only (re-onboard).
 - Pick a space (instance) → message view: load history (decrypt) + subscribe live
   (decrypt) + send (encrypt → POST).
 - PWA, responsive; no server-side session state.
 
 ## 4. The secret & key hierarchy (token approach)
 
-One **root secret `S`** per identity is the only thing copied/pasted. Everything is
+One **root secret `S`** per **machine** is the machine's master — held by the operator,
+never handed to a viewer. Everything is
 derived deterministically with **HKDF-SHA256** (RFC 5869), identical code on CLI
-host and web client.
+host and web client. A **viewer** receives a derived **pass** (§4.2a) — the operational
+keys, not `S`. (All of §4's crypto is the **Sealed** mode; **Open** skips `seal`/`open`
+entirely and ships cleartext — §2A.)
 
 ### 4.1 Secret format (non-guessable, mobile-pasteable)
 ```
@@ -397,6 +453,30 @@ fields, so there's nothing to double-encrypt and nothing left cleartext.)*
   identity's bus (publish/route), though it still **can't decrypt or forge** content/
   meta. Mitigations: never log the `Authorization` header, constant-time compare of the
   recomputed `identity_id`, rate-limit (§12), and (later) short-lived scoped tokens.
+
+### 4.2a The pass (a viewer credential — not the master secret)
+A **pass** is the artifact a viewer (phone/browser) onboards instead of `S`. It is a
+serialized bundle of the four **operational keys** derived above — the **address**
+(`auth_token`, hence `identity_id`), **content** (`content_root`), **command**
+(`control_key`), and **presence** (`K_meta`) keys — but **not** `S` or `PRK`. It is a
+distinct encoding from `rc1_` (QR/file-sized, since it carries several keys, not a single
+32-byte seed).
+- **One tier — read + steer.** There is **no view-only / control split**: a pass carries
+  both the content key (read transcripts, see presence) and the command key (send
+  prompts/interrupts/mode changes). One pass = full operation of that one machine, minus `S`.
+- **What it can't do (HKDF one-wayness).** Holding the four keys never lets a pass invert
+  back to `S`/`PRK` (HMAC preimage resistance), so it can **never** re-mint `identity_id`
+  or **reset/re-create** the machine — those need the master secret. The hard boundary is
+  the master secret / reset, **not** write-vs-read.
+- **Revoke = reset the machine.** There is no per-pass revocation; you cut a pass off by
+  resetting the machine (a new `S` ⇒ new `identity_id`, §4.4), which cuts off **all** passes
+  for that machine at once.
+- **Honest residual (symmetric-key forge).** Because content and presence keys are
+  *symmetric*, a pass-holder can also **produce** valid-looking content/presence for that
+  machine, not only read it — on the wire a pass is about as capable as the machine itself,
+  minus `S`. Preventing a holder from injecting frames others accept as the machine's would
+  need separate per-writer signing keys, deliberately omitted to keep the scheme symmetric
+  and small.
 
 ### 4.3 Session → message key flow (answers "do we need a session→key flow?")
 Yes — a 3-level hierarchy:
@@ -488,29 +568,35 @@ check** (no `identify?`, no challenge, no `beat_seq`, no `wrapper_instance_id`).
   ≤ `FRESH_WINDOW + SKEW` before it greys — the price of dropping the round-trip. (A
   zero-clock-trust challenge-handshake variant is recorded in §14A if ever needed.)
 
-### 4.4 Identity replace (a "burn", not a true rotation) & the revocation tension
-"Rotating" an identity here is a credential **replace**, not a rotation: generate a **new `S`** ⇒
-new `identity_id` ⇒ a **new, unrelated identity** (a fresh, empty set of spaces) and **abandon**
-the old one. There is no stable identity with a swapped credential, and **no broker-side
-revocation** — see the tension below. The CLI surface is **`--rc-identity --rc-confirm
-<identity_id>`** (§3.1) — there is no separate `--rc-rotate` verb, because in a store-free,
-single-secret model "rotating" *is* re-creating the identity. It is guarded (the confirm typo-check
+### 4.4 Machine reset (a "burn", not a true rotation) & the revocation tension
+Resetting a machine here is a credential **replace scoped to one machine**, not a key rotation
+(rotation was cut — there is no key rotation, no forward secrecy, no epoch ratchet; the master
+deterministically **re-derives** its keys, which is exactly what makes paste-to-reconnect work):
+generate a **new `S`** ⇒ new `identity_id` ⇒ a **new, unrelated identity for THIS machine** (a
+fresh, empty set of spaces) and **abandon** the old one. **Other machines, each with their own
+secret, are untouched** — there is no fleet-wide re-onboard. There is no stable identity with a
+swapped credential, and **no broker-side revocation** — see the tension below. The CLI surface is
+**`--rc-identity --rc-confirm <identity_id>`** (§3.1) — there is no separate `--rc-rotate` verb,
+because in a store-free, single-secret-per-machine model "resetting" *is* re-creating that machine's
+identity. It is guarded (the confirm typo-check
 + a TTY, unless `--rc-force-noninteractive`) and **securely deletes** the old `S` by default:
 because the same `S` deterministically re-derives the *same* keys, a retained copy is a **full live
 credential** (it can still decrypt/forge any ciphertext that survives — buffered frames, the web
 IndexedDB cache).
 
-**What a replace does and does *not* do.** It moves *you* to a new bus; it does **not** revoke the
-old one. Because the broker is store-free (§4.5), `bus:${old_identity_id}` is never torn down and
-the old `auth_token` still self-verifies **forever** — anyone still holding the old `S` keeps the
-full live credential (`auth_token` + `K_meta` + `control_key` + `content_root`) and can keep
+**What a reset does and does *not* do.** It moves **this machine** to a new bus; it does **not**
+revoke the old one. Because the broker is store-free (§4.5), `bus:${old_identity_id}` is never torn
+down and the old `auth_token` still self-verifies **forever** — anyone still holding the old `S` (or
+a pass derived from it, §4.2a) keeps a live credential and can keep
 subscribing to, publishing on, and forging authenticated `session_announce` on the abandoned bus.
-So this is **abandonment, not revocation**: it contains a leak only for your *future* traffic (the
-attacker can't follow you to the new `identity_id`), and only once you re-onboard every device. It
+So this is **abandonment, not revocation**: it contains a leak only for this machine's *future*
+traffic (the attacker can't follow it to the new `identity_id`), and only once you reconnect the
+viewers you still trust to the new identity. It
 gives **no forward secrecy** for past frames and does **nothing** against a *host* compromise (the
 §6 worker re-backfills claude's plaintext `.jsonl` history into the new identity, which a
 host-resident attacker reads anyway). Secure-deleting *your* copy never denies an attacker who
-already has theirs — re-onboard every device promptly.
+already has theirs — reconnect the viewers you still want promptly. The blast radius is exactly
+**one machine**: the others, on their own secrets, never noticed.
 
 **Running relays re-read the secret file each turn** (the secret is never cached for the process's
 lifetime), so a replace — or simply deleting/replacing the file — takes effect on an
@@ -523,20 +609,20 @@ alive.
 the broker self-verifies with **no store** (§4.5), so **{ store-free · stable `identity_id` ·
 revoke-a-leak } are mutually exclusive — pick two** (an information-theoretic result: a store-free
 broker's admit decision is a *pure function* of the bearer, and a pure function with a fixed output
-address can't have a shrinking accept-set). To deny a leaked credential you must *either* (a) change
-`auth_token` ⇒ change `identity_id` (this replace — sacrifices continuity), *or* (b) give the broker
-per-identity memory (a registered admission half / `paste_epoch` — sacrifices store-free). Two
-scoped upgrades, each spending exactly one property on purpose:
+address can't have a shrinking accept-set). This holds **per machine** — each machine's identity is
+its own instance of the tradeoff. To deny a leaked credential you must *either* (a) change
+`auth_token` ⇒ change `identity_id` (this reset — sacrifices continuity), *or* (b) give the broker
+per-identity memory (a registered admission half — sacrifices store-free). The one scoped upgrade
+worth naming, spending exactly one property on purpose:
 
-1. **Stable-identity epoch ratchet** — split the token into a stable `id_seed` and a rotatable
-   `epoch_secret` + counter, and stamp the already-reserved `key_epoch` AAD field (§4.3/§8) on every
-   frame. Keeps `identity_id`/discovery **stable** and re-keys *new* content store-free +
-   zero-knowledge — but does **not** revoke a leaked token's bus access (so it is a *separate* verb,
-   never called "rotate").
-2. **Server-registered split** — `S_server` (broker) + `S_paste` (user); delivers real
-   paste-(content)-revocation with a stable identity, but **requires a broker store and weakens
-   zero-knowledge** (the broker then holds a content-key input), and never revokes `auth_token`
-   itself.
+- **Server-registered split** — `S_server` (broker) + `S_paste` (user); delivers real
+  paste-(content)-revocation with a stable identity, but **requires a broker store and weakens
+  zero-knowledge** (the broker then holds a content-key input), and never revokes `auth_token`
+  itself.
+
+(A stable-identity *epoch ratchet* was previously sketched here; **rotation/forward-secrecy was cut**
+from the design, so it is dropped. The `key_epoch` field still bound into the AAD (§4.3/§8) is a
+**fixed constant** for wire stability, **not** a rotatable epoch — there is no per-frame re-keying.)
 
 Re-encryption/migration is **moot** here: nothing durable is encrypted under `S` (history is
 claude's plaintext `.jsonl`, re-backfilled — §6), so there is no at-rest ciphertext to re-key. (Cf.
@@ -577,7 +663,9 @@ SSO**, and the broker authorizes per-identity off the user's own `auth_token`.
   `auth_token` it derives from its secret (no interactive SSO, no app-key). `--rc-app` only
   names the broker/web origin.
 - **Confidentiality unchanged:** this is *authorization*, not confidentiality — zero-knowledge
-  still rests entirely on the content/meta keys (§4.2). The broker sees only ciphertext.
+  still rests entirely on the content/meta keys (§4.2), and only in **Sealed**/**Managed** (in
+  **Open** there is no encryption, by design — §2A). The broker sees only ciphertext in
+  Sealed/Managed.
 - **Future (stronger CLI admission): mTLS client identities.** For the headless CLI path,
   augment the per-identity `auth_token` with **mutual-TLS client certificates** so each wrapper
   (and, later, device) authenticates with its own cert — per-client, individually revocable
@@ -797,8 +885,9 @@ lost because claude holds the transcript.
 
 ## 6B. The per-identity bus & fresh-browser cold start
 
-The "registry" is **not a stored table** — it's a **per-identity message bus**. Every
-**connected** session (an independent `remote-claw` process, on any host under that secret)
+The "registry" is **not a stored table** — it's a **per-machine message bus** (one per
+`identity_id`, which is now a machine id). Every
+**connected** session (an independent `remote-claw` process on that machine)
 **periodically broadcasts** its own signed `session_announce`; a client tails the bus, keys
 by `session_id`, and renders the live list, treating a session **online iff its latest
 announce is fresh** (`sent_at` within `FRESH_WINDOW`) and **greying it locally** when
@@ -886,11 +975,12 @@ State lives on the bus (announced live) and with claude (transcript via `catch_u
 "**The server is stateless**" holds *maximally*: there is **no store at all** for the
 registry — the bus is reached by a derived token, not a stored id.
 
-### Cold-start sequence (paste secret → live list)
+### Cold-start sequence (paste pass → live list)
 Computed live from the bus — **no store, no enumeration, no request, lazy** (nothing
 exists until a wrapper enables `/remote-control` and starts broadcasting):
-1. **Derive (no network).** Checksum `rc1_…`; HKDF →
-   `identity_id, auth_token, K_meta, …` (§4.2). Secret never leaves the device.
+1. **Load the pass (no network).** Parse/validate the machine's **pass**; load its four
+   operational keys (`auth_token` → `identity_id`, `content_root`, `control_key`, `K_meta`,
+   §4.2a) — no HKDF, no `S`. The pass never leaves the device.
 2. **Subscribe to the bus.** `GET /api/stream?identity=identity_id`
    (`Bearer auth_token` — broker recomputes `identity_id=trunc(SHA256(auth_token))` and
    checks it matches, §4.2). The Function `getHookByToken("bus:"+identity_id)` →
@@ -965,22 +1055,22 @@ wanted, a small durable store could be added then. We investigated the options (
 Redis / Vercel Blob / Neon; Edge Config doesn't fit) and they're viable, but adding any
 of them now would pollute a deliberately lean design — **explicitly deferred.**
 
-## 7. Identity, "spaces" & onboarding (one secret at a time)
-Hierarchy: **identity (identity_id) → its spaces (each space = one claude instance =
+## 7. Identity, "spaces" & onboarding (one machine at a time)
+Hierarchy: **machine (identity_id) → its spaces (each space = one claude instance =
 one chat).** A space is *not* a container of sessions — it **is** one session.
-- The pasted secret = one **identity**; **each claude instance under it = one
-  space (chat)**. The client holds **exactly one secret at a time** (no multi-identity
-  list) and renders that identity's spaces with decrypted friendly names (default hostname
-  for the identity, claude's generated title for each space — both from the `K_meta`
-  `session_announce`; rename is a **client-local alias** this phase, §1A/§6C). Because one
-  identity already spans **all** the user's hosts, a single pasted secret surfaces every
-  chat at once — so there's no need to hold several.
-- **Switch identity:** paste a different `rc1_…` to **replace** the current one — the
-  checksum validates it, keys derive, the prior secret is forgotten from the device (§1A E),
-  and the client subscribes to the new identity's **bus** (`GET /api/stream?identity=…`) →
+- The onboarded pass = one **machine**; **each claude instance on it = one
+  space (chat)**. The client holds **exactly one pass at a time** (no multi-machine
+  list) and renders that machine's spaces with decrypted friendly names (default hostname
+  for the machine, claude's generated title for each space — both from the `K_meta`
+  `session_announce`; rename is a **client-local alias** this phase, §1A/§6C). One pass
+  surfaces that **one machine's** every chat at once; to watch a second machine you onboard
+  *its* pass too (one active at a time).
+- **Switch machine:** onboard a different machine's pass to **replace** the current one — its
+  keys load, the prior pass is forgotten from the device (§1A E),
+  and the client subscribes to the new machine's **bus** (`GET /api/stream?identity=…`) →
   its connected sessions' broadcast `session_announce`s populate its spaces (§6B).
 - Spaces are listed gchat-style (encrypted title + last-activity, online dot), all under
-  the one active identity. Routing metadata (`identity_id`, `session_id`, timestamps,
+  the one active machine. Routing metadata (`identity_id`, `session_id`, timestamps,
   sizes) is unavoidably visible to the broker — minimized and documented.
 
 ## 8. Data model / API (sketch)
@@ -1184,8 +1274,8 @@ phase0/            unchanged — the Python reference + protocol findings
   drives a real Claude session through Vercel.
 - **P5 — Web client.** Paste/fragment secret, identity + spaces list (each space =
   a chat), message view (history + live), send. Mobile/PWA.
-- **P6 — Multi-host + polish.** Add-host, friendly names, reconnect/resume, replay
-  from `since=seq`, rotation, error states.
+- **P6 — Multiple machines + polish.** Onboard several independent machines (each its own
+  secret), friendly names, reconnect/resume, replay from `since=seq`, machine reset, error states.
 - **P7 — Hardening + review.** `/code-review` + codex pass (as in Phase 0):
   auth/abuse on ingest routes, replay-window correctness, at-least-once dedupe,
   rate-limiting, secret-handling hygiene.
@@ -1194,9 +1284,12 @@ phase0/            unchanged — the Python reference + protocol findings
 - **Anthropic RC interception** (the Phase 0 MITM of `/v1/code/sessions`, pinned to
   `claude` 2.1.168) underpins v2 too — it can break or be re-gated on any Claude
   upgrade. Keep the capture tool (`mitm/capture-proxy.py`) to re-verify.
-- **Single secret per host** (one local file; override per run with `--rc-file`) = single
-  point of failure; rotating = a new identity (no partial/per-device revocation). Pasting
-  into a browser exposes it to that device's XSS/extension/clipboard surface. `rc1_`
+- **One secret per machine** (one local file; override per run with `--rc-file`) is the
+  **intended boundary**, not a flaw: a steal/reset blast radius is exactly **one machine**, with
+  the others untouched. The honest cost is no partial/per-pass revocation — resetting a machine =
+  a new identity that cuts off *all* its passes at once (§4.2a/§4.4). A viewer holds a **pass**, not
+  `S`; onboarding a pass into a browser still exposes it to that device's XSS/extension/clipboard
+  surface (and a stolen pass can read/steer that machine until reset). `rc1_`/pass
   high-entropy tokens trip secret scanners if pasted into a repo.
 - **Web-app admission is SSO, not a baked-in token** (§4.5): the web UI sits behind the
   Better Auth SSO plugin (OIDC via the IdP discovery document, plus SAML 2.0 / OAuth2), so
@@ -1395,6 +1488,23 @@ rebuilt from claude on restart); (2) for a session that predates the log, the wo
 Beyond §14's plan review, individual decisions are settled with small design panels
 (N independent proposals → synthesis → adversarial verification) and folded back here.
 
+- **Per-machine identity + viewer passes + trust modes; rotation cut (2026-06-08).**
+  Reversed the earlier "one user identity binding all sessions across hosts" model: **each
+  machine now owns its own secret `S` → its own `identity_id` → its own bus**; `identity_id`
+  is a **machine's public routing id**, not a user identity spanning hosts. Blast radius of a
+  steal/reset is exactly **one machine**; to watch another machine you onboard *its* credential.
+  Introduced the **pass** (§4.2a) — a viewer credential carrying the operational keys
+  {address/content/command/presence} but **not** `S`/`PRK`, one read+steer tier (no view/control
+  split), uninvertible to `S` by HKDF one-wayness; revoke = reset the machine; honest
+  symmetric-key forge residual. Introduced the **three trust modes** behind one `SecurityProvider`
+  seam (§2A): **Open** (trust-server, no crypto, loud banner), **Sealed** (today's E2E), **Managed**
+  (future relay-delivered wrapped keys) — identical wire/relay, only `seal`/`open` differ; every
+  unconditional confidentiality claim is now Sealed/Managed-relative. **Rotation/forward-secrecy
+  was cut** (the master re-derives its keys — that is what makes paste-to-reconnect work); the
+  destructive action is "**reset the machine**," and `key_epoch` is a fixed AAD constant, not a
+  rotatable epoch. (The crypto core — HKDF labels, 3-level content key flow, per-message AEAD,
+  canonical AAD, the §4.4 pick-two theorem, the blind store-free relay — is unchanged.) The earlier
+  "one user identity across hosts" entry below is **SUPERSEDED** by this.
 - **`--rc-identity` & the identity CLI surface (2026-06-07).** A 3-lens panel
   (security / ergonomics / simplicity) → synthesis → 3 adversarial verifiers settled
   §3.1's identity flags. Confirmed-sound core: local, idempotent, **create-once**
@@ -1406,7 +1516,8 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   `S` (same secret re-derives a live credential — not "keys to dead data"); the deep-link is built from the
   **one `--rc-app` origin** (its web UI reads the `#fragment`; its `/api` is the broker — one
   Vercel deployment, so no separate `--rc-web`); `--rc-confirm <identity_id>` is an
-  accident guard (identity_id is public), so rotate also requires a TTY.
+  accident guard (identity_id is public), so the reset (the destructive
+  `--rc-identity --rc-confirm`) also requires a TTY.
   - **CLI surface trim (2026-06-08, user call):** dropped `--rc-share` (claude's own
     `--remote-control`, forwarded verbatim by the wrapper, already starts a session
     remote-controlled) and `--rc-web` (collapsed into the one `--rc-app` origin). `--help`/`-h`
@@ -1418,7 +1529,8 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   custom `runId`; heartbeats-as-events blow the 25k cap) → first concluded a managed KV was
   needed;
   (2) the user simplified to **one user identity binding all sessions across hosts** +
-  **an announce bus** (connected wrappers self-identify on request); (3) the linchpin —
+  **an announce bus** (connected wrappers self-identify on request) — **[SUPERSEDED
+  2026-06-08: identity is now per-machine, see the entry above]**; (3) the linchpin —
   whether the bus is addressable by a derived value — resolved **yes**:
   `getHookByToken(token): Promise<Hook>` is public and returns `runId`, so
   `bus:${identity_id}` → `getHookByToken` → `getRun` → `getReadable` subscribes with
@@ -1508,15 +1620,16 @@ rc_api_bridge); others are specs to build/test.
 
 **Client onboarding & discovery (the bus)**
 
-6. **Client first connection.** Paste `rc1_…` (or `#fragment`) → derive keys →
-   `GET /api/stream?identity=identity_id` (subscribe the bus) → reads the recent window →
-   renders fresh `session_announce`s (empty if none connected). Store secret in
-   localStorage. No request sent.
-7. **One identity, 5 independent sessions across hosts.** Under one pasted secret, 5
-   separate `remote-claw` processes (any mix of hosts) each broadcast their **own**
-   `session_announce`; the client subscribes the single identity bus and renders all 5 as
+6. **Client first connection.** Onboard the machine's **pass** (paste/scan or `#fragment`) →
+   load its keys → `GET /api/stream?identity=identity_id` (subscribe the bus) → reads the
+   recent window → renders fresh `session_announce`s (empty if none connected). Store the
+   **pass** in localStorage. No request sent.
+7. **One MACHINE, 5 independent sessions.** On one machine (one secret), 5
+   separate `remote-claw` processes each broadcast their **own**
+   `session_announce`; the client subscribes that machine's single bus and renders all 5 as
    separate spaces, each with **independent** presence (online = its own fresh announce).
-   Tests the per-session/no-aggregator model (§1) — no batching, one secret on the client.
+   Tests the per-session/no-aggregator model (§1) — no batching, one pass on the client. (To
+   watch several **machines** from one viewer you hold several passes, one active at a time.)
 8. **List an identity's spaces.** = the wrappers' broadcast `session_announce`s on that
    identity's bus; decrypt titles/cwd → gchat-style list. (A space is a chat; online = its
    latest announce is **fresh**, §4.3.)
@@ -1547,16 +1660,16 @@ rc_api_bridge); others are specs to build/test.
     wrapper-assigned `seq`, dedup by `msg_id`). One client closing its SSE doesn't affect
     the other (no per-client server state). (multi-client)
 
-**Switch identity & naming**
+**Switch machine & naming**
 
-14. **Switch identity (replace, not accumulate).** Paste a different `rc1_…`. In order:
-    (1) **close the old identity's SSE** (so no late frame re-populates the cache mid-wipe),
-    (2) **forget** the prior secret — wipe it from `localStorage` **and** the decrypted
-    IndexedDB cache (§1A E; a retained secret is a live credential, §4.4), (3) **then**
-    re-derive keys for `identity_id₂` and subscribe the **new** identity's bus → its
-    connected sessions' announces render its spaces. The client holds **one secret at a
+14. **Switch machine (replace, not accumulate).** Onboard a different machine's pass. In order:
+    (1) **close the old machine's SSE** (so no late frame re-populates the cache mid-wipe),
+    (2) **forget** the prior pass — wipe it from `localStorage` **and** the decrypted
+    IndexedDB cache (§1A E; a retained pass is a live credential, §4.2a/§4.4), (3) **then**
+    load keys for `identity_id₂` and subscribe the **new** machine's bus → its
+    connected sessions' announces render its spaces. The client holds **one pass at a
     time** (§7). (Client-local rename aliases are keyed by `identity_id`/`session_id` (#15),
-    so they stay scoped to their identity — invisible after a switch, intact on switch-back.)
+    so they stay scoped to their machine — invisible after a switch, intact on switch-back.)
 15. **Rename identity/space.** This phase a rename is a **client-local alias** (stored in
     the device's `localStorage`, mapped by `identity_id`/`session_id` — so it survives an
     identity switch and only reappears when that identity is re-pasted) — no broker write,
@@ -1617,11 +1730,12 @@ rc_api_bridge); others are specs to build/test.
     (claude holds the transcript). **Cache-retention rule:** an empty bus or a `catch_up`
     `HookNotFound` means *offline*, not *gone* (the two are indistinguishable by design,
     §6B) — the client **keeps** its IndexedDB cache and retries with backoff; it only wipes
-    on explicit rotation (§4.4) or forget-identity (§1A E).
-23. **Two wrappers, one identity, one drops.** Two hosts under the same secret both
-    broadcast on `bus:${identity_id}` (each its own sessions' announces). A client sees
-    both sets of spaces. One host sleeps → only *its* announces age out → client greys
-    *those* locally; the other host's sessions + the bus run stay live (the survivor keeps
+    on an explicit machine reset (§4.4) or forget-identity (§1A E).
+23. **Two wrappers, one machine, one drops.** Two `remote-claw` processes on one machine
+    (one secret) both
+    broadcast on `bus:${identity_id}` (each its own session's announces). A client sees
+    both sets of spaces. One process exits → only *its* announces age out → client greys
+    *those* locally; the other process's sessions + the bus run stay live (the survivor keeps
     broadcasting, re-waking the run — §6B).
 
 **Adversarial / threat-model coverage** (the broker is hostile per §2 — drop/withhold/
@@ -1647,9 +1761,10 @@ reorder/**replay**, no keys)
     **times out and re-sends** with a fresh `msg_id` (no hang). A replayed control frame is
     dropped by the `(msg_id)` seen-set before any side effect.
 
-Also covered by the same mechanisms (not numbered): **secret rotation** (new `S`
-→ new `identity_id` = a new identity with a fresh, empty set of spaces; the old identity
-and all its spaces are dead — §4.4), and a **broker (Vercel) outage** (the local TUI
+Also covered by the same mechanisms (not numbered): **machine reset** (new `S`
+→ new `identity_id` = a new identity for that machine with a fresh, empty set of spaces; the
+old identity and all its spaces are dead, other machines untouched — §4.4), and a **broker
+(Vercel) outage** (the local TUI
 keeps working; remote is unavailable; clients reconnect, re-subscribe and `catch_up`
 when the broker returns — nothing lost since claude holds the transcript).
 
@@ -1693,14 +1808,14 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 **5. Launch with RC ON** (`remote-claw --remote-control`) — as #4 steps 2–4 + the join-bus/broadcast of step 6, **no backfill** (empty history).
 
 **6. Client first connection**
-1. user pastes `rc1_…`; C derives `identity_id, auth_token, content_root, K_*`
+1. user onboards the machine's **pass**; C loads `{identity_id/auth_token, content_root, control_key, K_meta}` from it (no derivation, no `rc1_`)
 2. C→V `GET /api/stream?identity=identity_id` → V `getHookByToken("bus:"+identity_id)`→`getRun`→`getReadable({startIndex:recent})` → SSE *(HookNotFound ⇒ `200` empty: nothing connected)*
 3. the recent window already holds each connected W's last `session_announce{sid, title, cwd, identity_label, status, last_activity, sent_at}` (AEAD `K_meta`); C accepts those with **`sent_at` within `FRESH_WINDOW`** (rejects stale/replayed), decrypts, renders the list. No request sent; the wrappers' periodic broadcasts keep it fresh.
 
-**7. One identity, 5 independent sessions across hosts**
-1. one secret → one `(identity_id, auth_token, …)`; 5 separate `remote-claw` processes (any hosts) each broadcast their **own** `session_announce` on the one bus
+**7. One MACHINE, 5 independent sessions**
+1. one machine's secret → one `(identity_id, auth_token, …)`; 5 separate `remote-claw` processes on that machine each broadcast their **own** `session_announce` on the one bus
 2. C subscribes that single bus (as #6) → recent-window holds all 5 sessions' last announces
-3. C renders all 5 as separate spaces, each with **independent** presence (online = its own fresh announce) — per-session, no aggregator (§1)
+3. C renders all 5 as separate spaces, each with **independent** presence (online = its own fresh announce) — per-session, no aggregator (§1). To watch several **machines** from one viewer, hold several passes (one active at a time)
 
 **8. List an identity's spaces** = the connected wrappers' broadcast `session_announce`s on that identity's bus; C accepts fresh ones, decrypts titles → gchat-style list (each a chat).
 
@@ -1734,8 +1849,8 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 1. C₁,C₂ each: C→V `GET /api/stream?identity=id&session=sid` (two readers on the session out-stream, via token→run)
 2. any out frame → V fans to both; an `in` frame from either → session hook → W→T → out-stream → both + T
 
-**14. Switch identity (replace, not accumulate)**
-1. user pastes `rc2_…` → C **closes the old SSE** → **forgets** the prior secret (`localStorage` + IndexedDB plaintext cache, §1A E) → re-derives for `identity_id₂` → subscribes the **new** bus (as #6) → its connected sessions' announces render its spaces. One secret on the client at a time (§7); aliases stay keyed by `identity_id` so they don't leak across the switch.
+**14. Switch machine (replace, not accumulate)**
+1. user onboards machine 2's pass → C **closes the old SSE** → **forgets** the prior pass (`localStorage` + IndexedDB plaintext cache, §1A E) → loads keys for `identity_id₂` → subscribes the **new** bus (as #6) → its connected sessions' announces render its spaces. One pass on the client at a time (§7); aliases stay keyed by `identity_id` so they don't leak across the switch.
 
 **15. Rename identity/space** *(client-local this phase — no broker write)*
 1. C stores `alias[identity_id|session_id] = new_name` in its own `localStorage`
@@ -1804,14 +1919,14 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `backfill`, `log`, `GCM`, **join-bus**(`resumeHook bus:${id}`), broadcast `session_announce`, `bearer` |
 | 5 | Launch with RC on (`--remote-control`) | `intercept`, `bridge`, `worker-SSE`, `initialize`, `log`, join-bus + broadcast |
 | 6 | Client first connection | `HKDF`, `sso`, `bearer`, `/api/stream`(`getHookByToken bus:${id}`, recent window), `session_announce`(fresh), `GCM-open(name)`, `localStorage` |
-| 7 | One identity, 5 independent sessions | 1× `HKDF`, `bearer`, **1× bus subscribe**, 5× per-session `session_announce`, `online=fresh-announce`, `GCM-open`, no aggregator (§1) |
+| 7 | One MACHINE, 5 independent sessions | 1× `HKDF`, `bearer`, **1× bus subscribe**, 5× per-session `session_announce`, `online=fresh-announce`, `GCM-open`, no aggregator (§1) |
 | 8 | List an identity's spaces | broadcast `session_announce` (bus), `online=fresh-announce`, `GCM-open(title/cwd)`, `grey-local` |
 | 9 | Cold full history sync | `GCM(control_key)`, `catch_up`, session `hook`, `log-read`, `GCM(content)`, `/api/relay`, `wf-stream/SSE`, `seq` |
 | 10 | Reopen — delta sync | `catch_up`, `log-read(>N)`, `IndexedDB` cache, `wf-stream` resume(`startIndex`) |
 | 11 | Client → claude → back | `GCM(content)`, `resumeHook sess:`, `dedup(msg_id)`, `log`, `seq-alloc`, `intercept`-inject, `passthrough`, `accepted`, `wf-stream/SSE`, `AAD` |
 | 12 | Type in TUI → client | `worker-SSE`(upstream), `log`, `GCM`, session `wf-stream/SSE` |
 | 13 | Two clients (fan-out) | `wf-stream` multi-reader (session), `SSE`, `seq`/`dedup` |
-| 14 | Switch identity (replace) | forget prior secret, `HKDF(S₂)`, `sso`, `bearer`, **new** bus subscribe → broadcast `session_announce`s (one secret on client) |
+| 14 | Switch machine (replace) | forget prior pass, load machine 2's keys, `sso`, `bearer`, **new** bus subscribe → broadcast `session_announce`s (one pass on client) |
 | 15 | Rename identity/space | client-local `alias` in `localStorage` *(no broker write; cross-device deferred §6C)* |
 | 16 | Tool permission | `control_request/response`, `GCM(control_key)`, session `hook`, `worker-SSE` |
 | 17 | Remote control verbs | control frames (`control_key`), session `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`) |
@@ -1932,8 +2047,8 @@ the **KIWI**/**PLUM** bidirectional TUI↔client tests).
 remote-claw: a mobile + web client that drives **Claude Code / Codex** running on your machine
 through an **E2E-encrypted relay**, with realtime + voice. It sits at the *opposite corner* of the
 same design space — **account-based and server-stateful** where remote-claw is **store-free and
-single-secret** — so it is the clearest mirror for what our model gives up (revocation, §4.4) and
-what it gains (paste-and-go, no accounts).
+per-machine-secret** — so it is the clearest mirror for what our model gives up (per-viewer
+revocation, §4.4) and what it gains (paste-and-go, no accounts).
 
 > Drawn from Happy's public docs (security / how-it-works); a few protocol details (exact ECDH /
 > derivation) are marked "diagram needed" there, so the crypto specifics below are the **documented
@@ -1978,30 +2093,34 @@ remote-claw and Happy answer the same problem with inverted primitives:
 
 | dimension | **remote-claw** | **Happy** |
 |---|---|---|
-| Root of trust | one symmetric `S` (a ~52-char paste) | phone-held asymmetric master + content keypair |
-| Per-device keys | none — `S` is the whole identity | per-machine DEK, wrapped to the account key |
+| Root of trust | one symmetric `S` **per machine** (a ~52-char paste) | phone-held asymmetric master + content keypair |
+| Per-device keys | the **pass** (§4.2a) — a derived, non-master per-viewer credential (read+steer one machine, **not** `S`) | per-machine DEK, wrapped to the account key |
 | Broker state | **store-free** (self-verifying `identity_id`, no registry) | account + device list + encrypted-DEK store |
 | Durable history | none on the broker (claude's own `.jsonl`, re-backfilled) | **server stores** encrypted history (timestamped, replayable) |
 | Onboarding | **paste-and-go** (any device, no account) | scan a QR → pair a device → account |
-| Steal one key | total: `S` reads/forges **everything**, all sessions | scoped: one DEK reads **that machine's** content only |
-| Revoke a leak | **impossible** without changing identity (burn + re-onboard, §4.4) | **"remove machine from account"** revokes that DEK server-side |
+| Steal one key | scoped to **one machine**: a stolen pass reads/steers that machine but is **not** `S`; a stolen `S` is full compromise of **that machine only** (others untouched) | scoped: one DEK reads **that machine's** content only |
+| Revoke a leak | **no per-pass revoke** — reset the machine (cuts all its passes; §4.4) | **"remove machine from account"** revokes that DEK server-side |
 | Forward secrecy | none | future-only after a device removal |
 
-The honest summary: **Happy spends a server-side store + a pairing step to buy per-device, revocable,
-*scoped* compromise and a stable account identity; remote-claw spends revocability to buy a
-store-free broker and a one-string, account-less, paste-and-go cold start.** Neither is strictly
+The honest summary: **Happy spends a server-side store + a pairing step to buy per-device,
+*revocable* access and a stable account identity; remote-claw spends per-viewer revocability to buy a
+store-free broker and a one-string, account-less, paste-and-go cold start.** (remote-claw already
+gets *scoped compromise* for free — one secret per machine bounds a steal to one machine; what Happy
+buys on top is **per-device revocation**.) Neither is strictly
 better — they are the two ends of the §4.4 impossibility (`{ store-free · stable id · revoke-a-leak
-}`, pick two). Happy picks *stable id + revoke* (and pays with the store); remote-claw picks
-*store-free* (and pays with revocation).
+}`, pick two), applied per machine. Happy picks *stable id + revoke* (and pays with the store);
+remote-claw picks *store-free* (and pays with per-viewer revocation).
 
-### 18.4 If remote-claw ever needs revocation
+### 18.4 If remote-claw ever needs per-viewer revocation
 
-The migration target is **Happy-shaped**, and it maps onto the two upgrades already named in §4.4:
-the **server-registered split** (`S_server` + `S_paste`) is the account half + paste half, and
-**per-device DEKs** are the multi-host story (§6/P6). Adopting them means accepting an
-account/registry and a pairing step — i.e. moving toward Happy's corner — and is a deliberate,
-deferred decision, **not** a v1 default. Until a hard need appears (revoke a shared paste, manage
-many devices), the paste-and-go, store-free model stands.
+Per-machine identity already buys **scoped compromise** (one steal = one machine), so the
+Happy-shaped migration is **not** about scope — it is about **per-viewer revocation** (cutting one
+pass without resetting the machine). The migration target maps onto the **server-registered split**
+named in §4.4 (`S_server` + `S_paste` = an account half + a paste half), which delivers
+revocable, per-viewer access at the cost of an account/registry, a broker store, and weakened
+zero-knowledge — i.e. moving toward Happy's corner. It is a deliberate, deferred decision, **not** a
+v1 default. Until a hard need appears (revoke one shared pass while keeping the machine), the
+paste-and-go, store-free, per-machine model stands.
 
 **Sources:** Happy docs — `https://happy.engineering/docs/security/`,
 `https://happy.engineering/docs/how-it-works/`; repo `https://github.com/slopus/happy`.
