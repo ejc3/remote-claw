@@ -12,15 +12,24 @@ export async function drain(
     while (out.length < max) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      const res = await Promise.race([
-        reader.read(),
-        new Promise<{ timeout: true }>((r) =>
-          setTimeout(() => r({ timeout: true }), remaining),
-        ),
-      ]);
+      // Clear the timeout the moment read() wins, or it leaks a live timer that keeps the
+      // serverless function's event loop alive (a fresh one would leak every iteration).
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<{ timeout: true }>((r) => {
+        timer = setTimeout(() => r({ timeout: true }), remaining);
+      });
+      let res: { timeout: true } | ReadableStreamReadResult<unknown>;
+      try {
+        res = await Promise.race([reader.read(), timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
       if ((res as { timeout?: true }).timeout) break;
       const { done, value } = res as ReadableStreamReadResult<unknown>;
       if (done) {
+        // The underlying stream signaled close (the bus called getWritable().close() after
+        // __close). This marks THIS drain hit a closed stream — it is not the authoritative
+        // "bus is gone" signal; that's getHookByToken 404 / run "completed" (CHECK 4).
         out.push({ __eof: true });
         break;
       }

@@ -26,6 +26,13 @@ export async function POST(req: Request) {
   const { token, msg } = await req.json();
   if (!token) return Response.json({ error: "missing token" }, { status: 400 });
   const { runId, created } = await ensureBus(token);
-  await resumeHook(token, msg ?? {});
+  // The bus run can complete/dispose between ensureBus resolving and this resume (e.g. a
+  // concurrent __close), which makes resumeHook throw. Report it as JSON instead of a 500.
+  try {
+    await resumeHook(token, msg ?? {});
+  } catch (e) {
+    const error = String((e as Error)?.message ?? e);
+    return Response.json({ ok: false, error, runId, busCreated: created }, { status: 409 });
+  }
   return Response.json({ ok: true, runId, busCreated: created });
 }

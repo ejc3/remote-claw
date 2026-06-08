@@ -11,9 +11,20 @@ export async function GET(req: Request) {
   const token = url.searchParams.get("token");
   if (!token) return Response.json({ error: "missing token" }, { status: 400 });
 
+  // parseInt("abc") is NaN, and NaN !== undefined — so an unguarded bad startIndex would reach
+  // getReadable({startIndex: NaN}) (invalid), and a bad ms would make drain's deadline NaN so
+  // its `remaining <= 0` never trips and it runs until maxDuration. Validate both up front.
   const startIndexParam = url.searchParams.get("startIndex");
-  const startIndex = startIndexParam != null ? parseInt(startIndexParam, 10) : undefined;
-  const budgetMs = parseInt(url.searchParams.get("ms") ?? "3000", 10);
+  let startIndex: number | undefined;
+  if (startIndexParam != null) {
+    startIndex = Number.parseInt(startIndexParam, 10);
+    if (Number.isNaN(startIndex)) {
+      return Response.json({ error: "startIndex must be an integer" }, { status: 400 });
+    }
+  }
+  const msParam = Number.parseInt(url.searchParams.get("ms") ?? "3000", 10);
+  // Default a bad/missing ms to 3000 and cap it under maxDuration (60s) so a drain can't hang.
+  const budgetMs = Number.isNaN(msParam) ? 3000 : Math.min(Math.max(msParam, 0), 30000);
 
   let runId: string;
   try {
