@@ -438,11 +438,26 @@ challenge-bound**. A client keeps, per known session (even while greyed),
   no `K_meta` to echo a just-issued `challenge`). A beat with a different
   `wrapper_instance_id` is likewise ignored. (A transient drop self-heals via the next
   challenge-matched announce on the client's cadence — not via a raw beat.)
+- **Beats also carry a `sent_at` timestamp (defense-in-depth on the *maintain* path).**
+  Inside the `K_meta` payload (so the broker can't forge a fresh one), each `present`
+  carries the wrapper's wall-clock `sent_at`. A client accepts a beat to *maintain*
+  liveness only if it is **both** strictly-advancing **and** fresh
+  (`|client_now − sent_at| ≤ FRESH_WINDOW`, sized ≥ max expected clock skew and ≪
+  `PRESENCE_TTL`). This bounds the lesser **withhold-and-dribble** vector — the broker
+  can't keep a still-listed session green by slowly releasing a backlog of *old* (now
+  stale-timestamped) advancing beats; the dead session greys within ~one TTL. **Assumes
+  wrapper & client clocks are roughly synced (NTP, ~seconds).** This is *only* a tightener
+  on maintenance — **revival stays challenge-anchored** (above), so even a badly-skewed
+  clock can't cause resurrection (worst case: a false grey, or a bounded false-online
+  within `FRESH_WINDOW`; never a dead host un-greyed). (If you fully trust clocks, a
+  fresh-timestamped beat *could* also revive — but keeping revival on the challenge avoids
+  making the no-resurrection property depend on clock sync at all.)
 - **Why ordering ≠ freshness.** A monotonic `beat_seq` tells a replay (stale seq) from a
   new beat, but cannot tell a *just-emitted* beat from a *withheld-then-released* real one
-  — both advance. Recency is therefore anchored to the **client's own fresh `challenge`**:
-  only a live wrapper can bind a challenge issued seconds ago, so the periodic
-  challenge→announce round-trip is the real-time liveness signal; beats merely smooth the
+  — both advance. Recency is therefore anchored to the **client's own fresh `challenge`**
+  (clock-free) and, secondarily, the `sent_at` window (clock-based): only a live wrapper
+  can bind a challenge issued seconds ago, so the periodic challenge→announce round-trip is
+  the real-time liveness signal; beats merely smooth the
   dot between round-trips and can never extend liveness past a grey.
 - **Clients re-`identify?` on a cadence** — periodically (≈every `PRESENCE_INTERVAL`,
   piggybacked on the bus they already tail) **and** whenever they grey a session. This
@@ -643,8 +658,8 @@ Our non-content meta frames (**AEAD under `K_meta`** — broker can't forge them
 | kind | dir | notes |
 | --- | --- | --- |
 | `accepted` | out | wrapper ack of a client frame: `{client_msg_id, seq}` |
-| `session_announce` | out (bus) | reply to `identify?`: `{in_reply_to:challenge, session_id, title, cwd, identity_label, status, last_activity, wrapper_instance_id, beat_seq}` — **whole payload AEAD under `K_meta`**; the **only** frame that admits/refreshes/un-greys a session, and only if `in_reply_to` matches a live `challenge` (broker reads/forges nothing; replayed stale announces rejected — §4.3) |
-| `present` | out (bus) | coalesced liveness beat `{session_ids[], wrapper_instance_id, beat_seq}` every ≈20–30 s, AEAD under `K_meta`; **only *maintains* a still-live session** (strictly-advancing `beat_seq` within the tracked `wrapper_instance_id`). It **never un-greys** — revival (and any new/changed instance, or new session) is **only** via a challenge-matched `session_announce` (§4.3); **greys** on silence (client-side; no server state; replay/withhold-proof — §6B) |
+| `session_announce` | out (bus) | reply to `identify?`: `{in_reply_to:challenge, session_id, title, cwd, identity_label, status, last_activity, wrapper_instance_id, beat_seq, sent_at}` — **whole payload AEAD under `K_meta`**; the **only** frame that admits/refreshes/un-greys a session, and only if `in_reply_to` matches a live `challenge` (broker reads/forges nothing; replayed stale announces rejected — §4.3) |
+| `present` | out (bus) | coalesced liveness beat `{session_ids[], wrapper_instance_id, beat_seq, sent_at}` every ≈20–30 s, AEAD under `K_meta`; **only *maintains* a still-live session** (strictly-advancing `beat_seq` within the tracked `wrapper_instance_id` **and** fresh `sent_at`). It **never un-greys** — revival (and any new/changed instance, or new session) is **only** via a challenge-matched `session_announce` (§4.3); **greys** on silence (client-side; no server state; replay/withhold-proof — §6B) |
 
 (`historical` is a **flag** on replayed content frames, not a separate kind. There is
 **no** server-side `heartbeat`/registry — presence is "answered `identify?` + beating on
@@ -882,9 +897,9 @@ large assistant output and full `catch_up` replays (over session streams).
   · `command` · `end`.
 - **meta** (AEAD under `K_meta`, `dir:out`): `accepted` `{client_msg_id, seq}`;
   `session_announce` (bus) `{in_reply_to:challenge, session_id, title, cwd, identity_label,
-  status, last_activity, wrapper_instance_id, beat_seq}` — **the whole payload is inside
-  the ciphertext**, so the broker reads none of it; `present` (bus) `{session_ids[],
-  wrapper_instance_id, beat_seq}`. (The `identify?{challenge}` it answers is a control
+  status, last_activity, wrapper_instance_id, beat_seq, sent_at}` — **the whole payload is
+  inside the ciphertext**, so the broker reads none of it; `present` (bus) `{session_ids[],
+  wrapper_instance_id, beat_seq, sent_at}`. (The `identify?{challenge}` it answers is a control
   frame; `in_reply_to` echoes that `challenge` so a client rejects replayed stale
   announces — §4.3.)
 
@@ -1035,6 +1050,14 @@ phase0/            unchanged — the Python reference + protocol findings
 - **The bus is online-only** (§6B): discovery+presence are answered by *connected*
   wrappers, so an offline host shows **nothing** (no greyed rows). Intended this phase;
   offline listing is **deferred** (§6C).
+- **Presence freshness (replay/withhold) — and its one assumption** (§4.3/§6B): a beat's
+  `beat_seq` proves ordering, not recency, so a malicious broker that withholds-then-
+  releases real beats can't *revive* a greyed session (revival is challenge-anchored, no
+  clock trust) but could *delay* a dying session's grey by dribbling its backlog. The
+  `sent_at` freshness window bounds that delay — at the cost of assuming **wrapper/client
+  clocks are NTP-synced within ~seconds**. A badly-skewed clock degrades to a false grey
+  or a bounded false-online (≤ `FRESH_WINDOW`), **never** a resurrected dead session.
+  Size `FRESH_WINDOW` ≥ max expected skew, ≪ `PRESENCE_TTL`.
 - **`getHookByToken→getRun→getReadable` is a verified-by-types but undocumented-as-a-
   pattern composition**, and the run-roll **hook re-bind** has a brief `HookNotFound`
   window → client retry. Both are P3 spike items (§11); a stale resolve is at worst
