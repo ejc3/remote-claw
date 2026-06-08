@@ -4,13 +4,12 @@
 
 import { base64urlDecode, base64urlEncode } from "./base64url.js";
 import { sha256 } from "./bytes.js";
+import { crockfordChecksum, normalizeChecksum } from "./checksum.js";
 
 const PREFIX = "rc1_";
 const SECRET_BYTES = 32;
 const B64_LEN = 43; // base64url of 32 bytes, no padding
 const CHECKSUM_LEN = 4; // 4 Crockford chars = 20 bits
-// Crockford base32 alphabet (excludes I, L, O, U to avoid transcription ambiguity).
-const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 export type SecretErrorReason = "bad-prefix" | "bad-length" | "bad-encoding" | "bad-checksum";
 
@@ -26,30 +25,12 @@ export class SecretError extends Error {
   }
 }
 
-/** 4 Crockford-base32 chars encoding the top 20 bits of the digest. */
-function checksumOf(digest: Uint8Array): string {
-  const b0 = digest[0] ?? 0;
-  const b1 = digest[1] ?? 0;
-  const b2 = digest[2] ?? 0;
-  const bits = (b0 << 12) | (b1 << 4) | (b2 >> 4); // top 20 bits
-  // Each shift is masked to [0,31], so CROCKFORD[i] is always defined; `?? ""` only
-  // satisfies noUncheckedIndexedAccess and never actually fires.
-  return [(bits >> 15) & 31, (bits >> 10) & 31, (bits >> 5) & 31, bits & 31]
-    .map((i) => CROCKFORD[i] ?? "")
-    .join("");
-}
-
-/** Crockford transcription tolerance: O→0, I/L→1, case-insensitive. */
-export function normalizeChecksum(s: string): string {
-  return s.toUpperCase().replace(/O/g, "0").replace(/[IL]/g, "1");
-}
-
 /** Format a 32-byte secret as an `rc1_…` token. */
 export async function formatSecret(secret: Uint8Array): Promise<string> {
   if (secret.length !== SECRET_BYTES) {
     throw new SecretError("bad-length", `secret must be ${SECRET_BYTES} bytes`);
   }
-  return PREFIX + base64urlEncode(secret) + checksumOf(await sha256(secret));
+  return PREFIX + base64urlEncode(secret) + crockfordChecksum(await sha256(secret));
 }
 
 /** Generate a fresh 256-bit secret and its `rc1_…` token. */
@@ -85,7 +66,7 @@ export async function parseSecret(token: string): Promise<Uint8Array> {
     throw new SecretError("bad-encoding", "non-canonical base64url body");
   }
 
-  const expected = checksumOf(await sha256(secret));
+  const expected = crockfordChecksum(await sha256(secret));
   if (normalizeChecksum(checksum) !== expected) {
     throw new SecretError("bad-checksum", "checksum mismatch (mistyped or truncated?)");
   }

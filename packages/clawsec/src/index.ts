@@ -2,6 +2,7 @@
 export { canonicalAad, type Dir, type FrameHeader } from "./aad.js";
 export { AeadError, type Frame, open, seal } from "./aead.js";
 export { concatBytes, fromHex, sha256, timingSafeEqual, toHex, utf8 } from "./bytes.js";
+export { normalizeChecksum } from "./checksum.js";
 export {
   ChunkError,
   type ChunkHeader,
@@ -11,10 +12,10 @@ export {
 } from "./chunk.js";
 export { hkdfExpand, hkdfExtract } from "./hkdf.js";
 export { deriveIdentity, deriveSessionKey, type Identity } from "./kdf.js";
+export { formatPass, PassError, type PassErrorReason, parsePass } from "./pass.js";
 export {
   formatSecret,
   generateSecret,
-  normalizeChecksum,
   parseSecret,
   SecretError,
   type SecretErrorReason,

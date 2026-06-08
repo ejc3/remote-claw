@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { base64urlDecode, base64urlEncode } from "./base64url.js";
-import {
-  formatSecret,
-  generateSecret,
-  normalizeChecksum,
-  parseSecret,
-  SecretError,
-} from "./secret.js";
+import { normalizeChecksum } from "./checksum.js";
+import { formatSecret, generateSecret, parseSecret, SecretError } from "./secret.js";
 
 const PREFIX = "rc1_";
 const TOKEN_LEN = PREFIX.length + 43 + 4; // 51
