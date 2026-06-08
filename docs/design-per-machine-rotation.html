@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>remote-claw — per-machine identity, layered security &amp; rotation (verified design)</title>
+<meta name="description" content="Verified design: a pluggable L0/L1/L2 security interface, per-machine identity, capability-scoped viewing, and a signed-epoch graceful rotation with an operator-paced overlap window. Store-free now; account key-relay later.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+<style>
+  :root{
+    --bg:#0d0f1a; --panel:#141729; --panel2:#1b1f37; --edge:#262b48;
+    --ink:#e7e9f3; --muted:#9aa0c0; --soft:#c5c9e6;
+    --accent:#8b7bff; --accent2:#5ad1c2; --warn:#ffc24b; --bad:#ff7a90;
+    --maxw:880px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  code,pre,kbd{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+
+  header.top{position:sticky;top:0;z-index:30;background:rgba(13,15,26,.85);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--edge)}
+  .top-in{display:flex;align-items:center;gap:12px;padding:10px 18px;max-width:1180px;margin:0 auto}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700}
+  .logo{width:26px;height:26px;border-radius:7px;background:
+    radial-gradient(120% 120% at 20% 10%,var(--accent),#3a2fb0 60%,#1a1640);
+    box-shadow:0 0 0 1px var(--edge),0 6px 18px rgba(139,123,255,.35)}
+  .spacer{flex:1}
+  .ghbtn{font-size:13px;color:var(--soft);border:1px solid var(--edge);padding:6px 11px;border-radius:8px}
+  .ghbtn:hover{background:var(--panel2);text-decoration:none}
+
+  .hero{max-width:1180px;margin:0 auto;padding:36px 20px 6px}
+  .hero h1{font-size:clamp(26px,5vw,40px);line-height:1.12;margin:0 0 10px;
+    background:linear-gradient(100deg,#fff,#c3bcff 60%,#7be7da);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p{color:var(--soft);max-width:780px;font-size:18px;margin:0 0 14px}
+  .badges{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 2px}
+  .badge{font-size:12.5px;color:var(--soft);background:var(--panel);
+    border:1px solid var(--edge);border-radius:999px;padding:5px 11px}
+  .badge b{color:#fff}
+  .badge.ok{border-color:#2f5f4f}.badge.ok b{color:var(--accent2)}
+  .badge.warn{border-color:#5a4b1f}.badge.warn b{color:var(--warn)}
+  .badge.cut{border-color:#5a2f3a}.badge.cut b{color:var(--bad)}
+
+  .wrap{max-width:1180px;margin:0 auto;display:grid;
+    grid-template-columns:248px minmax(0,1fr);gap:26px;padding:14px 20px 80px;overflow-x:hidden}
+  nav.toc{position:sticky;top:62px;align-self:start;max-height:calc(100dvh - 80px);
+    overflow:auto;overscroll-behavior:contain;padding:14px 12px;background:var(--panel);
+    border:1px solid var(--edge);border-radius:12px}
+  nav.toc .t{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:4px 6px 8px}
+  nav.toc a{display:block;color:var(--soft);font-size:13.5px;padding:4px 8px;border-radius:7px;border-left:2px solid transparent}
+  nav.toc a:hover{background:var(--panel2);text-decoration:none}
+  nav.toc a.h3{padding-left:18px;color:var(--muted);font-size:13px}
+  nav.toc a.active{background:var(--panel2);border-left-color:var(--accent);color:#fff}
+
+  main{min-width:0}
+  article{background:var(--panel);border:1px solid var(--edge);border-radius:14px;padding:26px 32px;max-width:var(--maxw)}
+  article h1{font-size:28px;margin:.2em 0 .5em;padding-bottom:.3em;border-bottom:1px solid var(--edge)}
+  article h2{font-size:21px;margin:1.6em 0 .6em;border-top:1px solid var(--edge);padding-top:1.1em;scroll-margin-top:72px}
+  article h3{font-size:17px;margin:1.3em 0 .5em;color:#fff;scroll-margin-top:72px}
+  article p,article li{color:var(--soft)}
+  article strong{color:#fff}
+  article blockquote{margin:1em 0;padding:.6em 1em;border-left:3px solid var(--accent);
+    background:var(--panel2);border-radius:0 8px 8px 0;color:var(--soft)}
+  article hr{border:0;border-top:1px solid var(--edge);margin:1.6em 0}
+  article :not(pre)>code{background:var(--panel2);border:1px solid var(--edge);padding:.1em .4em;
+    border-radius:6px;font-size:.88em;color:#e9c8ff;overflow-wrap:anywhere;word-break:break-word}
+  article pre{background:#0a0c16;border:1px solid var(--edge);border-radius:10px;padding:14px 16px;overflow:auto}
+  article pre code{background:none;border:0;padding:0;color:#d6dbf5;font-size:13px}
+  article table{border-collapse:collapse;width:100%;margin:1em 0;font-size:14px;display:block;overflow-x:auto}
+  article th,article td{border:1px solid var(--edge);padding:7px 10px;text-align:left;vertical-align:top}
+  article th{background:var(--panel2);color:#fff;white-space:nowrap}
+  article td code{white-space:nowrap}
+  @media(max-width:880px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static;max-height:none;margin-bottom:6px}
+    article{padding:20px 16px}
+  }
+</style>
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <span class="brand"><span class="logo"></span>remote-claw</span>
+  <span class="spacer"></span>
+  <a class="ghbtn" href="index.html">← architecture doc</a>
+  <a class="ghbtn" href="https://github.com/ejc3/remote-claw" target="_blank" rel="noopener">GitHub</a>
+</div></header>
+
+<section class="hero">
+  <h1>Per-machine identity, layered security &amp; graceful rotation</h1>
+  <p>A pluggable <b>L0/L1/L2</b> security interface, per-machine identities, capability-scoped viewing, and a <b>signed-epoch</b> rotation with an operator-paced overlap window. Store-free and zero-knowledge now; the account key-relay (phase&nbsp;3) is designed-for, not built.</p>
+  <div class="badges">
+    <span class="badge ok"><b>verified</b> · multi-agent adversarial review</span>
+    <span class="badge">scope: <b>L1 / phase-2</b></span>
+    <span class="badge">build: <b>6-PR stack</b> (not landed)</span>
+    <span class="badge warn"><b>4</b> overclaims corrected</span>
+    <span class="badge cut"><b>1</b> layer cut (theatre)</span>
+  </div>
+</section>
+
+<div class="wrap">
+  <nav class="toc" id="toc"></nav>
+  <main><article id="doc"></article></main>
+</div>
+
+<script id="src" type="text/markdown">
+# Per-machine identity, layered security &amp; graceful rotation
+
+**Status:** design **verified** by a multi-agent adversarial review (2026-06-08). Implementation scope is **L1 / phase-2**, written so **phase-3** (the account key-relay) drops on top. The build is a **6-PR stack**; nothing has landed yet. This page is the proposal of record — the authoritative `docs/v2-architecture.md` is reconciled to it in the final build PR.
+
+> This **supersedes the single-shared-secret model** for a fleet. It stays **store-free and zero-knowledge** today; the future server key-relay is *designed-for, not built*.
+
+## The shape
+
+One **`SecurityProvider`** interface sits between the wrapper/web app and the crypto/transport. **L0 / L1 / L2** are three implementations selected by config; the **broker is byte-identical at every level** — it sees ciphertext-or-plaintext plus the same cleartext routing header (`identity_id`, `session_id`, `key_epoch`, …) and self-verifies the bearer the same way, with **no AAD schema change**. That is what makes it incrementally deployable: ship **L0** to prove the relay, flip config to **L1** for end-to-end encryption, drop **L2** in later.
+
+- **Per-machine identity** — each machine runs `ensureIdentity` and owns its own `rc1_` root `S` → its own `identity_id` → its own `bus:${identity_id}`. No `S` is ever copied across the fleet.
+- **Phone is a viewer, never a root of trust** — it holds, per machine, a reduced **capability-scoped** credential.
+- **Stable vs rotating split** — stable keys never move on rotation (so the store-free broker never loses the machine); only the content plane rotates.
+- **Signed epoch ratchet + overlap window** — graceful, operator-paced rotation; the exact phase-2 → phase-3 seam.
+- **Capability credentials** — `rcv1_` (view) and `rcc1_` (control).
+
+## 1. The pluggable security interface
+
+The wrapper never calls `seal()`/`deriveIdentity()` directly again — it calls `provider.*`. `clawsec` stays the **primitive library** (sign/verify, epoch derivation, credential ser/de, wrap/unwrap) and has **no notion of "level"**; the `SecurityProvider` interface + the `L0`/`L1` implementations live one layer up in `packages/cli` (mirrored in the web client). `deriveContentKey` is **private** to the provider — a raw `K_session` never crosses the seam.
+
+```ts
+type CapabilityScope = "view" | "control";
+type Level = "L0" | "L1" | "L2";
+
+interface SealedFrame { header: FrameHeader; salt: Uint8Array; nonce: Uint8Array; ct: Uint8Array; }
+interface EpochAnnouncement {
+  identityId: Uint8Array; keyEpoch: number; prevEpoch: number;
+  epochCommitment: Uint8Array; validFrom: number; wrappedKey?: Uint8Array; // wrappedKey only at L2
+}
+
+interface SecurityProvider {
+  readonly level: Level;
+  readonly capability: CapabilityScope;
+  sealFrame(plane: "session"|"control"|"meta", header: FrameHeader, pt: Uint8Array): Promise<SealedFrame>;
+  openFrame(plane: "session"|"control"|"meta", frame: SealedFrame): Promise<Uint8Array>;
+  currentEpoch(): number;
+  rotateGeneration(): Promise<EpochAnnouncement>;        // mint gen N+1, sign it; gen N still valid
+  adoptGeneration(a: EpochAnnouncement): Promise<void>;  // verify sig vs PINNED pubkey + monotonic + window
+  retireGeneration(keyEpoch: number): Promise<void>;     // drop old epoch_root AFTER operator confirm
+  authBearer(): Uint8Array;                              // = auth_token; broker self-verifies
+  sealPresence(p: SessionAnnounce): Promise<SealedFrame>;
+  openPresence(f: SealedFrame): Promise<SessionAnnounce>;
+  wrapKeyForDevice(keyEpoch: number, recipientDevicePub: Uint8Array): Promise<Uint8Array>;  // throws at L0/L1
+  unwrapKeyForDevice(env: Uint8Array): Promise<{ keyEpoch: number; epochRoot: Uint8Array }>; // L2
+}
+```
+
+**The three levels, and what each loses going down:**
+
+| Level | What it is | Server can… | Loses vs. the level above |
+|---|---|---|---|
+| **L0** — no encryption | near pass-through; plaintext `ct`, zeroed salt/nonce, no AEAD. **Loud banner** every start; never a silent default | read **and forge** everything; routing header is tamperable | all confidentiality + integrity (trust the server entirely) |
+| **L1** — phase-2 E2E | per-message AES-256-GCM under epoch-scoped `K_session` / stable `control_key` / stable `K_meta`; signed epoch ratchet | only route/replay ciphertext; cannot read or forge | automatic wrapped-key delivery (you hand-carry the new gen to the phone) |
+| **L2** — phase-3 (future) | L1 **+** server auto-relays `epoch_root` **wrapped** to a device's X25519 pubkey along the same signed chain | same as L1 (wrapped keys are opaque to it) | — |
+
+**Downgrade L1→L0 is the dangerous direction** and is blocked **cryptographically**, not by config alone: an L1 client never opens a non-AEAD frame (a config *floor*), and a pinned client demands an Ed25519-signed announce an L0 server cannot produce.
+
+## 2. Per-machine identity &amp; the phone as viewer
+
+Each machine owns its own `S` — stealing one machine no longer compromises the fleet. The phone holds, per machine, a **reduced view credential** = `{auth_token, a named epoch_root set, K_meta, pinned rotation pubkey}` — **without `control_key` and without `S`**. HKDF one-wayness (HMAC preimage resistance) makes that split airtight: a stolen phone reads transcripts + presence but **cannot recover `S`, cannot derive `control_key`, cannot issue commands, and cannot forge a new generation** (it lacks the rotation private key).
+
+This maps onto the store-free bus **unchanged**: the phone presents the same `auth_token` bearer the machine derives, so the broker self-verifies it identically. The broker **cannot and need not distinguish a viewer from a controller** — capability is enforced purely client-side by *which keys the credential carries*.
+
+## 3. Key hierarchy — stable vs rotating
+
+```
+S ──HKDF──┬─ auth_token          STABLE  → identity_id = trunc(SHA256(auth_token),16)  (bus anchor)
+          ├─ control_key         STABLE  (commands; never in a view credential)
+          ├─ K_meta              STABLE  (presence/announce, AEAD)
+          ├─ sign_seed           STABLE  → Ed25519 rotation keypair (pubkey pinned at onboarding)
+          └─ content_root        ROTATES → epoch_root_N = HKDF(content_root, "epoch:"+N)   [N ≥ 1]
+                                              └─ K_session_N = HKDF(epoch_root_N, "session:"+id)
+                                                    └─ per-message K_msg (random salt → AES-256-GCM)
+```
+
+`identity_id` **must not change on rotation**, or the store-free broker loses the machine. **Epoch 0 is a literal flat special-case** — `K_session = deriveSessionKey(content_root, id)` directly (not through `deriveEpochRoot`) — so **every existing `rc1_` frame decrypts unchanged**; migration is zero-re-keying. `key_epoch` (already bound in the canonical AAD, but inert until now) finally **drives derivation**.
+
+## 4. Signed epoch ratchet &amp; the overlap window
+
+Each generation transition is an **Ed25519-signed `epoch_announce`** binding `{identity_id, key_epoch, prev_epoch, valid_from, commitment(epoch_root)}`, with a fixed domain-separation context string inside the signed bytes. A client that **pinned the rotation public key at onboarding** verifies the announce and **auto-adopts the new generation without re-onboarding**.
+
+One signature per generation authenticates the **generation key's genuineness** — it does **not** sign per-message authorship (that stays symmetric AES-GCM, forgeable by any key-holder). It only becomes strictly load-bearing at L2, where `epoch_root` arrives wrapped.
+
+**The overlap window (operator-paced — the exact 2→3 seam):**
+
+1. The machine mints gen `N+1`, signs the announce, and starts stamping outbound frames `key_epoch = N+1` — **while gen `N` still verifies and decrypts** (it holds both `epoch_root`s).
+2. You **add the new generation to the phone**: re-paste/scan a fresh `rcv1_` carrying the new `epoch_root`. *(This is the only step that differs in phase 3 — the server auto-relays the wrapped new key instead.)*
+3. Once the new gen is confirmed everywhere, the operator **retires** gen `N` (drops its `epoch_root`).
+
+A receiver picks the key by `frame.keyEpoch`, so both generations decrypt concurrently and **no client ever breaks** on a content re-key. **Anti-rollback:** reject `key_epoch ≤ max_seen`; `valid_from` must fall inside a **long, operator-paced** freshness window (not the ~60 s presence window); `max_epoch` is persisted with fail-closed behaviour when unavailable.
+
+## 5. Capability credentials
+
+| | `rcv1_` — **view** | `rcc1_` — **control** |
+|---|---|---|
+| Carries | `auth_token`, a **finite named** `epoch_root` set, `K_meta`, pinned rotation pubkey | view set **+** `control_key` **+** `content_root` |
+| **Never** carries | `content_root`, `control_key`, `S` | `S` |
+| Can | read transcripts + presence; verify generations | …**+ issue commands**; self-derive **all** future epochs |
+| Cannot | command; recover `S`; derive ungranted/future epochs | recover `S` |
+
+The **`content_root` ban in view scope is a blocking invariant** enforced in code — a `content_root` holder can derive `epoch_root_N` for *every* `N`, which would silently defeat attenuation. The cost of the control credential is stated loudly: **a leaked control credential self-derives every future epoch forever** (a control-cred leak defeats compartmentalization; a view-cred leak does not). These bundles are QR/file-oriented (too long to hand-type).
+
+## 6. What the review broke — and the honest corrections
+
+All four review lenses converged on the same breaks; the two load-bearing ones were empirically confirmed in Node 22.
+
+1. **"Forward secrecy" was structurally false.** `epoch_root_N = HKDF(content_root, "epoch:"+N) = f(S)` for every `N`, and the model deliberately keeps "paste `S` recovers any past epoch." Those are mutually exclusive with FS. **Correction:** drop the FS claim entirely; the epoch layer is **stable-identity re-keying + generation compartmentalization**, not forward secrecy.
+2. **A view credential carrying `content_root` defeats its own attenuation** (verified: a `content_root` holder derives every `epoch_root`). **Correction (blocking):** `formatViewCredential` **rejects** `content_root`; view carries only a finite named epoch set.
+3. **"Epoch-0 needs no special case" was false** (verified the derivations differ). **Correction:** epoch 0 is a literal flat path, with a test vector asserting existing `key_epoch=0` frames still decrypt.
+4. **Cold-client rollback.** Monotonic `key_epoch` protects only *warm* clients; a store-free broker can pin a fresh/reloaded viewer to a stale in-window announce. **Correction:** a long announce freshness window + persisted `max_epoch` + fail-closed; documented as a residual for stateless web viewers.
+
+**Cut as crypto-theatre — a `security_level` byte bound in the AAD.** An L0 plaintext frame has no GCM tag to bind a level into, so the byte would be unauthenticated cleartext the server sets freely — *and* it is a breaking wire change. Downgrade protection is the **client-config floor + the unforgeable signed announce**; `aad.ts` stays untouched.
+
+## 7. Security ledger — every layer must earn its keep
+
+Each mechanism is justified by a concrete risk it closes, with a precedent from an audited system.
+
+| Layer | Risk it closes | How | Precedent | Verdict |
+|---|---|---|---|---|
+| Per-machine identity | one `S` across the fleet ⇒ one theft = total fleet | each machine mints its own `S`/`identity_id`/bus | SSH per-host keys, WebAuthn per-device, MLS leaf, Happy DEK | **keep** |
+| View credential (`rcv1_`) | stolen phone could command / recover keys | reduced bundle; HKDF one-wayness | macaroons, OAuth scopes, age recipients | **keep** (content_root banned) |
+| Rotation signing key (Ed25519) | replaying broker tricks a client into a bogus gen | sign each transition; verify vs pinned pubkey | TLS 1.3 / MLS epoch auth, SSH pinning, Sigstore | **keep** |
+| Epoch / generation split | no way to re-key content with a stable identity | `content_root → epoch_root_N`; `key_epoch` selects | §4.4 stable-id ratchet, TLS 1.3 key-update, MLS | **keep** (continuity, not FS) |
+| Overlap window | instant cutover breaks lagging clients | hold both epochs; retire after confirm | TLS ticket overlap, JWKS rollover, MLS | **keep** |
+| Anti-rollback | broker replays an old gen to roll a client back | monotonic `key_epoch` + long window + persist | TLS 1.3 anti-downgrade, Signal/MLS counters | **keep** (warm; cold = residual) |
+| L0 (no encryption) | none vs server — dev/trust only | passthrough + loud banner; never silent | plaintext HTTP behind a trust boundary | **keep** (the *interface* is the value) |
+| L1 (phase-2 E2E) | broker reads/forges everything | per-message AES-GCM the server never holds | Signal / MLS / Matrix-Olm | **keep** |
+| `security_level` AAD byte | server runs an L1 client on the L0 plane | — (unauthenticated; no tag to bind into) | TLS_FALLBACK_SCSV / HSTS handle it differently | **CUT (theatre)** |
+| L2 (account relay) | manual key hand-carry on a new device | wrap `epoch_root` to device pubkey, server-blind | Happy, MLS Welcome, HPKE | **defer** (needs new pairing primitive) |
+
+## 8. The build — a 6-PR stack (scoped at L1)
+
+| PR | Scope | Security property it establishes |
+|---|---|---|
+| **A** | `SecurityProvider` interface + **L0** plaintext provider; wire the wrapper to `provider.*` | plumbing only — ships a working relay before any crypto; L0 closes nothing and says so loudly |
+| **B** | `clawsec`: `deriveEpochRoot` + epoch-threaded `deriveSessionKey` (epoch-0 flat); `signing.ts` (Ed25519, deterministic from `S`); `announce.ts` (context-prefixed sign/verify) | unforgeable generation transitions; the epoch tree; `rc1_` migration preserved |
+| **C** | **L1** provider: AEAD driven by `key_epoch`; `adopt`/`retire`; monotonic anti-rollback | E2E confidentiality + integrity vs the server; anti-rollback for warm clients |
+| **D** | `rcv1_`/`rcc1_` credentials (content_root banned from view) + CLI emit | capability-scoped viewing — read without command/`S`/future epochs |
+| **E** | CLI `rotateGeneration`/`retireGeneration` + overlap-window store (every fs invariant kept) | the graceful operator-paced overlap window — the 2→3 seam |
+| **F** | Broker `epoch_announce` bus event (P3) + `docs/v2-architecture.md` rewrite | keeps the store-free broker valid across all levels; removes the four overclaims from the doc |
+
+Each PR is independently gateable (`biome check` + `tsc --noEmit` + `vitest run`, then `/code-review` + codex, then CI). **P3 broker impact is minimal:** one opaque `epoch_announce` bus event; admission, token scheme, and presence are unchanged.
+
+## 9. Now vs future — the 2→3 seam
+
+**Built now (L0 + L1):** the provider seam; the L0 plaintext provider; per-machine identity; the epoch derivation tree (`key_epoch`-driven); the Ed25519 rotation key + signed `epoch_announce`; `rcv1_`/`rcc1_` credentials; `rotateGeneration`/`retireGeneration` + the overlap window; monotonic anti-rollback; the X25519 wrap **primitives shipped but stubbed** so L2 needs no `clawsec` change. **The add-new-gen-to-phone step is manual** (paste/scan a fresh `rcv1_`).
+
+**Deferred to phase 3 (design-for only):** the broker **auto-relaying wrapped `epoch_root`s** to device pubkeys; a server-side account holding the list of machines; and — corrected — a **new server-blind device-pairing primitive** (QR fingerprint compare, Happy-style) to authenticate a device pubkey *to* the machine, without which the wrapped-key relay is MITM-able. **The single intended 2→3 difference is *who delivers the new key*** (manual paste → server auto-relay); the pairing primitive is the one honestly-new piece L2 must add.
+
+## 10. Decisions (recommended defaults)
+
+1. **Forward secrecy:** keep paste-`S` recovery, claim **no FS** *(recommended)* — vs. real FS via random per-epoch secrets that break paste-recovery.
+2. **View-grant granularity:** a **finite named** epoch set (re-paste on rotation) — vs. a "view-up-to-epoch-K" forward range.
+3. **L2 device pairing:** leave it a **named seam + one-paragraph sketch** in the doc, not built.
+4. **Cold-client rollback (web):** **document as an L1 residual** now; wire a "demand-freshest-announce-or-warn" later.
+
+## 11. Honest residuals (stated, not glossed)
+
+- **No forward secrecy** wherever `S`/`content_root` survives — we keep paste-`S` recovery, the deliberate opposite.
+- **No bearer revocation** — a stable `auth_token` (phone *or* machine) keeps bus publish/route/forge-presence through all ratchets; eviction is the destructive identity-burn (or the deferred account-relay).
+- A **view credential is read + forge-write-content + forge-presence + bus-publish**, *not* command-capable — the only hard boundary is `control_key`.
+- **Cold viewers** (fresh phone / post-cap-roll / stateless web reload) have a stale-epoch rollback window a routing broker can exploit — mitigated, not eliminated, at L1.
+- **No host-compromise protection** — history is plaintext `.jsonl` on the machine.
+- **L2 is real added work** — it needs the new server-blind device-pairing primitive; it does *not* "drop in with zero rewiring."
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script>
+  marked.setOptions({gfm:true, breaks:false});
+  const docEl = document.getElementById("doc");
+  const tocEl = document.getElementById("toc");
+  const md = document.getElementById("src").textContent;
+  docEl.innerHTML = marked.parse(md);
+
+  // ids + highlight
+  const slug = s => s.toLowerCase().replace(/[^\w]+/g,"-").replace(/^-+|-+$/g,"");
+  docEl.querySelectorAll("h2,h3").forEach(h=>{ if(!h.id) h.id = slug(h.textContent); });
+  docEl.querySelectorAll("pre code").forEach(b=>{try{hljs.highlightElement(b);}catch(e){}});
+
+  // toc
+  const items = [...docEl.querySelectorAll("h2,h3")];
+  tocEl.innerHTML = '<div class="t">On this page</div>' + items.map(h=>
+    '<a class="'+(h.tagName==="H3"?"h3":"")+'" href="#'+h.id+'">'+h.textContent.replace(/</g,"&lt;")+'</a>'
+  ).join("");
+
+  // scroll-spy
+  window.addEventListener("scroll",()=>{
+    let cur=items[0];
+    for(const h of items){ if(h.getBoundingClientRect().top<90) cur=h; else break; }
+    if(cur) tocEl.querySelectorAll("a").forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+cur.id));
+  },{passive:true});
+</script>
+</body>
+</html>
