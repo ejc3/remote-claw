@@ -1,7 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    // DOM provides the WebCrypto types (BufferSource/SubtleCrypto) that @remote-claw/clawsec's
+    // source uses; the CLI typechecks that source across the workspace boundary (clawsec ships
+    // .ts, not built .d.ts). Node 22 provides these globals at runtime. Matches clawsec's lib.
+    "lib": ["ES2022", "DOM"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
