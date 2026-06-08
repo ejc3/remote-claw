@@ -16,10 +16,14 @@ Identity (local; never launches claude, never touches the network):
                      device). Needs a terminal unless --rc-force-noninteractive; --rc-keep-old
                      keeps the old secret as a live backup.
   --rc-show-secret   re-reveal this host's secret (warns first; --rc-yes skips the prompt)
+  --rc-pass          print a viewer PASS for this machine: a credential that can read + steer this
+                     machine's sessions but is NOT the master secret (can't reveal it or reset the
+                     machine). Hand it to a phone/browser (paste or QR); revoke by resetting the
+                     machine. The pass IS the output here, so it prints in every mode.
   --rc-file <path>   use a specific secret file (default: $XDG_STATE_HOME/remote-claw/secret;
                      or set REMOTE_CLAW_SECRET_FILE)
-  --rc-json          machine-readable output for an rc action (never prints the secret)
-  --rc-quiet         minimal output for an rc action (never prints the secret)
+  --rc-json          machine-readable output for an rc action (never prints the master secret)
+  --rc-quiet         minimal output for an rc action (never prints the master secret)
 
 Further --rc-* actions (broker config) arrive in later releases.
 

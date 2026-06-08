@@ -9,6 +9,7 @@ import { constants } from "node:os";
 import { classifyArgs } from "./args.js";
 import { RC_HELP } from "./help.js";
 import { runIdentity } from "./identity.js";
+import { runPass } from "./pass.js";
 import { runShowSecret } from "./showsecret.js";
 
 /** Map a signal name to its number (for the shell-standard 128+N exit code). */
@@ -66,8 +67,8 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     for (const e of errors) warn(`remote-claw: ${e}\n`);
     return 2;
   }
-  // --rc-identity is the one implemented action; it runs locally and never launches claude.
-  // (--rc-file/--rc-json/--rc-quiet are its modifiers, handled inside runIdentity.)
+  // The local rc actions (--rc-identity / --rc-show-secret / --rc-pass) run locally and never
+  // launch claude; their modifiers (--rc-file/--rc-json/--rc-quiet/…) are handled inside each.
   if (rc["rc-identity"] === true) {
     const writeOut = opts.stdout ?? ((line: string) => void process.stdout.write(line));
     return runIdentity(rc, claudeArgs, { stdout: writeOut, stderr: warn });
@@ -75,6 +76,10 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   if (rc["rc-show-secret"] === true) {
     const writeOut = opts.stdout ?? ((line: string) => void process.stdout.write(line));
     return runShowSecret(rc, claudeArgs, { stdout: writeOut, stderr: warn });
+  }
+  if (rc["rc-pass"] === true) {
+    const writeOut = opts.stdout ?? ((line: string) => void process.stdout.write(line));
+    return runPass(rc, claudeArgs, { stdout: writeOut, stderr: warn });
   }
 
   const rcNames = Object.keys(rc);

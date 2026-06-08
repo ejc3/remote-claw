@@ -9,6 +9,7 @@ describe("RC_HELP banner", () => {
     for (const f of [
       "--rc-identity",
       "--rc-show-secret",
+      "--rc-pass",
       "--rc-confirm",
       "--rc-file",
       "--rc-json",
