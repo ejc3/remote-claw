@@ -9,6 +9,12 @@ export {
 export { type IdentityOptions, runIdentity } from "./identity.js";
 export { type PassOptions, runPass } from "./pass.js";
 export { type RunOptions, runWrapper, type SpawnFn } from "./run.js";
+export {
+  type Level,
+  type Plane,
+  type SecurityProvider,
+  securityProvider,
+} from "./security/provider.js";
 export { runShowSecret, type ShowSecretOptions } from "./showsecret.js";
 export {
   type CreatedIdentity,
