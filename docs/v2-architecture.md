@@ -544,9 +544,11 @@ tailing the stream decrypt & render.
 **Web → worker** (your prompt): web encrypts a `user` content frame (`dir:"in"`,
 `client_msg_id`, under `K_session`) → `POST /api/relay` → the workflow **hook**
 wakes the wrapper → wrapper **dedups by `msg_id`**, decrypts, **commits to its log +
-assigns `seq`**, injects into Claude via the Phase-0 downstream, and emits
-`accepted{client_msg_id, seq}` on the out-stream. Claude replies → the worker→web
-path above.
+assigns `seq`**, **injects into Claude via the Phase-0-verified MITM downstream** (a write
+to the worker `/worker/events` path — see `phase0-findings.md`), and emits
+`accepted{client_msg_id, seq}` on the out-stream. The frame is **logged before the inject**,
+so an inject that fails after log-commit is simply **re-injected** (the log is authoritative;
+no rollback, `msg_id` keeps it idempotent). Claude replies → the worker→web path above.
 
 **History is wrapper-served, never read from the cloud.** A client gets backlog by
 sending an encrypted `catch_up{since=seq}` control frame (§6), **not** from any
@@ -559,8 +561,8 @@ Verified Vercel facts that shape this:
 - **Workflows (GA 2026-04-16)** give durable runs, `defineHook`/`resume` for
   inbound events, and **durable resumable streams** (reconnect by `runId` +
   `startIndex`) — Vercel-native, no separate pub/sub. **But:** completed-run
-  retention is **Hobby 1d / Pro 7d / Ent 30d**, per-run caps are **2 GB / 25 000
-  events / 10 000 steps**, and replay degrades past ~2 000 events. ⇒ a single
+  retention is **Hobby 1d / Pro 7d / Ent 30d**, per-run caps are **2 GB / 25k
+  events / 10k steps**, and replay degrades past ~2k events. ⇒ a single
   ever-growing per-session workflow is **not** a durable history store.
 - **No native WebSockets** on Vercel; SSE-from-Function is capped (300s Hobby /
   800s Pro and you pay for idle) ⇒ not a forever-socket.
@@ -591,6 +593,15 @@ log — never on an unproven replay primitive. See §14.)
   `~/.claude/projects/<cwd>/<session>.jsonl` transcript is a last-resort fallback.
   We do **not** use Anthropic's `/events?cursor=` (we're off Anthropic's relay —
   §14). The TUI owns sessions and `seq` ordering; **the cloud stores no history.**
+  - **Backfill = `historical:true` frames, then completeness check.** The backfill is
+    the worker's stream of events flagged `historical:true`; it is **complete** when that
+    stream **transitions to live** (the RC backend sends history first, then live frames)
+    **and** the wrapper's logged `historical` count matches claude's on-disk `.jsonl`
+    transcript length (the authoritative record). Until both hold, the backfill is treated
+    as **partial → retried** (re-read the worker stream / `.jsonl`), **never served** and
+    **no `session_announce` is broadcast** — so a truncated/failed backfill can't leave an
+    incomplete log or a gap in the `msg_id` seen-set (which would let a broker replay
+    double-deliver, §15 #19). Only a verified-complete log unlocks bus join + broadcast (P4).
 - **`seq` is allocated solely by the wrapper.** Clients never assign transcript
   order: a web client sends a `client_msg_id`; the wrapper decrypts, commits to its
   in-memory log, assigns the canonical `seq`, then echoes an `accepted{client_msg_id, seq}`.
@@ -766,18 +777,21 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   creates one. So a wrapper coming online does **resume-or-start**: try
   `getHookByToken`/`resumeHook`; on `HookNotFound` (or `HookConflictError` racing a
   concurrent create) `start()` then retry **with bounded exponential backoff + jitter**
-  (so a two-wrapper create race converges in a couple of rounds, not a storm). The token is
-  **1:1** (`HookConflictError` blocks a second), which *enforces* one bus per identity.
+  (**50 ms base, ×2, ≤2 s ceiling, ±25% jitter**, a few rounds → a two-wrapper create race
+  converges in well under a second, not a storm). The token is **1:1** (`HookConflictError`
+  blocks a second), which *enforces* one bus per identity.
 - **Long-lived, with two defined endings.** The bus run loops awaiting its hook, and **each
-  publish (`resumeHook`) re-wakes it**, so as long as *any* session under the identity keeps
-  broadcasting (≤ `ANNOUNCE_INTERVAL` apart) the run stays alive and `getHookByToken` keeps
-  resolving — `start()`'s random runId is irrelevant because the **token** is the durable
-  address. It ends in two cases: (i) **last broadcaster leaves** → no publish for the run's
-  **idle-timeout** (sized > `ANNOUNCE_INTERVAL`) → the run completes, disposing the hook
-  (token frees); the *next* session to come up just resume-or-starts it again. ( ii)
-  **deliberate cap-roll** — see below. ("Holds the hook" above is shorthand for *keeps
-  re-waking the run via periodic publishes*; no wrapper owns the run — verify the idle-timeout
-  semantics in the P3 spike, §11.)
+  publish (`resumeHook`) re-wakes it and resets the run's idle-timer** (it's *idle*-time, not
+  absolute wall-clock — a P3 acceptance criterion, §11). The run is **shared by all of the
+  identity's sessions**, so *any one* session's announce (≤ `ANNOUNCE_INTERVAL` apart) keeps
+  it alive for everyone — `getHookByToken` keeps resolving and `start()`'s random runId is
+  irrelevant because the **token** is the durable address. It ends in two cases: (i) **last
+  broadcaster leaves** → no publish for the **idle-timeout** (target **3× `ANNOUNCE_INTERVAL`
+  = 60 s**) → the run completes, disposing the hook (token frees); the *next* session to come
+  up just resume-or-starts it again. (ii) **deliberate cap-roll** — see below. ("Holds the
+  hook" above is shorthand for *keeps re-waking the run via periodic publishes*; no wrapper
+  owns the run — the exact idle-timeout value/reset semantics are a P3 acceptance criterion,
+  §11, with the §12 fallback if Vercel's behavior differs.)
 - **Cap-roll protocol.** Because each inbound publish is an event, before the bus nears
   the 25k-events/run cap a connected wrapper **completes** the current run (which
   **closes its stream and disposes the hook → frees the token**), then immediately
@@ -1047,31 +1061,53 @@ phase0/            unchanged — the Python reference + protocol findings
   + optional `--rc-web` QR/deep-link; host registration deferred to first RC),
   `--rc-id` (selector; default-only auto-create), `--rc-show-secret`, `--rc-rotate`
   (secure-delete + `--rc-confirm`), `--rc-list`, `--rc-name`, `--rc-json/--rc-quiet`
-  (never emit `S`). Local only (mock app); unit-test the token classifier + the
-  create-once/never-reveal/secure-delete invariants.
+  (never emit `S`). **Depends on P1 `clawsec`** for all key work (HKDF derivation +
+  `rc1_` parse/checksum); also wires the broker config (`--rc-app` / `--rc-app-key` →
+  `T_app`, §3.1/§4.5) used later in P4. Local only (mock app); unit-test the token
+  classifier + the create-once/never-reveal/secure-delete invariants.
 - **P3 — Vercel app skeleton (the bus).** `apps/web` (Next.js): **app-key middleware
   (`X-RC-App-Key` = `T_app`, a Vercel secret)** in front of the **two** routes
   (`POST /api/relay`, `GET /api/stream`) + per-identity auth (recompute `identity_id =
   trunc(SHA256(auth_token))` from the bearer, constant-time compare to the target token —
   **no stored hash**, §4.2); the
   per-identity bus relay workflow (`bus:${identity_id}` hook + out-stream) and the
-  token→stream resolver (`getHookByToken→getRun→getReadable`); per-session workflows.
-  Deploy; curl the cold-start (subscribe → recent-window `session_announce` broadcasts) +
-  a relay round-trip with hand-rolled ciphertext. **First, a build-time spike** of the §6B
-  linchpins: the `getHookByToken→getRun→getReadable` composition, run-roll hook re-bind,
-  recent-window read on subscribe, and the size/chunk limits — pin SDK versions
-  (`workflow`/`@workflow/*`).
+  token→stream resolver (`getHookByToken→getRun→getReadable`); **per-session runs are
+  resume-or-`start()`ed exactly like the bus** (first inbound/out frame on
+  `sess:${identity_id}:${session_id}` creates the run + hook; same 1:1-token / backoff rules
+  as §6B). Deploy; curl the cold-start (subscribe → recent-window `session_announce`
+  broadcasts) + a relay round-trip with hand-rolled ciphertext.
+  **First, a build-time spike** with explicit **acceptance criteria** — these are the §6B
+  linchpins that are verified-by-types only, and the design must be re-confirmed against the
+  live SDK before building on them (pin `workflow`/`@workflow/*` SDK versions):
+  1. `getHookByToken→getRun→getReadable` composition resolves a derived token to a live
+     readable stream from an API route (with server World creds).
+  2. `getReadable({startIndex:recent})` yields a **recent window spanning ≥ one
+     `ANNOUNCE_INTERVAL`** of events (so a cold client sees each live session's last
+     announce), and a rolled-past window degrades to ≤ `ANNOUNCE_INTERVAL` latency, not a miss.
+  3. **`resumeHook` resets the run's idle-timeout** (it is *idle*-time, not absolute
+     wall-clock), so periodic publishes keep the run alive; confirm the idle-timeout is
+     `> ANNOUNCE_INTERVAL` (target **3× = 60 s**) and that on expiry the run **completes →
+     hook disposes → token frees**.
+  4. **Cap-roll handoff** is observable: tailing readers see a stream **EOF** (or a clean
+     disconnect) when the old run completes, and `getHookByToken` resolves the new run after
+     re-`start()`; the brief `HookNotFound` swap window is retryable.
+  5. Browser path: the `GET /api/stream` Function obtains World creds (per-request vs cached
+     — measure) and pipes SSE; `HookNotFound` ⇒ `200` empty.
+  6. Size/chunk limits (hook ≤ 4.5 MB, stream chunk ≤ 10 MB) and the `(msg_id, part)` dedup.
 - **P4 — CLI: `serve` behavior = relay on `/remote-control` (MITM — §14).** Node/TS
   reimpl of the Phase 0 interception: `remote-claw` runs the real interactive
   `claude` (full passthrough) and, when RC is enabled, points it at our local MITM
   (`HTTPS_PROXY` → our proxy with a trusted leaf cert; intercept `/v1/code/sessions*`;
   pass `/v1/messages` through to Anthropic for inference). Our relay is the RC
-  backend — Anthropic's RC relay is never used. Then: **join the identity bus**
-  (resume-or-`start()` `bus:${identity_id}`) and **periodically broadcast** a signed
-  `session_announce{…, sent_at}` per session; per frame log it, allocate `seq`, encrypt →
-  `POST /api/relay` (with `T_app` + `auth_token`) on the session token; subscribe inbound
-  (SSE) → dedup by `msg_id` → decrypt → deliver to Claude only after log commit, then echo
-  `accepted`. End-to-end: a curl "web" drives a real Claude session through Vercel.
+  backend — Anthropic's RC relay is never used. Then, in order: **commit the worker
+  backfill to the in-memory log + seen-set first** (detect completeness — §6 backfill
+  rule), **then join the identity bus** (resume-or-`start()` `bus:${identity_id}`) **and open
+  the per-session run/out-stream** (`sess:${identity_id}:${session_id}`, resume-or-`start()`),
+  and only then **periodically broadcast** a signed `session_announce{…, sent_at}` for the
+  session; per frame log it, allocate `seq`, encrypt → `POST /api/relay` (with `T_app` +
+  `auth_token`) on the session token; subscribe inbound (SSE) → dedup by `msg_id` → decrypt →
+  deliver to Claude only after log commit, then echo `accepted`. End-to-end: a curl "web"
+  drives a real Claude session through Vercel.
 - **P5 — Web client.** Paste/fragment secret, identity + spaces list (each space =
   a chat), message view (history + live), send. Mobile/PWA.
 - **P6 — Multi-host + polish.** Add-host, friendly names, reconnect/resume, replay
@@ -1113,8 +1149,17 @@ phase0/            unchanged — the Python reference + protocol findings
   pattern composition**, and the run-roll **hook re-bind** has a brief `HookNotFound`
   window → client retry. Both are P3 spike items (§11); a stale resolve is at worst
   "reconnect + `catch_up`," never a wrong attach.
-- **Workflow per-run caps** (25 000 events / 10 000 steps / 2 GB; replay degrades past
-  ~2 000 events): each **inbound publish is an event**, so the bus **rolls** before the
+- **Bus idle-timeout is load-bearing but unverified** (§6B): liveness assumes `resumeHook`
+  **resets an idle-timer** (not an absolute wall-clock cap) and that the run completes →
+  hook disposes → token frees after the timeout. P3 acceptance criterion (§11). **Fallback
+  if Vercel differs:** a shorter/absolute timeout just makes the run end while a session is
+  still live → the next announce's `resumeHook` hits `HookNotFound` → **resume-or-`start()`
+  re-creates the bus** under the same token (the path already exists for cold-start and
+  cap-roll). Worst case is a brief presence blip + retry, never lost messages or a wrong
+  attach. If the token *fails to free* on completion, the next `start()` gets
+  `HookConflictError` → resume-tail instead — also already handled.
+- **Workflow per-run caps** (25k events / 10k steps / 2 GB; replay degrades past
+  ~2k events): each **inbound publish is an event**, so the bus **rolls** before the
   cap (re-creating `bus:${identity_id}`); keep high-volume turn frames on per-session
   **out-streams** (stream writes bypass the event cap, billed as Data Written) so rolls
   stay rare. Quantify Events vs Data-Written per active identity before scaling.
