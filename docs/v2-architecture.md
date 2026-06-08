@@ -1085,8 +1085,9 @@ phase0/            unchanged — the Python reference + protocol findings
   `sess:${identity_id}:${session_id}` creates the run + hook; same 1:1-token / backoff rules
   as §6B). Deploy; curl the cold-start (subscribe → recent-window `session_announce`
   broadcasts) + a relay round-trip with hand-rolled ciphertext.
-  **First, a small build-time spike.** Most of the §6B linchpins are now **docs-confirmed**
-  (web-verified 2026-06-08, §13) — `getHookByToken→getRun→getReadable`, custom hook tokens,
+  **First, a small build-time spike — ✓ RAN & PASSED on Vercel 2026-06-08 (§14A).** Most of
+  the §6B linchpins are now **docs-confirmed** (web-verified 2026-06-08, §13) *and
+  empirically verified* on a throwaway deployment — `getHookByToken→getRun→getReadable`, custom hook tokens,
   `resumeHook` (resume-not-create), negative-`startIndex` recent window, stream-writes-bypass-
   events, no-max-run-duration/idle-free, no caller-chosen `runId`, and the caps. So the spike
   is now a **pure integration smoke-test** — every primitive (incl. the duplicate-token
@@ -1394,6 +1395,21 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   session and sessions are mutually independent processes with no per-host aggregator (§1)** —
   there is nothing to batch, so presence stays **per-session**, and the bus event budget is
   honestly `Σ sessions × 86400 / ANNOUNCE_INTERVAL` (§12).
+- **P3 spike — empirically verified on Vercel (2026-06-08).** Built a throwaway Next.js +
+  Workflow DevKit app (`workflow@4.3.1`, `next@16.2.7`) and deployed it to Vercel (Vercel
+  World, `iad1`), then drove the §6B bus end-to-end with `vercel curl`. All four linchpins
+  passed on real infra: (1) **cross-process value-addressing** — `POST /api/publish`
+  resume-or-`start()`s a `bus:<token>` run and `resumeHook`s an announce; `GET /api/subscribe`
+  resolves the derived token via `getHookByToken→getRun→getReadable` and tails it (3 publishes
+  → one `runId`, read back `[{n:1},{n:2},{n:3}]`, `tailIndex:2`). (2) **recent window** —
+  `getReadable({startIndex:-2})` returned exactly the last two. (3) **one-bus-per-identity** —
+  a second `createHook` on the held token threw **`HookConflictError`** ("Hook token … is
+  already in use by another workflow"), so the create-race loser deterministically resume-tails.
+  (4) **completion → dispose → token frees** — after a `__close` the run completes, the token
+  stops resolving (`getHookByToken` → `HookNotFound`), and a subscribe renders empty — the
+  cap-roll/teardown path. So the bus is no longer just docs-confirmed but **observed working**;
+  the only remaining build-out is wiring it into the real broker (P3 proper) with `T_app`/auth,
+  chunking, and the per-session streams.
 
 ## 15. Use cases / scenario matrix (also the v2 test plan)
 
