@@ -9,6 +9,7 @@ import { constants } from "node:os";
 import { classifyArgs } from "./args.js";
 import { RC_HELP } from "./help.js";
 import { runIdentity } from "./identity.js";
+import { runRotate } from "./rotate.js";
 import { runShowSecret } from "./showsecret.js";
 
 /** Map a signal name to its number (for the shell-standard 128+N exit code). */
@@ -75,6 +76,10 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   if (rc["rc-show-secret"] === true) {
     const writeOut = opts.stdout ?? ((line: string) => void process.stdout.write(line));
     return runShowSecret(rc, claudeArgs, { stdout: writeOut, stderr: warn });
+  }
+  if (rc["rc-rotate"] === true) {
+    const writeOut = opts.stdout ?? ((line: string) => void process.stdout.write(line));
+    return runRotate(rc, claudeArgs, { stdout: writeOut, stderr: warn });
   }
 
   const rcNames = Object.keys(rc);

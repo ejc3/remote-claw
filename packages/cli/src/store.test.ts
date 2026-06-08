@@ -19,9 +19,12 @@ import {
   ensureIdentity,
   loadSecret,
   resolveSecretPath,
+  rotateIdentity,
   type StoreEnv,
   StoreError,
 } from "./store.js";
+
+const TOKEN_RE = /^rc1_[A-Za-z0-9_-]{43}[0-9A-HJKMNP-TV-Z]{4}$/;
 
 // A fixed clock so created_at is deterministic.
 const FIXED = new Date("2026-06-08T00:00:00.000Z");
@@ -257,4 +260,113 @@ describe("ensureIdentity + loadSecret (functional)", () => {
       StoreError,
     );
   });
+
+  // The create temp-write (atomicCreateExclusive → writeTempSecret) can fail (EACCES on a read-only
+  // dir): it must map to a StoreError, not escape unmapped — symmetric with the rotate path.
+  it.skipIf(process.getuid?.() === 0)(
+    "maps a create write failure (read-only dir) to a StoreError, not a raw throw",
+    async () => {
+      const sub = join(dir, "ro");
+      mkdirSync(sub, { recursive: true });
+      chmodSync(sub, 0o500); // r-x: mkdir(recursive) is a no-op, but the temp create EACCES-fails
+      try {
+        await expect(ensureIdentity(join(sub, "secret"), deps)).rejects.toBeInstanceOf(StoreError);
+      } finally {
+        chmodSync(sub, 0o700);
+      }
+    },
+  );
+});
+
+describe("rotateIdentity (functional)", () => {
+  let dir: string;
+  let secretPath: string;
+  const deps = { now: () => new Date("2027-01-02T03:04:05.000Z"), keepOld: false };
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "rc-rot-"));
+    secretPath = join(dir, "secret");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  async function seed() {
+    await ensureIdentity(secretPath, { now: () => new Date("2026-06-08T00:00:00Z") });
+    const token = readFileSync(secretPath, "utf8").trim();
+    const id = toHex((await deriveIdentity(await parseSecret(token))).identityId);
+    return { token, id };
+  }
+
+  it("default: writes a NEW valid token + different identity, scrubs the old, refreshes sidecar", async () => {
+    const before = await seed();
+    const r = await rotateIdentity(secretPath, deps);
+    expect(r.backupPath).toBeNull();
+    const onDisk = readFileSync(secretPath, "utf8").trim();
+    expect(onDisk).toMatch(TOKEN_RE);
+    expect(onDisk).not.toBe(before.token); // replaced
+    expect(toHex(r.oldIdentityId)).toBe(before.id);
+    expect(toHex(r.identityId)).not.toBe(before.id); // new identity
+    expect(toHex((await deriveIdentity(await parseSecret(onDisk))).identityId)).toBe(
+      toHex(r.identityId),
+    );
+    expect(statSync(secretPath).mode & 0o777).toBe(0o600);
+    expect(readFileSync(`${secretPath}.created`, "utf8").trim()).toBe(deps.now().toISOString());
+    expect(r.createdAt).toBe(deps.now().toISOString());
+  });
+
+  it("keepOld: keeps the OLD secret at <path>.old (a live credential) and installs the new", async () => {
+    const before = await seed();
+    const r = await rotateIdentity(secretPath, { now: deps.now, keepOld: true });
+    expect(r.backupPath).toBe(`${secretPath}.old`);
+    const backup = readFileSync(`${secretPath}.old`, "utf8").trim();
+    expect(backup).toBe(before.token); // the backup IS the old token
+    expect(statSync(`${secretPath}.old`).mode & 0o777).toBe(0o600);
+    expect(toHex((await deriveIdentity(await parseSecret(backup))).identityId)).toBe(before.id);
+    const onDisk = readFileSync(secretPath, "utf8").trim();
+    expect(toHex((await deriveIdentity(await parseSecret(onDisk))).identityId)).toBe(
+      toHex(r.identityId),
+    );
+  });
+
+  it("keepOld: refuses to clobber a pre-existing backup, leaving the secret intact", async () => {
+    const before = await seed();
+    writeFileSync(`${secretPath}.old`, "prior-backup\n", { mode: 0o600 });
+    await expect(
+      rotateIdentity(secretPath, { now: deps.now, keepOld: true }),
+    ).rejects.toMatchObject({ code: "IO" });
+    expect(readFileSync(secretPath, "utf8").trim()).toBe(before.token);
+    expect(readFileSync(`${secretPath}.old`, "utf8")).toBe("prior-backup\n");
+  });
+
+  it("rotating twice yields three distinct identities", async () => {
+    const first = await seed();
+    const r1 = await rotateIdentity(secretPath, deps);
+    const r2 = await rotateIdentity(secretPath, deps);
+    expect(new Set([first.id, toHex(r1.identityId), toHex(r2.identityId)]).size).toBe(3);
+    expect(readFileSync(secretPath, "utf8").trim()).not.toBe(first.token);
+  });
+
+  it("refuses to rotate a corrupt secret (loadSecret rejects), changing nothing", async () => {
+    writeFileSync(secretPath, "not-a-real-token\n", { mode: 0o600 });
+    await expect(rotateIdentity(secretPath, deps)).rejects.toMatchObject({ code: "BAD_SECRET" });
+    expect(readFileSync(secretPath, "utf8")).toBe("not-a-real-token\n");
+  });
+
+  it("rejects rotating a missing secret with NOT_FOUND", async () => {
+    await expect(rotateIdentity(secretPath, deps)).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  // A raw fs error while staging the new secret (e.g. a read-only parent dir → EACCES on the temp
+  // create) must surface as a mapped StoreError, not escape unmapped and crash the caller.
+  it.skipIf(process.getuid?.() === 0)(
+    "maps a write failure (read-only dir) to a StoreError, leaving the old secret intact",
+    async () => {
+      const before = await seed();
+      chmodSync(dir, 0o500); // r-x: existing secret still readable, but no new temp can be created
+      try {
+        await expect(rotateIdentity(secretPath, deps)).rejects.toBeInstanceOf(StoreError);
+        expect(readFileSync(secretPath, "utf8").trim()).toBe(before.token); // untouched
+      } finally {
+        chmodSync(dir, 0o700); // restore so afterEach can clean up
+      }
+    },
+  );
 });

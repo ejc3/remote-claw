@@ -26,7 +26,13 @@ import {
 } from "node:fs";
 import { homedir as osHomedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { deriveIdentity, generateSecret, parseSecret, SecretError } from "@remote-claw/clawsec";
+import {
+  deriveIdentity,
+  formatSecret,
+  generateSecret,
+  parseSecret,
+  SecretError,
+} from "@remote-claw/clawsec";
 
 const SECRET_MODE = 0o600;
 const DIR_MODE = 0o700;
@@ -260,6 +266,25 @@ function tempPathFor(path: string): string {
   return `${path}.${randomBytes(6).toString("hex")}.tmp`;
 }
 
+/** Write `content` to a fresh 0600 temp beside `path`, fsynced. Returns the temp path. */
+function writeTempSecret(path: string, content: string): string {
+  const tmp = tempPathFor(path);
+  const fd = openSync(tmp, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, SECRET_MODE);
+  try {
+    fchmodSync(fd, SECRET_MODE); // override umask so the mode is exactly 0600
+    writeAll(fd, content);
+    fsyncSync(fd);
+  } catch (e) {
+    // A partial write (ENOSPC/EIO) must not leave a half-written 0600 temp behind: close + unlink
+    // before propagating, so the caller never has to know the temp's random name to clean it up.
+    closeQuietly(fd);
+    unlinkBestEffort(tmp);
+    throw e;
+  }
+  closeQuietly(fd);
+  return tmp;
+}
+
 /**
  * Atomically create `path` containing `content`, mode 0600, failing if it already exists.
  * Writes a unique temp + fsync, then link(2)s it into place (atomic, exclusive). Returns false
@@ -267,14 +292,13 @@ function tempPathFor(path: string): string {
  * crash leaves only an orphan temp, never a zero-length canonical file.
  */
 function atomicCreateExclusive(path: string, content: string): boolean {
-  const tmp = tempPathFor(path);
-  const fd = openSync(tmp, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, SECRET_MODE);
+  let tmp: string;
   try {
-    fchmodSync(fd, SECRET_MODE); // override umask so the mode is exactly 0600
-    writeAll(fd, content);
-    fsyncSync(fd);
-  } finally {
-    closeQuietly(fd);
+    tmp = writeTempSecret(path, content);
+  } catch (e) {
+    // Staging failure (ENOSPC/EACCES/EIO) → mapped StoreError, so callers (ensureIdentity, the
+    // --rc-keep-old backup) never see a raw fs error escape; `path` gives the right diagnostic.
+    mapFsError(e, path);
   }
   try {
     linkSync(tmp, path); // atomic + exclusive: EEXIST if anything already occupies `path`
@@ -285,6 +309,39 @@ function atomicCreateExclusive(path: string, content: string): boolean {
   }
   unlinkBestEffort(tmp); // the content now lives at `path` via the hard link
   return true;
+}
+
+/**
+ * Best-effort overwrite of an open file's bytes with random data + fsync (no unlink). The secret
+ * file is one short line (~57 bytes); the scrub is capped so a `--rc-file` aimed at a huge file
+ * can't force a multi-gigabyte `randomBytes` allocation. Overwriting the head destroys the
+ * single-line token, which is all that addresses the (now-dead) identity.
+ */
+function scrubFd(fd: number): void {
+  const SCRUB_CAP = 1 << 16; // 64 KiB — far more than a token line, bounded regardless of file size
+  try {
+    const st = fstatSync(fd);
+    const size = st.isFile() ? Math.min(Number(st.size), SCRUB_CAP) : 0;
+    if (size > 0) {
+      writeSync(fd, randomBytes(size), 0, size, 0);
+      fsyncSync(fd);
+    }
+  } catch {
+    /* best-effort: a failed scrub still leaves the identity invalidated by the new S */
+  }
+}
+
+/** fsync the directory holding `filePath` so a rename/unlink is durable. Best-effort. */
+function fsyncDirBestEffort(filePath: string): void {
+  let fd: number | undefined;
+  try {
+    fd = openSync(dirname(filePath), FS.O_RDONLY | (FS.O_DIRECTORY ?? 0));
+    fsyncSync(fd);
+  } catch {
+    /* directory fsync is EINVAL/unsupported on some platforms (e.g. macOS) — best-effort */
+  } finally {
+    if (fd !== undefined) closeQuietly(fd);
+  }
 }
 
 function unlinkBestEffort(path: string): void {
@@ -341,18 +398,101 @@ export async function ensureIdentity(
  * written, so a sidecar failure must not fail the create — `created_at` just reads back as null.
  */
 function writeSidecar(sidecarPath: string, createdAt: string): void {
-  const tmp = tempPathFor(sidecarPath);
+  let tmp: string | undefined;
   try {
-    const fd = openSync(tmp, FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | FS.O_NOFOLLOW, SECRET_MODE);
-    try {
-      fchmodSync(fd, SECRET_MODE);
-      writeAll(fd, `${createdAt}\n`);
-      fsyncSync(fd);
-    } finally {
-      closeQuietly(fd);
-    }
-    renameSync(tmp, sidecarPath);
+    tmp = writeTempSecret(sidecarPath, `${createdAt}\n`);
+    renameSync(tmp, sidecarPath); // replace any existing sidecar atomically
   } catch {
-    unlinkBestEffort(tmp);
+    if (tmp) unlinkBestEffort(tmp);
   }
+}
+
+export interface RotatedIdentity {
+  /** The NEW `rc1_…` token — emitted to the user ONCE, on a successful rotate. */
+  token: string;
+  /** The NEW public identity_id. */
+  identityId: Uint8Array;
+  /** The OLD (now-destroyed) public identity_id, for the summary. */
+  oldIdentityId: Uint8Array;
+  createdAt: string;
+  /** Where the old secret was kept (`--rc-keep-old`), or null when it was scrubbed. */
+  backupPath: string | null;
+}
+
+/**
+ * Rotate the identity at `secretPath` (§3.1 `--rc-rotate`, the ONLY destructive path): generate a
+ * NEW S — a NEW identity — write it durably, and either best-effort scrub the old secret (default)
+ * or keep it as a `0600` `<path>.old` backup (still a live credential). The NEW token is durable
+ * on disk BEFORE the old is replaced, and the canonical path is only ever the old or the new
+ * secret (atomic rename) — never missing or garbage. The old identity and all its spaces are gone.
+ *
+ * Secure-delete is best-effort: an in-place overwrite cannot guarantee erasure on CoW / SSD /
+ * log-structured / journaling filesystems — the real guarantee is that a new S is a new identity,
+ * so the old key set no longer addresses any live bus. Caller must have a verified secret (this
+ * calls loadSecret, which rejects symlink/insecure/corrupt/absent up front).
+ */
+export async function rotateIdentity(
+  secretPath: string,
+  deps: { now: () => Date; keepOld: boolean },
+): Promise<RotatedIdentity> {
+  const old = await loadSecret(secretPath);
+  const oldId = await deriveIdentity(old.secret);
+
+  const { secret: newSecret, token: newToken } = await generateSecret();
+  const createdAt = deps.now().toISOString();
+  const newId = await deriveIdentity(newSecret);
+
+  const backupPath = deps.keepOld ? `${secretPath}.old` : null;
+
+  // writeTempSecret is inside the try so a raw fs error (ENOSPC/EACCES) maps to StoreError too,
+  // instead of escaping unmapped and crashing the CLI with a stack trace.
+  let tmpNew: string | undefined;
+  let backupCreated = false;
+  try {
+    tmpNew = writeTempSecret(secretPath, `${newToken}\n`); // new is durable before any destroy
+    if (backupPath) {
+      // Keep the old secret as an exclusive 0600 backup; refuse to clobber a prior (still-live) one.
+      const oldToken = await formatSecret(old.secret);
+      if (!atomicCreateExclusive(backupPath, `${oldToken}\n`)) {
+        throw new StoreError(
+          "IO",
+          `a backup already exists at ${backupPath}; remove it before rotating with --rc-keep-old`,
+        );
+      }
+      backupCreated = true;
+      renameSync(tmpNew, secretPath); // replace canonical; the backup retains the old secret
+      fsyncDirBestEffort(secretPath); // make the .old link + canonical rename durable
+    } else {
+      // Hold a handle to the old inode across the atomic replace, then scrub its bytes — so the
+      // path is always old-or-new and the old blocks are best-effort overwritten before freed.
+      const oldFd = openSync(secretPath, FS.O_RDWR | FS.O_NOFOLLOW);
+      try {
+        renameSync(tmpNew, secretPath); // path → new token; old inode kept alive by oldFd
+        // Make the rename DURABLE before scrubbing: scrubFd fsyncs the old inode's bytes, so a power
+        // loss after the scrub but before the dir entry persists could otherwise leave canonical →
+        // the (now-garbage) scrubbed old inode. Dir-fsync first keeps the path always old-or-new.
+        fsyncDirBestEffort(secretPath);
+        scrubFd(oldFd);
+      } finally {
+        closeQuietly(oldFd); // old inode freed (scrubbed)
+      }
+    }
+  } catch (e) {
+    if (tmpNew) unlinkBestEffort(tmpNew);
+    // If we created the .old backup but a later step (e.g. the rename) failed, the canonical path
+    // still holds the OLD secret — so drop our just-made backup, else it orphans a duplicate that
+    // wedges every future --rc-keep-old rotate (atomicCreateExclusive refuses EEXIST).
+    if (backupCreated && backupPath) unlinkBestEffort(backupPath);
+    if (StoreError.is(e)) throw e;
+    mapFsError(e, secretPath);
+  }
+
+  writeSidecar(sidecarPathFor(secretPath), createdAt); // replaces the old sidecar with the new time
+  return {
+    token: newToken,
+    identityId: newId.identityId,
+    oldIdentityId: oldId.identityId,
+    createdAt,
+    backupPath,
+  };
 }
