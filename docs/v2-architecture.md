@@ -1435,12 +1435,8 @@ Each maps to the frames (§6A), channels, endpoints (§8), and state. **[V]** = 
 aspect already empirically verified (Phase 0 MANGO / the P0.5 spikes C1–C5 +
 rc_api_bridge); others are specs to build/test.
 
-Discovery + presence are the per-identity **bus** (§6B): connected wrappers periodically
-**broadcast** a signed `session_announce{…, sent_at}`; a client subscribes
-(`GET /api/stream?identity=`) and shows a session **online iff its latest announce is
-fresh** (`sent_at` within `FRESH_WINDOW`), greying locally when announces stop
-(timestamp-driven, §4.3). Only two endpoints exist (`POST /api/relay`, `GET /api/stream`).
-Offline *listing* across cold starts is deferred (§6C).
+(Discovery + presence = the per-identity **bus** (§6B); the two endpoints = §8; offline
+*listing* across cold starts is deferred, §6C.)
 
 **Identity & bring-up**
 1. **Fresh identity bootstrap.** `remote-claw --rc-identity` → generate `S` (0600),
@@ -1453,6 +1449,7 @@ Offline *listing* across cold starts is deferred (§6C).
    transcript; the broker knows nothing. **[V]** (local history)
 
 **Enabling remote control**
+
 4. **Enable RC mid-session via `/remote-control`.** Wrapper points the inner claude at
    the local MITM (our relay = RC backend); worker backfills the prior transcript as
    `historical` frames → **log + seen-set seeded first**. *Only then* does the wrapper
@@ -1464,6 +1461,7 @@ Offline *listing* across cold starts is deferred (§6C).
    backend from the start, empty history, joins the bus + broadcasts. **[V]** (Phase 0)
 
 **Client onboarding & discovery (the bus)**
+
 6. **Client first connection.** Paste `rc1_…` (or `#fragment`) → derive keys →
    `GET /api/stream?identity=identity_id` (subscribe the bus) → reads the recent window →
    renders fresh `session_announce`s (empty if none connected). Store secret in
@@ -1478,6 +1476,7 @@ Offline *listing* across cold starts is deferred (§6C).
    latest announce is **fresh**, §4.3.)
 
 **History sync**
+
 9. **Open a session cold (full sync).** Client sends `catch_up{since=0}` on the session
    channel → wrapper replays its log (or worker backfill) as `historical` → client
    renders, then tails live.
@@ -1485,6 +1484,7 @@ Offline *listing* across cold starts is deferred (§6C).
     only `>N`; or resume the session out-stream by `startIndex` if within the window.
 
 **Messaging (the core loop)**
+
 11. **Send from client → underlying claude.** Client encrypts a `user` frame
     (`client_msg_id`) → `POST /api/relay` (`resumeHook sess:…`) → wrapper hook → dedup
     by `msg_id` → log → decrypt → inject into claude via MITM downstream → echo
@@ -1502,6 +1502,7 @@ Offline *listing* across cold starts is deferred (§6C).
     the other (no per-client server state). (multi-client)
 
 **Switch identity & naming**
+
 14. **Switch identity (replace, not accumulate).** Paste a different `rc1_…`. In order:
     (1) **close the old identity's SSE** (so no late frame re-populates the cache mid-wipe),
     (2) **forget** the prior secret — wipe it from `localStorage` **and** the decrypted
@@ -1518,6 +1519,7 @@ Offline *listing* across cold starts is deferred (§6C).
     deferred with the store (§6C).
 
 **Control & permissions**
+
 16. **Tool permission (`can_use_tool`).** Worker emits a `control_request` → session
     out-stream → client Allow/Deny → encrypted `permission` control frame → wrapper →
     `control_response` to claude. (plumbed; RC auto-runs today)
@@ -1525,6 +1527,7 @@ Offline *listing* across cold starts is deferred (§6C).
     / `command` (`/compact`,`/clear`) control frames (session channel) → wrapper → claude.
 
 **Resilience**
+
 18. **Network blip mid-turn.** Client SSE drops → reconnect
     `GET /api/stream?identity=id&session=sid` (resolve token → run → resume by `startIndex`);
     at-least-once → dedup by `msg_id`; no missed/dup frames.
@@ -1577,6 +1580,7 @@ Offline *listing* across cold starts is deferred (§6C).
 
 **Adversarial / threat-model coverage** (the broker is hostile per §2 — drop/withhold/
 reorder/**replay**, no keys)
+
 24. **Broker replays a stale announce to a watching client.** Session announces at `T`
     (`sent_at=T`); client sees it online. Wrapper dies; by `T + FRESH_WINDOW + SKEW` the
     client has **greyed** it. The broker replays the captured `T` announce later: its
