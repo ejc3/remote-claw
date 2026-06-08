@@ -38,8 +38,8 @@ export async function runIdentity(
     return 2;
   }
 
-  // Reject any reserved flag --rc-identity doesn't understand (e.g. --rc-rotate, --rc-show-secret,
-  // --rc-web) instead of silently ignoring it — those actions land in later PRs. Before any disk.
+  // Reject any rc flag --rc-identity doesn't understand (e.g. --rc-rotate, --rc-show-secret)
+  // instead of silently ignoring it — those actions land in later PRs. Before any disk.
   const unsupported = Object.keys(rc).filter((k) => !IDENTITY_FLAGS.has(k));
   if (unsupported.length > 0) {
     const named = unsupported.map((k) => `--${k}`).join(", ");

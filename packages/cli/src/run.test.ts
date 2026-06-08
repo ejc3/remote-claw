@@ -43,9 +43,35 @@ describe("runWrapper (functional)", () => {
 
   it("exits 2 on a recognized-but-unimplemented rc flag without spawning", async () => {
     const { fn, calls } = recordingSpawn();
-    // --rc-share is still a stub; --rc-identity is now implemented (covered in identity tests).
-    expect(await runWrapper(["--rc-share"], { spawnFn: fn, stderr: () => {} })).toBe(2);
+    // --rc-rotate is still a reserved stub; --rc-identity is implemented (covered in identity tests).
+    expect(await runWrapper(["--rc-rotate"], { spawnFn: fn, stderr: () => {} })).toBe(2);
     expect(calls).toHaveLength(0);
+  });
+
+  it("--help prints the rc help banner and STILL falls through to claude with --help", async () => {
+    const { fn, calls } = recordingSpawn(0);
+    const out: string[] = [];
+    const code = await runWrapper(["--help"], { spawnFn: fn, stdout: (l) => out.push(l) });
+    expect(code).toBe(0);
+    expect(out.join("")).toContain("remote-claw"); // our --rc-* banner printed first
+    expect(out.join("")).toMatch(/--rc-identity/);
+    expect(calls).toEqual([{ bin: "claude", args: ["--help"] }]); // claude still gets --help
+  });
+
+  it("-h triggers the same help passthrough", async () => {
+    const { fn, calls } = recordingSpawn(0);
+    const out: string[] = [];
+    await runWrapper(["chat", "-h"], { spawnFn: fn, stdout: (l) => out.push(l) });
+    expect(out.join("")).toMatch(/--rc-identity/);
+    expect(calls[0]?.args).toEqual(["chat", "-h"]);
+  });
+
+  it("does NOT print the banner for -h/--help after the `--` escape (stays opaque)", async () => {
+    const { fn, calls } = recordingSpawn(0);
+    const out: string[] = [];
+    await runWrapper(["chat", "--", "-h", "--help"], { spawnFn: fn, stdout: (l) => out.push(l) });
+    expect(out.join("")).toBe(""); // escape contract: post-`--` tokens are claude's, verbatim
+    expect(calls[0]?.args).toEqual(["chat", "--", "-h", "--help"]);
   });
 
   it("resolves the claude binary from RC_CLAUDE_BIN when not overridden", async () => {

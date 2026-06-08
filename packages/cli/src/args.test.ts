@@ -27,15 +27,15 @@ describe("classifyArgs (unit)", () => {
   });
 
   it("mixes rc flags and claude args in any order", () => {
-    const c = classifyArgs(["chat", "--rc-file", "work", "--model", "opus", "--rc-share"]);
-    expect(c.rc).toEqual({ "rc-file": "work", "rc-share": true });
+    const c = classifyArgs(["chat", "--rc-file", "work", "--model", "opus", "--rc-quiet"]);
+    expect(c.rc).toEqual({ "rc-file": "work", "rc-quiet": true });
     expect(c.claudeArgs).toEqual(["chat", "--model", "opus"]);
     expect(c.errors).toEqual([]);
   });
 
   it("treats -- as an escape: everything after is claude's, verbatim", () => {
-    const c = classifyArgs(["--rc-share", "a", "--", "--rc-identity", "-x", "--model"]);
-    expect(c.rc).toEqual({ "rc-share": true });
+    const c = classifyArgs(["--rc-quiet", "a", "--", "--rc-identity", "-x", "--model"]);
+    expect(c.rc).toEqual({ "rc-quiet": true });
     expect(c.claudeArgs).toEqual(["a", "--", "--rc-identity", "-x", "--model"]);
   });
 
@@ -47,6 +47,14 @@ describe("classifyArgs (unit)", () => {
     expect(classifyArgs(["--rc-bogus"]).errors).toEqual(["unknown flag --rc-bogus"]);
   });
 
+  it("no longer reserves --rc-share or --rc-web (removed from the namespace)", () => {
+    // --rc-share: claude's own --remote-control covers it. --rc-web: collapsed into --rc-app.
+    expect(classifyArgs(["--rc-share"]).errors).toEqual(["unknown flag --rc-share"]);
+    expect(classifyArgs(["--rc-web=https://x"]).errors).toEqual(["unknown flag --rc-web"]);
+    // claude's --remote-control is NOT an rc flag — it forwards through untouched.
+    expect(classifyArgs(["--remote-control"]).claudeArgs).toEqual(["--remote-control"]);
+  });
+
   it("errors when a boolean flag is given a value", () => {
     expect(classifyArgs(["--rc-identity=x"]).errors).toEqual(["--rc-identity takes no value"]);
   });
@@ -55,7 +63,7 @@ describe("classifyArgs (unit)", () => {
     expect(classifyArgs(["--rc-file"]).errors).toHaveLength(1);
     expect(classifyArgs(["--rc-file"]).errors[0]).toMatch(/--rc-file requires a value/);
     // crucially, a value flag must NOT eat a following claude flag (--model / -p) or rc flag
-    for (const next of ["--rc-share", "--", "--model", "-p", "-"]) {
+    for (const next of ["--rc-rotate", "--", "--model", "-p", "-"]) {
       const c = classifyArgs(["--rc-file", next]);
       expect(c.errors).toHaveLength(1);
       expect(c.rc["rc-file"]).toBeUndefined();

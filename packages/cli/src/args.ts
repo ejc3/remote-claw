@@ -8,7 +8,6 @@ export type RcFlagKind = "boolean" | "value";
 /** The reserved `--rc-*` namespace. Keys omit the leading `--`. */
 export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-identity": "boolean",
-  "rc-share": "boolean",
   "rc-rotate": "boolean",
   "rc-show-secret": "boolean",
   "rc-json": "boolean",
@@ -20,10 +19,13 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // points at a specific one, for both creating (--rc-identity) and using an identity.
   "rc-file": "value",
   "rc-confirm": "value",
+  // The single app origin (its /api is the broker, its web UI builds the #fragment deep link).
   "rc-app": "value",
-  "rc-app-key": "value",
-  "rc-web": "value",
 };
+// Not reserved: starting already remote-controlled is just claude's own `--remote-control`,
+// which the wrapper forwards verbatim — no `--rc-share`. The web deep link is built from the
+// one `--rc-app` origin — no separate `--rc-web`. The web app gates on SSO and the broker on the
+// per-identity auth_token, so there is no app-wide key — no `--rc-app-key` (§4.5).
 
 export interface Classified {
   /** Parsed reserved flags (key without `--`). Value is `true` for booleans. */

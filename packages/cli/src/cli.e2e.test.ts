@@ -48,6 +48,19 @@ describe("remote-claw CLI (e2e)", () => {
     expect(JSON.parse(r.stdout)).toEqual(["chat", "--model", "opus", "--", "--rc-identity"]);
   });
 
+  it("--help prints the rc help banner THEN claude's help (both layers)", () => {
+    const r = runCli(["--help"], { RC_CLAUDE_BIN: echoClaude(0) });
+    expect(r.status).toBe(0);
+    // Our banner lands on stdout first; the fake claude then echoes its argv (incl. --help).
+    expect(r.stdout).toMatch(/remote-claw/);
+    expect(r.stdout).toMatch(/--rc-identity/);
+    // The echoed argv is the LAST JSON array on stdout (robust even if the banner gains a `[`).
+    const echoed = r.stdout.slice(r.stdout.lastIndexOf("["));
+    expect(JSON.parse(echoed)).toEqual(["--help"]);
+    // Banner precedes claude's output (the contract): "remote-claw" appears before the argv.
+    expect(r.stdout.indexOf("remote-claw")).toBeLessThan(r.stdout.lastIndexOf("["));
+  });
+
   it("propagates claude's non-zero exit code", () => {
     expect(runCli(["x"], { RC_CLAUDE_BIN: echoClaude(7) }).status).toBe(7);
   });

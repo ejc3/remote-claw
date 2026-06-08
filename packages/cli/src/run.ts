@@ -4,14 +4,23 @@
 // implemented so the namespace never silently leaks into claude.
 
 import { spawn as nodeSpawn } from "node:child_process";
+import { writeSync } from "node:fs";
 import { constants } from "node:os";
 import { classifyArgs } from "./args.js";
+import { RC_HELP } from "./help.js";
 import { runIdentity } from "./identity.js";
 
 /** Map a signal name to its number (for the shell-standard 128+N exit code). */
 function signalExitCode(signal: NodeJS.Signals): number {
   const n = (constants.signals as Record<string, number>)[signal];
   return 128 + (n ?? 0);
+}
+
+/** True if `--help`/`-h` appears before the `--` escape (post-`--` tokens are opaque claude payload). */
+function wantsHelp(claudeArgs: readonly string[]): boolean {
+  const end = claudeArgs.indexOf("--");
+  const scan = end === -1 ? claudeArgs : claudeArgs.slice(0, end);
+  return scan.includes("--help") || scan.includes("-h");
 }
 
 /** Run `bin` with `args`, inheriting stdio, resolving to the process exit code. */
@@ -69,6 +78,16 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     const named = rcNames.map((k) => `--${k}`).join(", ");
     warn(`remote-claw: --rc-* flags are not implemented in this build yet (${named})\n`);
     return 2;
+  }
+
+  // `--help`/`-h`: print our --rc-* help first, then fall through to claude so the user also
+  // sees claude's help (claudeArgs still carries --help). Only honor it BEFORE the `--` escape,
+  // so a literal `-h` passed through (e.g. `remote-claw -- -h`) stays opaque per that contract.
+  if (wantsHelp(claudeArgs)) {
+    // Default sink uses a SYNCHRONOUS fd write so the banner is fully flushed before the child
+    // (inherited stdio) starts writing — otherwise piped stdout could interleave the two.
+    const writeOut = opts.stdout ?? ((line: string) => void writeSync(1, line));
+    writeOut(RC_HELP);
   }
 
   // `||` (not `??`) so an empty string from RC_CLAUDE_BIN falls through to the default
