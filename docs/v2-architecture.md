@@ -777,10 +777,10 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   an existing run; it never creates one (verified). So a wrapper coming online does
   **resume-or-start**: try `getHookByToken`/`resumeHook`; on a missing/dead run `start()`
   then retry **with bounded exponential backoff + jitter** (**50 ms base, ×2, ≤2 s ceiling,
-  ±25% jitter**). The docs confirm a **live hook owns its token until disposal** ("its token
-  becomes available for other workflows to use" only after `dispose()`), which gives us one
-  bus per identity; the **exact behavior of a duplicate `createHook` on a held token** (a
-  conflict error vs. silent) is **not documented → a P3 verify**, but either way the loser
+  ±25% jitter**). One bus per identity is **enforced by the SDK**: hook tokens must be unique
+  across all running workflows, and a duplicate `createHook` on a held token throws
+  **`HookConflictError`** (`@workflow/errors`; verified in the bundled SDK docs, §13) — so the
+  create-race loser deterministically catches it and resume-tails the winner; the loser
   resume-tails the winner.
 - **Long-lived; durable, no idle reaper (verified §13).** The bus run loops awaiting its
   hook. Vercel sets **no max run duration and no idle-timeout** — a suspended run waits
@@ -801,7 +801,7 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   the 25k-events/run cap a connected wrapper **completes** the current run (which
   **closes its stream and disposes the hook → frees the token**), then immediately
   `start()`s a fresh run (re-`createHook("bus:"+identity_id)`); if two wrappers race, one
-  wins and the loser (its duplicate create on the held token — behavior P3-verified, §11)
+  wins and the loser catches **`HookConflictError`** (SDK-enforced unique tokens, §13) and
   resume-tails the winner. **No new frame kind is needed: tailing clients (and wrappers) see
   the stream EOF**, reconnect `GET /api/stream?identity=…` → `getHookByToken` now resolves the
   new run → re-tail (and wrappers resume broadcasting; a brief `HookNotFound` during the swap
@@ -1089,16 +1089,19 @@ phase0/            unchanged — the Python reference + protocol findings
   (web-verified 2026-06-08, §13) — `getHookByToken→getRun→getReadable`, custom hook tokens,
   `resumeHook` (resume-not-create), negative-`startIndex` recent window, stream-writes-bypass-
   events, no-max-run-duration/idle-free, no caller-chosen `runId`, and the caps. So the spike
-  is **integration + the few undocumented bits**, not a re-derivation (pin `workflow`/`@workflow/*`):
+  is now a **pure integration smoke-test** — every primitive (incl. the duplicate-token
+  conflict) is docs-confirmed (§13), so this just proves *our wiring* on real infra (pin
+  `workflow`/`@workflow/*`):
   1. End-to-end **`getHookByToken→getRun→getReadable` from an API route** with server World
-     creds (the composition is ours; each call is documented, the wiring is what we prove).
+     creds (each call is documented; the cross-process composition is ours to wire).
   2. **`getReadable({startIndex:-N})`** delivers the last *N* chunks and keeps streaming new
      ones — pick *N* so the window spans ≥ one `ANNOUNCE_INTERVAL`; a rolled/short window
-     degrades to ≤ `ANNOUNCE_INTERVAL` latency, not a miss (negatives are docs-confirmed §13).
-  3. **Duplicate `createHook` on a held token** — the *one* genuinely undocumented behavior:
-     confirm it errors (or is otherwise safe) so the create-race loser deterministically
-     resume-tails the winner. (No idle-timeout exists, §13 — so there is nothing to "reset";
-     the run just persists, and the only token-free path is the cap-roll.)
+     degrades to ≤ `ANNOUNCE_INTERVAL` latency, not a miss (negatives + `getTailIndex()`
+     docs-confirmed §13; note: live-stream pagination over negatives isn't exact — fine for
+     "recent," §13).
+  3. **One-bus-per-identity**: a duplicate `createHook` on a held token throws
+     `HookConflictError` (docs-confirmed §13) → confirm the create-race loser catches it and
+     resume-tails. (No idle-timeout exists, §13 — the run persists; only the cap-roll frees the token.)
   4. **Cap-roll handoff** observable: readers see stream **EOF** on the old run's completion
      and `getHookByToken` resolves the new run after re-`start()`; brief `HookNotFound` → retry.
   5. Browser path: `GET /api/stream` obtains World creds (per-request vs cached — measure),
@@ -1165,9 +1168,9 @@ phase0/            unchanged — the Python reference + protocol findings
   storage-retained is billed), so the token stays held even with no connected sessions. This
   is benign — a cold client just sees "no fresh announce → empty" — and the token is freed
   only by the **cap-roll** (deliberate complete + re-`start()`). If we want idle buses to
-  self-clean, race the hook against a durable `sleep` (§6B). Residual unknown: the **exact
-  behavior of a duplicate `createHook` on a held token** (conflict error vs. silent) is
-  undocumented → a P3 verify; either way the create-race loser resume-tails the winner.
+  self-clean, race the hook against a durable `sleep` (§6B). One-bus-per-identity is
+  SDK-enforced (a duplicate `createHook` on a held token throws `HookConflictError`,
+  docs-confirmed §13 — the create-race loser catches it and resume-tails).
 - **Workflow per-run caps** (25k events / 10k steps / 2 GB; replay degrades past
   ~2k events): each **inbound publish is an event**, so the bus **rolls** before the
   cap (re-creating `bus:${identity_id}`); keep high-volume turn frames on per-session
@@ -1185,9 +1188,9 @@ phase0/            unchanged — the Python reference + protocol findings
 - **Vercel Queues / WDK surface** still moving (Queues beta); Workflows GA is
   stable — pin SDK versions, isolate behind a thin transport interface. The §6B caps,
   retention, stream-event-bypass and the API primitives are now **web-verified against the
-  live docs** (§13, 2026-06-08); only the *integration* (cross-process token→stream wiring +
-  the duplicate-`createHook` behavior) remains a P3 build check, and SDK versions can still
-  drift — re-confirm at build (§11 P3).
+  live docs** (§13, 2026-06-08) — incl. `HookConflictError` on duplicate tokens; only the
+  *integration* (our cross-process token→stream wiring) remains a P3 smoke-test, and SDK
+  versions can still drift — re-confirm at build (§11 P3).
 - **Relay flooding / DoS.** The broadcast model removes the old `identify?`
   request-triggered fan-out (no client request exists), but any caller past the soft web
   `T_app` can still `POST /api/relay` junk. Mitigate with a broker-side per-`identity_id`
@@ -1207,7 +1210,7 @@ phase0/            unchanged — the Python reference + protocol findings
   rolls at the cost of a larger presence fuzz. Quantify Events vs Data-Written per active
   identity in P3.
 
-## 13. Sources (verified 2026-06-07; Workflow runtime semantics **web-verified 2026-06-08**)
+## 13. Sources (verified 2026-06-07; Workflow runtime semantics **web- + bundled-SDK-verified 2026-06-08**, against the installed `workflow` package's `node_modules/workflow/docs`)
 - Vercel Workflows docs / concepts / pricing+limits — https://vercel.com/docs/workflows ·
   /workflows/concepts · /workflows/pricing (GA 2026-04-16; retention & caps as cited).
   The official docs delegate the SDK/API reference to the open-source **Workflow SDK** at
@@ -1218,10 +1221,17 @@ phase0/            unchanged — the Python reference + protocol findings
   - Hooks accept a **caller-chosen custom token** ("a custom token that external systems can
     reconstruct"); `resumeHook(token,data)` resumes an existing run (emits `hook_received`),
     does **not** create one — /docs/foundations/hooks · /docs/api-reference/workflow-api/resume-hook.
-  - `getRun(id).getReadable({startIndex})` reconnects by `runId`+`startIndex`; **`startIndex`
-    supports negatives** ("`-5` starts 5 chunks before the current end", "only fetch the last
-    20 chunks") — so the **recent-window read is a native, client-chosen offset**, and
-    later chunks still stream — /docs/foundations/streaming · /docs/ai/resumable-streams.
+  - `getRun(id).getReadable({startIndex})` reconnects by `runId`+`startIndex` and returns a
+    `WorkflowReadableStream` with a **`getTailIndex()`** helper ("index of the last chunk, or
+    −1") — handy for cold-start. **`startIndex` supports negatives** ("`-5` starts 5 chunks
+    before the current end"; "read only the last 10 chunks") — the recent-window read is a
+    **native, client-chosen offset** and later chunks still stream; caveat: exact pagination
+    over a live stream via negatives isn't supported (fine for "recent") —
+    /docs/foundations/streaming · /docs/api-reference/workflow-api/get-run · /docs/ai/resumable-streams.
+  - **One-bus-per-identity is SDK-enforced:** "hook tokens must be unique across all running
+    workflows"; a duplicate `createHook` on a held token throws **`HookConflictError`**
+    (`@workflow/errors`, `HookConflictError.is(e)`, `e.token`) — /docs/errors/hook-conflict.
+    Hooks are **`AsyncIterable`** (`for await … of hook` per `resumeHook`) — the bus loop.
   - **Stream data bypasses the event log** ("flows directly without being stored in the event
     log"), so out-stream writes do **not** count toward the 25k event cap (billed as Data
     Written; max stream storage Unlimited; **chunk ≤10 MB**, ≤1,000 chunks/s/stream).
