@@ -9,6 +9,18 @@ export async function sha256(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", data as BufferSource));
 }
 
+export function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  let len = 0;
+  for (const p of parts) len += p.length;
+  const out = new Uint8Array(len);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+
 export function toHex(bytes: Uint8Array): string {
   let s = "";
   for (const b of bytes) s += b.toString(16).padStart(2, "0");
