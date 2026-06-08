@@ -310,7 +310,7 @@ answered live on the per-identity **bus** (§6B).
   `/remote-control`. A machine running `remote-claw` (as claude) with RC off is
   invisible — no bus membership, no traffic.
 - **Discovery + presence are live, not stored:** a client publishes `identify?` to the
-  bus; **connected** wrappers answer (challenge-bound by the `identify?` nonce) with their
+  bus; **connected** wrappers answer (challenge-bound by the `identify?` `challenge`) with their
   sessions (= the list; answered + beating = online),
   and emit a periodic **`present` beat** so a client can **grey** a session locally when
   it goes quiet (client-side, no server state) — §6B. **Multiple wrappers under one
@@ -415,21 +415,29 @@ holds none of these keys, so it can forge **nothing**; `dir` is bound into AAD, 
 `in` prompt and its `out` echo derive different `K_msg` and can't be confused. **Inbound
 frames** carry `msg_id` (+ `client_msg_id` for a `user` prompt) and are replay-checked.
 **Outbound presence** (`present`/`session_announce`) carries `{wrapper_instance_id,
-beat_seq}` **inside** the `K_meta` ciphertext. Two replay defenses, because a beat alone
-can be replayed to a client that has no prior baseline:
-- **Discovery is challenge-bound.** `identify?` carries a fresh random **`nonce`**; the
-  wrapper echoes it as `in_reply_to` **inside** the `K_meta` `session_announce`. A client
-  **adds/refreshes a session in its list only from an announce whose `in_reply_to`
-  matches a nonce it issued in the last few seconds** — so the broker can't seed a
-  fresh/late client with a *replayed stale* announce (its nonce won't match). This is
-  what makes the two-clients-at-different-times case (§15 #13) freshness-sound.
-- **Liveness is monotonic.** Once a session is known, a client counts a beat as live
-  **only if `beat_seq` strictly advances within the same `wrapper_instance_id`**; a
-  replayed beat (stale `beat_seq`) is ignored — so the broker can't keep a dead session
-  green. A **new `wrapper_instance_id`** (a restarted, stateless wrapper that resets its
-  counter, §15 #19) is a fresh incarnation that **re-baselines** `beat_seq`, so genuine
-  restarts un-grey without the client re-issuing `identify?`. (`present` only *maintains*
-  already-known sessions; it never *introduces* one — only a nonce-matched announce does.)
+beat_seq}` **inside** the `K_meta` ciphertext. Because AEAD stops forgery but **not**
+replay (the broker can re-send a captured valid frame), liveness is gated on
+**monotonicity scoped to an instance**, and **introduction/instance-change is
+challenge-bound**. A client keeps, per known session (even while greyed),
+`(wrapper_instance_id, max_beat_seq)`.
+- **Announces are challenge-bound.** `identify?` carries a fresh **128-bit CSPRNG
+  `challenge`** (distinct from the envelope's GCM `nonce`); the wrapper echoes it as
+  `in_reply_to` **inside** the `K_meta` `session_announce`. A client **introduces a new
+  session, or accepts a *new* `wrapper_instance_id` for a known one, ONLY from an
+  announce whose `in_reply_to` matches a `challenge` it issued in the last few seconds** —
+  so a *replayed stale* announce (wrong/expired `challenge`) is rejected, and the broker
+  can neither mint a fresh `challenge` (no `K_meta`) nor reuse an expired one.
+- **Beats are monotonic within an instance.** For a session whose current
+  `wrapper_instance_id` the client tracks, a `present`/announce **maintains or un-greys**
+  it iff `beat_seq` **strictly advances** (a replay can't advance, so this is safe even to
+  revive after a transient drop). A beat bearing a **different `wrapper_instance_id` is
+  ignored** for liveness — it could be the broker replaying a real-but-stale *prior*
+  instance's beats — so a restart is adopted only via the challenge-bound announce above
+  (no free replay-exploitable re-baseline).
+- **Clients re-`identify?` on a cadence** — periodically (≈every `PRESENCE_INTERVAL`,
+  piggybacked on the bus they already tail) **and** whenever they grey a session. This
+  lets a **newly-shared** session, or a **restarted** wrapper's new instance, reach an
+  already-connected client within one refresh (§15 #13/#19).
 
 ### 4.4 Rotation / revocation
 Rotation = generate a **new `S`** ⇒ new `identity_id` ⇒ a **new identity** (a fresh,
@@ -612,7 +620,7 @@ Control frames (**in** — web client → wrapper → worker; encrypted under
 **`control_key`**, carry `msg_id` + `expiry`, replay-checked):
 | kind | maps to RC verb | notes |
 | --- | --- | --- |
-| `identify?` | — (ours, **bus**) | discovery request; carries a fresh random `nonce` — wrappers echo it as `in_reply_to` in `session_announce` (challenge-binds discovery vs replay, §4.3) |
+| `identify?` | — (ours, **bus**) | discovery request; carries a fresh 128-bit `challenge` — wrappers echo it as `in_reply_to` in `session_announce` (challenge-binds discovery vs replay; the *only* admit/un-grey path — §4.3) |
 | `catch_up` | — (ours) | request history `since=seq` |
 | `permission` | `control_response` | allow/deny a `can_use_tool` |
 | `interrupt` | `interrupt` | ESC / stop the current turn |
@@ -625,8 +633,8 @@ Our non-content meta frames (**AEAD under `K_meta`** — broker can't forge them
 | kind | dir | notes |
 | --- | --- | --- |
 | `accepted` | out | wrapper ack of a client frame: `{client_msg_id, seq}` |
-| `session_announce` | out (bus) | reply to `identify?`: `{in_reply_to:nonce, session_id, title, cwd, identity_label, status, last_activity, wrapper_instance_id, beat_seq}` — **whole payload AEAD under `K_meta`**; a client admits it only if `in_reply_to` matches a nonce it just issued (broker reads/forges nothing; replayed stale announces rejected — §4.3) |
-| `present` | out (bus) | coalesced liveness beat `{session_ids[], wrapper_instance_id, beat_seq}` every ≈20–30 s, AEAD under `K_meta`; a client resets a session's liveness timer **only on a `beat_seq` that strictly advances *within the same `wrapper_instance_id`*** (a *new* instance re-baselines); **greys** on silence (client-side; no server state; replay-proof — §6B) |
+| `session_announce` | out (bus) | reply to `identify?`: `{in_reply_to:challenge, session_id, title, cwd, identity_label, status, last_activity, wrapper_instance_id, beat_seq}` — **whole payload AEAD under `K_meta`**; the **only** frame that admits/refreshes/un-greys a session, and only if `in_reply_to` matches a live `challenge` (broker reads/forges nothing; replayed stale announces rejected — §4.3) |
+| `present` | out (bus) | coalesced liveness beat `{session_ids[], wrapper_instance_id, beat_seq}` every ≈20–30 s, AEAD under `K_meta`; **maintains** an already-admitted session's liveness only on a `beat_seq` that strictly advances *within the same `wrapper_instance_id`* (a new/unknown instance id does **not** un-grey — only a challenge-matched `session_announce` does); **greys** on silence (client-side; no server state; replay-proof — §6B) |
 
 (`historical` is a **flag** on replayed content frames, not a separate kind. There is
 **no** server-side `heartbeat`/registry — presence is "answered `identify?` + beating on
@@ -706,15 +714,16 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   (i) **last wrapper leaves** → the run completes, disposing the hook (token frees);
   (ii) **deliberate cap-roll** — see below.
 - **Cap-roll protocol.** Because each inbound publish is an event, before the bus nears
-  the 25k-events/run cap a connected wrapper triggers a roll: it emits a final
-  `roll{new=…}` marker and **completes** the current run (freeing the token), then
-  immediately `start()`s a fresh run (re-`createHook("bus:"+identity_id)`); if two
-  wrappers race, one wins and the loser catches `HookConflictError` and resume-tails the
-  winner. **Tailing clients see stream EOF → reconnect `GET /api/stream?identity=…` →
-  `getHookByToken` now resolves the new run → re-`identify?`** (a brief `HookNotFound`
-  during the swap → client retries). Open **per-session** chats are untouched (separate
-  runs). So "the bus never completes *except* on last-wrapper-exit or a deliberate roll"
-  — the token is always either live or re-creatable.
+  the 25k-events/run cap a connected wrapper **completes** the current run (which
+  **closes its stream and disposes the hook → frees the token**), then immediately
+  `start()`s a fresh run (re-`createHook("bus:"+identity_id)`); if two wrappers race, one
+  wins and the loser catches `HookConflictError` and resume-tails the winner. **No new
+  frame kind is needed: tailing clients (and wrappers) see the stream EOF**, reconnect
+  `GET /api/stream?identity=…` → `getHookByToken` now resolves the new run → re-tail and
+  re-`identify?` (a brief `HookNotFound` during the swap → retry). Open **per-session**
+  chats are untouched (separate runs). So "the bus never completes *except* on
+  last-wrapper-exit or a deliberate roll" — the token is always either live or
+  re-creatable, and the bus still carries only `identify?`/`session_announce`/`present`.
 - **"Online" = answered within a discovery window, not mere bus existence.** A resolvable
   bus only means *a* wrapper once created it; the client treats a session as online iff
   it received a `session_announce`/`present` for it within `PRESENCE_TTL` after
@@ -749,14 +758,18 @@ wrapper enables `/remote-control` and joins the bus):
    `getRun(runId).getReadable()` → SSE. (Offline/absent/mismatch all return the same
    empty, so status never leaks an *offline* identity; a *connected* one is observable as
    a live stream to anyone holding its `auth_token`.)
-3. **Ask.** Client publishes an encrypted `identify?{nonce}` control frame (fresh random
-   `nonce`) → `POST /api/relay` → `resumeHook("bus:"+identity_id, frame)`.
+3. **Ask.** Client publishes an encrypted `identify?{challenge}` control frame (fresh
+   128-bit `challenge`) → `POST /api/relay` → `resumeHook("bus:"+identity_id, frame)`.
+   (The client repeats this on a cadence — ≈every `PRESENCE_INTERVAL` and whenever it
+   greys a session — so newly-shared sessions appear and greyed ones can only return via
+   a fresh challenge-matched announce; §4.3.)
 4. **Wrappers answer.** Every connected wrapper (tailing the bus) replies
-   `session_announce{in_reply_to:nonce, session_id, title, cwd, identity_label, status,
+   `session_announce{in_reply_to:challenge, session_id, title, cwd, identity_label, status,
    last_activity, wrapper_instance_id, beat_seq}` (whole payload AEAD under `K_meta`) →
-   bus → SSE. The client **admits only announces whose `in_reply_to` matches its live
-   `nonce`** (rejecting any broker-replayed stale announce — §4.3), decrypts, and builds
-   the list, most-active first. The wrappers that answered are, by definition, online.
+   bus → SSE. The client **admits/refreshes/un-greys a session only from an announce whose
+   `in_reply_to` matches its live `challenge`** (rejecting any broker-replayed stale
+   announce — §4.3), decrypts, and builds the list, most-active first. The wrappers that
+   answered are, by definition, online.
 5. **Open a chat.** Tap a session → subscribe to **its per-session stream**, addressed by
    the **derived token** `sess:${identity_id}:${session_id}` (`GET
    /api/stream?identity=…&session=…` → `getHookByToken`→`getRun`→`getReadable`; no stored
@@ -765,19 +778,23 @@ wrapper enables `/remote-control` and joins the bus):
 
 ### Live greying (client-local presence)
 While connected, a wrapper emits a coalesced **`present{session_ids[], wrapper_instance_id,
-beat_seq}` beat** on the bus every `PRESENCE_INTERVAL` (≈20–30 s), AEAD under `K_meta`. A
-client tailing the bus resets a session's local liveness timer **only on an authenticated
-bus beat (`present`/`session_announce`) whose `beat_seq` strictly advances within the same
-`wrapper_instance_id`** — so a replayed (stale-`beat_seq`) beat is ignored, while a frame
-from a **new** `wrapper_instance_id` (a restarted wrapper, §15 #19) **re-baselines** the
-counter and counts as live. (Per-session turn frames keep their *own* per-session liveness
-on the session channel; they don't ride the bus.) If no qualifying beat arrives within
-`PRESENCE_TTL` (≈2–3× interval) the client **greys that session in its own UI** — a host
-that sleeps/crashes visibly "goes away" without re-asking. **Purely client-side** (no
-server state); it does **not** resurrect offline *listing* — a fresh browser still won't
-see a host never connected this session (deferred store, §6C). Cost: beats are bus
-**events** (coalesced per wrapper, modest interval) → they nudge the bus toward a roll, so
-keep high-volume turn frames on per-session streams (cap-free) and the interval generous.
+beat_seq}` beat** on the bus every `PRESENCE_INTERVAL` (≈20–30 s), AEAD under `K_meta`. For
+an **already-admitted** session, a `present` **maintains or un-greys** it **iff `beat_seq`
+strictly advances within the *tracked* `wrapper_instance_id`** (a replay can't advance, so
+even a brief drop self-heals on the next real beat). A beat with a **different
+`wrapper_instance_id` is ignored** (it could be the broker replaying a real-but-stale
+prior instance) — a restart is adopted only via a challenge-matched `session_announce`. If
+no qualifying beat arrives within `PRESENCE_TTL` (≈2–3× interval) the client **greys the
+session** — a host that sleeps/crashes visibly "goes away." A **newly-shared** session or a
+**restarted** instance reaches the client at its next `identify?` (cadence: ≈
+`PRESENCE_INTERVAL` + on grey), via a challenge-matched announce — so recovery is bounded
+by one refresh with **no** free replay-exploitable re-baseline. (Per-session turn frames
+keep their *own* liveness on the session channel; they don't ride the bus.) **Purely
+client-side** (no server state); it does **not** resurrect offline *listing* — a fresh
+browser still won't see a host never connected this session (deferred store, §6C). Cost:
+`present` + the `identify?` cadence are bus **events** (coalesced; modest interval) → they
+nudge the bus toward a roll, so keep high-volume turn frames on per-session streams
+(cap-free) and the intervals generous.
 
 ### Honest caveats (verified — §13)
 - **Online-only by design.** No connected wrapper ⇒ empty list (a sleeping/closed host
@@ -832,7 +849,7 @@ Transient relay **frame** (rides the bus / a session stream — never a durable 
 ```
 { v, identity_id, session_id, dir, record_kind, seq|null, msg_id, client_msg_id?,
   key_epoch, salt, nonce, ct, part?, parts? }   // ct includes the GCM tag
-AAD = canonical-encode(v, identity_id, session_id, dir, record_kind, seq, msg_id, key_epoch, part, parts)
+AAD = canonical-encode(v, identity_id, session_id, dir, record_kind, seq, msg_id, client_msg_id?, key_epoch, part, parts)   // identical to §4.3 canonical_AAD
 ```
 **Chunking (size limits, §6B).** A payload over a **hook** (inbound `POST /api/relay`,
 the Vercel Function body) is capped at **4.5 MB**; a **stream chunk** (outbound
@@ -849,24 +866,31 @@ large assistant output and full `catch_up` replays (over session streams).
   `status` · `rate_limit` · `can_use_tool` — carry `seq`; `user` may be `dir:in`
   (prompt, with `client_msg_id`) or `dir:out` (echo, optional `historical:true`).
 - **control** (AEAD under `control_key`, `dir:in`, `msg_id` + `expiry`,
-  replay-checked): `identify?` (the bus discovery request) · `catch_up` · `permission` ·
-  `interrupt` · `set_mode` · `set_model` · `command` · `end`.
+  replay-checked): `identify?` (bus discovery request — carries a fresh 128-bit
+  `challenge`, §4.3) · `catch_up` · `permission` · `interrupt` · `set_mode` · `set_model`
+  · `command` · `end`.
 - **meta** (AEAD under `K_meta`, `dir:out`): `accepted` `{client_msg_id, seq}`;
-  `session_announce` (bus) `{session_id, title, cwd, identity_label, status,
-  last_activity, wrapper_instance_id, beat_seq}` — **the whole payload is inside the
-  ciphertext**, so the broker reads none of it; `present` (bus) `{session_ids[],
-  wrapper_instance_id, beat_seq}`.
+  `session_announce` (bus) `{in_reply_to:challenge, session_id, title, cwd, identity_label,
+  status, last_activity, wrapper_instance_id, beat_seq}` — **the whole payload is inside
+  the ciphertext**, so the broker reads none of it; `present` (bus) `{session_ids[],
+  wrapper_instance_id, beat_seq}`. (The `identify?{challenge}` it answers is a control
+  frame; `in_reply_to` echoes that `challenge` so a client rejects replayed stale
+  announces — §4.3.)
 
 AAD binds **every** cleartext header field via a single canonical serialization
 (length-prefixed or CBOR) — no ad-hoc `a|b|c` concatenation (ambiguous). `beat_seq` and
-`wrapper_instance_id` live **inside** the `K_meta` payload (not the cleartext header);
-their AEAD + the client's strict-advance check provide presence replay-protection (§4.3).
+`wrapper_instance_id` live **inside** the `K_meta` payload (not the cleartext header).
+Presence replay-protection is **two-part** (§4.3): a `session_announce` admits/un-greys a
+session **only** when its `in_reply_to` matches a live `challenge`; thereafter a `present`
+maintains liveness **only** on a strictly-advancing `beat_seq` within the same
+`wrapper_instance_id`.
 
 Presence is **not stored on the server**: a session is online iff its wrapper, connected
-to the bus, answered the latest `identify?` and is **beating** (`present`); a client
-**greys it locally** when beats stop (§6B). No server-side `heartbeat`/`last_seen`;
-`last_activity` (in the decrypted `session_announce`) drives client-side "most-active
-first" sorting.
+to the bus, answered the client's latest `identify?{challenge}` and is **beating**
+(`present`); a client **greys it locally** when beats stop, and re-`identify?`s on a
+cadence to admit new sessions / un-grey returning ones (§6B). No server-side
+`heartbeat`/`last_seen`; `last_activity` (in the decrypted `session_announce`) drives
+client-side "most-active first" sorting.
 
 Endpoints — **just two** (both gated by `X-RC-App-Key` §4.5 + `Bearer auth_token`,
 ciphertext only): **`POST /api/relay`** (publish a frame via `resumeHook(token,…)` —
@@ -1193,9 +1217,9 @@ wrappers answer `session_announce` and beat `present`. **Online = answered + bea
 7. **Second connection, 5 identities.** 5 secrets pasted → client subscribes to each
    identity's bus + `identify?`; renders every **connected** instance as a space,
    grouped by identity. (online = answered + beating — the "5 separate wrappers" case)
-8. **List an identity's spaces.** = the `identify?` → `session_announce` exchange on
-   that identity's bus; decrypt titles/cwd → gchat-style list. (A space is a chat;
-   online = its wrapper answered.)
+8. **List an identity's spaces.** = the `identify?{challenge}` → `session_announce`
+   (`in_reply_to:challenge`) exchange on that identity's bus; decrypt titles/cwd →
+   gchat-style list. (A space is a chat; online = its wrapper answered **+ is beating**.)
 
 **History sync**
 9. **Open a session cold (full sync).** Client sends `catch_up{since=0}` on the session
@@ -1242,10 +1266,10 @@ wrappers answer `session_announce` and beat `present`. **Online = answered + bea
     at-least-once → dedup by `msg_id`; no missed/dup frames.
 19. **Wrapper/CLI restart (both stateless).** Reboot/crash → relaunch `remote-claw
     --continue` + `/remote-control` → worker re-backfills → log rebuilt → wrapper
-    **rejoins the bus** with a **new `wrapper_instance_id`** and re-announces (its
-    `beat_seq` resets from 0, but the new instance id **re-baselines** clients'
-    liveness so a still-connected tab un-greys it — §4.3); clients reconnect +
-    `catch_up`. **[V]** C5
+    **rejoins the bus** with a **new `wrapper_instance_id`** (its `beat_seq` resets from
+    0). A still-connected tab greys the session when the old beats stop, then **un-greys
+    on its next `identify?{challenge}`** → fresh challenge-matched `session_announce` from
+    the new instance (no free re-baseline — §4.3); clients reconnect + `catch_up`. **[V]** C5
 20. **Host offline → back.** Wrapper exits (never outlives the CLI) → **leaves the bus**;
     `present` beats stop → a client *watching* its spaces **greys them locally** after
     `PRESENCE_TTL`; a *fresh* cold open just won't list them (offline *listing* deferred
@@ -1321,8 +1345,8 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 **6. Client first connection**
 1. user pastes `rc1_…`; C derives `identity_id, auth_token, content_root, K_*`
 2. C→V `GET /api/stream?identity=identity_id` → V `getHookByToken("bus:"+identity_id)`→`getRun`→`getReadable` → SSE *(HookNotFound ⇒ `200` empty: nothing connected)*
-3. C→V `POST /api/relay` publish `identify?{nonce}` (control_key, fresh random `nonce`) → `resumeHook("bus:"+identity_id,…)`
-4. each connected W→V `session_announce{in_reply_to:nonce, sid, title, cwd, identity_label, status, last_activity, wrapper_instance_id, beat_seq}` (AEAD `K_meta`) → bus → SSE → C **admits only `in_reply_to==nonce`** (rejects replayed stale announces), renders the list; `present{…, wrapper_instance_id, beat_seq}` beats keep the dots fresh
+3. C→V `POST /api/relay` publish `identify?{challenge}` (control_key, fresh 128-bit `challenge`) → `resumeHook("bus:"+identity_id,…)`
+4. each connected W→V `session_announce{in_reply_to:challenge, sid, title, cwd, identity_label, status, last_activity, wrapper_instance_id, beat_seq}` (AEAD `K_meta`) → bus → SSE → C **admits only `in_reply_to==`its live `challenge`** (rejects replayed stale announces), renders the list; `present{…, wrapper_instance_id, beat_seq}` beats *maintain* liveness (strict `beat_seq`); C re-`identify?`s on a cadence to admit new / un-grey returning sessions
 
 **7. Client second connection, 5 identities**
 1. C has 5 secrets (localStorage) → 5 `(identity_id, auth_token, …)`
@@ -1386,13 +1410,28 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 1. both die → operator relaunches `remote-claw --continue` *(passthrough; resumes the on-disk session)* → W spawns **T** through the MITM
 2. user `/remote-control` → bridge→stream (as #4) → T→W backfill `POST …/worker/events [full historical transcript]`
 3. W rebuilds the log; **rejoins the bus with a NEW `wrapper_instance_id`** + re-announces (re-creating bus/session runs as needed)
-4. a still-connected C **re-baselines** liveness on the new `wrapper_instance_id` (un-greys, §4.3); a reconnecting C re-`identify?`s (fresh nonce) + `catch_up` → W replays the rebuilt log → C re-renders *(state recovered from claude)*
+4. a still-connected C greys the session when the old instance's beats stop, then **un-greys only after its next `identify?{challenge}` elicits a fresh challenge-matched `session_announce`** from the new `wrapper_instance_id` (no free re-baseline — §4.3) + `catch_up` → W replays the rebuilt log → C re-renders *(state recovered from claude)*
 
 **20. Host offline → back**
 1. W/CLI exit → W **leaves the bus**; `present` beats stop
 2. C (tailing the bus) **greys** the session locally after `PRESENCE_TTL`; a fresh open just won't list it (`getHookByToken` resolves the bus only if another W keeps it alive, else `HookNotFound` → empty)
 3. send is blocked **client-side** (greyed → disabled); if sent anyway, it lands once W returns (idempotent via `msg_id`) or `POST /api/relay` → `resumeHook` **`HookNotFound`** once the session run idles out → **`409`** (no durable queue)
-4. host returns: relaunch + `/remote-control` → W **rejoins the bus** → answers `identify?` + beats again; C `catch_up` fills the gap
+4. host returns: relaunch + `/remote-control` → W **rejoins the bus** → answers `identify?` + beats again; C re-`identify?`s on its cadence → challenge-matched announce un-greys; `catch_up` fills the gap
+
+**21. Bus rolls mid-session (event cap)**
+1. a connected W sees the bus run nearing 25k events → **completes** the old run (closes its stream, disposes the hook → frees the 1:1 token) → `start()`s a fresh run re-`createHook("bus:"+identity_id)` (race: loser catches `HookConflictError`, resume-tails the winner)
+2. tailing C's bus SSE hits **EOF** → C→V `GET /api/stream?identity=id` → `getHookByToken` resolves the **new** run → re-tail → re-`identify?{challenge}` (brief `HookNotFound` during swap → retry)
+3. open **per-session** chats untouched (separate `sess:` runs)
+
+**22. Client returns cold (was away)**
+1. C re-derives (or reads `localStorage`) → C→V `GET /api/stream?identity=id` (subscribe bus) + `POST /api/relay` `identify?{challenge}`
+2. connected W→V `session_announce{in_reply_to:challenge,…}` → C admits/renders list *(no per-client server state was kept)*
+3. open a chat → `catch_up{since=cached_seq}` (IndexedDB delta, or `since=0`) → caught up
+
+**23. Two wrappers, one identity, one drops**
+1. W₁,W₂ (same secret) both tail `bus:${id}`; each answers `identify?{challenge}` with its own `wrapper_instance_id` (no clobber); C lists both sets
+2. W₁ sleeps → its `present` beats stop → C greys **only W₁'s** sessions after `PRESENCE_TTL`; W₂'s sessions + the bus run stay live (W₂ keeps the hook)
+3. W₁ returns → rejoins → next C `identify?` → challenge-matched announce un-greys W₁'s sessions
 
 ### 16.1 Primitives used (per scenario)
 
@@ -1430,5 +1469,5 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 19 | Wrapper/CLI restart recovery | `--continue`, `/remote-control`, `intercept`, `backfill`, `log-rebuild`, **rejoin-bus**, re-`session_announce`, `catch_up` |
 | 20 | Host offline → back | leave-bus, `present` stops, `grey-local`, `409`(no live session), rejoin-bus, `catch_up` |
 | 21 | Bus rolls mid-session | cap-roll: complete old run, `start()` new (same token), `HookConflictError` race, client EOF→reconnect→re-`identify?`; sessions untouched |
-| 22 | Client returns cold | `localStorage`/re-derive, bus subscribe + `identify?{nonce}`, `catch_up{since=cached}`, IndexedDB delta *(no per-client server state)* |
+| 22 | Client returns cold | `localStorage`/re-derive, bus subscribe + `identify?{challenge}`, `catch_up{since=cached}`, IndexedDB delta *(no per-client server state)* |
 | 23 | Two wrappers, one drops | 2× `wrapper_instance_id` on the bus, `present` per-instance (no clobber), survivor keeps the run, `grey-local` only the dropped wrapper's spaces |
