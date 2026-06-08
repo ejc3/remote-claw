@@ -209,10 +209,13 @@ security review — §14A.)
   air-gapped). The secret lives in a **single local file** — the default, or a specific
   one chosen with `--rc-file`.
   - *Secret absent →* generate `S` (32 B CSPRNG), derive `identity_id`/`auth_token`/
-    `content_root`/`control_key`/`K_meta` (§4.2), write `S` `0600` with
-    `O_CREAT|O_EXCL` (atomic; never clobbers a concurrent create) at the **local secret
-    file** (`$XDG_STATE_HOME/remote-claw/secret`, default
-    `~/.local/state/remote-claw/secret`; a `0600` sidecar holds `created_at`). Print a
+    `content_root`/`control_key`/`K_meta` (§4.2), write the **`rc1_…` token** (the §4.1
+    encoding of `S`, not raw bytes — so the file *is* the shareable artifact and a
+    truncated/corrupt file fails the checksum loudly on read instead of deriving a wrong
+    identity) `0600` with `O_CREAT|O_EXCL` (atomic; never clobbers a concurrent create) at
+    the **local secret file** (`$XDG_STATE_HOME/remote-claw/secret`, default
+    `~/.local/state/remote-claw/secret`; reads refuse symlinks (`O_NOFOLLOW`) and
+    group/other-readable modes; a `0600` sidecar holds `created_at`). Print a
     summary (**public** `identity_id`, created-at, path) and **the `rc1_…` on its own bare line** (the
     onboarding step). If a **web** URL is configured (`--rc-web`), also print the
     `https://<web>/#<secret>` deep link + a terminal **QR** of it for phone
@@ -229,7 +232,11 @@ security review — §14A.)
     it doesn't launch claude.
 - **`--rc-file <path>`** — use a **specific** secret file instead of the default, for both
   creating (`--rc-identity`) and using an identity. The secret stays in the file and never
-  appears on argv (`REMOTE_CLAW_SECRET_FILE` sets the same path).
+  appears on argv (`REMOTE_CLAW_SECRET_FILE` sets the same path). The file is written `0600`,
+  created atomically + exclusively (`O_CREAT|O_EXCL`), and reads refuse symlinks (`O_NOFOLLOW`)
+  and group/other-readable modes — but the **directory** is trusted to be the user's own; a
+  world-writable parent defeats create-once (another local user could plant a valid token), so
+  point `--rc-file` only at a directory you control (the default under `$XDG_STATE_HOME` is).
 - **`--rc-show-secret`** — the **only** post-creation reveal of `S` (+ deep link/QR),
   for re-onboarding a device. On a TTY: a shoulder-surf/scrollback warning (STDERR) +
   Enter pause (skip with `--rc-yes`); non-TTY: bare token to STDOUT, warning to STDERR.

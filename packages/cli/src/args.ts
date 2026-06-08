@@ -34,6 +34,12 @@ export interface Classified {
   errors: string[];
 }
 
+/** Read a reserved value-flag as a string (booleans/absent → undefined). Shared by rc actions. */
+export function strFlag(rc: Record<string, RcValue>, name: string): string | undefined {
+  const v = rc[name];
+  return typeof v === "string" ? v : undefined;
+}
+
 /** Split argv into the consumed `--rc-*` flags and the args forwarded to `claude`. */
 export function classifyArgs(
   argv: readonly string[],

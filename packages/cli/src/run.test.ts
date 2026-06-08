@@ -41,9 +41,10 @@ describe("runWrapper (functional)", () => {
     expect(lines.join("")).toMatch(/unknown flag --rc-bogus/);
   });
 
-  it("exits 2 on a recognized rc flag (not implemented yet) without spawning", async () => {
+  it("exits 2 on a recognized-but-unimplemented rc flag without spawning", async () => {
     const { fn, calls } = recordingSpawn();
-    expect(await runWrapper(["--rc-identity"], { spawnFn: fn, stderr: () => {} })).toBe(2);
+    // --rc-share is still a stub; --rc-identity is now implemented (covered in identity tests).
+    expect(await runWrapper(["--rc-share"], { spawnFn: fn, stderr: () => {} })).toBe(2);
     expect(calls).toHaveLength(0);
   });
 

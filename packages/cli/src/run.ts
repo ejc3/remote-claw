@@ -6,6 +6,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { constants } from "node:os";
 import { classifyArgs } from "./args.js";
+import { runIdentity } from "./identity.js";
 
 /** Map a signal name to its number (for the shell-standard 128+N exit code). */
 function signalExitCode(signal: NodeJS.Signals): number {
@@ -23,6 +24,8 @@ export interface RunOptions {
   spawnFn?: SpawnFn;
   /** stderr sink (tests). Defaults to process.stderr. */
   stderr?: (line: string) => void;
+  /** stdout sink (tests) for local rc actions like --rc-identity. Defaults to process.stdout. */
+  stdout?: (line: string) => void;
 }
 
 const realSpawn: SpawnFn = (bin, args) =>
@@ -53,6 +56,13 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     for (const e of errors) warn(`remote-claw: ${e}\n`);
     return 2;
   }
+  // --rc-identity is the one implemented action; it runs locally and never launches claude.
+  // (--rc-file/--rc-json/--rc-quiet are its modifiers, handled inside runIdentity.)
+  if (rc["rc-identity"] === true) {
+    const writeOut = opts.stdout ?? ((line: string) => void process.stdout.write(line));
+    return runIdentity(rc, claudeArgs, { stdout: writeOut, stderr: warn });
+  }
+
   const rcNames = Object.keys(rc);
   if (rcNames.length > 0) {
     // Name the offending flag(s) only — never echo their values.

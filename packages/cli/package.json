@@ -7,6 +7,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "dependencies": {
+    "@remote-claw/clawsec": "file:../clawsec"
+  },
   "scripts": {
     "dev": "tsx src/cli.ts",
     "test": "vitest",
