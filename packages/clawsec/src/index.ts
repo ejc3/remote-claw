@@ -2,6 +2,13 @@
 export { canonicalAad, type Dir, type FrameHeader } from "./aad.js";
 export { AeadError, type Frame, open, seal } from "./aead.js";
 export { concatBytes, fromHex, sha256, timingSafeEqual, toHex, utf8 } from "./bytes.js";
+export {
+  ChunkError,
+  type ChunkHeader,
+  openChunked,
+  sealChunked,
+  splitPlaintext,
+} from "./chunk.js";
 export { hkdfExpand, hkdfExtract } from "./hkdf.js";
 export { deriveIdentity, deriveSessionKey, type Identity } from "./kdf.js";
 export {
