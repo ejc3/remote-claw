@@ -51,6 +51,7 @@
   nav.toc .t{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin:4px 6px 8px}
   nav.toc a{display:block;color:var(--soft);font-size:13.5px;padding:4px 8px;border-radius:7px;border-left:2px solid transparent}
   nav.toc a:hover{background:var(--panel2);text-decoration:none}
+  nav.toc a.h3{padding-left:20px;color:var(--muted);font-size:13px}
   nav.toc a.active{background:var(--panel2);border-left-color:var(--accent);color:#fff}
 
   main{min-width:0}
@@ -191,13 +192,49 @@ Keeping the design small is a feature. Three things we considered and chose **no
 
 ## Under the hood (for engineers)
 
-The plain-language terms above map to concrete cryptography; none of it is novel — it's standard primitives wired conservatively.
+The plain-language terms above map onto standard cryptography wired conservatively — no novel primitives.
 
-- **The secret → keys.** A machine's secret is 256 bits of randomness, encoded as a short `rc1_…` string. All keys derive from it with **HKDF-SHA256** (RFC 5869): a routing/address key (the relay verifies it without storing anything), a content key (locks/unlocks the session), a command key, and a presence key.
-- **Locking messages.** Each message is sealed with **AES-256-GCM** under a *fresh per-message key* — derived from the secret's content (or command) key plus a fresh random 256-bit salt via HKDF — so a fatal nonce reuse would require the *same salt and the same nonce on the same key*, which is negligible. The routing label, a unique message id, and a sequence number are bound in as **authenticated associated data**, so they can't be altered; the receiver replay-checks the id and ordering. **Presence** ("this session is online") is itself a sealed, timestamped announce the receiver accepts only inside a short freshness window — which is exactly what lets a viewer notice a *stale* or *withheld* liveness notice (the residual the plain-language section names).
-- **The limited passes.** Because the content/command/presence keys are independent one-way outputs of the secret, a "view pass" can carry the content and presence keys *without* the command key or the secret — so it reads but cannot issue commands your machine will accept (a command must be authenticated with the command key), and cannot reverse back to the secret.
-- **The relay's blindness.** It only ever receives ciphertext + the routing label, and verifies a presented address against a value it recomputes from the bearer — so it needs no database and learns no plaintext.
-- **The modes** are one swappable interface: **Open** passes bytes through in the clear (loud banner), **Sealed** runs the encryption above, **Managed** adds delivering content keys *wrapped to each device's public key* (so the relay moves them blind). The relay code and the wire format are identical across all three.
+### Keys derived from the secret
+
+A machine's secret is 256 bits of CSPRNG randomness, written as a short `rc1_…` string with a checksum (a mistyped or truncated paste fails fast, before any network call). Everything else derives from it deterministically with **HKDF-SHA256** (RFC 5869), each output domain-separated by its own label:
+
+- **address key** (`auth_token`) — the bearer presented to the relay. The routing address is `identity_id = truncate(SHA256(auth_token), 16 bytes)` — a public 128-bit id the relay **recomputes from the presented bearer and constant-time-compares**, so it needs no database and stores no per-machine record.
+- **content key** — locks and unlocks transcript content.
+- **command key** — authenticates inbound commands (prompts, interrupts, mode/model changes).
+- **presence key** — locks and authenticates the "this session is online" announces.
+
+The four are independent one-way outputs of the secret: holding one (or all) never lets you invert back to the secret, nor derive a sibling you weren't handed (HMAC preimage resistance).
+
+### The two passes, concretely
+
+A "pass" is a bundle carrying a **subset** of those keys — never the secret. It's a separate serialized form from `rc1_` (QR/file-sized, since it carries several keys):
+
+- **View pass** = address key + content key + presence key. It can subscribe, decrypt transcript content, and read presence. **No command key.**
+- **Control pass** = view pass **+ command key**. The same reads, plus it can produce commands your machine will accept.
+
+The view-vs-control boundary is enforced **at your machine, by key possession** — not by the relay, which can't tell the two passes apart. An inbound command is authenticated under the **command key**, and the machine acts only on a command that verifies under it; a view-pass holder lacks that key, so any command it emits is rejected at the receiver. Neither pass can recover the secret or widen its own scope.
+
+**Honest residual:** the content and presence keys are *symmetric*, so a pass-holder can also *produce* valid-looking content or presence for that machine, not only read it. The hard line a pass draws is **commands** (the command key) — not write-vs-read on the content channel. Stopping a malicious viewer from injecting content that others accept as the machine's would need per-writer signing keys; we deliberately don't add them, to keep the scheme symmetric and small.
+
+### Locking a message
+
+Each frame is sealed with **AES-256-GCM** under a *fresh per-message key*: `K_msg = HKDF(content-or-command key, salt = fresh random 256 bits)`. A fatal nonce reuse would therefore need the **same salt _and_ the same 96-bit nonce on the same key** — negligible at any realistic volume, and with **zero per-sender state** (which matters because the secret can be pasted into several devices at once, so there is no shared counter to coordinate). The routing label, a unique **message id**, and a **sequence number** are bound in as **AEAD associated data** (a canonical length-prefixed encoding, not ad-hoc concatenation), so the cleartext header can't be altered without breaking the tag. The receiver keeps a **seen-set of message ids** for clock-free replay rejection, and uses the sequence number for ordering and catch-up.
+
+### Presence
+
+"This session is online" is a small frame **authenticated under the presence key**, carrying the sender's wall-clock `sent_at` **inside** the sealed payload. A viewer shows a session online only while its newest announce is **fresh** (within a window of roughly a minute). Because `sent_at` is sealed, the relay can't fabricate or refresh one; a **replayed** old announce carries an old `sent_at` and expires — so a dead session can appear online for at most one bounded window. Presence is **timestamp-driven**, needing no challenge or round-trip; it does assume the viewer's and machine's clocks agree within that window (NTP-level), and that assumption touches *only* the online dot — message confidentiality and replay defense are clock-free.
+
+### The relay stays blind
+
+It only ever receives ciphertext + the cleartext routing header, and authorizes a request by recomputing `identity_id` from the bearer — no store, no plaintext, no key material. It can route, briefly buffer, and (mis)handle delivery, but it can't read or forge contents or presence. It keeps no durable history; the durable transcript is the AI tool's own on-disk session, which the wrapper re-reads to backfill a reconnecting viewer.
+
+### The three modes, one interface
+
+A single `SecurityProvider` seam sits between the wrapper/app and the crypto; the **wire format and relay code are identical** across modes — only `seal`/`open` differ:
+
+- **Open** — `seal`/`open` pass bytes through in the clear (loud banner); no keys, no AEAD.
+- **Sealed** — everything above.
+- **Managed** *(future)* — Sealed, plus the relay hands each device the content key **wrapped to that device's public key** (X25519 ECDH → HKDF → AES-GCM, an HPKE-style envelope the relay can't open). The open problem is **device pairing**: the machine must learn a device's real public key without the relay swapping in its own — solvable with an out-of-band fingerprint compare (a short code shown on both ends), not yet built.
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
@@ -214,7 +251,7 @@ The plain-language terms above map to concrete cryptography; none of it is novel
 
   const items = [...docEl.querySelectorAll("h2,h3")];
   tocEl.innerHTML = '<div class="t">On this page</div>' + items.map(h=>
-    '<a href="#'+h.id+'">'+h.textContent.replace(/</g,"&lt;")+'</a>'
+    '<a class="'+(h.tagName==="H3"?"h3":"")+'" href="#'+h.id+'">'+h.textContent.replace(/</g,"&lt;")+'</a>'
   ).join("");
   window.addEventListener("scroll",()=>{
     let cur=items[0];
