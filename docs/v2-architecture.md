@@ -427,13 +427,23 @@ challenge-bound**. A client keeps, per known session (even while greyed),
   announce whose `in_reply_to` matches a `challenge` it issued in the last few seconds** —
   so a *replayed stale* announce (wrong/expired `challenge`) is rejected, and the broker
   can neither mint a fresh `challenge` (no `K_meta`) nor reuse an expired one.
-- **Beats are monotonic within an instance.** For a session whose current
-  `wrapper_instance_id` the client tracks, a `present`/announce **maintains or un-greys**
-  it iff `beat_seq` **strictly advances** (a replay can't advance, so this is safe even to
-  revive after a transient drop). A beat bearing a **different `wrapper_instance_id` is
-  ignored** for liveness — it could be the broker replaying a real-but-stale *prior*
-  instance's beats — so a restart is adopted only via the challenge-bound announce above
-  (no free replay-exploitable re-baseline).
+- **Beats only *maintain* a still-live session; they NEVER *revive* a greyed one.** For a
+  session the client currently shows live (tracked `wrapper_instance_id`), a `present`
+  **keeps it live** iff `beat_seq` strictly advances. But strict-advance proves *ordering*,
+  not *recency* — and the broker may **withhold** then later release real, advancing beats
+  (§2). So once a session has **greyed** (PRESENCE_TTL of no qualifying beat), a beat can
+  **not** bring it back: a stockpile of genuine-but-withheld beats can't resurrect a dead
+  host. **Un-greying — and adopting any new/changed `wrapper_instance_id` — happens ONLY
+  via a fresh challenge-matched `session_announce`** (which a dead wrapper can't produce —
+  no `K_meta` to echo a just-issued `challenge`). A beat with a different
+  `wrapper_instance_id` is likewise ignored. (A transient drop self-heals via the next
+  challenge-matched announce on the client's cadence — not via a raw beat.)
+- **Why ordering ≠ freshness.** A monotonic `beat_seq` tells a replay (stale seq) from a
+  new beat, but cannot tell a *just-emitted* beat from a *withheld-then-released* real one
+  — both advance. Recency is therefore anchored to the **client's own fresh `challenge`**:
+  only a live wrapper can bind a challenge issued seconds ago, so the periodic
+  challenge→announce round-trip is the real-time liveness signal; beats merely smooth the
+  dot between round-trips and can never extend liveness past a grey.
 - **Clients re-`identify?` on a cadence** — periodically (≈every `PRESENCE_INTERVAL`,
   piggybacked on the bus they already tail) **and** whenever they grey a session. This
   lets a **newly-shared** session, or a **restarted** wrapper's new instance, reach an
@@ -634,7 +644,7 @@ Our non-content meta frames (**AEAD under `K_meta`** — broker can't forge them
 | --- | --- | --- |
 | `accepted` | out | wrapper ack of a client frame: `{client_msg_id, seq}` |
 | `session_announce` | out (bus) | reply to `identify?`: `{in_reply_to:challenge, session_id, title, cwd, identity_label, status, last_activity, wrapper_instance_id, beat_seq}` — **whole payload AEAD under `K_meta`**; the **only** frame that admits/refreshes/un-greys a session, and only if `in_reply_to` matches a live `challenge` (broker reads/forges nothing; replayed stale announces rejected — §4.3) |
-| `present` | out (bus) | coalesced liveness beat `{session_ids[], wrapper_instance_id, beat_seq}` every ≈20–30 s, AEAD under `K_meta`; **maintains** an already-admitted session's liveness only on a `beat_seq` that strictly advances *within the same `wrapper_instance_id`* (a new/unknown instance id does **not** un-grey — only a challenge-matched `session_announce` does); **greys** on silence (client-side; no server state; replay-proof — §6B) |
+| `present` | out (bus) | coalesced liveness beat `{session_ids[], wrapper_instance_id, beat_seq}` every ≈20–30 s, AEAD under `K_meta`; **only *maintains* a still-live session** (strictly-advancing `beat_seq` within the tracked `wrapper_instance_id`). It **never un-greys** — revival (and any new/changed instance, or new session) is **only** via a challenge-matched `session_announce` (§4.3); **greys** on silence (client-side; no server state; replay/withhold-proof — §6B) |
 
 (`historical` is a **flag** on replayed content frames, not a separate kind. There is
 **no** server-side `heartbeat`/registry — presence is "answered `identify?` + beating on
@@ -779,16 +789,17 @@ wrapper enables `/remote-control` and joins the bus):
 ### Live greying (client-local presence)
 While connected, a wrapper emits a coalesced **`present{session_ids[], wrapper_instance_id,
 beat_seq}` beat** on the bus every `PRESENCE_INTERVAL` (≈20–30 s), AEAD under `K_meta`. For
-an **already-admitted** session, a `present` **maintains or un-greys** it **iff `beat_seq`
-strictly advances within the *tracked* `wrapper_instance_id`** (a replay can't advance, so
-even a brief drop self-heals on the next real beat). A beat with a **different
-`wrapper_instance_id` is ignored** (it could be the broker replaying a real-but-stale
-prior instance) — a restart is adopted only via a challenge-matched `session_announce`. If
-no qualifying beat arrives within `PRESENCE_TTL` (≈2–3× interval) the client **greys the
-session** — a host that sleeps/crashes visibly "goes away." A **newly-shared** session or a
-**restarted** instance reaches the client at its next `identify?` (cadence: ≈
-`PRESENCE_INTERVAL` + on grey), via a challenge-matched announce — so recovery is bounded
-by one refresh with **no** free replay-exploitable re-baseline. (Per-session turn frames
+a session the client currently shows **live**, a `present` **keeps it live** iff `beat_seq`
+strictly advances within the *tracked* `wrapper_instance_id`. If no such beat arrives within
+`PRESENCE_TTL` (≈2–3× interval) the client **greys the session** — a host that sleeps/
+crashes visibly "goes away." **A beat can never *un-grey* a session** — strict-advance is
+ordering, not recency, and the broker may **withhold then release** real advancing beats to
+fake a dead host alive (§2/§4.3). **Un-greying — and adopting any new/changed
+`wrapper_instance_id`, or a newly-shared session — happens ONLY via a fresh
+challenge-matched `session_announce`**, which the client elicits by re-`identify?`ing on its
+cadence (≈`PRESENCE_INTERVAL` + on grey). A dead wrapper can't answer a fresh `challenge`
+(no `K_meta`), so recovery is real-time-anchored and bounded by one refresh, with **no**
+replay/withhold path to resurrect a dead session. (Per-session turn frames
 keep their *own* liveness on the session channel; they don't ride the bus.) **Purely
 client-side** (no server state); it does **not** resurrect offline *listing* — a fresh
 browser still won't see a host never connected this session (deferred store, §6C). Cost:
