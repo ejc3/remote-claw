@@ -2,6 +2,8 @@
 // separately — the §4.2 hierarchy is one Extract(salt=S) then several Expands from the same
 // PRK, plus raw Expands for K_session/K_msg, which the one-shot subtle HKDF can't express.
 
+import { concatBytes } from "./bytes.js";
+
 const HASH_LEN = 32; // SHA-256 output
 
 async function hmac(key: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
@@ -15,18 +17,6 @@ async function hmac(key: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
     ["sign"],
   );
   return new Uint8Array(await crypto.subtle.sign("HMAC", k, data as BufferSource));
-}
-
-function concat(...parts: Uint8Array[]): Uint8Array {
-  let len = 0;
-  for (const p of parts) len += p.length;
-  const out = new Uint8Array(len);
-  let off = 0;
-  for (const p of parts) {
-    out.set(p, off);
-    off += p.length;
-  }
-  return out;
 }
 
 /** RFC 5869 §2.2 — PRK = HMAC-Hash(salt, IKM). Empty salt defaults to HashLen zeros. */
@@ -48,7 +38,7 @@ export async function hkdfExpand(
   const okm = new Uint8Array(n * HASH_LEN);
   let prev: Uint8Array = new Uint8Array(0);
   for (let i = 1; i <= n; i++) {
-    prev = await hmac(prk, concat(prev, info, Uint8Array.of(i)));
+    prev = await hmac(prk, concatBytes(prev, info, Uint8Array.of(i)));
     okm.set(prev, (i - 1) * HASH_LEN);
   }
   return okm.slice(0, length);
