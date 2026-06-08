@@ -6,7 +6,14 @@ import { RC_HELP } from "./help.js";
 // claude's --remote-control, and never re-advertises a removed flag.
 describe("RC_HELP banner", () => {
   it("documents the implemented identity flags", () => {
-    for (const f of ["--rc-identity", "--rc-show-secret", "--rc-file", "--rc-json", "--rc-quiet"]) {
+    for (const f of [
+      "--rc-identity",
+      "--rc-show-secret",
+      "--rc-rotate",
+      "--rc-file",
+      "--rc-json",
+      "--rc-quiet",
+    ]) {
       expect(RC_HELP).toContain(f);
     }
   });

@@ -43,8 +43,9 @@ describe("runWrapper (functional)", () => {
 
   it("exits 2 on a recognized-but-unimplemented rc flag without spawning", async () => {
     const { fn, calls } = recordingSpawn();
-    // --rc-rotate is still a reserved stub; --rc-identity is implemented (covered in identity tests).
-    expect(await runWrapper(["--rc-rotate"], { spawnFn: fn, stderr: () => {} })).toBe(2);
+    // --rc-keep-old is a reserved modifier with no standalone action; --rc-identity/-show-secret/
+    // -rotate are implemented (covered in their own tests).
+    expect(await runWrapper(["--rc-keep-old"], { spawnFn: fn, stderr: () => {} })).toBe(2);
     expect(calls).toHaveLength(0);
   });
 
