@@ -5,7 +5,7 @@
 // leaks into CI logs). A script that truly needs the secret reads the 0600 file directly.
 
 import { toHex } from "@remote-claw/clawsec";
-import { type RcValue, strFlag } from "./args.js";
+import { type RcValue, rcActionArgError, strFlag } from "./args.js";
 import { ensureIdentity, resolveSecretPath, type StoreEnv, StoreError } from "./store.js";
 
 /** The only reserved flags --rc-identity understands. Any other rc-* flag is a usage error. */
@@ -33,17 +33,11 @@ export async function runIdentity(
   // Arg rule: --rc-identity does not launch claude, so any forwarded token (a positional, a
   // passthrough flag, or anything after `--` — classifyArgs funnels them all into claudeArgs)
   // is a usage error. Checked first, before any disk/crypto work, so a misuse never writes.
-  if (claudeArgs.length > 0) {
-    err("remote-claw: --rc-identity does not launch claude; remove the extra argument(s)\n");
-    return 2;
-  }
-
-  // Reject any rc flag --rc-identity doesn't understand (e.g. --rc-rotate, --rc-show-secret)
-  // instead of silently ignoring it — those actions land in later PRs. Before any disk.
-  const unsupported = Object.keys(rc).filter((k) => !IDENTITY_FLAGS.has(k));
-  if (unsupported.length > 0) {
-    const named = unsupported.map((k) => `--${k}`).join(", ");
-    err(`remote-claw: --rc-identity does not support ${named} in this build\n`);
+  // Arg-rule + unsupported-modifier guard (shared with the other rc actions): --rc-identity
+  // doesn't launch claude, and only its own flags may accompany it. Before any disk work.
+  const argErr = rcActionArgError("--rc-identity", rc, claudeArgs, IDENTITY_FLAGS);
+  if (argErr) {
+    err(`remote-claw: ${argErr}\n`);
     return 2;
   }
 

@@ -31,7 +31,9 @@ function freshEnv(extra: Record<string, string> = {}) {
   const root = mkdtempSync(join(tmpdir(), "rc-id-e2e-"));
   tempDirs.push(root);
   const xdg = join(root, "state");
-  const env = { ...process.env, HOME: root, XDG_STATE_HOME: xdg, ...extra };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, XDG_STATE_HOME: xdg, ...extra };
+  // Don't inherit a dev/CI secret-file override — it would point the test at a real secret.
+  delete env.REMOTE_CLAW_SECRET_FILE;
   return { root, xdg, env, defaultPath: join(xdg, "remote-claw", "secret") };
 }
 
