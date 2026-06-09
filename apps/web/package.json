@@ -1,0 +1,38 @@
+{
+  "name": "@remote-claw/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "remote-claw broker (P3): the per-identity bus + per-session ciphertext relay on Vercel Workflows. Two routes (POST /api/relay, GET /api/stream); no store.",
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "check": "biome check ."
+  },
+  "dependencies": {
+    "@remote-claw/clawsec": "file:../../packages/clawsec",
+    "@workflow/errors": "4.1.3",
+    "next": "^16.2.7",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "workflow": "4.3.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "@types/node": "^25.9.2",
+    "@types/react": "19.2.17",
+    "@workflow/vitest": "4.0.9",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

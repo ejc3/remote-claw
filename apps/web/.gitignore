@@ -1,0 +1,8 @@
+node_modules
+.next
+next-env.d.ts
+.vercel
+*.tsbuildinfo
+# Workflow DevKit build/test artifacts (compiled step/workflow bundles + run state)
+.workflow-vitest
+.workflow-data

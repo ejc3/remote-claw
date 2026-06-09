@@ -1,0 +1,158 @@
+import { decodeFrame, deriveSessionKey, open, utf8, type WireFrame } from "@remote-claw/clawsec";
+import { teardownWorkflowTests } from "@workflow/vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { POST as relay } from "../app/api/relay/route";
+import { GET as stream } from "../app/api/stream/route";
+import { announceFrame, bearer, header, readSseData, testIdentity, wireFrame } from "./helpers";
+
+afterAll(async () => {
+  await teardownWorkflowTests();
+});
+
+const BASE = "http://localhost";
+const td = new TextDecoder();
+
+function post(frame: WireFrame, auth: string, session?: string): Promise<Response> {
+  const qs = session === undefined ? "" : `?session=${encodeURIComponent(session)}`;
+  return relay(
+    new Request(`${BASE}/api/relay${qs}`, {
+      method: "POST",
+      headers: { authorization: auth, "content-type": "application/json" },
+      body: JSON.stringify(frame),
+    }),
+  );
+}
+
+function sub(auth: string, query = ""): Promise<Response> {
+  return stream(new Request(`${BASE}/api/stream${query}`, { headers: { authorization: auth } }));
+}
+
+describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
+  it("E2E: a sealed bus announce round-trips host → POST /api/relay → bus → GET /api/stream → open", async () => {
+    const id = await testIdentity(1);
+    const auth = bearer(id.authToken);
+    const frame = await announceFrame(id, {
+      session_id: "sess-1",
+      title: "my laptop",
+      sent_at: 123,
+    });
+
+    const pub = await post(frame, auth);
+    expect(pub.status).toBe(200);
+    expect(await pub.json()).toMatchObject({ ok: true, channel: "bus" });
+
+    const res = await sub(auth, "?startIndex=0");
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const [received] = (await readSseData(res, 1)) as [WireFrame];
+    // The broker forwarded ciphertext verbatim; only the holder of K_meta can read it.
+    const plaintext = await open(id.kMeta, decodeFrame(received));
+    expect(JSON.parse(td.decode(plaintext))).toMatchObject({ title: "my laptop" });
+  });
+
+  it("E2E: a per-session content frame rides the session channel, not the bus", async () => {
+    const id = await testIdentity(2);
+    const auth = bearer(id.authToken);
+    const sid = "sess-A";
+    const kSession = await deriveSessionKey(id.contentRoot, sid);
+    const frame = await wireFrame(
+      kSession,
+      header(id, { sessionId: sid, recordKind: "assistant", seq: 0, dir: "out" }),
+      utf8("hello from claude"),
+    );
+
+    const pub = await post(frame, auth, sid);
+    expect(await pub.json()).toMatchObject({ ok: true, channel: "session" });
+
+    // Readable on the session stream...
+    const onSession = await readSseData(await sub(auth, `?session=${sid}&startIndex=0`), 1);
+    expect(td.decode(await open(kSession, decodeFrame(onSession[0] as WireFrame)))).toBe(
+      "hello from claude",
+    );
+
+    // ...but the identity BUS never saw it (no bus run exists -> 200 empty event-stream).
+    const onBus = await readSseData(await sub(auth, "?startIndex=0"), 1);
+    expect(onBus).toEqual([]);
+  });
+
+  it("multiple announces accumulate on one bus run in order; the recent window surfaces the freshest", async () => {
+    const id = await testIdentity(3);
+    const auth = bearer(id.authToken);
+    for (const n of [1, 2, 3]) {
+      const f = await announceFrame(id, { session_id: `s${n}`, n, sent_at: n }, { msgId: `a${n}` });
+      expect((await post(f, auth)).status).toBe(200);
+    }
+    const ns = async (res: Response, max: number): Promise<number[]> => {
+      const frames = (await readSseData(res, max)) as WireFrame[];
+      const bodies = await Promise.all(
+        frames.map(async (w) => JSON.parse(td.decode(await open(id.kMeta, decodeFrame(w))))),
+      );
+      return bodies.map((b) => b.n as number);
+    };
+    // startIndex=0 deterministically replays the full buffer in publish order.
+    expect(await ns(await sub(auth, "?startIndex=0"), 3)).toEqual([1, 2, 3]);
+    // The recent window (negative startIndex) surfaces the freshest announce. Its EXACT last-N
+    // semantics are real-Vercel-verified (spike §14A); the in-process harness only guarantees the
+    // window is an in-order suffix that includes the latest, which is all the cold-start UX needs.
+    const recent = await ns(await sub(auth, "?startIndex=-2"), 3);
+    expect(recent.length).toBeGreaterThan(0);
+    expect(recent.at(-1)).toBe(3);
+    expect(recent).toEqual([1, 2, 3].slice(3 - recent.length)); // an in-order suffix of [1,2,3]
+  });
+
+  it("rejects an absent/malformed bearer with 401 (anti-scanning gate)", async () => {
+    const id = await testIdentity(4);
+    const frame = await announceFrame(id, { session_id: "s", sent_at: 1 });
+    // no Authorization
+    const noAuth = await relay(
+      new Request(`${BASE}/api/relay`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(frame),
+      }),
+    );
+    expect(noAuth.status).toBe(401);
+    // not valid hex
+    expect((await post(frame, "Bearer zzzz")).status).toBe(401);
+    // valid hex but wrong length (16 bytes, not 32)
+    expect((await post(frame, bearer(new Uint8Array(16)))).status).toBe(401);
+    // GET stream is gated identically
+    expect((await sub("")).status).toBe(401);
+  });
+
+  it("rejects a frame whose identity_id is not the bearer's (403) and malformed JSON (400)", async () => {
+    const mine = await testIdentity(5);
+    const theirs = await testIdentity(6);
+    // A frame sealed/labelled for `theirs`, posted with `mine`'s bearer.
+    const foreign = await announceFrame(theirs, { session_id: "s", sent_at: 1 });
+    expect((await post(foreign, bearer(mine.authToken))).status).toBe(403);
+
+    // Not a frame at all.
+    const bad = await relay(
+      new Request(`${BASE}/api/relay`, {
+        method: "POST",
+        headers: { authorization: bearer(mine.authToken), "content-type": "application/json" },
+        body: JSON.stringify({ not: "a frame" }),
+      }),
+    );
+    expect(bad.status).toBe(400);
+  });
+
+  it("rejects a non-integer startIndex with 400", async () => {
+    const id = await testIdentity(7);
+    expect((await sub(bearer(id.authToken), "?startIndex=abc")).status).toBe(400);
+  });
+
+  it("rejects a non-announce frame on the bus channel (§6A: bus carries only session_announce)", async () => {
+    const id = await testIdentity(8);
+    const auth = bearer(id.authToken);
+    // A content frame with no ?session targets the bus — that must be refused (event-cap protection).
+    const content = await wireFrame(
+      id.kMeta,
+      header(id, { recordKind: "assistant", seq: 0 }),
+      utf8("should not ride the bus"),
+    );
+    const res = await post(content, auth);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/only session_announce/);
+  });
+});
