@@ -13,6 +13,7 @@ import { type IncomingMessage, Server, type ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect as netConnect, type Socket } from "node:net";
 import { TLSSocket } from "node:tls";
+import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import { MITM_HOST } from "./certs.js";
 import { assistantText, type RelayCore, type Session } from "./session.js";
 
@@ -31,8 +32,8 @@ export interface MitmOptions {
   /** Called when claude registers a new RC session (POST /v1/code/sessions) — the wrapper announces
    *  it on the bus and starts pumping its upstream to the broker. */
   onSession?: (s: Session) => void;
-  /** Optional logger (defaults to no-op; the relay never logs secrets). */
-  log?: (msg: string) => void;
+  /** Optional structured tracer (target "rc.mitm"; defaults to no-op). Logs shapes/ids only. */
+  tracer?: Tracer;
 }
 
 export class MitmProxy {
@@ -41,10 +42,12 @@ export class MitmProxy {
   /** The inner HTTP server that parses requests off each TLS-terminated client socket. */
   readonly #inner: Server;
   readonly #leaf: { cert: Buffer; key: Buffer };
+  readonly #trace: Tracer;
   #stopped = false;
 
   constructor(opts: MitmOptions) {
     this.#opts = opts;
+    this.#trace = opts.tracer ?? NOOP_TRACER;
     this.#leaf = { cert: readFileSync(opts.leafCert), key: readFileSync(opts.leafKey) };
     this.#inner = new Server((req, res) => this.#onRequest(req, res));
     this.#server = new Server((_req, res) => {
@@ -75,10 +78,6 @@ export class MitmProxy {
     this.#inner.close();
   }
 
-  #log(msg: string): void {
-    this.#opts.log?.(msg);
-  }
-
   // ---- CONNECT handling ----
   #onConnect(req: IncomingMessage, clientSocket: Socket, head: Buffer): void {
     const { host, port } = splitAuthority(req.url ?? "");
@@ -95,7 +94,7 @@ export class MitmProxy {
         key: this.#leaf.key,
         ALPNProtocols: ["http/1.1"],
       });
-      tls.on("error", (e) => this.#log(`client TLS error: ${e.message}`));
+      tls.on("error", (e) => this.#trace.warn("client TLS error", { error: e.message }));
       // Hand the decrypted stream to the inner HTTP server for request parsing.
       this.#inner.emit("connection", tls);
     } else {
@@ -124,7 +123,7 @@ export class MitmProxy {
     const path = rawUrl.split("?", 1)[0] ?? ""; // the path WITHOUT query — only for intercept matching
     const body = await readBody(req);
     if (INTERCEPT_PREFIXES.some((p) => path.startsWith(p))) {
-      this.#log(`intercept ${req.method} ${rawUrl}`);
+      this.#trace.debug("intercept", { method: req.method ?? "GET", path });
       this.#intercept(req.method ?? "GET", path, body, res);
     } else {
       // Pass the FULL request-target (query string included) upstream — stripping `?…` would drop
@@ -155,7 +154,7 @@ export class MitmProxy {
       // a fast client prompt could race a `user` event ahead of it. The worker's SSE then always
       // receives initialize first (pushInitialize is idempotent, so #streamWorker's call is a no-op).
       s.pushInitialize();
-      this.#log(`session created: ${s.id} (title=${s.title})`);
+      this.#trace.info("session created", { session: s.id, title: s.title });
       this.#opts.onSession?.(s);
       return sendJson(res, { session: s.sessionObj() });
     }
@@ -206,9 +205,20 @@ export class MitmProxy {
           sequence_num: String(up.sequenceNum),
           duplicate: false,
         });
-        if (payload.type === "assistant") {
-          const txt = assistantText(payload);
-          if (txt) this.#log(`⇠ assistant (${s.id.slice(0, 12)}): ${clip(txt)}`);
+        // At debug (opt-in) we include a clipped content preview — the formatter bounds it. Secrets
+        // (keys, OAuth) are never carried here; conversation text is fine once you've asked for debug.
+        if (this.#trace.enabled("debug")) {
+          const type = typeof payload.type === "string" ? payload.type : "event";
+          const fields: { session: string; type: string; bytes?: number; text?: string } = {
+            session: s.id,
+            type,
+          };
+          if (payload.type === "assistant") {
+            const txt = assistantText(payload);
+            fields.bytes = txt.length;
+            fields.text = txt;
+          }
+          this.#trace.debug("upstream event", fields);
         }
       }
       return sendJson(res, { results });
@@ -228,7 +238,7 @@ export class MitmProxy {
     });
     const gen = s.claimWorkerStream(); // supersede any prior stream → single deliverer
     s.pushInitialize();
-    this.#log(`worker SSE connected: ${s.id} (gen ${gen})`);
+    this.#trace.debug("worker SSE connected", { session: s.id, gen });
     // A remote disconnect can close/destroy the response WITHOUT setting writableEnded, so watch the
     // `close` event too — else a dead follower lingers, waking on every heartbeat and holding the
     // response forever. The flag is re-checked by the stop predicate below.
@@ -329,9 +339,4 @@ function sendJson(res: ServerResponse, obj: unknown, status = 200): ServerRespon
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": body.length });
   res.end(body);
   return res;
-}
-
-function clip(s: string, n = 80): string {
-  const flat = s.replace(/\n/g, " ");
-  return flat.length <= n ? flat : `${flat.slice(0, n)}…`;
 }
