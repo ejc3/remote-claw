@@ -1222,7 +1222,12 @@ phase0/            unchanged — the Python reference + protocol findings
   `rc1_` parse/checksum); also wires the broker config (the `--rc-app` origin,
   §3.1/§4.5) used later in P4. Local only (mock app); unit-test the token
   classifier + the create-once/never-reveal/secure-delete invariants.
-- **P3 — Vercel app skeleton (the bus).** `apps/web` (Next.js): **per-identity bearer
+- **P3 — Vercel app (the bus). ✅ BUILT 2026-06-09 (`apps/web`, PR10 — §14A).** The two routes,
+  the per-identity-bus / per-session relay workflow, the `Bearer auth_token` admission gate, the §8
+  wire codec, resume-or-`start()` backoff, and the bus-only-announce guard are implemented and
+  **proven end-to-end on the real Workflow runtime** (in-process `@workflow/vitest`): a sealed
+  announce/turn round-trips host → bus/session → viewer and the broker sees only ciphertext. The rest
+  of this bullet is the original plan it fulfils. `apps/web` (Next.js): **per-identity bearer
   auth (recompute `identity_id = trunc(SHA256(auth_token))` from the bearer, constant-time
   compare to the target token — **no stored hash**, §4.2)** in front of the **two** routes
   (`POST /api/relay`, `GET /api/stream`) — the unguessable `identity_id` + required
@@ -1258,7 +1263,12 @@ phase0/            unchanged — the Python reference + protocol findings
      pipes SSE within the Function `maxDuration` (300s Hobby / 800s Pro, §13 — reconnect by
      `seq` past it); `HookNotFound` ⇒ `200` empty.
   6. Size/chunk limits (hook ≤ 4.5 MB, stream chunk ≤ 10 MB, payload ≤ 50 MB) + `(msg_id, part)` dedup.
-- **P4 — CLI: `serve` behavior = relay on `/remote-control` (MITM — §14).** Node/TS
+- **P4 — CLI: `serve` behavior = relay on `/remote-control` (MITM — §14).** ◐ PARTIAL
+  2026-06-09: the **broker-transport half is done** — the `BrokerClient` (seal/open, the two
+  endpoints, dedup/reorder; PR11) plus a **fake-claude end-to-end harness** (PR12) that drives the
+  real transport ↔ real broker ↔ viewer through a full encrypted turn + the control plane (§14A).
+  The **MITM half below** (intercepting a real `claude`'s RC protocol over the local proxy) is the
+  remaining work and needs the `claude` binary + Anthropic network to verify. Node/TS
   reimpl of the Phase 0 interception: `remote-claw` runs the real interactive
   `claude` (full passthrough) and, when RC is enabled, points it at our local MITM
   (`HTTPS_PROXY` → our proxy with a trusted leaf cert; intercept `/v1/code/sessions*`;
@@ -1586,6 +1596,29 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   cap-roll/teardown path. So the bus is no longer just docs-confirmed but **observed working**;
   the only remaining build-out is wiring it into the real broker (P3 proper) with
   per-identity `auth_token` auth, chunking, and the per-session streams.
+- **Implementation landed — the encrypted spine works end-to-end (2026-06-09, PR9–PR12).** The
+  spike's wiring is now the real system, built as four reviewed PRs and **proven against the real
+  Workflow runtime** (in-process via `@workflow/vitest`, the same engine Vercel runs):
+  - **clawsec** (PR9) — the §8 wire codec (`encodeFrame`/`decodeFrame`, strict at the trust
+    boundary; `identity_id` rendered as the one canonical hex form) and the client-derivable channel
+    tokens (`busToken`/`sessionToken`).
+  - **`apps/web`** (PR10) — the real broker: the two routes (`POST /api/relay`, `GET /api/stream`
+    over SSE), the per-identity-bus / per-session relay workflow (one run owns a channel token's
+    hook, re-emits frames onto its durable out-stream), the `Bearer auth_token` admission gate
+    (recompute `identity_id`, route by it), resume-or-`start()` with §6B backoff, and the §6A
+    bus-only-`session_announce` guard. No store.
+  - **CLI BrokerClient** (PR11) — the host+viewer transport: seal on the way out / open on the way
+    in (via the `SecurityProvider`), the two endpoints, a robust SSE parser, and the `FrameOrderer`
+    (dedup by `msg_id`/`(msg_id,part)`, reorder content by `seq`, deliver control/meta immediately).
+  - **End-to-end harness** (PR12) — the real transport ↔ the real broker ↔ a viewer, only `claude`
+    faked: a sealed `session_announce` is discovered on the bus; a `user` prompt (`K_session`) round-
+    trips to the host, which runs the fake model and emits `accepted` + echo + `assistant` + `result`;
+    the viewer reorders and decrypts them; an `interrupt` rides `control_key`. The broker holds no key
+    and sees only ciphertext + the cleartext routing header, exactly as designed.
+  What remains for a live deploy: the **P4 MITM** (intercepting a real `claude`'s RC protocol — needs
+  the binary + Anthropic network) and the **P5 browser UI**; the broker↔viewer crypto/transport spine
+  is done. Build/deploy note: `apps/web` uses `next build --webpack` + `extensionAlias` to bundle
+  clawsec's raw-TS source (Turbopack can't resolve its `.js`-specifier imports in `node_modules`).
 
 ## 15. Use cases / scenario matrix (also the v2 test plan)
 
