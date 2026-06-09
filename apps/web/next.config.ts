@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
   // Two settings make Next bundle it: transpilePackages runs it through Next's compiler (else
   // Turbopack rejects the `.ts` entry in node_modules), and extensionAlias maps its `.js` specifiers
   // back to the `.ts` sources (else `./wire.js` etc. don't resolve).
-  transpilePackages: ["@remote-claw/clawsec"],
+  transpilePackages: ["@remote-claw/clawsec", "@remote-claw/cli"],
   experimental: {
     extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
   },
