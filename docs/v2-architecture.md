@@ -1282,7 +1282,13 @@ phase0/            unchanged — the Python reference + protocol findings
   `Bearer auth_token`) on the session token; subscribe inbound (SSE) → dedup by `msg_id` → decrypt →
   deliver to Claude only after log commit, then echo `accepted`. End-to-end: a curl "web"
   drives a real Claude session through Vercel.
-- **P5 — Web client.** Paste/fragment secret, identity + spaces list (each space =
+- **P5 — Web client. ✅ BUILT 2026-06-09 (`apps/web/app`, PR14).** A mobile-first Next.js client:
+  paste a **pass** (or open a link with it in the URL `#fragment`, stripped after load), discover the
+  machine's live sessions on the bus (decrypted titles, timestamp-driven presence that greys as
+  announces lapse), open one, render the transcript (history + live, deduped/reordered), and send
+  prompts — all decrypted in-browser (WebCrypto), reusing the **same** transport the host uses
+  (`@remote-claw/cli/broker`, browser-safe subpath — PR13). Same-origin to the two routes.
+  Original plan: Paste/fragment secret, identity + spaces list (each space =
   a chat), message view (history + live), send. Mobile/PWA.
 - **P6 — Multiple machines + polish.** Onboard several independent machines (each its own
   secret), friendly names, reconnect/resume, replay from `since=seq`, machine reset, error states.
@@ -1615,10 +1621,21 @@ Beyond §14's plan review, individual decisions are settled with small design pa
     trips to the host, which runs the fake model and emits `accepted` + echo + `assistant` + `result`;
     the viewer reorders and decrypts them; an `interrupt` rides `control_key`. The broker holds no key
     and sees only ciphertext + the cleartext routing header, exactly as designed.
-  What remains for a live deploy: the **P4 MITM** (intercepting a real `claude`'s RC protocol — needs
-  the binary + Anthropic network) and the **P5 browser UI**; the broker↔viewer crypto/transport spine
-  is done. Build/deploy note: `apps/web` uses `next build --webpack` + `extensionAlias` to bundle
-  clawsec's raw-TS source (Turbopack can't resolve its `.js`-specifier imports in `node_modules`).
+  - **Web client** (PR13–PR14) — the broker module was exposed as a browser-safe subpath
+    (`@remote-claw/cli/broker`), and `apps/web/app` is a mobile-first Next.js viewer that reuses it:
+    paste a pass → discover sessions on the bus → open one → transcript + send, all decrypted
+    in-browser. So the **P5** UI is built (`next build` green, the `/` page prerenders).
+  - **Proven with a REAL claude** (PR15) — a gated test (`RC_PROVE_REAL_CLAUDE=1`) drives the actual
+    logged-in `claude` (2.1.169) through the full stack: the browser Viewer asks "capital of France?",
+    it travels **encrypted** to a host that runs `claude -p`, and "Paris." comes back encrypted and
+    renders in the viewer. The broker only ever saw ciphertext. (Network-gated, so CI stays
+    deterministic — skipped by default.)
+  What remains for a live deploy: the **P4 MITM half** — intercepting a real `claude`'s *native*
+  `--remote-control` protocol to drive the interactive TUI (rather than `claude -p`), which needs a
+  pty + an HTTPS interception proxy; its feasibility is already Phase-0-verified (C1–C5). The
+  broker ↔ transport ↔ web-client crypto spine is done and proven with a real model. Build/deploy
+  note: `apps/web` uses `next build --webpack` + `extensionAlias` to bundle clawsec's raw-TS source
+  (Turbopack can't resolve its `.js`-specifier imports in `node_modules`).
 
 ## 15. Use cases / scenario matrix (also the v2 test plan)
 
