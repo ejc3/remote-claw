@@ -4,14 +4,21 @@
 // (subscribe, SSE). The broker only ever sees ciphertext + the cleartext routing header.
 
 import {
+  concatBytes,
   decodeFrame,
   encodeFrame,
   type Frame,
   type FrameHeader,
+  splitPlaintext,
   toHex,
 } from "@remote-claw/clawsec";
 import type { SecurityProvider } from "../security/provider.js";
 import { planeForKind } from "./protocol.js";
+
+// Default chunk size for postMessage. A POST body (the inbound hook) is capped at 4.5 MB (§8) and
+// base64url expands ~33%, so a ~3 MB plaintext chunk stays comfortably under the limit with room for
+// the JSON envelope. Callers can override per message.
+const DEFAULT_MAX_CHUNK_BYTES = 3_000_000;
 
 /** A non-2xx broker reply. `status` lets callers branch (e.g. 409 = run rolled → retry). */
 export class BrokerError extends Error {
@@ -80,8 +87,13 @@ export class BrokerClient {
   async postFrame(header: FrameHeader, plaintext: Uint8Array): Promise<RelayResult> {
     const plane = planeForKind(header.recordKind);
     const frame = await this.#provider.sealFrame(plane, header, plaintext);
-    const onBus = header.recordKind === "session_announce";
-    const qs = onBus ? "" : `?session=${encodeURIComponent(header.sessionId)}`;
+    return this.#publish(frame);
+  }
+
+  /** POST one sealed frame on its channel (bus for session_announce, else the session channel). */
+  async #publish(frame: Frame): Promise<RelayResult> {
+    const onBus = frame.recordKind === "session_announce";
+    const qs = onBus ? "" : `?session=${encodeURIComponent(frame.sessionId)}`;
     const res = await this.#fetch(`${this.#baseUrl}/api/relay${qs}`, {
       method: "POST",
       headers: { authorization: this.#authHeader(), "content-type": "application/json" },
@@ -91,9 +103,80 @@ export class BrokerClient {
     return (await res.json()) as RelayResult;
   }
 
+  /**
+   * Publish a possibly-LARGE message: split the plaintext into ≤ `maxChunkBytes` pieces, seal each
+   * as an independent AEAD frame sharing `header.msgId` with its `(part, parts)` bound into the AAD
+   * (§8), and POST each on the message's channel. The receiver collects the parts and reassembles
+   * with `openMessage`. A single-piece message is exactly one ordinary frame. Returns one
+   * RelayResult per chunk.
+   */
+  async postMessage(
+    header: FrameHeader,
+    plaintext: Uint8Array,
+    maxChunkBytes = DEFAULT_MAX_CHUNK_BYTES,
+  ): Promise<RelayResult[]> {
+    const plane = planeForKind(header.recordKind);
+    const pieces = splitPlaintext(plaintext, maxChunkBytes);
+    const parts = pieces.length;
+    const results: RelayResult[] = [];
+    for (let part = 0; part < parts; part++) {
+      const frame = await this.#provider.sealFrame(
+        plane,
+        { ...header, part, parts },
+        pieces[part] as Uint8Array,
+      );
+      results.push(await this.#publish(frame));
+    }
+    return results;
+  }
+
   /** Open a received frame to its plaintext, choosing the plane from its record_kind (§6A). */
   openFrame(frame: Frame): Promise<Uint8Array> {
     return this.#provider.openFrame(planeForKind(frame.recordKind), frame);
+  }
+
+  /**
+   * Reassemble the chunk frames of ONE message (all sharing msg_id, `parts` total) into the full
+   * plaintext. Each chunk is AEAD-verified on open (its `part`/`parts` are in the AAD), and the
+   * parts must cover 0..parts-1 with no gaps or duplicates — a forged/missing/reordered chunk
+   * throws before it can corrupt the buffer.
+   */
+  async openMessage(frames: Frame[]): Promise<Uint8Array> {
+    const first = frames[0];
+    if (first === undefined) throw new Error("openMessage: no frames");
+    const { parts } = first;
+    if (frames.length !== parts)
+      throw new Error(`openMessage: expected ${parts} frames, got ${frames.length}`);
+    const slots: (Uint8Array | undefined)[] = new Array(parts);
+    for (const f of frames) {
+      if (f.parts !== parts) throw new Error("openMessage: inconsistent parts");
+      // All chunks MUST be the same message (mirrors clawsec openChunked's sameMessage check): each
+      // chunk's own AEAD passes individually, so without this two messages sharing a `parts` count
+      // could be Frankensteined into one corrupt plaintext. msg_id is CSPRNG-unique per message (§8).
+      if (
+        f.msgId !== first.msgId ||
+        f.sessionId !== first.sessionId ||
+        f.recordKind !== first.recordKind ||
+        f.seq !== first.seq ||
+        f.keyEpoch !== first.keyEpoch ||
+        f.dir !== first.dir ||
+        f.clientMsgId !== first.clientMsgId ||
+        toHex(f.identityId) !== toHex(first.identityId)
+      ) {
+        throw new Error("openMessage: frames are not from the same message");
+      }
+      if (f.part < 0 || f.part >= parts)
+        throw new Error(`openMessage: part out of range (${f.part})`);
+      if (slots[f.part] !== undefined) throw new Error(`openMessage: duplicate part ${f.part}`);
+      slots[f.part] = await this.openFrame(f);
+    }
+    const ordered: Uint8Array[] = [];
+    for (let i = 0; i < parts; i++) {
+      const s = slots[i];
+      if (s === undefined) throw new Error(`openMessage: missing part ${i}`);
+      ordered.push(s);
+    }
+    return concatBytes(...ordered);
   }
 
   /**

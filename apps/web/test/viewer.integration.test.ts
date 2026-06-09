@@ -70,6 +70,26 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
     expect(msgs[0]?.text).toBe("you said: hello from the browser");
   });
 
+  it("reassembles a LARGE assistant message (split into chunks) through the viewer's reorder path", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(99));
+    const pass = await formatPass(id);
+    const viewer = await Viewer.fromPass(pass, "http://broker", brokerFetch);
+    const host = fakeHost(id);
+    const sid = "big-view";
+    // ~18 KB assistant reply, posted as chunks (8 KB) sharing one seq — the host's real path.
+    const big = "lorem ipsum dolor ".repeat(1000);
+    await host.postMessage(
+      header(id, { recordKind: "assistant", sessionId: sid, seq: 0, msgId: "big-assistant" }),
+      utf8(big),
+      8000,
+    );
+    // The viewer must surface it as ONE message (FrameOrderer holds the seq until all parts land,
+    // then openMessage reassembles) — not as fragments or a dropped tail.
+    const [msg] = await takeGen(viewer.transcript(sid, never), 1);
+    expect(msg?.kind).toBe("assistant");
+    expect(msg?.text).toBe(big);
+  });
+
   it("rejects a malformed pass with a clear error", async () => {
     await expect(Viewer.fromPass("not-a-pass", "http://broker", brokerFetch)).rejects.toThrow();
   });

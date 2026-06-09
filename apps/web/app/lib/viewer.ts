@@ -98,12 +98,22 @@ export class Viewer {
       signal,
     })) {
       if (frame.dir !== "out") continue; // the viewer renders host→web frames only
-      for (const f of orderer.accept(frame)) {
+      // The orderer releases a chunked message (parts > 1) as its parts together, in part order — so
+      // reassemble those with openMessage; a single frame opens directly.
+      const ready = orderer.accept(frame);
+      for (let i = 0; i < ready.length; ) {
+        const f = ready[i];
+        if (f === undefined) break;
+        const span = f.parts > 1 ? f.parts : 1;
+        const group = ready.slice(i, i + span);
+        i += span;
         let text: string;
         try {
-          text = td.decode(await this.#client.openFrame(f));
+          text = td.decode(
+            span > 1 ? await this.#client.openMessage(group) : await this.#client.openFrame(f),
+          );
         } catch {
-          continue;
+          continue; // a frame/message we can't open (not ours / corrupt) — skip, never crash the list
         }
         yield { kind: f.recordKind, seq: f.seq, text, msgId: f.msgId };
       }

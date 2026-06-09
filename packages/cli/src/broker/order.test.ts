@@ -47,13 +47,46 @@ describe("FrameOrderer (dedup + reorder, §6/§12)", () => {
     expect(ids(o.accept(frame({ msgId: "a", seq: 0 })))).toEqual([]); // exact dup
   });
 
-  it("dedups chunked frames by (msg_id, part), not msg_id alone", () => {
+  it("holds a chunked message (parts share one seq) until complete, then releases all parts in order", () => {
     const o = new FrameOrderer();
+    // A 2-part message: both parts carry the SAME seq, differing only by `part` (§8).
     const p0 = frame({ msgId: "big", seq: 0, part: 0, parts: 2 });
-    const p1 = frame({ msgId: "big", seq: 1, part: 1, parts: 2 });
-    expect(ids(o.accept(p0))).toEqual(["big"]);
-    expect(ids(o.accept(p1))).toEqual(["big"]); // different part -> not a dup
-    expect(ids(o.accept(p0))).toEqual([]); // same part -> dup
+    const p1 = frame({ msgId: "big", seq: 0, part: 1, parts: 2 });
+    expect(o.accept(p0)).toEqual([]); // incomplete — the message's seq slot is held (like a gap)
+    expect(o.accept(p1).map((f) => f.part)).toEqual([0, 1]); // complete → both parts, in part order
+    expect(o.accept(p0)).toEqual([]); // a re-sent part is deduped by (msg_id, part)
+    expect(o.nextSeq).toBe(1); // the whole chunked message occupied exactly ONE transcript seq
+  });
+
+  it("guards a seq slot to one message: a foreign-msg_id frame at the same seq is dropped", () => {
+    const o = new FrameOrderer();
+    expect(o.accept(frame({ msgId: "real", seq: 0, part: 0, parts: 2 }))).toEqual([]); // accumulating
+    expect(o.accept(frame({ msgId: "intruder", seq: 0, part: 0, parts: 1 }))).toEqual([]); // dropped
+    // The real message completes and releases cleanly — only its own two parts, no intruder.
+    expect(
+      o.accept(frame({ msgId: "real", seq: 0, part: 1, parts: 2 })).map((f) => f.msgId),
+    ).toEqual(["real", "real"]);
+  });
+
+  it("does not falsely complete a chunked message on a replayed part after dedup-window eviction", () => {
+    const o = new FrameOrderer(0, 1); // dedup cap = 1 → keys evict fast, so a replay can slip past it
+    const p = (part: number) => frame({ msgId: "m", seq: 0, part, parts: 3 });
+    expect(o.accept(p(0))).toEqual([]); // part 0 buffered
+    expect(o.accept(p(1))).toEqual([]); // part 1 buffered (evicts the "m:0" dedup key)
+    // The "m:0" key evicted, so this replay passes the dedup window — but the SLOT rejects the dup part,
+    // so the message is NOT falsely "complete" with [0,1,0] (which would corrupt + lose the real part 2).
+    expect(o.accept(p(0))).toEqual([]); // duplicate part dropped at the slot
+    expect(o.pending).toBe(1); // still held — part 2 is genuinely missing
+    expect(o.accept(p(2)).map((f) => f.part)).toEqual([0, 1, 2]); // the real part 2 completes it cleanly
+  });
+
+  it("reassembles a chunked message even when its parts arrive out of order", () => {
+    const o = new FrameOrderer();
+    expect(o.accept(frame({ msgId: "m", seq: 0, part: 2, parts: 3 }))).toEqual([]);
+    expect(o.accept(frame({ msgId: "m", seq: 0, part: 0, parts: 3 }))).toEqual([]);
+    expect(o.accept(frame({ msgId: "m", seq: 0, part: 1, parts: 3 })).map((f) => f.part)).toEqual([
+      0, 1, 2,
+    ]);
   });
 
   it("delivers control/meta frames (seq=null) immediately, deduped", () => {

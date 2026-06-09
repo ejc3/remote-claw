@@ -4,6 +4,11 @@
 // content frames (the transcript) are buffered and released in consecutive seq order, so a reorder
 // or a duplicate never corrupts the transcript. A gap (a missing seq) holds delivery until it fills
 // (live retry or a catch_up replay, §6/§16) — the design's intended behavior.
+//
+// A CHUNKED message (§8) is ONE transcript entry: all its parts share the same `seq` and differ only
+// by `part` (0..parts-1). So a seq slot holds the WHOLE message — released only once every part has
+// arrived, all parts together in part order — and the cursor advances by one for the message, not
+// per chunk. (The caller reassembles a multi-part group with BrokerClient.openMessage.)
 
 import type { Frame } from "@remote-claw/clawsec";
 
@@ -14,8 +19,8 @@ export class FrameOrderer {
   readonly #seen = new Set<string>();
   readonly #seenOrder: string[] = [];
   readonly #seenCap: number;
-  /** Out-of-order content frames waiting for their turn, keyed by seq. */
-  readonly #buffered = new Map<number, Frame>();
+  /** seq → the frames for that transcript entry: one frame, or the accumulating chunks of one message. */
+  readonly #buffered = new Map<number, Frame[]>();
   #nextSeq: number;
 
   /** `nextSeq` is the first transcript seq to expect (0 for a full catch_up; N+1 to resume). */
@@ -54,14 +59,35 @@ export class FrameOrderer {
     // A content frame older than the cursor was already delivered — drop it (don't leak it forever).
     if (frame.seq < this.#nextSeq) return [];
 
-    this.#buffered.set(frame.seq, frame);
+    // Place the frame into its seq slot. A single frame IS the slot; a chunk accumulates with its
+    // siblings (the same seq) — already deduped by msg_id:part above, so each part lands once. A seq
+    // is ONE transcript entry, so every frame in a slot must share the message's msg_id + parts;
+    // drop a mismatch (a valid frame can't be forged, but never let two messages pollute one slot).
+    const slot = this.#buffered.get(frame.seq) ?? [];
+    const head = slot[0];
+    if (head !== undefined && (head.msgId !== frame.msgId || head.parts !== frame.parts)) return [];
+    if (frame.parts > 1) {
+      // Validate the part index and reject a duplicate part WITHIN the slot. The msg_id:part dedup
+      // above normally catches a replay, but the dedup window is bounded — a part that waited long
+      // enough for its key to evict could be replayed; counting it twice would make cur.length reach
+      // `parts` while a real part is still missing, releasing a corrupt (and unrecoverable) message.
+      if (frame.part < 0 || frame.part >= frame.parts) return []; // out of range
+      if (slot.some((f) => f.part === frame.part)) return []; // duplicate part
+    }
+    slot.push(frame);
+    this.#buffered.set(frame.seq, slot);
+
+    // Drain consecutive COMPLETE slots from the cursor. A chunked slot is complete only when it holds
+    // all `parts`; an incomplete chunked message holds the cursor (like any gap) until its rest lands.
     const ready: Frame[] = [];
-    let next = this.#buffered.get(this.#nextSeq);
-    while (next !== undefined) {
-      ready.push(next);
+    for (;;) {
+      const cur = this.#buffered.get(this.#nextSeq);
+      if (cur === undefined) break;
+      const parts = cur[0]?.parts ?? 1;
+      if (parts > 1 && cur.length < parts) break; // chunked message still missing parts
+      ready.push(...(parts > 1 ? [...cur].sort((a, b) => a.part - b.part) : cur));
       this.#buffered.delete(this.#nextSeq);
       this.#nextSeq += 1;
-      next = this.#buffered.get(this.#nextSeq);
     }
     return ready;
   }

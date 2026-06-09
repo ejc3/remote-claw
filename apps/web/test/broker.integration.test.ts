@@ -155,4 +155,66 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/only session_announce/);
   });
+
+  it("rejects a frame whose session_id disagrees with ?session (no cross-session smuggling)", async () => {
+    const id = await testIdentity(11);
+    const auth = bearer(id.authToken);
+    const kA = await deriveSessionKey(id.contentRoot, "A");
+    // A frame sealed + labelled for session A, attempted onto session B's channel.
+    const frame = await wireFrame(
+      kA,
+      header(id, { sessionId: "A", recordKind: "assistant", seq: 0 }),
+      utf8("for A only"),
+    );
+    const res = await post(frame, auth, "B");
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/does not match \?session/);
+    // Positive control: the same frame on its own channel is accepted.
+    expect((await post(frame, auth, "A")).status).toBe(200);
+  });
+
+  it("isolates channels: A's content stays on A, B's on B, and neither leaks onto a (non-empty) bus", async () => {
+    const id = await testIdentity(12);
+    const auth = bearer(id.authToken);
+    const kA = await deriveSessionKey(id.contentRoot, "A");
+    const kB = await deriveSessionKey(id.contentRoot, "B");
+    // Make the bus NON-empty first (an announce), so "no content on the bus" is a real isolation
+    // assertion, not just "the bus run never started".
+    await post(await announceFrame(id, { session_id: "A", sent_at: 1 }), auth);
+    await post(
+      await wireFrame(
+        kA,
+        header(id, { sessionId: "A", recordKind: "assistant", seq: 0 }),
+        utf8("A-secret"),
+      ),
+      auth,
+      "A",
+    );
+    await post(
+      await wireFrame(
+        kB,
+        header(id, { sessionId: "B", recordKind: "assistant", seq: 0 }),
+        utf8("B-secret"),
+      ),
+      auth,
+      "B",
+    );
+
+    const [aFrame] = (await readSseData(await sub(auth, "?session=A&startIndex=0"), 1)) as [
+      WireFrame,
+    ];
+    if (aFrame === undefined) throw new Error("A stream empty");
+    expect(td.decode(await open(kA, decodeFrame(aFrame)))).toBe("A-secret");
+
+    const [bFrame] = (await readSseData(await sub(auth, "?session=B&startIndex=0"), 1)) as [
+      WireFrame,
+    ];
+    if (bFrame === undefined) throw new Error("B stream empty");
+    expect(td.decode(await open(kB, decodeFrame(bFrame)))).toBe("B-secret");
+
+    // The bus is non-empty but carries ONLY the announce — neither session's content leaked onto it.
+    const busFrames = (await readSseData(await sub(auth, "?startIndex=0"), 2)) as WireFrame[];
+    expect(busFrames).toHaveLength(1);
+    expect(busFrames[0]?.record_kind).toBe("session_announce");
+  });
 });
