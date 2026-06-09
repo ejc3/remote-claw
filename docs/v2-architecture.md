@@ -1263,31 +1263,36 @@ phase0/            unchanged — the Python reference + protocol findings
      pipes SSE within the Function `maxDuration` (300s Hobby / 800s Pro, §13 — reconnect by
      `seq` past it); `HookNotFound` ⇒ `200` empty.
   6. Size/chunk limits (hook ≤ 4.5 MB, stream chunk ≤ 10 MB, payload ≤ 50 MB) + `(msg_id, part)` dedup.
-- **P4 — CLI: host relay + a real claude (MITM — §14).** ✅ DONE 2026-06-09 via the **stream-json
-  backend** (a simpler path than the HTTPS MITM): the `BrokerClient` transport (PR11) + **`HostRelay`
-  + `ClaudeStreamSession`** (PR16) drive a **real, live, multi-turn `claude`** over its stream-json
-  SDK transport (`--print --input-format stream-json --output-format stream-json`) and relay it
-  through the broker — **proven end-to-end** (PR17): a browser viewer teaches claude a number in turn
-  1 and reads it back in turn 2, both through the encrypted broker. It is **inference-agnostic** —
-  `{ bedrock: true, env: {…} }` forwards the backend env so claude routes inference to **Amazon
-  Bedrock** (or Vertex) via the AWS SDK while remote-claw relays the session unchanged (PR18);
-  remote-claw never reads the inference creds. The **HTTPS-MITM variant below** (intercepting a real
-  `claude`'s *native* `--remote-control` RC protocol to drive the interactive **TUI** the user has
-  open locally, rather than a headless stream-json session) is an **optional alternative UX**, not a
-  gap — its feasibility is Phase-0-verified (C1–C5). Node/TS
-  reimpl of the Phase 0 interception: `remote-claw` runs the real interactive
-  `claude` (full passthrough) and, when RC is enabled, points it at our local MITM
-  (`HTTPS_PROXY` → our proxy with a trusted leaf cert; intercept `/v1/code/sessions*`;
-  pass `/v1/messages` through to Anthropic for inference). Our relay is the RC
-  backend — Anthropic's RC relay is never used. Then, in order: **commit the worker
-  backfill to the in-memory log + seen-set first** (detect completeness — §6 backfill
-  rule), **then join the identity bus** (resume-or-`start()` `bus:${identity_id}`) **and open
-  the per-session run/out-stream** (`sess:${identity_id}:${session_id}`, resume-or-`start()`),
-  and only then **periodically broadcast** a signed `session_announce{…, sent_at}` for the
-  session; per frame log it, allocate `seq`, encrypt → `POST /api/relay` (with
-  `Bearer auth_token`) on the session token; subscribe inbound (SSE) → dedup by `msg_id` → decrypt →
-  deliver to Claude only after log commit, then echo `accepted`. End-to-end: a curl "web"
-  drives a real Claude session through Vercel.
+- **P4 — CLI: host relay + a real claude (the §14/§17.5 MITM).** ✅ DONE 2026-06-09 — the **real RC
+  MITM backend** is built in TypeScript (`@remote-claw/cli/rc`), a faithful port of the Phase-0
+  interception (`phase0/remote_claw/{mitm,core,certs}.py`, the MANGO/KIWI/PLUM tests):
+  - `certs.ts` — a throwaway CA + leaf for `api.anthropic.com`, trusted by the child only via
+    `NODE_EXTRA_CA_CERTS`.
+  - `session.ts` — `RelayCore`/`Session`: the downstream(→worker) / upstream(←worker) event bus,
+    `initialize`-first (enqueued at session-create so a fast client prompt can't race ahead of it),
+    worker-stream supersede, delivery acks. Async generators replace the Python `threading.Condition`.
+  - `mitm.ts` — an http/tls CONNECT proxy that TLS-terminates the MITM host, **serves** the worker
+    `/v1/code/sessions*` endpoints (register, bridge, worker SSE, events, events/delivery, heartbeat,
+    PUT worker), and **passes** `/v1/messages` + OAuth + everything else (query string intact) through
+    to the real upstream; other hosts blind-tunnel.
+  - `relay.ts` — `HostRcRelay` bridges one RC session to the broker (the v2 replacement for Phase-0's
+    localhost ClientServer): an OUTBOUND pump (worker upstream → sealed content frames: assistant,
+    result, `tool_use`/`assistant_sub` for sub-agents, `permission_request`; seq + catch_up log; 409
+    cap-roll retry) and an INBOUND pump (client `user` → echo + inject, `catch_up` → replay,
+    `permission` → control_response), each re-subscribing across run-not-up / cap-roll.
+  - `launch.ts` + `run.ts` — `remote-claw [claude args] --rc-app <broker>` runs the **real** claude
+    behind the MITM (`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`, `NO_PROXY` cleared), auto-creating the
+    machine identity; lazy — nothing reaches the broker until `/remote-control` registers a session.
+
+  **Proven end-to-end** by `apps/web/test/e2e/rc-spine.integration.test.ts`: a fake worker speaks the
+  **exact captured `--remote-control` worker protocol** through the real MITM, and the browser viewer
+  drives a turn, bus discovery, history replay (catch_up), **sub-agents** (`Task` + nested replies),
+  **tool-permission grants**, and **multi-client** — all through the real broker on the real Workflow
+  runtime. The real binary's leg is the in-repo Phase-0 capture + the gated `real-rc.prove.test.ts`
+  (needs a claude.ai login + a PTY). The native **`stream-json` SDK transport** (`HostRelay` +
+  `ClaudeStreamSession`, PR16–18, Bedrock/Vertex via `{ bedrock: true }`) remains as the **documented
+  cousin** for protocol cross-checks + a headless inference-agnostic path — NOT the RC backend (§14
+  resolved MITM, not the SDK bridge).
 - **P5 — Web client. ✅ BUILT 2026-06-09 (`apps/web/app`, PR14).** A mobile-first Next.js client:
   paste a **pass** (or open a link with it in the URL `#fragment`, stripped after load), discover the
   machine's live sessions on the bus (decrypted titles, timestamp-driven presence that greys as
