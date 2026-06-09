@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
+    "@remote-claw/cli": "file:../../packages/cli",
     "@types/node": "^25.9.2",
     "@types/react": "19.2.17",
     "@workflow/vitest": "4.0.9",

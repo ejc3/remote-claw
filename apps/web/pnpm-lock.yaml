@@ -30,6 +30,9 @@ importers:
       '@biomejs/biome':
         specifier: ^2.4.16
         version: 2.4.16
+      '@remote-claw/cli':
+        specifier: file:../../packages/cli
+        version: file:../../packages/cli
       '@types/node':
         specifier: ^25.9.2
         version: 25.9.2
@@ -756,6 +759,9 @@ packages:
 
   '@remote-claw/clawsec@file:../../packages/clawsec':
     resolution: {directory: ../../packages/clawsec, type: directory}
+
+  '@remote-claw/cli@file:../../packages/cli':
+    resolution: {directory: ../../packages/cli, type: directory}
 
   '@rolldown/binding-android-arm64@1.0.3':
     resolution: {integrity: sha512-454rs7jHngixp/NMxd5srYD57OnzSlZ/eFTETjORQHLwJG1lRtmNOJcBerZlfu4GjKqeq8aCCIQrMdHyhI51Hw==}
@@ -3455,6 +3461,10 @@ snapshots:
   '@oxc-project/types@0.133.0': {}
 
   '@remote-claw/clawsec@file:../../packages/clawsec': {}
+
+  '@remote-claw/cli@file:../../packages/cli':
+    dependencies:
+      '@remote-claw/clawsec': file:../../packages/clawsec
 
   '@rolldown/binding-android-arm64@1.0.3':
     optional: true
