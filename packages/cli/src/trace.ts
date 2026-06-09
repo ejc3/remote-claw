@@ -3,12 +3,14 @@
 //   • target-scoped each call site names a target ("rc.relay", "rc.mitm", "rc.session", …)
 //   • env-filtered  RC_LOG selects what's emitted, RUST_LOG-style ("debug", "rc.mitm=debug,warn")
 //   • span-like     child() binds fields (e.g. { session }) onto every line beneath it
-//   • redaction-safe you log ids, kinds, counts, byte-lengths — NEVER plaintext bodies or secrets.
-//     The field model only takes scalars, and the sink default writes to stderr; nothing here ever
-//     reaches the broker, --rc-json, or stdout (the secret-leak surfaces). See secretleak.ts.
+//   • local-only    the default sink is stderr; it never reaches the broker, --rc-json, or stdout
+//     (the secret-leak surfaces, see secretleak.ts). This runs on the SAME machine that already holds
+//     the raw transcript, so logging conversation content/titles is not a leak — be pragmatic, not
+//     paranoid. The one hard rule: NEVER pass key material (the AEAD/session keys, the rc master
+//     secret) to a trace call. Content rides at debug+, and `trace` is the unclipped firehose.
 //
-// Off by default for everything below `warn`, so a normal run is quiet; opt into diagnosis with
-// `RC_LOG=debug` (all) or `RC_LOG=rc.relay=trace,rc.mitm=debug` (per target).
+// Off by default for everything below `warn`, so a normal run is quiet (signal/noise, not secrecy);
+// opt into diagnosis with `RC_LOG=debug` (all) or `RC_LOG=rc.relay=trace,rc.mitm=debug` (per target).
 
 import { appendFileSync } from "node:fs";
 
@@ -100,10 +102,13 @@ function clip(s: string): string {
   return s.length > 160 ? `${s.slice(0, 157)}…` : s;
 }
 
-function fmtField(v: Field): string {
+function fmtField(v: Field, clipLong: boolean): string {
   if (v === null) return "null";
   if (v === undefined) return "undefined";
-  if (typeof v === "string") return /[\s="]/.test(v) ? JSON.stringify(clip(v)) : clip(v);
+  if (typeof v === "string") {
+    const s = clipLong ? clip(v) : v;
+    return /[\s="]/.test(s) ? JSON.stringify(s) : s;
+  }
   return String(v);
 }
 
@@ -119,8 +124,10 @@ export function formatRecord(rec: TraceRecord): string {
   const d = new Date(rec.time);
   const ts = `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}.${three(d.getMilliseconds())}`;
   const lvl = rec.level.toUpperCase().padEnd(5);
+  // `trace` is the deliberate firehose — show full bodies; info/debug clip long fields for the eye.
+  const clipLong = rec.level !== "trace";
   let line = `${ts} ${lvl} ${rec.target} ${rec.msg}`;
-  for (const [k, v] of Object.entries(rec.fields)) line += ` ${k}=${fmtField(v)}`;
+  for (const [k, v] of Object.entries(rec.fields)) line += ` ${k}=${fmtField(v, clipLong)}`;
   return line;
 }
 
