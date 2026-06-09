@@ -1,5 +1,18 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runWrapper } from "./run.js";
+
+function haveOpenssl(): boolean {
+  try {
+    execFileSync("openssl", ["version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function recordingSpawn(exitCode = 0) {
   const calls: { bin: string; args: string[] }[] = [];
@@ -100,4 +113,46 @@ describe("runWrapper (functional)", () => {
     }
     expect(calls[0]?.bin).toBe("claude");
   });
+
+  it("--rc-file alone (no broker) runs plain claude and warns RC is unavailable", async () => {
+    const { fn, calls } = recordingSpawn(0);
+    const lines: string[] = [];
+    const code = await runWrapper(["chat", "--rc-file", "/tmp/x/secret"], {
+      spawnFn: fn,
+      stderr: (l) => lines.push(l),
+    });
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ bin: "claude", args: ["chat"] }]); // the rc flag is consumed, not leaked
+    expect(lines.join("")).toMatch(/needs --rc-app/);
+  });
+
+  it.skipIf(!haveOpenssl())(
+    "--rc-app launches claude behind the MITM (RC enabled), auto-creating the identity",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "rc-run-"));
+      const secret = join(dir, "secret");
+      let seenEnv: NodeJS.ProcessEnv | null = null;
+      let seenArgs: readonly string[] | null = null;
+      try {
+        const code = await runWrapper(
+          ["chat", "--model", "opus", "--rc-file", secret, "--rc-app", "http://broker.example"],
+          {
+            spawnRcEnv: async (_bin, args, env) => {
+              seenEnv = env;
+              seenArgs = args;
+              return 0;
+            },
+          },
+        );
+        expect(code).toBe(0);
+        expect(existsSync(secret)).toBe(true); // identity auto-created on first run
+        expect(seenArgs).toEqual(["chat", "--model", "opus"]); // rc flags consumed, claude args kept
+        const env = seenEnv as unknown as NodeJS.ProcessEnv;
+        expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+        expect(env.NODE_EXTRA_CA_CERTS).toBe(join(dir, "mitm-certs", "ca.pem"));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

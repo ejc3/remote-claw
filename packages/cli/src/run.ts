@@ -6,11 +6,15 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { writeSync } from "node:fs";
 import { constants } from "node:os";
+import { dirname, join } from "node:path";
+import { deriveIdentity } from "@remote-claw/clawsec";
 import { classifyArgs } from "./args.js";
 import { RC_HELP } from "./help.js";
+import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
 import { runIdentity } from "./identity.js";
 import { runPass } from "./pass.js";
 import { runShowSecret } from "./showsecret.js";
+import { ensureIdentity, loadSecret, resolveSecretPath } from "./store.js";
 
 /** Map a signal name to its number (for the shell-standard 128+N exit code). */
 function signalExitCode(signal: NodeJS.Signals): number {
@@ -37,6 +41,8 @@ export interface RunOptions {
   stderr?: (line: string) => void;
   /** stdout sink (tests) for local rc actions like --rc-identity. Defaults to process.stdout. */
   stdout?: (line: string) => void;
+  /** Injectable env-aware spawn for the RC launch path (tests). Defaults to a real child process. */
+  spawnRcEnv?: SpawnClaudeEnv;
 }
 
 const realSpawn: SpawnFn = (bin, args) =>
@@ -56,6 +62,23 @@ const realSpawn: SpawnFn = (bin, args) =>
       child.on("close", (code, signal) => resolve(signal ? signalExitCode(signal) : (code ?? 0)));
     } catch (err) {
       fail(err); // e.g. an empty/invalid bin that throws synchronously
+    }
+  });
+
+/** Like realSpawn, but launches the child with an explicit env (the RC proxy env). */
+const realSpawnEnv: SpawnClaudeEnv = (bin, args, env) =>
+  new Promise((resolve) => {
+    const fail = (err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`remote-claw: cannot run claude: ${reason}\n`);
+      resolve(127);
+    };
+    try {
+      const child = nodeSpawn(bin, [...args], { stdio: "inherit", env });
+      child.on("error", fail);
+      child.on("close", (code, signal) => resolve(signal ? signalExitCode(signal) : (code ?? 0)));
+    } catch (err) {
+      fail(err);
     }
   });
 
@@ -82,11 +105,13 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     return runPass(rc, claudeArgs, { stdout: writeOut, stderr: warn });
   }
 
+  // The remaining `--rc-*` namespace splits into flags the LAUNCH path consumes (the secret file +
+  // the broker origin) and action modifiers that are only meaningful with a local action above.
   const rcNames = Object.keys(rc);
-  if (rcNames.length > 0) {
-    // Name the offending flag(s) only — never echo their values.
-    const named = rcNames.map((k) => `--${k}`).join(", ");
-    warn(`remote-claw: --rc-* flags are not implemented in this build yet (${named})\n`);
+  const stray = rcNames.filter((n) => n !== "rc-file" && n !== "rc-app");
+  if (stray.length > 0) {
+    const named = stray.map((k) => `--${k}`).join(", ");
+    warn(`remote-claw: ${named} only applies to a --rc-* action (e.g. --rc-identity)\n`);
     return 2;
   }
 
@@ -103,6 +128,49 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // `||` (not `??`) so an empty string from RC_CLAUDE_BIN falls through to the default
   // instead of producing a synchronous spawn("") throw.
   const bin = opts.claudeBin || process.env.RC_CLAUDE_BIN || "claude";
+
+  // Remote control needs a broker to relay to (`--rc-app` / RC_APP). With one configured, launch the
+  // REAL claude behind our MITM so a `/remote-control` inside it wires into the broker (§3.1). Without
+  // one, there's nothing to relay to — run claude transparently (identical to plain `claude`).
+  const rcApp = (typeof rc["rc-app"] === "string" ? rc["rc-app"] : "") || process.env.RC_APP || "";
+  if (rcApp !== "") {
+    return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
+  }
+  if (rcNames.length > 0) {
+    warn(
+      "remote-claw: --rc-file needs --rc-app (or RC_APP) to enable remote control; running plain claude\n",
+    );
+  }
   const spawnFn = opts.spawnFn ?? realSpawn;
   return spawnFn(bin, claudeArgs);
+}
+
+/** Resolve the identity (auto-created on first run) and launch claude behind the MITM (§3.1/§14). */
+async function runRcLaunchPath(
+  brokerUrl: string,
+  rc: Record<string, unknown>,
+  claudeArgs: string[],
+  bin: string,
+  opts: RunOptions,
+  warn: (line: string) => void,
+): Promise<number> {
+  const secretPath = resolveSecretPath({
+    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
+  }).path;
+  try {
+    await ensureIdentity(secretPath); // local, idempotent — create on first run, no network
+    const { secret } = await loadSecret(secretPath);
+    const identity = await deriveIdentity(secret);
+    return await runRcLaunch({
+      claudeArgs,
+      identity,
+      brokerUrl,
+      certsDir: join(dirname(secretPath), "mitm-certs"),
+      claudeBin: bin,
+      spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
+    });
+  } catch (e) {
+    warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
 }
