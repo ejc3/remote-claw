@@ -62,6 +62,15 @@ describe("buildFilter", () => {
     expect(f("rc.mitmx")).toBe(-1);
     expect(f("rc.mitm")).toBe(4);
   });
+
+  it("a garbled/typo'd spec falls back to warn (never silences errors)", () => {
+    // No valid directive parsed → must NOT default to OFF, or a typo would hide warnings + errors.
+    for (const spec of ["rc.mitm", ",", "nonsense", "=debug", "rc.mitm="]) {
+      expect(buildFilter(spec)("rc.relay")).toBe(1); // warn
+    }
+    // But a VALID target rule with no global default does silence the rest (intentional scoping).
+    expect(buildFilter("rc.mitm=debug")("rc.relay")).toBe(-1);
+  });
 });
 
 describe("Tracer level gating", () => {
@@ -155,6 +164,19 @@ describe("formatRecordJson", () => {
       seq: 3,
     });
     expect(obj.text).toBe(long); // on-disk capture is NOT clipped
+  });
+
+  it("a field named like a canonical key cannot overwrite the record metadata", () => {
+    const obj = JSON.parse(
+      formatRecordJson({
+        level: "warn",
+        target: "rc.relay",
+        msg: "real msg",
+        fields: { level: "SPOOF", target: "SPOOF", msg: "SPOOF", t: 999 },
+        time: 5,
+      }),
+    );
+    expect(obj).toMatchObject({ level: "warn", target: "rc.relay", msg: "real msg", t: 5 });
   });
 });
 

@@ -176,7 +176,8 @@ export class HostRcRelay {
       this.#header("session_announce", null, `ann-${this.#sessionId}-${this.#seq}`),
       utf8(JSON.stringify({ session_id: this.#sessionId, title, cwd, sent_at: Date.now() })),
     );
-    this.#trace.info("announce", { title });
+    this.#trace.info("announce"); // session id is bound via child(); title is debug-only
+    this.#trace.debug("announce", { title });
   }
 
   /**
@@ -249,9 +250,14 @@ export class HostRcRelay {
       try {
         await this.#tailInbound(signal);
       } catch (e) {
-        this.#trace.warn("inbound tail threw → retry", {
-          error: (e as Error)?.message ?? String(e),
-        });
+        // A SyntaxError from JSON.parse of a DECRYPTED body embeds a snippet of that plaintext in its
+        // message — never put that in the default-level log. Log the error class at warn; the message
+        // (safe for network/stream errors, content-bearing for parse errors) goes to debug only.
+        const err = e as Error;
+        this.#trace.warn("inbound tail threw → retry", { error: err?.name ?? "Error" });
+        if (!(err instanceof SyntaxError) && err?.message) {
+          this.#trace.debug("inbound tail error", { detail: err.message });
+        }
       }
       if (signal.aborted) break;
       await new Promise((r) => setTimeout(r, 150)); // run not up / stream closed → resume-or-retry

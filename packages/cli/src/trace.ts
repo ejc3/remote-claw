@@ -77,8 +77,10 @@ export function buildFilter(spec: string | undefined): Filter {
         rules.push({ target, rank: lvl === "off" ? OFF : RANK[lvl] });
     }
   }
-  // No spec at all → warn. A spec with only target rules → others OFF.
-  const def = global ?? (spec === undefined || spec.trim() === "" ? RANK.warn : OFF);
+  // Default for unmatched targets: a global directive wins; else, if there ARE valid target rules,
+  // others are OFF (naming a target silences the rest, like RUST_LOG); else (empty/typo'd spec with
+  // no usable directive) fall back to warn — a garbled RC_LOG must never silence errors.
+  const def = global ?? (rules.length > 0 ? OFF : RANK.warn);
   return (target: string) => {
     let best = def;
     let bestLen = -1;
@@ -125,12 +127,14 @@ export function formatRecord(rec: TraceRecord): string {
 /** Machine formatter: one JSON object per line, fields UNclipped — for a full on-disk capture you can
  *  grep/replay later (RC_LOG_FORMAT=json + RC_LOG_FILE). Still scalar fields only; never secrets. */
 export function formatRecordJson(rec: TraceRecord): string {
+  // Canonical keys are spread LAST so a field that happens to be named t/level/target/msg can never
+  // overwrite the record's real metadata (it's dropped instead of corrupting the line).
   return JSON.stringify({
+    ...rec.fields,
     t: rec.time,
     level: rec.level,
     target: rec.target,
     msg: rec.msg,
-    ...rec.fields,
   });
 }
 

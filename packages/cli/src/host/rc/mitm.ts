@@ -154,7 +154,9 @@ export class MitmProxy {
       // a fast client prompt could race a `user` event ahead of it. The worker's SSE then always
       // receives initialize first (pushInitialize is idempotent, so #streamWorker's call is a no-op).
       s.pushInitialize();
-      this.#trace.info("session created", { session: s.id, title: s.title });
+      // Lifecycle at info (session id only); the worker-set title is metadata we keep to debug.
+      this.#trace.info("session created", { session: s.id });
+      this.#trace.debug("session title", { session: s.id, title: s.title });
       this.#opts.onSession?.(s);
       return sendJson(res, { session: s.sessionObj() });
     }
