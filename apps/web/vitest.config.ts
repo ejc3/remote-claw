@@ -1,5 +1,5 @@
 import { workflow } from "@workflow/vitest";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // The @workflow/vitest plugin runs workflows in-process — the real durable runtime (hooks,
 // streams, resume), no deployed server. So the relay round-trip is exercised against the SAME
@@ -19,6 +19,10 @@ export default defineConfig({
   },
   test: {
     include: ["test/**/*.test.ts"],
+    // The deployment-targeted e2e (test/preview) hits a real Vercel URL over HTTP and needs no
+    // in-process Workflow runtime — it runs via vitest.preview.config.ts (`pnpm test:preview`), not
+    // the default suite.
+    exclude: [...configDefaults.exclude, "test/preview/**"],
     testTimeout: 60_000,
   },
 });

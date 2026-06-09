@@ -9,6 +9,7 @@
     "build": "next build --webpack",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:preview": "vitest run --config vitest.preview.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",
     "format": "biome format --write .",
