@@ -7,7 +7,9 @@ import {
   dirname,
   editStat,
   parseToolUse,
+  sanitizeInput,
   type ToolInput,
+  toolHint,
 } from "./lib/transcript";
 import { type Announce, FRESH_WINDOW_MS, type Message, Viewer } from "./lib/viewer";
 
@@ -284,6 +286,14 @@ function Transcript(props: {
     [mode, sessionId, viewer],
   );
 
+  // Answer a worker permission_request (§17.4): seal a `permission` frame the host turns into the
+  // control_response. Bound to this session; PermissionRow owns the per-request pending/resolved state.
+  const grant = useCallback(
+    (requestId: string, behavior: "allow" | "deny") =>
+      viewer.grantPermission(sessionId, requestId, behavior),
+    [sessionId, viewer],
+  );
+
   return (
     <section className="chat">
       <div className="chat-head">
@@ -296,7 +306,7 @@ function Transcript(props: {
       <div className="transcript">
         {messages.length === 0 && <p className="empty-pad">Waiting for the transcript…</p>}
         {messages.map((m) => (
-          <Bubble key={`${m.msgId}:${m.seq}`} message={m} />
+          <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} />
         ))}
         <div ref={endRef} />
       </div>
@@ -476,7 +486,9 @@ function ModeSheet({
 // right-aligned pills; ASSISTANT turns are full-width prose (no bubble). Tool calls are compact
 // tappable rows that expand to a Command/Diff detail; sub-agents and thinking nest/recede. (Inspired
 // by Claude Code's mobile UI — see the design spec.)
-function Bubble({ message }: { message: Message }) {
+type GrantFn = (requestId: string, behavior: "allow" | "deny") => Promise<void>;
+
+function Bubble({ message, onGrant }: { message: Message; onGrant: GrantFn }) {
   switch (message.kind) {
     case "result":
       return <p className="turn-sep" aria-hidden />;
@@ -500,7 +512,7 @@ function Bubble({ message }: { message: Message }) {
     case "tool_use":
       return <ToolRow text={message.text} />;
     case "permission_request":
-      return <PermissionRow text={message.text} />;
+      return <PermissionRow text={message.text} onGrant={onGrant} />;
     default:
       // accepted acks + lifecycle frames are not part of the rendered conversation.
       return null;
@@ -517,18 +529,91 @@ function ThinkingRow({ text, sub }: { text: string; sub: boolean }) {
   );
 }
 
-/** A worker permission request (RC usually auto-executes, §17.4 — shown when it doesn't). */
-function PermissionRow({ text }: { text: string }) {
-  let tool = "tool";
-  try {
-    tool = (JSON.parse(text) as { tool_name?: string }).tool_name ?? "tool";
-  } catch {}
+/**
+ * A worker permission request (RC usually auto-executes, §17.4 — shown when it doesn't). Renders the
+ * tool + a one-line hint and Allow / Deny buttons; the decision rides back as a `permission` frame
+ * (onGrant → viewer.grantPermission). Once answered (or if a request_id is missing) the buttons lock.
+ */
+function PermissionRow({ text, onGrant }: { text: string; onGrant: GrantFn }) {
+  const req = parsePermission(text);
+  const [decision, setDecision] = useState<"allow" | "deny" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const decide = useCallback(
+    async (behavior: "allow" | "deny") => {
+      if (req.requestId === "" || busy) return;
+      setBusy(true);
+      setErr(null);
+      try {
+        await onGrant(req.requestId, behavior);
+        setDecision(behavior);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [req.requestId, busy, onGrant],
+  );
+
   return (
-    <div className="tool-row">
-      <span className="tool-glyph">🔐</span>
-      <span className="tool-label">permission · {tool}</span>
+    <div className="perm">
+      <div className="perm-head">
+        <span className="tool-glyph">🔐</span>
+        <span className="perm-label">
+          Allow <strong>{req.tool}</strong>?
+        </span>
+      </div>
+      {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
+      {decision === null ? (
+        <div className="perm-actions">
+          <button
+            type="button"
+            className="perm-btn perm-allow"
+            disabled={busy || req.requestId === ""}
+            onClick={() => void decide("allow")}
+          >
+            Allow
+          </button>
+          <button
+            type="button"
+            className="perm-btn perm-deny"
+            disabled={busy || req.requestId === ""}
+            onClick={() => void decide("deny")}
+          >
+            Deny
+          </button>
+        </div>
+      ) : (
+        <div className="perm-resolved" data-behavior={decision}>
+          {decision === "allow" ? "✓ Allowed" : "✕ Denied"}
+        </div>
+      )}
+      {req.requestId === "" && decision === null && (
+        <div className="perm-hint">No request id — this prompt can’t be answered from here.</div>
+      )}
+      {err !== null && <div className="perm-err">Couldn’t send: {err}</div>}
     </div>
   );
+}
+
+/** Parse a permission_request frame → the tool name, a one-line hint, and the request id to answer. */
+function parsePermission(text: string): { tool: string; hint: string; requestId: string } {
+  try {
+    const p = JSON.parse(text) as {
+      request_id?: unknown;
+      tool_name?: unknown;
+      tool_input?: unknown;
+    };
+    return {
+      tool: typeof p.tool_name === "string" ? p.tool_name : "tool",
+      hint: toolHint(sanitizeInput(p.tool_input)),
+      requestId: typeof p.request_id === "string" ? p.request_id : "",
+    };
+  } catch {
+    return { tool: "tool", hint: "", requestId: "" };
+  }
 }
 
 /**

@@ -526,6 +526,81 @@ code {
   font-style: italic;
 }
 
+/* Permission prompt — a worker can_use_tool surfaced to grant/deny (§17.4). Stands out from the
+   muted tool rows: a bordered card with Allow / Deny. */
+.perm {
+  margin: 8px 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.perm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.perm-label strong {
+  font-weight: 650;
+}
+.perm-hint {
+  margin: 6px 0 0 24px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.perm-actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 0 24px;
+}
+.perm-btn {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 7px 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text);
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.perm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.perm-allow:not(:disabled) {
+  border-color: rgba(63, 185, 80, 0.5);
+  color: var(--add-fg);
+}
+.perm-allow:not(:disabled):hover {
+  background: var(--add-bg);
+}
+.perm-deny:not(:disabled):hover {
+  background: var(--del-bg);
+  border-color: rgba(248, 81, 73, 0.5);
+  color: var(--del-fg);
+}
+.perm-resolved {
+  margin: 10px 0 0 24px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.perm-resolved[data-behavior="allow"] {
+  color: var(--add-fg);
+}
+.perm-resolved[data-behavior="deny"] {
+  color: var(--del-fg);
+}
+.perm-err {
+  margin: 8px 0 0 24px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
 /* Extended-thinking block — collapsed by default, muted; recedes below the answer. */
 .thinking {
   margin: 4px 0;

@@ -114,3 +114,9 @@ export function dirname(p: string): string {
   const i = p.lastIndexOf("/");
   return i <= 0 ? "" : p.slice(0, i);
 }
+
+/** A one-line hint for a tool — the Bash command, the file path, or the description (else ""). Used
+ *  to give a permission prompt context about what the worker is asking to do. */
+export function toolHint(input: ToolInput): string {
+  return input.command ?? input.file_path ?? input.description ?? "";
+}

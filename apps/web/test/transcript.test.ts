@@ -6,6 +6,7 @@ import {
   editStat,
   parseToolUse,
   sanitizeInput,
+  toolHint,
 } from "../app/lib/transcript.js";
 
 describe("parseToolUse", () => {
@@ -84,6 +85,19 @@ describe("editStat", () => {
 
   it("counts a Write as added-only", () => {
     expect(editStat({ content: "x\ny\nz" })).toEqual({ add: 3, del: 0 });
+  });
+});
+
+describe("toolHint", () => {
+  it("prefers a Bash command", () => {
+    expect(toolHint({ command: "rm -rf build", description: "clean" })).toBe("rm -rf build");
+  });
+  it("falls back to file_path then description", () => {
+    expect(toolHint({ file_path: "/a/b.ts", description: "edit" })).toBe("/a/b.ts");
+    expect(toolHint({ description: "spawn an agent" })).toBe("spawn an agent");
+  });
+  it("is empty when there's nothing to show", () => {
+    expect(toolHint({})).toBe("");
   });
 });
 
