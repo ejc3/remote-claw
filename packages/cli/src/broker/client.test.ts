@@ -96,4 +96,34 @@ describe("BrokerClient transport", () => {
     );
     expect(ns).toEqual([2, 3]);
   });
+
+  it("postMessage/openMessage round-trips a large message via chunks", async () => {
+    const big = utf8("x".repeat(5000));
+    await client.postMessage(
+      header(id, { recordKind: "user", dir: "in", sessionId: "s", msgId: "big" }),
+      big,
+      2000,
+    );
+    const frames = await collect(client.streamFrames({ session: "s" }));
+    expect(frames).toHaveLength(3); // ceil(5000 / 2000)
+    expect(await client.openMessage(frames)).toEqual(big);
+  });
+
+  it("openMessage rejects chunks Frankensteined from two different messages (same parts count)", async () => {
+    await client.postMessage(
+      header(id, { recordKind: "user", dir: "in", sessionId: "x", msgId: "A" }),
+      utf8("aaaa"),
+      2,
+    );
+    await client.postMessage(
+      header(id, { recordKind: "user", dir: "in", sessionId: "x", msgId: "B" }),
+      utf8("bbbb"),
+      2,
+    );
+    const all = await collect(client.streamFrames({ session: "x" }));
+    const a0 = all.find((f) => f.msgId === "A" && f.part === 0);
+    const b1 = all.find((f) => f.msgId === "B" && f.part === 1);
+    if (a0 === undefined || b1 === undefined) throw new Error("missing chunks");
+    await expect(client.openMessage([a0, b1])).rejects.toThrow(/same message/);
+  });
 });
