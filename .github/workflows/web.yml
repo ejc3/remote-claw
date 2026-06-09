@@ -3,16 +3,16 @@ name: web
 on:
   push:
     branches: [main]
-    paths: ["apps/web/**", "packages/clawsec/**", ".github/workflows/web.yml"]
+    # web depends on cli + clawsec (workspace), so a change to either must re-run web CI.
+    paths:
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web.yml"]
   pull_request:
-    paths: ["apps/web/**", "packages/clawsec/**", ".github/workflows/web.yml"]
+    paths:
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web.yml"]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,13 +22,14 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: apps/web/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
+      # Install the whole pnpm workspace from the root single lockfile (cli + clawsec symlinked live).
       - run: pnpm install --frozen-lockfile
       - name: Lint + format check (Biome)
-        run: pnpm run check
+        run: pnpm --filter @remote-claw/web run check
       - name: Type check
-        run: pnpm run typecheck
+        run: pnpm --filter @remote-claw/web run typecheck
       - name: Integration tests (in-process Workflow runtime)
-        run: pnpm run test:run
+        run: pnpm --filter @remote-claw/web run test:run
       - name: Production build (Next + Workflow compiler) — proves the broker deploys
-        run: pnpm run build
+        run: pnpm --filter @remote-claw/web run build

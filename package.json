@@ -1,0 +1,14 @@
+{
+  "name": "remote-claw",
+  "private": true,
+  "version": "0.0.0",
+  "description": "remote-claw — a cloud-brokered, zero-knowledge, E2E-encrypted relay for `claude --remote-control`. pnpm workspace root (packages/*, apps/*, tests/*, spikes/*).",
+  "scripts": {
+    "check": "pnpm -r run check",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test:run"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

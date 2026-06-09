@@ -3,16 +3,15 @@ name: clawsec
 on:
   push:
     branches: [main]
-    paths: ["packages/clawsec/**", ".github/workflows/clawsec.yml"]
+    paths:
+      ["packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/clawsec.yml"]
   pull_request:
-    paths: ["packages/clawsec/**", ".github/workflows/clawsec.yml"]
+    paths:
+      ["packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/clawsec.yml"]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/clawsec
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,11 +21,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: packages/clawsec/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
+      # Install the whole pnpm workspace from the root single lockfile (members are symlinked).
       - run: pnpm install --frozen-lockfile
       - name: Lint + format check (Biome)
-        run: pnpm run check
+        run: pnpm --filter @remote-claw/clawsec run check
       - name: Type check
-        run: pnpm run typecheck
+        run: pnpm --filter @remote-claw/clawsec run typecheck
       - name: Unit tests
-        run: pnpm run test:run
+        run: pnpm --filter @remote-claw/clawsec run test:run
