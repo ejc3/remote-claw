@@ -44,6 +44,7 @@ export class FakeRcWorker {
   #sse: ReturnType<typeof httpsRequest> | null = null;
   #heartbeat: ReturnType<typeof setInterval> | null = null;
   #onControlResponse: ((requestId: string, behavior: string) => void) | null = null;
+  #onControlRequest: ((subtype: string, request: Record<string, unknown>) => void) | null = null;
 
   constructor(proxyPort: number, ca: Buffer) {
     this.#agent = proxyAgent(proxyPort, ca);
@@ -52,6 +53,11 @@ export class FakeRcWorker {
   /** Register a callback fired when the relay delivers a control_response downstream (a grant/deny). */
   onControlResponse(cb: (requestId: string, behavior: string) => void): void {
     this.#onControlResponse = cb;
+  }
+
+  /** Register a callback fired on a downstream control_request (a client verb: interrupt/set_model/…). */
+  onControlRequest(cb: (subtype: string, request: Record<string, unknown>) => void): void {
+    this.#onControlRequest = cb;
   }
 
   #rpc(method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
@@ -157,6 +163,7 @@ export class FakeRcWorker {
       event_type?: string;
       payload?: {
         message?: { content?: unknown };
+        request?: { subtype?: string } & Record<string, unknown>;
         response?: { request_id?: string; response?: { behavior?: string } };
       };
     };
@@ -177,6 +184,12 @@ export class FakeRcWorker {
     if (ev.event_type === "control_response") {
       const r = ev.payload?.response;
       this.#onControlResponse?.(r?.request_id ?? "", r?.response?.behavior ?? "");
+      return;
+    }
+    // A control_request is a client verb (interrupt/set_model/…); `initialize` is the handshake.
+    if (ev.event_type === "control_request") {
+      const req = ev.payload?.request ?? {};
+      if (req.subtype && req.subtype !== "initialize") this.#onControlRequest?.(req.subtype, req);
       return;
     }
     if (ev.event_type !== "user") return;

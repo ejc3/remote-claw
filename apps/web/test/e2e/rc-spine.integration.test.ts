@@ -247,6 +247,38 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     expect(granted).toBe(true);
   }, 40_000);
 
+  it("CONTROL VERBS: interrupt / set_model / set_mode / end + slash-command reach the worker", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(65));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+    const verbs: Array<{ subtype: string; req: Record<string, unknown> }> = [];
+    const userInputs: string[] = [];
+    worker.onControlRequest((subtype, req) => verbs.push({ subtype, req }));
+    // A slash command is delivered as user input — capture what the worker receives.
+    worker.start(sid, (text) => {
+      userInputs.push(text);
+      return [{ type: "result", subtype: "success", result: "ok" }];
+    });
+
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    // The first control frame creates the session run; the relay's inbound pump picks them all up.
+    await viewer.interrupt(sid);
+    await viewer.setModel(sid, "claude-opus-4-8");
+    await viewer.setMode(sid, "plan");
+    await viewer.command(sid, "/compact");
+    await viewer.endSession(sid);
+
+    await waitFor(() => verbs.length >= 4 && userInputs.includes("/compact"));
+    const subs = verbs.map((v) => v.subtype);
+    expect(subs).toContain("interrupt");
+    expect(verbs.find((v) => v.subtype === "set_model")?.req.model).toBe("claude-opus-4-8");
+    expect(verbs.find((v) => v.subtype === "set_permission_mode")?.req.mode).toBe("plan");
+    expect(subs).toContain("end_session"); // `end` maps to end_session
+    expect(userInputs).toContain("/compact"); // slash command delivered as user input
+  }, 40_000);
+
   it("MULTI-CLIENT: two devices drive turns on one RC session; both see the shared timeline", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(62));
     const ac = new AbortController();

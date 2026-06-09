@@ -78,6 +78,20 @@ describe("Session producers", () => {
     expect(resp.request_id).toBe("r1");
     expect(resp.response.behavior).toBe("allow");
   });
+
+  it("pushControlRequest builds a server→worker control_request with subtype + params (§3.7)", () => {
+    const s = new Session("cse_x", "t", {});
+    const ev = s.pushControlRequest("set_model", { model: "claude-opus-4-8" });
+    expect(ev.eventType).toBe("control_request");
+    const req = ev.payload.request as { subtype: string; model: string };
+    expect(req.subtype).toBe("set_model");
+    expect(req.model).toBe("claude-opus-4-8");
+    expect(typeof ev.payload.request_id).toBe("string");
+    // A param-less verb still carries just the subtype.
+    expect((s.pushControlRequest("interrupt").payload.request as { subtype: string }).subtype).toBe(
+      "interrupt",
+    );
+  });
 });
 
 describe("Session followers", () => {

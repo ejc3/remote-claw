@@ -192,6 +192,19 @@ export class Session {
     });
   }
 
+  /**
+   * Push a server→worker `control_request` (§3.7): the verbs a client drives the session with —
+   * `interrupt` (ESC the current turn), `set_permission_mode`, `set_model`, `end_session`. Each gets
+   * a fresh `request_id`. `extra` carries the verb's params (e.g. `{ model }`, `{ mode }`).
+   */
+  pushControlRequest(subtype: string, extra: Record<string, unknown> = {}): RcEvent {
+    return this.#pushDownstream("control_request", {
+      type: "control_request",
+      request: { subtype, ...extra },
+      request_id: newId("req"),
+    });
+  }
+
   /** Record an event the worker POSTed back (assistant/result/…), fanned out to clients. */
   pushUpstream(payload: Record<string, unknown>): RcEvent {
     this.#usSeq += 1;
