@@ -20,3 +20,5 @@ export {
   SecretError,
   type SecretErrorReason,
 } from "./secret.js";
+export { busToken, identityHex, sessionToken } from "./tokens.js";
+export { decodeFrame, encodeFrame, WireError, type WireFrame } from "./wire.js";
