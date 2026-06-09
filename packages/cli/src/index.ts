@@ -20,6 +20,13 @@ export {
   META_KINDS,
   planeForKind,
 } from "./broker/protocol.js";
+export {
+  type ClaudeBackend,
+  type ClaudeStreamOptions,
+  ClaudeStreamSession,
+  type TurnEvent,
+} from "./host/claude.js";
+export { HostRelay, type HostRelayOptions } from "./host/relay.js";
 export { type IdentityOptions, runIdentity } from "./identity.js";
 export { type PassOptions, runPass } from "./pass.js";
 export { type RunOptions, runWrapper, type SpawnFn } from "./run.js";
