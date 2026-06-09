@@ -3,6 +3,13 @@
 // messages go in as NDJSON; assistant text + the turn `result` come back as NDJSON. The session
 // process stays alive across turns, so context persists (turn 2 remembers turn 1). This is the
 // real model behind HostRelay — no MITM, no proxy.
+//
+// INFERENCE-AGNOSTIC: the host only reads claude's stdout, so it doesn't care WHERE inference runs.
+// Point a session at Amazon Bedrock (or Vertex) by passing the backend's own env through — e.g.
+// `{ bedrock: true, env: { AWS_REGION: "us-west-2" } }` sets CLAUDE_CODE_USE_BEDROCK=1, and claude
+// routes inference to Bedrock via the AWS SDK while remote-claw relays the session unchanged. The
+// extra env is MERGED OVER the host's own env (PATH/HOME/AWS creds preserved); remote-claw never
+// reads or logs those creds — claude talks to Bedrock directly.
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
@@ -21,13 +28,30 @@ export interface ClaudeBackend {
   close(): Promise<void>;
 }
 
+/** How the session process is launched; injectable so tests can run a fake claude. */
+export type ClaudeSpawn = (
+  bin: string,
+  args: readonly string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv },
+) => ChildProcessWithoutNullStreams;
+
 export interface ClaudeStreamOptions {
   /** Override the claude binary (else "claude"). */
   bin?: string;
-  /** Model id (e.g. "claude-opus-4-8"); omitted ⇒ claude's default. */
+  /** Model id; on Bedrock this MUST be an inference-profile id (e.g. "us.anthropic.claude-opus-4-8"). */
   model?: string;
   /** Working directory for the session. */
   cwd?: string;
+  /**
+   * Extra environment for the claude process, MERGED OVER the host's own env (so PATH/HOME and any
+   * AWS credentials survive). This is how a session is pointed at a non-Anthropic inference backend —
+   * e.g. `{ AWS_REGION: "us-west-2" }` alongside `bedrock: true`. remote-claw never reads these.
+   */
+  env?: Record<string, string>;
+  /** Shorthand for setting `CLAUDE_CODE_USE_BEDROCK=1` (route inference through Amazon Bedrock). */
+  bedrock?: boolean;
+  /** Injectable launcher (tests). Defaults to node:child_process spawn. */
+  spawnFn?: ClaudeSpawn;
 }
 
 const DONE = Symbol("done");
@@ -73,8 +97,19 @@ export class ClaudeStreamSession implements ClaudeBackend {
       "stream-json",
     ];
     if (opts.model !== undefined) args.push("--model", opts.model);
-    const spawnOpts = opts.cwd !== undefined ? { cwd: opts.cwd } : {};
-    this.#child = spawn(opts.bin ?? "claude", args, spawnOpts) as ChildProcessWithoutNullStreams;
+
+    // Build the child env. Only set `env` at all when we have something to add, so the common case
+    // keeps inheriting the host env implicitly. When we do set it, merge OVER process.env so PATH,
+    // HOME, and any AWS_* credentials the backend needs are never dropped.
+    const extraEnv: Record<string, string> = { ...(opts.env ?? {}) };
+    if (opts.bedrock === true) extraEnv.CLAUDE_CODE_USE_BEDROCK = "1";
+    const spawnOpts: { cwd?: string; env?: NodeJS.ProcessEnv } = {};
+    if (opts.cwd !== undefined) spawnOpts.cwd = opts.cwd;
+    if (Object.keys(extraEnv).length > 0) spawnOpts.env = { ...process.env, ...extraEnv };
+
+    const launch: ClaudeSpawn =
+      opts.spawnFn ?? ((bin, a, o) => spawn(bin, a, o) as ChildProcessWithoutNullStreams);
+    this.#child = launch(opts.bin ?? "claude", args, spawnOpts);
     this.#rl = createInterface({ input: this.#child.stdout });
     this.#rl.on("line", (line) => this.#onLine(line));
     this.#child.on("close", () => this.#events.close());

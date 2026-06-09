@@ -22,6 +22,7 @@ export {
 } from "./broker/protocol.js";
 export {
   type ClaudeBackend,
+  type ClaudeSpawn,
   type ClaudeStreamOptions,
   ClaudeStreamSession,
   type TurnEvent,
