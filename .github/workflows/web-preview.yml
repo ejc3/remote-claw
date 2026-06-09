@@ -15,11 +15,14 @@ on:
 
 jobs:
   e2e:
-    # Only on a SUCCESSFUL non-production deployment (preview), or a manual dispatch.
+    # Only on a SUCCESSFUL Vercel PREVIEW deployment, or a manual dispatch. We match the environment
+    # POSITIVELY (Vercel sets it to "Preview") rather than "!= Production" — the repo also deploys docs
+    # to GitHub Pages, whose deployment_status has environment "github-pages"; a negative gate would
+    # wrongly fire the broker e2e against the docs site (no /api/relay → 404).
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.deployment_status.state == 'success' &&
-       github.event.deployment_status.environment != 'Production')
+       github.event.deployment_status.environment == 'Preview')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
