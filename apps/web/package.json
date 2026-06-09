@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@remote-claw/clawsec": "file:../../packages/clawsec",
+    "@remote-claw/cli": "file:../../packages/cli",
     "@workflow/errors": "4.1.3",
     "next": "^16.2.7",
     "react": "^19.2.7",
@@ -24,7 +25,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
-    "@remote-claw/cli": "file:../../packages/cli",
     "@types/node": "^25.9.2",
     "@types/react": "19.2.17",
     "@workflow/vitest": "4.0.9",
