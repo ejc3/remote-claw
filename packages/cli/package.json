@@ -10,7 +10,7 @@
     "./rc": "./src/host/rc/index.ts"
   },
   "dependencies": {
-    "@remote-claw/clawsec": "file:../clawsec"
+    "@remote-claw/clawsec": "workspace:*"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
@@ -27,8 +27,5 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
   }
 }

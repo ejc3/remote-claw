@@ -3,16 +3,16 @@ name: cli
 on:
   push:
     branches: [main]
-    paths: ["packages/cli/**", ".github/workflows/cli.yml"]
+    # cli depends on clawsec (workspace), so a clawsec change must re-run cli CI too.
+    paths:
+      ["packages/cli/**", "packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/cli.yml"]
   pull_request:
-    paths: ["packages/cli/**", ".github/workflows/cli.yml"]
+    paths:
+      ["packages/cli/**", "packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/cli.yml"]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/cli
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,11 +22,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: packages/cli/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
+      # Install the whole pnpm workspace from the root single lockfile (members are symlinked).
       - run: pnpm install --frozen-lockfile
       - name: Lint + format check (Biome)
-        run: pnpm run check
+        run: pnpm --filter @remote-claw/cli run check
       - name: Type check
-        run: pnpm run typecheck
+        run: pnpm --filter @remote-claw/cli run typecheck
       - name: Unit + functional + e2e tests
-        run: pnpm run test:run
+        run: pnpm --filter @remote-claw/cli run test:run

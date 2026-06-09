@@ -1,0 +1,11 @@
+# pnpm workspace root. Members are SYMLINKED (not copied), so a local edit to any package is the
+# truth for every consumer immediately — vitest, `next dev`, `next build`, tsc — with no reinstall.
+# This is the root-cause fix for the `file:`-dep stale-copy footgun (pnpm hard-copies `file:` deps
+# into `.pnpm`, so edits didn't reach apps/web's tests until `pnpm install`). All package.json-bearing
+# dirs are listed: a dir inside a workspace that ISN'T a member would make `pnpm install` there
+# install the workspace instead of its own deps.
+packages:
+  - "packages/*"
+  - "apps/*"
+  - "tests/*"
+  - "spikes/*"
