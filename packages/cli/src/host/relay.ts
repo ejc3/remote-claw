@@ -26,6 +26,8 @@ export class HostRelay {
   #seq = 0;
   /** Inbound replay-dedup window (msg_id). */
   readonly #seen = new Set<string>();
+  /** The in-memory transcript (content frames only) — replayed on a viewer `catch_up` (§3.2/§16). */
+  readonly #log: { recordKind: string; seq: number; msgId: string; text: string }[] = [];
 
   constructor(opts: HostRelayOptions) {
     this.#client = opts.client;
@@ -58,27 +60,30 @@ export class HostRelay {
   }
 
   /**
-   * Emit one out-message (content carries a seq; meta/control pass seq=null). postMessage chunks a
-   * large payload into parts that share this seq (§8) — a small one is exactly one frame — so a big
-   * assistant turn reassembles correctly on the viewer (FrameOrderer holds the seq until all parts
-   * land, then openMessage reassembles).
+   * POST one out-message. postMessage chunks a large payload into parts that share this seq (§8) — a
+   * small one is exactly one frame — so a big turn reassembles correctly on the viewer.
    */
-  async #emit(recordKind: string, seq: number | null, text: string): Promise<void> {
-    await this.#client.postMessage(
-      this.#header(
-        recordKind,
-        seq,
-        `${recordKind}-${this.#sessionId}-${seq ?? "m"}-${this.#seen.size}`,
-      ),
-      utf8(text),
-    );
+  async #post(recordKind: string, seq: number | null, msgId: string, text: string): Promise<void> {
+    await this.#client.postMessage(this.#header(recordKind, seq, msgId), utf8(text));
+  }
+
+  /** Post AND record a content frame in the transcript (so it can be replayed via catch_up). */
+  async #emit(recordKind: string, seq: number, msgId: string, text: string): Promise<void> {
+    await this.#post(recordKind, seq, msgId, text);
+    this.#log.push({ recordKind, seq, msgId, text });
+  }
+
+  /** Replay the logged transcript from `since` onward — idempotent (the viewer dedups by seq/msg_id). */
+  async #replay(since: number): Promise<void> {
+    for (const e of [...this.#log]) {
+      if (e.seq >= since) await this.#post(e.recordKind, e.seq, e.msgId, e.text);
+    }
   }
 
   /**
    * Serve the session: tail inbound frames and relay each turn until `signal` aborts. A `user`
-   * prompt is acked, echoed, run through the backend, and its assistant/result streamed back out.
-   * (Control frames are acknowledged structurally here; mapping them to RC verbs is the live MITM's
-   * job — out of scope for the stream-json backend.)
+   * prompt is acked, echoed, run through the backend, and its assistant/result streamed back out; a
+   * `catch_up` control frame replays the in-memory transcript from its `since` (history sync, §16).
    */
   async serve(signal: AbortSignal): Promise<void> {
     for await (const frame of this.#client.streamFrames({
@@ -93,17 +98,22 @@ export class HostRelay {
       if (frame.recordKind === "user") {
         const text = new TextDecoder().decode(await this.#client.openFrame(frame));
         const userSeq = this.#seq++;
-        // Ack the client's frame (meta), then echo the user prompt into the transcript (content).
-        await this.#emit(
+        // Ack the client's frame (meta — not part of the transcript), then echo the prompt (content).
+        await this.#post(
           "accepted",
           null,
+          `accepted-${this.#sessionId}-${userSeq}`,
           JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, seq: userSeq }),
         );
-        await this.#emit("user", userSeq, text);
+        await this.#emit("user", userSeq, `user-${userSeq}`, text);
         // Drive the real model and relay the turn.
         for await (const ev of this.#backend.prompt(text)) {
-          await this.#emit(ev.kind, this.#seq++, ev.text);
+          const seq = this.#seq++;
+          await this.#emit(ev.kind, seq, `${ev.kind}-${seq}`, ev.text);
         }
+      } else if (frame.recordKind === "catch_up") {
+        const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame)));
+        await this.#replay(typeof body.since === "number" ? body.since : 0);
       }
     }
   }

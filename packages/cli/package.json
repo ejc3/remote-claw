@@ -6,7 +6,8 @@
   "description": "remote-claw — a transparent wrapper around `claude` (P2). Consumes the reserved --rc-* namespace; forwards everything else.",
   "exports": {
     ".": "./src/index.ts",
-    "./broker": "./src/broker/index.ts"
+    "./broker": "./src/broker/index.ts",
+    "./rc": "./src/host/rc/index.ts"
   },
   "dependencies": {
     "@remote-claw/clawsec": "file:../clawsec"

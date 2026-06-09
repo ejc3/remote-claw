@@ -153,6 +153,65 @@ describe("edge cases (same transport library, real Workflow runtime)", () => {
     ).toBe(true);
   });
 
+  it("MULTI-CLIENT: two devices on one identity concurrently tail the same session, both see the whole timeline", async () => {
+    // Several devices hold the SAME secret and subscribe to the same session out-stream. The broker
+    // fans every frame out to each subscriber independently, so both reconstruct a byte-identical
+    // transcript — including a chunked (large) message that each must reassemble on its own.
+    const id = await deriveIdentity(new Uint8Array(32).fill(26));
+    const phone = clientFor(id);
+    const laptop = clientFor(id);
+    const sid = "fanout";
+
+    const big = new Uint8Array(20_000);
+    for (let i = 0; i < big.length; i++) big[i] = (i * 13) % 251;
+    // Host emits: assistant (seq 0), a large chunked assistant (seq 1), result (seq 2).
+    await phone.postFrame(
+      header(id, { recordKind: "assistant", sessionId: sid, seq: 0, msgId: "a0" }),
+      utf8("first"),
+    );
+    await phone.postMessage(
+      header(id, { recordKind: "assistant", sessionId: sid, seq: 1, msgId: "a1-big" }),
+      big,
+      8_000,
+    );
+    await phone.postFrame(
+      header(id, { recordKind: "result", sessionId: sid, seq: 2, msgId: "r0" }),
+      utf8("done"),
+    );
+
+    // Both devices subscribe CONCURRENTLY from 0 and reconstruct the identical timeline — using the
+    // same dedup+reorder discipline the real viewer runs (FrameOrderer → openFrame/openMessage).
+    const drain = async (c: BrokerClient) => {
+      const orderer = new FrameOrderer();
+      const seqs: number[] = [];
+      let bigOut: Uint8Array | null = null;
+      // 5 wire frames: a0, three parts of a1-big, r0.
+      const raw = await takeFrames(
+        c.streamFrames({ session: sid, startIndex: 0 }),
+        5,
+        (f) => f.dir === "out",
+      );
+      for (const f of raw) {
+        const ready = orderer.accept(f);
+        for (let i = 0; i < ready.length; ) {
+          const rf = ready[i] as Frame;
+          const span = rf.parts > 1 ? rf.parts : 1;
+          const group = ready.slice(i, i + span);
+          i += span;
+          if (span > 1) bigOut = await c.openMessage(group);
+          else await c.openFrame(rf);
+          seqs.push(rf.seq as number);
+        }
+      }
+      return { seqs, bigOut };
+    };
+    const [a, b] = await Promise.all([drain(phone), drain(laptop)]);
+    expect(a.seqs).toEqual([0, 1, 2]);
+    expect(b.seqs).toEqual([0, 1, 2]);
+    expect(a.bigOut).toEqual(big);
+    expect(b.bigOut).toEqual(big); // independent reassembly, identical bytes
+  });
+
   it("DROP + RECONNECT: a viewer that disconnects resumes from its cursor with no gap and no dup", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(25));
     const c = clientFor(id);
