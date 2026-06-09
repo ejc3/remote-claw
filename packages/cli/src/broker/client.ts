@@ -60,7 +60,11 @@ export class BrokerClient {
   constructor(opts: BrokerClientOptions) {
     this.#baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.#provider = opts.provider;
-    this.#fetch = opts.fetchFn ?? fetch;
+    // The browser's global fetch is a built-in that MUST be called with `this === window`; storing
+    // it on the instance and calling `this.#fetch(...)` rebinds `this` to the BrokerClient and throws
+    // "Illegal invocation" (Node's fetch is lenient, so this only bites in a real browser). Bind the
+    // default to globalThis. An injected fetchFn is used as-is (the caller owns its binding).
+    this.#fetch = opts.fetchFn ?? globalThis.fetch.bind(globalThis);
   }
 
   /** `Authorization: Bearer <hex(auth_token)>` — recomputed by the broker into identity_id (§4.5). */
