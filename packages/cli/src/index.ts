@@ -6,6 +6,20 @@ export {
   type RcFlagKind,
   type RcValue,
 } from "./args.js";
+export {
+  BrokerClient,
+  type BrokerClientOptions,
+  BrokerError,
+  type RelayResult,
+  type StreamOptions,
+} from "./broker/client.js";
+export { FrameOrderer } from "./broker/order.js";
+export {
+  CONTENT_KINDS,
+  CONTROL_KINDS,
+  META_KINDS,
+  planeForKind,
+} from "./broker/protocol.js";
 export { type IdentityOptions, runIdentity } from "./identity.js";
 export { type PassOptions, runPass } from "./pass.js";
 export { type RunOptions, runWrapper, type SpawnFn } from "./run.js";
