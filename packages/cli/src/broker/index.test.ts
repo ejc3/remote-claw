@@ -1,0 +1,15 @@
+import { describe, expect, it } from "vitest";
+import * as broker from "./index.js";
+
+describe("@remote-claw/cli/broker barrel (browser-safe surface)", () => {
+  it("re-exports the transport, orderer, plane mapping, and provider", () => {
+    expect(typeof broker.BrokerClient).toBe("function");
+    expect(typeof broker.FrameOrderer).toBe("function");
+    expect(typeof broker.securityProvider).toBe("function");
+    expect(typeof broker.planeForKind).toBe("function");
+    expect(typeof broker.BrokerError).toBe("function");
+    expect(broker.CONTENT_KINDS.has("assistant")).toBe(true);
+    expect(broker.CONTROL_KINDS.has("interrupt")).toBe(true);
+    expect(broker.META_KINDS.has("session_announce")).toBe(true);
+  });
+});
