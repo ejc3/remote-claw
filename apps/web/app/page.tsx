@@ -299,6 +299,19 @@ function Bubble({ message }: { message: Message }) {
   if (message.kind === "result") {
     return <p className="turn-sep">turn complete</p>;
   }
+  // A tool call (including `Task`, which spawns a sub-agent) — render the activity, not as chat.
+  if (message.kind === "tool_use") return <ToolUse text={message.text} />;
+  // A sub-agent's reply (assistant output under a parent Task) — nested under the tool activity.
+  if (message.kind === "assistant_sub") {
+    return (
+      <div className="bubble-row" data-me={false}>
+        <div className="bubble bubble-sub">
+          <span className="sub-tag">sub-agent</span>
+          {message.text}
+        </div>
+      </div>
+    );
+  }
   // The transcript stream also carries meta acks (`accepted`) and lifecycle frames; only the actual
   // conversation (user prompts + assistant replies) belongs in the chat.
   if (message.kind !== "user" && message.kind !== "assistant") return null;
@@ -308,6 +321,29 @@ function Bubble({ message }: { message: Message }) {
       <div className="bubble" data-me={me}>
         {message.text}
       </div>
+    </div>
+  );
+}
+
+/** Render a tool call. A `Task` is a sub-agent spawn (🤖); any other tool is generic activity (⚙). */
+function ToolUse({ text }: { text: string }) {
+  let name = "tool";
+  let summary = "";
+  try {
+    const t = JSON.parse(text) as { name?: string; input?: unknown };
+    name = typeof t.name === "string" ? t.name : "tool";
+    const input = t.input as { command?: string; description?: string; prompt?: string } | null;
+    summary = input?.description ?? input?.command ?? input?.prompt ?? "";
+  } catch {
+    summary = text;
+  }
+  const isTask = name === "Task";
+  return (
+    <div className="tool-row">
+      <span className="tool-chip">
+        {isTask ? "🤖" : "⚙"} {isTask ? "sub-agent" : name}
+      </span>
+      {summary ? <span className="tool-summary">{summary.slice(0, 120)}</span> : null}
     </div>
   );
 }

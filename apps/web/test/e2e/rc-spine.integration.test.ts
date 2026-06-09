@@ -1,0 +1,244 @@
+// RC-SPINE e2e — the WHOLE spine with ONLY claude faked, and the fake speaks the REAL
+// `--remote-control` worker protocol through the REAL MITM:
+//
+//   FakeRcWorker --(HTTPS_PROXY → CONNECT → our leaf)--> MitmProxy --serves /v1/code/sessions*-->
+//   RelayCore/Session  <->  HostRcRelay  <->  REAL broker routes on the REAL Workflow runtime  <->
+//   web Viewer (phone/laptop)
+//
+// The worker register→triggers→bridge→worker→SSE→delivery-ack→events→heartbeat sequence matches the
+// captured real-claude flow (phase0/mitm/captures, §17.2). So every leg is production code except the
+// model itself; the real binary is additionally proven by real-rc.prove.test.ts. Covers: a turn
+// round-trip, session discovery on the bus, history replay (catch_up), and multi-client.
+
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { deriveIdentity, formatPass, type Identity } from "@remote-claw/clawsec";
+import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
+import { ensureCerts, HostRcRelay, MitmProxy, RelayCore } from "@remote-claw/cli/rc";
+import { teardownWorkflowTests } from "@workflow/vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { type Message, Viewer } from "../../app/lib/viewer";
+import { FakeRcWorker } from "./fake-rc-worker";
+import { brokerFetch } from "./harness";
+
+function haveOpenssl(): boolean {
+  try {
+    execFileSync("openssl", ["version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const RUN = haveOpenssl();
+
+const cleanup: Array<() => void | Promise<void>> = [];
+afterAll(async () => {
+  for (const c of cleanup) await c();
+  await teardownWorkflowTests();
+});
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+async function waitFor(pred: () => boolean, ms = 20_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!pred() && Date.now() < deadline) await sleep(50);
+  if (!pred()) throw new Error("timed out waiting for a condition");
+}
+
+function hostClient(id: Identity): BrokerClient {
+  return new BrokerClient({
+    baseUrl: "http://broker",
+    provider: securityProvider("sealed", id),
+    fetchFn: brokerFetch,
+  });
+}
+
+function tailInto(viewer: Viewer, sid: string, sink: Message[], signal: AbortSignal): void {
+  void (async () => {
+    for await (const m of viewer.transcript(sid, signal)) sink.push(m);
+  })().catch(() => {});
+}
+
+/** Stand up the MITM for one identity: each RC session the worker registers gets a HostRcRelay that
+ *  announces on the bus and serves it to the broker. Returns a worker bound to the proxy. */
+async function startRc(id: Identity, ac: AbortController): Promise<{ worker: FakeRcWorker }> {
+  const dir = mkdtempSync(join(tmpdir(), "rc-spine-"));
+  cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const certs = ensureCerts(dir);
+  const ca = readFileSync(certs.caPem);
+  const core = new RelayCore();
+  const proxy = new MitmProxy({
+    port: 0,
+    leafCert: certs.leafPem,
+    leafKey: certs.leafKey,
+    core,
+    onSession: (s) => {
+      const relay = new HostRcRelay({
+        client: hostClient(id),
+        identityId: id.identityId,
+        sessionId: s.id,
+        session: s,
+      });
+      void relay.announce("rc box").catch(() => {});
+      void relay.serve(ac.signal).catch(() => {});
+    },
+  });
+  await proxy.listen();
+  const worker = new FakeRcWorker(proxy.port, ca);
+  cleanup.push(() => worker.stop());
+  cleanup.push(() => proxy.close());
+  return { worker };
+}
+
+describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real broker)", () => {
+  it("drives a turn through the FULL path and the viewer discovers the session on the bus", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(60));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+
+    // The worker registers (real RC handshake through the MITM) → HostRcRelay announces on the bus.
+    const sid = await worker.register("rc box");
+    worker.start(sid);
+
+    // The viewer discovers the session on the bus (presence), exactly like the phone/web app.
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const announces: string[] = [];
+    void (async () => {
+      for await (const a of viewer.announces(ac.signal)) announces.push(a.sessionId);
+    })().catch(() => {});
+    await waitFor(() => announces.includes(sid));
+
+    // Drive a turn: viewer prompt → broker → relay → MITM SSE → worker → upstream → relay → broker.
+    const got: Message[] = [];
+    tailInto(viewer, sid, got, ac.signal);
+    await viewer.sendPrompt(sid, "hello rc");
+    await waitFor(() => got.some((m) => m.kind === "result"));
+
+    expect(got.filter((m) => m.kind === "user").map((m) => m.text)).toEqual(["hello rc"]);
+    expect(got.filter((m) => m.kind === "assistant").map((m) => m.text)).toEqual([
+      "echo: hello rc",
+    ]);
+    expect(got.filter((m) => m.kind === "result")).toHaveLength(1);
+    expect(got.filter((m) => m.seq !== null).map((m) => m.seq)).toEqual([0, 1, 2]);
+  }, 40_000);
+
+  it("CATCH_UP: a late device replays the transcript from the live RC relay", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(61));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+    worker.start(sid);
+
+    const driver = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const driverMsgs: Message[] = [];
+    tailInto(driver, sid, driverMsgs, ac.signal);
+    await driver.sendPrompt(sid, "remember me");
+    await waitFor(() => driverMsgs.some((m) => m.kind === "result"));
+
+    const late = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const lateMsgs: Message[] = [];
+    tailInto(late, sid, lateMsgs, ac.signal);
+    await late.requestHistory(sid, 0);
+    await waitFor(() => lateMsgs.some((m) => m.kind === "result"));
+
+    expect(lateMsgs.filter((m) => m.kind === "user").map((m) => m.text)).toEqual(["remember me"]);
+    expect(lateMsgs.filter((m) => m.kind === "assistant").map((m) => m.text)).toEqual([
+      "echo: remember me",
+    ]);
+    expect(lateMsgs.filter((m) => m.seq !== null).map((m) => m.seq)).toEqual([0, 1, 2]);
+  }, 40_000);
+
+  it("SUB-AGENTS: a Task tool_use + sub-agent output relay through as tool_use + assistant_sub frames", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(63));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+    // The worker answers with a real sub-agent turn: a Task tool_use (spawn), the sub-agent's own
+    // assistant reply (parent_tool_use_id set), then the parent assistant text + result.
+    worker.start(sid, () => [
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "delegating to a sub-agent" },
+            {
+              type: "tool_use",
+              id: "toolu_task1",
+              name: "Task",
+              input: { description: "research the thing" },
+            },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        parent_tool_use_id: "toolu_task1",
+        message: { content: [{ type: "text", text: "sub-agent here: found it" }] },
+      },
+      { type: "assistant", message: { content: [{ type: "text", text: "all done" }] } },
+      { type: "result", subtype: "success", is_error: false, result: "ok" },
+    ]);
+
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const got: Message[] = [];
+    tailInto(viewer, sid, got, ac.signal);
+    await viewer.sendPrompt(sid, "do a big task");
+    await waitFor(() => got.some((m) => m.kind === "result"));
+
+    // The parent's "thinking" text, the Task spawn (tool_use), the SUB-AGENT reply (assistant_sub),
+    // and the parent's final text all relayed, in order, on one gap-free timeline.
+    const kinds = got.filter((m) => m.seq !== null).map((m) => m.kind);
+    expect(kinds).toEqual([
+      "user",
+      "assistant",
+      "tool_use",
+      "assistant_sub",
+      "assistant",
+      "result",
+    ]);
+    const tool = got.find((m) => m.kind === "tool_use");
+    expect(JSON.parse(tool?.text ?? "{}").name).toBe("Task"); // the sub-agent spawn is visible
+    expect(got.find((m) => m.kind === "assistant_sub")?.text).toBe("sub-agent here: found it");
+    expect(got.filter((m) => m.seq !== null).map((m) => m.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+  }, 40_000);
+
+  it("MULTI-CLIENT: two devices drive turns on one RC session; both see the shared timeline", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(62));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+    worker.start(sid);
+
+    const phone = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const laptop = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const phoneMsgs: Message[] = [];
+    const laptopMsgs: Message[] = [];
+    tailInto(phone, sid, phoneMsgs, ac.signal);
+    tailInto(laptop, sid, laptopMsgs, ac.signal);
+
+    await phone.sendPrompt(sid, "from phone");
+    await waitFor(() => phoneMsgs.some((m) => m.kind === "result"));
+    await laptop.sendPrompt(sid, "from laptop");
+    const twoTurns = (ms: Message[]) => ms.filter((m) => m.kind === "result").length >= 2;
+    await waitFor(() => twoTurns(phoneMsgs) && twoTurns(laptopMsgs));
+
+    for (const msgs of [phoneMsgs, laptopMsgs]) {
+      expect(msgs.filter((m) => m.seq !== null).map((m) => m.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(msgs.filter((m) => m.kind === "user").map((m) => m.text)).toEqual([
+        "from phone",
+        "from laptop",
+      ]);
+      expect(msgs.filter((m) => m.kind === "assistant").map((m) => m.text)).toEqual([
+        "echo: from phone",
+        "echo: from laptop",
+      ]);
+    }
+  }, 40_000);
+});

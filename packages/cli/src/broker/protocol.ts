@@ -9,11 +9,13 @@ import type { Plane } from "../security/provider.js";
 export const CONTENT_KINDS = new Set([
   "user",
   "assistant",
+  "assistant_sub", // a sub-agent's assistant reply (under a parent Task) — §17 sub-agents
   "result",
   "system",
   "status",
   "rate_limit",
   "can_use_tool",
+  "tool_use", // a tool call the worker made (incl. `Task` = a sub-agent spawn)
 ]);
 
 /** Control frames (web → wrapper, `dir:in`) — sealed under control_key. */
