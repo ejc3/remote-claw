@@ -21,6 +21,13 @@ import { announceFrame, bearer, header, readSseData, wireFrame } from "../helper
 const BASE = process.env.WEB_E2E_URL?.replace(/\/+$/, "");
 const td = new TextDecoder();
 
+// In the web-preview CI job the URL must resolve; a broken `deployment_status` URL expression would
+// otherwise leave BASE empty and silently SKIP → a green run that proved nothing. Fail loudly there.
+// Locally (WEB_E2E_REQUIRE unset) it just skips.
+if (process.env.WEB_E2E_REQUIRE === "1" && !BASE) {
+  throw new Error("WEB_E2E_REQUIRE=1 but WEB_E2E_URL is empty — the deployment URL didn't resolve");
+}
+
 function freshIdentity() {
   const secret = new Uint8Array(32);
   crypto.getRandomValues(secret);
@@ -84,13 +91,14 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
       "hello from a deployed claude",
     );
 
-    // The identity BUS never saw the per-session frame (no bus run → 200 empty event-stream).
-    const onBus = await readSseData(
-      await fetch(`${BASE}/api/stream?startIndex=0`, {
-        headers: { authorization: auth, accept: "text/event-stream" },
-      }),
-      1,
-    );
-    expect(onBus).toEqual([]);
+    // The identity BUS never saw the per-session frame. Assert it's a real EMPTY event-stream (200 +
+    // text/event-stream) before asserting no frames — otherwise a 404/non-SSE error would also read
+    // as `[]` and pass for the wrong reason.
+    const busRes = await fetch(`${BASE}/api/stream?startIndex=0`, {
+      headers: { authorization: auth, accept: "text/event-stream" },
+    });
+    expect(busRes.status).toBe(200);
+    expect(busRes.headers.get("content-type")).toContain("text/event-stream");
+    expect(await readSseData(busRes, 1)).toEqual([]);
   });
 });

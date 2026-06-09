@@ -13,6 +13,11 @@ on:
         required: true
         type: string
 
+# This job checks out and runs the DEPLOYMENT's code (which may be from a PR); keep the workflow
+# token read-only and unpersisted so that code can't read/exfiltrate it.
+permissions:
+  contents: read
+
 jobs:
   e2e:
     # Only on a SUCCESSFUL Vercel PREVIEW deployment, or a manual dispatch. We match the environment
@@ -30,6 +35,7 @@ jobs:
           # Test the code that matches the deployment (deployment_status checks out the default
           # branch by default); for a manual dispatch this is empty → the dispatched ref.
           ref: ${{ github.event.deployment.sha }}
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -41,5 +47,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Deployment-targeted e2e (real broker over HTTP)
         env:
-          WEB_E2E_URL: ${{ github.event.inputs.url || github.event.deployment_status.target_url }}
+          # Vercel exposes the deployed URL as environment_url; target_url is a legacy fallback.
+          WEB_E2E_URL: >-
+            ${{ github.event.inputs.url
+                || github.event.deployment_status.environment_url
+                || github.event.deployment_status.target_url }}
+          # In this job the URL must resolve — make an empty URL a FAILURE, not a silent skip.
+          WEB_E2E_REQUIRE: "1"
         run: pnpm --filter @remote-claw/web run test:preview
