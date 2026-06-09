@@ -314,6 +314,17 @@ function Bubble({ message }: { message: Message }) {
       </div>
     );
   }
+  // An extended-thinking block — the model's reasoning, shown muted/collapsible (not a reply). A
+  // sub-agent's reasoning (`*_sub`) indents under its Task, matching assistant_sub.
+  if (message.kind === "assistant_thinking" || message.kind === "assistant_thinking_sub") {
+    const sub = message.kind === "assistant_thinking_sub";
+    return (
+      <details className="thinking" data-sub={sub}>
+        <summary>💭 {sub ? "sub-agent thinking" : "thinking"}</summary>
+        <div className="thinking-body">{message.text}</div>
+      </details>
+    );
+  }
   // A sub-agent's reply (assistant output under a parent Task) — nested under the tool activity.
   if (message.kind === "assistant_sub") {
     return (

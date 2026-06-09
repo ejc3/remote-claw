@@ -379,6 +379,34 @@ code {
   margin-bottom: 3px;
 }
 
+/* Extended-thinking block — collapsed by default, muted; the model's reasoning, not a reply. */
+.thinking {
+  margin: 4px 0 4px 8px;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+.thinking[data-sub="true"] {
+  margin-left: 24px; /* nest a sub-agent's reasoning under its Task, like .bubble-sub */
+}
+.thinking > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-weight: 600;
+}
+.thinking > summary::-webkit-details-marker {
+  display: none;
+}
+.thinking-body {
+  margin-top: 4px;
+  padding: 8px 11px;
+  border-left: 2px solid var(--line-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-style: italic;
+  line-height: 1.5;
+}
+
 /* composer */
 .composer {
   display: flex;

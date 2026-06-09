@@ -10,6 +10,8 @@ export const CONTENT_KINDS = new Set([
   "user",
   "assistant",
   "assistant_sub", // a sub-agent's assistant reply (under a parent Task) — §17 sub-agents
+  "assistant_thinking", // an extended-thinking block (the model's reasoning) — §17.3
+  "assistant_thinking_sub", // a sub-agent's thinking (nests under its Task, like assistant_sub)
   "result",
   "system",
   "status",
