@@ -60,11 +60,14 @@ ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `
 - **`packages/cli`** — the `remote-claw` wrapper: identity/pass management (`--rc-identity`,
   `--rc-pass`) and the broker transport (`BrokerClient`).
 
-**Proof:** a browser-side prompt travels encrypted through the real broker to a host running
-the real `claude`, and the answer comes back encrypted to the viewer — the broker only ever
-sees ciphertext (`apps/web/test/prove/real-claude.prove.test.ts`, run with
-`RC_PROVE_REAL_CLAUDE=1`). The one remaining build-out is the live MITM of claude's native
-`--remote-control` protocol to drive the **interactive TUI** (vs `claude -p`).
+**Proof:** the browser viewer drives a **real, multi-turn `claude` session** through the encrypted
+broker — `HostRelay` + `ClaudeStreamSession` run a live `claude` over its stream-json SDK transport;
+turn 1 teaches it a number, turn 2 reads it back, both as ciphertext through the relay
+(`apps/web/test/prove/*.prove.test.ts`, run with `RC_PROVE_REAL_CLAUDE=1`). It's **inference-agnostic**
+— point the session at **Amazon Bedrock**/Vertex (`{ bedrock: true }`) and claude routes inference via
+the AWS SDK while remote-claw relays it, never touching the inference creds. The only **optional**
+extra is the HTTPS-MITM of claude's *native* `--remote-control` (driving the interactive **TUI** the
+user has open locally) — a different UX, Phase-0-verified.
 
 📐 **Design:** [`docs/v2-architecture.md`](docs/v2-architecture.md) — the full v2 design,
 threat model, key hierarchy, broker, and phased plan.
