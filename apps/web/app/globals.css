@@ -585,6 +585,133 @@ code {
   padding: 6px 14px 0;
 }
 
+/* composer mode button (the </> Code affordance) */
+.mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  height: 40px;
+  background: var(--surface);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  font-size: 13.5px;
+  font-weight: 550;
+  transition: border-color 0.15s, color 0.15s;
+}
+.mode-btn:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.mode-glyph {
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+/* ---------- bottom sheet (mode picker) ---------- */
+.sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.sheet-scrim {
+  position: absolute;
+  inset: 0;
+  border: none;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.5);
+  animation: scrim-in 0.15s ease-out;
+}
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+.sheet {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  margin: 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-bottom: none;
+  border-radius: 18px 18px 0 0;
+  padding: 8px 12px calc(16px + env(safe-area-inset-bottom));
+  box-shadow: 0 -20px 60px -28px rgba(0, 0, 0, 0.9);
+  animation: sheet-up 0.18s ease-out;
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+}
+.sheet-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  margin: 4px auto 10px;
+}
+.sheet-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 0 6px 8px;
+}
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  padding: 11px 10px;
+  color: var(--text);
+  transition: background 0.12s;
+}
+.mode-row:hover {
+  background: var(--surface-2);
+}
+.mode-row[data-active="true"] {
+  background: var(--surface-2);
+}
+.mode-row-glyph {
+  flex: none;
+  width: 22px;
+  text-align: center;
+  font-size: 16px;
+  opacity: 0.9;
+}
+.mode-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mode-row-label {
+  font-size: 15px;
+  font-weight: 600;
+}
+.mode-row-desc {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+.mode-check {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent);
+  font-weight: 700;
+}
+
 /* ---------- mobile: single column with view switching ---------- */
 @media (max-width: 760px) {
   .sessions {

@@ -225,6 +225,10 @@ function Transcript(props: {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // The session's real permission mode lives on the worker and isn't announced, so we track the last
+  // mode set from here (optimistic): null = "we haven't set one". setMode is fire-and-forget.
+  const [mode, setMode] = useState<string | null>(null);
+  const [modeSheet, setModeSheet] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -263,6 +267,22 @@ function Transcript(props: {
     }
   }, [input, sessionId, viewer]);
 
+  const chooseMode = useCallback(
+    async (id: string) => {
+      setModeSheet(false);
+      setSendError(null);
+      const prev = mode;
+      setMode(id); // optimistic — revert if the control frame can't be sent
+      try {
+        await viewer.setMode(sessionId, id);
+      } catch (e) {
+        setMode(prev);
+        setSendError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [mode, sessionId, viewer],
+  );
+
   return (
     <section className="chat">
       <div className="chat-head">
@@ -289,6 +309,17 @@ function Transcript(props: {
           void send();
         }}
       >
+        <button
+          type="button"
+          className="mode-btn"
+          aria-haspopup="dialog"
+          aria-expanded={modeSheet}
+          onClick={() => setModeSheet(true)}
+          title="Permission mode"
+        >
+          <span className="mode-glyph">{modeGlyph(mode)}</span>
+          {modeLabel(mode)}
+        </button>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -299,7 +330,97 @@ function Transcript(props: {
           Send
         </button>
       </form>
+
+      {modeSheet && (
+        <ModeSheet
+          current={mode}
+          onPick={(id) => void chooseMode(id)}
+          onClose={() => setModeSheet(false)}
+        />
+      )}
     </section>
+  );
+}
+
+// The three permission modes Claude Code exposes (IMG_1825 "Select mode"). `id` is the RC
+// set_permission_mode value the relay forwards to the worker (§3.7): Auto = default (Claude asks on
+// risky actions), Code = acceptEdits (edits applied directly), Plan = read-only plan-first.
+const MODES = [
+  {
+    id: "default",
+    label: "Auto",
+    glyph: "◍",
+    desc: "Claude decides which actions need confirmation",
+  },
+  { id: "acceptEdits", label: "Code", glyph: "⌨", desc: "Claude writes and edits code directly" },
+  {
+    id: "plan",
+    label: "Plan",
+    glyph: "◑",
+    desc: "Claude explores code and presents a plan before making edits",
+  },
+] as const;
+
+function modeLabel(id: string | null): string {
+  return MODES.find((m) => m.id === id)?.label ?? "Mode";
+}
+function modeGlyph(id: string | null): string {
+  return MODES.find((m) => m.id === id)?.glyph ?? "⚙";
+}
+
+/** Bottom sheet to pick the session's permission mode — mirrors Claude Code's "Select mode" sheet. */
+function ModeSheet({
+  current,
+  onPick,
+  onClose,
+}: {
+  current: string | null;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Scrim and sheet are siblings (not nested): the scrim is a real <button> so dismiss is keyboard-
+  // and click-accessible, and the sheet's own buttons aren't illegally nested inside another button.
+  return (
+    <div className="sheet-layer" role="dialog" aria-modal="true" aria-label="Select mode">
+      <button
+        type="button"
+        className="sheet-scrim"
+        aria-label="Close mode picker"
+        onClick={onClose}
+      />
+      <div className="sheet">
+        <div className="sheet-handle" />
+        <div className="sheet-title">Select mode</div>
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className="mode-row"
+            data-active={m.id === current}
+            onClick={() => onPick(m.id)}
+          >
+            <span className="mode-row-glyph">{m.glyph}</span>
+            <span className="mode-row-main">
+              <span className="mode-row-label">{m.label}</span>
+              <span className="mode-row-desc">{m.desc}</span>
+            </span>
+            {m.id === current && (
+              <span className="mode-check" aria-hidden>
+                ✓
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
