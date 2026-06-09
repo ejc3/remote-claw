@@ -1,6 +1,14 @@
 "use client";
 
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import {
+  basename,
+  diffOf,
+  dirname,
+  editStat,
+  parseToolUse,
+  type ToolInput,
+} from "./lib/transcript";
 import { type Announce, FRESH_WINDOW_MS, type Message, Viewer } from "./lib/viewer";
 
 export default function Home() {
@@ -354,31 +362,13 @@ function PermissionRow({ text }: { text: string }) {
   );
 }
 
-interface ToolInput {
-  command?: string;
-  description?: string;
-  prompt?: string;
-  file_path?: string;
-  old_string?: string;
-  new_string?: string;
-  content?: string;
-}
-
 /**
  * A tool call: a compact tappable row (action-verb label + a green/red edit stat for Edit/Write +
  * a chevron) that expands to its detail — the Bash command, or a diff viewer for a file edit, or the
  * Task prompt for a sub-agent. The diff is computed from the tool_use input (Edit old/new strings).
  */
 function ToolRow({ text }: { text: string }) {
-  let name = "tool";
-  let input: ToolInput = {};
-  let sub = false;
-  try {
-    const t = JSON.parse(text) as { name?: string; input?: ToolInput | null; sub?: boolean };
-    name = typeof t.name === "string" ? t.name : "tool";
-    input = t.input ?? {};
-    sub = t.sub === true;
-  } catch {}
+  const { name, input, sub } = parseToolUse(text);
 
   const isTask = name === "Task";
   const isEdit = name === "Edit" || name === "Write" || name === "MultiEdit";
@@ -394,7 +384,9 @@ function ToolRow({ text }: { text: string }) {
           ? input.description || "Ran a command"
           : `${name}${input.description ? `: ${input.description}` : ""}`;
 
-  const hasDetail = Boolean(input.command || isEdit || input.prompt || input.description);
+  // Only expandable when the detail body will actually render something. `description` is already in
+  // the label, and a Task's prompt is the only prompt we render — so don't open to an empty box.
+  const hasDetail = Boolean(input.command || isEdit || (isTask && input.prompt));
   const glyph = isTask ? "🤖" : isEdit ? "✏️" : name === "Read" ? "📄" : name === "Bash" ? "❯" : "⚙";
 
   const row = (
@@ -449,25 +441,42 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** A diff viewer for a file edit — a path header + removed (old) lines in red, added (new) in green.
- *  Computed from the tool_use input (Edit's old_string→new_string; Write's content = all added). */
+const MAX_DIFF_LINES = 200; // cap each side so a large Write/Edit doesn't mount thousands of nodes
+
+/** A diff viewer for a file edit — a path header over the changed lines (removed red / added green),
+ *  computed from the tool_use input. See diffOf() for how a hunk is reduced to just its changes. */
 function DiffView({ input }: { input: ToolInput }) {
   const path = input.file_path ?? "file";
-  const drop = (s: string) => {
-    const lines = s.split("\n");
-    return lines.length === 1 && lines[0] === "" ? [] : lines;
-  };
-  const rem = drop(input.old_string ?? "");
-  const add = drop(input.new_string ?? input.content ?? "");
+  const { rem, add } = diffOf(input);
+  if (rem.length === 0 && add.length === 0)
+    return (
+      <div className="diff">
+        <div className="diff-path" title={path}>
+          {basename(path)} <span className="diff-dir">{dirname(path)}</span>
+        </div>
+        <div className="diff-empty">no textual changes</div>
+      </div>
+    );
   return (
     <div className="diff">
       <div className="diff-path" title={path}>
         {basename(path)} <span className="diff-dir">{dirname(path)}</span>
       </div>
       <pre className="diff-body">
-        {diffLines(rem, "dl-del", "−")}
-        {diffLines(add, "dl-add", "+")}
+        {diffLines(rem.slice(0, MAX_DIFF_LINES), "dl-del", "−")}
+        {more(rem.length - MAX_DIFF_LINES, "removed")}
+        {diffLines(add.slice(0, MAX_DIFF_LINES), "dl-add", "+")}
+        {more(add.length - MAX_DIFF_LINES, "added")}
       </pre>
+    </div>
+  );
+}
+
+function more(n: number, which: string): ReactNode {
+  if (n <= 0) return null;
+  return (
+    <div className="dl dl-more">
+      … {n} more {which} line{n === 1 ? "" : "s"}
     </div>
   );
 }
@@ -481,26 +490,12 @@ function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
     const n = seen.get(line) ?? 0;
     seen.set(line, n + 1);
     return (
-      <div key={`${sign}${n} ${line}`} className={`dl ${cls}`}>
+      <div key={`${sign}${n}:${line}`} className={`dl ${cls}`}>
         <span className="dg">{sign}</span>
         {line}
       </div>
     );
   });
-}
-
-function editStat(input: ToolInput): { add: number; del: number } {
-  const count = (s?: string) => (s && s !== "" ? s.split("\n").length : 0);
-  return { add: count(input.new_string ?? input.content), del: count(input.old_string) };
-}
-
-function basename(p: string): string {
-  const i = p.replace(/\/+$/, "").lastIndexOf("/");
-  return i === -1 ? p : p.slice(i + 1);
-}
-function dirname(p: string): string {
-  const i = p.lastIndexOf("/");
-  return i <= 0 ? "" : p.slice(0, i);
 }
 
 /** Render assistant prose with minimal markdown: **bold** and `inline code` (everything escaped). */

@@ -514,6 +514,17 @@ code {
   background: var(--del-bg);
   color: var(--del-fg);
 }
+.dl-more {
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 2px 8px;
+}
+.diff-empty {
+  padding: 8px 10px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  font-style: italic;
+}
 
 /* Extended-thinking block — collapsed by default, muted; recedes below the answer. */
 .thinking {
@@ -588,8 +599,5 @@ code {
   }
   .chat-head {
     display: flex;
-  }
-  .bubble {
-    max-width: 86%;
   }
 }
