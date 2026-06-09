@@ -62,10 +62,17 @@ describe("parseSseBlock", () => {
     expect(id).toBe("5");
     expect(evType(JSON.parse(data))).toBe("assistant");
   });
-  it("concatenates multi-line data and ignores keepalive comments", () => {
+  it("joins multi-line data with newline and ignores keepalive comments", () => {
     expect(parseSseBlock(":keepalive")).toEqual({ event: "", id: "", data: "" });
     const { data } = parseSseBlock('data: {"a":1,\ndata: "b":2}');
-    expect(data).toBe('{"a":1,"b":2}');
+    expect(data).toBe('{"a":1,\n"b":2}'); // SSE spec: data lines joined with "\n"
+  });
+
+  it("tolerates CRLF framing", () => {
+    const e = parseSseBlock('event: client_event\r\nid: 9\r\ndata: {"type":"result"}');
+    expect(e.event).toBe("client_event");
+    expect(e.id).toBe("9");
+    expect(evType(JSON.parse(e.data))).toBe("result");
   });
 });
 

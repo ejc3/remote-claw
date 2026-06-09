@@ -67,13 +67,17 @@ export async function runRcTrace(opts: RcTraceOptions): Promise<number> {
     if (opts.spawnClaude) {
       return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
     }
-    // Native-app mode: keep the proxy up until aborted.
+    // Native-app mode: keep the proxy up until aborted — the provided signal, or Ctrl-C/SIGTERM, so
+    // the `finally` below still runs and tears the proxy down gracefully.
     note(
       `  no child spawned — point your app's HTTPS proxy at the port above, then Ctrl-C to stop.\n`,
     );
     await new Promise<void>((resolve) => {
       if (opts.signal?.aborted) return resolve();
-      opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+      const onSig = () => resolve();
+      process.once("SIGINT", onSig);
+      process.once("SIGTERM", onSig);
+      opts.signal?.addEventListener("abort", onSig, { once: true });
     });
     return 0;
   } finally {

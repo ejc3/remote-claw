@@ -62,6 +62,37 @@ describe("runWrapper (functional)", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("--rc-trace rejects an inapplicable modifier (e.g. --rc-json) without spawning", async () => {
+    const { fn, calls } = recordingSpawn();
+    const lines: string[] = [];
+    const code = await runWrapper(["--rc-trace", "--rc-json", "chat"], {
+      spawnFn: fn,
+      spawnRcEnv: async () => 0,
+      stderr: (l) => lines.push(l),
+    });
+    expect(code).toBe(2);
+    expect(calls).toHaveLength(0);
+    expect(lines.join("")).toContain("--rc-json");
+  });
+
+  it("--rc-trace --help prints the rc help and does NOT stand up a proxy", async () => {
+    const { fn, calls } = recordingSpawn();
+    const out: string[] = [];
+    let traceSpawned = false;
+    const code = await runWrapper(["--rc-trace", "--help"], {
+      spawnFn: fn,
+      spawnRcEnv: async () => {
+        traceSpawned = true;
+        return 0;
+      },
+      stdout: (l) => out.push(l),
+    });
+    expect(code).toBe(0);
+    expect(traceSpawned).toBe(false);
+    expect(calls).toHaveLength(0);
+    expect(out.join("")).toContain("--rc-trace");
+  });
+
   it("--help prints the rc help banner and STILL falls through to claude with --help", async () => {
     const { fn, calls } = recordingSpawn(0);
     const out: string[] = [];

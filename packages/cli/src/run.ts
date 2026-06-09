@@ -106,8 +106,19 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     return runPass(rc, claudeArgs, { stdout: writeOut, stderr: warn });
   }
   // `--rc-trace`: a live protocol inspector — stand up the tracing MITM → real Anthropic and spawn
-  // claude behind it (no broker). Handled before the stray-flag check so it isn't rejected.
+  // claude behind it (no broker). Handled before the generic stray-flag check, so it validates its
+  // own companions: only --rc-file (for the CA dir) applies; anything else is a usage error.
   if (rc["rc-trace"] === true) {
+    if (wantsHelp(claudeArgs)) {
+      const writeOut = opts.stdout ?? ((line: string) => void writeSync(1, line));
+      writeOut(RC_HELP); // print our help; don't stand up a proxy just to show it
+      return 0;
+    }
+    const stray = Object.keys(rc).filter((n) => n !== "rc-trace" && n !== "rc-file");
+    if (stray.length > 0) {
+      warn(`remote-claw: ${stray.map((k) => `--${k}`).join(", ")} doesn't apply to --rc-trace\n`);
+      return 2;
+    }
     const bin = opts.claudeBin || process.env.RC_CLAUDE_BIN || "claude";
     return runRcTracePath(rc, claudeArgs, bin, opts, warn);
   }

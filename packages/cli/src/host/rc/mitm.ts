@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { type IncomingMessage, Server, type ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect as netConnect, type Socket } from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { TLSSocket } from "node:tls";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import { MITM_HOST } from "./certs.js";
@@ -19,6 +20,12 @@ import { assistantText, type RelayCore, type Session } from "./session.js";
 
 /** Endpoint prefixes we serve ourselves; everything else on the MITM host is passed through. */
 const INTERCEPT_PREFIXES = ["/v1/code/sessions", "/v1/code/triggers"];
+
+/** SSE event boundary — a blank line, LF or CRLF framed. */
+const SSE_SEP = /\r?\n\r?\n/;
+/** Caps so a pathological stream can't grow the trace buffers without bound (it's a diagnostic). */
+const SSE_BUF_CAP = 256 * 1024;
+const JSON_TRACE_CAP = 256 * 1024;
 
 const SESS_RE = /^\/v1\/code\/sessions\/([^/?]+)(\/[^?]*)?/;
 
@@ -346,23 +353,27 @@ export class MitmProxy {
     upstream.end();
   }
 
-  /** Forward an SSE response unchanged while parsing each `event:/id:/data:` block to trace the worker
-   *  event type (Anthropic→worker direction). Forwarding happens first, so tracing never delays delivery. */
+  /** Forward an SSE response and trace each `event:/id:/data:` block (Anthropic→worker direction).
+   *  `up.pipe(res)` does the forwarding — it keeps proper backpressure and ends res — while a `data`
+   *  listener (which still fires under pipe) decodes a copy for tracing via a StringDecoder, so a
+   *  multi-byte char split across chunks isn't corrupted in the trace. Delivery is byte-exact. */
   #teeSse(label: string, up: IncomingMessage, res: ServerResponse): void {
+    up.pipe(res);
+    const decoder = new StringDecoder("utf8");
     let buf = "";
     up.on("data", (chunk: Buffer) => {
-      res.write(chunk);
-      buf += chunk.toString("utf8");
-      let idx = buf.indexOf("\n\n");
-      while (idx !== -1) {
-        const raw = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        this.#traceSseEvent(label, raw);
-        idx = buf.indexOf("\n\n");
+      buf += decoder.write(chunk);
+      let m = SSE_SEP.exec(buf);
+      while (m) {
+        this.#traceSseEvent(label, buf.slice(0, m.index));
+        buf = buf.slice(m.index + m[0].length);
+        m = SSE_SEP.exec(buf);
       }
+      if (buf.length > SSE_BUF_CAP) buf = buf.slice(-SSE_BUF_CAP); // never grow without bound
     });
-    up.on("end", () => res.end());
-    up.on("error", () => res.end());
+    up.on("error", () => {
+      if (!res.writableEnded) res.end();
+    });
   }
 
   #traceSseEvent(label: string, raw: string): void {
@@ -378,18 +389,28 @@ export class MitmProxy {
     if (this.#trace.enabled("trace") && data !== "") this.#trace.trace("rc ← sse data", { data });
   }
 
-  /** Forward a non-SSE response while buffering it to dump the body at trace (protocol vetting). */
+  /** Forward a non-SSE response (pipe = backpressure + end) while keeping a CAPPED copy to dump the
+   *  body at trace. The cap means even a huge response can't OOM the diagnostic. */
   #teeJson(label: string, up: IncomingMessage, res: ServerResponse): void {
+    up.pipe(res);
     const chunks: Buffer[] = [];
+    let kept = 0;
     up.on("data", (c: Buffer) => {
-      chunks.push(c);
-      res.write(c);
+      if (kept < JSON_TRACE_CAP) {
+        chunks.push(c);
+        kept += c.length;
+      }
     });
     up.on("end", () => {
-      this.#trace.trace("rc ← body", { path: label, body: Buffer.concat(chunks).toString("utf8") });
-      res.end();
+      const body = Buffer.concat(chunks).toString("utf8");
+      this.#trace.trace("rc ← body", {
+        path: label,
+        body: kept >= JSON_TRACE_CAP ? `${body}…(truncated)` : body,
+      });
     });
-    up.on("error", () => res.end());
+    up.on("error", () => {
+      if (!res.writableEnded) res.end();
+    });
   }
 }
 
@@ -455,17 +476,18 @@ function tryJson(s: string | Buffer): Record<string, unknown> | null {
   }
 }
 
-/** Parse one SSE block (`event:`/`id:`/`data:` lines, possibly multi-line data) into its fields. */
+/** Parse one SSE block (`event:`/`id:`/`data:` lines) into its fields. Tolerates LF or CRLF line
+ *  endings; multiple `data:` lines are joined with "\n", per the SSE spec. */
 export function parseSseBlock(raw: string): { event: string; id: string; data: string } {
   let event = "";
   let id = "";
-  let data = "";
-  for (const line of raw.split("\n")) {
+  const data: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("id:")) id = line.slice(3).trim();
-    else if (line.startsWith("data:")) data += line.slice(5).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).trim());
   }
-  return { event, id, data };
+  return { event, id, data: data.join("\n") };
 }
 
 /** The RC event type carried by a frame: an SSE/worker event is `{payload:{type}}` or `{type}`. */
