@@ -539,22 +539,27 @@ function PermissionRow({ text, onGrant }: { text: string; onGrant: GrantFn }) {
   const [decision, setDecision] = useState<"allow" | "deny" | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // A synchronous re-entry guard: `busy` is async React state, so two clicks fired in the same tick
+  // would both pass a `busy`-based check and send conflicting grants. The ref closes that window.
+  const deciding = useRef(false);
 
   const decide = useCallback(
     async (behavior: "allow" | "deny") => {
-      if (req.requestId === "" || busy) return;
+      if (req.requestId === "" || deciding.current) return;
+      deciding.current = true;
       setBusy(true);
       setErr(null);
       try {
         await onGrant(req.requestId, behavior);
-        setDecision(behavior);
+        setDecision(behavior); // resolved view replaces the buttons — no further clicks possible
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
+        deciding.current = false; // failed — let the user retry
       } finally {
         setBusy(false);
       }
     },
-    [req.requestId, busy, onGrant],
+    [req.requestId, onGrant],
   );
 
   return (
