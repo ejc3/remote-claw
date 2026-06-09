@@ -1,0 +1,34 @@
+name: web
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/web/**", "packages/clawsec/**", ".github/workflows/web.yml"]
+  pull_request:
+    paths: ["apps/web/**", "packages/clawsec/**", ".github/workflows/web.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Lint + format check (Biome)
+        run: pnpm run check
+      - name: Type check
+        run: pnpm run typecheck
+      - name: Integration tests (in-process Workflow runtime)
+        run: pnpm run test:run
+      - name: Production build (Next + Workflow compiler) — proves the broker deploys
+        run: pnpm run build
