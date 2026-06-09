@@ -276,7 +276,8 @@ function Transcript(props: {
       try {
         await viewer.setMode(sessionId, id);
       } catch (e) {
-        setMode(prev);
+        // Only revert if no newer choice landed while we were awaiting — else we'd clobber it.
+        setMode((cur) => (cur === id ? prev : cur));
         setSendError(e instanceof Error ? e.message : String(e));
       }
     },
@@ -378,25 +379,71 @@ function ModeSheet({
   onPick: (id: string) => void;
   onClose: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // onClose is a fresh arrow each parent render; read it through a ref so the focus/scroll-lock
+  // effect can run exactly once (on open) without re-stealing focus or re-saving the trigger.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // Open-once: focus into the sheet + trap Tab + lock scroll; restore on close. onClose is read via
+  // a ref, so this effect has no reactive deps and must not re-run on parent re-renders.
   useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null; // the composer mode button
+    const focusables = () =>
+      Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? []);
+    // Move focus into the sheet (the active row, else the first) so keyboard users land on the choices.
+    (
+      dialogRef.current?.querySelector<HTMLElement>('[data-active="true"]') ?? focusables()[0]
+    )?.focus();
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      // Trap Tab within the sheet so it can't reach the controls behind the scrim.
+      const f = focusables();
+      const first = f[0];
+      const last = f[f.length - 1];
+      if (!first || !last) return;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden"; // lock background scroll while modal
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      trigger?.focus?.(); // restore focus to the mode button
+    };
+  }, []);
 
-  // Scrim and sheet are siblings (not nested): the scrim is a real <button> so dismiss is keyboard-
-  // and click-accessible, and the sheet's own buttons aren't illegally nested inside another button.
+  // Scrim and sheet are siblings (not nested): the sheet's own buttons aren't illegally nested inside
+  // another button. The scrim is mouse-only (tabIndex -1) — keyboard dismiss is Escape; role=dialog
+  // sits on the content (.sheet), not the overlay.
   return (
-    <div className="sheet-layer" role="dialog" aria-modal="true" aria-label="Select mode">
+    <div className="sheet-layer">
       <button
         type="button"
         className="sheet-scrim"
         aria-label="Close mode picker"
+        tabIndex={-1}
         onClick={onClose}
       />
-      <div className="sheet">
+      <div
+        className="sheet"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Select mode"
+      >
         <div className="sheet-handle" />
         <div className="sheet-title">Select mode</div>
         {MODES.map((m) => (
@@ -405,6 +452,7 @@ function ModeSheet({
             type="button"
             className="mode-row"
             data-active={m.id === current}
+            aria-pressed={m.id === current}
             onClick={() => onPick(m.id)}
           >
             <span className="mode-row-glyph">{m.glyph}</span>
