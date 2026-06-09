@@ -224,6 +224,11 @@ export class Session {
     this.#gate.wake();
   }
 
+  /** Wake any parked follower so it re-checks its stop predicate now (e.g. an SSE response closed). */
+  wake(): void {
+    this.#gate.wake();
+  }
+
   // ---- consumers (async generators that block until new events) ----
   /** Yield downstream events for the worker stream `gen`; `null` is a heartbeat tick. Exits when
    *  superseded by a newer stream, on close, or when `stop()` returns true. */

@@ -208,6 +208,45 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     expect(got.filter((m) => m.seq !== null).map((m) => m.seq)).toEqual([0, 1, 2, 3, 4, 5]);
   }, 40_000);
 
+  it("PERMISSION: a worker can_use_tool surfaces to the viewer, which grants it back to the worker", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(64));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+
+    // The worker asks to run a tool (control_request can_use_tool) instead of auto-executing, then —
+    // once the grant arrives downstream — finishes the turn. The grant detection is wired below.
+    let granted = false;
+    worker.onControlResponse(() => {
+      granted = true;
+    });
+    worker.start(sid, () => [
+      {
+        type: "control_request",
+        request_id: "perm-1",
+        request: { subtype: "can_use_tool", tool_name: "Bash", tool_input: { command: "echo hi" } },
+      },
+    ]);
+
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const got: Message[] = [];
+    tailInto(viewer, sid, got, ac.signal);
+    await viewer.sendPrompt(sid, "run a tool");
+
+    // The viewer receives the permission_request frame…
+    await waitFor(() => got.some((m) => m.kind === "permission_request"));
+    const reqFrame = got.find((m) => m.kind === "permission_request");
+    const requestId = JSON.parse(reqFrame?.text ?? "{}").request_id;
+    expect(requestId).toBe("perm-1");
+    expect(JSON.parse(reqFrame?.text ?? "{}").tool_name).toBe("Bash");
+
+    // …and grants it — the worker receives the control_response downstream.
+    await viewer.grantPermission(sid, requestId, "allow");
+    await waitFor(() => granted);
+    expect(granted).toBe(true);
+  }, 40_000);
+
   it("MULTI-CLIENT: two devices drive turns on one RC session; both see the shared timeline", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(62));
     const ac = new AbortController();

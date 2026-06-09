@@ -58,16 +58,24 @@ ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `
   mobile-first **web client** (paste a pass → discover sessions → drive them, decrypted
   in-browser).
 - **`packages/cli`** — the `remote-claw` wrapper: identity/pass management (`--rc-identity`,
-  `--rc-pass`) and the broker transport (`BrokerClient`).
+  `--rc-pass`), the broker transport (`BrokerClient`), and the **RC MITM backend** (`@remote-claw/cli/rc`:
+  `MitmProxy` + `RelayCore`/`Session` + `HostRcRelay`) — the Phase-0 interception core ported to TS.
 
-**Proof:** the browser viewer drives a **real, multi-turn `claude` session** through the encrypted
-broker — `HostRelay` + `ClaudeStreamSession` run a live `claude` over its stream-json SDK transport;
-turn 1 teaches it a number, turn 2 reads it back, both as ciphertext through the relay
-(`apps/web/test/prove/*.prove.test.ts`, run with `RC_PROVE_REAL_CLAUDE=1`). It's **inference-agnostic**
-— point the session at **Amazon Bedrock**/Vertex (`{ bedrock: true }`) and claude routes inference via
-the AWS SDK while remote-claw relays it, never touching the inference creds. The only **optional**
-extra is the HTTPS-MITM of claude's *native* `--remote-control` (driving the interactive **TUI** the
-user has open locally) — a different UX, Phase-0-verified.
+**The RC backend (the real one, §14/§17.5):** you run `remote-claw` like `claude` (`--rc-app <broker>`
+arms it); inside, `/remote-control` lands on **our local TLS MITM of `api.anthropic.com`** (set via
+`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`), which serves the `/v1/code/sessions*` worker endpoints itself
+and passes `/v1/messages` + OAuth through. The wrapper *is* the RC backend, so it sees every frame and
+bridges the session E2E-encrypted to the broker. **Proven end to end** by `rc-spine.integration.test.ts`:
+a fake worker speaks the **exact captured `--remote-control` worker protocol** (register → triggers →
+bridge → SSE → delivery-ack → events → heartbeat) through the real MITM, and the browser viewer drives a
+turn, history replay (catch_up), sub-agents (`Task` + nested replies), tool-permission grants, and
+multi-client — all through the real broker on the real Workflow runtime. The real binary's leg is
+covered by the in-repo Phase-0 capture + the gated `real-rc.prove.test.ts` (needs a login + PTY).
+
+The native **`stream-json` SDK transport** (`HostRelay` + `ClaudeStreamSession`, `--print
+--input-format stream-json`) remains as the **documented cousin** for cross-checking the protocol and
+for an inference-agnostic headless path — point it at **Amazon Bedrock**/Vertex (`{ bedrock: true }`)
+and claude routes inference via the AWS SDK while remote-claw relays it, never touching the creds.
 
 📐 **Design:** [`docs/v2-architecture.md`](docs/v2-architecture.md) — the full v2 design,
 threat model, key hierarchy, broker, and phased plan.

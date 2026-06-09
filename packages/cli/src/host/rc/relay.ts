@@ -15,8 +15,15 @@
 // decoupled into the event-driven shape RC needs (a turn's response is async, tool turns interleave).
 
 import { type FrameHeader, utf8 } from "@remote-claw/clawsec";
-import type { BrokerClient } from "../../broker/client.js";
+import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import { assistantText, type RcEvent, type Session } from "./session.js";
+
+/** Out-post retry budget for a transient broker error (409 = the run cap-rolled between resolve and
+ *  publish — the "window rolling over"). A `seq` is allocated BEFORE the post, so a dropped post would
+ *  strand the viewer on a permanent gap; retrying the SAME frame (deterministic msg_id → viewer
+ *  dedups) closes that hole. */
+const POST_RETRIES = 6;
+const POST_RETRY_BASE_MS = 50;
 
 export interface HostRcRelayOptions {
   client: BrokerClient;
@@ -48,7 +55,27 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
     const r = ev.payload.result;
     return [{ kind: "result", text: typeof r === "string" ? r : JSON.stringify(ev.payload) }];
   }
-  if (ev.eventType !== "assistant") return []; // system/status/control — not rendered (kept minimal)
+  // A worker `can_use_tool` control_request — surface it so a viewer CAN grant/deny (the reply rides
+  // back as an inbound `permission` frame → pushControlResponse). RC usually auto-executes tools with
+  // no gate (§17.4), so this is rarely emitted, but we relay it rather than drop it silently.
+  if (ev.eventType === "control_request") {
+    const req =
+      (ev.payload.request as { subtype?: string; tool_name?: string; tool_input?: unknown }) ?? {};
+    if (req.subtype !== "can_use_tool") return []; // initialize/other control verbs aren't rendered
+    const requestId =
+      (ev.payload.request_id as string) ?? (req as { request_id?: string }).request_id ?? "";
+    return [
+      {
+        kind: "permission_request",
+        text: JSON.stringify({
+          request_id: requestId,
+          tool_name: req.tool_name ?? "tool",
+          tool_input: req.tool_input ?? null,
+        }),
+      },
+    ];
+  }
+  if (ev.eventType !== "assistant") return []; // system/status — not rendered (kept minimal)
 
   // Sub-agent output is any assistant message produced under a parent Task tool call.
   const sub =
@@ -84,7 +111,10 @@ export class HostRcRelay {
   readonly #session: Session;
   /** Next transcript seq to allocate (a single shared timeline across both pumps). */
   #seq = 0;
-  /** Inbound at-least-once dedup window (msg_id). */
+  /** Inbound at-least-once dedup set (msg_id). Grows with the count of DISTINCT client frames this
+   *  session (prompts + catch_ups + permission grants) — modest, human-paced, and freed when the
+   *  session ends. Must NOT be size-bounded: #tailInbound re-reads from index 0 on each reconnect, so
+   *  an evicted-then-re-read `user` msg_id would re-inject a duplicate prompt into claude. */
   readonly #seen = new Set<string>();
   /** In-memory transcript (content frames only) — replayed on a viewer `catch_up` (§6/§16). */
   readonly #log: { recordKind: string; seq: number; msgId: string; text: string }[] = [];
@@ -122,9 +152,26 @@ export class HostRcRelay {
     );
   }
 
-  /** POST one out-message (postMessage chunks a large payload into seq-sharing parts, §8). */
+  /**
+   * POST one out-message (postMessage chunks a large payload into seq-sharing parts, §8). Retries a
+   * transient 409 (the channel run cap-rolled mid-publish) with bounded backoff: the frame's msg_id
+   * is deterministic, so a re-post is deduped by the viewer — but a DROPPED post would leave a seq
+   * gap that stalls every viewer's orderer forever, so we must not let one slip.
+   */
   async #post(recordKind: string, seq: number | null, msgId: string, text: string): Promise<void> {
-    await this.#client.postMessage(this.#header(recordKind, seq, msgId), utf8(text));
+    const header = this.#header(recordKind, seq, msgId);
+    const body = utf8(text);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.#client.postMessage(header, body);
+        return;
+      } catch (e) {
+        // 409 = run rolled → retry (§6B). Anything else, or out of budget, propagates.
+        if (!(BrokerError.is(e) && e.status === 409) || attempt >= POST_RETRIES) throw e;
+        this.#logger(`#post: 409 on ${recordKind} seq=${seq} (attempt ${attempt + 1}) → retry`);
+        await new Promise((r) => setTimeout(r, POST_RETRY_BASE_MS * 2 ** attempt));
+      }
+    }
   }
 
   /** Post AND record a content frame so it can be replayed via catch_up. */

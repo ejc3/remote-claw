@@ -67,6 +67,10 @@ export class MitmProxy {
 
   async close(): Promise<void> {
     this.#stopped = true;
+    // Wake every worker-SSE follower NOW (close() sets #stopped, but a follower parked on the
+    // session Gate's heartbeat wait wouldn't re-check it for up to HEARTBEAT_MS). Closing the
+    // sessions wakes their gates so #streamWorker loops exit and end their responses immediately.
+    this.#opts.core.closeAll();
     this.#server.close();
     this.#inner.close();
   }
@@ -80,6 +84,11 @@ export class MitmProxy {
     const { host, port } = splitAuthority(req.url ?? "");
     if (host === MITM_HOST) {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      // Any bytes the client pipelined after the CONNECT line are the START of its TLS ClientHello —
+      // push them back onto the RAW socket so the TLS engine consumes them as handshake input.
+      // (Unshifting onto the TLSSocket would feed raw ciphertext to the decoded-plaintext side and
+      // break the handshake.) Normally empty for HTTPS_PROXY, but a coalescing client can pipeline.
+      if (head?.length) clientSocket.unshift(head);
       const tls = new TLSSocket(clientSocket, {
         isServer: true,
         cert: this.#leaf.cert,
@@ -87,7 +96,6 @@ export class MitmProxy {
         ALPNProtocols: ["http/1.1"],
       });
       tls.on("error", (e) => this.#log(`client TLS error: ${e.message}`));
-      if (head?.length) tls.unshift(head);
       // Hand the decrypted stream to the inner HTTP server for request parsing.
       this.#inner.emit("connection", tls);
     } else {
@@ -112,13 +120,16 @@ export class MitmProxy {
 
   // ---- request handling (intercept or passthrough) ----
   async #onRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const path = (req.url ?? "").split("?", 1)[0] ?? "";
+    const rawUrl = req.url ?? "";
+    const path = rawUrl.split("?", 1)[0] ?? ""; // the path WITHOUT query — only for intercept matching
     const body = await readBody(req);
     if (INTERCEPT_PREFIXES.some((p) => path.startsWith(p))) {
-      this.#log(`intercept ${req.method} ${req.url}`);
+      this.#log(`intercept ${req.method} ${rawUrl}`);
       this.#intercept(req.method ?? "GET", path, body, res);
     } else {
-      this.#passthrough(req, path, body, res);
+      // Pass the FULL request-target (query string included) upstream — stripping `?…` would drop
+      // params the real API needs (e.g. /api/claude_cli/bootstrap?entrypoint=…&model=…, ?limit=…).
+      this.#passthrough(req, rawUrl, body, res);
     }
   }
 
@@ -140,6 +151,10 @@ export class MitmProxy {
 
     if (path === "/v1/code/sessions" && method === "POST") {
       const s = this.#opts.core.create(data);
+      // Enqueue `initialize` as downstream seq 1 AT CREATE — before onSession announces the session and
+      // a fast client prompt could race a `user` event ahead of it. The worker's SSE then always
+      // receives initialize first (pushInitialize is idempotent, so #streamWorker's call is a no-op).
+      s.pushInitialize();
       this.#log(`session created: ${s.id} (title=${s.title})`);
       this.#opts.onSession?.(s);
       return sendJson(res, { session: s.sessionObj() });
@@ -214,8 +229,19 @@ export class MitmProxy {
     const gen = s.claimWorkerStream(); // supersede any prior stream → single deliverer
     s.pushInitialize();
     this.#log(`worker SSE connected: ${s.id} (gen ${gen})`);
+    // A remote disconnect can close/destroy the response WITHOUT setting writableEnded, so watch the
+    // `close` event too — else a dead follower lingers, waking on every heartbeat and holding the
+    // response forever. The flag is re-checked by the stop predicate below.
+    let closed = false;
+    res.on("close", () => {
+      closed = true;
+      s.wake(); // break the follower out of its heartbeat wait immediately
+    });
     try {
-      for await (const ev of s.followDownstream(gen, () => this.#stopped || res.writableEnded)) {
+      for await (const ev of s.followDownstream(
+        gen,
+        () => this.#stopped || closed || res.writableEnded || res.destroyed,
+      )) {
         if (ev === null) {
           res.write(":keepalive\n\n");
           continue;
@@ -225,7 +251,7 @@ export class MitmProxy {
         );
       }
     } catch {
-      // client/socket went away — the follower exits on writableEnded
+      // client/socket went away — the follower exits on the stop predicate
     } finally {
       res.end();
     }
