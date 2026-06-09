@@ -1263,12 +1263,18 @@ phase0/            unchanged — the Python reference + protocol findings
      pipes SSE within the Function `maxDuration` (300s Hobby / 800s Pro, §13 — reconnect by
      `seq` past it); `HookNotFound` ⇒ `200` empty.
   6. Size/chunk limits (hook ≤ 4.5 MB, stream chunk ≤ 10 MB, payload ≤ 50 MB) + `(msg_id, part)` dedup.
-- **P4 — CLI: `serve` behavior = relay on `/remote-control` (MITM — §14).** ◐ PARTIAL
-  2026-06-09: the **broker-transport half is done** — the `BrokerClient` (seal/open, the two
-  endpoints, dedup/reorder; PR11) plus a **fake-claude end-to-end harness** (PR12) that drives the
-  real transport ↔ real broker ↔ viewer through a full encrypted turn + the control plane (§14A).
-  The **MITM half below** (intercepting a real `claude`'s RC protocol over the local proxy) is the
-  remaining work and needs the `claude` binary + Anthropic network to verify. Node/TS
+- **P4 — CLI: host relay + a real claude (MITM — §14).** ✅ DONE 2026-06-09 via the **stream-json
+  backend** (a simpler path than the HTTPS MITM): the `BrokerClient` transport (PR11) + **`HostRelay`
+  + `ClaudeStreamSession`** (PR16) drive a **real, live, multi-turn `claude`** over its stream-json
+  SDK transport (`--print --input-format stream-json --output-format stream-json`) and relay it
+  through the broker — **proven end-to-end** (PR17): a browser viewer teaches claude a number in turn
+  1 and reads it back in turn 2, both through the encrypted broker. It is **inference-agnostic** —
+  `{ bedrock: true, env: {…} }` forwards the backend env so claude routes inference to **Amazon
+  Bedrock** (or Vertex) via the AWS SDK while remote-claw relays the session unchanged (PR18);
+  remote-claw never reads the inference creds. The **HTTPS-MITM variant below** (intercepting a real
+  `claude`'s *native* `--remote-control` RC protocol to drive the interactive **TUI** the user has
+  open locally, rather than a headless stream-json session) is an **optional alternative UX**, not a
+  gap — its feasibility is Phase-0-verified (C1–C5). Node/TS
   reimpl of the Phase 0 interception: `remote-claw` runs the real interactive
   `claude` (full passthrough) and, when RC is enabled, points it at our local MITM
   (`HTTPS_PROXY` → our proxy with a trusted leaf cert; intercept `/v1/code/sessions*`;
@@ -1630,12 +1636,20 @@ Beyond §14's plan review, individual decisions are settled with small design pa
     it travels **encrypted** to a host that runs `claude -p`, and "Paris." comes back encrypted and
     renders in the viewer. The broker only ever saw ciphertext. (Network-gated, so CI stays
     deterministic — skipped by default.)
-  What remains for a live deploy: the **P4 MITM half** — intercepting a real `claude`'s *native*
-  `--remote-control` protocol to drive the interactive TUI (rather than `claude -p`), which needs a
-  pty + an HTTPS interception proxy; its feasibility is already Phase-0-verified (C1–C5). The
-  broker ↔ transport ↔ web-client crypto spine is done and proven with a real model. Build/deploy
-  note: `apps/web` uses `next build --webpack` + `extensionAlias` to bundle clawsec's raw-TS source
-  (Turbopack can't resolve its `.js`-specifier imports in `node_modules`).
+  - **A real, multi-turn host** (PR16–PR18) — `HostRelay` + `ClaudeStreamSession` drive a *live*
+    `claude` over its stream-json SDK transport (no MITM/proxy needed) and relay it through the
+    broker. Proven multi-turn (PR17): a browser viewer teaches claude "42" in turn 1 and reads it back
+    in turn 2, both through the encrypted broker — the "42" only appears if both prompts reached the
+    same live process via the relay, so a real **stateful session** is driven end to end. And it is
+    **inference-agnostic** (PR18): `{ bedrock: true, env: {…} }` points the relayed session at Amazon
+    **Bedrock** (or Vertex) — claude routes inference via the AWS SDK while remote-claw relays the
+    session, never touching the inference creds.
+  So the encrypted spine is **complete and proven with a real, multi-turn claude on any inference
+  backend**. The only thing NOT built is the **optional** HTTPS-MITM of claude's *native*
+  `--remote-control` (driving the interactive TUI the user has open locally, vs a headless stream-json
+  session) — a different UX, Phase-0-verified, not a missing capability. Build/deploy note: `apps/web`
+  uses `next build --webpack` + `extensionAlias` to bundle clawsec's raw-TS source (Turbopack can't
+  resolve its `.js`-specifier imports in `node_modules`).
 
 ## 15. Use cases / scenario matrix (also the v2 test plan)
 
