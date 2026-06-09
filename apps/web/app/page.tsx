@@ -299,6 +299,9 @@ function Bubble({ message }: { message: Message }) {
   if (message.kind === "result") {
     return <p className="turn-sep">turn complete</p>;
   }
+  // The transcript stream also carries meta acks (`accepted`) and lifecycle frames; only the actual
+  // conversation (user prompts + assistant replies) belongs in the chat.
+  if (message.kind !== "user" && message.kind !== "assistant") return null;
   const me = message.kind === "user";
   return (
     <div className="bubble-row" data-me={me}>
