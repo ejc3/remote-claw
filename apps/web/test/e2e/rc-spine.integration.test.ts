@@ -179,7 +179,12 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       {
         type: "assistant",
         parent_tool_use_id: "toolu_task1",
-        message: { content: [{ type: "text", text: "sub-agent here: found it" }] },
+        message: {
+          content: [
+            { type: "thinking", thinking: "sub-agent reasoning" },
+            { type: "text", text: "sub-agent here: found it" },
+          ],
+        },
       },
       { type: "assistant", message: { content: [{ type: "text", text: "all done" }] } },
       { type: "result", subtype: "success", is_error: false, result: "ok" },
@@ -191,21 +196,62 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     await viewer.sendPrompt(sid, "do a big task");
     await waitFor(() => got.some((m) => m.kind === "result"));
 
-    // The parent's "thinking" text, the Task spawn (tool_use), the SUB-AGENT reply (assistant_sub),
-    // and the parent's final text all relayed, in order, on one gap-free timeline.
+    // Parent text, the Task spawn (tool_use), the SUB-AGENT's thinking (assistant_thinking_sub) +
+    // reply (assistant_sub), then the parent's final text — in order, on one gap-free timeline.
     const kinds = got.filter((m) => m.seq !== null).map((m) => m.kind);
     expect(kinds).toEqual([
       "user",
       "assistant",
       "tool_use",
+      "assistant_thinking_sub",
       "assistant_sub",
       "assistant",
       "result",
     ]);
     const tool = got.find((m) => m.kind === "tool_use");
     expect(JSON.parse(tool?.text ?? "{}").name).toBe("Task"); // the sub-agent spawn is visible
+    expect(got.find((m) => m.kind === "assistant_thinking_sub")?.text).toBe("sub-agent reasoning");
     expect(got.find((m) => m.kind === "assistant_sub")?.text).toBe("sub-agent here: found it");
-    expect(got.filter((m) => m.seq !== null).map((m) => m.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(got.filter((m) => m.seq !== null).map((m) => m.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  }, 40_000);
+
+  it("THINKING: an extended-thinking block relays through as an assistant_thinking frame", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(66));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+    // The worker answers with a thinking block, then the visible reply, then result.
+    worker.start(sid, () => [
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "thinking", thinking: "let me reason about this step by step" },
+            { type: "text", text: "the answer is 42" },
+          ],
+        },
+      },
+      { type: "result", subtype: "success", is_error: false, result: "ok" },
+    ]);
+
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const got: Message[] = [];
+    tailInto(viewer, sid, got, ac.signal);
+    await viewer.sendPrompt(sid, "think hard");
+    await waitFor(() => got.some((m) => m.kind === "result"));
+
+    // user → thinking → assistant → result, one gap-free timeline.
+    expect(got.filter((m) => m.seq !== null).map((m) => m.kind)).toEqual([
+      "user",
+      "assistant_thinking",
+      "assistant",
+      "result",
+    ]);
+    expect(got.find((m) => m.kind === "assistant_thinking")?.text).toBe(
+      "let me reason about this step by step",
+    );
+    expect(got.find((m) => m.kind === "assistant")?.text).toBe("the answer is 42");
   }, 40_000);
 
   it("PERMISSION: a worker can_use_tool surfaces to the viewer, which grants it back to the worker", async () => {

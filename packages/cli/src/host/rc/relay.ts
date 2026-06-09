@@ -88,9 +88,29 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
   const blocks = Array.isArray(message?.content) ? message.content : [];
   const items: OutItem[] = [];
   for (const b of blocks) {
-    const bb = b as { type?: string; text?: string; name?: string; input?: unknown };
+    const bb = b as {
+      type?: string;
+      text?: string;
+      thinking?: string;
+      name?: string;
+      input?: unknown;
+    };
     if (bb.type === "text" && typeof bb.text === "string" && bb.text !== "") {
       items.push({ kind: sub ? "assistant_sub" : "assistant", text: bb.text });
+    } else if (
+      bb.type === "thinking" &&
+      typeof bb.thinking === "string" &&
+      bb.thinking.trim() !== ""
+    ) {
+      // Extended-thinking block (§17.3): the worker posts the model's reasoning. Relay it as a
+      // distinct kind so the UI can render it muted/collapsible (not as a normal reply); tag a
+      // sub-agent's reasoning `*_sub` so it nests under its Task, like its text sibling. Per-token
+      // streaming isn't available — the RC worker channel delivers COMPLETE messages (the live deltas
+      // ride the passed-through /v1/messages inference SSE, not the worker events).
+      items.push({
+        kind: sub ? "assistant_thinking_sub" : "assistant_thinking",
+        text: bb.thinking,
+      });
     } else if (bb.type === "tool_use") {
       // A `Task` tool_use is a sub-agent spawn; everything else is a normal tool call. Carry the tool
       // name + input so the UI can render the activity (and recognize a sub-agent).
