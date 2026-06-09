@@ -57,9 +57,14 @@ export class HostRelay {
     );
   }
 
-  /** Emit one out-frame (content carries a seq; meta/control pass seq=null). */
+  /**
+   * Emit one out-message (content carries a seq; meta/control pass seq=null). postMessage chunks a
+   * large payload into parts that share this seq (§8) — a small one is exactly one frame — so a big
+   * assistant turn reassembles correctly on the viewer (FrameOrderer holds the seq until all parts
+   * land, then openMessage reassembles).
+   */
   async #emit(recordKind: string, seq: number | null, text: string): Promise<void> {
-    await this.#client.postFrame(
+    await this.#client.postMessage(
       this.#header(
         recordKind,
         seq,

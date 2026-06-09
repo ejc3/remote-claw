@@ -152,4 +152,46 @@ describe("edge cases (same transport library, real Workflow runtime)", () => {
       ),
     ).toBe(true);
   });
+
+  it("DROP + RECONNECT: a viewer that disconnects resumes from its cursor with no gap and no dup", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(25));
+    const c = clientFor(id);
+    const sid = "drop";
+    const orderer = new FrameOrderer();
+    const got: number[] = [];
+    const consume = (frames: Frame[]) => {
+      for (const f of frames)
+        for (const d of orderer.accept(f)) if (d.seq !== null) got.push(d.seq);
+    };
+    const postN = (n: number) =>
+      c.postFrame(
+        header(id, { recordKind: "assistant", sessionId: sid, seq: n, msgId: `m${n}` }),
+        utf8(`f${n}`),
+      );
+
+    // First connection: read seqs 0,1.
+    await postN(0);
+    await postN(1);
+    consume(
+      await takeFrames(c.streamFrames({ session: sid, startIndex: 0 }), 2, (f) => f.dir === "out"),
+    );
+    expect(got).toEqual([0, 1]);
+
+    // The viewer DROPS; time passes; the host keeps producing 2,3.
+    await new Promise((r) => setTimeout(r, 300));
+    await postN(2);
+    await postN(3);
+
+    // Reconnect: resume from the orderer's cursor (the catch_up `since`). A full re-read from 0 would
+    // also be safe — the orderer dedups already-delivered seqs — but resuming from the cursor is the
+    // efficient protocol. No gap, no duplicate across the reconnect.
+    consume(
+      await takeFrames(
+        c.streamFrames({ session: sid, startIndex: orderer.nextSeq }),
+        2,
+        (f) => f.dir === "out",
+      ),
+    );
+    expect(got).toEqual([0, 1, 2, 3]);
+  });
 });
