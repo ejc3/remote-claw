@@ -13,7 +13,9 @@ import {
 
 const td = new TextDecoder();
 
-/** Presence: a session is "online" iff its latest announce's sent_at is within this window (§4.3). */
+/** Presence: a session is "online" iff its latest announce's sent_at is within this window (§4.3).
+ *  Also the freshness bound for control verbs (§3.7) — a verb the broker withholds past it is a
+ *  no-op, so it can't replay a stale interrupt/set_mode/end. */
 export const FRESH_WINDOW_MS = 60_000;
 
 /** A decrypted session_announce from the bus. */
@@ -181,6 +183,46 @@ export class Viewer {
       }),
       utf8(JSON.stringify({ request_id: requestId, behavior })),
     );
+  }
+
+  /** Post a control-verb frame (dir:in) the host forwards to the worker as a control_request (§3.7).
+   *  Stamps `expiry` so a control action the broker withholds and replays later is dropped as stale. */
+  async #control(
+    sessionId: string,
+    kind: string,
+    body: Record<string, unknown> = {},
+  ): Promise<void> {
+    await this.#client.postFrame(
+      this.#header({ recordKind: kind, sessionId, msgId: `${kind}-${randomId()}` }),
+      utf8(JSON.stringify({ ...body, expiry: Date.now() + FRESH_WINDOW_MS })),
+    );
+  }
+
+  /** Interrupt the current turn (the remote ESC). */
+  async interrupt(sessionId: string): Promise<void> {
+    await this.#control(sessionId, "interrupt");
+  }
+
+  /** Switch the session's model mid-flight (e.g. "claude-opus-4-8"). */
+  async setModel(sessionId: string, model: string): Promise<void> {
+    await this.#control(sessionId, "set_model", { model });
+  }
+
+  /** Change the permission mode (default | acceptEdits | plan | bypassPermissions | …). */
+  async setMode(sessionId: string, mode: string): Promise<void> {
+    await this.#control(sessionId, "set_mode", { mode });
+  }
+
+  /** End the session from the remote. */
+  async endSession(sessionId: string): Promise<void> {
+    await this.#control(sessionId, "end");
+  }
+
+  /** Run a slash command (`/compact`, `/clear`, `/context`, …). claude processes it as input, so it
+   *  rides the SAME `user` path as a prompt — acked + echoed to every device, replayable via catch_up
+   *  (a control frame would skip all three). Returns its client_msg_id. */
+  async command(sessionId: string, text: string): Promise<string> {
+    return this.sendPrompt(sessionId, text);
   }
 
   /** Send a prompt to the session (a `user` content frame, dir:in). Returns its client_msg_id. */

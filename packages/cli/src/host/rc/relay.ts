@@ -14,9 +14,13 @@
 // `#seen` set dedups the at-least-once inbound stream. Mirrors HostRelay's broker discipline, but
 // decoupled into the event-driven shape RC needs (a turn's response is async, tool turns interleave).
 
-import { type FrameHeader, utf8 } from "@remote-claw/clawsec";
+import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import { assistantText, type RcEvent, type Session } from "./session.js";
+
+/** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
+ *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
+const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
 
 /** Out-post retry budget for a transient broker error (409 = the run cap-rolled between resolve and
  *  publish — the "window rolling over"). A `seq` is allocated BEFORE the post, so a dropped post would
@@ -262,7 +266,47 @@ export class HostRcRelay {
             body.behavior === "deny" ? "deny" : "allow",
           );
         }
+      } else if (CONTROL_VERBS.has(frame.recordKind)) {
+        // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
+        // to the worker as a `control_request` with the mapped subtype + params.
+        await this.#driveControlVerb(frame.recordKind, frame);
       }
+    }
+  }
+
+  /** Map a client control-verb frame → the worker control_request the spec uses (§3.7). */
+  async #driveControlVerb(kind: string, frame: Frame): Promise<void> {
+    // openFrame IS the authentication: a forged/corrupt/tampered frame fails AEAD here. We must NOT
+    // act on a frame that fails to open — even a bodyless verb (interrupt/end) proves authenticity by
+    // opening cleanly. (Earlier this swallowed the error and fired anyway, letting the UNTRUSTED
+    // broker forge an interrupt/end — both assessors flagged it.)
+    let body: Record<string, unknown>;
+    try {
+      const raw = new TextDecoder().decode(await this.#client.openFrame(frame));
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (parsed === null || typeof parsed !== "object") return; // authenticated but malformed → drop
+      body = parsed as Record<string, unknown>;
+    } catch {
+      return; // AEAD open failed or unparseable → reject, never drive a control action
+    }
+    // Drop a STALE control frame: a malicious broker can withhold a valid frame and replay it much
+    // later. The client stamps `expiry`; past it, the verb is a no-op (matches catch_up's freshness).
+    if (typeof body.expiry === "number" && body.expiry < Date.now()) return;
+    switch (kind) {
+      case "interrupt":
+        this.#session.pushControlRequest("interrupt");
+        break;
+      case "set_model":
+        if (typeof body.model === "string")
+          this.#session.pushControlRequest("set_model", { model: body.model });
+        break;
+      case "set_mode":
+        if (typeof body.mode === "string")
+          this.#session.pushControlRequest("set_permission_mode", { mode: body.mode });
+        break;
+      case "end":
+        this.#session.pushControlRequest("end_session");
+        break;
     }
   }
 }
