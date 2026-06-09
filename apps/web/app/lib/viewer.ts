@@ -78,20 +78,25 @@ export class Viewer {
    */
   async *announces(signal: AbortSignal): AsyncGenerator<Announce> {
     while (!signal.aborted) {
-      for await (const frame of this.#client.streamFrames({ startIndex: -64, signal })) {
-        if (frame.recordKind !== "session_announce") continue;
-        let body: Record<string, unknown>;
-        try {
-          body = JSON.parse(td.decode(await this.#client.openFrame(frame)));
-        } catch {
-          continue; // a frame we can't open/parse (not ours / corrupt) — skip, never crash the list
+      try {
+        for await (const frame of this.#client.streamFrames({ startIndex: -64, signal })) {
+          if (frame.recordKind !== "session_announce") continue;
+          let body: Record<string, unknown>;
+          try {
+            body = JSON.parse(td.decode(await this.#client.openFrame(frame)));
+          } catch {
+            continue; // a frame we can't open/parse (not ours / corrupt) — skip, never crash the list
+          }
+          yield {
+            sessionId: String(body.session_id ?? frame.sessionId),
+            title: typeof body.title === "string" ? body.title : String(body.session_id ?? ""),
+            cwd: typeof body.cwd === "string" ? body.cwd : null,
+            sentAt: typeof body.sent_at === "number" ? body.sent_at : 0,
+          };
         }
-        yield {
-          sessionId: String(body.session_id ?? frame.sessionId),
-          title: typeof body.title === "string" ? body.title : String(body.session_id ?? ""),
-          cwd: typeof body.cwd === "string" ? body.cwd : null,
-          sentAt: typeof body.sent_at === "number" ? body.sent_at : 0,
-        };
+      } catch {
+        // A transient stream error (network blip / SSE reset / broker 5xx) must NOT end discovery —
+        // fall through to the resume-or-retry sleep and re-subscribe, exactly like the relay does.
       }
       if (signal.aborted) break;
       await new Promise((r) => setTimeout(r, 150)); // bus run not up / stream closed → resume-or-retry
@@ -102,8 +107,10 @@ export class Viewer {
    * Tail a session's out-stream; yield decoded transcript messages (deduped + reordered by seq).
    * Re-subscribes when the stream ends: the session run may not exist yet (you opened the session
    * before the host posted anything) or may have cap-rolled (the "window rolling over"). The
-   * FrameOrderer persists across re-subscribes, so its dedup window + seq cursor make the re-read
-   * idempotent — no gap, no duplicate. Loops until `signal` aborts.
+   * FrameOrderer persists across re-subscribes; for CONTENT frames its seq cursor (drops seq < next)
+   * is what guarantees no gap and no duplicate on the re-read — the bounded msg_id window only de-dups
+   * the seq===null meta frames (e.g. `accepted`), which are idempotent to re-yield (rendered as
+   * nothing) even if the window evicts on a very long session. Loops until `signal` aborts.
    */
   async *transcript(sessionId: string, signal: AbortSignal): AsyncGenerator<Message> {
     const orderer = new FrameOrderer();
@@ -112,31 +119,36 @@ export class Viewer {
       // delivered, so the re-subscribe is idempotent. (startIndex is a broker FRAME index — which
       // counts in/out/meta/chunk frames — not the transcript seq, so the orderer, not startIndex,
       // is what guarantees no gap and no duplicate across a reconnect.)
-      for await (const frame of this.#client.streamFrames({
-        session: sessionId,
-        startIndex: 0,
-        signal,
-      })) {
-        if (frame.dir !== "out") continue; // the viewer renders host→web frames only
-        // The orderer releases a chunked message (parts > 1) as its parts together, in part order — so
-        // reassemble those with openMessage; a single frame opens directly.
-        const ready = orderer.accept(frame);
-        for (let i = 0; i < ready.length; ) {
-          const f = ready[i];
-          if (f === undefined) break;
-          const span = f.parts > 1 ? f.parts : 1;
-          const group = ready.slice(i, i + span);
-          i += span;
-          let text: string;
-          try {
-            text = td.decode(
-              span > 1 ? await this.#client.openMessage(group) : await this.#client.openFrame(f),
-            );
-          } catch {
-            continue; // a frame/message we can't open (not ours / corrupt) — skip, never crash the list
+      try {
+        for await (const frame of this.#client.streamFrames({
+          session: sessionId,
+          startIndex: 0,
+          signal,
+        })) {
+          if (frame.dir !== "out") continue; // the viewer renders host→web frames only
+          // The orderer releases a chunked message (parts > 1) as its parts together, in part order — so
+          // reassemble those with openMessage; a single frame opens directly.
+          const ready = orderer.accept(frame);
+          for (let i = 0; i < ready.length; ) {
+            const f = ready[i];
+            if (f === undefined) break;
+            const span = f.parts > 1 ? f.parts : 1;
+            const group = ready.slice(i, i + span);
+            i += span;
+            let text: string;
+            try {
+              text = td.decode(
+                span > 1 ? await this.#client.openMessage(group) : await this.#client.openFrame(f),
+              );
+            } catch {
+              continue; // a frame/message we can't open (not ours / corrupt) — skip, never crash the list
+            }
+            yield { kind: f.recordKind, seq: f.seq, text, msgId: f.msgId };
           }
-          yield { kind: f.recordKind, seq: f.seq, text, msgId: f.msgId };
         }
+      } catch {
+        // A transient stream error must NOT end the transcript — fall through to resume-or-retry and
+        // re-subscribe. The persistent FrameOrderer makes the re-read idempotent (no gap, no dup).
       }
       if (signal.aborted) break;
       await new Promise((r) => setTimeout(r, 150)); // run not up / stream closed → resume-or-retry
@@ -148,6 +160,26 @@ export class Viewer {
     await this.#client.postFrame(
       this.#header({ recordKind: "catch_up", sessionId, msgId: `catchup-${since}-${randomId()}` }),
       utf8(JSON.stringify({ since, expiry: Date.now() + FRESH_WINDOW_MS })),
+    );
+  }
+
+  /**
+   * Grant or deny a worker `can_use_tool` request (a `permission` control frame, dir:in). The host
+   * answers the worker's control_request with the chosen behavior. `requestId` comes from the
+   * `permission_request` transcript frame the host relayed.
+   */
+  async grantPermission(
+    sessionId: string,
+    requestId: string,
+    behavior: "allow" | "deny" = "allow",
+  ): Promise<void> {
+    await this.#client.postFrame(
+      this.#header({
+        recordKind: "permission",
+        sessionId,
+        msgId: `perm-${requestId}-${randomId()}`,
+      }),
+      utf8(JSON.stringify({ request_id: requestId, behavior })),
     );
   }
 

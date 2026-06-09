@@ -118,7 +118,8 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // `--help`/`-h`: print our --rc-* help first, then fall through to claude so the user also
   // sees claude's help (claudeArgs still carries --help). Only honor it BEFORE the `--` escape,
   // so a literal `-h` passed through (e.g. `remote-claw -- -h`) stays opaque per that contract.
-  if (wantsHelp(claudeArgs)) {
+  const helpWanted = wantsHelp(claudeArgs);
+  if (helpWanted) {
     // Default sink uses a SYNCHRONOUS fd write so the banner is fully flushed before the child
     // (inherited stdio) starts writing — otherwise piped stdout could interleave the two.
     const writeOut = opts.stdout ?? ((line: string) => void writeSync(1, line));
@@ -131,12 +132,14 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
 
   // Remote control needs a broker to relay to (`--rc-app` / RC_APP). With one configured, launch the
   // REAL claude behind our MITM so a `/remote-control` inside it wires into the broker (§3.1). Without
-  // one, there's nothing to relay to — run claude transparently (identical to plain `claude`).
+  // one, there's nothing to relay to — run claude transparently (identical to plain `claude`). A bare
+  // `--help` short-circuits the launch: never create an identity or stand up the MITM just to print
+  // claude's help — fall through to a plain spawn.
   const rcApp = (typeof rc["rc-app"] === "string" ? rc["rc-app"] : "") || process.env.RC_APP || "";
-  if (rcApp !== "") {
+  if (rcApp !== "" && !helpWanted) {
     return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
   }
-  if (rcNames.length > 0) {
+  if (rcApp === "" && rcNames.length > 0 && !helpWanted) {
     warn(
       "remote-claw: --rc-file needs --rc-app (or RC_APP) to enable remote control; running plain claude\n",
     );

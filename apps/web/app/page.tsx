@@ -301,6 +301,19 @@ function Bubble({ message }: { message: Message }) {
   }
   // A tool call (including `Task`, which spawns a sub-agent) — render the activity, not as chat.
   if (message.kind === "tool_use") return <ToolUse text={message.text} />;
+  // A worker permission request (RC usually auto-executes, §17.4 — shown when it doesn't).
+  if (message.kind === "permission_request") {
+    let tool = "tool";
+    try {
+      tool = (JSON.parse(message.text) as { tool_name?: string }).tool_name ?? "tool";
+    } catch {}
+    return (
+      <div className="tool-row">
+        <span className="tool-chip">🔐 permission</span>
+        <span className="tool-summary">{tool}</span>
+      </div>
+    );
+  }
   // A sub-agent's reply (assistant output under a parent Task) — nested under the tool activity.
   if (message.kind === "assistant_sub") {
     return (

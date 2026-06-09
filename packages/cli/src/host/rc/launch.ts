@@ -87,6 +87,11 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     https_proxy: `http://127.0.0.1:${proxy.port}`,
     NODE_EXTRA_CA_CERTS: certs.caPem,
   };
+  // A pre-existing NO_PROXY (e.g. "api.anthropic.com" or "*") would make a proxy-aware HTTP stack
+  // BYPASS our MITM despite HTTPS_PROXY — so `/remote-control` would never reach the local backend.
+  // Clear both forms for the child; our proxy itself passes inference/OAuth straight through anyway.
+  delete env.NO_PROXY;
+  delete env.no_proxy;
 
   try {
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
