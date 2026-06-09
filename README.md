@@ -45,6 +45,30 @@ Hardened: stdlib-only `remote_claw` package, token-gated client face, secret-red
 logs, 0600 cert keys, graceful shutdown, unit + integration tests, and CI
 (`.github/workflows/ci.yml`). See [`phase0/README.md`](phase0/README.md).
 
+## v2 — cloud-brokered, zero-knowledge, E2E-encrypted (BUILT & PROVEN 2026-06-09)
+
+Phase 0 proved the interception. **v2** is the product: drive your machine's claude
+sessions from a phone/browser through a **zero-knowledge cloud broker** that sees only
+ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `claude`**.
+
+- **`packages/clawsec`** — the crypto core: the HKDF key hierarchy, per-message AES-256-GCM,
+  the §8 wire envelope, the derivable channel tokens, and the `rcp1_` viewer **pass**.
+- **`apps/web`** — the **broker** (two routes on Vercel Workflows — `POST /api/relay`,
+  `GET /api/stream`; a per-identity bus + per-session relay; **no store**) and the
+  mobile-first **web client** (paste a pass → discover sessions → drive them, decrypted
+  in-browser).
+- **`packages/cli`** — the `remote-claw` wrapper: identity/pass management (`--rc-identity`,
+  `--rc-pass`) and the broker transport (`BrokerClient`).
+
+**Proof:** a browser-side prompt travels encrypted through the real broker to a host running
+the real `claude`, and the answer comes back encrypted to the viewer — the broker only ever
+sees ciphertext (`apps/web/test/prove/real-claude.prove.test.ts`, run with
+`RC_PROVE_REAL_CLAUDE=1`). The one remaining build-out is the live MITM of claude's native
+`--remote-control` protocol to drive the **interactive TUI** (vs `claude -p`).
+
+📐 **Design:** [`docs/v2-architecture.md`](docs/v2-architecture.md) — the full v2 design,
+threat model, key hierarchy, broker, and phased plan.
+
 📄 **[`phase0/README.md`](phase0/README.md)** — how to run it ·
 **[`docs/phase0-findings.md`](docs/phase0-findings.md)** — the full reverse-engineered
 protocol, the de-minified `--sdk-url` validator, and the build writeup (§4a–4c) ·
