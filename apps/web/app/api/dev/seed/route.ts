@@ -1,6 +1,7 @@
 import { deriveIdentity, formatPass, timingSafeEqual, utf8 } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { HostRcRelay, Session } from "@remote-claw/cli/rc";
+import { after } from "next/server";
 
 // Seed route for the Playwright app e2e. Enabled in two ways, NEVER in production:
 //   • LOCAL dev/CI — BROKER_BACKEND=local and not on Vercel (the local + temporal e2e).
@@ -235,15 +236,21 @@ export async function POST(req: Request): Promise<Response> {
   }, SESSION_TTL_MS);
   if (typeof ttl.unref === "function") ttl.unref(); // don't keep the process alive for the timer
 
-  // Announce on the bus (so the browser discovers the session), start the serve loop, then inject the
-  // scripted turn. serve()'s upstream pump drains the queued events → maps → publishes to the broker.
+  // Announce on the bus (so the browser discovers the session), queue the scripted turn (Session
+  // buffers upstream events), then run the pump. serve()'s upstream pump drains the queued events →
+  // maps → publishes to the broker.
   await relay.announce("rc box", "/home/ubuntu/remote-claw");
-  // Surface a non-abort failure (dev-only, local machine) so a broken pump shows up in the server log
-  // instead of leaving the test staring at a silently-empty transcript.
-  void relay.serve(ac.signal).catch((e) => {
-    if (!ac.signal.aborted) console.error(`[dev/seed] serve(${sessionId}) failed:`, e);
-  });
   for (const payload of scenario()) session.pushUpstream(payload);
+  // Run the pump under after(): on a serverless deployment (the vercel backend) the function FREEZES
+  // once the Response is returned, so a fire-and-forget serve() would never publish the turn — the
+  // session would announce but its transcript would be empty. after() keeps the function alive to
+  // drain the queue to the (durable) broker; locally it's equivalent. The catch surfaces a non-abort
+  // failure (dev-only) instead of a silently-empty transcript.
+  after(() =>
+    relay.serve(ac.signal).catch((e) => {
+      if (!ac.signal.aborted) console.error(`[dev/seed] serve(${sessionId}) failed:`, e);
+    }),
+  );
 
   return Response.json({ pass, sessionId, origin });
 }
