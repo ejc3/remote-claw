@@ -21,13 +21,18 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
-  // A pass may arrive in the URL fragment (#rcp1_…) — never sent to the server. Prefill, then strip
-  // it from the address bar so it doesn't linger in history.
+  // A pass may arrive in the URL fragment (#rcp1_…) — never sent to the server. Prefill it, strip it
+  // from the address bar so it doesn't linger in history, but KEEP it in sessionStorage so a refresh
+  // restores it (tab-scoped: survives reload, cleared when the tab closes, never back in the URL).
+  // On a refresh the fragment is already gone, so fall back to the stored pass.
   useEffect(() => {
     const frag = window.location.hash.replace(/^#/, "");
     if (frag.startsWith("rcp1_")) {
       setPassInput(frag);
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    } else {
+      const saved = sessionStorage.getItem("rc-pass");
+      if (saved?.startsWith("rcp1_")) setPassInput(saved);
     }
   }, []);
 
@@ -39,6 +44,9 @@ export default function Home() {
       // forwards it as the x-broker-backend header on every broker call. Same-origin, default fetch.
       const backend = new URLSearchParams(window.location.search).get("backend") ?? undefined;
       setViewer(await Viewer.fromPass(pass, "", undefined, backend));
+      // Persist only AFTER a successful connect (covers a pasted pass too) so a refresh reconnects
+      // without re-pasting. It's a live credential, so sessionStorage (tab-scoped), not localStorage.
+      sessionStorage.setItem("rc-pass", pass);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -57,7 +65,15 @@ export default function Home() {
       />
     );
   }
-  return <Console viewer={viewer} onForget={() => setViewer(null)} />;
+  return (
+    <Console
+      viewer={viewer}
+      onForget={() => {
+        sessionStorage.removeItem("rc-pass"); // "Forget" must actually forget — drop the stored pass
+        setViewer(null);
+      }}
+    />
+  );
 }
 
 function Brand() {
