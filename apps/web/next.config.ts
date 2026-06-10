@@ -8,11 +8,19 @@ const nextConfig: NextConfig = {
   // Turbopack rejects the `.ts` entry in node_modules), and extensionAlias maps its `.js` specifiers
   // back to the `.ts` sources (else `./wire.js` etc. don't resolve).
   transpilePackages: ["@remote-claw/clawsec", "@remote-claw/cli"],
-  // @temporalio/client wraps a gRPC/protobuf core that webpack mangles (the "Critical dependency"
-  // warning) — bundling it breaks the connection (getSystemInfo fails with undefined status). Keep it
-  // external so the Node server loads it from node_modules at runtime. Only loaded when the temporal
-  // backend is actually selected (the dynamic import in lib/broker/index.ts).
-  serverExternalPackages: ["@temporalio/client"],
+  // @temporalio/* wrap a gRPC/protobuf core (and, for the worker, a native Rust addon) that webpack
+  // mangles (the "Critical dependency" warning) — bundling breaks the connection (getSystemInfo fails
+  // with undefined status) and can't bundle the .node binary. Keep them external so the Node runtime
+  // loads them from node_modules. @temporalio/client → the TemporalBackend (lib/broker/temporal.ts);
+  // @temporalio/worker → the keep-warm drain route (app/api/temporal/drain). Each is only pulled in
+  // when its code path runs.
+  serverExternalPackages: ["@temporalio/client", "@temporalio/worker"],
+  // The drain route bundles workflows.ts in-function (bundleWorkflowCode reads the source at runtime),
+  // so the Temporal source must ship with the function — Next's output tracing won't follow the
+  // runtime `new URL("./workflows.ts", import.meta.url)` path on its own.
+  outputFileTracingIncludes: {
+    "/api/temporal/drain": ["./temporal/**/*.ts"],
+  },
   experimental: {
     extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
   },

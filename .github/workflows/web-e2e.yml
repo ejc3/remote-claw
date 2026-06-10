@@ -57,6 +57,8 @@ jobs:
         run: pnpm --filter remote-claw-web-tests run test:app:temporal
       - name: Temporal backend contract (real server)
         run: pnpm --filter @remote-claw/web run test:temporal
+      - name: Keep-warm drain worker (boots its own worker, no standalone poller)
+        run: pnpm --filter @remote-claw/web run test:drain
       - name: Encryption stress — local + vercel(in-process) + temporal
         run: pnpm --filter @remote-claw/web run test:stress
       - name: Encryption stress — HEAVY local (thousands of sealed round-trips)

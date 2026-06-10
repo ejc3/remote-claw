@@ -80,10 +80,30 @@ TEMPORAL_NAMESPACE=<namespace>.<account>
 TEMPORAL_API_KEY=<temporal-cloud-api-key>     # API-key auth (implies TLS); or use TEMPORAL_TLS_* for mTLS
 ```
 
-The Next routes only need `@temporalio/client`. The **`relayChannel` worker** (`temporal/worker.ts`)
-is a separate long-running service — deploy it against the same cluster/namespace (Vercel functions
-can't host a persistent worker), e.g. on a container/VM. In dev it runs via `tsx`; for prod, run it
-with a TS loader (`tsx`/`ts-node`) or compile it first — it bounds history with `continueAsNew` and
+The Next routes only need `@temporalio/client`. The **`relayChannel` worker** must run *somewhere* —
+Temporal Cloud stores state + the task queue but never executes your workflow code; a worker polls the
+queue and runs it. Two ways to host it:
+
+**A. Keep-warm worker on Vercel itself (no extra infra).** A cron (`apps/web/vercel.json`,
+`* * * * *`) hits `GET /api/temporal/drain` every minute; the route boots the worker for a bounded
+window (default 70s, > the 60s tick) so there's always ≥1 poller draining the queue. The window
+overlaps the next tick, Fluid Compute bills only active CPU (a long-poller is mostly idle), and
+`worker.shutdown()` drains gracefully before `maxDuration`. The route and the standalone worker share
+`createRelayWorker()` (`temporal/run.ts`) so they can't drift. Requirements/notes:
+
+- **Vercel Pro** — per-minute crons are Pro-only; Hobby caps at once/day and *fails the deploy* for
+  anything more frequent.
+- **`CRON_SECRET`** (Vercel env, Production + Preview) gates the route — Vercel sends
+  `Authorization: Bearer $CRON_SECRET` on cron calls; everything else gets a `404`.
+- Crons fire only on the **production** deployment. On a preview, drive it with an authenticated
+  request: `curl -H "authorization: Bearer $CRON_SECRET" "$URL/api/temporal/drain"`.
+- `GET …/drain?selftest=1` builds the workflow bundle in-function **without** connecting — proves the
+  native worker bundler runs in the Vercel function (the riskiest part) even before creds are wired.
+- Tunable: `TEMPORAL_DRAIN_WINDOW_MS` (raise on Pro where `maxDuration` can be 800s).
+
+**B. A dedicated always-on worker** (`temporal/worker.ts`) on a container/VM/Fly/Render against the
+same cluster/namespace — the classic option if you'd rather not run a cron. In dev it runs via `tsx`;
+for prod run it with a TS loader or compile it. Either way it bounds history with `continueAsNew` and
 shuts down gracefully on SIGTERM/SIGINT.
 
 ### Notes / limits

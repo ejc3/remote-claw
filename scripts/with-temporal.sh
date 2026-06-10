@@ -49,17 +49,23 @@ else
   fi
 fi
 
-echo "with-temporal: starting relayChannel worker"
-( cd "$ROOT/apps/web" && TEMPORAL_ADDRESS="$ADDR" pnpm exec tsx temporal/worker.ts ) >/tmp/temporal-worker.log 2>&1 &
-pids+=($!)
-for _ in $(seq 1 60); do
-  grep -q "ready —" /tmp/temporal-worker.log && break
-  sleep 1
-done
-if ! grep -q "ready —" /tmp/temporal-worker.log; then
-  echo "with-temporal: worker did not become ready; see /tmp/temporal-worker.log" >&2
-  tail -20 /tmp/temporal-worker.log >&2 || true
-  exit 1
+# TEMPORAL_NO_WORKER=1 skips the standalone worker — the drain test boots its OWN worker (via
+# createRelayWorker) so it can prove THAT worker drains a queued channel with nothing else polling.
+if [ -n "${TEMPORAL_NO_WORKER:-}" ]; then
+  echo "with-temporal: TEMPORAL_NO_WORKER set — not starting the standalone worker"
+else
+  echo "with-temporal: starting relayChannel worker"
+  ( cd "$ROOT/apps/web" && TEMPORAL_ADDRESS="$ADDR" pnpm exec tsx temporal/worker.ts ) >/tmp/temporal-worker.log 2>&1 &
+  pids+=($!)
+  for _ in $(seq 1 60); do
+    grep -q "ready —" /tmp/temporal-worker.log && break
+    sleep 1
+  done
+  if ! grep -q "ready —" /tmp/temporal-worker.log; then
+    echo "with-temporal: worker did not become ready; see /tmp/temporal-worker.log" >&2
+    tail -20 /tmp/temporal-worker.log >&2 || true
+    exit 1
+  fi
 fi
 
 echo "with-temporal: running: $*"
