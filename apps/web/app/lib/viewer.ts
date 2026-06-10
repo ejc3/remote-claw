@@ -175,6 +175,8 @@ export class Viewer {
     requestId: string,
     behavior: "allow" | "deny" = "allow",
   ): Promise<void> {
+    // An empty request_id can't match any worker control_request — never seal a useless frame.
+    if (requestId === "") throw new Error("grantPermission: empty requestId");
     await this.#client.postFrame(
       this.#header({
         recordKind: "permission",
