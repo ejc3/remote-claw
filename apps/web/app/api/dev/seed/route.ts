@@ -1,16 +1,20 @@
-import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
+import { deriveIdentity, formatPass, timingSafeEqual, utf8 } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { HostRcRelay, Session } from "@remote-claw/cli/rc";
+import { after } from "next/server";
 
-// DEV-ONLY seed route for the Playwright app e2e. Gated HARD to BROKER_BACKEND=local — it returns 404
-// on any other backend, so it never exists in the Vercel production deploy.
+// Seed route for the Playwright app e2e. Enabled in two ways, NEVER in production:
+//   • LOCAL dev/CI — BROKER_BACKEND=local and not on Vercel (the local + temporal e2e).
+//   • Vercel PREVIEW — a matching `x-dev-seed-token` (the DEV_SEED_TOKEN secret) on a non-production
+//     deploy, so the UI e2e can run against a preview on the vercel backend. Inert in prod (no token
+//     honoured when VERCEL_ENV=production).
 //
 // It builds the REAL host side in-process — a Session fed a scripted RC turn + a real HostRcRelay
 // pointed at this server's own broker loopback — and returns a viewer pass + session id for the
 // browser to drive. Only the worker leg is shortcut: instead of the MITM + FakeRcWorker delivering
 // the worker events, we inject the SAME events straight into the Session via pushUpstream(). That
 // MITM↔worker leg is separately proven end to end by rc-spine.integration.test.ts; here the point is
-// to exercise relay → broker(local) → real browser UI with production code on every leg the UI sees.
+// to exercise relay → broker → real browser UI with production code on every leg the UI sees.
 
 // Each seeded session runs a real serve() loop forever; a TTL bounds its lifetime so repeated seeds
 // (the e2e seeds once per test) can't accumulate relays + pumps for the process lifetime. The map
@@ -18,8 +22,8 @@ import { HostRcRelay, Session } from "@remote-claw/cli/rc";
 const live = new Map<string, AbortController>();
 const SESSION_TTL_MS = 60_000; // > any single e2e test, << a leak
 
-/** Only loopback origins may seed: the host side loops authenticated requests back to THIS server, so
- *  a spoofed Host header must not be able to point them at another origin (SSRF), even in dev. */
+/** Only loopback origins may seed locally: the host side loops authenticated requests back to THIS
+ *  server, so a spoofed Host header must not be able to point them at another origin (SSRF). */
 function isLoopback(hostname: string): boolean {
   return (
     hostname === "localhost" ||
@@ -27,6 +31,35 @@ function isLoopback(hostname: string): boolean {
     hostname === "::1" ||
     hostname === "[::1]"
   );
+}
+
+/** Constant-time check of the `x-dev-seed-token` header against the DEV_SEED_TOKEN secret. */
+function tokenMatches(got: string | null): boolean {
+  const want = process.env.DEV_SEED_TOKEN;
+  if (!want || got === null) return false;
+  const a = utf8(got);
+  const b = utf8(want);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Whether THIS request may seed (and the trusted self-origin to loop the host relay back to), or a
+ *  Response to return (404/400). Local dev requires loopback; a Vercel preview requires the token. */
+function gate(req: Request): { origin: string } | Response {
+  const onVercel = process.env.VERCEL === "1";
+  const isProd = process.env.VERCEL_ENV === "production";
+  const localDev = process.env.BROKER_BACKEND === "local" && !onVercel;
+  const previewSeed = !isProd && tokenMatches(req.headers.get("x-dev-seed-token"));
+  if (!localDev && !previewSeed) {
+    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+  }
+  // On Vercel, loop back to the deployment's OWN canonical URL (a trusted env var, not the Host
+  // header) — no SSRF surface. Locally, take the request origin but require loopback.
+  if (process.env.VERCEL_URL) return { origin: `https://${process.env.VERCEL_URL}` };
+  const url = new URL(req.url);
+  if (!isLoopback(url.hostname)) {
+    return new Response(JSON.stringify({ error: "seed is loopback-only" }), { status: 400 });
+  }
+  return { origin: url.origin };
 }
 
 /** One scripted RC turn that exercises every transcript row the UI renders (#47 + prior features). */
@@ -163,17 +196,10 @@ function scenario(): Array<Record<string, unknown>> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  // DEV gate: only when the in-process broker is selected AND we're not on a Vercel deploy. The real
-  // production deploy uses the vercel backend and sets VERCEL=1, so this route is a 404 there even if
-  // BROKER_BACKEND were somehow mis-set to local. The e2e runs `next start` locally (VERCEL unset).
-  if (process.env.BROKER_BACKEND !== "local" || process.env.VERCEL === "1") {
-    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
-  }
+  const g = gate(req);
+  if (g instanceof Response) return g; // 404 (not enabled) or 400 (non-loopback locally)
+  const { origin } = g;
   const url = new URL(req.url);
-  if (!isLoopback(url.hostname)) {
-    return new Response(JSON.stringify({ error: "seed is loopback-only" }), { status: 400 });
-  }
-  const origin = url.origin;
 
   // A fresh random identity per seed so each run gets isolated bus/session channels.
   const secret = new Uint8Array(32);
@@ -186,7 +212,20 @@ export async function POST(req: Request): Promise<Response> {
   crypto.getRandomValues(rand);
   const sessionId = `e2e-${Array.from(rand, (b) => b.toString(16).padStart(2, "0")).join("")}`;
   const session = new Session(sessionId, "rc box", {});
-  const client = new BrokerClient({ baseUrl: origin, provider: securityProvider("sealed", id) });
+  // Forward ?backend= so the seeded host drives the SAME backend the browser will read from (the
+  // BrokerClient sends it as the x-broker-backend header on its loopback calls).
+  const backend = url.searchParams.get("backend") ?? undefined;
+  const clientOpts: ConstructorParameters<typeof BrokerClient>[0] = {
+    baseUrl: origin,
+    provider: securityProvider("sealed", id),
+  };
+  if (backend !== undefined && backend !== "") clientOpts.backend = backend;
+  // The host relay loops back to this deployment's OWN public URL; behind Vercel Deployment Protection
+  // (SSO) those loopback calls would hit the 401 wall. Pass the automation-bypass secret (auto-injected
+  // as an env var on the deployment) so the seed's broker round-trip reaches the routes.
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (bypass) clientOpts.protectionBypass = bypass;
+  const client = new BrokerClient(clientOpts);
   const relay = new HostRcRelay({ client, identityId: id.identityId, sessionId, session });
 
   const ac = new AbortController();
@@ -197,15 +236,21 @@ export async function POST(req: Request): Promise<Response> {
   }, SESSION_TTL_MS);
   if (typeof ttl.unref === "function") ttl.unref(); // don't keep the process alive for the timer
 
-  // Announce on the bus (so the browser discovers the session), start the serve loop, then inject the
-  // scripted turn. serve()'s upstream pump drains the queued events → maps → publishes to the broker.
+  // Announce on the bus (so the browser discovers the session), queue the scripted turn (Session
+  // buffers upstream events), then run the pump. serve()'s upstream pump drains the queued events →
+  // maps → publishes to the broker.
   await relay.announce("rc box", "/home/ubuntu/remote-claw");
-  // Surface a non-abort failure (dev-only, local machine) so a broken pump shows up in the server log
-  // instead of leaving the test staring at a silently-empty transcript.
-  void relay.serve(ac.signal).catch((e) => {
-    if (!ac.signal.aborted) console.error(`[dev/seed] serve(${sessionId}) failed:`, e);
-  });
   for (const payload of scenario()) session.pushUpstream(payload);
+  // Run the pump under after(): on a serverless deployment (the vercel backend) the function FREEZES
+  // once the Response is returned, so a fire-and-forget serve() would never publish the turn — the
+  // session would announce but its transcript would be empty. after() keeps the function alive to
+  // drain the queue to the (durable) broker; locally it's equivalent. The catch surfaces a non-abort
+  // failure (dev-only) instead of a silently-empty transcript.
+  after(() =>
+    relay.serve(ac.signal).catch((e) => {
+      if (!ac.signal.aborted) console.error(`[dev/seed] serve(${sessionId}) failed:`, e);
+    }),
+  );
 
   return Response.json({ pass, sessionId, origin });
 }
