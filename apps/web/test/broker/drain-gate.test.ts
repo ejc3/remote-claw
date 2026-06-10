@@ -65,13 +65,15 @@ describe("authorized", () => {
 });
 
 describe("temporalConfigured", () => {
-  it("is false with nothing set, true for any temporal signal", () => {
+  it("requires an address (TEMPORAL_ADDRESS or BROKER_BACKEND=temporal), not an API key alone", () => {
+    expect(temporalConfigured()).toBe(false);
+    // An API key without an address is a misconfig — must NOT count as configured (else the worker
+    // would connect to the 127.0.0.1 default and 500 every tick).
+    env.TEMPORAL_API_KEY = "tmprl_x";
     expect(temporalConfigured()).toBe(false);
     env.TEMPORAL_ADDRESS = "ns.acct.api.temporal.io:7233";
     expect(temporalConfigured()).toBe(true);
     delete env.TEMPORAL_ADDRESS;
-    env.TEMPORAL_API_KEY = "tmprl_x";
-    expect(temporalConfigured()).toBe(true);
     delete env.TEMPORAL_API_KEY;
     env.BROKER_BACKEND = "temporal";
     expect(temporalConfigured()).toBe(true);

@@ -23,18 +23,18 @@ export function authorized(req: Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** True when a Temporal cluster is configured to drain. Cron on a deploy that doesn't use Temporal is
- *  a harmless no-op (don't connect a worker to nothing). */
+/** True when a Temporal cluster is configured to drain. Requires an ADDRESS to connect to —
+ *  `TEMPORAL_ADDRESS`, or `BROKER_BACKEND=temporal` which opts into the local default. NOT
+ *  `TEMPORAL_API_KEY` alone: an API key is auth, not an endpoint, so connecting on it would fall back
+ *  to the 127.0.0.1 default and 500 every cron tick (a Cloud key without its address is a misconfig,
+ *  not a reason to spin a worker). Cron on a deploy that doesn't use Temporal is a harmless no-op. */
 export function temporalConfigured(): boolean {
-  return (
-    process.env.BROKER_BACKEND === "temporal" ||
-    process.env.TEMPORAL_ADDRESS !== undefined ||
-    process.env.TEMPORAL_API_KEY !== undefined
-  );
+  return process.env.BROKER_BACKEND === "temporal" || process.env.TEMPORAL_ADDRESS !== undefined;
 }
 
 /** The worker run window (ms), clamped to leave shutdown headroom under the function's maxDuration.
- *  Overridable via TEMPORAL_DRAIN_WINDOW_MS (e.g. raise it on Pro where maxDuration can be 800s). */
+ *  Overridable via TEMPORAL_DRAIN_WINDOW_MS; overlap with the next tick (not a long window) is what
+ *  removes gaps, so it only needs to sit a little above the 60s cron interval. */
 export function drainWindowMs(maxDurationS: number): number {
   const ceil = Math.max(1_000, (maxDurationS - SHUTDOWN_HEADROOM_S) * 1000);
   const parsed = Number.parseInt(process.env.TEMPORAL_DRAIN_WINDOW_MS ?? "", 10);
