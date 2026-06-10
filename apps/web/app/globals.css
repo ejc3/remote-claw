@@ -313,6 +313,36 @@ code {
   white-space: nowrap;
 }
 
+/* Git chip (#49): branch + a dot for uncommitted changes + ahead/behind vs upstream. Used in the
+   session row's sub-line and the mobile chat header. */
+.git-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-right: 6px;
+}
+.git-branch {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-dirty {
+  color: var(--warn);
+  font-size: 8px;
+  line-height: 1;
+}
+.git-ab {
+  color: var(--text-faint);
+}
+.git-behind {
+  color: var(--warn);
+}
+
 /* empty states */
 .empty {
   display: grid;

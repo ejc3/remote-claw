@@ -256,7 +256,15 @@ export async function POST(req: Request): Promise<Response> {
   // Announce on the bus (so the browser discovers the session), queue the scripted turn (Session
   // buffers upstream events), then run the pump. serve()'s upstream pump drains the queued events →
   // maps → publishes to the broker.
-  await relay.announce("rc box", "/home/ubuntu/remote-claw");
+  // A FIXED git snapshot (not the deployment's real repo, which is absent on Vercel and varies
+  // locally) so the app-e2e can assert a deterministic git chip (#49).
+  await relay.announce("rc box", "/home/ubuntu/remote-claw", {
+    branch: "main",
+    sha: "abc1234",
+    dirty: true,
+    ahead: 2,
+    behind: 0,
+  });
   const withPerm = url.searchParams.get("perm") === "1"; // opt-in: inject a permission card (#56 e2e)
   for (const payload of scenario(withPerm)) session.pushUpstream(payload);
   // Run the pump under after(): on a serverless deployment (the vercel backend) the function FREEZES

@@ -10,6 +10,7 @@ import { BrokerClient } from "../../broker/client.js";
 import { securityProvider } from "../../security/provider.js";
 import { tracerFromEnv } from "../../trace.js";
 import { ensureCerts } from "./certs.js";
+import { type GitInfo, gitInfo } from "./gitinfo.js";
 import { MitmProxy } from "./mitm.js";
 import { HostRcRelay } from "./relay.js";
 import { RelayCore, type Session } from "./session.js";
@@ -36,6 +37,8 @@ export interface RcLaunchOptions {
   spawnClaude: SpawnClaudeEnv;
   /** A short title for the session announce (default: hostname-ish label). */
   title?: string;
+  /** The session's working dir, snapshotted for the announce's cwd + git chip (default process.cwd()). */
+  cwd?: string;
   /** Custom fetch for the broker client (tests). */
   fetchFn?: typeof fetch;
   /** Notified when a session registers (tests/observability). */
@@ -52,6 +55,11 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   const core = new RelayCore();
   const ac = new AbortController();
   const title = opts.title ?? "remote-claw";
+  // Snapshot the session's working dir + git state ONCE at launch for the announce (cwd + #49 chip).
+  // Bounded and non-throwing — outside a repo / without git it's just null and no chip shows. Gathered
+  // before listen() so it's ready well before the child enables RC and onSession can fire.
+  const cwd = opts.cwd ?? process.cwd();
+  const git: GitInfo | null = await gitInfo(cwd);
   // Wire diagnostics: quiet by default, opt in with RC_LOG (e.g. RC_LOG=debug). The relay binds the
   // session id per relay; both share the env-configured sink (stderr, or RC_LOG_FILE for capture).
   const mitmTracer = tracerFromEnv("rc.mitm");
@@ -86,7 +94,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
         session: s,
         tracer: relayTracer,
       });
-      void relay.announce(title).catch(() => {});
+      void relay.announce(title, cwd, git).catch(() => {});
       void relay.serve(ac.signal).catch(() => {});
     },
   });

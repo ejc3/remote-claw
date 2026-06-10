@@ -17,6 +17,7 @@
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
+import type { GitInfo } from "./gitinfo.js";
 import { assistantText, type RcEvent, type Session } from "./session.js";
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
@@ -263,9 +264,11 @@ export class HostRcRelay {
   /** Whether announce() has run; gates the periodic re-announce so a session with a genuinely empty
    *  title/cwd still keepalives (and an un-announced session never does). */
   #announced = false;
-  /** Title/cwd captured by announce(), reused by every periodic re-announce (presence refreshes them). */
+  /** Title/cwd/git captured by announce(), reused by every periodic re-announce (presence refreshes
+   *  status/phase/needs; title/cwd/git are a snapshot taken once at announce time). */
   #annTitle = "";
   #annCwd: string | null = null;
+  #annGit: GitInfo | null = null;
   /** A per-announce counter → a UNIQUE msg_id for every (re-)announce (announces don't advance #seq,
    *  so without this every idle keepalive would reuse one msg_id — fine for today's consumer, fragile
    *  if any future consumer dedups by msg_id). */
@@ -301,10 +304,17 @@ export class HostRcRelay {
   }
 
   /** Broadcast the first presence announce for this session on the bus (§6B), and remember the
-   *  title/cwd so the periodic re-announce (#maybeAnnounce) can refresh presence without them. */
-  async announce(title: string, cwd: string | null = null): Promise<void> {
+   *  title/cwd/git so the periodic re-announce (#maybeAnnounce) can refresh presence without them.
+   *  `git` is a static snapshot of the session's repo state (branch/dirty/ahead-behind) for the
+   *  viewer's git chip (#49); null when the session isn't in a git repo. */
+  async announce(
+    title: string,
+    cwd: string | null = null,
+    git: GitInfo | null = null,
+  ): Promise<void> {
     this.#annTitle = title;
     this.#annCwd = cwd;
+    this.#annGit = git;
     this.#announced = true; // gate the periodic re-announce on a real first announce, not on title===""
     await this.#sendAnnounce();
   }
@@ -332,6 +342,7 @@ export class HostRcRelay {
           status: p.status,
           phase: p.phase,
           needs: p.needs,
+          git: this.#annGit,
         }),
       ),
     );
