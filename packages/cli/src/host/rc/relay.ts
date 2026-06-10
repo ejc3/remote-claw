@@ -29,6 +29,19 @@ const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
  *  dedups) closes that hole. */
 const POST_RETRIES = 6;
 const POST_RETRY_BASE_MS = 50;
+// Re-announce presence at least this often while idle (matches the session's HEARTBEAT_MS null-tick),
+// so the viewer's freshness check (#58) has a steady signal even when nothing is happening. A change
+// in phase/needs re-announces immediately; this is just the keepalive floor.
+const ANNOUNCE_KEEPALIVE_MS = 10_000;
+
+/** The session's live presence, derived from the worker's status + any open permission gates. Carried
+ *  on the (idempotent, meta-plane, never-logged) session_announce so the viewer can show a
+ *  thinking/needs-you indicator (#48) and detect disconnect from announce-freshness (#58). */
+export function phaseFor(workerStatus: string): "idle" | "thinking" {
+  // Live claude (2.1.x) reports "running"; the captured/older protocol used "busy" — both = thinking.
+  // Anything else (idle, requires_action, WORKER_STATUS_UNSPECIFIED) is not actively generating.
+  return workerStatus === "running" || workerStatus === "busy" ? "thinking" : "idle";
+}
 
 export interface HostRcRelayOptions {
   client: BrokerClient;
@@ -241,6 +254,16 @@ export class HostRcRelay {
   /** In-memory transcript (content frames only) — replayed on a viewer `catch_up` (§6/§16). */
   readonly #log: { recordKind: string; seq: number; msgId: string; text: string }[] = [];
 
+  /** Unanswered permission requests (request_id) — drives the announce's `needs` flag (#48/#58) and
+   *  is cleared when the matching inbound `permission` answer arrives (which logs permission_resolved). */
+  readonly #openPerms = new Set<string>();
+  /** Remembered for the periodic presence re-announce (the initial announce supplies them). */
+  #annTitle = "";
+  #annCwd: string | null = null;
+  /** Throttle: the last announced presence key + when, so we only re-announce on change or keepalive. */
+  #lastPresenceKey = "";
+  #lastAnnounceAt = 0;
+
   readonly #trace: Tracer;
 
   constructor(opts: HostRcRelayOptions) {
@@ -267,13 +290,57 @@ export class HostRcRelay {
     };
   }
 
-  /** Broadcast one presence announce for this session on the bus (§6B). */
+  /** Broadcast the first presence announce for this session on the bus (§6B), and remember the
+   *  title/cwd so the periodic re-announce (#maybeAnnounce) can refresh presence without them. */
   async announce(title: string, cwd: string | null = null): Promise<void> {
+    this.#annTitle = title;
+    this.#annCwd = cwd;
+    await this.#sendAnnounce();
+  }
+
+  /** Current presence: phase (idle/thinking) from worker_status, needs (a pending permission or the
+   *  worker awaiting a required action). A stable string key lets us re-announce only on change. */
+  #presence(): { status: string; phase: "idle" | "thinking"; needs: boolean } {
+    const status = this.#session.workerStatus;
+    const needs = status === "requires_action" || this.#openPerms.size > 0;
+    return { status, phase: phaseFor(status), needs };
+  }
+
+  /** Post a session_announce carrying the current presence. Meta-plane + seq===null, so the broker
+   *  never logs it — re-announcing is cheap and idempotent (the viewer keeps only the freshest). */
+  async #sendAnnounce(): Promise<void> {
+    const p = this.#presence();
     await this.#client.postFrame(
       this.#header("session_announce", null, `ann-${this.#sessionId}-${this.#seq}`),
-      utf8(JSON.stringify({ session_id: this.#sessionId, title, cwd, sent_at: Date.now() })),
+      utf8(
+        JSON.stringify({
+          session_id: this.#sessionId,
+          title: this.#annTitle,
+          cwd: this.#annCwd,
+          sent_at: Date.now(),
+          status: p.status,
+          phase: p.phase,
+          needs: p.needs,
+        }),
+      ),
     );
-    this.#trace.info("announce", { title }); // session id is bound via child()
+    this.#lastPresenceKey = `${p.status}|${p.needs}`;
+    this.#lastAnnounceAt = Date.now();
+    this.#trace.debug("announce", { phase: p.phase, needs: p.needs });
+  }
+
+  /** Re-announce when presence changed, or when the keepalive floor elapsed (so the viewer's
+   *  freshness check has a steady signal). Called on the heartbeat null-tick + after a state change. */
+  async #maybeAnnounce(): Promise<void> {
+    if (this.#annTitle === "" && this.#annCwd === null) return; // not announced yet (no title bound)
+    const p = this.#presence();
+    const key = `${p.status}|${p.needs}`;
+    if (
+      key !== this.#lastPresenceKey ||
+      Date.now() - this.#lastAnnounceAt >= ANNOUNCE_KEEPALIVE_MS
+    ) {
+      await this.#sendAnnounce();
+    }
   }
 
   /**
@@ -323,7 +390,10 @@ export class HostRcRelay {
   async #pumpUpstream(signal: AbortSignal): Promise<void> {
     this.#trace.debug("pumpUpstream start");
     for await (const ev of this.#session.followUpstream(() => signal.aborted)) {
-      if (ev === null) continue; // heartbeat tick
+      if (ev === null) {
+        await this.#maybeAnnounce(); // idle null-tick → refresh presence (keepalive + a phase flip)
+        continue;
+      }
       const items = mapUpstreamItems(ev);
       this.#trace.debug("upstream event", {
         event: ev.eventType,
@@ -332,7 +402,17 @@ export class HostRcRelay {
       for (const item of items) {
         const seq = this.#seq++;
         await this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text);
+        if (item.kind === "permission_request") {
+          // Track the open gate so presence shows `needs` until it's answered (#pumpInbound clears it).
+          try {
+            const id = (JSON.parse(item.text) as { request_id?: unknown }).request_id;
+            if (typeof id === "string" && id !== "") this.#openPerms.add(id);
+          } catch {
+            // a malformed permission_request body — don't track an unanswerable gate
+          }
+        }
       }
+      await this.#maybeAnnounce(); // an event may have flipped phase (running) or opened a gate
     }
     this.#trace.debug("pumpUpstream end");
   }
@@ -397,6 +477,18 @@ export class HostRcRelay {
           const behavior = body.behavior === "deny" ? "deny" : "allow";
           this.#trace.debug("permission response", { behavior });
           this.#session.pushControlResponse(body.request_id, behavior);
+          // Log a permission_resolved content frame so a later reload / catch_up renders the request
+          // as ANSWERED rather than re-prompting (#56). Clearing the gate also drops `needs` from
+          // presence — re-announce so the viewer's needs-you indicator clears promptly (#58).
+          this.#openPerms.delete(body.request_id);
+          const seq = this.#seq++;
+          await this.#emit(
+            "permission_resolved",
+            seq,
+            `permresolved-${seq}`,
+            JSON.stringify({ request_id: body.request_id, behavior }),
+          );
+          await this.#maybeAnnounce();
         }
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
         // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
