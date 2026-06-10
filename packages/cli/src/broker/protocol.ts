@@ -18,6 +18,8 @@ export const CONTENT_KINDS = new Set([
   "rate_limit",
   "can_use_tool",
   "tool_use", // a tool call the worker made (incl. `Task` = a sub-agent spawn)
+  "tool_result", // a tool's OUTPUT (keyed by tool_use_id) — Bash stdout, a Read's file, …
+  "task", // a sub-agent Task lifecycle event (task_started/_updated/_notification)
   "permission_request", // a worker can_use_tool surfaced to the viewer to grant/deny (§17.4)
 ]);
 

@@ -215,6 +215,102 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     expect(got.filter((m) => m.seq !== null).map((m) => m.seq)).toEqual([0, 1, 2, 3, 4, 5, 6]);
   }, 40_000);
 
+  it("TOOL_RESULT + TASK: a tool's output (user/tool_result) + a sub-agent Task lifecycle (system) relay; noise is dropped", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(64));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+    worker.start(sid, () => [
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id: "toolu_bash1", name: "Bash", input: { command: "echo hi" } },
+          ],
+        },
+      },
+      // The worker posts the tool OUTPUT as a user-role tool_result; the text block is the prompt
+      // echo and must NOT be re-relayed (the inbound pump already emitted the user prompt).
+      {
+        type: "user",
+        message: {
+          content: [
+            { type: "text", text: "prompt echo — must be dropped" },
+            { type: "tool_result", tool_use_id: "toolu_bash1", content: "hi\n" },
+          ],
+        },
+      },
+      {
+        type: "system",
+        subtype: "task_started",
+        task_id: "tk1",
+        description: "research the thing",
+        tool_use_id: "toolu_task1",
+      },
+      // A SUB-AGENT's tool output: a user event tagged with the spawning Task's parent_tool_use_id.
+      // Its content array holds a `null` (untrusted model JSON) and a tool_result whose own content
+      // array also holds a `null` — the relay must tag the frame `sub` AND not crash on either null
+      // (codex: an unguarded `.type` deref here would kill #pumpUpstream and stall all later output).
+      {
+        type: "user",
+        parent_tool_use_id: "toolu_task1",
+        message: {
+          content: [
+            null,
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_sub1",
+              content: [{ type: "text", text: "sub out" }, null],
+            },
+          ],
+        },
+      },
+      { type: "system", subtype: "thinking_tokens", estimated_tokens: 50 }, // noisy — must be dropped
+      { type: "assistant", message: { content: [{ type: "text", text: "done" }] } },
+      { type: "result", subtype: "success", is_error: false, result: "ok" },
+    ]);
+
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const got: Message[] = [];
+    tailInto(viewer, sid, got, ac.signal);
+    await viewer.sendPrompt(sid, "run it");
+    await waitFor(() => got.some((m) => m.kind === "result"));
+
+    const kinds = got.filter((m) => m.seq !== null).map((m) => m.kind);
+    // inbound user echo, the Bash call, its Output, the Task lifecycle, the sub-agent's Output, the
+    // reply, result. The worker's user-text echo and the thinking_tokens are dropped (no double
+    // prompt, no token spam); the null content blocks must not abort the relay.
+    expect(kinds).toEqual([
+      "user",
+      "tool_use",
+      "tool_result",
+      "task",
+      "tool_result",
+      "assistant",
+      "result",
+    ]);
+    const toolResults = got.filter((m) => m.kind === "tool_result").map((m) => JSON.parse(m.text));
+    expect(toolResults[0]).toMatchObject({
+      tool_use_id: "toolu_bash1",
+      is_error: false,
+      output: "hi\n",
+      sub: false,
+    });
+    // The sub-agent's tool_result is tagged sub and survives the null content element.
+    expect(toolResults[1]).toMatchObject({
+      tool_use_id: "toolu_sub1",
+      output: "sub out",
+      sub: true,
+    });
+    // The Task lifecycle carries the spawning tool_use_id so the UI can correlate it to the Task row.
+    expect(JSON.parse(got.find((m) => m.kind === "task")?.text ?? "{}")).toMatchObject({
+      subtype: "task_started",
+      description: "research the thing",
+      tool_use_id: "toolu_task1",
+    });
+  }, 40_000);
+
   it("THINKING: an extended-thinking block relays through as an assistant_thinking frame", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(66));
     const ac = new AbortController();

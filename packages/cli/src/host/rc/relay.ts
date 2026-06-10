@@ -49,6 +49,38 @@ interface OutItem {
   text: string;
 }
 
+/** Cap a tool_result's relayed output so a huge stdout can't bloat the durable transcript log. */
+const TOOL_RESULT_CAP = 4000;
+
+/**
+ * Flatten a tool_result's `content` to display text. It's either a string (Bash stdout) or an array
+ * of blocks (text + images). We surface text and a `[type]` marker for non-text — an image is on the
+ * HOST as base64 (too big to relay, not viewable remotely; SendUserFile is the worker→viewer image
+ * path). Capped to TOOL_RESULT_CAP.
+ */
+function toolResultOutput(content: unknown): string {
+  let text: string;
+  if (typeof content === "string") {
+    text = content;
+  } else if (Array.isArray(content)) {
+    text = content
+      .map((b) => {
+        // A content array can hold a `null` or a primitive (model-authored JSON is untrusted); guard
+        // so dereferencing `.type` can't throw and kill #pumpUpstream, stalling all later relay output.
+        const bb = (typeof b === "object" && b !== null ? b : {}) as {
+          type?: string;
+          text?: string;
+        };
+        if (bb.type === "text" && typeof bb.text === "string") return bb.text;
+        return typeof bb.type === "string" ? `[${bb.type}]` : "";
+      })
+      .join("");
+  } else {
+    text = "";
+  }
+  return text.length > TOOL_RESULT_CAP ? `${text.slice(0, TOOL_RESULT_CAP)}…[truncated]` : text;
+}
+
 /**
  * Expand a worker upstream event into the content frames the viewer renders. An assistant message
  * carries one or more blocks: `text` (the model's words) and `tool_use` (a tool call — including
@@ -81,7 +113,71 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
       },
     ];
   }
-  if (ev.eventType !== "assistant") return []; // system/status — not rendered (kept minimal)
+  // The worker posts tool OUTPUT as a `user`-role message whose content holds tool_result blocks
+  // (Bash stdout, a Read's file, …), each keyed by the tool_use_id it answers. Surface those so the UI
+  // can show a tool's Output (§40 design). A sub-agent's tool_result carries the spawning Task's
+  // `parent_tool_use_id` (like its assistant siblings) — tag it `sub` so the UI nests it under the Task.
+  //
+  // We relay ONLY the tool_result blocks and deliberately DROP a user event's text. In the live viewer
+  // flow that text is the echo of a prompt the inbound pump already emitted (#pumpInbound emits a
+  // `user` frame for every client prompt), so relaying it would double every prompt — a guaranteed bug.
+  // The cost is that a user turn with NO inbound echo (a host-local TUI prompt, or a reconnect/backfill
+  // replay) isn't surfaced; that backfill path is #36's domain (it needs the worker-reconnect capture),
+  // so the drop is intentional here, not silent loss.
+  if (ev.eventType === "user") {
+    const sub =
+      typeof ev.payload.parent_tool_use_id === "string" && ev.payload.parent_tool_use_id !== "";
+    const message = ev.payload.message as { content?: unknown } | undefined;
+    const blocks = Array.isArray(message?.content) ? message.content : [];
+    const items: OutItem[] = [];
+    for (const b of blocks) {
+      const bb = (typeof b === "object" && b !== null ? b : {}) as {
+        type?: string;
+        tool_use_id?: string;
+        content?: unknown;
+        is_error?: boolean;
+      };
+      if (bb.type === "tool_result") {
+        items.push({
+          kind: "tool_result",
+          text: JSON.stringify({
+            tool_use_id: typeof bb.tool_use_id === "string" ? bb.tool_use_id : "",
+            is_error: bb.is_error === true,
+            output: toolResultOutput(bb.content),
+            sub,
+          }),
+        });
+      }
+    }
+    return items;
+  }
+
+  // System events: surface the Task/sub-agent lifecycle (task_started/_updated/_notification) so a
+  // long-running sub-agent is visible. `thinking_tokens` is a high-frequency streaming counter — too
+  // noisy to commit to the durable transcript log, so it's dropped here.
+  if (ev.eventType === "system") {
+    const p = ev.payload as {
+      subtype?: string;
+      task_id?: string;
+      description?: string;
+      tool_use_id?: string;
+    };
+    const st = typeof p.subtype === "string" ? p.subtype : "";
+    if (!st.startsWith("task_")) return [];
+    return [
+      {
+        kind: "task",
+        text: JSON.stringify({
+          subtype: st,
+          task_id: typeof p.task_id === "string" ? p.task_id : "",
+          description: typeof p.description === "string" ? p.description : "",
+          tool_use_id: typeof p.tool_use_id === "string" ? p.tool_use_id : "",
+        }),
+      },
+    ];
+  }
+
+  if (ev.eventType !== "assistant") return []; // other status — not rendered (kept minimal)
 
   // Sub-agent output is any assistant message produced under a parent Task tool call.
   const sub =

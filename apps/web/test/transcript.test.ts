@@ -4,6 +4,8 @@ import {
   diffOf,
   dirname,
   editStat,
+  parseTask,
+  parseToolResult,
   parseToolUse,
   sanitizeInput,
   toolHint,
@@ -85,6 +87,66 @@ describe("editStat", () => {
 
   it("counts a Write as added-only", () => {
     expect(editStat({ content: "x\ny\nz" })).toEqual({ add: 3, del: 0 });
+  });
+});
+
+describe("parseToolResult", () => {
+  it("parses tool_use_id, is_error, output, sub", () => {
+    expect(
+      parseToolResult(
+        JSON.stringify({ tool_use_id: "toolu_1", is_error: true, output: "boom", sub: true }),
+      ),
+    ).toEqual({ toolUseId: "toolu_1", isError: true, output: "boom", sub: true });
+  });
+  it("defaults sub to false when absent", () => {
+    expect(parseToolResult(JSON.stringify({ tool_use_id: "toolu_2", output: "ok" }))).toEqual({
+      toolUseId: "toolu_2",
+      isError: false,
+      output: "ok",
+      sub: false,
+    });
+  });
+  it("defaults safely on malformed JSON or missing fields", () => {
+    expect(parseToolResult("nope")).toEqual({
+      toolUseId: "",
+      isError: false,
+      output: "",
+      sub: false,
+    });
+    expect(parseToolResult(JSON.stringify({ output: 42 }))).toEqual({
+      toolUseId: "",
+      isError: false,
+      output: "",
+      sub: false,
+    });
+  });
+});
+
+describe("parseTask", () => {
+  it("parses subtype, task_id, description, tool_use_id", () => {
+    expect(
+      parseTask(
+        JSON.stringify({
+          subtype: "task_started",
+          task_id: "t1",
+          description: "build",
+          tool_use_id: "toolu_9",
+        }),
+      ),
+    ).toEqual({
+      subtype: "task_started",
+      taskId: "t1",
+      description: "build",
+      toolUseId: "toolu_9",
+    });
+  });
+  it("defaults tool_use_id to empty when absent", () => {
+    expect(
+      parseTask(JSON.stringify({ subtype: "task_updated", task_id: "t2", description: "x" })),
+    ).toEqual({ subtype: "task_updated", taskId: "t2", description: "x", toolUseId: "" });
+  });
+  it("defaults safely on bad JSON", () => {
+    expect(parseTask("{")).toEqual({ subtype: "", taskId: "", description: "", toolUseId: "" });
   });
 });
 

@@ -466,6 +466,56 @@ code {
   color: var(--text);
 }
 
+/* Tool Output (tool_result) — a collapsible row nested under the tool call. */
+.tool-result {
+  margin: 2px 0 6px 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-soft);
+  font-size: 13px;
+}
+/* A sub-agent's tool output nests one level deeper, matching .tool-row[data-sub]. */
+.tool-result[data-sub="true"] {
+  margin-left: 26px;
+}
+.tool-result > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-faint);
+  padding: 2px 0;
+}
+.tool-result > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-result[data-error="true"] > summary {
+  color: var(--del-fg);
+}
+.tool-result .chev {
+  margin-left: auto;
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+.tool-result[open] .chev {
+  transform: rotate(90deg);
+}
+.tool-output {
+  margin-top: 4px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* Sub-agent Task lifecycle status line. */
+.task-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 4px 0 4px 16px;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
 /* Diff viewer — path header + removed (red) / added (green) lines with a sign gutter. */
 .diff {
   margin: 6px 0;

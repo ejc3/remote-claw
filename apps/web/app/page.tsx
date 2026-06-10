@@ -6,6 +6,8 @@ import {
   diffOf,
   dirname,
   editStat,
+  parseTask,
+  parseToolResult,
   parseToolUse,
   sanitizeInput,
   type ToolInput,
@@ -511,6 +513,10 @@ function Bubble({ message, onGrant }: { message: Message; onGrant: GrantFn }) {
       return <ThinkingRow text={message.text} sub={message.kind === "assistant_thinking_sub"} />;
     case "tool_use":
       return <ToolRow text={message.text} />;
+    case "tool_result":
+      return <ToolResultRow text={message.text} />;
+    case "task":
+      return <TaskRow text={message.text} />;
     case "permission_request":
       return <PermissionRow text={message.text} onGrant={onGrant} />;
     default:
@@ -696,6 +702,46 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
     <div className="detail-section">
       <div className="detail-label">{label}</div>
       {children}
+    </div>
+  );
+}
+
+/** A tool's Output (the worker's tool_result) — a compact collapsible row under the tool call. Empty
+ *  output (no stdout) renders nothing so it doesn't clutter the transcript. */
+function ToolResultRow({ text }: { text: string }) {
+  const r = parseToolResult(text);
+  if (r.output === "") return null;
+  return (
+    <details className="tool-result" data-error={r.isError} data-sub={r.sub}>
+      <summary>
+        <span className="tool-glyph">{r.isError ? "✕" : "↳"}</span>
+        <span className="tool-label">{r.isError ? "Error" : "Output"}</span>
+        <span className="chev">›</span>
+      </summary>
+      <pre className="code-block tool-output">{r.output}</pre>
+    </details>
+  );
+}
+
+/** A sub-agent Task lifecycle event (task_started/_updated/_notification) — a muted status line so a
+ *  long-running Task is visible in the stream. */
+function TaskRow({ text }: { text: string }) {
+  const t = parseTask(text);
+  const verb =
+    t.subtype === "task_started"
+      ? "Task started"
+      : t.subtype === "task_notification"
+        ? "Task update"
+        : t.subtype === "task_updated"
+          ? "Task progress"
+          : "Task";
+  return (
+    <div className="task-row" data-sub>
+      <span className="tool-glyph">🤖</span>
+      <span className="tool-label">
+        {verb}
+        {t.description ? `: ${t.description}` : ""}
+      </span>
     </div>
   );
 }
