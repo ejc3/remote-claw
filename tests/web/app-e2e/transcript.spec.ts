@@ -92,3 +92,21 @@ test("a typed prompt appears as a user turn (the inbound echo path)", async ({ p
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.locator(".row-user .pill", { hasText: "ship it" })).toBeVisible();
 });
+
+test("the pass survives a browser refresh (it's restored from sessionStorage, not lost)", async ({
+  page,
+  request,
+}) => {
+  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
+  expect(res.ok()).toBeTruthy();
+  const { pass } = (await res.json()) as { pass: string };
+  // Open via the #fragment and connect — page.tsx strips the fragment from the URL after reading it.
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
+
+  // Reload: the fragment is already gone, so before the fix the pass was lost and the input was empty.
+  // Now it must be restored from sessionStorage so the user can reconnect without re-pasting.
+  await page.reload();
+  await expect(page.getByPlaceholder(/rcp1_/)).toHaveValue(pass);
+});
