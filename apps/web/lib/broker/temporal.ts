@@ -1,5 +1,10 @@
 import type { WireFrame } from "@remote-claw/clawsec";
-import { Client, Connection, WorkflowNotFoundError } from "@temporalio/client";
+import {
+  Client,
+  Connection,
+  WorkflowIdReusePolicy,
+  WorkflowNotFoundError,
+} from "@temporalio/client";
 import { temporalConfig, temporalPollMs } from "../../temporal/connection";
 import {
   CLOSE_SIGNAL,
@@ -19,6 +24,10 @@ import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } fr
 // relayChannel worker (temporal/worker.ts) must run as a service against the same server. subscribe
 // polls (Temporal has no native server→client push for workflow state); the interval is tunable.
 
+// A `state` query with a beyond-the-end cursor returns NO frames, just {total, closed} — a cheap
+// existence/total probe that never ships the (growing) frame log over the wire.
+const PROBE_CURSOR = Number.MAX_SAFE_INTEGER;
+
 export class TemporalBackend implements BrokerBackend {
   #client: Client | null = null;
   #connecting: Promise<Client> | null = null;
@@ -28,10 +37,17 @@ export class TemporalBackend implements BrokerBackend {
   async #client_(): Promise<Client> {
     if (this.#client !== null) return this.#client;
     if (this.#connecting === null) {
-      this.#connecting = Connection.connect(this.#cfg.connection).then((connection) => {
-        this.#client = new Client({ connection, namespace: this.#cfg.namespace });
-        return this.#client;
-      });
+      this.#connecting = Connection.connect(this.#cfg.connection)
+        .then((connection) => {
+          this.#client = new Client({ connection, namespace: this.#cfg.namespace });
+          return this.#client;
+        })
+        .catch((e) => {
+          // A failed connect must NOT poison the cached backend forever — clear so the next call
+          // re-attempts (else a transient outage wedges the temporal path until process restart).
+          this.#connecting = null;
+          throw e;
+        });
     }
     return this.#connecting;
   }
@@ -61,6 +77,9 @@ export class TemporalBackend implements BrokerBackend {
     await client.workflow.signalWithStart(WORKFLOW_TYPE, {
       taskQueue: this.#cfg.taskQueue,
       workflowId: token,
+      // Pin AllowDuplicate so a publish after a COMPLETED close-run deterministically starts a FRESH
+      // run (the cap-roll handoff) instead of being rejected by a namespace default.
+      workflowIdReusePolicy: WorkflowIdReusePolicy.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
       args: [token],
       signal: PUBLISH_SIGNAL,
       signalArgs: [payload],
@@ -75,23 +94,21 @@ export class TemporalBackend implements BrokerBackend {
     const client = await this.#client_();
     const handle = client.workflow.getHandle(token);
 
-    // Resolve-or-null: an absent workflow → null (the route replies 200-empty). The first query also
-    // gives us the total, needed to resolve a negative (recent-window) startIndex.
-    let initial: RelayState;
+    // Resolve-or-null + learn `total` for a negative (recent-window) startIndex — via the no-frames
+    // probe so this doesn't ship the whole frame log on every (re)subscribe.
+    let probe: RelayState;
     try {
-      initial = await handle.query<RelayState, [number]>(STATE_QUERY, 0);
+      probe = await handle.query<RelayState, [number]>(STATE_QUERY, PROBE_CURSOR);
     } catch (e) {
       if (e instanceof WorkflowNotFoundError) return null;
       throw e;
     }
 
-    // undefined → 0; negative → recent window (last |n|); positive → absolute, clamped to [0, total].
+    // undefined → 0; negative → recent window (last |n|); positive → that absolute index (the query's
+    // slice clamps an out-of-range index to an empty replay, matching the contract).
     let cursor = 0;
     if (startIndex !== undefined) {
-      cursor =
-        startIndex < 0
-          ? Math.max(0, initial.total + startIndex)
-          : Math.min(startIndex, initial.total);
+      cursor = startIndex < 0 ? Math.max(0, probe.total + startIndex) : startIndex;
     }
 
     let stopped = false;
@@ -110,8 +127,13 @@ export class TemporalBackend implements BrokerBackend {
             }
             throw e;
           }
+          if (stopped) return; // cancelled while the query was in flight — don't touch the controller
           if (st.frames.length > 0) {
-            for (const f of st.frames) controller.enqueue(f as WireFrame);
+            try {
+              for (const f of st.frames) controller.enqueue(f as WireFrame);
+            } catch {
+              return; // controller already closed (a racing cancel) — stop quietly
+            }
             cursor += st.frames.length;
             return;
           }
@@ -121,7 +143,6 @@ export class TemporalBackend implements BrokerBackend {
           }
           await new Promise((r) => setTimeout(r, this.#pollMs));
         }
-        controller.close();
       },
       cancel: () => {
         stopped = true;

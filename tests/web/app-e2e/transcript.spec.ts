@@ -56,6 +56,23 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
 
   // Artifact: the real transcript as rendered by the real app.
   await page.locator("section.chat").screenshot({ path: "test-results/transcript-e2e.png" });
+
+  // On the Temporal run, PROVE the frames really went through Temporal (not a silent fall-back to the
+  // server's default local backend): a relayChannel workflow must exist on the cluster. Use the
+  // Temporal CLI (the same binary with-temporal.sh located, passed as TEMPORAL_CLI) so the test needs
+  // no @temporalio/client dependency of its own.
+  if (BACKEND === "temporal") {
+    const { execFileSync } = await import("node:child_process");
+    const cli = process.env.TEMPORAL_CLI ?? "temporal";
+    const addr = process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233";
+    const out = execFileSync(
+      cli,
+      ["workflow", "list", "--address", addr, "--query", 'WorkflowType = "relayChannel"', "-o", "json"],
+      { encoding: "utf8" },
+    );
+    const rows = JSON.parse(out || "[]");
+    expect(Array.isArray(rows) ? rows.length : 0).toBeGreaterThan(0);
+  }
 });
 
 test("a typed prompt appears as a user turn (the inbound echo path)", async ({ page, request }) => {

@@ -27,8 +27,12 @@ export interface TemporalConfig {
   connection: TemporalConnectionOptions;
 }
 
-function truthy(v: string | undefined): boolean {
-  return v === "1" || v === "true";
+// TLS is a security toggle, so it FAILS CLOSED: any non-empty TEMPORAL_TLS that isn't an explicit
+// "off" value enables it (TRUE / yes / on / 1 all work) — a misspelling never silently downgrades a
+// production connection to plaintext.
+function tlsEnabled(v: string | undefined): boolean {
+  if (v === undefined || v === "") return false;
+  return !["0", "false", "no", "off"].includes(v.toLowerCase());
 }
 
 export function temporalConfig(): TemporalConfig {
@@ -42,7 +46,7 @@ export function temporalConfig(): TemporalConfig {
   let tls: Tls | undefined;
   if (certPath && keyPath) {
     tls = { clientCertPair: { crt: readFileSync(certPath), key: readFileSync(keyPath) } };
-  } else if (apiKey || truthy(process.env.TEMPORAL_TLS)) {
+  } else if (apiKey || tlsEnabled(process.env.TEMPORAL_TLS)) {
     tls = true; // server TLS; API-key auth needs it
   }
 

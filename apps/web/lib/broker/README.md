@@ -25,7 +25,13 @@ Per **request** override (so one deployment can serve multiple backends):
 - Browser URLs use the **`?backend=`** query param (`page.tsx` forwards it to the `Viewer`).
 
 Publish and subscribe for a given channel **must name the same backend** — the client sends the
-selector on both. An unknown selector is a `400`.
+selector on both (the `BrokerClient` puts the header on every call; the `Viewer` reads `?backend=`
+once and uses it for the whole session). A selector that isn't valid for this deployment is a `400`.
+
+Only **durable, shared** backends (`vercel`, `temporal`) are selectable per request. `local` is
+process-memory, so it's honoured **only when it's the deployment's own default** (dev / `next start`
+with `BROKER_BACKEND=local`) — a request can't pick `local` on a Vercel/Temporal deployment (it would
+land publish and subscribe on different instances).
 
 ## Local development
 
@@ -67,7 +73,9 @@ TEMPORAL_API_KEY=<temporal-cloud-api-key>     # API-key auth (implies TLS); or u
 
 The Next routes only need `@temporalio/client`. The **`relayChannel` worker** (`temporal/worker.ts`)
 is a separate long-running service — deploy it against the same cluster/namespace (Vercel functions
-can't host a persistent worker). The worker bounds history with `continueAsNew`.
+can't host a persistent worker), e.g. on a container/VM. In dev it runs via `tsx`; for prod, run it
+with a TS loader (`tsx`/`ts-node`) or compile it first — it bounds history with `continueAsNew` and
+shuts down gracefully on SIGTERM/SIGINT.
 
 ### Notes / limits
 

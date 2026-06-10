@@ -1,4 +1,5 @@
 import {
+  allHandlersFinished,
   condition,
   continueAsNew,
   defineQuery,
@@ -42,6 +43,9 @@ export async function relayChannel(token: string, carried?: Carried): Promise<vo
 
   // Run until closed, or until Temporal suggests rolling history.
   await condition(() => closed || workflowInfo().continueAsNewSuggested);
+  // Let every in-flight signal handler finish so a publish/close delivered right at the boundary is
+  // applied before we complete or roll — otherwise its frame would be dropped (a permanent gap).
+  await condition(allHandlersFinished);
   if (closed) return; // run completes → the workflowId frees for the next signalWithStart on this token
   await continueAsNew<typeof relayChannel>(token, { frames, closed });
 }

@@ -1,6 +1,6 @@
 import { decodeFrame, encodeFrame, timingSafeEqual, WireError } from "@remote-claw/clawsec";
 import { AuthError, identityFromRequest } from "../../../lib/auth";
-import { backendSelector, getBackend, isKnownBackend } from "../../../lib/broker";
+import { backendSelector, getBackend, isRequestableBackend } from "../../../lib/broker";
 import { PublishConflictError } from "../../../lib/broker/backend";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
@@ -68,11 +68,8 @@ export async function POST(req: Request): Promise<Response> {
   // param (browser URLs) — same meaning; default vercel. Resolve before publishing so a bad name is a
   // clean 400, not a 500, and the publish try below only owns the publish itself.
   const requested = backendSelector(req, url);
-  if (requested !== null && !isKnownBackend(requested)) {
-    return json(
-      { error: `unknown backend "${requested}" (expected: vercel | local | temporal)` },
-      400,
-    );
+  if (requested !== null && !isRequestableBackend(requested)) {
+    return json({ error: `backend "${requested}" is not selectable on this deployment` }, 400);
   }
   const backend = await getBackend(requested);
 

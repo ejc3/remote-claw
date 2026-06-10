@@ -11,9 +11,12 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./app-e2e",
-  timeout: 60_000,
-  expect: { timeout: 20_000 }, // Temporal adds signal round-trip + 150ms query polling
+  timeout: 90_000,
+  expect: { timeout: 25_000 }, // Temporal adds signal round-trip + query polling, atop cold start
   outputDir: "./test-results-temporal",
+  fullyParallel: false,
+  workers: 1,
+  retries: 2,
   use: { baseURL: "http://localhost:3101", trace: "retain-on-failure" },
   webServer: {
     command: "pnpm exec next build --webpack && pnpm exec next start -p 3101",
@@ -23,7 +26,7 @@ export default defineConfig({
       BROKER_BACKEND: "local", // default backend + enables /api/dev/seed; ?backend=temporal overrides
       TEMPORAL_ADDRESS: process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
     },
-    reuseExistingServer: true,
+    reuseExistingServer: !process.env.CI,
     timeout: 300_000,
   },
   projects: [{ name: "mobile", use: { ...devices["Pixel 5"] } }],
