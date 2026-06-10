@@ -12,6 +12,7 @@
     "test:preview": "vitest run --config vitest.preview.config.ts",
     "test:temporal": "bash ../../scripts/with-temporal.sh pnpm exec vitest run test/broker/temporal-backend.test.ts",
     "test:stress": "bash ../../scripts/with-temporal.sh pnpm exec vitest run test/broker/stress.integration.test.ts",
+    "test:stress:heavy": "STRESS_HEAVY=1 vitest run test/broker/stress-local.heavy.test.ts",
     "temporal:worker": "tsx temporal/worker.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",

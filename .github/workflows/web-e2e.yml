@@ -1,0 +1,73 @@
+name: web-e2e
+
+# Self-contained end-to-end + stress tests for the broker, covering the LocalBackend and the Temporal
+# backend (an in-memory `temporal server start-dev` — no Docker, no external account). The Vercel
+# backend's durable runtime only exists on a Vercel deployment, so its e2e lives in web-preview.yml.
+on:
+  push:
+    branches: [main]
+    paths:
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "scripts/with-temporal.sh", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
+  pull_request:
+    paths:
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "scripts/with-temporal.sh", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+
+      # Playwright Chromium + its OS libraries (cached by the lockfile, which pins @playwright/test).
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Chromium
+        run: pnpm --filter remote-claw-web-tests exec playwright install --with-deps chromium
+
+      # Temporal CLI — its `server start-dev` is an in-memory single binary (no Docker). Cached (~500 MB).
+      - name: Cache Temporal CLI
+        id: temporal-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.temporalio
+          key: temporal-cli-${{ runner.os }}-v1
+      - name: Install Temporal CLI
+        if: steps.temporal-cache.outputs.cache-hit != 'true'
+        run: curl -sSf https://temporal.download/cli.sh | sh
+      - name: Temporal CLI on PATH
+        run: echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
+
+      - name: App e2e — LocalBackend
+        run: pnpm --filter remote-claw-web-tests run test:app
+      - name: App e2e — Temporal (in-memory server + worker, flipped via ?backend=)
+        run: pnpm --filter remote-claw-web-tests run test:app:temporal
+      - name: Temporal backend contract (real server)
+        run: pnpm --filter @remote-claw/web run test:temporal
+      - name: Encryption stress — local + vercel(in-process) + temporal
+        run: pnpm --filter @remote-claw/web run test:stress
+      - name: Encryption stress — HEAVY local (thousands of sealed round-trips)
+        run: pnpm --filter @remote-claw/web run test:stress:heavy
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: |
+            tests/web/test-results/
+            tests/web/test-results-temporal/
+          retention-days: 7

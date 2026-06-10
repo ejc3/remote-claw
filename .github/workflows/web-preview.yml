@@ -29,6 +29,14 @@ jobs:
       (github.event.deployment_status.state == 'success' &&
        github.event.deployment_status.environment == 'Preview')
     runs-on: ubuntu-latest
+    env:
+      # Vercel exposes the deployed URL as environment_url; target_url is a legacy fallback.
+      WEB_E2E_URL: >-
+        ${{ github.event.inputs.url
+            || github.event.deployment_status.environment_url
+            || github.event.deployment_status.target_url }}
+      # Maps the optional secret to an env so steps can gate on it (secrets aren't usable in `if:`).
+      DEV_SEED_TOKEN: ${{ secrets.DEV_SEED_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,11 +55,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Deployment-targeted e2e (real broker over HTTP)
         env:
-          # Vercel exposes the deployed URL as environment_url; target_url is a legacy fallback.
-          WEB_E2E_URL: >-
-            ${{ github.event.inputs.url
-                || github.event.deployment_status.environment_url
-                || github.event.deployment_status.target_url }}
           # In this job the URL must resolve — make an empty URL a FAILURE, not a silent skip.
           WEB_E2E_REQUIRE: "1"
         run: pnpm --filter @remote-claw/web run test:preview
+
+      # The Playwright UI e2e against the deployed preview (the VERCEL backend). Runs only once the
+      # DEV_SEED_TOKEN secret is set (and matches the same value in the Vercel env), which enables the
+      # token-gated /api/dev/seed on a preview. Until then this is skipped — web-preview stays green.
+      - name: Install Chromium (UI e2e)
+        if: ${{ env.DEV_SEED_TOKEN != '' }}
+        run: pnpm --filter remote-claw-web-tests exec playwright install --with-deps chromium
+      - name: App UI e2e against the preview (vercel backend)
+        if: ${{ env.DEV_SEED_TOKEN != '' }}
+        env:
+          E2E_SEED_TOKEN: ${{ env.DEV_SEED_TOKEN }}
+        run: pnpm --filter remote-claw-web-tests exec playwright test -c app-e2e.preview.config.ts

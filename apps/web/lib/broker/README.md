@@ -59,6 +59,15 @@ cd tests/web && pnpm test:app:temporal            # the SAME app e2e flipped to 
 `test:app:temporal` runs against one Next server (default `local`) and flips individual sessions to
 Temporal with `?backend=temporal`, proving the abstraction is swappable per-request.
 
+### CI
+
+- **`web-e2e.yml`** (every PR, self-contained): installs Chromium + the Temporal CLI and runs the
+  **local** and **temporal** app e2e + the contract + the encryption stress (`test:stress`) + a
+  **heavy local stress** (`test:stress:heavy` — thousands of sealed round-trips). No Docker, no account.
+- **`web-preview.yml`** (on a Vercel preview): runs the deployment-targeted broker e2e, and — once the
+  `DEV_SEED_TOKEN` secret is set (GitHub + the Vercel *Preview* env) — the Playwright UI e2e against the
+  **vercel** backend. The vercel runtime only exists on a deployment, which is why its e2e lives here.
+
 ## Production (Temporal Cloud)
 
 Set these as **Vercel encrypted env vars**, scoped per environment (Production / Preview / Development)

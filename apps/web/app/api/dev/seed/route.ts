@@ -1,16 +1,19 @@
-import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
+import { deriveIdentity, formatPass, timingSafeEqual, utf8 } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { HostRcRelay, Session } from "@remote-claw/cli/rc";
 
-// DEV-ONLY seed route for the Playwright app e2e. Gated HARD to BROKER_BACKEND=local — it returns 404
-// on any other backend, so it never exists in the Vercel production deploy.
+// Seed route for the Playwright app e2e. Enabled in two ways, NEVER in production:
+//   • LOCAL dev/CI — BROKER_BACKEND=local and not on Vercel (the local + temporal e2e).
+//   • Vercel PREVIEW — a matching `x-dev-seed-token` (the DEV_SEED_TOKEN secret) on a non-production
+//     deploy, so the UI e2e can run against a preview on the vercel backend. Inert in prod (no token
+//     honoured when VERCEL_ENV=production).
 //
 // It builds the REAL host side in-process — a Session fed a scripted RC turn + a real HostRcRelay
 // pointed at this server's own broker loopback — and returns a viewer pass + session id for the
 // browser to drive. Only the worker leg is shortcut: instead of the MITM + FakeRcWorker delivering
 // the worker events, we inject the SAME events straight into the Session via pushUpstream(). That
 // MITM↔worker leg is separately proven end to end by rc-spine.integration.test.ts; here the point is
-// to exercise relay → broker(local) → real browser UI with production code on every leg the UI sees.
+// to exercise relay → broker → real browser UI with production code on every leg the UI sees.
 
 // Each seeded session runs a real serve() loop forever; a TTL bounds its lifetime so repeated seeds
 // (the e2e seeds once per test) can't accumulate relays + pumps for the process lifetime. The map
@@ -18,8 +21,8 @@ import { HostRcRelay, Session } from "@remote-claw/cli/rc";
 const live = new Map<string, AbortController>();
 const SESSION_TTL_MS = 60_000; // > any single e2e test, << a leak
 
-/** Only loopback origins may seed: the host side loops authenticated requests back to THIS server, so
- *  a spoofed Host header must not be able to point them at another origin (SSRF), even in dev. */
+/** Only loopback origins may seed locally: the host side loops authenticated requests back to THIS
+ *  server, so a spoofed Host header must not be able to point them at another origin (SSRF). */
 function isLoopback(hostname: string): boolean {
   return (
     hostname === "localhost" ||
@@ -27,6 +30,35 @@ function isLoopback(hostname: string): boolean {
     hostname === "::1" ||
     hostname === "[::1]"
   );
+}
+
+/** Constant-time check of the `x-dev-seed-token` header against the DEV_SEED_TOKEN secret. */
+function tokenMatches(got: string | null): boolean {
+  const want = process.env.DEV_SEED_TOKEN;
+  if (!want || got === null) return false;
+  const a = utf8(got);
+  const b = utf8(want);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Whether THIS request may seed (and the trusted self-origin to loop the host relay back to), or a
+ *  Response to return (404/400). Local dev requires loopback; a Vercel preview requires the token. */
+function gate(req: Request): { origin: string } | Response {
+  const onVercel = process.env.VERCEL === "1";
+  const isProd = process.env.VERCEL_ENV === "production";
+  const localDev = process.env.BROKER_BACKEND === "local" && !onVercel;
+  const previewSeed = !isProd && tokenMatches(req.headers.get("x-dev-seed-token"));
+  if (!localDev && !previewSeed) {
+    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+  }
+  // On Vercel, loop back to the deployment's OWN canonical URL (a trusted env var, not the Host
+  // header) — no SSRF surface. Locally, take the request origin but require loopback.
+  if (process.env.VERCEL_URL) return { origin: `https://${process.env.VERCEL_URL}` };
+  const url = new URL(req.url);
+  if (!isLoopback(url.hostname)) {
+    return new Response(JSON.stringify({ error: "seed is loopback-only" }), { status: 400 });
+  }
+  return { origin: url.origin };
 }
 
 /** One scripted RC turn that exercises every transcript row the UI renders (#47 + prior features). */
@@ -163,17 +195,10 @@ function scenario(): Array<Record<string, unknown>> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  // DEV gate: only when the in-process broker is selected AND we're not on a Vercel deploy. The real
-  // production deploy uses the vercel backend and sets VERCEL=1, so this route is a 404 there even if
-  // BROKER_BACKEND were somehow mis-set to local. The e2e runs `next start` locally (VERCEL unset).
-  if (process.env.BROKER_BACKEND !== "local" || process.env.VERCEL === "1") {
-    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
-  }
+  const g = gate(req);
+  if (g instanceof Response) return g; // 404 (not enabled) or 400 (non-loopback locally)
+  const { origin } = g;
   const url = new URL(req.url);
-  if (!isLoopback(url.hostname)) {
-    return new Response(JSON.stringify({ error: "seed is loopback-only" }), { status: 400 });
-  }
-  const origin = url.origin;
 
   // A fresh random identity per seed so each run gets isolated bus/session channels.
   const secret = new Uint8Array(32);

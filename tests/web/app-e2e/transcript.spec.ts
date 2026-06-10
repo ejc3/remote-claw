@@ -12,13 +12,17 @@ import { expect, test } from "@playwright/test";
 // the abstraction is swappable per-request on one deployment.
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
+// On a Vercel preview the seed route is reached with the DEV_SEED_TOKEN secret (locally it's loopback-
+// gated and needs no token).
+const SEED_TOKEN = process.env.E2E_SEED_TOKEN;
+const seedOpts = SEED_TOKEN ? { headers: { "x-dev-seed-token": SEED_TOKEN } } : {};
 
 test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and prose", async ({
   page,
   request,
 }) => {
   // Seed the host side (real HostRcRelay + scripted turn) through the selected broker backend.
-  const res = await request.post(`/api/dev/seed${qp}`);
+  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
   expect(res.ok()).toBeTruthy();
   const { pass } = (await res.json()) as { pass: string };
 
@@ -76,7 +80,7 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
 });
 
 test("a typed prompt appears as a user turn (the inbound echo path)", async ({ page, request }) => {
-  const res = await request.post(`/api/dev/seed${qp}`);
+  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
   expect(res.ok()).toBeTruthy(); // a 404 (server not in local mode) would otherwise fail confusingly
   const { pass } = (await res.json()) as { pass: string };
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
