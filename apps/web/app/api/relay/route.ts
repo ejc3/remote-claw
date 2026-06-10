@@ -1,12 +1,12 @@
 import { decodeFrame, encodeFrame, timingSafeEqual, WireError } from "@remote-claw/clawsec";
-import { resumeHook } from "workflow/api";
 import { AuthError, identityFromRequest } from "../../../lib/auth";
-import { channelToken, ensureChannel } from "../../../lib/channel";
+import { getBackend } from "../../../lib/broker";
+import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
-// §3.2 POST /api/relay — publish ONE ciphertext frame. Resume-or-start the channel run (bus, or
-// per-session with ?session=<sid>) and resumeHook(token, frame). Gated by Bearer auth_token;
-// ciphertext only — the broker validates the §8 envelope SHAPE but never decrypts it.
+// §3.2 POST /api/relay — publish ONE ciphertext frame. Resume-or-start the channel (bus, or
+// per-session with ?session=<sid>) and deliver the frame via the selected backend. Gated by Bearer
+// auth_token; ciphertext only — the broker validates the §8 envelope SHAPE but never decrypts it.
 export const maxDuration = 60;
 
 export async function POST(req: Request): Promise<Response> {
@@ -63,13 +63,19 @@ export async function POST(req: Request): Promise<Response> {
     return json({ error: String((e as Error)?.message ?? e) }, 400);
   }
 
-  const { runId, created } = await ensureChannel(token);
-  // The run can complete/dispose between ensureChannel resolving and this resume (a concurrent
-  // __close or cap-roll) -> resumeHook throws. Report 409, not 500; the client retries.
+  // Resume-or-start the channel and deliver the frame. The channel can complete/dispose between
+  // resolve and deliver (a concurrent __close or cap-roll) -> publish throws. Report 409, not 500;
+  // the client retries. A dropped delivery would strand a subscriber's ordered stream on a gap.
+  let result: { created: boolean; channelId: string };
   try {
-    await resumeHook(token, encodeFrame(frame));
+    result = await getBackend().publish(token, encodeFrame(frame));
   } catch (e) {
-    return json({ ok: false, error: String((e as Error)?.message ?? e), runId, created }, 409);
+    return json({ ok: false, error: String((e as Error)?.message ?? e) }, 409);
   }
-  return json({ ok: true, channel: sessionId === null ? "bus" : "session", runId, created });
+  return json({
+    ok: true,
+    channel: sessionId === null ? "bus" : "session",
+    runId: result.channelId,
+    created: result.created,
+  });
 }
