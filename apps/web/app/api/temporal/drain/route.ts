@@ -11,7 +11,7 @@ import { authorized, drainWindowMs, temporalConfigured } from "./gate";
 // manual authenticated request. Gated by CRON_SECRET (see ./gate).
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // Fluid max on Hobby; Pro allows up to 800 (raise via the env window)
+export const maxDuration = 300; // Fluid max on Hobby; the window (drainWindowMs) is clamped under this
 
 export async function GET(req: Request): Promise<Response> {
   if (!authorized(req)) {
@@ -19,12 +19,11 @@ export async function GET(req: Request): Promise<Response> {
     return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
   }
 
-  // `?selftest=1`: build the workflow bundle IN-FUNCTION without connecting — proves the native
-  // worker bundler runs in a real Vercel function (the riskiest part) even before Temporal Cloud
-  // creds are wired, and without spinning a 70s worker.
+  // `?selftest=1`: load the pre-built workflow bundle IN-FUNCTION without connecting — confirms the
+  // committed bundle decodes in a real Vercel function, with no cluster and no 70s worker.
   const url = new URL(req.url);
   if (url.searchParams.get("selftest") === "1") {
-    const bundle = await relayWorkflowBundle();
+    const bundle = relayWorkflowBundle();
     return Response.json({ ran: false, selftest: true, bundleBytes: bundle.code.length });
   }
 

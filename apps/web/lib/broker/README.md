@@ -99,7 +99,9 @@ overlaps the next tick, Fluid Compute bills only active CPU (a long-poller is mo
   request: `curl -H "authorization: Bearer $CRON_SECRET" "$URL/api/temporal/drain"`.
 - `GET …/drain?selftest=1` builds the workflow bundle in-function **without** connecting — proves the
   native worker bundler runs in the Vercel function (the riskiest part) even before creds are wired.
-- Tunable: `TEMPORAL_DRAIN_WINDOW_MS` (raise on Pro where `maxDuration` can be 800s).
+- Tunable: `TEMPORAL_DRAIN_WINDOW_MS` (default 70s). Overlap with the next tick is what removes gaps,
+  so it only needs to sit a little above the 60s interval — it is clamped under the route's
+  `maxDuration` (300s) regardless, since a much longer window just stacks redundant pollers.
 
 **B. A dedicated always-on worker** (`temporal/worker.ts`) on a container/VM/Fly/Render against the
 same cluster/namespace — the classic option if you'd rather not run a cron. In dev it runs via `tsx`;

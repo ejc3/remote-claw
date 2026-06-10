@@ -11,6 +11,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./app-e2e",
+  testMatch: "transcript.spec.ts", // the drain spec runs under app-e2e.drain.config.ts only
   timeout: 90_000,
   expect: { timeout: 25_000 }, // Temporal adds signal round-trip + query polling, atop cold start
   outputDir: "./test-results-temporal",

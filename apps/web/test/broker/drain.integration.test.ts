@@ -16,7 +16,11 @@ function frame(seq: number): WireFrame {
 }
 const seqs = (fs: WireFrame[]) => fs.map((f) => (f as unknown as { seq: number }).seq);
 
-async function readN(stream: ReadableStream<WireFrame>, n: number, ms = 8000): Promise<WireFrame[]> {
+async function readN(
+  stream: ReadableStream<WireFrame>,
+  n: number,
+  ms = 8000,
+): Promise<WireFrame[]> {
   const reader = stream.getReader();
   const out: WireFrame[] = [];
   const deadline = Date.now() + ms;

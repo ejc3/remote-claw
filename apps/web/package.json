@@ -15,6 +15,7 @@
     "test:stress": "bash ../../scripts/with-temporal.sh pnpm exec vitest run test/broker/stress.integration.test.ts",
     "test:stress:heavy": "STRESS_HEAVY=1 vitest run test/broker/stress-local.heavy.test.ts",
     "temporal:worker": "tsx temporal/worker.ts",
+    "gen:workflow-bundle": "node scripts/gen-workflow-bundle.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",
     "format": "biome format --write .",

@@ -12,15 +12,11 @@ const nextConfig: NextConfig = {
   // mangles (the "Critical dependency" warning) — bundling breaks the connection (getSystemInfo fails
   // with undefined status) and can't bundle the .node binary. Keep them external so the Node runtime
   // loads them from node_modules. @temporalio/client → the TemporalBackend (lib/broker/temporal.ts);
-  // @temporalio/worker → the keep-warm drain route (app/api/temporal/drain). Each is only pulled in
-  // when its code path runs.
+  // @temporalio/worker → the keep-warm drain route (app/api/temporal/drain). The route runs the
+  // worker from a PRE-BUILT workflow bundle (temporal/workflow-bundle.generated.ts), so the function
+  // needs no @temporalio/workflow at runtime and no in-function bundler. Each is loaded only when its
+  // code path runs.
   serverExternalPackages: ["@temporalio/client", "@temporalio/worker"],
-  // The drain route bundles workflows.ts in-function (bundleWorkflowCode reads the source at runtime),
-  // so the Temporal source must ship with the function — Next's output tracing won't follow the
-  // runtime `new URL("./workflows.ts", import.meta.url)` path on its own.
-  outputFileTracingIncludes: {
-    "/api/temporal/drain": ["./temporal/**/*.ts"],
-  },
   experimental: {
     extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
   },

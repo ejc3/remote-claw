@@ -7,14 +7,17 @@ export const DEFAULT_WINDOW_MS = 70_000; // > the 60s cron interval ⇒ invocati
 export const SHUTDOWN_HEADROOM_S = 10; // keep the window this far under maxDuration for graceful drain
 
 /** Whether this request may spin a worker. Vercel sends `Authorization: Bearer $CRON_SECRET` on cron
- *  invocations when CRON_SECRET is set; we require an exact, constant-time match. With no secret we
- *  allow ONLY off-Vercel (local dev / a manual curl) and NEVER an unauthenticated request on Vercel
- *  (fail closed — a missing secret in prod must not open the route). */
+ *  invocations when CRON_SECRET is set; we require an exact match. With NO secret we allow the route
+ *  only in a non-production, off-Vercel environment (local dev / a manual curl) and FAIL CLOSED
+ *  everywhere else — a missing secret in ANY production deploy (Vercel or self-hosted) must not leave
+ *  this worker-spawning endpoint open. */
 export function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.VERCEL !== "1";
+  if (!secret) return process.env.VERCEL !== "1" && process.env.NODE_ENV !== "production";
   const got = req.headers.get("authorization");
   if (got === null) return false;
+  // timingSafeEqual throws on unequal lengths, so the length guard is required (not redundant); the
+  // Bearer prefix and secret length are fixed, so it leaks nothing useful. Mirrors the dev/seed gate.
   const a = utf8(got);
   const b = utf8(`Bearer ${secret}`);
   return a.length === b.length && timingSafeEqual(a, b);

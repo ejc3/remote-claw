@@ -7,6 +7,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./app-e2e",
+  testMatch: "transcript.spec.ts", // the drain spec runs under app-e2e.drain.config.ts only
   timeout: 90_000,
   expect: { timeout: 20_000 }, // absorb cold-start latency of a freshly-built prod server
   outputDir: "./test-results",
