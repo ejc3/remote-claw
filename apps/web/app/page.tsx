@@ -343,17 +343,17 @@ function Transcript(props: {
   );
 }
 
-// The three permission modes Claude Code exposes (IMG_1825 "Select mode"). `id` is the RC
-// set_permission_mode value the relay forwards to the worker (§3.7): Auto = default (Claude asks on
-// risky actions), Code = acceptEdits (edits applied directly), Plan = read-only plan-first.
+// The three permission modes Claude Code exposes (IMG_1825 "Select mode"). `id` is the exact RC
+// set_permission_mode value the relay forwards to the worker (§3.7) — VERIFIED by capturing the real
+// iOS app through `--rc-trace`: Auto="auto", Code="default", Plan="plan" (NOT default/acceptEdits).
 const MODES = [
   {
-    id: "default",
+    id: "auto",
     label: "Auto",
-    glyph: "◍",
+    glyph: "⚡",
     desc: "Claude decides which actions need confirmation",
   },
-  { id: "acceptEdits", label: "Code", glyph: "⌨", desc: "Claude writes and edits code directly" },
+  { id: "default", label: "Code", glyph: "⌨", desc: "Claude writes and edits code directly" },
   {
     id: "plan",
     label: "Plan",
