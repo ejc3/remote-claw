@@ -421,6 +421,166 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     expect(userInputs).toContain("/compact"); // slash command delivered as user input
   }, 40_000);
 
+  it("PRESENCE + PERMISSION_RESOLVED: announce carries phase/status/needs; granting a permission logs permission_resolved (content frame, replayed on catch_up)", async () => {
+    // Uses fill(67) — a fresh identity so this test doesn't share broker state with the PERMISSION
+    // test (fill(64)) or any other test. Two things are proven here with one worker lifecycle:
+    //   (A) The session_announce body carries `status`, `phase`, and `needs`. The `needs` flag
+    //       transitions true→false across the permission grant — the `phase` field is validated as
+    //       structurally present; catching the transient "busy"→"thinking" window is not attempted here
+    //       because the FakeRcWorker's busy→idle cycle is near-instant (no model latency). A separate
+    //       unit test covers phaseFor() directly; here we prove the wire fields exist and that
+    //       `needs` is driven by the open/closed state of the permission gate.
+    //   (B) Granting an inbound permission emits a LOGGED `permission_resolved` content frame (not just
+    //       the control_response sent to the worker) so a fresh viewer's catch_up replays it.
+    const id = await deriveIdentity(new Uint8Array(32).fill(67));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+
+    // ── A: collect raw announce bodies (status/phase/needs live on the full JSON body, which
+    //    Viewer.announces() strips to {sessionId,title,cwd,sentAt}). We read the bus directly via
+    //    a BrokerClient with the same identity to decode the K_meta-sealed session_announce frames.
+    const rawAnnounces: Array<{
+      status: string;
+      phase: string;
+      needs: boolean;
+      sentAt: number;
+    }> = [];
+    const busClient = new BrokerClient({
+      baseUrl: "http://broker",
+      provider: securityProvider("sealed", id),
+      fetchFn: brokerFetch,
+    });
+    // Mirror the retry loop from Viewer.announces(): the bus workflow might not exist yet on the
+    // first subscribe attempt (the relay.announce() inside onSession is fire-and-forget; it may not
+    // have completed by the time we start streaming). Re-subscribing every 150 ms matches the
+    // viewer's own resume-or-retry logic, and the startIndex:-64 replay ensures we don't miss an
+    // announce that posted between retries.
+    void (async () => {
+      while (!ac.signal.aborted) {
+        try {
+          for await (const frame of busClient.streamFrames({
+            startIndex: -64,
+            signal: ac.signal,
+          })) {
+            if (frame.recordKind !== "session_announce") continue;
+            let body: Record<string, unknown>;
+            try {
+              body = JSON.parse(new TextDecoder().decode(await busClient.openFrame(frame)));
+            } catch {
+              continue;
+            }
+            if (body.session_id !== sid) continue; // filter to this session only
+            rawAnnounces.push({
+              status: typeof body.status === "string" ? body.status : "",
+              phase: typeof body.phase === "string" ? body.phase : "",
+              needs: body.needs === true,
+              sentAt: typeof body.sent_at === "number" ? body.sent_at : 0,
+            });
+          }
+        } catch {
+          // transient error (bus not yet created / SSE reset) — retry shortly
+        }
+        if (ac.signal.aborted) break;
+        await sleep(150);
+      }
+    })().catch(() => {});
+
+    // Wait for the initial announce (the one relay.announce() fires on register) to arrive in our
+    // bus stream. This ensures the busClient is live before we kick off the turn.
+    await waitFor(() => rawAnnounces.length > 0, 15_000);
+    // The initial announce is posted before any turn, so the worker is idle and no gate is open.
+    const initAnnounce = rawAnnounces[0];
+    // Every announce must carry all three presence fields (structural check):
+    expect(typeof initAnnounce?.status).toBe("string"); // raw worker_status string
+    expect(initAnnounce?.phase === "idle" || initAnnounce?.phase === "thinking").toBe(true);
+    expect(typeof initAnnounce?.needs).toBe("boolean");
+
+    // ── A (continued): start the worker with a can_use_tool control_request. The open gate drives
+    //    `needs=true` in the presence announce after #pumpUpstream processes the event — this is
+    //    reliably observable (unlike the transient busy→thinking window) because #openPerms persists
+    //    until the permission answer arrives.
+    let granted = false;
+    worker.onControlResponse(() => {
+      granted = true;
+    });
+    worker.start(sid, () => [
+      {
+        type: "control_request",
+        request_id: "perm-presence-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Bash",
+          tool_input: { command: "echo presence" },
+        },
+      },
+    ]);
+
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const got: Message[] = [];
+    tailInto(viewer, sid, got, ac.signal);
+
+    // Trigger the turn: relay processes the control_request, opens the gate (#openPerms), and
+    // re-announces with needs=true (key changed → re-announce fires promptly, not waiting for the
+    // 10 s keepalive floor).
+    await viewer.sendPrompt(sid, "use a tool");
+
+    // Wait for the permission_request content frame (proves the relay processed the upstream event).
+    await waitFor(() => got.some((m) => m.kind === "permission_request"), 20_000);
+    const reqFrame = got.find((m) => m.kind === "permission_request");
+    const requestId = JSON.parse(reqFrame?.text ?? "{}").request_id as string;
+    expect(requestId).toBe("perm-presence-1");
+
+    // After #pumpUpstream logs the permission_request and calls #maybeAnnounce, needs flips true.
+    // The keepalive-OR-change logic fires immediately on a key change, so this isn't a 10 s wait.
+    await waitFor(() => rawAnnounces.some((a) => a.needs === true), 15_000);
+    // Every announce with needs=true must carry the structural fields (belt-and-suspenders).
+    for (const a of rawAnnounces.filter((r) => r.needs)) {
+      expect(a.phase === "idle" || a.phase === "thinking").toBe(true);
+      expect(typeof a.status).toBe("string");
+    }
+
+    // ── B: grant the permission — relay logs permission_resolved and clears the open gate.
+    await viewer.grantPermission(sid, requestId, "allow");
+    await waitFor(() => granted, 15_000);
+    expect(granted).toBe(true);
+
+    // The permission_resolved content frame must appear in the live transcript.
+    await waitFor(() => got.some((m) => m.kind === "permission_resolved"), 15_000);
+    const resolvedFrame = got.find((m) => m.kind === "permission_resolved");
+    const resolvedBody = JSON.parse(resolvedFrame?.text ?? "{}");
+    expect(resolvedBody.request_id).toBe("perm-presence-1");
+    expect(resolvedBody.behavior).toBe("allow");
+    expect(resolvedFrame?.seq).not.toBeNull(); // it is a LOGGED content frame with a seq
+
+    // After the grant the relay deletes from #openPerms and calls #maybeAnnounce: needs must drop.
+    await waitFor(() => rawAnnounces.some((a) => a.needs === false && a.sentAt > 0), 15_000);
+    // We must have seen BOTH a needs=true announce and a later needs=false one for this session —
+    // i.e., the full true→false transition happened on the bus.
+    const needsTrue = rawAnnounces.filter((a) => a.needs === true);
+    const needsFalse = rawAnnounces.filter((a) => a.needs === false && a.sentAt > 0);
+    expect(needsTrue.length).toBeGreaterThanOrEqual(1);
+    expect(needsFalse.length).toBeGreaterThanOrEqual(1);
+    // A needs=false announce must come no earlier than the first needs=true one.
+    expect(needsFalse[needsFalse.length - 1]?.sentAt ?? 0).toBeGreaterThanOrEqual(
+      needsTrue[0]?.sentAt ?? 0,
+    );
+
+    // ── B (continued): fresh viewer's catch_up must replay permission_resolved — it is LOGGED (not
+    //    a meta-plane announce), so #replay() replays it exactly like any other content frame.
+    const late = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const lateMsgs: Message[] = [];
+    tailInto(late, sid, lateMsgs, ac.signal);
+    await late.requestHistory(sid, 0);
+    await waitFor(() => lateMsgs.some((m) => m.kind === "permission_resolved"), 20_000);
+    const replayedResolved = lateMsgs.find((m) => m.kind === "permission_resolved");
+    expect(JSON.parse(replayedResolved?.text ?? "{}")).toMatchObject({
+      request_id: "perm-presence-1",
+      behavior: "allow",
+    });
+  }, 50_000);
+
   it("MULTI-CLIENT: two devices drive turns on one RC session; both see the shared timeline", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(62));
     const ac = new AbortController();

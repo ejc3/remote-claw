@@ -228,7 +228,10 @@ export class MitmProxy {
       });
     }
     if (sub === "/worker" && method === "PUT") {
-      if (typeof data.worker_status === "string") s.workerStatus = data.worker_status;
+      if (typeof data.worker_status === "string" && data.worker_status !== s.workerStatus) {
+        s.workerStatus = data.worker_status;
+        s.wake(); // nudge the relay's idle null-tick so it re-announces presence promptly (#48/#58)
+      }
       return sendJson(res, {});
     }
     if (sub === "/worker/heartbeat") return sendJson(res, {});

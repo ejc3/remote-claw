@@ -21,6 +21,8 @@ export const CONTENT_KINDS = new Set([
   "tool_result", // a tool's OUTPUT (keyed by tool_use_id) — Bash stdout, a Read's file, …
   "task", // a sub-agent Task lifecycle event (task_started/_updated/_notification)
   "permission_request", // a worker can_use_tool surfaced to the viewer to grant/deny (§17.4)
+  "permission_resolved", // a permission_request was answered (allow/deny) — LOGGED so a reload /
+  // catch_up renders it RESOLVED instead of re-prompting (#56); folds onto its request by request_id
 ]);
 
 /** Control frames (web → wrapper, `dir:in`) — sealed under control_key. */
