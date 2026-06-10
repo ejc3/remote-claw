@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parsePermissionResolved } from "../app/lib/transcript.js";
-import { CONNECTED_WINDOW_MS, connState, FRESH_WINDOW_MS } from "../app/lib/viewer.js";
+import { CONNECTED_WINDOW_MS, connState, FRESH_WINDOW_MS, parseGit } from "../app/lib/viewer.js";
 
 // The connection-state ladder (#58): connected (fresh) → reconnecting (a keepalive or two missed) →
 // disconnected (gone). Pure + clock-injected, so pin every boundary deterministically — the host
@@ -63,5 +63,46 @@ describe("parsePermissionResolved", () => {
     expect(parsePermissionResolved(JSON.stringify({ behavior: "deny" })).requestId).toBe("");
     expect(parsePermissionResolved(JSON.stringify({ request_id: 7 })).requestId).toBe("");
     expect(parsePermissionResolved("{not json").requestId).toBe("");
+  });
+});
+
+// parseGit defensively coerces the announce's `git` field (decrypted-but-untrusted) into GitInfo|null
+// — the viewer renders no chip rather than crashing on a malformed/absent body. (#49)
+describe("parseGit", () => {
+  it("parses a well-formed git snapshot", () => {
+    expect(parseGit({ branch: "main", sha: "abc1234", dirty: true, ahead: 2, behind: 1 })).toEqual({
+      branch: "main",
+      sha: "abc1234",
+      dirty: true,
+      ahead: 2,
+      behind: 1,
+    });
+  });
+
+  it("returns null for null / non-object / a missing or empty branch", () => {
+    expect(parseGit(null)).toBeNull();
+    expect(parseGit(undefined)).toBeNull();
+    expect(parseGit("main")).toBeNull();
+    expect(parseGit({ sha: "abc" })).toBeNull(); // no branch
+    expect(parseGit({ branch: "" })).toBeNull(); // empty branch
+    expect(parseGit({ branch: 7 })).toBeNull(); // non-string branch
+  });
+
+  it("defaults missing/ill-typed fields (sha '', dirty false, ahead/behind 0)", () => {
+    expect(parseGit({ branch: "x" })).toEqual({
+      branch: "x",
+      sha: "",
+      dirty: false,
+      ahead: 0,
+      behind: 0,
+    });
+    // non-finite / wrong-typed counts collapse to 0; dirty only true on a literal true
+    expect(parseGit({ branch: "x", ahead: Number.NaN, behind: "5", dirty: "yes" })).toEqual({
+      branch: "x",
+      sha: "",
+      dirty: false,
+      ahead: 0,
+      behind: 0,
+    });
   });
 });

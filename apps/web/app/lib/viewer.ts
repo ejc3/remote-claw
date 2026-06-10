@@ -37,6 +37,15 @@ export function connState(sentAt: number, now: number): ConnState {
   return "disconnected";
 }
 
+/** The session's git state, snapshotted by the host at announce time (#49). null outside a repo. */
+export interface GitInfo {
+  branch: string;
+  sha: string;
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+}
+
 /** A decrypted session_announce from the bus. `status`/`phase`/`needs` are the live presence the host
  *  folds onto every (re-)announce (#48/#58); absent on a pre-presence host, so they default benignly
  *  (status "", phase idle, needs false) — an old host simply shows no thinking/needs indicator. */
@@ -51,6 +60,24 @@ export interface Announce {
   phase: "idle" | "thinking";
   /** The worker is waiting on the human (an open permission gate or requires_action). */
   needs: boolean;
+  /** The session's git snapshot for the branch/dirty/ahead-behind chip (#49); null outside a repo. */
+  git: GitInfo | null;
+}
+
+/** Defensively coerce an announce's `git` field into GitInfo|null. The body is decrypted-but-untrusted
+ *  (a malicious broker can't forge it past AEAD, but a malformed host could), so every field is type-
+ *  checked and a non-object (or a missing branch) collapses to null — no chip rather than a crash. */
+export function parseGit(raw: unknown): GitInfo | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const g = raw as Record<string, unknown>;
+  if (typeof g.branch !== "string" || g.branch === "") return null;
+  return {
+    branch: g.branch,
+    sha: typeof g.sha === "string" ? g.sha : "",
+    dirty: g.dirty === true,
+    ahead: typeof g.ahead === "number" && Number.isFinite(g.ahead) ? g.ahead : 0,
+    behind: typeof g.behind === "number" && Number.isFinite(g.behind) ? g.behind : 0,
+  };
 }
 
 /** A decrypted transcript message from a session's out-stream. */
@@ -137,6 +164,7 @@ export class Viewer {
             status: typeof body.status === "string" ? body.status : "",
             phase: body.phase === "thinking" ? "thinking" : "idle",
             needs: body.needs === true,
+            git: parseGit(body.git), // git chip (#49); null outside a repo / on an old host
           };
         }
       } catch {

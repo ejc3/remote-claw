@@ -14,7 +14,14 @@ import {
   type ToolInput,
   toolHint,
 } from "./lib/transcript";
-import { type Announce, type ConnState, connState, type Message, Viewer } from "./lib/viewer";
+import {
+  type Announce,
+  type ConnState,
+  connState,
+  type GitInfo,
+  type Message,
+  Viewer,
+} from "./lib/viewer";
 
 export default function Home() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -150,6 +157,36 @@ function presenceWord(s: Announce, now: number): string {
   return "online";
 }
 
+/** The session's git context (#49): branch, a dot for uncommitted changes, and ahead/behind vs its
+ *  upstream (zeros omitted). A static snapshot from announce time — title carries the precise sha. */
+function GitChip({ git }: { git: GitInfo }) {
+  const title = [
+    git.branch,
+    git.sha ? `@ ${git.sha}` : "",
+    git.dirty ? "· uncommitted changes" : "· clean",
+    git.ahead || git.behind ? `· ↑${git.ahead} ↓${git.behind}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <span className="git-chip" title={title}>
+      <span className="git-branch">⎇ {git.branch}</span>
+      {git.dirty && (
+        <span
+          className="git-dirty"
+          role="img"
+          aria-label="uncommitted changes"
+          title="uncommitted changes"
+        >
+          ●
+        </span>
+      )}
+      {git.ahead > 0 && <span className="git-ab">↑{git.ahead}</span>}
+      {git.behind > 0 && <span className="git-ab git-behind">↓{git.behind}</span>}
+    </span>
+  );
+}
+
 /** A tiny three-dot "working" pulse (CSS-animated) — the viewer's thinking indicator (#48). */
 function Working() {
   return (
@@ -239,8 +276,9 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                   ) : null}
                 </span>
                 <span className="row-sub">
-                  {s.cwd !== null ? `${s.cwd} · ` : ""}
+                  {s.git && <GitChip git={s.git} />}
                   {presenceWord(s, now)}
+                  {s.cwd !== null ? ` · ${s.cwd}` : ""}
                 </span>
               </button>
             );
@@ -375,6 +413,7 @@ function Transcript(props: {
           ‹ Sessions
         </button>
         <span className="row-title">{props.title}</span>
+        {announce?.git && <GitChip git={announce.git} />}
       </div>
 
       <div className="transcript">

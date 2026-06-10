@@ -34,6 +34,9 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   const row = page.locator("button.row", { hasText: "rc box" });
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute("data-state", "connected");
+  // The git chip reflects the announce's git snapshot — branch + ahead count (#49).
+  await expect(row.locator(".git-chip")).toContainText("main");
+  await expect(row.locator(".git-chip")).toContainText("↑2");
   await row.click();
 
   // (1) The top-level tool's Output — the tool_result the relay used to drop (#47). Target it by
