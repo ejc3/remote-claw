@@ -62,9 +62,11 @@ function gate(req: Request): { origin: string } | Response {
   return { origin: url.origin };
 }
 
-/** One scripted RC turn that exercises every transcript row the UI renders (#47 + prior features). */
-function scenario(): Array<Record<string, unknown>> {
-  return [
+/** One scripted RC turn that exercises every transcript row the UI renders (#47 + prior features).
+ *  With `withPerm`, a can_use_tool control_request is injected so the UI shows a permission card —
+ *  the resolved-on-reload e2e (#56) grants it, reloads, and asserts it replays as answered. */
+function scenario(withPerm: boolean): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = [
     {
       type: "assistant",
       message: {
@@ -193,6 +195,21 @@ function scenario(): Array<Record<string, unknown>> {
     },
     { type: "result", subtype: "success", is_error: false, result: "ok" },
   ];
+  if (withPerm) {
+    // Inject a can_use_tool gate right after the opening line so the UI renders a permission card
+    // (the relay maps it to a permission_request content frame, §17.4). Stable request_id so the e2e
+    // can grant it and assert the resolved frame replays on reload.
+    events.splice(1, 0, {
+      type: "control_request",
+      request_id: "perm-e2e-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Bash",
+        tool_input: { command: "rm -rf build && pnpm run build" },
+      },
+    });
+  }
+  return events;
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -240,7 +257,8 @@ export async function POST(req: Request): Promise<Response> {
   // buffers upstream events), then run the pump. serve()'s upstream pump drains the queued events →
   // maps → publishes to the broker.
   await relay.announce("rc box", "/home/ubuntu/remote-claw");
-  for (const payload of scenario()) session.pushUpstream(payload);
+  const withPerm = url.searchParams.get("perm") === "1"; // opt-in: inject a permission card (#56 e2e)
+  for (const payload of scenario(withPerm)) session.pushUpstream(payload);
   // Run the pump under after(): on a serverless deployment (the vercel backend) the function FREEZES
   // once the Response is returned, so a fire-and-forget serve() would never publish the turn — the
   // session would announce but its transcript would be empty. after() keeps the function alive to

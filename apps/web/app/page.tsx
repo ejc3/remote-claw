@@ -1,11 +1,12 @@
 "use client";
 
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   basename,
   diffOf,
   dirname,
   editStat,
+  parsePermissionResolved,
   parseTask,
   parseToolResult,
   parseToolUse,
@@ -13,7 +14,7 @@ import {
   type ToolInput,
   toolHint,
 } from "./lib/transcript";
-import { type Announce, FRESH_WINDOW_MS, type Message, Viewer } from "./lib/viewer";
+import { type Announce, type ConnState, connState, type Message, Viewer } from "./lib/viewer";
 
 export default function Home() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -128,14 +129,36 @@ function Connect(props: {
   );
 }
 
+/** A coarse "N ago" label for a lapsed session (only shown once it reads as disconnected). */
 function relativeTime(ms: number, now: number): string {
-  const d = Math.max(0, now - ms);
-  if (d < FRESH_WINDOW_MS) return "online";
-  const mins = Math.floor(d / 60000);
+  const mins = Math.floor(Math.max(0, now - ms) / 60000);
+  if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/** The session row's sub-line word, combining connection state + activity (#48/#58): a connected
+ *  session reads its phase/needs; a lapsing one reads its link state; a gone one reads "N ago". */
+function presenceWord(s: Announce, now: number): string {
+  const cs = connState(s.sentAt, now);
+  if (cs === "disconnected") return relativeTime(s.sentAt, now);
+  if (cs === "reconnecting") return "reconnecting…";
+  if (s.needs) return "needs you";
+  if (s.phase === "thinking") return "working…";
+  return "online";
+}
+
+/** A tiny three-dot "working" pulse (CSS-animated) — the viewer's thinking indicator (#48). */
+function Working() {
+  return (
+    <span className="working" role="img" aria-label="working">
+      <span />
+      <span />
+      <span />
+    </span>
+  );
 }
 
 function Console(props: { viewer: Viewer; onForget: () => void }) {
@@ -195,23 +218,29 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             </p>
           )}
           {list.map((s) => {
-            const online = now - s.sentAt < FRESH_WINDOW_MS;
+            const cs = connState(s.sentAt, now);
+            const connected = cs === "connected";
             return (
               <button
                 type="button"
                 key={s.sessionId}
                 className="row"
                 data-active={selected === s.sessionId}
-                data-online={online}
+                data-state={cs}
                 onClick={() => setSelected(s.sessionId)}
               >
                 <span className="row-top">
-                  <span className="dot" data-online={online} />
+                  <span className="dot" data-state={cs} />
                   <span className="row-title">{s.title}</span>
+                  {connected && s.needs ? (
+                    <span className="needs-badge">needs you</span>
+                  ) : connected && s.phase === "thinking" ? (
+                    <Working />
+                  ) : null}
                 </span>
                 <span className="row-sub">
                   {s.cwd !== null ? `${s.cwd} · ` : ""}
-                  {relativeTime(s.sentAt, now)}
+                  {presenceWord(s, now)}
                 </span>
               </button>
             );
@@ -229,6 +258,8 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             viewer={viewer}
             sessionId={selected}
             title={current?.title ?? selected}
+            announce={current}
+            now={now}
             onBack={() => setSelected(null)}
           />
         )}
@@ -241,13 +272,35 @@ function Transcript(props: {
   viewer: Viewer;
   sessionId: string;
   title: string;
+  announce: Announce | undefined;
+  now: number;
   onBack: () => void;
 }) {
-  const { viewer, sessionId } = props;
+  const { viewer, sessionId, announce, now } = props;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+
+  // Live connection state from the freshest announce (null until one arrives — then never scary).
+  // Thinking/needs are only meaningful while connected; a stale announce's phase says nothing.
+  const cs = announce ? connState(announce.sentAt, now) : null;
+  const connected = cs === "connected";
+  const phase = connected ? (announce?.phase ?? "idle") : "idle";
+  const needs = connected ? (announce?.needs ?? false) : false;
+
+  // Resolved permissions, folded from the LOGGED permission_resolved frames (#56) — this is the source
+  // of truth that survives a reload (PermissionRow's local optimistic decision does not). The host
+  // replays these on catch_up, so a previously-answered request renders resolved, never re-prompting.
+  const resolved = useMemo(() => {
+    const m = new Map<string, "allow" | "deny">();
+    for (const msg of messages) {
+      if (msg.kind !== "permission_resolved") continue;
+      const r = parsePermissionResolved(msg.text);
+      if (r.requestId !== "") m.set(r.requestId, r.behavior);
+    }
+    return m;
+  }, [messages]);
   // The session's real permission mode lives on the worker and isn't announced, so we track the last
   // mode set from here (optimistic): null = "we haven't set one". setMode is fire-and-forget.
   const [mode, setMode] = useState<string | null>(null);
@@ -327,11 +380,12 @@ function Transcript(props: {
       <div className="transcript">
         {messages.length === 0 && <p className="empty-pad">Waiting for the transcript…</p>}
         {messages.map((m) => (
-          <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} />
+          <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} resolved={resolved} />
         ))}
         <div ref={endRef} />
       </div>
 
+      <StatusStrip conn={cs} phase={phase} needs={needs} />
       {sendError !== null && <p className="send-err">Couldn’t send: {sendError}</p>}
 
       <form
@@ -372,6 +426,48 @@ function Transcript(props: {
       )}
     </section>
   );
+}
+
+/** A pinned status line above the composer (#48/#58): surfaces a connection problem
+ *  (reconnecting/disconnected) or the worker's activity (working / needs you). Hidden when connected +
+ *  idle so a quiet session stays uncluttered, and hidden when `conn` is null (no announce seen yet —
+ *  we don't claim a state we don't know). */
+function StatusStrip({
+  conn,
+  phase,
+  needs,
+}: {
+  conn: ConnState | null;
+  phase: "idle" | "thinking";
+  needs: boolean;
+}) {
+  // role="alert" (assertive) for states that need attention now; role="status" (polite) for ambient
+  // activity — so a screen reader announces the flip to disconnected / needs-you / working (#58 a11y).
+  if (conn === "disconnected")
+    return (
+      <div className="chat-status" data-state="disconnected" role="alert">
+        Host disconnected — the session may have ended.
+      </div>
+    );
+  if (conn === "reconnecting")
+    return (
+      <div className="chat-status" data-state="reconnecting" role="status">
+        Reconnecting to the host… <Working />
+      </div>
+    );
+  if (conn === "connected" && needs)
+    return (
+      <div className="chat-status" data-state="needs" role="alert">
+        🔔 Claude needs your input
+      </div>
+    );
+  if (conn === "connected" && phase === "thinking")
+    return (
+      <div className="chat-status" data-state="thinking" role="status">
+        Claude is working… <Working />
+      </div>
+    );
+  return null;
 }
 
 // The three permission modes Claude Code exposes (IMG_1825 "Select mode"). `id` is the exact RC
@@ -509,7 +605,15 @@ function ModeSheet({
 // by Claude Code's mobile UI — see the design spec.)
 type GrantFn = (requestId: string, behavior: "allow" | "deny") => Promise<void>;
 
-function Bubble({ message, onGrant }: { message: Message; onGrant: GrantFn }) {
+function Bubble({
+  message,
+  onGrant,
+  resolved,
+}: {
+  message: Message;
+  onGrant: GrantFn;
+  resolved: Map<string, "allow" | "deny">;
+}) {
   switch (message.kind) {
     case "result":
       return <p className="turn-sep" aria-hidden />;
@@ -537,9 +641,10 @@ function Bubble({ message, onGrant }: { message: Message; onGrant: GrantFn }) {
     case "task":
       return <TaskRow text={message.text} />;
     case "permission_request":
-      return <PermissionRow text={message.text} onGrant={onGrant} />;
+      return <PermissionRow text={message.text} onGrant={onGrant} resolved={resolved} />;
     default:
-      // accepted acks + lifecycle frames are not part of the rendered conversation.
+      // accepted acks + lifecycle frames are not rendered standalone; permission_resolved is folded
+      // into its PermissionRow (via the `resolved` map), not shown as its own row.
       return null;
   }
 }
@@ -559,7 +664,15 @@ function ThinkingRow({ text, sub }: { text: string; sub: boolean }) {
  * tool + a one-line hint and Allow / Deny buttons; the decision rides back as a `permission` frame
  * (onGrant → viewer.grantPermission). Once answered (or if a request_id is missing) the buttons lock.
  */
-function PermissionRow({ text, onGrant }: { text: string; onGrant: GrantFn }) {
+function PermissionRow({
+  text,
+  onGrant,
+  resolved,
+}: {
+  text: string;
+  onGrant: GrantFn;
+  resolved: Map<string, "allow" | "deny">;
+}) {
   const req = parsePermission(text);
   const [decision, setDecision] = useState<"allow" | "deny" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -567,6 +680,12 @@ function PermissionRow({ text, onGrant }: { text: string; onGrant: GrantFn }) {
   // A synchronous re-entry guard: `busy` is async React state, so two clicks fired in the same tick
   // would both pass a `busy`-based check and send conflicting grants. The ref closes that window.
   const deciding = useRef(false);
+
+  // The host-logged resolution (replayed on catch_up) is the source of truth that survives a reload,
+  // so it WINS over the local optimistic `decision`. On a fresh load `decision` is null but `confirmed`
+  // is set → the row renders resolved instead of re-prompting with live buttons (#56/#57).
+  const confirmed = resolved.get(req.requestId) ?? null;
+  const effective = confirmed ?? decision;
 
   const decide = useCallback(
     async (behavior: "allow" | "deny") => {
@@ -596,7 +715,7 @@ function PermissionRow({ text, onGrant }: { text: string; onGrant: GrantFn }) {
         </span>
       </div>
       {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
-      {decision === null ? (
+      {effective === null ? (
         <div className="perm-actions">
           <button
             type="button"
@@ -616,11 +735,11 @@ function PermissionRow({ text, onGrant }: { text: string; onGrant: GrantFn }) {
           </button>
         </div>
       ) : (
-        <div className="perm-resolved" data-behavior={decision}>
-          {decision === "allow" ? "✓ Allowed" : "✕ Denied"}
+        <div className="perm-resolved" data-behavior={effective}>
+          {effective === "allow" ? "✓ Allowed" : "✕ Denied"}
         </div>
       )}
-      {req.requestId === "" && decision === null && (
+      {req.requestId === "" && effective === null && (
         <div className="perm-hint">No request id — this prompt can’t be answered from here.</div>
       )}
       {err !== null && <div className="perm-err">Couldn’t send: {err}</div>}

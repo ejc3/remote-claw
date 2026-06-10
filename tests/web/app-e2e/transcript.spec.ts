@@ -30,9 +30,10 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
 
-  // The host's bus announce surfaces the session; open it.
+  // The host's bus announce surfaces the session; a fresh announce reads as connected (#58).
   const row = page.locator("button.row", { hasText: "rc box" });
   await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute("data-state", "connected");
   await row.click();
 
   // (1) The top-level tool's Output — the tool_result the relay used to drop (#47). Target it by
@@ -109,4 +110,39 @@ test("the pass survives a browser refresh (it's restored from sessionStorage, no
   // Now it must be restored from sessionStorage so the user can reconnect without re-pasting.
   await page.reload();
   await expect(page.getByPlaceholder(/rcp1_/)).toHaveValue(pass);
+});
+
+test("a granted permission stays resolved after a reload — no re-prompt (#56/#57)", async ({
+  page,
+  request,
+}) => {
+  // Seed WITH a permission card (perm=1). The optional backend switch coexists on the query string.
+  const permQp = `?perm=1${BACKEND ? `&backend=${BACKEND}` : ""}`;
+  const res = await request.post(`/api/dev/seed${permQp}`, seedOpts);
+  expect(res.ok()).toBeTruthy();
+  const { pass } = (await res.json()) as { pass: string };
+
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+
+  // The permission card renders with live Allow/Deny; grant it → the row flips to "✓ Allowed".
+  const perm = page.locator(".perm", { hasText: "Bash" });
+  await expect(perm.getByRole("button", { name: "Allow" })).toBeVisible();
+  await perm.getByRole("button", { name: "Allow" }).click();
+  await expect(perm.locator(".perm-resolved")).toHaveText(/Allowed/);
+  await page
+    .locator("section.chat")
+    .screenshot({ path: "test-results/permission-resolved-e2e.png" });
+
+  // Reload → reconnect (pass restored from sessionStorage) → reopen the session.
+  await page.reload();
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+
+  // The host replayed the LOGGED permission_resolved on catch_up, so the card renders resolved with
+  // NO live buttons. Before #56 the decision was local-only and the Allow/Deny buttons came back.
+  const permAfter = page.locator(".perm", { hasText: "Bash" });
+  await expect(permAfter.locator(".perm-resolved")).toHaveText(/Allowed/);
+  await expect(permAfter.getByRole("button", { name: "Allow" })).toHaveCount(0);
 });
