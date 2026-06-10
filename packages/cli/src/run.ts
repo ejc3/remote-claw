@@ -11,6 +11,7 @@ import { deriveIdentity } from "@remote-claw/clawsec";
 import { classifyArgs } from "./args.js";
 import { RC_HELP } from "./help.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
+import { runRcTrace } from "./host/rc/trace-run.js";
 import { runIdentity } from "./identity.js";
 import { runPass } from "./pass.js";
 import { runShowSecret } from "./showsecret.js";
@@ -104,6 +105,23 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     const writeOut = opts.stdout ?? ((line: string) => void process.stdout.write(line));
     return runPass(rc, claudeArgs, { stdout: writeOut, stderr: warn });
   }
+  // `--rc-trace`: a live protocol inspector — stand up the tracing MITM → real Anthropic and spawn
+  // claude behind it (no broker). Handled before the generic stray-flag check, so it validates its
+  // own companions: only --rc-file (for the CA dir) applies; anything else is a usage error.
+  if (rc["rc-trace"] === true) {
+    if (wantsHelp(claudeArgs)) {
+      const writeOut = opts.stdout ?? ((line: string) => void writeSync(1, line));
+      writeOut(RC_HELP); // print our help; don't stand up a proxy just to show it
+      return 0;
+    }
+    const stray = Object.keys(rc).filter((n) => n !== "rc-trace" && n !== "rc-file");
+    if (stray.length > 0) {
+      warn(`remote-claw: ${stray.map((k) => `--${k}`).join(", ")} doesn't apply to --rc-trace\n`);
+      return 2;
+    }
+    const bin = opts.claudeBin || process.env.RC_CLAUDE_BIN || "claude";
+    return runRcTracePath(rc, claudeArgs, bin, opts, warn);
+  }
 
   // The remaining `--rc-*` namespace splits into flags the LAUNCH path consumes (the secret file +
   // the broker origin) and action modifiers that are only meaningful with a local action above.
@@ -146,6 +164,31 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   }
   const spawnFn = opts.spawnFn ?? realSpawn;
   return spawnFn(bin, claudeArgs);
+}
+
+/** Stand up the tracing MITM → real Anthropic and spawn claude behind it. Reuses the wrapper's CA
+ *  (the certs dir next to the secret file), but needs no identity/secret — nothing hits the broker. */
+async function runRcTracePath(
+  rc: Record<string, unknown>,
+  claudeArgs: string[],
+  bin: string,
+  opts: RunOptions,
+  warn: (line: string) => void,
+): Promise<number> {
+  const secretPath = resolveSecretPath({
+    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
+  }).path;
+  try {
+    return await runRcTrace({
+      claudeArgs,
+      certsDir: join(dirname(secretPath), "mitm-certs"),
+      claudeBin: bin,
+      spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
+    });
+  } catch (e) {
+    warn(`remote-claw: could not start trace MITM: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
 }
 
 /** Resolve the identity (auto-created on first run) and launch claude behind the MITM (§3.1/§14). */

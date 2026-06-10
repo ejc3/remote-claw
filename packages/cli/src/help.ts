@@ -25,6 +25,12 @@ Identity (local; never launches claude, never touches the network):
   --rc-json          machine-readable output for an rc action (never prints the master secret)
   --rc-quiet         minimal output for an rc action (never prints the master secret)
 
+Diagnostics:
+  --rc-trace         stand up a MITM that passes through to the REAL api.anthropic.com and traces the
+                     Remote-Control protocol both ways, then spawn claude behind it (no broker — a live
+                     protocol inspector). Set RC_LOG=debug for frame shapes, RC_LOG=trace for full
+                     bodies (RC_LOG_FILE=… to capture on disk). All local.
+
 Further --rc-* actions (broker config) arrive in later releases.
 
 Below is claude's own help:

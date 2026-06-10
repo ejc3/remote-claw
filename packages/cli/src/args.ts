@@ -10,6 +10,8 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-identity": "boolean",
   "rc-show-secret": "boolean",
   "rc-pass": "boolean",
+  // Stand up the tracing MITM → real Anthropic and spawn claude behind it (a protocol inspector).
+  "rc-trace": "boolean",
   "rc-json": "boolean",
   "rc-quiet": "boolean",
   "rc-yes": "boolean",

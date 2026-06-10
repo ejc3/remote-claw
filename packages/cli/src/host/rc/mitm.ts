@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { type IncomingMessage, Server, type ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect as netConnect, type Socket } from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { TLSSocket } from "node:tls";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import { MITM_HOST } from "./certs.js";
@@ -19,6 +20,12 @@ import { assistantText, type RelayCore, type Session } from "./session.js";
 
 /** Endpoint prefixes we serve ourselves; everything else on the MITM host is passed through. */
 const INTERCEPT_PREFIXES = ["/v1/code/sessions", "/v1/code/triggers"];
+
+/** SSE event boundary — a blank line, LF or CRLF framed. */
+const SSE_SEP = /\r?\n\r?\n/;
+/** Caps so a pathological stream can't grow the trace buffers without bound (it's a diagnostic). */
+const SSE_BUF_CAP = 256 * 1024;
+const JSON_TRACE_CAP = 256 * 1024;
 
 const SESS_RE = /^\/v1\/code\/sessions\/([^/?]+)(\/[^?]*)?/;
 
@@ -28,11 +35,19 @@ export interface MitmOptions {
   /** PEM file paths for the leaf cert/key we present for api.anthropic.com. */
   leafCert: string;
   leafKey: string;
-  core: RelayCore;
+  /**
+   * "relay" (default): INTERCEPT the RC endpoints and serve them from `core` — the wrapper backend.
+   * "trace": pass EVERYTHING through to real Anthropic and TRACE the RC traffic both ways — a live
+   * protocol inspector (point it at the real API, drive it from real claude). No `core` needed.
+   */
+  mode?: "relay" | "trace";
+  /** The RelayCore the relay serves RC endpoints from. Required in "relay" mode; unused in "trace". */
+  core?: RelayCore;
   /** Called when claude registers a new RC session (POST /v1/code/sessions) — the wrapper announces
-   *  it on the bus and starts pumping its upstream to the broker. */
+   *  it on the bus and starts pumping its upstream to the broker. (relay mode only) */
   onSession?: (s: Session) => void;
-  /** Optional structured tracer (target "rc.mitm"; defaults to no-op). Logs shapes/ids only. */
+  /** Optional structured tracer (target "rc.mitm"; defaults to no-op). Local-only sink; in trace mode
+   *  it dumps full RC bodies (no key material — auth headers are never passed to it). */
   tracer?: Tracer;
 }
 
@@ -73,7 +88,7 @@ export class MitmProxy {
     // Wake every worker-SSE follower NOW (close() sets #stopped, but a follower parked on the
     // session Gate's heartbeat wait wouldn't re-check it for up to HEARTBEAT_MS). Closing the
     // sessions wakes their gates so #streamWorker loops exit and end their responses immediately.
-    this.#opts.core.closeAll();
+    this.#opts.core?.closeAll();
     this.#server.close();
     this.#inner.close();
   }
@@ -122,13 +137,39 @@ export class MitmProxy {
     const rawUrl = req.url ?? "";
     const path = rawUrl.split("?", 1)[0] ?? ""; // the path WITHOUT query — only for intercept matching
     const body = await readBody(req);
-    if (INTERCEPT_PREFIXES.some((p) => path.startsWith(p))) {
+    const rc = rcLabel(path); // an RC worker endpoint (session id masked), or null
+    if (
+      (this.#opts.mode ?? "relay") === "relay" &&
+      INTERCEPT_PREFIXES.some((p) => path.startsWith(p))
+    ) {
       this.#trace.debug("intercept", { method: req.method ?? "GET", path });
       this.#intercept(req.method ?? "GET", path, body, res);
     } else {
       // Pass the FULL request-target (query string included) upstream — stripping `?…` would drop
-      // params the real API needs (e.g. /api/claude_cli/bootstrap?entrypoint=…&model=…, ?limit=…).
-      this.#passthrough(req, rawUrl, body, res);
+      // params the real API needs (e.g. /api/claude_cli/bootstrap?entrypoint=…&model=…, ?limit=…). In
+      // trace mode, an RC endpoint is traced both ways as it flows to/from the real upstream.
+      if (rc !== null) this.#traceRcRequest(req.method ?? "GET", rc, body);
+      this.#passthrough(req, rawUrl, body, res, rc);
+    }
+  }
+
+  /** Trace one client→Anthropic RC request: the verb/path always; the worker event types it carries
+   *  at debug; the full body at trace. Auth headers are never touched (they aren't passed here). */
+  #traceRcRequest(method: string, label: string, body: Buffer): void {
+    if (!this.#trace.enabled("info")) return;
+    const fields: Record<string, string | number> = { dir: "→", method, path: label };
+    if (this.#trace.enabled("debug")) {
+      const json = tryJson(body);
+      if (json) {
+        if (Array.isArray(json.events))
+          fields.events = json.events.map((e) => evType(e)).join(",") || "0";
+        if (Array.isArray(json.updates)) fields.acks = json.updates.length;
+        if (typeof json.worker_status === "string") fields.worker_status = json.worker_status;
+      }
+    }
+    this.#trace.info("rc →", fields);
+    if (this.#trace.enabled("trace") && body.length) {
+      this.#trace.trace("rc → body", { body: body.toString("utf8") });
     }
   }
 
@@ -136,6 +177,8 @@ export class MitmProxy {
   // returns `res` directly), so the `return sendJson(...)` early-exits are legal (biome forbids a
   // value-return from a `void` function — noVoidTypeReturn — and dislikes `void` in a union).
   #intercept(method: string, path: string, body: Buffer, res: ServerResponse): ServerResponse {
+    const core = this.#opts.core;
+    if (!core) return sendJson(res, { error: "no relay core" }, 500); // relay mode always has one
     let data: Record<string, unknown> = {};
     if (body.length) {
       try {
@@ -149,14 +192,12 @@ export class MitmProxy {
     if (path === "/v1/code/triggers") return sendJson(res, { data: [] });
 
     if (path === "/v1/code/sessions" && method === "POST") {
-      const s = this.#opts.core.create(data);
+      const s = core.create(data);
       // Enqueue `initialize` as downstream seq 1 AT CREATE — before onSession announces the session and
       // a fast client prompt could race a `user` event ahead of it. The worker's SSE then always
       // receives initialize first (pushInitialize is idempotent, so #streamWorker's call is a no-op).
       s.pushInitialize();
-      // Lifecycle at info (session id only); the worker-set title is metadata we keep to debug.
-      this.#trace.info("session created", { session: s.id });
-      this.#trace.debug("session title", { session: s.id, title: s.title });
+      this.#trace.info("session created", { session: s.id, title: s.title });
       this.#opts.onSession?.(s);
       return sendJson(res, { session: s.sessionObj() });
     }
@@ -165,7 +206,7 @@ export class MitmProxy {
     if (!m) return sendJson(res, { error: "not found" }, 404);
     const sid = m[1] as string;
     const sub = m[2] ?? "";
-    const s = this.#opts.core.get(sid);
+    const s = core.get(sid);
     if (!s) return sendJson(res, { error: "no such session" }, 404);
 
     if (sub === "" && method === "GET") return sendJson(res, { session: s.sessionObj() });
@@ -269,7 +310,13 @@ export class MitmProxy {
     }
   }
 
-  #passthrough(req: IncomingMessage, path: string, body: Buffer, res: ServerResponse): void {
+  #passthrough(
+    req: IncomingMessage,
+    path: string,
+    body: Buffer,
+    res: ServerResponse,
+    rc: string | null = null,
+  ): void {
     // Forward to the REAL upstream over a fresh TLS connection (default CA validation). Drop
     // hop-by-hop + framing headers; set an exact Content-Length from the fully-read body.
     const headers: Record<string, string> = {};
@@ -286,7 +333,16 @@ export class MitmProxy {
       { host: MITM_HOST, port: 443, method: req.method, path, headers, servername: MITM_HOST },
       (up) => {
         res.writeHead(up.statusCode ?? 502, up.headers);
-        up.pipe(res);
+        if (rc !== null)
+          this.#trace.info("rc ←", { dir: "←", path: rc, status: up.statusCode ?? 0 });
+        const isSse = String(up.headers["content-type"] ?? "").includes("text/event-stream");
+        if (rc !== null && isSse && this.#trace.enabled("debug")) {
+          this.#teeSse(rc, up, res); // worker event stream: forward + trace each event
+        } else if (rc !== null && this.#trace.enabled("trace")) {
+          this.#teeJson(rc, up, res); // small JSON response: forward + dump the body at trace
+        } else {
+          up.pipe(res);
+        }
       },
     );
     upstream.on("error", () => {
@@ -295,6 +351,66 @@ export class MitmProxy {
     });
     if (body.length) upstream.write(body);
     upstream.end();
+  }
+
+  /** Forward an SSE response and trace each `event:/id:/data:` block (Anthropic→worker direction).
+   *  `up.pipe(res)` does the forwarding — it keeps proper backpressure and ends res — while a `data`
+   *  listener (which still fires under pipe) decodes a copy for tracing via a StringDecoder, so a
+   *  multi-byte char split across chunks isn't corrupted in the trace. Delivery is byte-exact. */
+  #teeSse(label: string, up: IncomingMessage, res: ServerResponse): void {
+    up.pipe(res);
+    const decoder = new StringDecoder("utf8");
+    let buf = "";
+    up.on("data", (chunk: Buffer) => {
+      buf += decoder.write(chunk);
+      let m = SSE_SEP.exec(buf);
+      while (m) {
+        this.#traceSseEvent(label, buf.slice(0, m.index));
+        buf = buf.slice(m.index + m[0].length);
+        m = SSE_SEP.exec(buf);
+      }
+      if (buf.length > SSE_BUF_CAP) buf = buf.slice(-SSE_BUF_CAP); // never grow without bound
+    });
+    up.on("error", () => {
+      if (!res.writableEnded) res.end();
+    });
+  }
+
+  #traceSseEvent(label: string, raw: string): void {
+    const { event, id, data } = parseSseBlock(raw);
+    if (event === "" && data === "") return; // a keepalive (":...") — nothing to trace
+    this.#trace.debug("rc ← sse", {
+      dir: "←",
+      path: label,
+      event,
+      id,
+      type: evType(tryJson(data)),
+    });
+    if (this.#trace.enabled("trace") && data !== "") this.#trace.trace("rc ← sse data", { data });
+  }
+
+  /** Forward a non-SSE response (pipe = backpressure + end) while keeping a CAPPED copy to dump the
+   *  body at trace. The cap means even a huge response can't OOM the diagnostic. */
+  #teeJson(label: string, up: IncomingMessage, res: ServerResponse): void {
+    up.pipe(res);
+    const chunks: Buffer[] = [];
+    let kept = 0;
+    up.on("data", (c: Buffer) => {
+      if (kept < JSON_TRACE_CAP) {
+        chunks.push(c);
+        kept += c.length;
+      }
+    });
+    up.on("end", () => {
+      const body = Buffer.concat(chunks).toString("utf8");
+      this.#trace.trace("rc ← body", {
+        path: label,
+        body: kept >= JSON_TRACE_CAP ? `${body}…(truncated)` : body,
+      });
+    });
+    up.on("error", () => {
+      if (!res.writableEnded) res.end();
+    });
   }
 }
 
@@ -341,4 +457,47 @@ function sendJson(res: ServerResponse, obj: unknown, status = 200): ServerRespon
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": body.length });
   res.end(body);
   return res;
+}
+
+/** A stable label for an RC worker endpoint (session id masked), or null if it isn't one. */
+export function rcLabel(path: string): string | null {
+  if (!path.startsWith("/v1/code/")) return null;
+  return path.replace(/(\/v1\/code\/sessions\/)[^/?]+/, "$1{id}");
+}
+
+function tryJson(s: string | Buffer): Record<string, unknown> | null {
+  const str = typeof s === "string" ? s : s.toString("utf8");
+  if (str.trim() === "") return null;
+  try {
+    const v = JSON.parse(str);
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse one SSE block (`event:`/`id:`/`data:` lines) into its fields. Tolerates LF or CRLF line
+ *  endings; multiple `data:` lines are joined with "\n", per the SSE spec. */
+export function parseSseBlock(raw: string): { event: string; id: string; data: string } {
+  let event = "";
+  let id = "";
+  const data: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("id:")) id = line.slice(3).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).trim());
+  }
+  return { event, id, data: data.join("\n") };
+}
+
+/** The RC event type carried by a frame: an SSE/worker event is `{payload:{type}}` or `{type}`. */
+export function evType(json: unknown): string {
+  if (!json || typeof json !== "object") return "?";
+  const o = json as Record<string, unknown>;
+  const payload = o.payload;
+  if (payload && typeof payload === "object") {
+    const pt = (payload as Record<string, unknown>).type;
+    if (typeof pt === "string") return pt;
+  }
+  return typeof o.type === "string" ? o.type : "?";
 }
