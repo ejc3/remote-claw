@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import {
+  basename,
+  diffOf,
+  dirname,
+  editStat,
+  parseToolUse,
+  type ToolInput,
+} from "./lib/transcript";
 import { type Announce, FRESH_WINDOW_MS, type Message, Viewer } from "./lib/viewer";
 
 export default function Home() {
@@ -295,79 +303,228 @@ function Transcript(props: {
   );
 }
 
+// The transcript renders as an asymmetric document, not symmetric chat: USER turns are small
+// right-aligned pills; ASSISTANT turns are full-width prose (no bubble). Tool calls are compact
+// tappable rows that expand to a Command/Diff detail; sub-agents and thinking nest/recede. (Inspired
+// by Claude Code's mobile UI — see the design spec.)
 function Bubble({ message }: { message: Message }) {
-  if (message.kind === "result") {
-    return <p className="turn-sep">turn complete</p>;
-  }
-  // A tool call (including `Task`, which spawns a sub-agent) — render the activity, not as chat.
-  if (message.kind === "tool_use") return <ToolUse text={message.text} />;
-  // A worker permission request (RC usually auto-executes, §17.4 — shown when it doesn't).
-  if (message.kind === "permission_request") {
-    let tool = "tool";
-    try {
-      tool = (JSON.parse(message.text) as { tool_name?: string }).tool_name ?? "tool";
-    } catch {}
-    return (
-      <div className="tool-row">
-        <span className="tool-chip">🔐 permission</span>
-        <span className="tool-summary">{tool}</span>
-      </div>
-    );
-  }
-  // An extended-thinking block — the model's reasoning, shown muted/collapsible (not a reply). A
-  // sub-agent's reasoning (`*_sub`) indents under its Task, matching assistant_sub.
-  if (message.kind === "assistant_thinking" || message.kind === "assistant_thinking_sub") {
-    const sub = message.kind === "assistant_thinking_sub";
-    return (
-      <details className="thinking" data-sub={sub}>
-        <summary>💭 {sub ? "sub-agent thinking" : "thinking"}</summary>
-        <div className="thinking-body">{message.text}</div>
-      </details>
-    );
-  }
-  // A sub-agent's reply (assistant output under a parent Task) — nested under the tool activity.
-  if (message.kind === "assistant_sub") {
-    return (
-      <div className="bubble-row" data-me={false}>
-        <div className="bubble bubble-sub">
-          <span className="sub-tag">sub-agent</span>
-          {message.text}
+  switch (message.kind) {
+    case "result":
+      return <p className="turn-sep" aria-hidden />;
+    case "user":
+      return (
+        <div className="row-user">
+          <div className="pill">{message.text}</div>
         </div>
-      </div>
-    );
+      );
+    case "assistant":
+      return <Prose className="assistant" text={message.text} />;
+    case "assistant_sub":
+      return (
+        <div className="sub-thread">
+          <Prose className="assistant assistant-sub" text={message.text} />
+        </div>
+      );
+    case "assistant_thinking":
+    case "assistant_thinking_sub":
+      return <ThinkingRow text={message.text} sub={message.kind === "assistant_thinking_sub"} />;
+    case "tool_use":
+      return <ToolRow text={message.text} />;
+    case "permission_request":
+      return <PermissionRow text={message.text} />;
+    default:
+      // accepted acks + lifecycle frames are not part of the rendered conversation.
+      return null;
   }
-  // The transcript stream also carries meta acks (`accepted`) and lifecycle frames; only the actual
-  // conversation (user prompts + assistant replies) belongs in the chat.
-  if (message.kind !== "user" && message.kind !== "assistant") return null;
-  const me = message.kind === "user";
+}
+
+/** A thinking block — collapsed, muted, recedes. A sub-agent's reasoning nests under its Task. */
+function ThinkingRow({ text, sub }: { text: string; sub: boolean }) {
   return (
-    <div className="bubble-row" data-me={me}>
-      <div className="bubble" data-me={me}>
-        {message.text}
-      </div>
+    <details className="thinking" data-sub={sub}>
+      <summary>💭 {sub ? "sub-agent thinking" : "thought"}</summary>
+      <div className="thinking-body">{text}</div>
+    </details>
+  );
+}
+
+/** A worker permission request (RC usually auto-executes, §17.4 — shown when it doesn't). */
+function PermissionRow({ text }: { text: string }) {
+  let tool = "tool";
+  try {
+    tool = (JSON.parse(text) as { tool_name?: string }).tool_name ?? "tool";
+  } catch {}
+  return (
+    <div className="tool-row">
+      <span className="tool-glyph">🔐</span>
+      <span className="tool-label">permission · {tool}</span>
     </div>
   );
 }
 
-/** Render a tool call. A `Task` is a sub-agent spawn (🤖); any other tool is generic activity (⚙). */
-function ToolUse({ text }: { text: string }) {
-  let name = "tool";
-  let summary = "";
-  try {
-    const t = JSON.parse(text) as { name?: string; input?: unknown };
-    name = typeof t.name === "string" ? t.name : "tool";
-    const input = t.input as { command?: string; description?: string; prompt?: string } | null;
-    summary = input?.description ?? input?.command ?? input?.prompt ?? "";
-  } catch {
-    summary = text;
-  }
+/**
+ * A tool call: a compact tappable row (action-verb label + a green/red edit stat for Edit/Write +
+ * a chevron) that expands to its detail — the Bash command, or a diff viewer for a file edit, or the
+ * Task prompt for a sub-agent. The diff is computed from the tool_use input (Edit old/new strings).
+ */
+function ToolRow({ text }: { text: string }) {
+  const { name, input, sub } = parseToolUse(text);
+
   const isTask = name === "Task";
+  const isEdit = name === "Edit" || name === "Write" || name === "MultiEdit";
+  const file = input.file_path ? basename(input.file_path) : null;
+  const stat = isEdit ? editStat(input) : null;
+  const verb = isTask
+    ? `Ran a sub-agent${input.description ? `: ${input.description}` : ""}`
+    : isEdit && file
+      ? `Edited ${file}`
+      : name === "Read" && file
+        ? `Read ${file}`
+        : name === "Bash"
+          ? input.description || "Ran a command"
+          : `${name}${input.description ? `: ${input.description}` : ""}`;
+
+  // Only expandable when the detail body will actually render something. `description` is already in
+  // the label, and a Task's prompt is the only prompt we render — so don't open to an empty box.
+  const hasDetail = Boolean(input.command || isEdit || (isTask && input.prompt));
+  const glyph = isTask ? "🤖" : isEdit ? "✏️" : name === "Read" ? "📄" : name === "Bash" ? "❯" : "⚙";
+
+  const row = (
+    <span className="tool-line">
+      <span className="tool-glyph">{glyph}</span>
+      <span className="tool-label">{verb}</span>
+      {stat && (
+        <span className="tool-stat">
+          {stat.add > 0 && <span className="stat-add">+{stat.add}</span>}
+          {stat.del > 0 && <span className="stat-del">−{stat.del}</span>}
+        </span>
+      )}
+    </span>
+  );
+
+  if (!hasDetail)
+    return (
+      <div className="tool-row" data-sub={sub}>
+        {row}
+      </div>
+    );
+
   return (
-    <div className="tool-row">
-      <span className="tool-chip">
-        {isTask ? "🤖" : "⚙"} {isTask ? "sub-agent" : name}
-      </span>
-      {summary ? <span className="tool-summary">{summary.slice(0, 120)}</span> : null}
+    <details className="tool-row tool-row-x" data-sub={sub}>
+      <summary>
+        {row}
+        <span className="chev">›</span>
+      </summary>
+      <div className="tool-detail">
+        {input.command && (
+          <Section label="Command">
+            <pre className="code-block">{input.command}</pre>
+          </Section>
+        )}
+        {isEdit && <DiffView input={input} />}
+        {isTask && input.prompt && (
+          <Section label="Prompt">
+            <div className="detail-text">{input.prompt}</div>
+          </Section>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function Section({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="detail-section">
+      <div className="detail-label">{label}</div>
+      {children}
     </div>
   );
+}
+
+const MAX_DIFF_LINES = 200; // cap each side so a large Write/Edit doesn't mount thousands of nodes
+
+/** A diff viewer for a file edit — a path header over the changed lines (removed red / added green),
+ *  computed from the tool_use input. See diffOf() for how a hunk is reduced to just its changes. */
+function DiffView({ input }: { input: ToolInput }) {
+  const path = input.file_path ?? "file";
+  const { rem, add } = diffOf(input);
+  if (rem.length === 0 && add.length === 0)
+    return (
+      <div className="diff">
+        <div className="diff-path" title={path}>
+          {basename(path)} <span className="diff-dir">{dirname(path)}</span>
+        </div>
+        <div className="diff-empty">no textual changes</div>
+      </div>
+    );
+  return (
+    <div className="diff">
+      <div className="diff-path" title={path}>
+        {basename(path)} <span className="diff-dir">{dirname(path)}</span>
+      </div>
+      <pre className="diff-body">
+        {diffLines(rem.slice(0, MAX_DIFF_LINES), "dl-del", "−")}
+        {more(rem.length - MAX_DIFF_LINES, "removed")}
+        {diffLines(add.slice(0, MAX_DIFF_LINES), "dl-add", "+")}
+        {more(add.length - MAX_DIFF_LINES, "added")}
+      </pre>
+    </div>
+  );
+}
+
+function more(n: number, which: string): ReactNode {
+  if (n <= 0) return null;
+  return (
+    <div className="dl dl-more">
+      … {n} more {which} line{n === 1 ? "" : "s"}
+    </div>
+  );
+}
+
+// Render one side of a diff. Keyed by content + occurrence ordinal (not the array index): for an
+// immutable, never-reordered diff that is a stable identity, and it keeps biome's array-index rule
+// satisfied honestly rather than by suppression.
+function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
+  const seen = new Map<string, number>();
+  return lines.map((line) => {
+    const n = seen.get(line) ?? 0;
+    seen.set(line, n + 1);
+    return (
+      <div key={`${sign}${n}:${line}`} className={`dl ${cls}`}>
+        <span className="dg">{sign}</span>
+        {line}
+      </div>
+    );
+  });
+}
+
+/** Render assistant prose with minimal markdown: **bold** and `inline code` (everything escaped). */
+function Prose({ text, className }: { text: string; className: string }) {
+  return <div className={`prose ${className}`}>{renderInline(text)}</div>;
+}
+
+function renderInline(text: string): ReactNode[] {
+  // Split on `code` spans and **bold** runs; everything else is plain (auto-escaped) text.
+  const out: ReactNode[] = [];
+  const re = /`([^`]+)`|\*\*([^*]+)\*\*/g;
+  let last = 0;
+  let m: RegExpExecArray | null = re.exec(text);
+  let k = 0;
+  while (m !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] !== undefined) {
+      out.push(
+        <code key={`c${k}`} className="inline-code">
+          {m[1]}
+        </code>,
+      );
+    } else if (m[2] !== undefined) {
+      out.push(<strong key={`b${k}`}>{m[2]}</strong>);
+    }
+    last = re.lastIndex;
+    k += 1;
+    m = re.exec(text);
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
 }
