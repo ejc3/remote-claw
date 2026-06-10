@@ -1,15 +1,20 @@
 import type { WireFrame } from "@remote-claw/clawsec";
 import { createHook, getWritable } from "workflow";
 
-// §6A/§6B — the relay run. One run owns ONE channel token's inbound hook and re-emits every
-// published frame onto its durable resumable out-stream. The per-identity BUS (`bus:<id>`,
-// session_announce broadcasts) and a PER-SESSION stream (`sess:<id>:<sid>`, turn/control frames)
-// are the SAME workflow under different tokens — the broker is a dumb ciphertext relay that never
-// holds a key, so it forges nothing. Stream writes bypass the per-run event cap (§12), so
-// high-volume session turn frames stay cheap.
+// §6A/§6B — the relay run (the Vercel backend's durable loop). One run owns ONE channel token's
+// inbound hook and re-emits every published frame onto its durable resumable out-stream. The
+// per-identity BUS (`bus:<id>`, session_announce broadcasts) and a PER-SESSION stream
+// (`sess:<id>:<sid>`, turn/control frames) are the SAME workflow under different tokens — the broker
+// is a dumb ciphertext relay that never holds a key, so it forges nothing. Stream writes bypass the
+// per-run event cap (§12), so high-volume session turn frames stay cheap.
 //
 // __close is a control sentinel for the cap-roll / teardown path (§6B): completing the run closes
 // its stream and disposes the hook, freeing the token for a fresh `start()` under the same name.
+//
+// RelayPayload + isClose are kept LOCAL here (not imported from lib/broker/backend, the canonical
+// home the other adapters use): this file is compiled by the Workflow DevKit into a separate steps
+// bundle whose ESM loader doesn't apply the `.js`→`.ts` extensionAlias, so a runtime import of a
+// local `.ts` would fail to resolve. The shapes are trivial and structurally identical.
 
 /** What a publisher may put on the channel: a wire frame, or the teardown sentinel. */
 export type RelayPayload = WireFrame | { __close: true };

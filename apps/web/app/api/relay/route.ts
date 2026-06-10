@@ -1,12 +1,13 @@
 import { decodeFrame, encodeFrame, timingSafeEqual, WireError } from "@remote-claw/clawsec";
-import { resumeHook } from "workflow/api";
 import { AuthError, identityFromRequest } from "../../../lib/auth";
-import { channelToken, ensureChannel } from "../../../lib/channel";
+import { getBackend } from "../../../lib/broker";
+import { PublishConflictError } from "../../../lib/broker/backend";
+import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
-// §3.2 POST /api/relay — publish ONE ciphertext frame. Resume-or-start the channel run (bus, or
-// per-session with ?session=<sid>) and resumeHook(token, frame). Gated by Bearer auth_token;
-// ciphertext only — the broker validates the §8 envelope SHAPE but never decrypts it.
+// §3.2 POST /api/relay — publish ONE ciphertext frame. Resume-or-start the channel (bus, or
+// per-session with ?session=<sid>) and deliver the frame via the selected backend. Gated by Bearer
+// auth_token; ciphertext only — the broker validates the §8 envelope SHAPE but never decrypts it.
 export const maxDuration = 60;
 
 export async function POST(req: Request): Promise<Response> {
@@ -63,13 +64,24 @@ export async function POST(req: Request): Promise<Response> {
     return json({ error: String((e as Error)?.message ?? e) }, 400);
   }
 
-  const { runId, created } = await ensureChannel(token);
-  // The run can complete/dispose between ensureChannel resolving and this resume (a concurrent
-  // __close or cap-roll) -> resumeHook throws. Report 409, not 500; the client retries.
+  // Resume-or-start the channel and deliver the frame. A PublishConflictError means the channel
+  // disposed between resolve and deliver (a concurrent __close or cap-roll) -> 409, and the client
+  // re-posts the same frame (a dropped delivery would strand a subscriber's ordered stream on a gap).
+  // Any OTHER failure (the channel never came up) propagates -> 500, so the client fails fast on a
+  // hard outage instead of retry-looping it (the host only retries 409).
+  let result: { created: boolean; channelId: string };
   try {
-    await resumeHook(token, encodeFrame(frame));
+    result = await getBackend().publish(token, encodeFrame(frame));
   } catch (e) {
-    return json({ ok: false, error: String((e as Error)?.message ?? e), runId, created }, 409);
+    if (PublishConflictError.is(e)) {
+      return json({ ok: false, error: String((e as Error)?.message ?? e) }, 409);
+    }
+    throw e;
   }
-  return json({ ok: true, channel: sessionId === null ? "bus" : "session", runId, created });
+  return json({
+    ok: true,
+    channel: sessionId === null ? "bus" : "session",
+    runId: result.channelId,
+    created: result.created,
+  });
 }

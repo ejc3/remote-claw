@@ -1,5 +1,6 @@
 import { AuthError, identityFromRequest } from "../../../lib/auth";
-import { channelToken, resolveStream } from "../../../lib/channel";
+import { getBackend } from "../../../lib/broker";
+import { channelToken } from "../../../lib/channel";
 import { json, sseEmptyResponse, sseResponse } from "../../../lib/http";
 
 // §3.2 GET /api/stream — subscribe to a channel as Server-Sent Events. Resolves the derived token
@@ -35,7 +36,7 @@ export async function GET(req: Request): Promise<Response> {
     return json({ error: String((e as Error)?.message ?? e) }, 400);
   }
 
-  const stream = await resolveStream(token, startIndex);
+  const stream = await getBackend().subscribe(token, startIndex);
   if (stream === null) return sseEmptyResponse();
   return sseResponse(stream);
 }
