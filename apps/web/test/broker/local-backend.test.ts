@@ -85,6 +85,15 @@ describe("LocalBackend — durable channel contract", () => {
     expect(seqs(await readN(stream, 2))).toEqual([3, 4]); // last 2 only
   });
 
+  it("clamps a positive out-of-range startIndex to the head: empty replay, then live", async () => {
+    const b = new LocalBackend();
+    await b.publish("t", frame(0));
+    await b.publish("t", frame(1));
+    const stream = present(await b.subscribe("t", 99)); // past the end → clamp to len
+    await b.publish("t", frame(2));
+    expect(seqs(await readN(stream, 1))).toEqual([2]); // no replay of 0/1, only the new frame
+  });
+
   it("fans a live frame out to every subscriber", async () => {
     const b = new LocalBackend();
     await b.publish("t", frame(0));

@@ -25,9 +25,10 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   await expect(row).toBeVisible();
   await row.click();
 
-  // (1) The tool's Output — the tool_result the relay used to drop (#47).
-  const output = page.locator("details.tool-result", { hasText: "Output" }).first();
-  await expect(output).toBeVisible();
+  // (1) The top-level tool's Output — the tool_result the relay used to drop (#47). Target it by
+  // identity (not sub, not error) so a frame-ordering regression can't make .first() grab another row.
+  const output = page.locator('details.tool-result[data-sub="false"][data-error="false"]');
+  await expect(output).toHaveCount(1);
   await output.click(); // expand
   await expect(output.locator("pre.tool-output")).toContainText("built in 3.42s");
 
@@ -44,8 +45,8 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   // (4) An error tool_result renders red (data-error).
   await expect(page.locator('details.tool-result[data-error="true"]')).toBeVisible();
 
-  // (5) The model's prose.
-  await expect(page.locator("p.assistant", { hasText: "Build is green" })).toBeVisible();
+  // (5) The model's prose (Prose renders a div.prose.assistant).
+  await expect(page.locator(".prose.assistant", { hasText: "Build is green" })).toBeVisible();
 
   // Artifact: the real transcript as rendered by the real app.
   await page.locator("section.chat").screenshot({ path: "test-results/transcript-e2e.png" });
@@ -53,6 +54,7 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
 
 test("a typed prompt appears as a user turn (the inbound echo path)", async ({ page, request }) => {
   const res = await request.post("/api/dev/seed");
+  expect(res.ok()).toBeTruthy(); // a 404 (server not in local mode) would otherwise fail confusingly
   const { pass } = (await res.json()) as { pass: string };
   await page.goto(`/#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();

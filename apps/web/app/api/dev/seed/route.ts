@@ -12,8 +12,22 @@ import { HostRcRelay, Session } from "@remote-claw/cli/rc";
 // MITM↔worker leg is separately proven end to end by rc-spine.integration.test.ts; here the point is
 // to exercise relay → broker(local) → real browser UI with production code on every leg the UI sees.
 
-// Keep each seeded session's serve() loop alive across requests (and un-GC'd) for the test's lifetime.
+// Each seeded session runs a real serve() loop forever; a TTL bounds its lifetime so repeated seeds
+// (the e2e seeds once per test) can't accumulate relays + pumps for the process lifetime. The map
+// holds the controllers so the TTL (and a later seed) can abort and drop them.
 const live = new Map<string, AbortController>();
+const SESSION_TTL_MS = 60_000; // > any single e2e test, << a leak
+
+/** Only loopback origins may seed: the host side loops authenticated requests back to THIS server, so
+ *  a spoofed Host header must not be able to point them at another origin (SSRF), even in dev. */
+function isLoopback(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
+}
 
 /** One scripted RC turn that exercises every transcript row the UI renders (#47 + prior features). */
 function scenario(): Array<Record<string, unknown>> {
@@ -149,29 +163,48 @@ function scenario(): Array<Record<string, unknown>> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  if (process.env.BROKER_BACKEND !== "local") {
+  // DEV gate: only when the in-process broker is selected AND we're not on a Vercel deploy. The real
+  // production deploy uses the vercel backend and sets VERCEL=1, so this route is a 404 there even if
+  // BROKER_BACKEND were somehow mis-set to local. The e2e runs `next start` locally (VERCEL unset).
+  if (process.env.BROKER_BACKEND !== "local" || process.env.VERCEL === "1") {
     return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
   }
-  const origin = new URL(req.url).origin;
+  const url = new URL(req.url);
+  if (!isLoopback(url.hostname)) {
+    return new Response(JSON.stringify({ error: "seed is loopback-only" }), { status: 400 });
+  }
+  const origin = url.origin;
 
-  // A fresh random identity per seed so parallel test runs get isolated bus/session channels.
+  // A fresh random identity per seed so each run gets isolated bus/session channels.
   const secret = new Uint8Array(32);
   crypto.getRandomValues(secret);
   const id = await deriveIdentity(secret);
   const pass = await formatPass(id);
 
-  const sessionId = `e2e-${Math.random().toString(36).slice(2, 10)}`;
+  // A crypto-random session id (not Math.random) so concurrent seeds can't collide on the live-map key.
+  const rand = new Uint8Array(8);
+  crypto.getRandomValues(rand);
+  const sessionId = `e2e-${Array.from(rand, (b) => b.toString(16).padStart(2, "0")).join("")}`;
   const session = new Session(sessionId, "rc box", {});
   const client = new BrokerClient({ baseUrl: origin, provider: securityProvider("sealed", id) });
   const relay = new HostRcRelay({ client, identityId: id.identityId, sessionId, session });
 
   const ac = new AbortController();
   live.set(sessionId, ac);
+  const ttl = setTimeout(() => {
+    ac.abort();
+    live.delete(sessionId);
+  }, SESSION_TTL_MS);
+  if (typeof ttl.unref === "function") ttl.unref(); // don't keep the process alive for the timer
 
   // Announce on the bus (so the browser discovers the session), start the serve loop, then inject the
   // scripted turn. serve()'s upstream pump drains the queued events → maps → publishes to the broker.
   await relay.announce("rc box", "/home/ubuntu/remote-claw");
-  void relay.serve(ac.signal).catch(() => {});
+  // Surface a non-abort failure (dev-only, local machine) so a broken pump shows up in the server log
+  // instead of leaving the test staring at a silently-empty transcript.
+  void relay.serve(ac.signal).catch((e) => {
+    if (!ac.signal.aborted) console.error(`[dev/seed] serve(${sessionId}) failed:`, e);
+  });
   for (const payload of scenario()) session.pushUpstream(payload);
 
   return Response.json({ pass, sessionId, origin });

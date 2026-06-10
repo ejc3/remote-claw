@@ -19,6 +19,24 @@ export function isClose(p: RelayPayload): p is { __close: true } {
   return (p as { __close?: boolean }).__close === true;
 }
 
+/**
+ * Thrown by publish() ONLY when the channel completed/disposed BETWEEN resolving it and delivering
+ * the frame (a concurrent __close or Vercel cap-roll). The relay route maps this to 409 — the client
+ * re-posts the same (deterministic-msg_id) frame, which the fresh channel dedups. Any OTHER publish
+ * failure (e.g. the channel never came up) must NOT be a 409: it propagates as a 500 so the client
+ * fails fast instead of retry-looping a hard outage. (Keeping these distinct preserves the pre-port
+ * behavior, where only the resume step was inside the route's 409 catch.)
+ */
+export class PublishConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PublishConflictError";
+  }
+  static is(e: unknown): e is PublishConflictError {
+    return e instanceof PublishConflictError;
+  }
+}
+
 /** The result of a publish: whether this call brought the channel into existence, and the adapter's
  *  id for it (a Vercel run id, a LocalBackend channel id, a Temporal workflow id). Both are surfaced
  *  on the relay route's JSON reply (`created`, `runId`) — preserving the client's RelayResult shape. */

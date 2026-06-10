@@ -1,6 +1,7 @@
 import { decodeFrame, encodeFrame, timingSafeEqual, WireError } from "@remote-claw/clawsec";
 import { AuthError, identityFromRequest } from "../../../lib/auth";
 import { getBackend } from "../../../lib/broker";
+import { PublishConflictError } from "../../../lib/broker/backend";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
@@ -63,14 +64,19 @@ export async function POST(req: Request): Promise<Response> {
     return json({ error: String((e as Error)?.message ?? e) }, 400);
   }
 
-  // Resume-or-start the channel and deliver the frame. The channel can complete/dispose between
-  // resolve and deliver (a concurrent __close or cap-roll) -> publish throws. Report 409, not 500;
-  // the client retries. A dropped delivery would strand a subscriber's ordered stream on a gap.
+  // Resume-or-start the channel and deliver the frame. A PublishConflictError means the channel
+  // disposed between resolve and deliver (a concurrent __close or cap-roll) -> 409, and the client
+  // re-posts the same frame (a dropped delivery would strand a subscriber's ordered stream on a gap).
+  // Any OTHER failure (the channel never came up) propagates -> 500, so the client fails fast on a
+  // hard outage instead of retry-looping it (the host only retries 409).
   let result: { created: boolean; channelId: string };
   try {
     result = await getBackend().publish(token, encodeFrame(frame));
   } catch (e) {
-    return json({ ok: false, error: String((e as Error)?.message ?? e) }, 409);
+    if (PublishConflictError.is(e)) {
+      return json({ ok: false, error: String((e as Error)?.message ?? e) }, 409);
+    }
+    throw e;
   }
   return json({
     ok: true,

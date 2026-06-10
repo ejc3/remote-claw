@@ -85,11 +85,13 @@ export class LocalBackend implements BrokerBackend {
     if (channel === undefined) return null; // subscribing never creates a channel — mirror Vercel
 
     // Resolve the resume point: undefined → 0 (from the start); negative → the recent window (the
-    // last |n| frames); positive → that absolute index. Clamp into range.
+    // last |n| frames); positive → that absolute index. Clamp both ends into [0, len] so an
+    // out-of-range index degrades to "stream only new frames", matching getReadable's contract.
     const len = channel.frames.length;
     let start = 0;
-    if (startIndex !== undefined)
-      start = startIndex < 0 ? Math.max(0, len + startIndex) : startIndex;
+    if (startIndex !== undefined) {
+      start = startIndex < 0 ? Math.max(0, len + startIndex) : Math.min(startIndex, len);
+    }
 
     let sub: Subscriber | null = null;
     return new ReadableStream<WireFrame>({

@@ -1,7 +1,13 @@
 import type { WireFrame } from "@remote-claw/clawsec";
 import { getHookByToken, getRun, resumeHook, start } from "workflow/api";
 import { relayWorkflow } from "../../workflows/relay";
-import type { BrokerBackend, PublishResult, RelayPayload } from "./backend";
+import {
+  type BrokerBackend,
+  isClose,
+  PublishConflictError,
+  type PublishResult,
+  type RelayPayload,
+} from "./backend";
 
 // The production backend: Vercel Workflows. Each channel token addresses ONE durable `relayWorkflow`
 // run that owns the token's inbound hook and re-emits every published frame onto its resumable
@@ -61,12 +67,34 @@ async function ensureChannel(token: string): Promise<{ runId: string; created: b
 
 export class VercelBackend implements BrokerBackend {
   async publish(token: string, payload: RelayPayload): Promise<PublishResult> {
+    // A __close RESOLVES an existing run only — never start one just to close it (ensureChannel would
+    // create and immediately dispose an empty run, or race a real first publish and kill the fresh
+    // run). No-op if no run holds the token (matching LocalBackend's close-on-absent).
+    if (isClose(payload)) {
+      let runId: string;
+      try {
+        runId = runIdOf(await getHookByToken(token));
+      } catch {
+        return { created: false, channelId: "" };
+      }
+      return { created: false, channelId: await this.#deliver(token, payload, runId) };
+    }
+    // A failure to resolve-or-start the channel (e.g. the hook never registers within the deadline)
+    // is a HARD outage — let it propagate so the route returns 500 and the client fails fast.
     const { runId, created } = await ensureChannel(token);
-    // The run can complete/dispose between ensureChannel resolving and this resume (a concurrent
-    // __close or cap-roll) -> resumeHook throws. Propagate so the route reports 409 (not 500); the
-    // client retries. A dropped post would leave a permanent seq gap that stalls every subscriber.
-    await resumeHook(token, payload);
-    return { created, channelId: runId };
+    return { created, channelId: await this.#deliver(token, payload, runId) };
+  }
+
+  /** Deliver one payload to a resolved run; a resume failure (the run disposed between resolve and
+   *  deliver — a concurrent __close/cap-roll) becomes a PublishConflictError → 409 → client re-posts
+   *  the same (deterministic-msg_id) frame. A dropped post would strand a subscriber's ordered stream. */
+  async #deliver(token: string, payload: RelayPayload, runId: string): Promise<string> {
+    try {
+      await resumeHook(token, payload);
+    } catch (e) {
+      throw new PublishConflictError(String((e as Error)?.message ?? e));
+    }
+    return runId;
   }
 
   async subscribe(

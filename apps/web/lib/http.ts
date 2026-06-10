@@ -26,9 +26,14 @@ const encoder = new TextEncoder();
  * client disconnects. A leading comment opens the stream so intermediaries flush headers promptly.
  */
 export function sseResponse(source: ReadableStream<unknown>): Response {
+  // Hoisted so the body's cancel() (fired when the HTTP client disconnects) can interrupt the start()
+  // loop's pending read(): cancelling the reader cancels `source`, which lets a fan-out backend (the
+  // in-process LocalBackend) drop THIS subscriber. Without it, an idle disconnect leaves start()
+  // blocked on read() forever and the subscriber is never released.
+  let reader: ReadableStreamDefaultReader<unknown> | null = null;
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const reader = source.getReader();
+      reader = source.getReader();
       try {
         controller.enqueue(encoder.encode(": open\n\n"));
         while (true) {
@@ -46,6 +51,13 @@ export function sseResponse(source: ReadableStream<unknown>): Response {
           /* already closed */
         }
         controller.close();
+      }
+    },
+    async cancel() {
+      try {
+        await reader?.cancel();
+      } catch {
+        /* already closed */
       }
     },
   });
