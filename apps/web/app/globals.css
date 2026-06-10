@@ -14,6 +14,7 @@
   --accent: #6366f1;
   --accent-hover: #7c7ef5;
   --online: #34d399;
+  --warn: #fbbf24; /* amber — reconnecting / needs-you (#58) */
   --danger: #fb7185;
   --radius: 12px;
   --radius-sm: 9px;
@@ -229,21 +230,79 @@ code {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: #3a3a42;
+  background: #3a3a42; /* disconnected / unknown — a dim grey */
 }
-.dot[data-online="true"] {
+.dot[data-state="connected"] {
   background: var(--online);
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
+}
+.dot[data-state="reconnecting"] {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
 }
 .row-title {
   font-size: 14.5px;
   font-weight: 550;
+  /* flex:1 + min-width:0 so the title fills the row AND can shrink to an ellipsis — without min-width:0
+     a flex item won't shrink below its content, which would push a right-pinned badge off the edge. */
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.row[data-online="false"] .row-title {
+.row[data-state="disconnected"] .row-title {
   color: var(--text-faint);
+}
+
+/* "needs you" chip on a session row (and the activity it stands in for). */
+.needs-badge {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1a1205;
+  background: var(--warn);
+}
+
+/* The working pulse — three dots that fade in sequence (the thinking indicator, #48). */
+.working {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  flex: none;
+}
+.working > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--online);
+  animation: working-bounce 1s ease-in-out infinite;
+}
+.working > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.working > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes working-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
 }
 .row-sub {
   margin: 3px 0 0 17px;
@@ -677,6 +736,31 @@ code {
   word-break: break-word;
   font-style: italic;
   line-height: 1.5;
+}
+
+/* Pinned status strip above the composer — connection problems + worker activity (#48/#58). */
+.chat-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 550;
+  border-top: 1px solid var(--line-soft);
+}
+.chat-status[data-state="thinking"] {
+  color: var(--text-dim);
+}
+.chat-status[data-state="needs"] {
+  color: var(--warn);
+}
+.chat-status[data-state="reconnecting"] {
+  color: var(--warn);
+  background: rgba(251, 191, 36, 0.07);
+}
+.chat-status[data-state="disconnected"] {
+  color: var(--danger);
+  background: rgba(251, 113, 133, 0.08);
 }
 
 /* composer */

@@ -178,3 +178,24 @@ export function parseTask(text: string): TaskEvent {
     return { subtype: "", taskId: "", description: "", toolUseId: "" };
   }
 }
+
+export interface PermissionResolution {
+  requestId: string;
+  behavior: "allow" | "deny";
+}
+
+/** Parse a `permission_resolved` content frame — `{request_id, behavior}` — tolerating bad JSON. The
+ *  host LOGS this when a permission is answered, so a reload / catch_up can render the request as
+ *  resolved instead of re-prompting (#56). An unknown behavior defaults to "allow" (the relay only
+ *  ever emits allow|deny; "" requestId means we couldn't fold it onto a request — caller drops it). */
+export function parsePermissionResolved(text: string): PermissionResolution {
+  try {
+    const r = JSON.parse(text) as { request_id?: unknown; behavior?: unknown };
+    return {
+      requestId: typeof r.request_id === "string" ? r.request_id : "",
+      behavior: r.behavior === "deny" ? "deny" : "allow",
+    };
+  } catch {
+    return { requestId: "", behavior: "allow" };
+  }
+}

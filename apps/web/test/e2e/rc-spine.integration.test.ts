@@ -19,7 +19,8 @@ import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { ensureCerts, HostRcRelay, MitmProxy, RelayCore } from "@remote-claw/cli/rc";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
-import { type Message, Viewer } from "../../app/lib/viewer";
+import { parsePermissionResolved } from "../../app/lib/transcript";
+import { type Announce, type Message, Viewer } from "../../app/lib/viewer";
 import { FakeRcWorker } from "./fake-rc-worker";
 import { brokerFetch } from "./harness";
 
@@ -438,9 +439,10 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     const { worker } = await startRc(id, ac);
     const sid = await worker.register("rc box");
 
-    // ── A: collect raw announce bodies (status/phase/needs live on the full JSON body, which
-    //    Viewer.announces() strips to {sessionId,title,cwd,sentAt}). We read the bus directly via
-    //    a BrokerClient with the same identity to decode the K_meta-sealed session_announce frames.
+    // ── A: collect raw announce bodies straight off the bus. (Viewer.announces() ALSO surfaces
+    //    status/phase/needs now — see the VIEWER PRESENCE test below — but here we decode the bus
+    //    directly via a same-identity BrokerClient so this host-side proof is independent of the viewer
+    //    parse: it asserts the wire actually carries the fields, not just that the viewer copies them.)
     const rawAnnounces: Array<{
       status: string;
       phase: string;
@@ -614,4 +616,79 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       ]);
     }
   }, 40_000);
+
+  it("VIEWER PRESENCE + RESOLVED-ON-RELOAD: announces() surfaces phase/needs; a fresh viewer's catch_up renders the permission resolved", async () => {
+    // The viewer-side complement to the host-side PRESENCE test. Proves the two things the web UI
+    // actually depends on, through the REAL viewer APIs (not a hand-rolled bus decode):
+    //   (A) Viewer.announces() now surfaces {status, phase, needs}, and `needs` transitions
+    //       false→true→false across a permission gate opening and being granted.
+    //   (B) A cold second device (no local PermissionRow state) replays history and folds the LOGGED
+    //       permission_resolved into the SAME {requestId→behavior} map page.tsx uses — so it renders
+    //       the request resolved (allow), never re-prompting with live buttons (#56/#57).
+    const id = await deriveIdentity(new Uint8Array(32).fill(68));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+
+    const seen: Announce[] = [];
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    void (async () => {
+      for await (const a of viewer.announces(ac.signal)) if (a.sessionId === sid) seen.push(a);
+    })().catch(() => {});
+    // The pre-turn announce: idle worker, no open gate → the viewer reads it as not-needing-input.
+    await waitFor(() => seen.length > 0, 15_000);
+    const first = seen[0];
+    expect(typeof first?.status).toBe("string");
+    expect(first?.phase === "idle" || first?.phase === "thinking").toBe(true);
+    expect(first?.needs).toBe(false);
+
+    // Open a can_use_tool gate; the relay re-announces needs=true and announces() surfaces it.
+    let granted = false;
+    worker.onControlResponse(() => {
+      granted = true;
+    });
+    worker.start(sid, () => [
+      {
+        type: "control_request",
+        request_id: "perm-viewer-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Bash",
+          tool_input: { command: "echo hi" },
+        },
+      },
+    ]);
+
+    const got: Message[] = [];
+    tailInto(viewer, sid, got, ac.signal);
+    await viewer.sendPrompt(sid, "use a tool");
+    await waitFor(() => got.some((m) => m.kind === "permission_request"), 20_000);
+    await waitFor(() => seen.some((a) => a.needs === true), 15_000);
+
+    // Grant it — the host logs permission_resolved and re-announces needs=false.
+    await viewer.grantPermission(sid, "perm-viewer-1", "allow");
+    await waitFor(() => granted, 15_000);
+    await waitFor(
+      () => seen.some((a) => a.needs === false && a.sentAt > (first?.sentAt ?? 0)),
+      15_000,
+    );
+
+    // (B) Cold reload: a fresh viewer replays history and folds permission_resolved exactly as the UI.
+    const late = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const lateMsgs: Message[] = [];
+    tailInto(late, sid, lateMsgs, ac.signal);
+    await late.requestHistory(sid, 0);
+    await waitFor(() => lateMsgs.some((m) => m.kind === "permission_request"), 20_000);
+    await waitFor(() => lateMsgs.some((m) => m.kind === "permission_resolved"), 20_000);
+
+    const resolvedMap = new Map<string, "allow" | "deny">();
+    for (const m of lateMsgs) {
+      if (m.kind !== "permission_resolved") continue;
+      const r = parsePermissionResolved(m.text);
+      if (r.requestId !== "") resolvedMap.set(r.requestId, r.behavior);
+    }
+    // page.tsx: effective = confirmed ?? decision → "allow" with no local decision → renders resolved.
+    expect(resolvedMap.get("perm-viewer-1")).toBe("allow");
+  }, 50_000);
 });

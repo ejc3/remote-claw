@@ -15,15 +15,42 @@ const td = new TextDecoder();
 
 /** Presence: a session is "online" iff its latest announce's sent_at is within this window (§4.3).
  *  Also the freshness bound for control verbs (§3.7) — a verb the broker withholds past it is a
- *  no-op, so it can't replay a stale interrupt/set_mode/end. */
+ *  no-op, so it can't replay a stale interrupt/set_mode/end. Doubles as the DISCONNECTED threshold for
+ *  the connection-state machine (#58): past it, no recent announce means the host is gone. */
 export const FRESH_WINDOW_MS = 60_000;
 
-/** A decrypted session_announce from the bus. */
+/** A still-CONNECTED announce is at most this old. The host re-announces every ~20s + immediately on
+ *  any phase/needs change (relay's ANNOUNCE_KEEPALIVE_MS), so a healthy session stays well under this;
+ *  crossing it means ≥2 keepalives were missed → we're RECONNECTING, not yet declared gone (#58). */
+export const CONNECTED_WINDOW_MS = 45_000;
+
+/** The viewer's view of the host link, derived purely from announce freshness (§4.3 / #58):
+ *  connected (fresh) → reconnecting (a keepalive or two missed) → disconnected (gone past the window). */
+export type ConnState = "connected" | "reconnecting" | "disconnected";
+
+/** Classify the host link from the freshest announce's age. A monotone ladder: the older that
+ *  announce, the worse the state. `now` is passed in (not read here) so the UI owns the clock/ticks. */
+export function connState(sentAt: number, now: number): ConnState {
+  const age = now - sentAt;
+  if (age < CONNECTED_WINDOW_MS) return "connected";
+  if (age < FRESH_WINDOW_MS) return "reconnecting";
+  return "disconnected";
+}
+
+/** A decrypted session_announce from the bus. `status`/`phase`/`needs` are the live presence the host
+ *  folds onto every (re-)announce (#48/#58); absent on a pre-presence host, so they default benignly
+ *  (status "", phase idle, needs false) — an old host simply shows no thinking/needs indicator. */
 export interface Announce {
   sessionId: string;
   title: string;
   cwd: string | null;
   sentAt: number;
+  /** Raw worker_status (idle/running/requires_action/…) — kept verbatim for display/debug. */
+  status: string;
+  /** Derived activity: "thinking" = actively generating, "idle" = not. Drives the working indicator. */
+  phase: "idle" | "thinking";
+  /** The worker is waiting on the human (an open permission gate or requires_action). */
+  needs: boolean;
 }
 
 /** A decrypted transcript message from a session's out-stream. */
@@ -106,6 +133,10 @@ export class Viewer {
             title: typeof body.title === "string" ? body.title : String(body.session_id ?? ""),
             cwd: typeof body.cwd === "string" ? body.cwd : null,
             sentAt: typeof body.sent_at === "number" ? body.sent_at : 0,
+            // Presence fields (#48/#58). Pre-presence hosts omit them → benign defaults.
+            status: typeof body.status === "string" ? body.status : "",
+            phase: body.phase === "thinking" ? "thinking" : "idle",
+            needs: body.needs === true,
           };
         }
       } catch {
