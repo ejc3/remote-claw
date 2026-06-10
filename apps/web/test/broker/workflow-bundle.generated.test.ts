@@ -1,14 +1,16 @@
-import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
-import { bundleWorkflowCode } from "@temporalio/worker";
 import { describe, expect, it } from "vitest";
-import { WORKFLOW_BUNDLE_GZIP_B64 } from "../../temporal/workflow-bundle.generated";
+import {
+  WORKFLOW_BUNDLE_GZIP_B64,
+  WORKFLOW_BUNDLE_SOURCE_SHA256,
+} from "../../temporal/workflow-bundle.generated";
+import { workflowBundleSourceSha } from "../../temporal/workflow-bundle-source.mjs";
 
 // Drift guard for the committed, pre-built workflow bundle (temporal/workflow-bundle.generated.ts).
-// bundleWorkflowCode is deterministic (toolchain pinned via the lockfile), so we re-bundle from the
-// CURRENT source and assert the committed gzip decodes to exactly that. If someone edits
-// workflows.ts / names.ts without running `pnpm gen:workflow-bundle`, this fails — so the keep-warm
-// drain route can never ship a stale workflow.
+// We compare a hash of the SOURCE (workflows.ts + names.ts + the @temporalio/worker version), NOT the
+// bundle bytes — bundleWorkflowCode is only deterministic per machine (CI vs local differ), so a
+// byte compare would flake across environments. A source hash is identical everywhere, so this fails
+// exactly when someone edits the workflow without running `pnpm gen:workflow-bundle`.
 
 describe("workflow-bundle.generated.ts", () => {
   it("decodes to a non-empty bundle that mentions the relay signal/query names", () => {
@@ -19,10 +21,7 @@ describe("workflow-bundle.generated.ts", () => {
     }
   });
 
-  it("matches a fresh bundle of the current source (regenerate with `pnpm gen:workflow-bundle`)", async () => {
-    const committed = gunzipSync(Buffer.from(WORKFLOW_BUNDLE_GZIP_B64, "base64")).toString("utf8");
-    const workflowsPath = fileURLToPath(new URL("../../temporal/workflows.ts", import.meta.url));
-    const { code: fresh } = await bundleWorkflowCode({ workflowsPath });
-    expect(committed).toEqual(fresh);
-  }, 60_000);
+  it("is current with the workflow source (regenerate with `pnpm gen:workflow-bundle`)", () => {
+    expect(WORKFLOW_BUNDLE_SOURCE_SHA256).toEqual(workflowBundleSourceSha());
+  });
 });
