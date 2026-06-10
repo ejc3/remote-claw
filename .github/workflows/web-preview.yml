@@ -37,6 +37,10 @@ jobs:
             || github.event.deployment_status.target_url }}
       # Maps the optional secret to an env so steps can gate on it (secrets aren't usable in `if:`).
       DEV_SEED_TOKEN: ${{ secrets.DEV_SEED_TOKEN }}
+      # Vercel Deployment Protection (SSO) bounces anonymous requests to the preview with a 401 wall.
+      # The automation-bypass secret (x-vercel-protection-bypass) gets the e2e through it. Low blast
+      # radius (grants access only to the preview already under test), like DEV_SEED_TOKEN above.
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:

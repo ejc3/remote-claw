@@ -57,11 +57,16 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   const mitmTracer = tracerFromEnv("rc.mitm");
   const relayTracer = tracerFromEnv("rc.relay");
 
+  // If the broker is deployed behind Vercel Deployment Protection (SSO), the host's requests need the
+  // automation-bypass secret to get past the edge. Read it from the env on this host; an unprotected
+  // broker (local dev) leaves it unset and sends no header.
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
   const newClient = () =>
     new BrokerClient({
       baseUrl: opts.brokerUrl,
       provider,
       ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
+      ...(bypass ? { protectionBypass: bypass } : {}),
     });
 
   const proxy = new MitmProxy({

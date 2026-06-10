@@ -73,6 +73,35 @@ describe("BrokerClient transport", () => {
     await expect(collect(client.streamFrames({}))).resolves.toHaveLength(1);
   });
 
+  it("sends x-vercel-protection-bypass on every call when configured, and omits it otherwise", async () => {
+    const capture = (sink: Array<Record<string, string>>): typeof fetch =>
+      ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        sink.push(Object.fromEntries(new Headers(init?.headers).entries()));
+        return broker.fetch(input, init);
+      }) as typeof fetch;
+
+    const withSeen: Array<Record<string, string>> = [];
+    const withBypass = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: capture(withSeen),
+      protectionBypass: "byp-secret-123",
+    });
+    await withBypass.postFrame(header(id), utf8("{}")); // publish
+    await collect(withBypass.streamFrames({})); // subscribe
+    expect(withSeen.length).toBeGreaterThanOrEqual(2);
+    for (const h of withSeen) expect(h["x-vercel-protection-bypass"]).toBe("byp-secret-123");
+
+    const noSeen: Array<Record<string, string>> = [];
+    const noBypass = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: capture(noSeen),
+    });
+    await noBypass.postFrame(header(id), utf8("{}"));
+    expect(noSeen[0]?.["x-vercel-protection-bypass"]).toBeUndefined();
+  });
+
   it("throws BrokerError (with status) when the broker rejects (e.g. 401 wrong identity)", async () => {
     broker.requireAuth(id.authToken); // only `id`'s bearer is accepted
     const strangerId = await deriveIdentity(new Uint8Array(32).fill(9));
