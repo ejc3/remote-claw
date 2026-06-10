@@ -225,6 +225,10 @@ function Transcript(props: {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // The session's real permission mode lives on the worker and isn't announced, so we track the last
+  // mode set from here (optimistic): null = "we haven't set one". setMode is fire-and-forget.
+  const [mode, setMode] = useState<string | null>(null);
+  const [modeSheet, setModeSheet] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -263,6 +267,23 @@ function Transcript(props: {
     }
   }, [input, sessionId, viewer]);
 
+  const chooseMode = useCallback(
+    async (id: string) => {
+      setModeSheet(false);
+      setSendError(null);
+      const prev = mode;
+      setMode(id); // optimistic — revert if the control frame can't be sent
+      try {
+        await viewer.setMode(sessionId, id);
+      } catch (e) {
+        // Only revert if no newer choice landed while we were awaiting — else we'd clobber it.
+        setMode((cur) => (cur === id ? prev : cur));
+        setSendError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [mode, sessionId, viewer],
+  );
+
   return (
     <section className="chat">
       <div className="chat-head">
@@ -289,6 +310,17 @@ function Transcript(props: {
           void send();
         }}
       >
+        <button
+          type="button"
+          className="mode-btn"
+          aria-haspopup="dialog"
+          aria-expanded={modeSheet}
+          onClick={() => setModeSheet(true)}
+          title="Permission mode"
+        >
+          <span className="mode-glyph">{modeGlyph(mode)}</span>
+          {modeLabel(mode)}
+        </button>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -299,7 +331,144 @@ function Transcript(props: {
           Send
         </button>
       </form>
+
+      {modeSheet && (
+        <ModeSheet
+          current={mode}
+          onPick={(id) => void chooseMode(id)}
+          onClose={() => setModeSheet(false)}
+        />
+      )}
     </section>
+  );
+}
+
+// The three permission modes Claude Code exposes (IMG_1825 "Select mode"). `id` is the exact RC
+// set_permission_mode value the relay forwards to the worker (§3.7) — VERIFIED by capturing the real
+// iOS app through `--rc-trace`: Auto="auto", Code="default", Plan="plan" (NOT default/acceptEdits).
+const MODES = [
+  {
+    id: "auto",
+    label: "Auto",
+    glyph: "⚡",
+    desc: "Claude decides which actions need confirmation",
+  },
+  { id: "default", label: "Code", glyph: "⌨", desc: "Claude writes and edits code directly" },
+  {
+    id: "plan",
+    label: "Plan",
+    glyph: "◑",
+    desc: "Claude explores code and presents a plan before making edits",
+  },
+] as const;
+
+function modeLabel(id: string | null): string {
+  return MODES.find((m) => m.id === id)?.label ?? "Mode";
+}
+function modeGlyph(id: string | null): string {
+  return MODES.find((m) => m.id === id)?.glyph ?? "⚙";
+}
+
+/** Bottom sheet to pick the session's permission mode — mirrors Claude Code's "Select mode" sheet. */
+function ModeSheet({
+  current,
+  onPick,
+  onClose,
+}: {
+  current: string | null;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // onClose is a fresh arrow each parent render; read it through a ref so the focus/scroll-lock
+  // effect can run exactly once (on open) without re-stealing focus or re-saving the trigger.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // Open-once: focus into the sheet + trap Tab + lock scroll; restore on close. onClose is read via
+  // a ref, so this effect has no reactive deps and must not re-run on parent re-renders.
+  useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null; // the composer mode button
+    const focusables = () =>
+      Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? []);
+    // Move focus into the sheet (the active row, else the first) so keyboard users land on the choices.
+    (
+      dialogRef.current?.querySelector<HTMLElement>('[data-active="true"]') ?? focusables()[0]
+    )?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      // Trap Tab within the sheet so it can't reach the controls behind the scrim.
+      const f = focusables();
+      const first = f[0];
+      const last = f[f.length - 1];
+      if (!first || !last) return;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden"; // lock background scroll while modal
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      trigger?.focus?.(); // restore focus to the mode button
+    };
+  }, []);
+
+  // Scrim and sheet are siblings (not nested): the sheet's own buttons aren't illegally nested inside
+  // another button. The scrim is mouse-only (tabIndex -1) — keyboard dismiss is Escape; role=dialog
+  // sits on the content (.sheet), not the overlay.
+  return (
+    <div className="sheet-layer">
+      <button
+        type="button"
+        className="sheet-scrim"
+        aria-label="Close mode picker"
+        tabIndex={-1}
+        onClick={onClose}
+      />
+      <div
+        className="sheet"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Select mode"
+      >
+        <div className="sheet-handle" />
+        <div className="sheet-title">Select mode</div>
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className="mode-row"
+            data-active={m.id === current}
+            aria-pressed={m.id === current}
+            onClick={() => onPick(m.id)}
+          >
+            <span className="mode-row-glyph">{m.glyph}</span>
+            <span className="mode-row-main">
+              <span className="mode-row-label">{m.label}</span>
+              <span className="mode-row-desc">{m.desc}</span>
+            </span>
+            {m.id === current && (
+              <span className="mode-check" aria-hidden>
+                ✓
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
