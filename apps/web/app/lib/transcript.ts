@@ -120,3 +120,61 @@ export function dirname(p: string): string {
 export function toolHint(input: ToolInput): string {
   return input.command ?? input.file_path ?? input.description ?? "";
 }
+
+export interface ToolResult {
+  toolUseId: string;
+  isError: boolean;
+  output: string;
+  /** True when this is a sub-agent's tool output (the worker tagged it from `parent_tool_use_id`), so
+   *  the UI can nest it under the Task — mirrors ParsedTool.sub for tool_use. */
+  sub: boolean;
+}
+
+/** Parse a `tool_result` content frame — `{tool_use_id, is_error, output, sub}` — tolerating bad JSON. */
+export function parseToolResult(text: string): ToolResult {
+  try {
+    const r = JSON.parse(text) as {
+      tool_use_id?: unknown;
+      is_error?: unknown;
+      output?: unknown;
+      sub?: unknown;
+    };
+    return {
+      toolUseId: typeof r.tool_use_id === "string" ? r.tool_use_id : "",
+      isError: r.is_error === true,
+      output: typeof r.output === "string" ? r.output : "",
+      sub: r.sub === true,
+    };
+  } catch {
+    return { toolUseId: "", isError: false, output: "", sub: false };
+  }
+}
+
+export interface TaskEvent {
+  subtype: string;
+  taskId: string;
+  description: string;
+  /** The spawning Task tool_use_id (relay carries it so the UI can correlate the lifecycle event to
+   *  the Task row that started the sub-agent); "" when absent. */
+  toolUseId: string;
+}
+
+/** Parse a `task` content frame — a sub-agent Task lifecycle event — tolerating bad JSON. */
+export function parseTask(text: string): TaskEvent {
+  try {
+    const t = JSON.parse(text) as {
+      subtype?: unknown;
+      task_id?: unknown;
+      description?: unknown;
+      tool_use_id?: unknown;
+    };
+    return {
+      subtype: typeof t.subtype === "string" ? t.subtype : "",
+      taskId: typeof t.task_id === "string" ? t.task_id : "",
+      description: typeof t.description === "string" ? t.description : "",
+      toolUseId: typeof t.tool_use_id === "string" ? t.tool_use_id : "",
+    };
+  } catch {
+    return { subtype: "", taskId: "", description: "", toolUseId: "" };
+  }
+}
