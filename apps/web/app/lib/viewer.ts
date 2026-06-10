@@ -38,23 +38,35 @@ export class Viewer {
   readonly #client: BrokerClient;
   readonly #identityId: Uint8Array;
 
-  private constructor(identity: Identity, baseUrl: string, fetchFn?: typeof fetch) {
+  private constructor(
+    identity: Identity,
+    baseUrl: string,
+    fetchFn?: typeof fetch,
+    backend?: string,
+  ) {
     this.#identityId = identity.identityId;
     const opts: BrokerClientOptions = {
       baseUrl,
       provider: securityProvider("sealed", identity),
     };
-    // exactOptionalPropertyTypes: only set fetchFn when a custom one is supplied (tests).
+    // exactOptionalPropertyTypes: only set optional fields when actually supplied.
     if (fetchFn !== undefined) opts.fetchFn = fetchFn;
+    if (backend !== undefined && backend !== "") opts.backend = backend;
     this.#client = new BrokerClient(opts);
   }
 
   /**
    * Build a viewer from a pasted/fragment pass (`rcp1_…`). Throws PassError on a bad pass. `baseUrl`
-   * defaults to same-origin (""); `fetchFn` is for tests (defaults to the global fetch).
+   * defaults to same-origin (""); `fetchFn` is for tests; `backend` selects the broker backend
+   * ("temporal" etc.) for this viewer's calls (sent as the x-broker-backend header).
    */
-  static async fromPass(pass: string, baseUrl = "", fetchFn?: typeof fetch): Promise<Viewer> {
-    return new Viewer(await parsePass(pass.trim()), baseUrl, fetchFn);
+  static async fromPass(
+    pass: string,
+    baseUrl = "",
+    fetchFn?: typeof fetch,
+    backend?: string,
+  ): Promise<Viewer> {
+    return new Viewer(await parsePass(pass.trim()), baseUrl, fetchFn, backend);
   }
 
   #header(

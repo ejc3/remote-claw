@@ -40,6 +40,10 @@ export interface BrokerClientOptions {
   provider: SecurityProvider;
   /** Injectable fetch (tests / a custom agent). Defaults to the global fetch. */
   fetchFn?: typeof fetch;
+  /** Pick the broker's durable backend for this client's calls ("vercel" | "local" | "temporal").
+   *  Sent as the `x-broker-backend` header on every /api/relay + /api/stream request; omitted ⇒ the
+   *  broker's default. Publish and subscribe for one channel MUST agree, so it's set per client. */
+  backend?: string;
 }
 
 /** The JSON reply shape of POST /api/relay on success. */
@@ -63,10 +67,12 @@ export class BrokerClient {
   readonly #baseUrl: string;
   readonly #provider: SecurityProvider;
   readonly #fetch: typeof fetch;
+  readonly #backend: string | undefined;
 
   constructor(opts: BrokerClientOptions) {
     this.#baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.#provider = opts.provider;
+    this.#backend = opts.backend;
     // The browser's global fetch is a built-in that MUST be called with `this === window`; storing
     // it on the instance and calling `this.#fetch(...)` rebinds `this` to the BrokerClient and throws
     // "Illegal invocation" (Node's fetch is lenient, so this only bites in a real browser). Bind the
@@ -77,6 +83,12 @@ export class BrokerClient {
   /** `Authorization: Bearer <hex(auth_token)>` — recomputed by the broker into identity_id (§4.5). */
   #authHeader(): string {
     return `Bearer ${toHex(this.#provider.authBearer())}`;
+  }
+
+  /** The `x-broker-backend` header selecting the durable backend, when one is configured. Merged into
+   *  every /api/relay + /api/stream request so publish + subscribe address the same backend. */
+  #backendHeader(): Record<string, string> {
+    return this.#backend ? { "x-broker-backend": this.#backend } : {};
   }
 
   /**
@@ -96,7 +108,11 @@ export class BrokerClient {
     const qs = onBus ? "" : `?session=${encodeURIComponent(frame.sessionId)}`;
     const res = await this.#fetch(`${this.#baseUrl}/api/relay${qs}`, {
       method: "POST",
-      headers: { authorization: this.#authHeader(), "content-type": "application/json" },
+      headers: {
+        authorization: this.#authHeader(),
+        "content-type": "application/json",
+        ...this.#backendHeader(),
+      },
       body: JSON.stringify(encodeFrame(frame)),
     });
     if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
@@ -191,7 +207,11 @@ export class BrokerClient {
     const qs = params.toString();
     const url = `${this.#baseUrl}/api/stream${qs ? `?${qs}` : ""}`;
     const init: RequestInit = {
-      headers: { authorization: this.#authHeader(), accept: "text/event-stream" },
+      headers: {
+        authorization: this.#authHeader(),
+        accept: "text/event-stream",
+        ...this.#backendHeader(),
+      },
     };
     if (opts.signal !== undefined) init.signal = opts.signal;
     const res = await this.#fetch(url, init);

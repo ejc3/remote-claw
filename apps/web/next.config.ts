@@ -8,6 +8,11 @@ const nextConfig: NextConfig = {
   // Turbopack rejects the `.ts` entry in node_modules), and extensionAlias maps its `.js` specifiers
   // back to the `.ts` sources (else `./wire.js` etc. don't resolve).
   transpilePackages: ["@remote-claw/clawsec", "@remote-claw/cli"],
+  // @temporalio/client wraps a gRPC/protobuf core that webpack mangles (the "Critical dependency"
+  // warning) — bundling it breaks the connection (getSystemInfo fails with undefined status). Keep it
+  // external so the Node server loads it from node_modules at runtime. Only loaded when the temporal
+  // backend is actually selected (the dynamic import in lib/broker/index.ts).
+  serverExternalPackages: ["@temporalio/client"],
   experimental: {
     extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
   },

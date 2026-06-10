@@ -1,5 +1,5 @@
 import { AuthError, identityFromRequest } from "../../../lib/auth";
-import { getBackend } from "../../../lib/broker";
+import { backendSelector, getBackend, isKnownBackend } from "../../../lib/broker";
 import { channelToken } from "../../../lib/channel";
 import { json, sseEmptyResponse, sseResponse } from "../../../lib/http";
 
@@ -36,7 +36,18 @@ export async function GET(req: Request): Promise<Response> {
     return json({ error: String((e as Error)?.message ?? e) }, 400);
   }
 
-  const stream = await getBackend().subscribe(token, startIndex);
+  // Per-request backend selection: the `x-broker-backend` header or `?backend=` (default vercel). The
+  // publish for this channel must name the SAME backend — the client sends the selector on both.
+  const requested = backendSelector(req, url);
+  if (requested !== null && !isKnownBackend(requested)) {
+    return json(
+      { error: `unknown backend "${requested}" (expected: vercel | local | temporal)` },
+      400,
+    );
+  }
+
+  const backend = await getBackend(requested);
+  const stream = await backend.subscribe(token, startIndex);
   if (stream === null) return sseEmptyResponse();
   return sseResponse(stream);
 }

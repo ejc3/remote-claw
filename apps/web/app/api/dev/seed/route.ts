@@ -186,7 +186,15 @@ export async function POST(req: Request): Promise<Response> {
   crypto.getRandomValues(rand);
   const sessionId = `e2e-${Array.from(rand, (b) => b.toString(16).padStart(2, "0")).join("")}`;
   const session = new Session(sessionId, "rc box", {});
-  const client = new BrokerClient({ baseUrl: origin, provider: securityProvider("sealed", id) });
+  // Forward ?backend= so the seeded host drives the SAME backend the browser will read from (the
+  // BrokerClient sends it as the x-broker-backend header on its loopback calls).
+  const backend = url.searchParams.get("backend") ?? undefined;
+  const clientOpts: ConstructorParameters<typeof BrokerClient>[0] = {
+    baseUrl: origin,
+    provider: securityProvider("sealed", id),
+  };
+  if (backend !== undefined && backend !== "") clientOpts.backend = backend;
+  const client = new BrokerClient(clientOpts);
   const relay = new HostRcRelay({ client, identityId: id.identityId, sessionId, session });
 
   const ac = new AbortController();

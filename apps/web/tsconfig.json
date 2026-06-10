@@ -33,6 +33,7 @@
   },
   "include": [
     "workflows/**/*.ts",
+    "temporal/**/*.ts",
     "lib/**/*.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
