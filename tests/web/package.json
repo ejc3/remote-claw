@@ -2,6 +2,9 @@
   "name": "remote-claw-web-tests",
   "private": true,
   "type": "module",
-  "scripts": { "test": "playwright test" },
+  "scripts": {
+    "test": "playwright test",
+    "test:app": "playwright test -c app-e2e.config.ts"
+  },
   "devDependencies": { "@playwright/test": "^1.49.0" }
 }
