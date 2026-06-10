@@ -1,0 +1,57 @@
+name: web-preview-e2e
+
+# Run the deployment-targeted e2e against the REAL broker on a Vercel deployment. Vercel's GitHub
+# app emits a `deployment_status` event when a preview (or prod) finishes; we run the e2e against its
+# URL. Until Vercel is connected to the repo this simply never fires (no-op). `workflow_dispatch`
+# lets you point it at any URL by hand.
+on:
+  deployment_status:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Deployment URL to test (e.g. a Vercel preview URL)"
+        required: true
+        type: string
+
+# This job checks out and runs the DEPLOYMENT's code (which may be from a PR); keep the workflow
+# token read-only and unpersisted so that code can't read/exfiltrate it.
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    # Only on a SUCCESSFUL Vercel PREVIEW deployment, or a manual dispatch. We match the environment
+    # POSITIVELY (Vercel sets it to "Preview") rather than "!= Production" — the repo also deploys docs
+    # to GitHub Pages, whose deployment_status has environment "github-pages"; a negative gate would
+    # wrongly fire the broker e2e against the docs site (no /api/relay → 404).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment_status.environment == 'Preview')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Test the code that matches the deployment (deployment_status checks out the default
+          # branch by default); for a manual dispatch this is empty → the dispatched ref.
+          ref: ${{ github.event.deployment.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Deployment-targeted e2e (real broker over HTTP)
+        env:
+          # Vercel exposes the deployed URL as environment_url; target_url is a legacy fallback.
+          WEB_E2E_URL: >-
+            ${{ github.event.inputs.url
+                || github.event.deployment_status.environment_url
+                || github.event.deployment_status.target_url }}
+          # In this job the URL must resolve — make an empty URL a FAILURE, not a silent skip.
+          WEB_E2E_REQUIRE: "1"
+        run: pnpm --filter @remote-claw/web run test:preview
