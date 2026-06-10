@@ -1,23 +1,33 @@
 import { expect, test } from "@playwright/test";
 
 // Proves the web UI works end to end against the WHOLE real spine (only the model is scripted):
-//   real Chromium → real Next client (page.tsx) → real broker routes (LocalBackend) → real
-//   HostRcRelay event mapping → a Session fed a scripted RC turn.
+//   real Chromium → real Next client (page.tsx) → real broker routes → real HostRcRelay event mapping
+//   → a Session fed a scripted RC turn.
 // The /api/dev/seed route stands up the host side and returns a viewer pass; the browser drives the
 // rest exactly as a phone would. Assertions target the actual rendered DOM, so a regression in the
 // relay's frame mapping OR the transcript components fails the test.
+//
+// E2E_BACKEND (set by app-e2e.temporal.config.ts) flips the broker via the ?backend= switch so the
+// IDENTICAL assertions run against both the in-process LocalBackend (default) and Temporal — proving
+// the abstraction is swappable per-request on one deployment.
+const BACKEND = process.env.E2E_BACKEND;
+const qp = BACKEND ? `?backend=${BACKEND}` : "";
+// On a Vercel preview the seed route is reached with the DEV_SEED_TOKEN secret (locally it's loopback-
+// gated and needs no token).
+const SEED_TOKEN = process.env.E2E_SEED_TOKEN;
+const seedOpts = SEED_TOKEN ? { headers: { "x-dev-seed-token": SEED_TOKEN } } : {};
 
 test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and prose", async ({
   page,
   request,
 }) => {
-  // Seed the host side (real HostRcRelay + scripted turn) through the local broker.
-  const res = await request.post("/api/dev/seed");
+  // Seed the host side (real HostRcRelay + scripted turn) through the selected broker backend.
+  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
   expect(res.ok()).toBeTruthy();
   const { pass } = (await res.json()) as { pass: string };
 
   // Open the app with the pass in the URL fragment (never sent to the server), then connect.
-  await page.goto(`/#${encodeURIComponent(pass)}`);
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
 
   // The host's bus announce surfaces the session; open it.
@@ -50,13 +60,30 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
 
   // Artifact: the real transcript as rendered by the real app.
   await page.locator("section.chat").screenshot({ path: "test-results/transcript-e2e.png" });
+
+  // On the Temporal run, PROVE the frames really went through Temporal (not a silent fall-back to the
+  // server's default local backend): a relayChannel workflow must exist on the cluster. Use the
+  // Temporal CLI (the same binary with-temporal.sh located, passed as TEMPORAL_CLI) so the test needs
+  // no @temporalio/client dependency of its own.
+  if (BACKEND === "temporal") {
+    const { execFileSync } = await import("node:child_process");
+    const cli = process.env.TEMPORAL_CLI ?? "temporal";
+    const addr = process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233";
+    const out = execFileSync(
+      cli,
+      ["workflow", "list", "--address", addr, "--query", 'WorkflowType = "relayChannel"', "-o", "json"],
+      { encoding: "utf8" },
+    );
+    const rows = JSON.parse(out || "[]");
+    expect(Array.isArray(rows) ? rows.length : 0).toBeGreaterThan(0);
+  }
 });
 
 test("a typed prompt appears as a user turn (the inbound echo path)", async ({ page, request }) => {
-  const res = await request.post("/api/dev/seed");
+  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
   expect(res.ok()).toBeTruthy(); // a 404 (server not in local mode) would otherwise fail confusingly
   const { pass } = (await res.json()) as { pass: string };
-  await page.goto(`/#${encodeURIComponent(pass)}`);
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
 

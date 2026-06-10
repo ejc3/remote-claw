@@ -10,6 +10,12 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:preview": "vitest run --config vitest.preview.config.ts",
+    "test:temporal": "bash ../../scripts/with-temporal.sh pnpm exec vitest run test/broker/temporal-backend.test.ts",
+    "test:drain": "TEMPORAL_NO_WORKER=1 bash ../../scripts/with-temporal.sh pnpm exec vitest run test/broker/drain.integration.test.ts",
+    "test:stress": "bash ../../scripts/with-temporal.sh pnpm exec vitest run test/broker/stress.integration.test.ts",
+    "test:stress:heavy": "STRESS_HEAVY=1 vitest run test/broker/stress-local.heavy.test.ts",
+    "temporal:worker": "tsx temporal/worker.ts",
+    "gen:workflow-bundle": "node scripts/gen-workflow-bundle.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",
     "format": "biome format --write .",
@@ -18,6 +24,9 @@
   "dependencies": {
     "@remote-claw/clawsec": "workspace:*",
     "@remote-claw/cli": "workspace:*",
+    "@temporalio/client": "^1.18.0",
+    "@temporalio/worker": "^1.18.0",
+    "@temporalio/workflow": "^1.18.0",
     "@workflow/errors": "4.1.3",
     "next": "^16.2.7",
     "react": "^19.2.7",
@@ -29,6 +38,7 @@
     "@types/node": "^25.9.2",
     "@types/react": "19.2.17",
     "@workflow/vitest": "4.0.9",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   }

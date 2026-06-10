@@ -1,3 +1,5 @@
 node_modules/
 test-results/
+test-results-temporal/
+test-results-drain/
 playwright-report/

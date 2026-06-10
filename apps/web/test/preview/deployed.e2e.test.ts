@@ -21,6 +21,13 @@ import { announceFrame, bearer, header, readSseData, wireFrame } from "../helper
 const BASE = process.env.WEB_E2E_URL?.replace(/\/+$/, "");
 const td = new TextDecoder();
 
+// When the deployment is behind Vercel Deployment Protection (SSO), every request needs the
+// automation-bypass secret to reach the broker (else a 401 auth wall). The web-preview CI job sets it
+// from the VERCEL_AUTOMATION_BYPASS_SECRET secret; an unprotected target leaves it unset.
+const bypass: Record<string, string> = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+  ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET }
+  : {};
+
 // In the web-preview CI job the URL must resolve; a broken `deployment_status` URL expression would
 // otherwise leave BASE empty and silently SKIP → a green run that proved nothing. Fail loudly there.
 // Locally (WEB_E2E_REQUIRE unset) it just skips.
@@ -46,14 +53,14 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
 
     const pub = await fetch(`${BASE}/api/relay`, {
       method: "POST",
-      headers: { authorization: auth, "content-type": "application/json" },
+      headers: { authorization: auth, "content-type": "application/json", ...bypass },
       body: JSON.stringify(frame),
     });
     expect(pub.status).toBe(200);
     expect(await pub.json()).toMatchObject({ ok: true, channel: "bus" });
 
     const res = await fetch(`${BASE}/api/stream?startIndex=0`, {
-      headers: { authorization: auth, accept: "text/event-stream" },
+      headers: { authorization: auth, accept: "text/event-stream", ...bypass },
     });
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     const [received] = (await readSseData(res, 1)) as [WireFrame];
@@ -75,7 +82,7 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
 
     const pub = await fetch(`${BASE}/api/relay?session=${encodeURIComponent(sid)}`, {
       method: "POST",
-      headers: { authorization: auth, "content-type": "application/json" },
+      headers: { authorization: auth, "content-type": "application/json", ...bypass },
       body: JSON.stringify(frame),
     });
     expect(pub.status).toBe(200);
@@ -83,7 +90,7 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
 
     const onSession = await readSseData(
       await fetch(`${BASE}/api/stream?session=${encodeURIComponent(sid)}&startIndex=0`, {
-        headers: { authorization: auth, accept: "text/event-stream" },
+        headers: { authorization: auth, accept: "text/event-stream", ...bypass },
       }),
       1,
     );
@@ -95,7 +102,7 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
     // text/event-stream) before asserting no frames — otherwise a 404/non-SSE error would also read
     // as `[]` and pass for the wrong reason.
     const busRes = await fetch(`${BASE}/api/stream?startIndex=0`, {
-      headers: { authorization: auth, accept: "text/event-stream" },
+      headers: { authorization: auth, accept: "text/event-stream", ...bypass },
     });
     expect(busRes.status).toBe(200);
     expect(busRes.headers.get("content-type")).toContain("text/event-stream");

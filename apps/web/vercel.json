@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "fluid": true,
+  "crons": [{ "path": "/api/temporal/drain", "schedule": "* * * * *" }],
+  "functions": {
+    "app/api/temporal/drain/route.ts": { "maxDuration": 300 }
+  }
+}
