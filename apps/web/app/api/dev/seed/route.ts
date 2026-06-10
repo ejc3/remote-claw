@@ -219,6 +219,11 @@ export async function POST(req: Request): Promise<Response> {
     provider: securityProvider("sealed", id),
   };
   if (backend !== undefined && backend !== "") clientOpts.backend = backend;
+  // The host relay loops back to this deployment's OWN public URL; behind Vercel Deployment Protection
+  // (SSO) those loopback calls would hit the 401 wall. Pass the automation-bypass secret (auto-injected
+  // as an env var on the deployment) so the seed's broker round-trip reaches the routes.
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (bypass) clientOpts.protectionBypass = bypass;
   const client = new BrokerClient(clientOpts);
   const relay = new HostRcRelay({ client, identityId: id.identityId, sessionId, session });
 
