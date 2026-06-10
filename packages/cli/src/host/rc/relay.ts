@@ -16,6 +16,7 @@
 
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
+import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import { assistantText, type RcEvent, type Session } from "./session.js";
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
@@ -37,8 +38,8 @@ export interface HostRcRelayOptions {
   sessionId: string;
   /** The RC session (from RelayCore) the MITM created for the worker. */
   session: Session;
-  /** Optional logger (defaults to no-op; never logs secrets/plaintext bodies). */
-  log?: (msg: string) => void;
+  /** Optional structured tracer (target "rc.relay"; defaults to no-op). Logs shapes/ids only. */
+  tracer?: Tracer;
 }
 
 /** One content frame to relay out of a worker upstream event. */
@@ -143,14 +144,15 @@ export class HostRcRelay {
   /** In-memory transcript (content frames only) — replayed on a viewer `catch_up` (§6/§16). */
   readonly #log: { recordKind: string; seq: number; msgId: string; text: string }[] = [];
 
-  readonly #logger: (msg: string) => void;
+  readonly #trace: Tracer;
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
     this.#identityId = opts.identityId;
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
-    this.#logger = opts.log ?? (() => {});
+    // Bind the session id onto every line (span-like) so interleaved sessions are distinguishable.
+    this.#trace = (opts.tracer ?? NOOP_TRACER).child({ session: opts.sessionId });
   }
 
   #header(recordKind: string, seq: number | null, msgId: string): FrameHeader {
@@ -174,6 +176,8 @@ export class HostRcRelay {
       this.#header("session_announce", null, `ann-${this.#sessionId}-${this.#seq}`),
       utf8(JSON.stringify({ session_id: this.#sessionId, title, cwd, sent_at: Date.now() })),
     );
+    this.#trace.info("announce"); // session id is bound via child(); title is debug-only
+    this.#trace.debug("announce", { title });
   }
 
   /**
@@ -192,7 +196,7 @@ export class HostRcRelay {
       } catch (e) {
         // 409 = run rolled → retry (§6B). Anything else, or out of budget, propagates.
         if (!(BrokerError.is(e) && e.status === 409) || attempt >= POST_RETRIES) throw e;
-        this.#logger(`#post: 409 on ${recordKind} seq=${seq} (attempt ${attempt + 1}) → retry`);
+        this.#trace.debug("post 409 → retry", { kind: recordKind, seq, attempt: attempt + 1 });
         await new Promise((r) => setTimeout(r, POST_RETRY_BASE_MS * 2 ** attempt));
       }
     }
@@ -202,6 +206,9 @@ export class HostRcRelay {
   async #emit(recordKind: string, seq: number, msgId: string, text: string): Promise<void> {
     await this.#post(recordKind, seq, msgId, text);
     this.#log.push({ recordKind, seq, msgId, text });
+    // Per-frame, so it's `trace`. Body length only at this level; the upstream-event log carries a
+    // content preview at debug (a content frame here may be any record_kind, so just the shape).
+    this.#trace.trace("frame sealed", { kind: recordKind, seq, bytes: text.length });
   }
 
   /** Replay the logged transcript from `since` onward — idempotent (the viewer dedups by seq/msg_id). */
@@ -218,47 +225,55 @@ export class HostRcRelay {
 
   /** OUTBOUND: tail the worker's upstream and relay each assistant/result as a content frame. */
   async #pumpUpstream(signal: AbortSignal): Promise<void> {
-    this.#logger("pumpUpstream: start");
+    this.#trace.debug("pumpUpstream start");
     for await (const ev of this.#session.followUpstream(() => signal.aborted)) {
       if (ev === null) continue; // heartbeat tick
       const items = mapUpstreamItems(ev);
-      this.#logger(
-        `pumpUpstream: upstream ${ev.eventType} → ${items.map((i) => i.kind).join(",") || "skip"}`,
-      );
+      this.#trace.debug("upstream event", {
+        event: ev.eventType,
+        items: items.map((i) => i.kind).join(",") || "skip",
+      });
       for (const item of items) {
         const seq = this.#seq++;
         await this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text);
       }
     }
-    this.#logger("pumpUpstream: end");
+    this.#trace.debug("pumpUpstream end");
   }
 
   /** INBOUND: tail the session channel for client frames and drive the worker. Re-subscribes if the
    *  stream ends — the session run may not exist yet (the relay serves before the first client
    *  prompt) or may have cap-rolled (the "window rolling over"); `#seen` dedups the re-read. */
   async #pumpInbound(signal: AbortSignal): Promise<void> {
-    this.#logger("pumpInbound: start");
+    this.#trace.debug("pumpInbound start");
     while (!signal.aborted) {
       try {
         await this.#tailInbound(signal);
       } catch (e) {
-        this.#logger(`pumpInbound: tail threw ${(e as Error)?.message ?? e} → retry`);
+        // A SyntaxError from JSON.parse of a DECRYPTED body embeds a snippet of that plaintext in its
+        // message — never put that in the default-level log. Log the error class at warn; the message
+        // (safe for network/stream errors, content-bearing for parse errors) goes to debug only.
+        const err = e as Error;
+        this.#trace.warn("inbound tail threw → retry", { error: err?.name ?? "Error" });
+        if (!(err instanceof SyntaxError) && err?.message) {
+          this.#trace.debug("inbound tail error", { detail: err.message });
+        }
       }
       if (signal.aborted) break;
       await new Promise((r) => setTimeout(r, 150)); // run not up / stream closed → resume-or-retry
     }
-    this.#logger("pumpInbound: end");
+    this.#trace.debug("pumpInbound end");
   }
 
   async #tailInbound(signal: AbortSignal): Promise<void> {
-    this.#logger("tailInbound: subscribe");
+    this.#trace.debug("inbound subscribe");
     for await (const frame of this.#client.streamFrames({
       session: this.#sessionId,
       startIndex: 0,
       signal,
     })) {
       if (frame.dir !== "in") continue; // ignore our own out-frames on the shared stream
-      this.#logger(`tailInbound: in ${frame.recordKind} msg=${frame.msgId}`);
+      this.#trace.trace("inbound frame", { kind: frame.recordKind, msg: frame.msgId });
       if (this.#seen.has(frame.msgId)) continue; // at-least-once dedup
       this.#seen.add(frame.msgId);
 
@@ -275,16 +290,19 @@ export class HostRcRelay {
         );
         await this.#emit("user", userSeq, `user-${userSeq}`, text);
         this.#session.pushUserInput(text);
+        // Content preview at debug (opt-in); bytes always.
+        this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length, text });
       } else if (frame.recordKind === "catch_up") {
         const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame)));
-        await this.#replay(typeof body.since === "number" ? body.since : 0);
+        const since = typeof body.since === "number" ? body.since : 0;
+        this.#trace.debug("catch_up replay", { since, frames: this.#log.length });
+        await this.#replay(since);
       } else if (frame.recordKind === "permission") {
         const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame)));
         if (typeof body.request_id === "string") {
-          this.#session.pushControlResponse(
-            body.request_id,
-            body.behavior === "deny" ? "deny" : "allow",
-          );
+          const behavior = body.behavior === "deny" ? "deny" : "allow";
+          this.#trace.debug("permission response", { behavior });
+          this.#session.pushControlResponse(body.request_id, behavior);
         }
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
         // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
@@ -307,11 +325,16 @@ export class HostRcRelay {
       if (parsed === null || typeof parsed !== "object") return; // authenticated but malformed → drop
       body = parsed as Record<string, unknown>;
     } catch {
+      this.#trace.warn("control verb rejected (AEAD/parse)", { kind });
       return; // AEAD open failed or unparseable → reject, never drive a control action
     }
     // Drop a STALE control frame: a malicious broker can withhold a valid frame and replay it much
     // later. The client stamps `expiry`; past it, the verb is a no-op (matches catch_up's freshness).
-    if (typeof body.expiry === "number" && body.expiry < Date.now()) return;
+    if (typeof body.expiry === "number" && body.expiry < Date.now()) {
+      this.#trace.warn("control verb dropped (stale)", { kind });
+      return;
+    }
+    this.#trace.debug("control verb", { kind });
     switch (kind) {
       case "interrupt":
         this.#session.pushControlRequest("interrupt");

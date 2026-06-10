@@ -8,6 +8,7 @@
 import type { Identity } from "@remote-claw/clawsec";
 import { BrokerClient } from "../../broker/client.js";
 import { securityProvider } from "../../security/provider.js";
+import { tracerFromEnv } from "../../trace.js";
 import { ensureCerts } from "./certs.js";
 import { MitmProxy } from "./mitm.js";
 import { HostRcRelay } from "./relay.js";
@@ -51,6 +52,10 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   const core = new RelayCore();
   const ac = new AbortController();
   const title = opts.title ?? "remote-claw";
+  // Wire diagnostics: quiet by default, opt in with RC_LOG (e.g. RC_LOG=debug). The relay binds the
+  // session id per relay; both share the env-configured sink (stderr, or RC_LOG_FILE for capture).
+  const mitmTracer = tracerFromEnv("rc.mitm");
+  const relayTracer = tracerFromEnv("rc.relay");
 
   const newClient = () =>
     new BrokerClient({
@@ -64,6 +69,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     leafCert: certs.leafPem,
     leafKey: certs.leafKey,
     core,
+    tracer: mitmTracer,
     onSession: (s) => {
       opts.onSession?.(s);
       // Each RC session the child opens gets its own relay: announce presence on the bus, then bridge
@@ -73,6 +79,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
         identityId: opts.identity.identityId,
         sessionId: s.id,
         session: s,
+        tracer: relayTracer,
       });
       void relay.announce(title).catch(() => {});
       void relay.serve(ac.signal).catch(() => {});
