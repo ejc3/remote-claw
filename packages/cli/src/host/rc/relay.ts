@@ -457,10 +457,26 @@ export class HostRcRelay {
         await this.#client.postMessage(header, body);
         return;
       } catch (e) {
-        // 409 = run rolled → retry (§6B). Anything else, or out of budget, propagates.
-        if (!(BrokerError.is(e) && e.status === 409) || attempt >= POST_RETRIES) throw e;
-        this.#trace.debug("post 409 → retry", { kind: recordKind, seq, attempt: attempt + 1 });
-        await new Promise((r) => setTimeout(r, POST_RETRY_BASE_MS * 2 ** attempt));
+        // 409 = run rolled → retry (§6B). Anything else, or out of budget, is terminal.
+        if (BrokerError.is(e) && e.status === 409 && attempt < POST_RETRIES) {
+          this.#trace.debug("post 409 → retry", { kind: recordKind, seq, attempt: attempt + 1 });
+          await new Promise((r) => setTimeout(r, POST_RETRY_BASE_MS * 2 ** attempt));
+          continue;
+        }
+        // Terminal. A CONTENT post (seq !== null) burns a durable transcript `seq` → a permanent gap
+        // that stalls a late viewer's orderer forever (§12 boundary #1). Surface it as an ERROR (with
+        // the burned seq) so it's an actionable alert, not just a silent #fatal teardown, before it
+        // propagates to #fatalOnThrow.
+        if (seq !== null) {
+          this.#trace.error("durable content post failed — seq burned (permanent gap)", {
+            kind: recordKind,
+            seq,
+            msgId,
+            attempts: attempt + 1,
+            error: (e as Error)?.message ?? String(e),
+          });
+        }
+        throw e;
       }
     }
   }

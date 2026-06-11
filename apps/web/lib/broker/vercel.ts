@@ -52,16 +52,33 @@ async function ensureChannel(token: string): Promise<{ runId: string; created: b
     // No live run holds this token — create one, then wait for its hook to register.
   }
   await start(relayWorkflow, [token]);
+  // Observe the registration so a slow COLD START (transient) is distinguishable from a hard broker
+  // OUTAGE (the deadline blown) instead of both surfacing as one opaque 500. Log only the channel KIND
+  // (`bus`/`sess`) — never the full token, which carries the identity_id.
+  const channel = token.split(":")[0] ?? "?";
+  const startedAt = Date.now();
   let delay = BASE_MS;
-  const deadline = Date.now() + REGISTER_DEADLINE_MS;
+  let attempts = 0;
+  const deadline = startedAt + REGISTER_DEADLINE_MS;
   while (Date.now() < deadline) {
     try {
-      return { runId: runIdOf(await getHookByToken(token)), created: true };
+      const runId = runIdOf(await getHookByToken(token));
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs > REGISTER_DEADLINE_MS / 2) {
+        console.warn(
+          `[broker] slow relay hook registration channel=${channel} elapsedMs=${elapsedMs} attempts=${attempts + 1}`,
+        );
+      }
+      return { runId, created: true };
     } catch {
+      attempts++;
       await sleep(jittered(delay));
       delay = Math.min(delay * 2, CEIL_MS);
     }
   }
+  console.error(
+    `[broker] relay hook did NOT register channel=${channel} deadlineMs=${REGISTER_DEADLINE_MS} attempts=${attempts}`,
+  );
   throw new Error(`relay hook did not register within ${REGISTER_DEADLINE_MS}ms`);
 }
 
