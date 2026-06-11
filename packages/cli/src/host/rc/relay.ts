@@ -614,6 +614,19 @@ export class HostRcRelay {
       signal,
     })) {
       if (frame.dir !== "in") continue; // ignore our own out-frames on the shared stream
+      // Inbound is single-frame by design (the viewer chunks nothing — viewer.ts). `openFrame` returns
+      // only THIS frame's plaintext, so a frame claiming `parts > 1` would be opened to just its first
+      // part — a silently truncated prompt / permission answer / attachment, acted on as if whole. Drop
+      // it loudly instead. (Dedup keys on `msgId`, not `(msgId, part)`, which is fine precisely because
+      // we never process a multi-part inbound frame.)
+      if (frame.parts !== 1) {
+        this.#trace.warn("dropped multi-part inbound frame", {
+          kind: frame.recordKind,
+          parts: frame.parts,
+          msg: frame.msgId,
+        });
+        continue;
+      }
       this.#trace.trace("inbound frame", { kind: frame.recordKind, msg: frame.msgId });
       if (this.#seen.has(frame.msgId)) continue; // at-least-once dedup
       this.#seen.add(frame.msgId);

@@ -430,3 +430,29 @@ describe("HostRcRelay mid-session reconnect = complete history from the relay lo
     expect(client.content.slice(3).map((p) => p.seq)).toEqual([1, 2]); // only the missing tail
   });
 });
+
+describe("HostRcRelay inbound framing (single-frame invariant)", () => {
+  it("drops a multi-part inbound frame instead of acting on a truncated first part", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    // A `user` frame claiming parts=2 (openFrame would yield only part 0 — a truncated prompt). It must
+    // be dropped, NOT injected. A normal single-frame prompt follows and must still be processed (the
+    // relay kept running, and the dropped frame burned no seq).
+    client.queueInbound({ ...inFrame("user", "mp-1", "hello"), parts: 2 } as Frame);
+    client.queueInbound(inFrame("user", "u-1", "world"));
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    const users = client.content.filter((p) => p.recordKind === "user");
+    expect(users).toHaveLength(1); // only the single-frame prompt echoed
+    expect(users[0]?.text).toBe("world"); // the multi-part "hello" was dropped, not injected
+    expect(users[0]?.seq).toBe(0); // the dropped frame burned no seq
+  });
+});
