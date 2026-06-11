@@ -370,3 +370,63 @@ describe("HostRcRelay attachments (#44)", () => {
     expect(users[0]?.seq).toBe(0); // the dropped attachment burned no seq
   });
 });
+
+// #36 — "deep-history worker backfill" GROUNDING.
+//
+// The v2-architecture §6 design had the WORKER re-emit prior turns as `historical:true` frames on RC
+// (re)connect, gated by a completeness check. The real RC protocol (captured via --rc-trace) does NOT
+// do this: `POST .../bridge` returns only a worker_jwt (no transcript); the SSE stream carries only NEW
+// inputs; a `--resume`d worker is streamed NO prior history; `historical` appears in zero captures. So
+// there is nothing to backfill FROM the worker, and nothing to gate on.
+//
+// Instead, the RELAY is the source of truth for its session's transcript: every content frame is
+// appended to `#log`, and a mid-session (re)connecting viewer replays the COMPLETE history from that log
+// via `catch_up` (§8) — no worker round-trip. These tests simulate that mid-session reconnect end to end
+// against the real relay, which is what #36 actually needs to guarantee.
+describe("HostRcRelay mid-session reconnect = complete history from the relay log (#36)", () => {
+  it("a viewer that joins mid-session catch_up's the WHOLE prior transcript (no worker backfill)", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    // Drive a few turns so the relay accumulates a transcript (seq 0,1,2) BEFORE any viewer is present.
+    for (const a of ["a0", "a1", "a2"]) session.pushUpstream(assistant(a));
+    await waitFor(() => client.content.length >= 3);
+    const original = client.content.map((p) => ({ seq: p.seq, msgId: p.msgId, text: p.text }));
+    expect(original.map((p) => p.seq)).toEqual([0, 1, 2]);
+
+    // A late viewer connects and asks for everything since the start (mid-session reconnect).
+    client.pushInbound(inFrame("catch_up", "cu-1", JSON.stringify({ since: 0 })));
+    await waitFor(() => client.content.length >= 6);
+    ac.abort();
+    await served;
+
+    // The replay re-posted the ENTIRE prior transcript with identical seq+msg_id+text — the late viewer
+    // reconstructs the full history from the relay log alone (the viewer's orderer dedups the re-posts).
+    const replayed = client.content
+      .slice(3, 6)
+      .map((p) => ({ seq: p.seq, msgId: p.msgId, text: p.text }));
+    expect(replayed).toEqual(original);
+  });
+
+  it("an incremental catch_up replays only frames at/after `since` (no gap, no over-send)", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    for (const a of ["a0", "a1", "a2"]) session.pushUpstream(assistant(a));
+    await waitFor(() => client.content.length >= 3);
+
+    // A viewer that already has seq 0 reconnects mid-session and only needs the tail (1,2).
+    client.pushInbound(inFrame("catch_up", "cu-2", JSON.stringify({ since: 1 })));
+    await waitFor(() => client.content.length >= 5);
+    ac.abort();
+    await served;
+
+    expect(client.content.slice(3).map((p) => p.seq)).toEqual([1, 2]); // only the missing tail
+  });
+});
