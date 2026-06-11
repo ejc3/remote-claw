@@ -59,7 +59,7 @@ export function isLikelyBase64(s: string): boolean {
 
 /** Defensive cap on a viewer attachment's base64 length (~12 MB of bytes). The viewer downscales far
  *  below this; the cap just stops a buggy/hostile client from writing an arbitrarily large file. (#44) */
-const MAX_ATTACHMENT_B64 = 16 * 1024 * 1024;
+export const MAX_ATTACHMENT_B64 = 16 * 1024 * 1024;
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
