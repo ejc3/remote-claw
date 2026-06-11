@@ -92,7 +92,7 @@ The tables above are about *rendering*; this is about *control*, and it is the s
 session** — proven this session: three locally-sent messages, then a remote client joined and sent
 another, all into the *same running TUI*, nothing killed or forked.
 
-**Happier's `local` mode structurally cannot do this** (source-traced on `happier-dev/happier@main`).
+**Happier's `local` mode structurally cannot do this** (source-traced on `happier-dev/happier@dev`).
 Because it is bolted onto a TUI it does not control (`stdio:['inherit',…]`, `claudeLocal.ts`), a phone
 prompt cannot be injected — so the instant the phone sends a message, Happier **kills the local
 `claude`** (SIGINT→SIGTERM→SIGKILL, `claudeLocal.ts`) and **switches the session to headless `remote`
@@ -108,10 +108,65 @@ toggle.
 | **Happier `local`** | ❌ no | **killed**, session goes headless | **forks** (new id per switch) |
 | **Native RC (remote-claw)** | ✅ yes, same session | untouched, keeps running | stable |
 
-The root cause is architectural: Happier rides a terminal it can only *read* (tail JSONL) and *signal*
-(kill), not *share*; native RC rides a protocol built for shared control of one live session. This is
-arguably the single strongest argument for the native-RC approach — and it is invisible until you try to
-drive the same session from two places at once.
+The root cause is architectural: in `local` mode Happier can only *read* the terminal (tail JSONL) and
+*signal* it (kill), not *share* it. But this is **mode-specific** — Happier has four Claude modes, and
+its opt-in `unified terminal` mode reaches shared control by a different route (next). The honest
+summary: **native RC shares one live session by default; Happier shares only in an opt-in tmux mode, via
+fragile keystroke injection.**
+
+### Happier's four modes — and where tmux mode is heading
+
+`loop.ts` only models `local | remote`, but the `remote` arm dispatches (`claudeRemoteDispatch.ts`) to
+three runners, so there are really **four** ways Happier drives Claude:
+
+| Mode | Real `claude` TUI? | Co-drive one live session (local + phone)? | Phone sees | Write path | claude session id | Bedrock-OK? |
+| --- | --- | --- | --- | --- | --- | --- |
+| **`local`** (default) | ✅ your terminal | ❌ phone msg **kills + forks** → headless | JSONL reconstruction | n/a (kills → headless) | **forks** per switch | ✅ |
+| **`remote` / `agentSdk`** (SDK default) | ❌ headless | ❌ phone-only | SDK-stream reconstruction | SDK input stream | resumes same | ✅ |
+| **`remote` / `legacy`** (fallback) | ❌ headless | ❌ phone-only | stream-json reconstruction | stream-json stdin | resumes same | ✅ |
+| **`unified terminal`** (opt-in) | ✅ in tmux/zellij | **✅ yes** (inject, no teardown) | JSONL reconstruction | **tmux `send-keys`** | **stable** | ✅ |
+| *Native RC (remote-claw)* | ✅ `--remote-control` | ✅ yes (default) | worker-events feed (richest) | RC control channel | stable | ❌ Anthropic-API-only |
+
+- **`remote` (headless SDK)** — the Bedrock workhorse. Default is the official Agent SDK `query()`; on an
+  auth-error / early-exit it falls back to a vendored `claude --output-format stream-json` client.
+  Permissions ride `canUseTool`; AskUserQuestion is answered structurally (`{answers}` keyed by question
+  text) plus a synthesized free-form escape hatch. It **resumes the same** claude session. Tradeoff: ✅
+  provider-agnostic, clean, robust; ❌ **no real TUI at all** (loses slash commands, flattens thinking),
+  and **phone-only** (your local terminal shows Happier's own Ink status UI, not interactive claude).
+- **`unified terminal` (tmux/zellij)** — the standout. Runs the **real interactive TUI** (strips
+  `--print`) in tmux (preferred) or zellij, and **injects phone prompts as keystrokes** (`send-keys -l`
+  then `C-m`), deferring while you're mid-typing. Critically it **does not kill/fork** — it injects into
+  the live TUI, so you and the phone drive the *same running session* (abort = send `Esc`, "keep host
+  alive"), and the session id is **stable**. Tradeoff: ✅ real TUI **+ concurrent shared control +
+  provider-agnostic** — the only Happier mode with native-RC-like shared control; ❌ **opt-in** + needs
+  tmux/zellij, the write path is **fragile keystroke injection** (timing/mid-typing/bracketed-paste, no
+  structured ack), and the **phone still reconstructs from JSONL** (the pane is `tmux attach`-style
+  local, not streamed as pixels), so the phone keeps the same TUI-only fidelity losses as every other
+  mode.
+
+**Is `unified terminal` the future, or a throwaway experiment?** It reads as a **deliberate future
+direction — but very new and not yet the default** (confidence: moderate-to-high). The strongest signal
+is product framing: Happier's June UI now relabels the SDK path as **"Classic runtime (Agent SDK
+fallback)"** ("use the Agent SDK path when unified terminal runtime is off or unavailable") — the
+marketing treats the SDK reconstruction as the *fallback* and the real-TUI tmux mode as the *preferred*
+path, even though the boolean still defaults to the SDK (the fingerprint of a mode mid-graduation).
+Backing it: the entire `unifiedTerminal/` subsystem (~15 files) + the tmux/zellij host adapters were
+**created June 6–8 2026** — days old, intensely active, landing on the default `dev` branch with tests.
+
+Honest caveats, though: the default flag is **still OFF** (`claudeUnifiedTerminalEnabled: false`, gate
+`fail_closed`) and no commit has flipped it; there is **no explicit "this becomes default" roadmap
+statement** anywhere public (the verdict is inferred from code + UI strings); the older
+`claude-feature-matrix.md` still names the Agent SDK as the intended *single* runtime, so the docs lag —
+and possibly contradict — the June pivot; it is **~1 week old** (new subsystems can stall or get
+reworked); and it is a **Happier-fork-specific bet** — upstream `slopus/happy` has *zero*
+unified-terminal code. So: the real-TUI-via-tmux-injection direction is a live, serious bet by the
+leading fork — evidence that **the direction is real, not that it's settled.**
+
+This matters here because that tmux-inject pattern is the **provider-agnostic, shared-control,
+real-TUI-ish** path §4 reaches for — the one I'd otherwise have called "nobody ships." Someone is now
+building it; the open gap they leave is exactly the two things native RC does better: a **non-fragile
+control channel** (vs send-keys) and a **richer remote feed** (worker-events vs JSONL reconstruction, or
+streaming the pane itself).
 
 ---
 
@@ -211,13 +266,15 @@ enterprise/Bedrock shops are exactly the zero-knowledge-conscious crowd remote-c
 
 The three findings converge on one decision:
 
-- Native RC gives **full TUI fidelity**, **concurrent shared control** of one live session (§1 — the
-  thing the headless apps structurally can't do: they kill-and-fork), and a **store-free** relay
-  (remote-claw's current bet) — but is **Anthropic-API-only** and depends on Anthropic's hosted control
-  plane.
+- Native RC gives **full TUI fidelity**, **concurrent shared control by default** (Happier matches this
+  only in its opt-in `unified terminal` tmux mode, via fragile `send-keys` injection — §1; its default
+  `local` mode kills-and-forks), and a **store-free** relay (remote-claw's current bet) — but is
+  **Anthropic-API-only** and depends on Anthropic's hosted control plane.
 - A Bedrock/Vertex/Foundry-compatible remote experience **cannot ride native RC**. It must use one of the
   other §1 mechanisms: the **SDK-headless** path (provider-agnostic, but loses TUI fidelity like
-  Happy/Happier) or **PTY-streaming the real `claude` TUI** (tmux + xterm — provider-agnostic *and*
+  Happy/Happier's default), the **tmux-inject** path (provider-agnostic + keeps the real TUI + shared
+  control, but fragile writes and a JSONL-reconstructed phone view — the bet Happier is actively making),
+  or **PTY-streaming the real `claude` TUI** to the phone (tmux + xterm — provider-agnostic *and*
   pixel-literal, the one path nobody currently ships for `claude`).
 - The **durable-log model** (§2) is orthogonal to fidelity but central to durability/scale, and is
   validated by Anthropic's own backend (§3's persisted `sequence_num` log).
@@ -227,8 +284,11 @@ The three findings converge on one decision:
 1. **Keep native RC as the high-fidelity, Anthropic-API path** (status quo — full TUI, store-free) and
    document the Bedrock exclusion plainly.
 2. **Spike a PTY-stream transport** (`claude` in tmux → xterm to the viewer) as the *provider-agnostic,
-   pixel-literal* option — the only way to serve Bedrock users without losing the TUI. This is the
-   genuine differentiator versus Happy/Happier (who only stream a shell, never `claude`).
+   pixel-literal* option — the only way to serve Bedrock users without losing the TUI. Happier is already
+   building the *inject* half (phone prompt → tmux `send-keys` into the real `claude` pane, §1); the
+   unshipped half is **streaming that pane's pixels to the phone** (Happier reconstructs from JSONL
+   instead) plus a **non-fragile control channel** (vs send-keys). That delta is the genuine
+   differentiator — Happy/Happier stream a *shell* to the phone, never `claude` itself.
 3. **Spike the durable-log `BrokerBackend` adapter** (§2) to retire the seq/restart/reconnect machinery,
    gated on the store-free trade.
 
