@@ -434,6 +434,33 @@ code {
   word-break: break-word;
 }
 
+/* Slash-command chip (#41): a centered, muted instruction marker — not a chat pill. */
+.row-command {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0 6px;
+}
+.cmd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 80%;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmd-glyph {
+  color: var(--accent);
+  font-size: 12px;
+}
+
 /* ASSISTANT prose — full width, no bubble; serif body to read as a document. */
 .prose {
   font-family: Georgia, "Times New Roman", ui-serif, serif;

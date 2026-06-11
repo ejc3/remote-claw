@@ -121,6 +121,17 @@ export function toolHint(input: ToolInput): string {
   return input.command ?? input.file_path ?? input.description ?? "";
 }
 
+/**
+ * Whether a user message is a slash command claude runs (`/compact`, `/clear`, `/model opus`, …) rather
+ * than a chat prompt — `/` + a word, then a space or end-of-string. The trailing `(?:\s|$)` distinguishes
+ * a command from a path like `/home/ubuntu` (where a `/` follows the word, so it does NOT match). Such
+ * messages are rendered as a distinct command chip instead of a chat pill (#41). `/compact` rides the
+ * same `user` path as any prompt (captured via --rc-trace); the worker's reply is the compaction summary.
+ */
+export function isSlashCommand(text: string): boolean {
+  return /^\/[a-zA-Z][\w-]*(?:\s|$)/.test(text.trim());
+}
+
 export interface ToolResult {
   toolUseId: string;
   isError: boolean;

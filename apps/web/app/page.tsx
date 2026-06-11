@@ -6,6 +6,7 @@ import {
   diffOf,
   dirname,
   editStat,
+  isSlashCommand,
   parsePermissionResolved,
   parseTask,
   parseToolResult,
@@ -657,7 +658,16 @@ function Bubble({
     case "result":
       return <p className="turn-sep" aria-hidden />;
     case "user":
-      return (
+      // A slash command (/compact, /clear, /model …) is rendered as a distinct command chip, not a chat
+      // pill — it rides the same `user` path but is an instruction to claude, not a message (#41).
+      return isSlashCommand(message.text) ? (
+        <div className="row-command">
+          <span className="cmd-chip">
+            <span className="cmd-glyph">⌘</span>
+            {message.text.trim()}
+          </span>
+        </div>
+      ) : (
         <div className="row-user">
           <div className="pill">{message.text}</div>
         </div>

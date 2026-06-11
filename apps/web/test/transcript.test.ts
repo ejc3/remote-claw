@@ -4,12 +4,34 @@ import {
   diffOf,
   dirname,
   editStat,
+  isSlashCommand,
   parseTask,
   parseToolResult,
   parseToolUse,
   sanitizeInput,
   toolHint,
 } from "../app/lib/transcript.js";
+
+describe("isSlashCommand", () => {
+  it("recognizes a bare command and a command with args", () => {
+    for (const t of ["/compact", "/clear", "/context", "/model opus", "  /compact  "]) {
+      expect(isSlashCommand(t)).toBe(true);
+    }
+  });
+
+  it("does NOT treat a path or a normal message as a command", () => {
+    for (const t of [
+      "/home/ubuntu/file",
+      "/",
+      "hello",
+      "use /compact later",
+      "//double",
+      "/ space",
+    ]) {
+      expect(isSlashCommand(t)).toBe(false);
+    }
+  });
+});
 
 describe("parseToolUse", () => {
   it("parses a well-formed tool_use frame", () => {
