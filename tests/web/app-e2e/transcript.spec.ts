@@ -211,3 +211,32 @@ test("attaching a photo sends it and echoes in the transcript (#44)", async ({ p
   await expect(page.locator(".row-user .pill", { hasText: "📎 photo.png" })).toBeVisible();
   await page.locator("section.chat").screenshot({ path: "test-results/attachment-e2e.png" });
 });
+
+test("serves the CSP + security headers, and the app still hydrates under them (#2)", async ({
+  page,
+}) => {
+  // Asserted against the PRODUCTION build (next start), so this is the enforced prod policy — and the
+  // fact that every other test in this file connects, renders, and attaches under it proves the CSP
+  // doesn't break hydration.
+  const resp = await page.goto(`/${qp}`);
+  const h = resp?.headers() ?? {};
+  const csp = h["content-security-policy"] ?? "";
+  // The exfiltration-blocking directives — the pass can't be fetched/beaconed/POSTed to another origin,
+  // no external script origins, no base-uri hijack, no object/embed, no framing.
+  expect(csp).toContain("default-src 'self'");
+  expect(csp).toContain("script-src 'self'"); // no external script origins
+  expect(csp).toContain("connect-src 'self'");
+  expect(csp).toContain("img-src 'self' blob: data:");
+  expect(csp).toContain("form-action 'self'");
+  expect(csp).toContain("base-uri 'self'");
+  expect(csp).toContain("object-src 'none'");
+  expect(csp).toContain("frame-ancestors 'none'");
+  expect(csp).not.toContain("'unsafe-eval'");
+  // Static defense-in-depth headers from next.config.
+  expect(h["x-frame-options"]).toBe("DENY");
+  expect(h["x-content-type-options"]).toBe("nosniff");
+  expect(h["referrer-policy"]).toBe("no-referrer");
+  expect(h["strict-transport-security"]).toContain("max-age=");
+  // The page still loads + is interactive under the CSP (no blocked framework script).
+  await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+});
