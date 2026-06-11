@@ -40,9 +40,11 @@ export interface BrokerClientOptions {
   provider: SecurityProvider;
   /** Injectable fetch (tests / a custom agent). Defaults to the global fetch. */
   fetchFn?: typeof fetch;
-  /** Pick the broker's durable backend for this client's calls ("vercel" | "local" | "temporal").
-   *  Sent as the `x-broker-backend` header on every /api/relay + /api/stream request; omitted ⇒ the
-   *  broker's default. Publish and subscribe for one channel MUST agree, so it's set per client. */
+  /** Pick the broker's durable backend for this client's calls ("vercel" | "local" | "temporal" |
+   *  "turso"). Sent as the `x-broker-backend` header on every /api/relay + /api/stream request; omitted
+   *  ⇒ the broker's default. Publish and subscribe for one channel MUST agree, so it's set per client.
+   *  "turso" is a durable log (see `durable`): the broker retains every frame, so the host can retire
+   *  its in-memory transcript and let subscribe() serve history. */
   backend?: string;
   /** Vercel "Protection Bypass for Automation" secret. When the broker is deployed behind Vercel
    *  Deployment Protection (SSO), an unauthenticated request is bounced with a 401 auth wall before
@@ -86,6 +88,17 @@ export class BrokerClient {
     // "Illegal invocation" (Node's fetch is lenient, so this only bites in a real browser). Bind the
     // default to globalThis. An injected fetchFn is used as-is (the caller owns its binding).
     this.#fetch = opts.fetchFn ?? globalThis.fetch.bind(globalThis);
+  }
+
+  /** True when this client targets a DURABLE-log backend (currently only `turso`): the broker keeps
+   *  every frame forever, so a fresh subscribe(startIndex:0) alone replays the WHOLE transcript and the
+   *  host need not hold an in-memory `#log` or re-post it on a viewer `catch_up`. A capped/ephemeral
+   *  backend (vercel) rolls old frames off its buffer, so there the host's `#log` is still the only full
+   *  history — hence the conservative default (undefined/unknown backend ⇒ NOT durable, keep the #log). */
+  get durable(): boolean {
+    // `.trim()` mirrors the broker's own backend resolution (it trims `?backend=` before matching), so a
+    // stray-whitespace backend value can't make host and broker disagree about which store is in play.
+    return this.#backend?.trim() === "turso";
   }
 
   /** `Authorization: Bearer <hex(auth_token)>` — recomputed by the broker into identity_id (§4.5). */

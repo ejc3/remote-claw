@@ -26,6 +26,11 @@ describe("classifyArgs (unit)", () => {
     });
   });
 
+  it("parses --rc-backend (the host's broker-backend selector) as a value flag", () => {
+    expect(classifyArgs(["--rc-backend", "turso", "chat"]).rc).toEqual({ "rc-backend": "turso" });
+    expect(classifyArgs(["--rc-backend=turso"]).rc).toEqual({ "rc-backend": "turso" });
+  });
+
   it("mixes rc flags and claude args in any order", () => {
     const c = classifyArgs(["chat", "--rc-file", "work", "--model", "opus", "--rc-quiet"]);
     expect(c.rc).toEqual({ "rc-file": "work", "rc-quiet": true });
