@@ -132,6 +132,51 @@ export function isSlashCommand(text: string): boolean {
   return /^\/[a-zA-Z][\w-]*(?:\s|$)/.test(text.trim());
 }
 
+/** One choice in an AskUserQuestion question (#42). */
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+/** One AskUserQuestion question — its header, prompt, choices, and whether multiple may be picked. */
+export interface Question {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multiSelect: boolean;
+}
+
+/**
+ * Parse an AskUserQuestion tool input into its questions (#42). The real shape (captured via
+ * --rc-trace) is `{questions:[{question, header, options:[{label, description}], multiSelect}]}`.
+ * Defensive: drops malformed entries (a question with no prompt or no options) so the UI never renders
+ * an unanswerable card. Returns [] for anything that isn't a questions array.
+ */
+export function parseQuestions(toolInput: unknown): Question[] {
+  const raw = (toolInput as { questions?: unknown } | null)?.questions;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((q): Question => {
+      const qq = (typeof q === "object" && q !== null ? q : {}) as Record<string, unknown>;
+      const opts = Array.isArray(qq.options) ? qq.options : [];
+      return {
+        question: typeof qq.question === "string" ? qq.question : "",
+        header: typeof qq.header === "string" ? qq.header : "",
+        multiSelect: qq.multiSelect === true,
+        options: opts
+          .map((o): QuestionOption => {
+            const oo = (typeof o === "object" && o !== null ? o : {}) as Record<string, unknown>;
+            return {
+              label: typeof oo.label === "string" ? oo.label : "",
+              description: typeof oo.description === "string" ? oo.description : "",
+            };
+          })
+          .filter((o) => o.label !== ""),
+      };
+    })
+    .filter((q) => q.question !== "" && q.options.length > 0);
+}
+
 export interface ToolResult {
   toolUseId: string;
   isError: boolean;

@@ -8,9 +8,11 @@ import {
   editStat,
   isSlashCommand,
   parsePermissionResolved,
+  parseQuestions,
   parseTask,
   parseToolResult,
   parseToolUse,
+  type Question,
   sanitizeInput,
   type ToolInput,
   toolHint,
@@ -401,9 +403,9 @@ function Transcript(props: {
 
   // Answer a worker permission_request (§17.4): seal a `permission` frame the host turns into the
   // control_response. Bound to this session; PermissionRow owns the per-request pending/resolved state.
-  const grant = useCallback(
-    (requestId: string, behavior: "allow" | "deny") =>
-      viewer.grantPermission(sessionId, requestId, behavior),
+  // `extra` carries an AskUserQuestion's {answers, toolUseId} (#42); absent for a plain allow/deny.
+  const grant = useCallback<GrantFn>(
+    (requestId, behavior, extra) => viewer.grantPermission(sessionId, requestId, behavior, extra),
     [sessionId, viewer],
   );
 
@@ -643,7 +645,8 @@ function ModeSheet({
 // right-aligned pills; ASSISTANT turns are full-width prose (no bubble). Tool calls are compact
 // tappable rows that expand to a Command/Diff detail; sub-agents and thinking nest/recede. (Inspired
 // by Claude Code's mobile UI — see the design spec.)
-type GrantFn = (requestId: string, behavior: "allow" | "deny") => Promise<void>;
+type GrantExtra = { answers?: Record<string, string | string[]>; toolUseId?: string };
+type GrantFn = (requestId: string, behavior: "allow" | "deny", extra?: GrantExtra) => Promise<void>;
 
 function Bubble({
   message,
@@ -755,6 +758,13 @@ function PermissionRow({
     [req.requestId, onGrant],
   );
 
+  // An AskUserQuestion is a can_use_tool whose input is multiple-choice questions — render the question
+  // UI + answer with updatedInput.answers, not a bare Allow/Deny (#42). (Branch AFTER the hooks above
+  // so the rules of hooks hold; QuestionCard owns its own state.)
+  if (req.questions.length > 0) {
+    return <QuestionCard req={req} onGrant={onGrant} resolved={resolved} />;
+  }
+
   return (
     <div className="perm">
       <div className="perm-head">
@@ -796,21 +806,140 @@ function PermissionRow({
   );
 }
 
-/** Parse a permission_request frame → the tool name, a one-line hint, and the request id to answer. */
-function parsePermission(text: string): { tool: string; hint: string; requestId: string } {
+interface ParsedPermission {
+  tool: string;
+  hint: string;
+  requestId: string;
+  toolUseId: string;
+  questions: Question[];
+}
+
+/**
+ * AskUserQuestion (#42): render each multiple-choice question + options; on submit, send the chosen
+ * labels back as `updatedInput.answers` keyed by question text, with the request's `tool_use_id` — the
+ * exact shape real claude expects (verified live via --rc-trace). Single-select picks one label;
+ * multiSelect toggles an array. Survives reload via the host-logged `resolved` map (#56).
+ */
+function QuestionCard({
+  req,
+  onGrant,
+  resolved,
+}: {
+  req: ParsedPermission;
+  onGrant: GrantFn;
+  resolved: Map<string, "allow" | "deny">;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+  const deciding = useRef(false);
+
+  const done = resolved.get(req.requestId) != null || sent; // host-logged answer survives reload
+
+  const pick = (q: Question, label: string) =>
+    setAnswers((a) => {
+      if (!q.multiSelect) return { ...a, [q.question]: label };
+      const cur = Array.isArray(a[q.question]) ? (a[q.question] as string[]) : [];
+      return {
+        ...a,
+        [q.question]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label],
+      };
+    });
+  const isPicked = (q: Question, label: string) => {
+    const v = answers[q.question];
+    return Array.isArray(v) ? v.includes(label) : v === label;
+  };
+  const answered = (q: Question) => {
+    const v = answers[q.question];
+    return Array.isArray(v) ? v.length > 0 : typeof v === "string";
+  };
+  const allAnswered = req.questions.every(answered);
+
+  const submit = useCallback(async () => {
+    if (req.requestId === "" || deciding.current || !allAnswered) return;
+    deciding.current = true;
+    setBusy(true);
+    setErr(null);
+    try {
+      await onGrant(req.requestId, "allow", { answers, toolUseId: req.toolUseId });
+      setSent(true);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      deciding.current = false; // failed — let the user retry
+    } finally {
+      setBusy(false);
+    }
+  }, [req.requestId, req.toolUseId, answers, allAnswered, onGrant]);
+
+  if (done) {
+    return (
+      <div className="perm perm-q">
+        <div className="perm-resolved" data-behavior="allow">
+          ✓ Answered
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="perm perm-q">
+      <div className="perm-head">
+        <span className="tool-glyph">❓</span>
+        <span className="perm-label">Claude is asking</span>
+      </div>
+      {req.questions.map((q) => (
+        <div className="q-block" key={`${q.header}:${q.question}`}>
+          {q.header !== "" && <div className="q-header">{q.header}</div>}
+          <div className="q-text">{q.question}</div>
+          <div className="q-options">
+            {q.options.map((o) => (
+              <button
+                key={o.label}
+                type="button"
+                className="q-option"
+                data-selected={isPicked(q, o.label)}
+                onClick={() => pick(q, o.label)}
+              >
+                <span className="q-option-label">{o.label}</span>
+                {o.description !== "" && <span className="q-option-desc">{o.description}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="perm-btn perm-allow q-submit"
+        disabled={busy || !allAnswered || req.requestId === ""}
+        onClick={() => void submit()}
+      >
+        {busy ? "Sending…" : "Submit answers"}
+      </button>
+      {err !== null && <div className="perm-err">Couldn’t send: {err}</div>}
+    </div>
+  );
+}
+
+/** Parse a permission_request frame → tool, hint, request id, tool_use_id, and (for AskUserQuestion)
+ *  the questions to render (#42). */
+function parsePermission(text: string): ParsedPermission {
   try {
     const p = JSON.parse(text) as {
       request_id?: unknown;
       tool_name?: unknown;
       tool_input?: unknown;
+      tool_use_id?: unknown;
     };
     return {
       tool: typeof p.tool_name === "string" ? p.tool_name : "tool",
       hint: toolHint(sanitizeInput(p.tool_input)),
       requestId: typeof p.request_id === "string" ? p.request_id : "",
+      toolUseId: typeof p.tool_use_id === "string" ? p.tool_use_id : "",
+      questions: parseQuestions(p.tool_input),
     };
   } catch {
-    return { tool: "tool", hint: "", requestId: "" };
+    return { tool: "tool", hint: "", requestId: "", toolUseId: "", questions: [] };
   }
 }
 
