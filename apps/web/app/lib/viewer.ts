@@ -239,22 +239,28 @@ export class Viewer {
   /**
    * Grant or deny a worker `can_use_tool` request (a `permission` control frame, dir:in). The host
    * answers the worker's control_request with the chosen behavior. `requestId` comes from the
-   * `permission_request` transcript frame the host relayed.
+   * `permission_request` transcript frame the host relayed. For an AskUserQuestion (#42), pass
+   * `extra.answers` ({question→choice}) + `extra.toolUseId` so the host builds the real
+   * `updatedInput.answers` + `toolUseID` shape claude expects.
    */
   async grantPermission(
     sessionId: string,
     requestId: string,
     behavior: "allow" | "deny" = "allow",
+    extra?: { answers?: Record<string, string | string[]>; toolUseId?: string },
   ): Promise<void> {
     // An empty request_id can't match any worker control_request — never seal a useless frame.
     if (requestId === "") throw new Error("grantPermission: empty requestId");
+    const body: Record<string, unknown> = { request_id: requestId, behavior };
+    if (extra?.answers) body.answers = extra.answers;
+    if (extra?.toolUseId) body.tool_use_id = extra.toolUseId;
     await this.#client.postFrame(
       this.#header({
         recordKind: "permission",
         sessionId,
         msgId: `perm-${requestId}-${randomId()}`,
       }),
-      utf8(JSON.stringify({ request_id: requestId, behavior })),
+      utf8(JSON.stringify(body)),
     );
   }
 

@@ -43,15 +43,21 @@ export class FakeRcWorker {
   readonly #agent: Agent;
   #sse: ReturnType<typeof httpsRequest> | null = null;
   #heartbeat: ReturnType<typeof setInterval> | null = null;
-  #onControlResponse: ((requestId: string, behavior: string) => void) | null = null;
+  #onControlResponse:
+    | ((requestId: string, behavior: string, response?: Record<string, unknown>) => void)
+    | null = null;
   #onControlRequest: ((subtype: string, request: Record<string, unknown>) => void) | null = null;
 
   constructor(proxyPort: number, ca: Buffer) {
     this.#agent = proxyAgent(proxyPort, ca);
   }
 
-  /** Register a callback fired when the relay delivers a control_response downstream (a grant/deny). */
-  onControlResponse(cb: (requestId: string, behavior: string) => void): void {
+  /** Register a callback fired when the relay delivers a control_response downstream (a grant/deny).
+   *  The 3rd arg is the FULL `response.response` object — for an AskUserQuestion answer that carries
+   *  `{behavior, toolUseID, updatedInput:{answers}}` (#42). */
+  onControlResponse(
+    cb: (requestId: string, behavior: string, response?: Record<string, unknown>) => void,
+  ): void {
     this.#onControlResponse = cb;
   }
 
@@ -183,7 +189,7 @@ export class FakeRcWorker {
     // A control_response is the relay delivering a viewer's permission grant/deny back to the worker.
     if (ev.event_type === "control_response") {
       const r = ev.payload?.response;
-      this.#onControlResponse?.(r?.request_id ?? "", r?.response?.behavior ?? "");
+      this.#onControlResponse?.(r?.request_id ?? "", r?.response?.behavior ?? "", r?.response);
       return;
     }
     // A control_request is a client verb (interrupt/set_model/…); `initialize` is the handshake.

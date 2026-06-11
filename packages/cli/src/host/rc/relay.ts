@@ -115,17 +115,27 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
   // no gate (§17.4), so this is rarely emitted, but we relay it rather than drop it silently.
   if (ev.eventType === "control_request") {
     const req =
-      (ev.payload.request as { subtype?: string; tool_name?: string; tool_input?: unknown }) ?? {};
+      (ev.payload.request as {
+        subtype?: string;
+        tool_name?: string;
+        tool_input?: unknown;
+        input?: unknown;
+        tool_use_id?: string;
+        request_id?: string;
+      }) ?? {};
     if (req.subtype !== "can_use_tool") return []; // initialize/other control verbs aren't rendered
-    const requestId =
-      (ev.payload.request_id as string) ?? (req as { request_id?: string }).request_id ?? "";
+    const requestId = (ev.payload.request_id as string) ?? req.request_id ?? "";
     return [
       {
         kind: "permission_request",
         text: JSON.stringify({
           request_id: requestId,
           tool_name: req.tool_name ?? "tool",
-          tool_input: req.tool_input ?? null,
+          // Real claude carries the tool input under `input` (captured via --rc-trace); the fake/older
+          // protocol used `tool_input`. Read both so a real can_use_tool (incl. AskUserQuestion's
+          // `questions`) isn't dropped. `tool_use_id` rides the answer back as `toolUseID` (#42).
+          tool_input: req.input ?? req.tool_input ?? null,
+          tool_use_id: typeof req.tool_use_id === "string" ? req.tool_use_id : "",
         }),
       },
     ];
@@ -589,18 +599,31 @@ export class HostRcRelay {
         if (typeof body.request_id === "string" && this.#openPerms.delete(body.request_id)) {
           const behavior = body.behavior === "deny" ? "deny" : "allow";
           this.#trace.debug("permission response", { behavior });
+          // An AskUserQuestion answer (#42) carries `answers` (+ the request's `tool_use_id`) — forward
+          // them so pushControlResponse builds the real `updatedInput.answers` + `toolUseID` shape.
+          const extra: { toolUseId?: string; answers?: Record<string, string | string[]> } = {};
+          if (typeof body.tool_use_id === "string" && body.tool_use_id) {
+            extra.toolUseId = body.tool_use_id;
+          }
+          if (body.answers !== null && typeof body.answers === "object") {
+            extra.answers = body.answers as Record<string, string | string[]>;
+          }
           // Log a permission_resolved content frame so a later reload / catch_up renders the request
           // as ANSWERED rather than re-prompting (#56); a failed post is fatal (a seq is burned).
           // Clearing the gate also drops `needs` from presence — re-announce so the viewer's
           // needs-you indicator clears (#58).
-          this.#session.pushControlResponse(body.request_id, behavior);
+          this.#session.pushControlResponse(body.request_id, behavior, extra);
           const seq = this.#seq++;
           await this.#fatalOnThrow(() =>
             this.#emit(
               "permission_resolved",
               seq,
               `permresolved-${seq}`,
-              JSON.stringify({ request_id: body.request_id, behavior }),
+              JSON.stringify(
+                extra.answers
+                  ? { request_id: body.request_id, behavior, answers: extra.answers }
+                  : { request_id: body.request_id, behavior },
+              ),
             ),
           );
           await this.#maybeAnnounce();

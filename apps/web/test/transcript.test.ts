@@ -5,12 +5,65 @@ import {
   dirname,
   editStat,
   isSlashCommand,
+  parseQuestions,
   parseTask,
   parseToolResult,
   parseToolUse,
   sanitizeInput,
   toolHint,
 } from "../app/lib/transcript.js";
+
+// parseQuestions reads an AskUserQuestion tool input (#42) — the exact shape captured live via
+// --rc-trace: {questions:[{question, header, options:[{label,description}], multiSelect}]}.
+describe("parseQuestions", () => {
+  it("parses the real captured AskUserQuestion shape", () => {
+    const input = {
+      questions: [
+        {
+          question: "What would you like to dig into next on remote-claw?",
+          header: "Next up",
+          multiSelect: false,
+          options: [
+            { label: "Continue cli-2-trace-mitm", description: "Keep iterating." },
+            { label: "Start something new", description: "Pick a fresh task." },
+          ],
+        },
+      ],
+    };
+    const qs = parseQuestions(input);
+    expect(qs).toHaveLength(1);
+    expect(qs[0]?.header).toBe("Next up");
+    expect(qs[0]?.multiSelect).toBe(false);
+    expect(qs[0]?.options.map((o) => o.label)).toEqual([
+      "Continue cli-2-trace-mitm",
+      "Start something new",
+    ]);
+  });
+
+  it("carries multiSelect and drops malformed/empty-label entries", () => {
+    const qs = parseQuestions({
+      questions: [
+        {
+          question: "Pick any",
+          header: "H",
+          multiSelect: true,
+          options: [{ label: "a" }, { x: 1 }],
+        },
+        { question: "", options: [{ label: "z" }] }, // no question text → dropped
+        { question: "no opts", options: [] }, // no options → dropped
+      ],
+    });
+    expect(qs).toHaveLength(1);
+    expect(qs[0]?.multiSelect).toBe(true);
+    expect(qs[0]?.options.map((o) => o.label)).toEqual(["a"]); // the {x:1} option (no label) dropped
+  });
+
+  it("returns [] for a non-AskUserQuestion input", () => {
+    expect(parseQuestions({ command: "ls" })).toEqual([]);
+    expect(parseQuestions(null)).toEqual([]);
+    expect(parseQuestions({ questions: "nope" })).toEqual([]);
+  });
+});
 
 describe("isSlashCommand", () => {
   it("recognizes a bare command and a command with args", () => {

@@ -65,7 +65,7 @@ function gate(req: Request): { origin: string } | Response {
 /** One scripted RC turn that exercises every transcript row the UI renders (#47 + prior features).
  *  With `withPerm`, a can_use_tool control_request is injected so the UI shows a permission card —
  *  the resolved-on-reload e2e (#56) grants it, reloads, and asserts it replays as answered. */
-function scenario(withPerm: boolean): Array<Record<string, unknown>> {
+function scenario(withPerm: boolean, withAskq = false): Array<Record<string, unknown>> {
   const events: Array<Record<string, unknown>> = [
     {
       type: "assistant",
@@ -209,6 +209,32 @@ function scenario(withPerm: boolean): Array<Record<string, unknown>> {
       },
     });
   }
+  if (withAskq) {
+    // Inject an AskUserQuestion gate (the real shape captured via --rc-trace: tool input under `input`
+    // with a sibling `tool_use_id`) so the app-e2e can render the question UI + answer it (#42).
+    events.splice(1, 0, {
+      type: "control_request",
+      request_id: "askq-e2e-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        tool_use_id: "toolu_e2e_q1",
+        input: {
+          questions: [
+            {
+              question: "Which name do you like best?",
+              header: "Name pick",
+              multiSelect: false,
+              options: [
+                { label: "Orion", description: "A bold, cosmic name." },
+                { label: "Sable", description: "Sleek and distinctive." },
+              ],
+            },
+          ],
+        },
+      },
+    });
+  }
   return events;
 }
 
@@ -266,7 +292,8 @@ export async function POST(req: Request): Promise<Response> {
     behind: 0,
   });
   const withPerm = url.searchParams.get("perm") === "1"; // opt-in: inject a permission card (#56 e2e)
-  for (const payload of scenario(withPerm)) session.pushUpstream(payload);
+  const withAskq = url.searchParams.get("askq") === "1"; // opt-in: inject an AskUserQuestion (#42 e2e)
+  for (const payload of scenario(withPerm, withAskq)) session.pushUpstream(payload);
   // Run the pump under after(): on a serverless deployment (the vercel backend) the function FREEZES
   // once the Response is returned, so a fire-and-forget serve() would never publish the turn — the
   // session would announce but its transcript would be empty. after() keeps the function alive to

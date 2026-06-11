@@ -79,6 +79,31 @@ describe("Session producers", () => {
     expect(resp.response.behavior).toBe("allow");
   });
 
+  it("pushControlResponse builds the AskUserQuestion answer shape (toolUseID + updatedInput.answers)", () => {
+    // The exact shape real claude expects, verified live via --rc-trace (#42).
+    const s = new Session("cse_x", "t", {});
+    const ev = s.pushControlResponse("req-1", "allow", {
+      toolUseId: "toolu_abc",
+      answers: { "Which name?": "Orion" },
+    });
+    const resp = ev.payload.response as {
+      request_id: string;
+      response: { behavior: string; toolUseID: string; updatedInput: { answers: unknown } };
+    };
+    expect(resp.request_id).toBe("req-1");
+    expect(resp.response.behavior).toBe("allow");
+    expect(resp.response.toolUseID).toBe("toolu_abc");
+    expect(resp.response.updatedInput.answers).toEqual({ "Which name?": "Orion" });
+  });
+
+  it("pushControlResponse omits toolUseID/updatedInput for a plain allow/deny", () => {
+    const s = new Session("cse_x", "t", {});
+    const resp = s.pushControlResponse("r2", "deny").payload.response as {
+      response: Record<string, unknown>;
+    };
+    expect(resp.response).toEqual({ behavior: "deny" }); // no toolUseID, no updatedInput
+  });
+
   it("pushControlRequest builds a server→worker control_request with subtype + params (§3.7)", () => {
     const s = new Session("cse_x", "t", {});
     const ev = s.pushControlRequest("set_model", { model: "claude-opus-4-8" });

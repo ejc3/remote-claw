@@ -19,7 +19,7 @@ import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { ensureCerts, HostRcRelay, MitmProxy, RelayCore } from "@remote-claw/cli/rc";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
-import { parsePermissionResolved } from "../../app/lib/transcript";
+import { parsePermissionResolved, parseQuestions } from "../../app/lib/transcript";
 import { type Announce, type Message, Viewer } from "../../app/lib/viewer";
 import { FakeRcWorker } from "./fake-rc-worker";
 import { brokerFetch } from "./harness";
@@ -690,5 +690,74 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     }
     // page.tsx: effective = confirmed ?? decision → "allow" with no local decision → renders resolved.
     expect(resolvedMap.get("perm-viewer-1")).toBe("allow");
+  }, 50_000);
+
+  it("ASKUSERQUESTION: a can_use_tool with questions round-trips an answer (updatedInput.answers + toolUseID)", async () => {
+    // The full #42 spine, against the SHAPES captured live via --rc-trace: the worker surfaces an
+    // AskUserQuestion can_use_tool (`input.questions` + `tool_use_id`); the viewer renders the
+    // questions (parseQuestions) and answers; the relay sends a control_response whose response carries
+    // {behavior:"allow", toolUseID, updatedInput:{answers:{question→label}}}.
+    const id = await deriveIdentity(new Uint8Array(32).fill(69));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+
+    let answer: Record<string, unknown> | undefined;
+    worker.onControlResponse((_rid, _b, response) => {
+      answer = response;
+    });
+    // Real shape: the tool input is under `input` (not `tool_input`), with a sibling `tool_use_id`.
+    worker.start(sid, () => [
+      {
+        type: "control_request",
+        request_id: "askq-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          tool_use_id: "toolu_q1",
+          input: {
+            questions: [
+              {
+                question: "Which name?",
+                header: "Name pick",
+                multiSelect: false,
+                options: [
+                  { label: "Orion", description: "cosmic" },
+                  { label: "Sable", description: "sleek" },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const got: Message[] = [];
+    tailInto(viewer, sid, got, ac.signal);
+    await viewer.sendPrompt(sid, "pick a name");
+
+    // The relay surfaced the questions + tool_use_id on the permission_request (real `input` shape).
+    await waitFor(() => got.some((m) => m.kind === "permission_request"), 20_000);
+    const reqFrame = got.find((m) => m.kind === "permission_request");
+    const parsed = JSON.parse(reqFrame?.text ?? "{}");
+    expect(parsed.tool_use_id).toBe("toolu_q1");
+    const questions = parseQuestions(parsed.tool_input);
+    expect(questions[0]?.options.map((o) => o.label)).toEqual(["Orion", "Sable"]);
+
+    // The viewer answers with the chosen label, keyed by question text, + the request's tool_use_id.
+    await viewer.grantPermission(sid, "askq-1", "allow", {
+      answers: { "Which name?": "Orion" },
+      toolUseId: "toolu_q1",
+    });
+
+    // The worker receives the exact control_response shape claude expects.
+    await waitFor(() => answer !== undefined, 15_000);
+    expect(answer?.behavior).toBe("allow");
+    expect(answer?.toolUseID).toBe("toolu_q1");
+    expect((answer?.updatedInput as { answers?: unknown })?.answers).toEqual({
+      "Which name?": "Orion",
+    });
   }, 50_000);
 });

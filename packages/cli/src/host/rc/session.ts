@@ -184,11 +184,23 @@ export class Session {
     return ev;
   }
 
-  /** Answer a worker `can_use_tool` (the permission grant path, §17.4). */
-  pushControlResponse(requestId: string, behavior: "allow" | "deny" = "allow"): RcEvent {
+  /**
+   * Answer a worker `can_use_tool` (the permission grant path, §17.4). A plain allow/deny sends
+   * `response:{behavior}`. An AskUserQuestion answer (#42) additionally carries `toolUseID` and
+   * `updatedInput:{answers}` — the exact shape real claude expects (captured via --rc-trace):
+   * `response:{behavior:"allow", toolUseID, updatedInput:{answers:{"<question>":"<choice>"}}}`.
+   */
+  pushControlResponse(
+    requestId: string,
+    behavior: "allow" | "deny" = "allow",
+    extra?: { toolUseId?: string; answers?: Record<string, string | string[]> },
+  ): RcEvent {
+    const response: Record<string, unknown> = { behavior };
+    if (extra?.toolUseId) response.toolUseID = extra.toolUseId;
+    if (extra?.answers) response.updatedInput = { answers: extra.answers };
     return this.#pushDownstream("control_response", {
       type: "control_response",
-      response: { subtype: "success", request_id: requestId, response: { behavior } },
+      response: { subtype: "success", request_id: requestId, response },
     });
   }
 

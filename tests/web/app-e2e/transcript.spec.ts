@@ -164,3 +164,27 @@ test("a granted permission stays resolved after a reload — no re-prompt (#56/#
   await expect(permAfter.locator(".perm-resolved")).toHaveText(/Allowed/);
   await expect(permAfter.getByRole("button", { name: "Allow" })).toHaveCount(0);
 });
+
+test("an AskUserQuestion renders a question UI and submits answers (#42)", async ({
+  page,
+  request,
+}) => {
+  const askqQp = `?askq=1${BACKEND ? `&backend=${BACKEND}` : ""}`;
+  const res = await request.post(`/api/dev/seed${askqQp}`, seedOpts);
+  expect(res.ok()).toBeTruthy();
+  const { pass } = (await res.json()) as { pass: string };
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+
+  // The AskUserQuestion renders as a question card (options), not a bare Allow/Deny.
+  const card = page.locator(".perm.perm-q");
+  await expect(card.locator(".q-text", { hasText: "Which name do you like best?" })).toBeVisible();
+  const submit = card.getByRole("button", { name: "Submit answers" });
+  await expect(submit).toBeDisabled(); // can't submit until a choice is picked
+  await card.getByRole("button", { name: "Orion" }).click();
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
+  await page.locator("section.chat").screenshot({ path: "test-results/askuserquestion-e2e.png" });
+});

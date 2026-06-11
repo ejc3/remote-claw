@@ -767,6 +767,63 @@ code {
   color: var(--danger);
 }
 
+/* AskUserQuestion card (#42) — each question's header/prompt + selectable option buttons. */
+.perm-q .perm-label {
+  font-weight: 600;
+}
+.q-block {
+  margin: 12px 0 0;
+}
+.q-header {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  margin-bottom: 3px;
+}
+.q-text {
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.q-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.q-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  transition: border-color 0.12s, background 0.12s;
+}
+.q-option:hover {
+  border-color: var(--text-faint);
+}
+.q-option[data-selected="true"] {
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.12);
+}
+.q-option-label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.q-option-desc {
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+.q-submit {
+  margin-top: 12px;
+  width: 100%;
+}
+
 /* Extended-thinking block — collapsed by default, muted; recedes below the answer. */
 .thinking {
   margin: 4px 0;
