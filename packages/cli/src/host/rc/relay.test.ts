@@ -4,8 +4,27 @@ import { join } from "node:path";
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it } from "vitest";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
+import type { Tracer } from "../../trace.js";
 import { extForMime, HostRcRelay, isLikelyBase64, safeAttachmentName } from "./relay.js";
 import { Session } from "./session.js";
+
+/** A capturing tracer that records `error` lines (and is its own `child`) — for asserting alerts. */
+function spyTracer(): {
+  tracer: Tracer;
+  errors: Array<{ msg: string; fields: Record<string, unknown> | undefined }>;
+} {
+  const errors: Array<{ msg: string; fields: Record<string, unknown> | undefined }> = [];
+  const noop = () => {};
+  const t = {
+    error: (msg: string, fields?: Record<string, unknown>) => errors.push({ msg, fields }),
+    warn: noop,
+    info: noop,
+    debug: noop,
+    trace: noop,
+    child: () => t,
+  } as unknown as Tracer;
+  return { tracer: t, errors };
+}
 
 describe("safeAttachmentName", () => {
   it("strips path separators + odd chars and keeps a basename", () => {
@@ -172,6 +191,27 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     // Only seq 0 was durably posted; seq 1 (failed) and seq 2 (never allocated — halted) are absent.
     // The channel is a clean prefix, NOT [0, 2] with a permanent hole at 1.
     expect(client.content.map((p) => p.seq)).toEqual([0]);
+  });
+
+  it("emits an ERROR alert naming the burned seq when a content post fails terminally (#4)", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.failSeq = 1; // the second content post fails terminally → seq 1 is burned
+    const { tracer, errors } = spyTracer();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      tracer,
+    });
+    for (const a of ["a0", "a1"]) session.pushUpstream(assistant(a));
+    await relay.serve(new AbortController().signal).catch(() => {});
+
+    // The teardown is now also an actionable alert: an ERROR line that names the burned seq.
+    const alert = errors.find((e) => e.msg.includes("seq burned"));
+    expect(alert).toBeDefined();
+    expect(alert?.fields?.seq).toBe(1);
   });
 
   it("a fatal INBOUND publish failure tears the relay down (couples both pumps; no silent retry-limp)", async () => {
