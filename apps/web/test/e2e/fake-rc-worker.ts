@@ -181,10 +181,13 @@ export class FakeRcWorker {
     // ACK delivery of every downstream event, exactly as the real worker does (so reconnects don't
     // re-deliver). This exercises the MITM's events/delivery handler.
     if (ev.event_id) {
+      // Fire-and-forget, but CATCH: on test teardown the proxy closes mid-flight and `#rpc` rejects with
+      // `socket hang up`/ECONNRESET — an uncaught reject here surfaces as a vitest unhandled-rejection
+      // error (a flaky CI failure even though every assertion passed).
       void this.#rpc("POST", `/v1/code/sessions/${sessionId}/worker/events/delivery`, {
         worker_epoch: 1,
         updates: [{ event_id: ev.event_id, status: "received" }],
-      });
+      }).catch(() => {});
     }
     // A control_response is the relay delivering a viewer's permission grant/deny back to the worker.
     if (ev.event_type === "control_response") {
@@ -216,7 +219,9 @@ export class FakeRcWorker {
         worker_epoch: 1,
         worker_status: "idle",
       });
-    })();
+      // CATCH: teardown can close the proxy mid-turn, rejecting an in-flight `#rpc` with `socket hang
+      // up` — swallow it so it doesn't become a vitest unhandled-rejection failure.
+    })().catch(() => {});
   }
 
   stop(): void {
