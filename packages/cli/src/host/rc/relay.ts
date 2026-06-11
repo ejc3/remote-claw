@@ -14,11 +14,52 @@
 // `#seen` set dedups the at-least-once inbound stream. Mirrors HostRelay's broker discipline, but
 // decoupled into the event-driven shape RC needs (a turn's response is async, tool turns interleave).
 
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import type { GitInfo } from "./gitinfo.js";
 import { assistantText, type RcEvent, type Session } from "./session.js";
+
+/** Sanitize a viewer-supplied attachment filename to a safe basename (no path traversal, no separators).
+ *  A blank/odd name falls back to a generic one; the extension is preserved when present. (#44) */
+export function safeAttachmentName(name: string): string {
+  const base = name.split(/[/\\]/).pop() ?? "";
+  const cleaned = base
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .replace(/^\.+/, "")
+    .slice(0, 80);
+  return cleaned === "" ? "attachment" : cleaned;
+}
+
+/** The file extension matching an image mime, or "" if unknown. The viewer always re-encodes to one of
+ *  these, so the on-disk name must carry the matching extension (not the original) for claude's Read. (#44) */
+export function extForMime(mime: string): string {
+  switch (mime) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    default:
+      return "";
+  }
+}
+
+/** True if `s` is non-empty, well-formed standard base64 (so a malformed `data` is rejected outright
+ *  rather than silently decoded to truncated/empty bytes by Buffer.from). (#44) */
+export function isLikelyBase64(s: string): boolean {
+  return s.length > 0 && s.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(s);
+}
+
+/** Defensive cap on a viewer attachment's base64 length (~12 MB of bytes). The viewer downscales far
+ *  below this; the cap just stops a buggy/hostile client from writing an arbitrarily large file. (#44) */
+const MAX_ATTACHMENT_B64 = 16 * 1024 * 1024;
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
@@ -58,6 +99,9 @@ export interface HostRcRelayOptions {
   /** Optional structured tracer (target "rc.relay"; defaults to no-op). Local-only sink; content
    *  rides at debug+, never the key material. */
   tracer?: Tracer;
+  /** Where a viewer-sent attachment (#44) is written on the host before claude `Read`s it. Defaults to
+   *  an OS-temp subdir; the wrapper points it at the session workspace so paths are familiar to claude. */
+  attachmentsDir?: string;
 }
 
 /** One content frame to relay out of a worker upstream event. */
@@ -296,12 +340,19 @@ export class HostRcRelay {
   #fatal = false;
 
   readonly #trace: Tracer;
+  /** Where a viewer attachment is written before claude Reads it (#44). */
+  readonly #attachmentsDir: string;
+  /** Monotonic prefix making each on-disk attachment name unique (so a later upload can't overwrite a
+   *  file an earlier still-queued prompt will Read). (#44) */
+  #attachmentSeq = 0;
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
     this.#identityId = opts.identityId;
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
+    this.#attachmentsDir =
+      opts.attachmentsDir ?? join(tmpdir(), "remote-claw-attachments", opts.sessionId);
     // Bind the session id onto every line (span-like) so interleaved sessions are distinguishable.
     this.#trace = (opts.tracer ?? NOOP_TRACER).child({ session: opts.sessionId });
   }
@@ -628,12 +679,68 @@ export class HostRcRelay {
           );
           await this.#maybeAnnounce();
         }
+      } else if (frame.recordKind === "attachment") {
+        await this.#handleAttachment(frame);
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
         // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
         // to the worker as a `control_request` with the mapped subtype + params.
         await this.#driveControlVerb(frame.recordKind, frame);
       }
     }
+  }
+
+  /**
+   * Handle a viewer attachment (#44): write the (E2E-decrypted) bytes into the host's attachments dir,
+   * then drive claude to `Read` the file — claude's image Read gives real vision, so this needs NO
+   * unverified worker-protocol write (the image rides our own `attachment` frame, the rest is a normal
+   * prompt + the standard Read tool). Also echoes a `user` content frame so every device's transcript
+   * shows the attachment. A write/parse failure is logged, not fatal (it didn't burn a seq).
+   */
+  async #handleAttachment(frame: Frame): Promise<void> {
+    let name: string;
+    let path: string;
+    let caption: string;
+    try {
+      const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame))) as {
+        name?: unknown;
+        mime?: unknown;
+        data?: unknown;
+        caption?: unknown;
+      };
+      // Reject anything not well-formed base64 (Buffer.from would otherwise silently truncate it) or
+      // over the size cap — drop cleanly, before any seq/file/prompt side effect.
+      if (typeof body.data !== "string" || !isLikelyBase64(body.data)) return;
+      if (body.data.length > MAX_ATTACHMENT_B64) {
+        this.#trace.warn("attachment too large", { b64: body.data.length });
+        return;
+      }
+      const bytes = Buffer.from(body.data, "base64");
+      if (bytes.length === 0) return; // decoded to nothing
+      name = safeAttachmentName(typeof body.name === "string" ? body.name : ""); // display name (chip)
+      caption = typeof body.caption === "string" ? body.caption : "";
+      // On-disk name: a unique prefix (no overwrite of a still-referenced file) + the extension that
+      // matches the ACTUAL bytes (the viewer always re-encodes), so claude's image Read detects it right.
+      const mime = typeof body.mime === "string" ? body.mime : "";
+      const ext = extForMime(mime);
+      const stem = name.replace(/\.[A-Za-z0-9]+$/, "") || "attachment";
+      const diskName = `${(this.#attachmentSeq++).toString(36)}-${ext ? `${stem}.${ext}` : name}`;
+      await mkdir(this.#attachmentsDir, { recursive: true });
+      path = join(this.#attachmentsDir, diskName);
+      await writeFile(path, bytes);
+      this.#trace.debug("attachment written", { name, diskName, bytes: bytes.length });
+    } catch (e) {
+      this.#trace.warn("attachment rejected", { error: (e as Error)?.message ?? String(e) });
+      return; // bad frame / unwritable — drop (non-fatal: no seq was allocated)
+    }
+    // Echo the user frame FIRST (durably — a failed post is fatal), THEN inject into claude: the same
+    // invariant as the `user` path (never feed claude a prompt no viewer can see), here ordered so a
+    // torn-down relay can't have driven claude to Read an image that never reached any transcript.
+    const seq = this.#seq++;
+    await this.#fatalOnThrow(() =>
+      this.#emit("user", seq, `user-${seq}`, `📎 ${name}${caption ? `\n${caption}` : ""}`),
+    );
+    const prompt = `${caption || "Please look at this image."}\n\n[Attached image "${name}" saved at ${path} — use the Read tool to view it.]`;
+    this.#session.pushUserInput(prompt);
   }
 
   /** Map a client control-verb frame → the worker control_request the spec uses (§3.7). */

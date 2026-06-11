@@ -313,6 +313,31 @@ export class Viewer {
     );
     return clientMsgId;
   }
+
+  /**
+   * Send a file/photo attachment (#44): an `attachment` control frame (dir:in), E2E-sealed so the
+   * broker never sees the bytes. The host writes it into the session workspace and has claude `Read`
+   * it (vision) alongside `caption`. The image should be downscaled to fit one frame (the host's
+   * inbound path is single-frame); `data` is base64 (no data-URI prefix). Returns the frame's msg_id.
+   */
+  async sendAttachment(
+    sessionId: string,
+    att: { name: string; mime: string; data: string; caption?: string },
+  ): Promise<string> {
+    const msgId = `att-${randomId()}`;
+    await this.#client.postFrame(
+      this.#header({ recordKind: "attachment", sessionId, msgId }),
+      utf8(
+        JSON.stringify({
+          name: att.name,
+          mime: att.mime,
+          data: att.data,
+          caption: att.caption ?? "",
+        }),
+      ),
+    );
+    return msgId;
+  }
 }
 
 /** A short random id (browser + Node 22 both expose WebCrypto). */

@@ -928,6 +928,27 @@ code {
   color: var(--text);
   border-color: var(--text-faint);
 }
+
+/* Composer attach-a-photo button (#44). */
+.attach-btn {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  background: var(--surface);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  font-size: 16px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.attach-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .mode-glyph {
   font-size: 13px;
   opacity: 0.9;

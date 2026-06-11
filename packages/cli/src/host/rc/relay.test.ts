@@ -1,8 +1,41 @@
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
-import { HostRcRelay } from "./relay.js";
+import { extForMime, HostRcRelay, isLikelyBase64, safeAttachmentName } from "./relay.js";
 import { Session } from "./session.js";
+
+describe("safeAttachmentName", () => {
+  it("strips path separators + odd chars and keeps a basename", () => {
+    expect(safeAttachmentName("../../etc/passwd")).toBe("passwd");
+    expect(safeAttachmentName("a/b/IMG 1.png")).toBe("IMG_1.png");
+    expect(safeAttachmentName("weird*name?.jpeg")).toBe("weird_name_.jpeg");
+  });
+  it("falls back for an empty/dotfile-only name", () => {
+    expect(safeAttachmentName("")).toBe("attachment");
+    expect(safeAttachmentName("...")).toBe("attachment");
+    expect(safeAttachmentName("/")).toBe("attachment");
+  });
+});
+
+describe("extForMime / isLikelyBase64", () => {
+  it("maps known image mimes and rejects unknown", () => {
+    expect(extForMime("image/jpeg")).toBe("jpg");
+    expect(extForMime("image/png")).toBe("png");
+    expect(extForMime("image/webp")).toBe("webp");
+    expect(extForMime("application/pdf")).toBe("");
+    expect(extForMime("")).toBe("");
+  });
+  it("accepts well-formed base64 and rejects malformed/empty", () => {
+    expect(isLikelyBase64(Buffer.from("hello").toString("base64"))).toBe(true);
+    expect(isLikelyBase64("")).toBe(false);
+    expect(isLikelyBase64("!!!!")).toBe(false); // non-base64 chars
+    expect(isLikelyBase64("Zm9v!")).toBe(false); // bad length + char
+    expect(isLikelyBase64("abc")).toBe(false); // length not a multiple of 4
+  });
+});
 
 // Adversarial-review fixes for the relay's two-pump seq discipline (the mid-stream-gap bug) and the
 // sticky `needs` flag. We drive the REAL HostRcRelay.serve() loop with a controllable fake broker
@@ -208,5 +241,132 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     await served;
 
     expect(client.announces.at(-1)?.needs).toBe(false);
+  });
+});
+
+describe("HostRcRelay attachments (#44)", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("writes a viewer attachment to disk (sanitized name) and echoes a user frame", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    dirs.push(dir);
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    const bytes = Buffer.from("PNGDATA-καλημέρα-\x00\x01\x02");
+    client.queueInbound(
+      inFrame(
+        "attachment",
+        "att-1",
+        JSON.stringify({
+          name: "../IMG 1.png", // path traversal + space → must sanitize to IMG_1.png
+          mime: "image/png",
+          data: bytes.toString("base64"),
+          caption: "look at this",
+        }),
+      ),
+    );
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    // The bytes were written under a SANITIZED basename (traversal stripped) carrying a unique prefix +
+    // the mime-derived extension, byte-for-byte. There is exactly one file.
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(1);
+    const written = files[0] as string;
+    expect(written).toMatch(/^[a-z0-9]+-IMG_1\.png$/); // <unique>-IMG_1.png (mime image/png → .png)
+    expect(readFileSync(join(dir, written)).equals(bytes)).toBe(true);
+    // The transcript echo shows the attachment chip (the original display name) + the caption.
+    const echo = client.content.find((p) => p.recordKind === "user");
+    expect(echo?.text).toContain("📎 IMG_1.png");
+    expect(echo?.text).toContain("look at this");
+  });
+
+  it("rewrites the on-disk extension to match the mime, not the original name", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    dirs.push(dir);
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    const bytes = Buffer.from("JPEGDATA");
+    // The viewer always re-encodes to JPEG, so a ".png" source name must land as ".jpg" on disk.
+    client.queueInbound(
+      inFrame(
+        "attachment",
+        "att-2",
+        JSON.stringify({ name: "photo.png", mime: "image/jpeg", data: bytes.toString("base64") }),
+      ),
+    );
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    const written = readdirSync(dir)[0] as string;
+    expect(written).toMatch(/^[a-z0-9]+-photo\.jpg$/); // extension follows the JPEG bytes
+    const echo = client.content.find((p) => p.recordKind === "user");
+    expect(echo?.text).toContain("📎 photo.png"); // …but the chip keeps the original display name
+  });
+
+  it("drops a malformed-base64 attachment: no file, no echo, no seq burned", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    dirs.push(dir);
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    // A bad attachment, then a normal user frame: the user echo proves the relay kept running and that
+    // the bad attachment neither wrote a file nor emitted a content frame (and burned no seq → seq 0).
+    client.queueInbound(
+      inFrame(
+        "attachment",
+        "bad-1",
+        JSON.stringify({ name: "x.png", mime: "image/png", data: "!!!!" }),
+      ),
+    );
+    client.queueInbound(inFrame("user", "u-1", "hi"));
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    expect(readdirSync(dir)).toHaveLength(0); // nothing written for the bad frame
+    const users = client.content.filter((p) => p.recordKind === "user");
+    expect(users).toHaveLength(1); // only the real user frame echoed
+    expect(users[0]?.seq).toBe(0); // the dropped attachment burned no seq
   });
 });
