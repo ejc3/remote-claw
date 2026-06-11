@@ -113,4 +113,28 @@ describe("FrameOrderer (dedup + reorder, §6/§12)", () => {
     // "x" was evicted, so it's no longer remembered as seen -> re-delivered (acceptable: bounded window).
     expect(ids(o.accept(frame({ msgId: "x", seq: null })))).toEqual(["x"]);
   });
+
+  it("does NOT double-deliver a parts=1 content frame re-read after its dedup key evicted", () => {
+    // The adversarial-review case: a non-chunked frame buffered behind a gap whose msg_id evicts from
+    // the bounded window, then is re-read (reconnect re-reads from index 0). Before the per-slot guard
+    // it was pushed into the seq slot twice and drained as two transcript entries with the same seq.
+    const o = new FrameOrderer(0, 2); // tiny dedup window so we can force an eviction
+    expect(ids(o.accept(frame({ msgId: "m1", seq: 1 })))).toEqual([]); // buffered behind the seq-0 gap
+    // Churn the window with two other (seq:null) keys → "m1" evicts.
+    o.accept(frame({ msgId: "x1", seq: null, recordKind: "accepted" }));
+    o.accept(frame({ msgId: "x2", seq: null, recordKind: "accepted" }));
+    // Re-read seq 1 (same msg_id): #markSeen passes (key evicted), but the per-slot guard drops it.
+    expect(ids(o.accept(frame({ msgId: "m1", seq: 1 })))).toEqual([]);
+    // Fill the seq-0 gap → drains 0 then 1, EACH EXACTLY ONCE (no duplicate seq-1 entry).
+    expect(ids(o.accept(frame({ msgId: "m0", seq: 0 })))).toEqual(["m0", "m1"]);
+  });
+
+  it("keeps exactly one frame in a buffered parts=1 slot (head-mismatch and same-id dup both drop)", () => {
+    const o = new FrameOrderer(0);
+    expect(ids(o.accept(frame({ msgId: "a", seq: 2 })))).toEqual([]); // buffered behind gap
+    expect(ids(o.accept(frame({ msgId: "b", seq: 2 })))).toEqual([]); // head mismatch → dropped
+    expect(ids(o.accept(frame({ msgId: "a", seq: 2 })))).toEqual([]); // same-id re-read → per-slot dup
+    expect(ids(o.accept(frame({ msgId: "s0", seq: 0 })))).toEqual(["s0"]); // delivers now, cursor → 1
+    expect(ids(o.accept(frame({ msgId: "s1", seq: 1 })))).toEqual(["s1", "a"]); // s1 then buffered 'a', once
+  });
 });
