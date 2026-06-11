@@ -188,3 +188,26 @@ test("an AskUserQuestion renders a question UI and submits answers (#42)", async
   await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
   await page.locator("section.chat").screenshot({ path: "test-results/askuserquestion-e2e.png" });
 });
+
+test("attaching a photo sends it and echoes in the transcript (#44)", async ({ page, request }) => {
+  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
+  expect(res.ok()).toBeTruthy();
+  const { pass } = (await res.json()) as { pass: string };
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+
+  // A real (tiny 4x4) PNG so the browser's canvas downscale can decode it.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGM4YWMDRwzEcQAREhQBbrqBkwAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await page
+    .locator('input[type="file"]')
+    .setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: png });
+
+  // The host wrote the file + echoed a user frame with the attachment chip (proves the full inbound
+  // attachment path: viewer downscale → E2E frame → relay write + inject + echo → transcript).
+  await expect(page.locator(".row-user .pill", { hasText: "📎 photo.png" })).toBeVisible();
+  await page.locator("section.chat").screenshot({ path: "test-results/attachment-e2e.png" });
+});

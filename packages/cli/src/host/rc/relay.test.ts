@@ -1,8 +1,24 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
-import { HostRcRelay } from "./relay.js";
+import { HostRcRelay, safeAttachmentName } from "./relay.js";
 import { Session } from "./session.js";
+
+describe("safeAttachmentName", () => {
+  it("strips path separators + odd chars and keeps a basename", () => {
+    expect(safeAttachmentName("../../etc/passwd")).toBe("passwd");
+    expect(safeAttachmentName("a/b/IMG 1.png")).toBe("IMG_1.png");
+    expect(safeAttachmentName("weird*name?.jpeg")).toBe("weird_name_.jpeg");
+  });
+  it("falls back for an empty/dotfile-only name", () => {
+    expect(safeAttachmentName("")).toBe("attachment");
+    expect(safeAttachmentName("...")).toBe("attachment");
+    expect(safeAttachmentName("/")).toBe("attachment");
+  });
+});
 
 // Adversarial-review fixes for the relay's two-pump seq discipline (the mid-stream-gap bug) and the
 // sticky `needs` flag. We drive the REAL HostRcRelay.serve() loop with a controllable fake broker
@@ -208,5 +224,54 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     await served;
 
     expect(client.announces.at(-1)?.needs).toBe(false);
+  });
+});
+
+describe("HostRcRelay attachments (#44)", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("writes a viewer attachment to disk (sanitized name) and echoes a user frame", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    dirs.push(dir);
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    const bytes = Buffer.from("PNGDATA-καλημέρα-\x00\x01\x02");
+    client.queueInbound(
+      inFrame(
+        "attachment",
+        "att-1",
+        JSON.stringify({
+          name: "../IMG 1.png", // path traversal + space → must sanitize to IMG_1.png
+          mime: "image/png",
+          data: bytes.toString("base64"),
+          caption: "look at this",
+        }),
+      ),
+    );
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    // The bytes were written under a SANITIZED basename (traversal stripped), byte-for-byte.
+    expect(readFileSync(join(dir, "IMG_1.png")).equals(bytes)).toBe(true);
+    // The transcript echo shows the attachment chip + the caption (so every device sees it).
+    const echo = client.content.find((p) => p.recordKind === "user");
+    expect(echo?.text).toContain("📎 IMG_1.png");
+    expect(echo?.text).toContain("look at this");
   });
 });

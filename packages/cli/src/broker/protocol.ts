@@ -34,6 +34,7 @@ export const CONTROL_KINDS = new Set([
   "set_model",
   "command",
   "end",
+  "attachment", // a viewer-sent file/photo (#44): the host writes it to disk + has claude Read it
 ]);
 
 /** Meta frames (acks + presence) — sealed under K_meta. */

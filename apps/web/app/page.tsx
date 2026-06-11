@@ -190,6 +190,29 @@ function GitChip({ git }: { git: GitInfo }) {
   );
 }
 
+/**
+ * Downscale an image File to a JPEG and return base64 (no `data:` prefix), small enough for one E2E
+ * frame (#44). Browser-only (canvas). The host writes the bytes + has claude `Read` them for vision.
+ */
+async function downscaleToBase64(file: File, maxDim = 1536, quality = 0.85): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) throw new Error("canvas 2d context unavailable");
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", quality));
+  if (blob === null) throw new Error("image encode failed");
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i] as number);
+  return btoa(bin);
+}
+
 /** A tiny three-dot "working" pulse (CSS-animated) — the viewer's thinking indicator (#48). */
 function Working() {
   return (
@@ -384,6 +407,31 @@ function Transcript(props: {
     }
   }, [input, sessionId, viewer]);
 
+  // Attach a photo/image (#44): downscale to fit one E2E frame, send it (the composer text rides as the
+  // caption), and the host writes it + has claude Read it. The bytes never reach the broker in cleartext.
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const attach = useCallback(
+    async (file: File) => {
+      setSending(true);
+      setSendError(null);
+      try {
+        const data = await downscaleToBase64(file);
+        await viewer.sendAttachment(sessionId, {
+          name: file.name,
+          mime: "image/jpeg",
+          data,
+          caption: input.trim(),
+        });
+        setInput("");
+      } catch (e) {
+        setSendError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSending(false);
+      }
+    },
+    [input, sessionId, viewer],
+  );
+
   const chooseMode = useCallback(
     async (id: string) => {
       setModeSheet(false);
@@ -448,6 +496,27 @@ function Transcript(props: {
           <span className="mode-glyph">{modeGlyph(mode)}</span>
           {modeLabel(mode)}
         </button>
+        <button
+          type="button"
+          className="attach-btn"
+          title="Attach a photo"
+          aria-label="Attach a photo"
+          disabled={sending}
+          onClick={() => fileRef.current?.click()}
+        >
+          📎
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void attach(f);
+            e.target.value = ""; // allow re-picking the same file
+          }}
+        />
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}

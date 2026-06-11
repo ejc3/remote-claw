@@ -14,11 +14,25 @@
 // `#seen` set dedups the at-least-once inbound stream. Mirrors HostRelay's broker discipline, but
 // decoupled into the event-driven shape RC needs (a turn's response is async, tool turns interleave).
 
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import type { GitInfo } from "./gitinfo.js";
 import { assistantText, type RcEvent, type Session } from "./session.js";
+
+/** Sanitize a viewer-supplied attachment filename to a safe basename (no path traversal, no separators).
+ *  A blank/odd name falls back to a generic one; the extension is preserved when present. (#44) */
+export function safeAttachmentName(name: string): string {
+  const base = name.split(/[/\\]/).pop() ?? "";
+  const cleaned = base
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .replace(/^\.+/, "")
+    .slice(0, 80);
+  return cleaned === "" ? "attachment" : cleaned;
+}
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
@@ -58,6 +72,9 @@ export interface HostRcRelayOptions {
   /** Optional structured tracer (target "rc.relay"; defaults to no-op). Local-only sink; content
    *  rides at debug+, never the key material. */
   tracer?: Tracer;
+  /** Where a viewer-sent attachment (#44) is written on the host before claude `Read`s it. Defaults to
+   *  an OS-temp subdir; the wrapper points it at the session workspace so paths are familiar to claude. */
+  attachmentsDir?: string;
 }
 
 /** One content frame to relay out of a worker upstream event. */
@@ -296,12 +313,16 @@ export class HostRcRelay {
   #fatal = false;
 
   readonly #trace: Tracer;
+  /** Where a viewer attachment is written before claude Reads it (#44). */
+  readonly #attachmentsDir: string;
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
     this.#identityId = opts.identityId;
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
+    this.#attachmentsDir =
+      opts.attachmentsDir ?? join(tmpdir(), "remote-claw-attachments", opts.sessionId);
     // Bind the session id onto every line (span-like) so interleaved sessions are distinguishable.
     this.#trace = (opts.tracer ?? NOOP_TRACER).child({ session: opts.sessionId });
   }
@@ -628,12 +649,51 @@ export class HostRcRelay {
           );
           await this.#maybeAnnounce();
         }
+      } else if (frame.recordKind === "attachment") {
+        await this.#handleAttachment(frame);
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
         // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
         // to the worker as a `control_request` with the mapped subtype + params.
         await this.#driveControlVerb(frame.recordKind, frame);
       }
     }
+  }
+
+  /**
+   * Handle a viewer attachment (#44): write the (E2E-decrypted) bytes into the host's attachments dir,
+   * then drive claude to `Read` the file — claude's image Read gives real vision, so this needs NO
+   * unverified worker-protocol write (the image rides our own `attachment` frame, the rest is a normal
+   * prompt + the standard Read tool). Also echoes a `user` content frame so every device's transcript
+   * shows the attachment. A write/parse failure is logged, not fatal (it didn't burn a seq).
+   */
+  async #handleAttachment(frame: Frame): Promise<void> {
+    let name: string;
+    let path: string;
+    let caption: string;
+    try {
+      const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame))) as {
+        name?: unknown;
+        data?: unknown;
+        caption?: unknown;
+      };
+      if (typeof body.data !== "string" || body.data === "") return; // nothing to write
+      name = safeAttachmentName(typeof body.name === "string" ? body.name : "");
+      caption = typeof body.caption === "string" ? body.caption : "";
+      await mkdir(this.#attachmentsDir, { recursive: true });
+      path = join(this.#attachmentsDir, name);
+      await writeFile(path, Buffer.from(body.data, "base64"));
+      this.#trace.debug("attachment written", { name, bytes: body.data.length });
+    } catch (e) {
+      this.#trace.warn("attachment rejected", { error: (e as Error)?.message ?? String(e) });
+      return; // bad frame / unwritable — drop (non-fatal: no seq was allocated)
+    }
+    // Inject a prompt that makes claude Read the saved image (vision), then echo a user frame.
+    const prompt = `${caption || "Please look at this image."}\n\n[Attached image "${name}" saved at ${path} — use the Read tool to view it.]`;
+    this.#session.pushUserInput(prompt);
+    const seq = this.#seq++;
+    await this.#fatalOnThrow(() =>
+      this.#emit("user", seq, `user-${seq}`, `📎 ${name}${caption ? `\n${caption}` : ""}`),
+    );
   }
 
   /** Map a client control-verb frame → the worker control_request the spec uses (§3.7). */
