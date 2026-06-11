@@ -277,6 +277,14 @@ export class HostRcRelay {
   #lastPresenceKey = "";
   #lastAnnounceAt = 0;
 
+  /** Latched when a seq-allocating post fails. A failed post has burned a transcript seq that can never
+   *  be filled (it was allocated before the post, and never logged), so retrying the inbound stream
+   *  would only allocate seqs PAST the burned one — widening a permanent mid-stream gap on a STILL-LIVE
+   *  session (the worst adversarial-review finding). Instead, #fatal makes the relay tear down (serve()
+   *  couples the pumps): the session ends and the viewer reads disconnect, rather than limping on behind
+   *  a hole. (A durable gap may remain for a reconnecting viewer — §12 boundary, broker-windowing #36.) */
+  #fatal = false;
+
   readonly #trace: Tracer;
 
   constructor(opts: HostRcRelayOptions) {
@@ -352,7 +360,10 @@ export class HostRcRelay {
   }
 
   /** Re-announce when presence changed, or when the keepalive floor elapsed (so the viewer's
-   *  freshness check has a steady signal). Called on the heartbeat null-tick + after a state change. */
+   *  freshness check has a steady signal). Called on the heartbeat null-tick + after a state change.
+   *  Presence is ADVISORY: a failed announce is swallowed (warn-only) so a transient bus blip can't
+   *  reject a pump — which, now that serve() couples the pumps, would otherwise tear the session down.
+   *  The viewer's freshness check already degrades a missed announce to reconnecting/disconnected. */
   async #maybeAnnounce(): Promise<void> {
     if (!this.#announced) return; // first announce() hasn't run yet — nothing to refresh
     const p = this.#presence();
@@ -361,7 +372,13 @@ export class HostRcRelay {
       key !== this.#lastPresenceKey ||
       Date.now() - this.#lastAnnounceAt >= ANNOUNCE_KEEPALIVE_MS
     ) {
-      await this.#sendAnnounce();
+      try {
+        await this.#sendAnnounce();
+      } catch (e) {
+        this.#trace.warn("announce failed (advisory)", {
+          error: (e as Error)?.message ?? String(e),
+        });
+      }
     }
   }
 
@@ -396,6 +413,19 @@ export class HostRcRelay {
     this.#trace.trace("frame sealed", { kind: recordKind, seq, bytes: text.length });
   }
 
+  /** Run a seq-allocating publish; on failure latch #fatal (a transcript seq is now burned) and
+   *  propagate. serve()'s coupling + #pumpInbound's #fatal check then tear the relay down rather than
+   *  retrying (which would allocate seqs past the hole). Keeps the two pumps' allocate-before-post
+   *  discipline but makes a burned seq end the session instead of silently stranding a live one. */
+  async #fatalOnThrow<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      this.#fatal = true;
+      throw e;
+    }
+  }
+
   /** Replay the logged transcript from `since` onward — idempotent (the viewer dedups by seq/msg_id). */
   async #replay(since: number): Promise<void> {
     for (const e of [...this.#log]) {
@@ -403,9 +433,33 @@ export class HostRcRelay {
     }
   }
 
-  /** Serve the session until `signal` aborts: run the outbound + inbound pumps concurrently. */
+  /** Serve the session until `signal` aborts: run the outbound + inbound pumps concurrently.
+   *  The pumps are COUPLED: if either throws (a fatal publish failure), the other is aborted so the
+   *  session tears down cleanly instead of limping on with a dead pump — which, combined with the
+   *  shared #publishLock/#halted, would otherwise leave a live session stranded behind a permanent seq
+   *  gap. (Adversarial-review fix.) An external `signal` abort still stops both as before. */
   async serve(signal: AbortSignal): Promise<void> {
-    await Promise.all([this.#pumpUpstream(signal), this.#pumpInbound(signal)]);
+    const ac = new AbortController();
+    const onAbort = () => ac.abort();
+    if (signal.aborted) ac.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    const child = ac.signal;
+    // Wake the session's followUpstream gate on abort so the OUTBOUND pump re-checks its stop predicate
+    // immediately instead of lingering up to HEARTBEAT_MS parked on the gate. (Without this, serve()
+    // only stops promptly when the caller also closes the session.)
+    child.addEventListener("abort", () => this.#session.wake(), { once: true });
+    const halt = (e: unknown): never => {
+      ac.abort(); // stop the sibling pump, then surface the original failure
+      throw e;
+    };
+    try {
+      await Promise.all([
+        this.#pumpUpstream(child).catch(halt),
+        this.#pumpInbound(child).catch(halt),
+      ]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 
   /** OUTBOUND: tail the worker's upstream and relay each assistant/result as a content frame. */
@@ -416,18 +470,29 @@ export class HostRcRelay {
         await this.#maybeAnnounce(); // idle null-tick → refresh presence (keepalive + a phase flip)
         continue;
       }
+      // The worker cancels a pending gate (e.g. the turn was interrupted) with a control_cancel_request
+      // carrying the gate's request_id — the GROUNDED signal (captured via --rc-trace) that an open
+      // permission is now unanswerable. Clear it so `needs` doesn't stay pinned true. (Primary fix for
+      // the sticky-needs finding; the interrupt/end verb clear in #driveControlVerb is a backstop.)
+      if (ev.eventType === "control_cancel_request") {
+        const id = ev.payload.request_id;
+        if (typeof id === "string" && this.#openPerms.delete(id)) {
+          this.#trace.debug("gate cancelled by worker", { request_id: id });
+          await this.#maybeAnnounce();
+        }
+        continue; // not a rendered content frame
+      }
       const items = mapUpstreamItems(ev);
       this.#trace.debug("upstream event", {
         event: ev.eventType,
         items: items.map((i) => i.kind).join(",") || "skip",
       });
       for (const item of items) {
-        const seq = this.#seq++;
-        // Register a permission gate BEFORE the publish await, not after: #emit yields the event loop,
-        // so a fast viewer can grant the permission (and #pumpInbound run its delete) before this add
-        // would have happened — leaving the id stuck in #openPerms and `needs` true forever. Adding
-        // first means the inbound delete always finds it. Roll back if the publish fails, since the
-        // viewer never saw the request and could never answer it. (codex HIGH #1)
+        // Register a permission gate BEFORE the publish, not after: #emit yields the event loop, so a
+        // fast viewer can grant the permission (and #pumpInbound run its delete) before this add would
+        // have happened — leaving the id stuck in #openPerms and `needs` true forever. Adding first
+        // (outside the lock — it's not seq work) means the inbound delete always finds it. Roll back if
+        // the publish fails, since the viewer never saw the request and could never answer it. (codex HIGH #1)
         let gateId: string | null = null;
         if (item.kind === "permission_request") {
           try {
@@ -440,8 +505,11 @@ export class HostRcRelay {
             // a malformed permission_request body — don't track an unanswerable gate
           }
         }
+        const seq = this.#seq++;
         try {
-          await this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text);
+          await this.#fatalOnThrow(() =>
+            this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text),
+          );
         } catch (e) {
           if (gateId !== null) this.#openPerms.delete(gateId); // publish failed → gate is unanswerable
           throw e;
@@ -461,9 +529,12 @@ export class HostRcRelay {
       try {
         await this.#tailInbound(signal);
       } catch (e) {
-        // The error message (a network reason, or a parse error that may quote a decrypted snippet)
-        // is useful and local-only — log it, clipped by the formatter. Not a leak: this machine holds
-        // the transcript already.
+        // A seq-burning publish failure latches #fatal; retrying would re-subscribe and allocate seqs
+        // PAST the burned one — widening the mid-stream gap on a live session. So propagate and let
+        // serve() tear the relay down. Only a NON-fatal error (stream not up yet / cap-roll) is the
+        // retryable case the loop exists for. The message is local-only (this machine holds the
+        // transcript), clipped by the formatter.
+        if (this.#fatal) throw e;
         this.#trace.warn("inbound tail threw → retry", {
           error: (e as Error)?.message ?? String(e),
         });
@@ -490,14 +561,17 @@ export class HostRcRelay {
         const text = new TextDecoder().decode(await this.#client.openFrame(frame));
         const userSeq = this.#seq++;
         // Ack the client's frame (meta), echo the prompt (content, so every device sees it), then
-        // inject it into the real claude via the MITM downstream.
-        await this.#post(
-          "accepted",
-          null,
-          `accepted-${this.#sessionId}-${userSeq}`,
-          JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, seq: userSeq }),
-        );
-        await this.#emit("user", userSeq, `user-${userSeq}`, text);
+        // inject it into the real claude. A failed echo post is FATAL (a seq is burned) — tear down
+        // rather than feed claude a prompt no viewer can see.
+        await this.#fatalOnThrow(async () => {
+          await this.#post(
+            "accepted",
+            null,
+            `accepted-${this.#sessionId}-${userSeq}`,
+            JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, seq: userSeq }),
+          );
+          await this.#emit("user", userSeq, `user-${userSeq}`, text);
+        });
         this.#session.pushUserInput(text);
         // Content preview at debug (opt-in); bytes always.
         this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length, text });
@@ -515,16 +589,19 @@ export class HostRcRelay {
         if (typeof body.request_id === "string" && this.#openPerms.delete(body.request_id)) {
           const behavior = body.behavior === "deny" ? "deny" : "allow";
           this.#trace.debug("permission response", { behavior });
-          this.#session.pushControlResponse(body.request_id, behavior);
           // Log a permission_resolved content frame so a later reload / catch_up renders the request
-          // as ANSWERED rather than re-prompting (#56). Clearing the gate also drops `needs` from
-          // presence — re-announce so the viewer's needs-you indicator clears promptly (#58).
+          // as ANSWERED rather than re-prompting (#56); a failed post is fatal (a seq is burned).
+          // Clearing the gate also drops `needs` from presence — re-announce so the viewer's
+          // needs-you indicator clears (#58).
+          this.#session.pushControlResponse(body.request_id, behavior);
           const seq = this.#seq++;
-          await this.#emit(
-            "permission_resolved",
-            seq,
-            `permresolved-${seq}`,
-            JSON.stringify({ request_id: body.request_id, behavior }),
+          await this.#fatalOnThrow(() =>
+            this.#emit(
+              "permission_resolved",
+              seq,
+              `permresolved-${seq}`,
+              JSON.stringify({ request_id: body.request_id, behavior }),
+            ),
           );
           await this.#maybeAnnounce();
         }
@@ -562,6 +639,10 @@ export class HostRcRelay {
     switch (kind) {
       case "interrupt":
         this.#session.pushControlRequest("interrupt");
+        // Interrupting the turn abandons any in-flight can_use_tool gate — its request_id is now
+        // unanswerable (the viewer moved on; no `permission` frame will ever arrive). Clear the open
+        // gates so `needs` doesn't stay pinned true forever on an idle session. (Adversarial-review fix.)
+        this.#clearOpenPerms();
         break;
       case "set_model":
         if (typeof body.model === "string")
@@ -573,7 +654,16 @@ export class HostRcRelay {
         break;
       case "end":
         this.#session.pushControlRequest("end_session");
+        this.#clearOpenPerms(); // ending the session orphans any open gate too
         break;
     }
+  }
+
+  /** Drop all open permission gates and refresh presence so `needs` clears. Used when a turn is
+   *  interrupted or the session ends, which abandon any pending can_use_tool without a viewer answer. */
+  #clearOpenPerms(): void {
+    if (this.#openPerms.size === 0) return;
+    this.#openPerms.clear();
+    void this.#maybeAnnounce(); // #maybeAnnounce is self-swallowing; fire-and-forget the presence refresh
   }
 }

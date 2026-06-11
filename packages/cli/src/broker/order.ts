@@ -66,13 +66,18 @@ export class FrameOrderer {
     const slot = this.#buffered.get(frame.seq) ?? [];
     const head = slot[0];
     if (head !== undefined && (head.msgId !== frame.msgId || head.parts !== frame.parts)) return [];
+    // Reject a duplicate within the slot. The msg_id(:part) dedup above normally catches a replay, but
+    // the dedup window is BOUNDED — a frame that sat buffered behind a gap long enough for its key to
+    // evict can be re-read (every reconnect re-reads from index 0) and reach here a second time.
     if (frame.parts > 1) {
-      // Validate the part index and reject a duplicate part WITHIN the slot. The msg_id:part dedup
-      // above normally catches a replay, but the dedup window is bounded — a part that waited long
-      // enough for its key to evict could be replayed; counting it twice would make cur.length reach
-      // `parts` while a real part is still missing, releasing a corrupt (and unrecoverable) message.
+      // Counting a part twice would make the slot reach `parts` while a real part is still missing,
+      // releasing a corrupt (and unrecoverable) message; also validate the part index.
       if (frame.part < 0 || frame.part >= frame.parts) return []; // out of range
       if (slot.some((f) => f.part === frame.part)) return []; // duplicate part
+    } else if (slot.length > 0) {
+      // A parts=1 slot holds exactly one frame; a second copy would be drained and rendered TWICE as
+      // duplicate transcript entries (same seq/msg_id). Drop it. (Adversarial-review fix.)
+      return [];
     }
     slot.push(frame);
     this.#buffered.set(frame.seq, slot);
