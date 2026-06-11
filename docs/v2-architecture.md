@@ -349,10 +349,10 @@ security review — §14A.)
   §4.3). It exposes the session's stream (`sess:${identity_id}:${session_id}`) for live
   frames. No server-side heartbeat/registry store.
 - Maintains **in-memory** relay state (catch-up log, `msg_id` seen-set, sessions, crypto
-  state) — **recoverable from the claude session** by re-enabling `/remote-control` (the
-  worker re-backfills), so **no durable store is required**; both wrapper and CLI are
-  stateless (claude's on-disk session is the durable layer). Answers encrypted
-  `catch_up{since=seq}` from its log, falling back to worker backfill (§6).
+  state) accumulated live over the session — **no durable store is required**; both wrapper
+  and CLI are stateless (claude's on-disk session is the durable layer, but it is **not**
+  re-streamed over RC — §6). Answers encrypted `catch_up{since=seq}` from its in-memory log
+  (the sole in-session history source; there is no worker backfill — §6).
 - The wrapper does **not** outlive the CLI; on exit it stops broadcasting → its announces
   age out of `FRESH_WINDOW` → clients grey then drop those sessions (online = fresh
   announce).
@@ -391,8 +391,9 @@ answered live on the per-identity **bus** (§6B).
   stream-readers, not hook-owners (so no token collision).
 - **Catch-up is wrapper-served, never the cloud.** A `catch_up{since=seq}` control frame
   rides the **session channel** (`sess:${identity_id}:${session_id}`) to the wrapper,
-  which replays from its in-memory log (then worker backfill). No `GET /api/messages`
-  history store. (The bus carries only `session_announce` broadcasts — §6B.)
+  which replays from its in-memory log (the sole in-session history source — no worker
+  backfill, no `GET /api/messages` store). (The bus carries only `session_announce`
+  broadcasts — §6B.)
 
 ### 3.3 Web client (stateless, mobile-first)
 - Onboard a machine's **pass** (paste/scan, or open a link with the pass in the **URL
@@ -592,8 +593,8 @@ subscribing to, publishing on, and forging authenticated `session_announce` on t
 So this is **abandonment, not revocation**: it contains a leak only for this machine's *future*
 traffic (the attacker can't follow it to the new `identity_id`), and only once you reconnect the
 viewers you still trust to the new identity. It
-gives **no forward secrecy** for past frames and does **nothing** against a *host* compromise (the
-§6 worker re-backfills claude's plaintext `.jsonl` history into the new identity, which a
+gives **no forward secrecy** for past frames and does **nothing** against a *host* compromise
+(claude's plaintext `.jsonl` history sits on the host regardless of identity, which a
 host-resident attacker reads anyway). Secure-deleting *your* copy never denies an attacker who
 already has theirs — reconnect the viewers you still want promptly. The blast radius is exactly
 **one machine**: the others, on their own secrets, never noticed.
@@ -625,7 +626,7 @@ from the design, so it is dropped. The `key_epoch` field still bound into the AA
 **fixed constant** for wire stability, **not** a rotatable epoch — there is no per-frame re-keying.)
 
 Re-encryption/migration is **moot** here: nothing durable is encrypted under `S` (history is
-claude's plaintext `.jsonl`, re-backfilled — §6), so there is no at-rest ciphertext to re-key. (Cf.
+claude's plaintext `.jsonl` on the host — §6), so there is no at-rest ciphertext to re-key. (Cf.
 the **Happy/Codex mobile app**, which *does* offer per-device revocation — but only because it is
 **account-based and not store-free**: a phone-held master secret, per-machine DEKs wrapped to an
 account content key, and "remove machine from account" revokes that machine's DEK server-side. That
@@ -716,35 +717,40 @@ Verified Vercel facts that shape this:
 **DECISION (chosen): W′ — the TUI is the brain; the cloud is a dumb,
 zero-knowledge pipe; the web is a thin renderer.**
 
-It concentrates every "smart" on the TUI host. (⚠️ Plan-review correction: an
-earlier draft claimed the worker's "replay/backfill" was *verified* — that was an
-overstatement. Phase 0 confirmed those **strings exist in the binary** but did
-**not** prove a usable seq-range replay request; the only worker-side history we
-*actually verified* is the cursor-paginated
-`GET /v1/code/sessions/{id}/events?sort_order=&cursor=` API. The design below relies only on that + the wrapper's own
-log — never on an unproven replay primitive. See §14.)
+It concentrates every "smart" on the TUI host. (⚠️ Grounded correction: an earlier
+draft claimed the worker "replays/backfills" prior turns to our relay on RC connect;
+a later plan-review softened that to *unproven*. Fresh `--rc-trace` captures now
+**disprove** it outright (see §17 and `docs/protocol.md` §12): `POST …/bridge` returns
+only a `worker_jwt` (no transcript), the worker SSE stream carries only **new** inputs,
+a `--resume`d worker is streamed **no** prior history, and `historical` appears in
+**zero** captures. So the history mechanism is the wrapper's own in-memory log + a
+client `catch_up` — **never** a worker backfill, and **never** Anthropic's cursor API
+(`GET …/events?cursor=`, which the wrapper does **not** call). See §14.)
 
 - **The durable record is claude's on-disk session; the wrapper's log is
   in-memory.** The wrapper sees every frame both directions and keeps an
-  **in-memory per-session log** (keyed by `seq`) as the live catch-up source. It is
-  **not** persisted: both wrapper and CLI are stateless, and the in-memory log is
-  rebuilt from claude on (re)connect (next bullet). The authoritative transcript is
-  claude's own `~/.claude/projects/.../<session>.jsonl`.
-- **History (and recovery) comes from claude, reseeded by the worker backfilling
-  `historical` frames to OUR relay** on RC connect (Phase 0 observed
-  `historical: true` events arriving at the relay; reconnect-reseed hardened in P4). The local
-  `~/.claude/projects/<cwd>/<session>.jsonl` transcript is a last-resort fallback.
-  We do **not** use Anthropic's `/events?cursor=` (we're off Anthropic's relay —
-  §14). The TUI owns sessions and `seq` ordering; **the cloud stores no history.**
-  - **Backfill = `historical:true` frames, then completeness check.** The backfill is
-    the worker's stream of events flagged `historical:true`; it is **complete** when that
-    stream **transitions to live** (the RC backend sends history first, then live frames)
-    **and** the wrapper's logged `historical` count matches claude's on-disk `.jsonl`
-    transcript length (the authoritative record). Until both hold, the backfill is treated
-    as **partial → retried** (re-read the worker stream / `.jsonl`), **never served** and
-    **no `session_announce` is broadcast** — so a truncated/failed backfill can't leave an
-    incomplete log or a gap in the `msg_id` seen-set (which would let a broker replay
-    double-deliver, §15 #19). Only a verified-complete log unlocks bus join + broadcast (P4).
+  **in-memory per-session log** (keyed by `seq`) as the catch-up source. It is
+  **not** persisted (both wrapper and CLI are stateless) and it is **not** reseeded
+  from claude — it accumulates **live**, from the moment RC connects, because the
+  relay observes every frame from session start. So the log covers exactly the life
+  of *this* wrapper process; the authoritative full transcript is claude's own
+  `~/.claude/projects/.../<session>.jsonl`.
+- **In-session history is the wrapper's log; there is no worker backfill.** A viewer
+  that joins or reconnects mid-session replays the **complete** transcript via
+  `catch_up{since=seq}` from that log (the relay saw everything from the start, so the
+  log is complete for the session's life — proven by the `relay.test.ts` mid-session
+  reconnect suite). The TUI owns sessions and `seq` ordering; **the cloud stores no
+  history.** Because there is nothing to backfill, there is **no completeness gate** —
+  the wrapper joins the bus and broadcasts `session_announce` as soon as it is serving;
+  a client racing in with `catch_up{since=0}` gets whatever has accumulated, which is
+  the whole session so far.
+  - **Residual gaps the worker genuinely can't fill** (grounded, accepted): a wrapper
+    restart loses the in-memory log, and since the wrapper and `claude` share a process
+    lifecycle a restart is a **new session id**, not a resumable one; and a `--resume`d
+    session's pre-resume turns live only in claude's local `.jsonl`, never on the RC
+    wire — surfacing them would mean the host reading that private on-disk file, not a
+    worker backfill. Deep cross-restart history is therefore **deferred** (§6C), not a
+    capability the worker provides.
 - **`seq` is allocated solely by the wrapper.** Clients never assign transcript
   order: a web client sends a `client_msg_id`; the wrapper decrypts, commits to its
   in-memory log, assigns the canonical `seq`, then echoes an `accepted{client_msg_id, seq}`.
@@ -766,8 +772,8 @@ log — never on an unproven replay primitive. See §14.)
 - **Catch-up is an encrypted control frame to the wrapper.** A client sends an
   **AEAD-encrypted** `catch_up{since=<last-seen seq | 0>, msg_id, expiry}` (control
   frames use a derived control key + replay check — never plaintext the broker
-  could inject); the wrapper serves the delta from its log (then worker-backfill
-  for ranges older than the log), streaming `historical` frames, then live.
+  could inject); the wrapper serves the delta from its log (re-posting the logged
+  frames with their original `seq`/`msg_id`; the client's orderer dedups), then live.
 - **The cloud = relay + short live buffer only — no durable store** (§6B). Discovery
   and presence are answered live on the per-identity **bus**, not a store; message
   transport is relay-only. Live ciphertext frames go out over **SSE from a streaming
@@ -808,7 +814,7 @@ frame is content in **both** directions — `in` = the typed prompt (carries
 `client_msg_id`), `out` = the worker's echo:
 | kind | dir | source | notes |
 | --- | --- | --- | --- |
-| `user` | in / out | client (prompt) / RC (echo) | typed prompt carries `client_msg_id`; echo gets `historical:true` on backfill |
+| `user` | in / out | client (prompt) / RC (echo) | typed prompt carries `client_msg_id`; `out` echo carries the wrapper-assigned `seq` |
 | `assistant` | out | RC | model output (+ partial deltas if we enable them) |
 | `result` | out | RC | turn complete (cost / usage) |
 | `system` / `status` / `rate_limit` | out | RC | lifecycle (init, "requesting", limits) |
@@ -837,7 +843,7 @@ the next only after observing the prior's effect on the out-stream (e.g. wait fo
 `interrupt` to land before toggling `set_mode`), so a reorder window can't invert them. A
 rejected control frame (expired or replayed) simply produces **no effect**; the client's
 contract is **bounded timeout + retry** (as content frames "retry until `accepted`") — e.g.
-a `catch_up` that yields no `historical`/live frames within the timeout is re-sent with a
+a `catch_up` that yields no replayed/live frames within the timeout is re-sent with a
 fresh `msg_id`/`expiry`. (An explicit `nack{msg_id,reason}` meta frame is a possible future
 nicety; not required for correctness.)
 
@@ -847,7 +853,8 @@ Our non-content meta frames (**AEAD under `K_meta`** — broker can't forge them
 | `accepted` | out | wrapper ack of a client frame: `{client_msg_id, seq}` |
 | `session_announce` | out (bus) | the **periodic broadcast** that is *both* discovery and presence: `{session_id, title, cwd, identity_label, status, last_activity, sent_at}`, whole payload AEAD under `K_meta`. Each **independent session** broadcasts **its own**, one per `ANNOUNCE_INTERVAL` (§4.3) + on change; a client keys by `session_id` and treats the session **online iff its latest `sent_at` is within `FRESH_WINDOW`** (timestamp-driven, §4.3). No client request, no challenge/`beat_seq` — a replayed/withheld announce has a stale `sent_at` → ignored. |
 
-(`historical` is a **flag** on replayed content frames, not a separate kind. There is
+(`catch_up` replay re-posts the original content frames with their `seq`/`msg_id`; the
+client's orderer dedups — there is **no** separate `historical` kind or wire flag. There is
 **no** server-side `heartbeat`/registry and **no** `identify?`/`present` — presence is a
 fresh, signed `session_announce` within the window, greyed client-side on staleness.)
 
@@ -868,8 +875,8 @@ A run (the bus, or a per-session run) holds ONLY: the **recent in-flight frame b
 inbound **hook**; a small **`msg_id` dedup window**. It deliberately does **not** hold
 the transcript, long-term history, or any plaintext. Workflow retention is irrelevant
 because everything is reconstructible from the claude session via `catch_up`. The
-**run** makes live delivery + short-window reconnection seamless; the **wrapper** makes
-deep history correct; the **bus** makes discovery + presence live (no store).
+**run** makes live delivery + short-window reconnection seamless; the **wrapper**'s log
+makes in-session history correct; the **bus** makes discovery + presence live (no store).
 
 ### Lifecycle (the natural flow)
 RC enabled → the session's wrapper joins the identity **bus** (`bus:${identity_id}`), starts
@@ -877,7 +884,7 @@ RC enabled → the session's wrapper joins the identity **bus** (`bus:${identity
 Live turn → `assistant`/`result` flow the session out-stream, `user` arrives via the
 session hook; clients tail; wrapper logs + echoes `accepted`. Brief reconnect (web or
 wrapper) → resume by `seq`/`startIndex`. Gap older than the buffer / cold device →
-`catch_up` → wrapper replays from its log (or worker backfill). A client opening cold →
+`catch_up` → wrapper replays from its log. A client opening cold →
 tails the bus + reads the recent window → sees the latest (fresh) `session_announce`s.
 Session ends / wrapper exits (it never outlives the CLI) → it stops broadcasting → its
 announces age out of `FRESH_WINDOW` → clients grey then drop those sessions; nothing is
@@ -1103,7 +1110,7 @@ re-serving never corrupts the transcript.
 `record_kind` ∈ (aligned with §6A):
 - **content** (AEAD under `K_session`): `user` · `assistant` · `result` · `system` ·
   `status` · `rate_limit` · `can_use_tool` — carry `seq`; `user` may be `dir:in`
-  (prompt, with `client_msg_id`) or `dir:out` (echo, optional `historical:true`).
+  (prompt, with `client_msg_id`) or `dir:out` (echo, carrying the assigned `seq`).
 - **control** (AEAD under `control_key`, `dir:in`, on the **session** channel,
   replay-checked by the `msg_id` seen-set): `catch_up` · `permission` · `interrupt` ·
   `set_mode` · `set_model` · `command` · `end`. The control payload (e.g. `catch_up`'s
@@ -1140,13 +1147,13 @@ presence and history are all on the bus / wrapper-served (§6B).
 
 ## 9. Decisions (resolved 2026-06-07)
 1. **Durable store / history → W′ (TUI is the brain). No cloud store at all.** The
-   wrapper holds an **in-memory** per-session log on the TUI host (rebuilt from claude
-   on reconnect) and serves catch-up via message-passing; claude's on-disk session
-   (`.jsonl`) is the durable record and the Claude worker backfill is the deep-history
-   source on RC connect. The cloud keeps only **ephemeral Workflow runs** (the
-   per-identity bus + per-session live buffers — §6B); none holds the transcript or a
-   registry. Offline listing / history browsing (and any durable store) is **deferred**
-   (§6C).
+   wrapper holds an **in-memory** per-session log on the TUI host (accumulated live over
+   the session, **not** reseeded from claude) and serves catch-up via message-passing;
+   claude's on-disk session (`.jsonl`) is the durable record but is **not** re-streamed
+   over RC — there is no worker backfill (grounded — §6/§17). The cloud keeps only
+   **ephemeral Workflow runs** (the per-identity bus + per-session live buffers — §6B);
+   none holds the transcript or a registry. Offline listing / cross-restart history
+   browsing (and any durable store) is **deferred** (§6C).
 2. **Realtime transport → Vercel-native only (no third party).** SSE from a
    streaming Function backed by the Workflow durable stream; client
    reconnects and resumes by `seq` (gaps refilled by the wrapper's `catch_up`).
@@ -1198,15 +1205,19 @@ phase0/            unchanged — the Python reference + protocol findings
   TUI-side question on `claude` 2.1.168:
   - `rc_api_bridge.py` — the RC-API-client bridge is *viable* but **rejected**
     (routes remote through Anthropic's relay, §14). MITM is chosen.
-  - `tui_remote_control.py` — drove a **real interactive TUI** through our MITM and
-    proved all 6 claims: **C1** `/remote-control` (mid-session slash command) enables
-    RC on our relay; **C2** the wrapper receives the **prior** chat history (worker
-    backfill); **C3** a **generic client message reaches the real TUI and the reply
-    comes back**; **C4** the same exchange shows in the local TUI (one synced
-    session); **C5** kill **both** wrapper+CLI, reboot (`claude --continue` +
-    `/remote-control`) → the **full transcript recovers from claude's persisted
-    session** → both components are stateless / in-memory is sufficient. Verdict:
-    *TUI-SIDE MODEL FULLY VERIFIED*.
+  - `tui_remote_control.py` — drove a **real interactive TUI** through our MITM. It
+    verified **C1** `/remote-control` (mid-session slash command) enables RC on our
+    relay; **C3** a **generic client message reaches the real TUI and the reply comes
+    back**; **C4** the same exchange shows in the local TUI (one synced session). Two
+    early claims were **later DISPROVEN by `--rc-trace` capture** (see §17): **C2**
+    "the wrapper receives the prior chat history via a worker backfill" — it does
+    **not** (`POST …/bridge` returns only a `worker_jwt`, the worker SSE carries only
+    **new** inputs, and `historical` is in **zero** captures); and **C5** — while
+    `claude --continue` does reload the **full transcript into claude's own local TUI**,
+    that history is **not** re-streamed over RC to our relay/viewer (a restart is a
+    **new** RC session, not a resumable one). The grounded model: the wrapper's
+    in-memory log is the **sole** in-session history source (§6). Verdict: *TUI-side
+    live relay verified; cross-(re)connect history does NOT come from the worker.*
 - **P1 — Crypto core.** `packages/clawsec` (TypeScript): secret gen/parse/checksum,
   HKDF hierarchy, AES-256-GCM encrypt/decrypt, AAD, envelope format. Vitest unit
   tests (incl. round-trip + tamper/AAD-rejection). No network. Runs in Node +
@@ -1459,11 +1470,13 @@ tightening. Accepted fixes are already folded into §3–§8 above:
 - **Control frames are encrypted** under a derived `control_key` with `msg_id` +
   `expiry` + replay-check (catch_up/permission can't be server-injected). (§4.2,§8)
 - **Cloud-history contradiction removed.** The broker stores **no message bodies**;
-  catch-up is wrapper-served (log → worker backfill). Dropped `GET /api/messages`.
-  (§3.2,§6,§8)
-- **Overstated "verified replay" corrected.** Only string-presence was confirmed in
-  the binary, not a usable seq-range replay; design relies on the wrapper log +
-  worker backfill to our relay — NOT Anthropic's cursor API (we're off their relay). (§6,§11,§14)
+  catch-up is wrapper-served **purely from the in-memory log** (no worker backfill —
+  grounded §17). Dropped `GET /api/messages`. (§3.2,§6,§8)
+- **Overstated "verified replay" corrected — then disproven.** Only string-presence
+  was confirmed in the binary, never a usable replay; `--rc-trace` capture then showed
+  the worker performs **no** history backfill at all. Design relies on the wrapper log
+  **alone** — NOT a worker backfill, NOT Anthropic's cursor API (we're off their relay,
+  and never call it). (§6,§11,§14,§17)
 - **AAD/envelope canonicalized** (binds v, identity_id, session_id, dir, record_kind,
   seq, msg_id, key_epoch via one serialization). (§4.3,§8)
 - **Meta-frame key.** Meta frames (`accepted`/`session_announce`) are AEAD under a single
@@ -1502,13 +1515,15 @@ the RC backend, so it sees and logs **every** frame; it then E2E-encrypts to
 Vercel. The bridge is recorded as a **rejected alternative** (keeps the protocol
 shapes it validated; we serve the same shapes ourselves).
 
-Consequence for history (supersedes earlier "events-cursor" wording): since we are
-**off Anthropic's relay**, deep history does **not** come from Anthropic's
-`/events?cursor=` API. Sources are: (1) the wrapper's **in-memory log** (a live buffer,
-rebuilt from claude on restart); (2) for a session that predates the log, the worker
-**backfills `historical` frames to OUR relay on RC connect** (Phase 0 observed
-`historical:true` events arriving at the relay) — harden reconnect-reseed in P4;
-(3) the local `.jsonl` transcript as a last resort. No Anthropic cloud history.
+Consequence for history (supersedes earlier "events-cursor" **and** "worker-backfill"
+wording): since we are **off Anthropic's relay**, history does **not** come from
+Anthropic's `/events?cursor=` API (the wrapper never calls it) — and `--rc-trace`
+capture shows it does **not** come from a worker backfill either (no `historical` frames
+on the wire; `POST …/bridge` returns only a `worker_jwt`; a `--resume`d worker is
+streamed no prior history). The **sole** in-session history source is the wrapper's
+**in-memory log**, served on `catch_up`; it accumulates live and is lost on restart (a
+restart is a new RC session). claude's local `.jsonl` is the durable on-host record but
+is **not** re-streamed over RC. No Anthropic cloud history, no worker backfill.
 
 ## 14A. Design-review log (multi-agent panels)
 
@@ -1678,12 +1693,13 @@ rc_api_bridge); others are specs to build/test.
 **Enabling remote control**
 
 4. **Enable RC mid-session via `/remote-control`.** Wrapper points the inner claude at
-   the local MITM (our relay = RC backend); worker backfills the prior transcript as
-   `historical` frames → **log + seen-set seeded first**. *Only then* does the wrapper
-   **join the identity bus** (`bus:${identity_id}`, resume-or-`start()`) and start
-   **broadcasting** `session_announce` for the session + open its stream
-   (`sess:${identity_id}:${session_id}`) — so an announce never precedes a complete log
-   (§16 #4). **[V]** C1+C2
+   the local MITM (our relay = RC backend), then **joins the identity bus**
+   (`bus:${identity_id}`, resume-or-`start()`), starts **broadcasting** `session_announce`
+   for the session + opens its stream (`sess:${identity_id}:${session_id}`). There is **no
+   backfill** — the worker does not re-emit the pre-RC turns (grounded §17), so the relay's
+   log (and therefore the viewer) covers the conversation **from RC-enable forward**; the
+   prior local turns remain in claude's `.jsonl` only. No completeness gate is needed
+   because the log is complete from the moment it starts. **[V]** C1 (C2 disproven)
 5. **Launch with RC on.** `remote-claw --remote-control` → fresh session, relay is the
    backend from the start, empty history, joins the bus + broadcasts. **[V]** (Phase 0)
 
@@ -1706,8 +1722,8 @@ rc_api_bridge); others are specs to build/test.
 **History sync**
 
 9. **Open a session cold (full sync).** Client sends `catch_up{since=0}` on the session
-   channel → wrapper replays its log (or worker backfill) as `historical` → client
-   renders, then tails live.
+   channel → wrapper replays its log (re-posting each frame with its `seq`/`msg_id`; the
+   client's orderer dedups) → client renders, then tails live.
 10. **Reopen (delta sync).** Cached to `seq=N` → `catch_up{since=N}` → wrapper sends
     only `>N`; or resume the session out-stream by `startIndex` if within the window.
 
@@ -1760,15 +1776,16 @@ rc_api_bridge); others are specs to build/test.
     `GET /api/stream?identity=id&session=sid` (resolve token → run → resume by `startIndex`);
     at-least-once → dedup by `msg_id`; no missed/dup frames.
 19. **Wrapper/CLI restart (both stateless).** Reboot/crash → relaunch
-    `remote-claw --continue` + `/remote-control` → worker re-backfills → log **and `msg_id` seen-set**
-    rebuilt. The backfill must be **complete before W resumes** (claude's on-disk transcript
-    is authoritative; a partial/failed backfill POST is retried, not served) — otherwise the
-    rebuilt seen-set would miss a `msg_id` and a broker replay of that gap frame could
-    double-deliver. Only then does the wrapper **rejoin the bus and resume broadcasting**
-    fresh `session_announce`s. A still-connected tab greys the session when announces lapse,
-    then **un-greys automatically on the next fresh broadcast** (no epoch/handshake — a fresh
-    `sent_at` is just accepted, §4.3; a broker replay of pre-restart announces can't extend
-    liveness past `FRESH_WINDOW + SKEW`); clients reconnect + `catch_up`. **[V]** C5
+    `remote-claw --continue` + `/remote-control`. `claude --continue` reloads the prior
+    conversation into its **own local TUI**, but the RC wire does **not** re-stream it
+    (grounded §17): this is a **new** RC session whose in-memory log + `msg_id` seen-set
+    start **empty**, covering the conversation **from restart forward**. The wrapper rejoins
+    the bus and broadcasts a fresh `session_announce`; the pre-restart transcript is **not**
+    recoverable over RC (it lives only in claude's `.jsonl`). A still-connected tab greys the
+    old session when announces lapse, then **un-greys on the next fresh broadcast** (no
+    epoch/handshake — a fresh `sent_at` is just accepted, §4.3; a broker replay of pre-restart
+    announces can't extend liveness past `FRESH_WINDOW + SKEW`); clients reconnect + `catch_up`
+    on the new session. **[V]** C5 (re-scoped: the **local TUI** recovers; RC does not backfill)
 20. **Host offline → back.** Wrapper exits (never outlives the CLI) → **stops
     broadcasting** → its announces age out of `FRESH_WINDOW` → a client *watching* its
     spaces **greys them locally**, then drops them; a *fresh* cold open just won't list
@@ -1866,13 +1883,13 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 1. user↔T locally; T→A inference; transcript persists on disk
 2. V sees **nothing** — no bus membership, no content
 
-**4. Enable `/remote-control` mid-session** *(verified C1+C2)*
+**4. Enable `/remote-control` mid-session** *(C1 verified; C2 disproven — no backfill)*
 1. user types `/remote-control` in T
 2. T→W `POST /v1/code/sessions {title, config{cwd,model}}` *(MITM-intercepted)* → W `200 {session{id:sid}}`
 3. T→W `POST …/{sid}/bridge` → W `200 {worker_jwt, api_base_url}`
 4. T→W `GET …/{sid}/worker/events/stream` (SSE); W→T `control_request{initialize}`
-5. T→W `POST …/worker/events [{user historical}, {assistant historical}, …]` *(backfill of prior chat)*
-6. W **commits the backfill to its in-memory log first** (log+encrypt all `historical` frames + seed the `msg_id` seen-set), **then** joins the bus: `resumeHook("bus:"+identity_id, …)` (resume-or-**start** the bus run, bounded-backoff retry on `HookNotFound`/`HookConflictError`); opens the session stream `sess:${identity_id}:${sid}`. Only **after** the log is seeded does W **broadcast** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change) — so a client that races in with `catch_up{since=0}` the instant it sees the announce gets the *complete* history, never a partial log.
+5. **No backfill** — the stream carries only **new** events from here (grounded §17: the worker does **not** re-emit pre-RC turns). W's in-memory log starts effectively empty and covers the conversation **from RC-enable forward**; the prior local turns stay in claude's `.jsonl`.
+6. W **joins the bus immediately**: `resumeHook("bus:"+identity_id, …)` (resume-or-**start** the bus run, bounded-backoff retry on `HookNotFound`/`HookConflictError`); opens the session stream `sess:${identity_id}:${sid}`; **broadcasts** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change). **No completeness gate** is needed — the log is complete from the moment it starts, so a client racing in with `catch_up{since=0}` gets the whole session-so-far.
 
 **5. Launch with RC ON** (`remote-claw --remote-control`) — as #4 steps 2–4 + the join-bus/broadcast of step 6, **no backfill** (empty history).
 
@@ -1891,7 +1908,7 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 **9. Open a session cold — full history sync**
 1. C: encrypt `catch_up{since:0, msg_id, expiry}` (control_key) → C→V `POST /api/relay` → `resumeHook("sess:"+identity_id+":"+sid,…)`
 2. V→W via the session hook; W decrypts `catch_up`
-3. W replays its log from 0: each frame → W→V session out-stream `{historical:true, seq}`
+3. W replays its log from 0: each frame → W→V session out-stream re-posted with its original `{seq, msg_id}` (the client's orderer dedups)
 4. V→C SSE → C decrypts + renders history, then tails live
 
 **10. Reopen — delta sync**
@@ -1939,11 +1956,11 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 1. C's SSE drops → C→V `GET /api/stream?identity=id&session=sid` (token→run; resume by `startIndex`)
 2. C dedups by `msg_id`, reorders by `seq` → no gap, no dup
 
-**19. Wrapper/CLI restart (both stateless)** *(verified C5)*
-1. both die → operator relaunches `remote-claw --continue` *(passthrough; resumes the on-disk session)* → W spawns **T** through the MITM
-2. user `/remote-control` → bridge→stream (as #4) → T→W backfill `POST …/worker/events [full historical transcript]`
-3. W rebuilds the log; **rejoins the bus and resumes broadcasting** fresh `session_announce`s (re-creating bus/session runs as needed)
-4. a still-connected C greys the session when announces lapse, then **un-greys automatically on the next fresh broadcast** (a fresh `sent_at` is just accepted — no epoch/handshake, §4.3) + `catch_up` → W replays the rebuilt log → C re-renders *(state recovered from claude)*
+**19. Wrapper/CLI restart (both stateless)** *(C5 re-scoped: local TUI recovers; RC does not backfill)*
+1. both die → operator relaunches `remote-claw --continue` *(passthrough; `claude --continue` reloads the conversation into its **own local TUI**)* → W spawns **T** through the MITM
+2. user `/remote-control` → bridge→stream (as #4) → **no backfill**: the worker streams only **new** events (grounded §17), so this is a **new** RC session whose log starts empty
+3. W **joins the bus and broadcasts** fresh `session_announce`s (re-creating bus/session runs as needed); the pre-restart transcript is **not** recoverable over RC (it lives only in claude's `.jsonl`)
+4. a still-connected C greys the old session when announces lapse, then **un-greys on the next fresh broadcast** (a fresh `sent_at` is just accepted — no epoch/handshake, §4.3) + `catch_up` → W replays the **new** session's log → C re-renders *(from RC-enable forward; the local TUI holds the full history)*
 
 **20. Host offline → back**
 1. W/CLI exit → W **stops broadcasting**; its announces age out of `FRESH_WINDOW`
@@ -1977,7 +1994,7 @@ Compact map of the building blocks each scenario exercises. Vocabulary: `HKDF`
 `FRESH_WINDOW`) `grey-local` ·
 workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 `--rc-*` `intercept`(/v1/code/sessions*) `passthrough`(/v1/messages) `bridge`(worker_jwt)
-`worker-SSE` `/worker/events` `initialize` `backfill`(historical) `log` `dedup`(msg_id)
+`worker-SSE` `/worker/events` `initialize` `log`(live, no backfill) `dedup`(msg_id)
 `seq-alloc` `/remote-control`.
 
 | # | Scenario | Primitives |
@@ -1985,7 +2002,7 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 1 | Fresh identity bootstrap (`--rc-identity`) | `CSPRNG(S)`, `HKDF`→{identity_id,auth_token,content_root,control_key,K_meta}, `checksum`, print `rc1_…` *(local only; no broker call)* |
 | 2 | Wrapper launches TUI, RC off | `args-passthrough`, MITM `passthrough`, CA trust *(no broker traffic; not on bus)* |
 | 3 | Work locally, RC off | `passthrough`, claude on-disk transcript (no /v1/code; broker sees nothing) |
-| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `backfill`, `log`, `GCM`, **join-bus**(`resumeHook bus:${id}`), broadcast `session_announce`, `bearer` |
+| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `log`(live, no backfill), `GCM`, **join-bus**(`resumeHook bus:${id}`), broadcast `session_announce`, `bearer` |
 | 5 | Launch with RC on (`--remote-control`) | `intercept`, `bridge`, `worker-SSE`, `initialize`, `log`, join-bus + broadcast |
 | 6 | Client first connection | `HKDF`, `sso`, `bearer`, `/api/stream`(`getHookByToken bus:${id}`, recent window), `session_announce`(fresh), `GCM-open(name)`, `localStorage` |
 | 7 | One MACHINE, 5 independent sessions | 1× `HKDF`, `bearer`, **1× bus subscribe**, 5× per-session `session_announce`, `online=fresh-announce`, `GCM-open`, no aggregator (§1) |
@@ -2000,7 +2017,7 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 16 | Tool permission | `control_request/response`, `GCM(control_key)`, session `hook`, `worker-SSE` |
 | 17 | Remote control verbs | control frames (`control_key`), session `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`) |
 | 18 | Network blip resume | `/api/stream?identity=&session=` (token→run), `wf-stream` resume(`startIndex`), `seq` reorder, `dedup` |
-| 19 | Wrapper/CLI restart recovery | `--continue`, `/remote-control`, `intercept`, `backfill`, `log-rebuild`, **rejoin-bus + resume broadcast**, fresh-announce un-grey, `catch_up` |
+| 19 | Wrapper/CLI restart recovery | `--continue` (local TUI only), `/remote-control`, `intercept`, **new RC session** (no backfill — fresh log), **rejoin-bus + resume broadcast**, fresh-announce un-grey, `catch_up` |
 | 20 | Host offline → back | stop-broadcast, announces age out, `grey-local`, `409`(no live session), rejoin + rebroadcast, `catch_up` |
 | 21 | Bus rolls mid-session | cap-roll: complete old run, `start()` new (same token), `HookConflictError` race, client EOF→reconnect→re-tail; sessions untouched |
 | 22 | Client returns cold | `localStorage`/re-derive, bus subscribe (recent window), `catch_up{since=cached}`, IndexedDB delta *(no per-client server state)* |
@@ -2099,8 +2116,9 @@ events onto its own E2E-encrypted frame types (§6A):
 - the SSE `initialize` and client `user` events → inbound (`dir:in`) frames delivered to claude;
 - the host's `assistant` / `result` / `system`·`status` outputs → outbound (`dir:out`) content
   frames broadcast to subscribers;
-- the cursor-paginated `GET …/events` → the catch-up / **worker backfill** source (§6) that seeds
-  the in-memory log + `msg_id` seen-set on (re)connect.
+- catch-up is served from the wrapper's **in-memory log** (built live from the frames above),
+  **not** from a worker backfill or the cursor-paginated `GET …/events` API — neither is used
+  (grounded §17): the worker re-emits no history, and we are off Anthropic's relay.
 
 Phase 0 verified this two-surface sync end-to-end on v2.1.168 (the **MANGO** own-relay test, and
 the **KIWI**/**PLUM** bidirectional TUI↔client tests).
@@ -2165,7 +2183,7 @@ remote-claw and Happy answer the same problem with inverted primitives:
 | Root of trust | one symmetric `S` **per machine** (a ~52-char paste) | phone-held asymmetric master + content keypair |
 | Per-device keys | the **pass** (§4.2a) — a derived, non-master per-viewer credential (read+steer one machine, **not** `S`) | per-machine DEK, wrapped to the account key |
 | Broker state | **store-free** (self-verifying `identity_id`, no registry) | account + device list + encrypted-DEK store |
-| Durable history | none on the broker (claude's own `.jsonl`, re-backfilled) | **server stores** encrypted history (timestamped, replayable) |
+| Durable history | none on the broker (claude's own `.jsonl` on-host; the wrapper's in-memory log serves in-session catch-up) | **server stores** encrypted history (timestamped, replayable) |
 | Onboarding | **paste-and-go** (any device, no account) | scan a QR → pair a device → account |
 | Steal one key | scoped to **one machine**: a stolen pass reads/steers that machine but is **not** `S`; a stolen `S` is full compromise of **that machine only** (others untouched) | scoped: one DEK reads **that machine's** content only |
 | Revoke a leak | **no per-pass revoke** — reset the machine (cuts all its passes; §4.4) | **"remove machine from account"** revokes that DEK server-side |
