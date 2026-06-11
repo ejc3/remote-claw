@@ -22,6 +22,7 @@
     "check": "biome check ."
   },
   "dependencies": {
+    "@libsql/client": "^0.17.3",
     "@remote-claw/clawsec": "workspace:*",
     "@remote-claw/cli": "workspace:*",
     "@temporalio/client": "^1.18.0",

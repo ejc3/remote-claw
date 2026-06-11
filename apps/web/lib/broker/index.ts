@@ -11,12 +11,13 @@ import { VercelBackend } from "./vercel";
 //   (unset) | "vercel"  → Vercel Workflows (production; the default)
 //   "local"            → in-process fake broker (next dev / tests / Playwright e2e)
 //   "temporal"         → Temporal durable workflows (needs a server + the relayChannel worker)
+//   "turso"            → durable libSQL log (one shared frames table; survives a wrapper restart)
 //
 // Each backend is cached per-name (process-wide), so the LocalBackend's in-memory channel map and the
 // Temporal connection persist across requests. getBackend() is async only so the Temporal adapter can
 // be DYNAMICALLY imported — keeping the heavy @temporalio/client out of the bundle unless selected.
 
-const KNOWN = new Set(["vercel", "local", "temporal"]);
+const KNOWN = new Set(["vercel", "local", "temporal", "turso"]);
 
 // The cache lives on globalThis, NOT a module-level binding: Next can give the relay route and the
 // stream route SEPARATE instances of this module (per-route bundles) and re-import it on HMR — either
@@ -40,7 +41,7 @@ export function isKnownBackend(name: string): boolean {
 // instances' maps. So `local` is only honoured when it's the deployment's OWN default (i.e. dev /
 // `next start` with BROKER_BACKEND=local) — never as a header/param override on a vercel/temporal
 // deployment.
-const REQUESTABLE = new Set(["vercel", "temporal"]);
+const REQUESTABLE = new Set(["vercel", "temporal", "turso"]);
 
 /** True if `name` may be chosen by an incoming request's selector (header / ?backend=). */
 export function isRequestableBackend(name: string): boolean {
@@ -72,8 +73,15 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
       backend = new TemporalBackend();
       break;
     }
+    case "turso": {
+      // Dynamic import keeps @libsql/client out of the bundle unless this backend is selected (Temporal
+      // pattern). The durable libSQL log backend (BROKER_BACKEND=turso / ?backend=turso).
+      const { TursoBackend } = await import("./turso");
+      backend = new TursoBackend();
+      break;
+    }
     default:
-      throw new Error(`unknown backend "${name}" (expected: vercel | local | temporal)`);
+      throw new Error(`unknown backend "${name}" (expected: vercel | local | temporal | turso)`);
   }
   cache.set(name, backend);
   return backend;
