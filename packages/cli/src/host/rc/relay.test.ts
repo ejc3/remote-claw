@@ -2,10 +2,16 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import type { Tracer } from "../../trace.js";
-import { extForMime, HostRcRelay, isLikelyBase64, safeAttachmentName } from "./relay.js";
+import {
+  extForMime,
+  HostRcRelay,
+  isLikelyBase64,
+  MAX_ATTACHMENT_B64,
+  safeAttachmentName,
+} from "./relay.js";
 import { Session } from "./session.js";
 
 /** A capturing tracer that records `error` lines (and is its own `child`) — for asserting alerts. */
@@ -133,7 +139,11 @@ class FakeClient {
     }
   }
 
+  /** msgIds whose openFrame should REJECT — simulates an AEAD/auth failure (forged/tampered frame). */
+  failOpen = new Set<string>();
+
   openFrame(frame: Frame): Promise<Uint8Array> {
+    if (this.failOpen.has(frame.msgId)) return Promise.reject(new Error("AEAD open failed"));
     return Promise.resolve(frame.ct); // inbound test frames stash plaintext in `ct`
   }
 }
@@ -494,5 +504,130 @@ describe("HostRcRelay inbound framing (single-frame invariant)", () => {
     expect(users).toHaveLength(1); // only the single-frame prompt echoed
     expect(users[0]?.text).toBe("world"); // the multi-part "hello" was dropped, not injected
     expect(users[0]?.seq).toBe(0); // the dropped frame burned no seq
+  });
+});
+
+// #5 — coverage backfills for the documented-but-untested control-verb auth invariant, the attachment
+// size cap, and the shared-seq discipline under concurrent load.
+describe("HostRcRelay control-verb auth + validation (#5)", () => {
+  /** Drive one inbound control frame, then a benign `user` frame that proves the relay kept running;
+   *  returns the spy on session.pushControlRequest so a test can assert what (if anything) it drove. */
+  async function driveVerb(verb: string, msgId: string, bodyJson: string, failAead = false) {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    if (failAead) client.failOpen.add(msgId);
+    const relay = relayOf(session, client);
+    const spy = vi.spyOn(session, "pushControlRequest");
+    client.queueInbound(inFrame(verb, msgId, bodyJson));
+    client.queueInbound(inFrame("user", `after-${msgId}`, "ok"));
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+    return spy;
+  }
+
+  it("rejects a verb whose frame fails AEAD open — never drives the action (forge-proof)", async () => {
+    const spy = await driveVerb("interrupt", "v-aead", JSON.stringify({}), /* failAead */ true);
+    expect(spy).not.toHaveBeenCalled(); // a forged/tampered interrupt must NOT reach the worker
+  });
+
+  it("drops a STALE (expired) control verb", async () => {
+    const spy = await driveVerb(
+      "set_model",
+      "v-stale",
+      JSON.stringify({ model: "opus", expiry: 1 }),
+    );
+    expect(spy).not.toHaveBeenCalled(); // expiry in the distant past → no-op
+  });
+
+  it("ignores a verb with a missing required field", async () => {
+    const spy = await driveVerb("set_model", "v-nomodel", JSON.stringify({})); // no `model`
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("ignores an authenticated-but-malformed (non-object) body", async () => {
+    const spy = await driveVerb("set_mode", "v-bad", "42"); // valid JSON, not an object
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("drives a valid, fresh verb through to the worker", async () => {
+    const spy = await driveVerb(
+      "set_model",
+      "v-ok",
+      JSON.stringify({ model: "opus", expiry: Date.now() + 60_000 }),
+    );
+    expect(spy).toHaveBeenCalledWith("set_model", { model: "opus" });
+  });
+});
+
+describe("HostRcRelay attachment size cap (#5)", () => {
+  it("rejects an over-cap attachment: nothing written, nothing echoed, no seq burned", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    // `data` is well-formed base64 but one char over the cap → rejected before any side effect.
+    const oversized = "A".repeat(MAX_ATTACHMENT_B64 + 4);
+    client.queueInbound(
+      inFrame(
+        "attachment",
+        "big-1",
+        JSON.stringify({ name: "x.png", mime: "image/png", data: oversized }),
+      ),
+    );
+    client.queueInbound(inFrame("user", "u-1", "after"));
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    expect(readdirSync(dir)).toHaveLength(0); // nothing written
+    const users = client.content.filter((p) => p.recordKind === "user");
+    expect(users).toHaveLength(1); // only the real user frame echoed
+    expect(users[0]?.seq).toBe(0); // the oversized attachment burned no seq
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("HostRcRelay seq discipline under load (#5)", () => {
+  it("allocates a gap-free, dup-free seq run under interleaved upstream + inbound traffic", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    // Interleave N upstream turns and N inbound prompts so both pumps allocate from the shared `#seq`.
+    const N = 40;
+    for (let i = 0; i < N; i++) {
+      session.pushUpstream(assistant(`a${i}`));
+      client.pushInbound(inFrame("user", `u${i}`, `p${i}`));
+    }
+    await waitFor(() => client.content.length >= 2 * N, 5000);
+    ac.abort();
+    await served;
+
+    const seqs = (client.content.map((p) => p.seq) as number[]).sort((a, b) => a - b);
+    expect(seqs).toHaveLength(2 * N); // every frame got a seq
+    expect(new Set(seqs).size).toBe(2 * N); // …all distinct (no duplicate seq)
+    expect(seqs[0]).toBe(0);
+    expect(seqs[2 * N - 1]).toBe(2 * N - 1); // a contiguous 0..2N-1 run (no gap)
   });
 });
