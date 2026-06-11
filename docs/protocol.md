@@ -308,7 +308,7 @@ guarantees.
    remains: the durable channel may still hold that one mid-stream gap, so a viewer that reads the dead
    channel stalls there — but presence has gone stale, so it reads **disconnected**, which is truthful
    (the session ended around that point). Fully gap-free durability (a skip/tombstone marker, or assigning
-   `seq` only post-ack) is future work tied to broker windowing (#36); a global publish-lock that makes
+   `seq` only post-ack) is future work tied to broker windowing; a global publish-lock that makes
    the prefix gap-free was prototyped but destabilized the in-process workflow test runtime, so the
    lighter teardown was taken.
 2. **Reconnect re-reads the whole channel (O(N)).** Both the viewer and the host re-subscribe from index
@@ -316,7 +316,7 @@ guarantees.
    length. No resume cursor is used.
 3. **Unbounded growth.** The inbound `#seen` (§6) and the per-identity **bus** channel (one
    `session_announce` per 20 s keepalive, never trimmed) grow with session lifetime. Bus growth is the
-   broker's to window (§6/#36); the 20 s cadence bounds the rate. `#openPerms` and the relay `#log` also
+   broker's to window (§6); the 20 s cadence bounds the rate. `#openPerms` and the relay `#log` also
    grow with the session but are human-paced / freed at end.
 4. **Presence is liveness, not delivery.** A `disconnected` reading means *no fresh announce*, which can
    be a dead host or just a stalled bus subscription; the viewer can't distinguish them, and a transcript
@@ -354,13 +354,30 @@ the UI are scoped features, **not** unknowns.
   updatedInput:{answers:{"<question>":"<choice>", …}}}`; the worker then posts a `user`/`tool_result`
   summarising the answers. So #42 reuses the §10 permission spine — the viewer renders the options and
   returns `updatedInput.answers` instead of a bare allow/deny.
-- **#44 composer attachments** — a `user` event whose payload carries
-  `file_attachments:[{file_name, file_uuid, is_image}]` (`client_platform:"ios"`); the bytes are uploaded
-  out-of-band and referenced by `file_uuid`, **not** inlined as base64. So #44 needs an upload step +
-  the `file_attachments` array on the outgoing `user` frame, not an inline-image content block.
-- **#36 deep-history backfill** — on RC connect the worker backfills prior turns as `historical:true`
-  frames (v2-architecture §6); the completeness gate compares the backfilled count against the worker's
-  reported transcript length before announcing. (Capture-confirmed shape; gate not yet implemented.)
+- **#44 composer attachments** — the captured RC shape is a `user` event whose payload carries
+  `file_attachments:[{file_name, file_uuid, is_image}]` (`client_platform:"ios"`): the bytes are uploaded
+  out-of-band and referenced by `file_uuid`, **not** inlined. We can't reproduce that upload
+  zero-knowledge (the broker would have to hold the bytes), so the **implemented** path rides our own
+  E2E `attachment` control frame instead: the host writes the (decrypted) bytes to disk under a
+  sanitized, unique, mime-correct name and drives claude to `Read` the file (image Read = real vision),
+  echoing a `user` content frame so every device sees a 📎 chip. No unverified worker-protocol write —
+  only our frame transport + the standard Read tool + a normal prompt (relay `#handleAttachment`).
+- **#36 deep-history backfill — GROUNDED AWAY.** The v2-architecture §6 design had the *worker* re-emit
+  prior turns as `historical:true` frames on RC (re)connect, gated by a completeness check. The real
+  protocol does **not** do this, confirmed three ways via `--rc-trace`: `POST .../bridge` returns only a
+  `worker_jwt` (no transcript); the SSE `…/worker/events/stream` opens once and carries only **new**
+  inputs (the worker *pushes* its own output via `POST …/worker/events`); and a `--resume`d worker
+  bridging into an existing conversation is streamed **no** prior history (`historical` appears in zero
+  captures). So there is nothing to backfill from the worker and nothing to gate on. History is instead
+  guaranteed by the **relay**: every content frame is appended to `#log`, and a mid-session
+  (re)connecting viewer replays the COMPLETE prior transcript from that log via `catch_up` (§8) — proven
+  by the `#36` mid-session-reconnect tests in `relay.test.ts`. Residual gaps the worker genuinely can't
+  fix (out of scope, documented honestly): a relay/wrapper restart loses the in-memory `#log` (but the
+  wrapper and `claude` share a process lifecycle, so a restart is a *new* session id, not a resumable
+  one), and a `--resume`d session's pre-resume history lives only in claude's local transcript file, not
+  on the RC wire — surfacing it would mean the host parsing that private on-disk format, not a backfill.
 
-These four (#41/#42/#44/#36) are now **grounded, scoped features**, each building on existing spine
-machinery (the `user` path for #41/#44, the §10 permission path for #42, catch_up/replay for #36).
+So #41/#42/#44 are **grounded, scoped features** (the `user` path for #41, the §10 permission path for
+#42, the host-write + Read path for #44), and #36 is **resolved by grounding**: the relay's `#log` +
+`catch_up` already deliver complete mid-session history, and the worker-backfill it specified does not
+exist in the protocol.
