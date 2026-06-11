@@ -190,27 +190,50 @@ function GitChip({ git }: { git: GitInfo }) {
   );
 }
 
+/** Base64 of a Blob without a per-byte loop: FileReader yields a `data:<mime>;base64,<…>` URL we slice. */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("image read failed"));
+    reader.onload = () => {
+      const s = typeof reader.result === "string" ? reader.result : "";
+      resolve(s.slice(s.indexOf(",") + 1)); // strip the "data:…;base64," prefix
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
 /**
  * Downscale an image File to a JPEG and return base64 (no `data:` prefix), small enough for one E2E
  * frame (#44). Browser-only (canvas). The host writes the bytes + has claude `Read` them for vision.
+ * Steps quality down (then dimension) until the base64 fits `maxB64` so a noisy photo still rides one
+ * frame instead of failing the single-frame inbound POST.
  */
-async function downscaleToBase64(file: File, maxDim = 1536, quality = 0.85): Promise<string> {
+async function downscaleToBase64(file: File, maxDim = 1536, maxB64 = 900_000): Promise<string> {
   const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
-  const w = Math.max(1, Math.round(bitmap.width * scale));
-  const h = Math.max(1, Math.round(bitmap.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (ctx === null) throw new Error("canvas 2d context unavailable");
-  ctx.drawImage(bitmap, 0, 0, w, h);
-  const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", quality));
-  if (blob === null) throw new Error("image encode failed");
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i] as number);
-  return btoa(bin);
+  try {
+    let dim = maxDim;
+    let last = "";
+    for (const quality of [0.85, 0.7, 0.55, 0.45, 0.4]) {
+      const scale = Math.min(1, dim / Math.max(bitmap.width, bitmap.height));
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (ctx === null) throw new Error("canvas 2d context unavailable");
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", quality));
+      if (blob === null) throw new Error("image encode failed");
+      last = await blobToBase64(blob);
+      if (last.length <= maxB64) return last;
+      dim = Math.round(dim * 0.7); // still too big — shrink the longest edge and re-encode
+    }
+    return last; // best effort after the steps; the host enforces its own hard cap
+  } finally {
+    bitmap.close();
+  }
 }
 
 /** A tiny three-dot "working" pulse (CSS-animated) — the viewer's thinking indicator (#48). */

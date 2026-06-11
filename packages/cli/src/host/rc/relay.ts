@@ -34,6 +34,33 @@ export function safeAttachmentName(name: string): string {
   return cleaned === "" ? "attachment" : cleaned;
 }
 
+/** The file extension matching an image mime, or "" if unknown. The viewer always re-encodes to one of
+ *  these, so the on-disk name must carry the matching extension (not the original) for claude's Read. (#44) */
+export function extForMime(mime: string): string {
+  switch (mime) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    default:
+      return "";
+  }
+}
+
+/** True if `s` is non-empty, well-formed standard base64 (so a malformed `data` is rejected outright
+ *  rather than silently decoded to truncated/empty bytes by Buffer.from). (#44) */
+export function isLikelyBase64(s: string): boolean {
+  return s.length > 0 && s.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(s);
+}
+
+/** Defensive cap on a viewer attachment's base64 length (~12 MB of bytes). The viewer downscales far
+ *  below this; the cap just stops a buggy/hostile client from writing an arbitrarily large file. (#44) */
+const MAX_ATTACHMENT_B64 = 16 * 1024 * 1024;
+
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
 const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
@@ -315,6 +342,9 @@ export class HostRcRelay {
   readonly #trace: Tracer;
   /** Where a viewer attachment is written before claude Reads it (#44). */
   readonly #attachmentsDir: string;
+  /** Monotonic prefix making each on-disk attachment name unique (so a later upload can't overwrite a
+   *  file an earlier still-queued prompt will Read). (#44) */
+  #attachmentSeq = 0;
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
@@ -673,27 +703,44 @@ export class HostRcRelay {
     try {
       const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame))) as {
         name?: unknown;
+        mime?: unknown;
         data?: unknown;
         caption?: unknown;
       };
-      if (typeof body.data !== "string" || body.data === "") return; // nothing to write
-      name = safeAttachmentName(typeof body.name === "string" ? body.name : "");
+      // Reject anything not well-formed base64 (Buffer.from would otherwise silently truncate it) or
+      // over the size cap — drop cleanly, before any seq/file/prompt side effect.
+      if (typeof body.data !== "string" || !isLikelyBase64(body.data)) return;
+      if (body.data.length > MAX_ATTACHMENT_B64) {
+        this.#trace.warn("attachment too large", { b64: body.data.length });
+        return;
+      }
+      const bytes = Buffer.from(body.data, "base64");
+      if (bytes.length === 0) return; // decoded to nothing
+      name = safeAttachmentName(typeof body.name === "string" ? body.name : ""); // display name (chip)
       caption = typeof body.caption === "string" ? body.caption : "";
+      // On-disk name: a unique prefix (no overwrite of a still-referenced file) + the extension that
+      // matches the ACTUAL bytes (the viewer always re-encodes), so claude's image Read detects it right.
+      const mime = typeof body.mime === "string" ? body.mime : "";
+      const ext = extForMime(mime);
+      const stem = name.replace(/\.[A-Za-z0-9]+$/, "") || "attachment";
+      const diskName = `${(this.#attachmentSeq++).toString(36)}-${ext ? `${stem}.${ext}` : name}`;
       await mkdir(this.#attachmentsDir, { recursive: true });
-      path = join(this.#attachmentsDir, name);
-      await writeFile(path, Buffer.from(body.data, "base64"));
-      this.#trace.debug("attachment written", { name, bytes: body.data.length });
+      path = join(this.#attachmentsDir, diskName);
+      await writeFile(path, bytes);
+      this.#trace.debug("attachment written", { name, diskName, bytes: bytes.length });
     } catch (e) {
       this.#trace.warn("attachment rejected", { error: (e as Error)?.message ?? String(e) });
       return; // bad frame / unwritable — drop (non-fatal: no seq was allocated)
     }
-    // Inject a prompt that makes claude Read the saved image (vision), then echo a user frame.
-    const prompt = `${caption || "Please look at this image."}\n\n[Attached image "${name}" saved at ${path} — use the Read tool to view it.]`;
-    this.#session.pushUserInput(prompt);
+    // Echo the user frame FIRST (durably — a failed post is fatal), THEN inject into claude: the same
+    // invariant as the `user` path (never feed claude a prompt no viewer can see), here ordered so a
+    // torn-down relay can't have driven claude to Read an image that never reached any transcript.
     const seq = this.#seq++;
     await this.#fatalOnThrow(() =>
       this.#emit("user", seq, `user-${seq}`, `📎 ${name}${caption ? `\n${caption}` : ""}`),
     );
+    const prompt = `${caption || "Please look at this image."}\n\n[Attached image "${name}" saved at ${path} — use the Read tool to view it.]`;
+    this.#session.pushUserInput(prompt);
   }
 
   /** Map a client control-verb frame → the worker control_request the spec uses (§3.7). */
