@@ -192,9 +192,9 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
   // We relay ONLY the tool_result blocks and deliberately DROP a user event's text. In the live viewer
   // flow that text is the echo of a prompt the inbound pump already emitted (#pumpInbound emits a
   // `user` frame for every client prompt), so relaying it would double every prompt — a guaranteed bug.
-  // The cost is that a user turn with NO inbound echo (a host-local TUI prompt, or a reconnect/backfill
-  // replay) isn't surfaced; that backfill path is #36's domain (it needs the worker-reconnect capture),
-  // so the drop is intentional here, not silent loss.
+  // The cost is that a host-local TUI prompt (typed at the machine, with no inbound echo) isn't
+  // surfaced to viewers. There is no worker history backfill to recover it either (#36, grounded: the
+  // worker re-emits no history — see docs/protocol.md §12), so the drop is intentional here, not silent loss.
   if (ev.eventType === "user") {
     const sub =
       typeof ev.payload.parent_tool_use_id === "string" && ev.payload.parent_tool_use_id !== "";
