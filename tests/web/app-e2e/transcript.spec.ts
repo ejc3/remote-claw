@@ -97,6 +97,21 @@ test("a typed prompt appears as a user turn (the inbound echo path)", async ({ p
   await expect(page.locator(".row-user .pill", { hasText: "ship it" })).toBeVisible();
 });
 
+test("a slash command renders as a command chip, not a chat pill (#41)", async ({ page, request }) => {
+  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
+  expect(res.ok()).toBeTruthy();
+  const { pass } = (await res.json()) as { pass: string };
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+
+  // /compact rides the same user path; the echo must render as a .cmd-chip, not a chat pill.
+  await page.getByPlaceholder(/Send a prompt/).fill("/compact");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator(".cmd-chip", { hasText: "/compact" })).toBeVisible();
+  await expect(page.locator(".row-user .pill", { hasText: "/compact" })).toHaveCount(0);
+});
+
 test("the pass survives a browser refresh (it's restored from sessionStorage, not lost)", async ({
   page,
   request,
