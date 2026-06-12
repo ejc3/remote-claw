@@ -78,9 +78,13 @@ was then closed. Landed as a reviewed commit stack:
    dropped; a permanently missing low seq surfaces a recoverable banner (distinguishing a real gap from a
    chunk-in-progress); `permission_resolved` is now unordered (`seq=null`) so a content gap can't stall it.
 9. **Permission-mode chip convergence** (the worker's true mode rides presence), **teardown flush** (the
-   last outbound frame is drained before close), and the **dependency audit cleared** — 10 transitive
-   vulnerabilities (postcss / devalue / undici) remediated via patch-level pnpm overrides → `pnpm audit`
-   reports **no known vulnerabilities**.
+   last outbound frame is drained before close), and a **dependency-audit pass**: the build-time **postcss**
+   advisory is patched via a pnpm override; the remaining transitive advisories — **devalue**
+   (low-reachability: the Workflow runtime serializes only our own sealed frames + routing, never
+   attacker-controlled objects) and **undici** (dev-only, via `@workflow/vitest`) — are accepted and
+   tracked for a Workflow-DevKit bump, because force-overriding them broke the **deployed** Vercel
+   Workflows runtime (the in-process test tolerated the bump; the live durable runtime did not — caught by
+   the deployment-targeted preview e2e).
 
 ## Threat model & security posture
 
@@ -110,8 +114,10 @@ pipe: it validates the §8 envelope shape and routes opaque ciphertext, and neve
   RC bodies only — the upstream Anthropic credential is never passed to the tracer.
 - **Web.** Static exfil-blocking CSP + HSTS / `X-Frame-Options: DENY` / `nosniff` / `no-referrer`; **no**
   XSS sink (`dangerouslySetInnerHTML` / `innerHTML` / `eval`) exists, enforced by a CI sink-guard test.
-- **Supply chain.** `pnpm audit` reports no known vulnerabilities (lockfile pinned; `--frozen-lockfile` in
-  CI).
+- **Supply chain.** The build-time postcss advisory is patched via a pnpm override; the remaining
+  transitive advisories (devalue — low-reachability, the WDK serializes only our own data; undici —
+  dev-only via `@workflow/vitest`) are tracked for a Workflow-DevKit bump rather than force-overridden,
+  since that broke the deployed Workflows runtime. Lockfile pinned; `--frozen-lockfile` in CI.
 
 ### Accepted limitations (documented, not bugs)
 
