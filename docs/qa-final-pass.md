@@ -43,62 +43,97 @@ auditable, and tracks the fixes that close them.
 
 ## Fixed in this pass
 
-Each fix ships with a regression test and was adversarially reviewed (codex + the workflow).
+Every fix ships with a regression test, and each cluster was adversarially re-reviewed (codex + the
+workflow) before merge — the review of the durable-restart fix itself caught a follow-up gap (C1) that
+was then closed. Landed as a reviewed commit stack:
 
 1. **Session-id collision across launches (CRITICAL).** `newId()` was a process-local counter reset to 0
    each launch, so the first RC session of *every* launch was `cse_12654435761`; under one identity,
-   sequential launches collided on a single broker channel (`sess:<id>:<sessionId>`), and on a durable
-   backend the second session read/extended the first's frames. Session ids are now minted from a
-   crypto-random source (globally unique), with an injectable deterministic minter for tests.
-2. **Host secrets leaked to the child claude (defense-in-depth).** The spawned `claude` inherited
-   `REMOTE_CLAW_SECRET_FILE` (the host secret-file pointer) and `VERCEL_AUTOMATION_BYPASS_SECRET` (a
-   secret value). Both are now scrubbed from the child env in `launch.ts` *and* the `--rc-trace` path
-   (`trace-run.ts`); the host itself still authenticates (it reads the bypass before building the child
-   env).
-3. **A blank `?backend=` returned 400 instead of the default.** `backendSelector` now treats a blank /
-   whitespace selector (and a padded value) as "no selection" → the route falls back to the
-   `BROKER_BACKEND` default, matching `getBackend`'s own `trim() || default`. A real invalid value still
-   400s.
-4. **Turso durable e2e was not exercised in CI.** `web-e2e.yml` ran the Local, Temporal, and drain
-   browser suites but never `test:app:turso`, so the durable backend shipped with no browser-level proof.
-   The Turso e2e step (and its results artifact path) is now wired into CI.
+   sequential launches collided on a single broker channel, and on a durable backend the second session
+   read/extended the first's frames. Session ids are now crypto-random (globally unique), test-injectable.
+2. **Host secrets scrubbed from the child claude** (`REMOTE_CLAW_SECRET_FILE`,
+   `VERCEL_AUTOMATION_BYPASS_SECRET`) in both `launch.ts` and the `--rc-trace` path; the host still
+   authenticates (it reads the bypass before building the child env).
+3. **Blank `?backend=` → the default, not 400**; the Turso durable e2e is wired into CI (`web-e2e.yml`).
+4. **Durable-restart re-execution safety (security).** A host restart on a durable backend re-subscribed
+   inbound from `startIndex:0` with an empty dedup window and re-injected historical `user` prompts (and
+   replayed `permission` answers) into claude. The relay now resumes BOTH durable cursors before the pumps
+   go live — `maxSeq` (outbound seq) and a new `frameCount` (the inbound publish-order high-water mark, via
+   a zero-knowledge `/api/frame-count` route) — so historical inbound is skipped and only genuinely-new
+   inbound is delivered, exactly once. A failed cursor read **fails closed** (no seq-0 collision).
+5. **Durability discovered from the server, not the `--rc-backend` flag.** `/api/seq` reports `durable`,
+   so a default-turso deployment is protected even when the host omits the flag. The gen-bump race is
+   closed (a Turso `gen` only bumps on the internal `__close`+reopen; `/api/relay` rejects that sentinel).
+6. **Turso resilience.** Writes are serialized through a per-client mutex (no `SQLITE_BUSY`→500); the
+   subscribe poll retries transient libSQL errors without tearing the SSE stream; a dead cached client is
+   evicted. **Retention**: the sweep is wall-clock-bounded with a `frames(token, created_at)` index, gated
+   on the *active* backend, and reports sessions-swept.
+7. **Input validation + security proofs.** `decodeFrame` bounds the cleartext routing strings (length +
+   control-char guard) at the trust boundary; a 17 MiB ciphertext cap (`413`) on `/api/relay`. New proof
+   tests pin: the zero-knowledge invariant on the launch path (no secret/authToken/keys leak to the trace,
+   child env, or plaintext), cross-plane AEAD relabeling rejection, auth bearer byte-canonicalization, and
+   the `dev/seed` production-404 gate.
+8. **Viewer correctness — no silent blank/frozen transcript.** A host restart resets the viewer's orderer
+   (via a per-process `RELAY_INCARNATION` in the announce) so non-durable re-numbered frames aren't
+   dropped; a permanently missing low seq surfaces a recoverable banner (distinguishing a real gap from a
+   chunk-in-progress); `permission_resolved` is now unordered (`seq=null`) so a content gap can't stall it.
+9. **Permission-mode chip convergence** (the worker's true mode rides presence), **teardown flush** (the
+   last outbound frame is drained before close), and the **dependency audit cleared** — 10 transitive
+   vulnerabilities (postcss / devalue / undici) remediated via patch-level pnpm overrides → `pnpm audit`
+   reports **no known vulnerabilities**.
 
-## Remaining work — prioritized stack (tracked, each its own reviewed PR)
+## Threat model & security posture
 
-The full per-finding detail (file:line, trigger, action, and the exact test to add) is in the workflow
-inventory. The high-value clusters, in recommended order:
+remote-claw is a zero-knowledge, E2E-encrypted relay. The broker (Vercel/Turso) is an untrusted dumb
+pipe: it validates the §8 envelope shape and routes opaque ciphertext, and never holds any decryption key.
 
-1. **Durable host-restart safety (highest risk).** On a durable restart the inbound pump re-subscribes
-   from `startIndex:0` with an empty dedup window and can re-inject historical `user` prompts (and
-   replayed `permission` answers) into claude — resume the inbound cursor from a durable high-water mark
-   / re-hydrate the dedup set, fenced by a per-run incarnation epoch.
-2. **Durable seq-resume must fail loud.** When `maxSeq` is unavailable on a durable backend, `serve()`
-   currently logs and starts at seq 0 (colliding with durable history → viewers silently drop frames);
-   it should latch fatal and take the coupled-pump teardown path instead.
-3. **Non-durable restart ordering + gap surfacing.** A non-durable host restart resets seq to 0 and the
-   viewer's persistent `FrameOrderer` drops the re-numbered content; and a permanent low-seq gap stalls
-   the whole transcript with no surfaced recovery. Resume seq for non-durable backends and/or rebuild the
-   orderer on a sub-cursor restart, and surface a recoverable banner after a bounded stall.
-4. **Turso resilience.** Serialize writes (in-process mutex / `SQLITE_BUSY` retry so the relay returns
-   the 409 retry contract, not 500), wrap the subscribe pull-loop queries so a transient libSQL error
-   doesn't tear a live SSE stream, and evict a dead cached client.
-5. **Retention.** Add a wall-clock budget to the sweep loop and a `frames(token, created_at)` index
-   (avoid the O(N²) full-table scan), gate the cron on the *active* backend (not just
-   `TURSO_DATABASE_URL` presence), and report sessions-swept rather than frame-rows.
-6. **Smaller fixes.** Converge the optimistic permission-mode chip via the announce; bound the free-form
-   wire routing strings in `clawsec`; make `permission_resolved` an unordered (`seq=null`) frame so it
-   can't be gap-stalled; await the relay pumps on teardown.
-7. **Coverage.** Turso in the encryption-stress matrix; a joined cross-restart seq-continuity e2e; Turso
-   concurrency-race tests; a route→real-`TursoBackend.sweep` integration test; a `dev/seed` prod-404
-   gate test; a launch-path zero-knowledge leak test; a CSP sink-guard CI test.
+### Verified controls
+
+- **Key separation / blast radius.** The root secret `S` derives four independent HKDF-SHA256 keys:
+  `authToken` (broker routing credential — the Bearer), `contentRoot`, `controlKey`, `kMeta` (decryption).
+  Only `authToken` is sent to the broker; the decryption keys never leave the host/viewer. A leaked Bearer
+  therefore permits routing abuse on the victim's own channel but **cannot decrypt content**. The full
+  read credential is the `pass` (all four keys minus `S`), carried only in the URL `#fragment` +
+  sessionStorage — never sent to the server.
+- **Crypto.** AEAD (AES-GCM) binds every cleartext routing column as AAD, so a frame can't be replayed
+  onto another channel/plane/seq; per-frame CSPRNG salt+nonce + per-message subkey ⇒ no nonce reuse;
+  auth-token comparison is constant-time; a Sealed client refuses Open frames (no silent downgrade).
+- **AuthN/AuthZ.** Every data route requires a Bearer and scopes the channel token to the authenticated
+  identity (no cross-identity access); cron routes require `CRON_SECRET`; `/api/dev/seed` is 404 in
+  production (now gate-tested). Hex bearers are decoded to bytes before hashing (canonical, case-insensitive).
+- **Input validation.** Wire routing strings are length- and charset-bounded; numeric header fields are
+  range-checked; a viewer attachment filename is sanitized to a safe basename and capped (~12 MB); the
+  broker publish path caps the sealed frame body (17 MiB → 413).
+- **Secret handling.** The secret never goes on argv, is never logged, and is suppressed from
+  `--rc-json`/`--rc-quiet`; the secret file is `0o600` (enforced + warned), the MITM CA key `0o600`; the
+  child claude's env is scrubbed of the host secret-file pointer + the broker bypass; `--rc-trace` traces
+  RC bodies only — the upstream Anthropic credential is never passed to the tracer.
+- **Web.** Static exfil-blocking CSP + HSTS / `X-Frame-Options: DENY` / `nosniff` / `no-referrer`; **no**
+  XSS sink (`dangerouslySetInnerHTML` / `innerHTML` / `eval`) exists, enforced by a CI sink-guard test.
+- **Supply chain.** `pnpm audit` reports no known vulnerabilities (lockfile pinned; `--frozen-lockfile` in
+  CI).
+
+### Accepted limitations (documented, not bugs)
+
+- **Metadata is not private.** The broker sees cleartext routing — identity ids, session counts, frame
+  sizes, timing. The guarantee is zero-knowledge of *content*, not of metadata. A malicious broker
+  operator learns who is active and when, never what is said.
+- **Rate limiting is platform-level.** There is no app-level rate limiter (serverless has no shared
+  state). The DoS surface is bounded: unauthenticated requests are rejected cheaply; an authenticated
+  identity can only flood its **own** retention-bounded channel; and Vercel provides DDoS mitigation + the
+  WAF. Recommendation: a Vercel Firewall rate rule on `/api/*` in production.
+- **No key rotation — rotation is replacement.** A compromised secret is remediated by minting a new
+  identity; the old channel's at-rest ciphertext is bounded by retention. There is no in-place re-key.
+- **Durable at-rest ciphertext weakens forward secrecy** vs the ephemeral backends; the retention sweep
+  bounds the exposure window.
 
 ## Open design frontier (documented, not a regression)
 
 Full durable cross-restart *resume* (the same session reattaching across `claude --resume`) needs
-stable-resumable session ids + `worker_epoch` lease fencing + a durable inbound ack cursor. The
-session-id fix above removes the collision; true resume + split-brain fencing remains the design frontier
-(consistent with the durable-log design doc's open decisions). This pass makes every path **safe** (no
-silent corruption), and closes the items above incrementally.
+stable-resumable session ids + `worker_epoch` lease fencing + a durable inbound ack cursor. The session-id
+fix removes the collision and the restart path is now **safe** (no silent corruption / no re-execution);
+true resume + split-brain fencing remains the design frontier (consistent with the durable-log design
+doc's open decisions).
 
 ## Reproducing
 
