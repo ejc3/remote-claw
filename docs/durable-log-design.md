@@ -132,10 +132,11 @@ read-only redundancy source, not the primary durability plan. Evidence:
 
 Use two durable logs with different trust and replay roles:
 
-1. RC server event log: cleartext or host-encrypted, owned by the wrapper host.
-   It is the authoritative server state for `mitm.ts` and `session.ts`. It
-   stores canonical RC event ids, RC sequence numbers, raw event bodies,
-   downstream delivery state, worker epoch, close/archive metadata, and compact
+1. RC server event log: **cleartext, host-owned, kept LOCAL on the host** (SQLite/libSQL under the CLI
+   config dir). Nothing on the host needs encryption — it is the user's own machine, with no
+   zero-knowledge requirement — and this log is **never sent to the broker**. It is the authoritative
+   server state for `mitm.ts` and `session.ts`. It stores canonical RC event ids, RC sequence numbers,
+   raw event bodies, downstream delivery state, worker epoch, close/archive metadata, and compact
    boundaries. This log is required even when no viewer is connected.
 
 2. Broker frame log: sealed viewer transport, already started by A1 Turso
@@ -180,11 +181,11 @@ CREATE TABLE IF NOT EXISTS frames (
 CREATE INDEX IF NOT EXISTS frames_token_gen_id ON frames (token, gen, id);
 ```
 
-Keep this table as the sealed viewer transport. Add host-owned RC tables. If
-they are implemented in the same Turso database, encrypt `body_json`/`payload`
-with a host-held key and keep only routing/index columns clear; otherwise use
-local SQLite/libSQL under the CLI config directory. The interface should hide
-the storage choice from `mitm.ts` and `session.ts`.
+Keep this table as the sealed viewer transport. Add host-owned RC tables in a **LOCAL** SQLite/libSQL
+database under the CLI config directory, in **cleartext** — nothing on the host needs encryption, and
+the broker never holds RC plaintext (only sealed frames cross to the cloud). The interface should hide
+the storage choice from `mitm.ts` and `session.ts`. (Decided: do NOT put RC payloads in the broker
+Turso — there is no host-encryption hedge to make, because the RC log simply stays local.)
 
 No A1 `frames` schema change is required for the first durable server pass.
 The RC event store extends the system by adding companion server-state tables,
@@ -756,10 +757,9 @@ A durability PR is not complete unless it demonstrates these properties:
 
 ## Open Decisions
 
-- Storage placement: local SQLite/libSQL in the CLI is the cleanest default for
-  plaintext server state. Putting RC tables in broker Turso is acceptable only
-  if payloads are host-encrypted or the deployment explicitly accepts broker
-  plaintext.
+- Storage placement: **DECIDED — local SQLite/libSQL in the CLI**, cleartext. Nothing on the host needs
+  encryption, and the RC event log is never sent to the broker, so there is no host-encryption question.
+  The broker holds only sealed frames; RC plaintext stays on the host.
 - Unknown resume policy: production should reject unknown `cse_` resumes by
   default; debug adoption is useful but must mark history incomplete.
 - Broker sequence mapping: recommended design keeps dense broker `seq` separate
