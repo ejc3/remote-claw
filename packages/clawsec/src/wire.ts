@@ -8,9 +8,9 @@
 // output), so a wire frame's identity_id matches the derived channel token byte-for-byte; the three
 // opaque binary blobs (salt, nonce, ct) ride as the more compact base64url.
 //
-// decodeFrame is STRICT: every field is validated for type and length, because this is the trust
-// boundary where attacker-controlled JSON enters (a bad identity_id length or a non-12-byte nonce
-// must fail here, not deep inside AES-GCM).
+// decodeFrame is STRICT: every field is validated for type and bounded length, because this is the
+// trust boundary where attacker-controlled JSON enters (a bad identity_id length, oversized routing
+// string, or a non-12-byte nonce must fail here, not deep inside AES-GCM).
 
 import type { Dir, FrameHeader } from "./aad.js";
 import type { Frame } from "./aead.js";
@@ -45,6 +45,9 @@ export class WireError extends Error {
   }
 }
 
+const MAX_ROUTING_STRING = 256;
+const MAX_MSG_ID = 1024;
+
 /** Serialize a Frame to its JSON-safe wire form. */
 export function encodeFrame(frame: Frame): WireFrame {
   const wire: WireFrame = {
@@ -78,6 +81,28 @@ function reqString(o: Record<string, unknown>, key: string): string {
   const v = o[key];
   if (typeof v !== "string") throw new WireError(`${key} must be a string`);
   return v;
+}
+
+function hasControlChar(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+}
+
+function reqBoundedString(
+  o: Record<string, unknown>,
+  key: string,
+  max: number,
+  opts: { noControlChars?: boolean } = {},
+): string {
+  const s = reqString(o, key);
+  if (s.length > max) throw new WireError(`${key} must be at most ${max} characters`);
+  if (opts.noControlChars && hasControlChar(s)) {
+    throw new WireError(`${key} must not contain ASCII control characters`);
+  }
+  return s;
 }
 
 /**
@@ -152,11 +177,11 @@ export function decodeFrame(value: unknown): Frame {
   const header: FrameHeader = {
     v: reqUint(o, "v"),
     identityId: reqHexBytes(o, "identity_id", 16),
-    sessionId: reqString(o, "session_id"),
+    sessionId: reqBoundedString(o, "session_id", MAX_ROUTING_STRING, { noControlChars: true }),
     dir,
-    recordKind: reqString(o, "record_kind"),
+    recordKind: reqBoundedString(o, "record_kind", MAX_ROUTING_STRING, { noControlChars: true }),
     seq,
-    msgId: reqString(o, "msg_id"),
+    msgId: reqBoundedString(o, "msg_id", MAX_MSG_ID),
     keyEpoch: reqUint(o, "key_epoch"),
     part: reqUint(o, "part"),
     parts: reqUint(o, "parts"),
@@ -165,7 +190,7 @@ export function decodeFrame(value: unknown): Frame {
   // exactOptionalPropertyTypes: client_msg_id is set only when present (string) — reject other
   // non-undefined types so a `{client_msg_id: 5}` can't slip through unchecked.
   if (o.client_msg_id !== undefined) {
-    header.clientMsgId = reqString(o, "client_msg_id");
+    header.clientMsgId = reqBoundedString(o, "client_msg_id", MAX_ROUTING_STRING);
   }
 
   return {

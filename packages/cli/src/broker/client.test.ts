@@ -1,4 +1,12 @@
-import { deriveIdentity, type FrameHeader, type Identity, toHex, utf8 } from "@remote-claw/clawsec";
+import {
+  AeadError,
+  deriveIdentity,
+  type Frame,
+  type FrameHeader,
+  type Identity,
+  toHex,
+  utf8,
+} from "@remote-claw/clawsec";
 import { beforeEach, describe, expect, it } from "vitest";
 import { securityProvider } from "../security/provider.js";
 import { BrokerClient, BrokerError } from "./client.js";
@@ -65,6 +73,48 @@ describe("BrokerClient transport", () => {
     const [frame] = await collect(client.streamFrames({ session: "sX" }));
     if (frame === undefined) throw new Error("no frame");
     expect(td.decode(await client.openFrame(frame))).toBe("hello from claude");
+  });
+
+  it("rejects record_kind relabeling and same-plane session relabeling via derived AEAD/AAD", async () => {
+    const postAndRead = async (h: FrameHeader, text: string): Promise<Frame> => {
+      await client.postFrame(h, utf8(text));
+      const frames = await collect(client.streamFrames({ session: h.sessionId }));
+      const frame = frames.find((f) => f.msgId === h.msgId);
+      if (frame === undefined) throw new Error(`missing frame ${h.msgId}`);
+      return frame;
+    };
+
+    const control = await postAndRead(
+      header(id, { recordKind: "interrupt", dir: "in", seq: null, msgId: "ctl-meta" }),
+      "{}",
+    );
+    await expect(client.openFrame({ ...control, recordKind: "accepted" })).rejects.toBeInstanceOf(
+      AeadError,
+    );
+
+    const content = await postAndRead(
+      header(id, { recordKind: "assistant", seq: 0, msgId: "content-meta" }),
+      "content body",
+    );
+    await expect(client.openFrame({ ...content, recordKind: "accepted" })).rejects.toBeInstanceOf(
+      AeadError,
+    );
+
+    const meta = await postAndRead(
+      header(id, { recordKind: "accepted", seq: null, msgId: "meta-content" }),
+      JSON.stringify({ ok: true }),
+    );
+    await expect(client.openFrame({ ...meta, recordKind: "assistant" })).rejects.toBeInstanceOf(
+      AeadError,
+    );
+
+    const samePlane = await postAndRead(
+      header(id, { recordKind: "assistant", sessionId: "session-a", seq: 1, msgId: "same-plane" }),
+      "same plane",
+    );
+    await expect(client.openFrame({ ...samePlane, sessionId: "session-b" })).rejects.toBeInstanceOf(
+      AeadError,
+    );
   });
 
   it("sends Authorization: Bearer <hex(auth_token)> on every call", async () => {
