@@ -1062,6 +1062,170 @@ wanted, a small durable store could be added then. We investigated the options (
 Redis / Vercel Blob / Neon; Edge Config doesn't fit) and they're viable, but adding any
 of them now would pollute a deliberately lean design — **explicitly deferred.**
 
+## 6D. Broker backends — execution-model comparison (why Vercel Workflows, vs Temporal, vs Turso)
+
+The broker is a **pluggable port** (`BrokerBackend` in `apps/web/lib/broker/backend.ts`):
+`publish(token, frame)` and `subscribe(token, {startIndex})`, selected per-request via the
+`x-broker-backend` header / `?backend=`. Four implementations ship — `vercel` (live default),
+`temporal`, `turso`, `local` (dev/test). They divide on **one axis: who runs the execution, and
+whether reads are push or poll.** This section captures the verified design of each so the choice
+of default is auditable.
+
+### Vercel Workflows — the live default (per-event materialization, push reads)
+
+The headline property: **there is no orchestrator service and no standing worker.** An SWC plugin
+compiles each `"use workflow"` and `"use step"` into separate **Vercel Function** handlers reachable
+only through **Vercel Queues**. When an event needs handling the **platform invokes a function**, runs
+the orchestration to the next `await step()`, persists, suspends, and **scales to zero**. So when no
+viewer is connected and the relay run is parked on its hook, **nothing runs and nothing polls** — cost
+is the stored event-log rows only. (This is the literal answer to "what is the executor doing with no
+clients connected": on Vercel, nothing.)
+
+Durability is **event-sourced deterministic replay** (verified against bundled `workflow@4.3.1` docs,
+`how-it-works/event-sourcing.mdx`): an append-only log of `run_*`/`step_*`/`hook_*`/`wait_*` events
+(ULID-keyed, so always read in order); resume = re-run from the top replaying cached step results.
+The `"use workflow"` body runs in a **VM sandbox** (seeded `Math.random`/`Date.now`) precisely because
+it is replayed and must be deterministic; all side effects are quarantined into `"use step"` (full
+Node, runs once, retried, journaled).
+
+Two properties make it the right shape for *our* real-time fan-out, both **verified in the 4.3.1 docs
+and proven by our own `vercel.ts`**:
+
+- **Reads are true push, multi-subscriber.** Each viewer opens its own `getRun(runId).getReadable({
+  startIndex })` cursor against the one relay run's persistent (Redis-backed) stream — catch-up then
+  live, no polling. The streaming doc confirms concurrent readers/writers on one stream; our
+  `subscribe()` *is* this, one cursor per viewer. (Public docs couldn't confirm multi-reader; our
+  shipped code is the proof.)
+- **Outbound frames bypass the event log.** Stream chunks "flow directly without being stored in the
+  event log," so the transcript fan-out does **not** consume the 25k-events/run budget. Only inbound
+  publishes (`hook_received`) and step events count. The relay's replies are nearly free against the
+  cap; only inbound prompts press on it.
+
+Publish maps onto a **reusable hook**: `relayWorkflow` runs `for await (const payload of hook)`, and
+each `resumeHook(token, frame)` delivers a `hook_received` (hook stays `active`, takes many events). A
+`hook_conflict` is recorded **only at create-time** when the token is already held by another active
+hook → `HookConflictError` — which is exactly the `ensureChannel` registration race we hardened (§13);
+once created, publishing never conflicts.
+
+The **limits envelope** (Vercel pricing page, dated 2026-06-02 — current for this build) is why the
+host keeps `#log` as system-of-record and the channel is cap-rolled rather than relied on as the
+durable store:
+
+| limit | value | bearing on the relay |
+| --- | --- | --- |
+| max run duration | no limit | a channel run can live indefinitely |
+| events per run | **25,000** (replay degrades past ~2k) | inbound publishes + step events — **not** outbound frames |
+| stream storage / chunk | unlimited / 10 MB | transcript fan-out unbounded; per-frame ≤10 MB |
+| stream chunks/sec/stream | 1,000 | per-channel publish-rate ceiling |
+| event creations/run/sec | 200 | inbound `resumeHook` rate ceiling per channel |
+| max replay duration | 240 s | the real reason long histories must roll |
+| idle on a hook | no compute billed | a parked channel = storage only |
+
+There is **no `continueAsNew`**; the documented remedy for long histories is **child workflows**. We
+sidestep it entirely: the host `#log` is the history source-of-record and the channel is a bounded
+live buffer (§6).
+
+### Temporal — durable orchestration, but a poll-read pub/sub anti-pattern
+
+Temporal is the opposite substrate: a **standing worker fleet long-polls task queues**, orchestrated
+by a separate server. Web research (Temporal docs + forum, May 2026) confirms the mismatch for a live
+relay:
+
+- **No server→client push exists.** A subscriber reads workflow state by **polling a query**; that's
+  what our `temporal.ts` `subscribe()` does (poll `STATE_QUERY` every `pollMs`). `Update` lowers write
+  latency but writes to Event History; the `workflow-streams` contrib long-polls and is scoped to
+  "tens, not thousands" of subscribers.
+- **In-workflow pub/sub is an explicit anti-pattern**, bounded by a **51,200-event / 50 MB history**
+  cap (→ termination) and a **2,000 pending-signal** cap (with no worker draining, publishes buffer to
+  2,000 then the workflow task fails/retries — the failure mode of the "no standing worker" idea).
+- The newer **Serverless Workers** (May 2026, pre-release) remove the standing-worker pain (event-
+  invoked, scale-to-zero) **but run compute in your own cloud** (AWS Lambda, 15-min limit, "not ideal
+  for sustained high-throughput") — self-hosted-but-elastic, not managed-execution.
+
+The supported scalable Temporal design is therefore the **split**: Temporal for durable orchestration
++ an **external pub/sub** (Redis Streams / NATS / Kafka) for the fan-out — i.e. an admission that
+Temporal alone is not a broker. That's strictly more infrastructure than either shipped backend for no
+gain on this workload, which is why Temporal stays an opt-in backend, not the default.
+
+### Turso — the no-worker durable log (the durability answer)
+
+Turso sidesteps the push/poll question: an **unbounded ordered libSQL log** with **no worker at all** —
+the DB itself serves catch-up. Reads are a poll (`SELECT … WHERE id > cursor`), but replay and live are
+the *same* query (no gap/dupe boundary), and unlike Vercel/Temporal it is **flagged durable**, so the
+broker serves catch-up and the host can retire its `#log` replay. Full schema and the RC-event/broker-
+frame split are in `docs/durable-log-design.md`. (Aside: Turso is also one of Workflow DevKit's embedded
+"Worlds" — the same engine, used there as a workflow store rather than a relay log.)
+
+### The World abstraction (why "no worker" is a Vercel property, not universal)
+
+Workflow DevKit's runtime/queues/persistence are a swappable **World**. Managed = **Vercel** (Functions
++ Queues + encrypted managed store). Self-hosted Worlds (**Postgres via graphile-worker, BullMQ, NATS
+JetStream, Cloudflare Durable Objects, Redis, Turso**) exist — but Postgres/BullMQ/JetStream **bring
+back a long-lived polling worker**, converging toward Temporal's operational shape. So "event-driven,
+zero-cost idle, no worker" is specifically the **Vercel World**, not a universal DevKit guarantee.
+
+### Verdict (the auditable default)
+
+| | reads | writes | who runs compute | standing process | durability | infra pieces |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Vercel** (default) | **push** (`getReadable` cursor/viewer) | `resumeHook` (event-driven) | **Vercel**, per-event | **none** | capped stream + host `#log` | 1 |
+| **Temporal** | poll a query | signal (2k pending cap) | your worker | standing worker | history (capped → terminates) | 1 (wrong-shaped) / 2 with Redis |
+| **Turso** | poll (`id > cursor`) | `INSERT OR IGNORE` | nobody (DB serves reads) | **none** | **unbounded ordered log** | 1 |
+
+Vercel Workflows is the one managed system giving **event-driven execution + push fan-out + zero hosted
+infra** in a single piece (hence the live default); Turso is the clean **durable-log** opt-in; Temporal
+is durable orchestration that needs an external pub/sub bolted on to be a broker, so it stays opt-in.
+
+### Worked example — a no-viewer fleet (the roll cycle, and the viewer-gating gap)
+
+A stress case that exposes the real over-time behavior: **100 channel tokens (100 `relayWorkflow`
+runs), 1000 claudes pumping ~10 frames/sec/run (~1000/sec aggregate), and *no viewers connected.***
+
+The load-bearing fact: **the host posts unconditionally.** `#pumpUpstream` (`host/rc/relay.ts`)
+`#emit`s every frame the worker produces as it happens, and never checks for a viewer — it *can't*,
+because the zero-knowledge, store-free broker gives the host **no viewer-presence back-channel** (the
+bus carries host→viewer announces; there is no viewer→host "I'm watching" beat). So zero viewers does
+**not** reduce the publish load — the fleet pays full relay price to broadcast into the void.
+
+Per-frame cost on a run's event log ≈ **~4 events**: 1 `hook_received` (the `resumeHook`) + the `emit`
+step's `step_created`/`step_started`/`step_completed`. The frame *bytes* go onto the stream and bypass
+the event log, but the step lifecycle still journals — so cost is ~4 events/frame regardless of frame
+size.
+
+What one run does over time, against the caps (25k events, 10k steps, replay degrades past ~2k events,
+240 s max replay), at **10 frames/sec ≈ 40 events/sec**:
+
+| t | what happens |
+| --- | --- |
+| 0 | run `start()`ed; hook loop emits into a stream nobody reads |
+| ~50 s | crosses **2,000 events** → replay slows → each `resumeHook` waits longer to resume → **publish latency creeps up** |
+| ~10 min | hits **~25,000 events** → run **terminates**; hook auto-disposes; token frees |
+| +gap | host's next `postMessage` → 409/`HookNotFound` → `ensureChannel` `start()`s a **fresh run** (409-retry budget covers the window); the old stream of unread frames is abandoned to retention |
+
+So each run **rolls every ~10 min** (at 1 frame/sec — the real 1:1 topology — every ~1.7 hr). The roll
+is **reactive, not orchestrated**: nothing counts frames and sends `__close`; the platform terminating
+the capped run *is* the trigger, and resume-or-start picks it back up. No frame is lost — the host
+`#log` is the source-of-record and re-pumps on a late viewer's `catch_up`; a viewer joining mid-stream
+gets a fresh stream + catch-up.
+
+Fleet-level, with no viewers: 100 streams fill with unread chunks; runs cross the 2k knee out of phase
+→ a rolling wave of rising publish latency; runs then terminate/roll continuously (~0.17
+run-creations/sec, far under the 1,000/sec create limit); and because nothing is consumed and Pro
+retention is **7 days**, abandoned streams **pile up for a week before GC** (Data Retained climbs then
+plateaus). Billing is full freight: ~4,000 events/sec ≈ 14.4M/hr ≈ **~$290/hr in events alone**, plus
+Data Written per frame and a week of Data Retained. The platform stays correct throughout (clean
+roll-and-restart, throttle-and-retry rather than drop on the req/min ceiling) — it's just **expensive
+and churny for the idle-fleet case.**
+
+**The gap this surfaces (tracked):** the host has **no outbound viewer-gating** — there is no mechanism
+to stop pumping the transcript when nobody is watching, because the broker exposes no viewer presence
+to the host. The honest mitigations, in order: (a) add a sealed presence beat so the host can gate
+outbound on ≥1 viewer (drops an idle fleet to the ~20 s `ANNOUNCE_KEEPALIVE_MS` announce floor); (b)
+use the **Turso** backend, which has no per-run cap and **no rolling** (publish is `INSERT`, so the
+~10-min churn and replay-degradation tax vanish — the cost shifts to libSQL write throughput and
+unbounded at-rest ciphertext needing the A2 retention/TTL sweep); (c) accept the churn (it is correct
+and self-healing, just costly). Today's default is (c); (a) is the missing mechanism.
+
 ## 7. Identity, "spaces" & onboarding (one machine at a time)
 Hierarchy: **machine (identity_id) → its spaces (each space = one claude instance =
 one chat).** A space is *not* a container of sessions — it **is** one session.
