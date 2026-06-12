@@ -1,4 +1,12 @@
-import { deriveIdentity, type FrameHeader, type Identity, toHex, utf8 } from "@remote-claw/clawsec";
+import {
+  AeadError,
+  deriveIdentity,
+  type Frame,
+  type FrameHeader,
+  type Identity,
+  toHex,
+  utf8,
+} from "@remote-claw/clawsec";
 import { beforeEach, describe, expect, it } from "vitest";
 import { securityProvider } from "../security/provider.js";
 import { BrokerClient, BrokerError } from "./client.js";
@@ -67,6 +75,48 @@ describe("BrokerClient transport", () => {
     expect(td.decode(await client.openFrame(frame))).toBe("hello from claude");
   });
 
+  it("rejects record_kind relabeling and same-plane session relabeling via derived AEAD/AAD", async () => {
+    const postAndRead = async (h: FrameHeader, text: string): Promise<Frame> => {
+      await client.postFrame(h, utf8(text));
+      const frames = await collect(client.streamFrames({ session: h.sessionId }));
+      const frame = frames.find((f) => f.msgId === h.msgId);
+      if (frame === undefined) throw new Error(`missing frame ${h.msgId}`);
+      return frame;
+    };
+
+    const control = await postAndRead(
+      header(id, { recordKind: "interrupt", dir: "in", seq: null, msgId: "ctl-meta" }),
+      "{}",
+    );
+    await expect(client.openFrame({ ...control, recordKind: "accepted" })).rejects.toBeInstanceOf(
+      AeadError,
+    );
+
+    const content = await postAndRead(
+      header(id, { recordKind: "assistant", seq: 0, msgId: "content-meta" }),
+      "content body",
+    );
+    await expect(client.openFrame({ ...content, recordKind: "accepted" })).rejects.toBeInstanceOf(
+      AeadError,
+    );
+
+    const meta = await postAndRead(
+      header(id, { recordKind: "accepted", seq: null, msgId: "meta-content" }),
+      JSON.stringify({ ok: true }),
+    );
+    await expect(client.openFrame({ ...meta, recordKind: "assistant" })).rejects.toBeInstanceOf(
+      AeadError,
+    );
+
+    const samePlane = await postAndRead(
+      header(id, { recordKind: "assistant", sessionId: "session-a", seq: 1, msgId: "same-plane" }),
+      "same plane",
+    );
+    await expect(client.openFrame({ ...samePlane, sessionId: "session-b" })).rejects.toBeInstanceOf(
+      AeadError,
+    );
+  });
+
   it("sends Authorization: Bearer <hex(auth_token)> on every call", async () => {
     broker.requireAuth(id.authToken);
     await expect(client.postFrame(header(id), utf8("{}"))).resolves.toMatchObject({ ok: true });
@@ -102,7 +152,7 @@ describe("BrokerClient transport", () => {
     expect(noSeen[0]?.["x-vercel-protection-bypass"]).toBeUndefined();
   });
 
-  it("maxSeq round-trips numbers/null and sends auth + backend headers", async () => {
+  it("maxSeq/frameCount round-trip numbers/null and send auth + backend headers", async () => {
     const seen: Array<{ url: string; headers: Record<string, string> }> = [];
     const capture: typeof fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       seen.push({
@@ -118,12 +168,16 @@ describe("BrokerClient transport", () => {
       backend: "turso",
     });
 
+    expect(tursoClient.durable).toBe(false); // no server capability has been read yet
     expect(await tursoClient.maxSeq("missing")).toBeNull();
+    expect(tursoClient.durable).toBe(true);
+    expect(await tursoClient.frameCount("missing")).toBeNull();
     await tursoClient.postFrame(
       header(id, { recordKind: "accepted", seq: null, sessionId: "empty", msgId: "empty-1" }),
       utf8("{}"),
     );
     expect(await tursoClient.maxSeq("empty")).toBeNull();
+    expect(await tursoClient.frameCount("empty")).toBe(1);
     await tursoClient.postFrame(
       header(id, { recordKind: "assistant", seq: 2, sessionId: "seq-session", msgId: "seq-2" }),
       utf8("two"),
@@ -133,10 +187,17 @@ describe("BrokerClient transport", () => {
       utf8("seven"),
     );
     expect(await tursoClient.maxSeq("seq-session")).toBe(7);
+    expect(await tursoClient.frameCount("seq-session")).toBe(2);
 
     const seqCalls = seen.filter((call) => new URL(call.url).pathname === "/api/seq");
     expect(seqCalls).toHaveLength(3);
     for (const call of seqCalls) {
+      expect(call.headers.authorization).toBe(`Bearer ${toHex(id.authToken)}`);
+      expect(call.headers["x-broker-backend"]).toBe("turso");
+    }
+    const countCalls = seen.filter((call) => new URL(call.url).pathname === "/api/frame-count");
+    expect(countCalls).toHaveLength(3);
+    for (const call of countCalls) {
       expect(call.headers.authorization).toBe(`Bearer ${toHex(id.authToken)}`);
       expect(call.headers["x-broker-backend"]).toBe("turso");
     }
@@ -155,7 +216,7 @@ describe("BrokerClient transport", () => {
     expect((err as BrokerError).status).toBe(401);
   });
 
-  it("reports durable=true only for the turso backend (the host's catch_up-retire signal)", async () => {
+  it("discovers durable=true from the server, including a durable default with no backend header", async () => {
     const mk = (backend?: string): BrokerClient =>
       new BrokerClient({
         baseUrl: "http://broker.test",
@@ -163,11 +224,21 @@ describe("BrokerClient transport", () => {
         fetchFn: broker.fetch,
         ...(backend !== undefined ? { backend } : {}),
       });
-    expect(mk("turso").durable).toBe(true);
-    expect(mk("vercel").durable).toBe(false);
-    expect(mk("temporal").durable).toBe(false);
-    expect(mk("local").durable).toBe(false);
-    expect(mk(undefined).durable).toBe(false); // unknown/default backend ⇒ conservative (keep #log)
+    expect(mk("turso").durable).toBe(false); // the local flag alone is not trusted
+
+    const defaultClient = mk(undefined);
+    broker.durable = true;
+    const cursor = await defaultClient.seqCursor("default-turso-session");
+    expect(cursor).toEqual({ maxSeq: null, durable: true });
+    expect(defaultClient.durable).toBe(true);
+
+    broker.durable = false;
+    const vercelClient = mk("vercel");
+    expect(await vercelClient.seqCursor("default-vercel-session")).toEqual({
+      maxSeq: null,
+      durable: false,
+    });
+    expect(vercelClient.durable).toBe(false);
   });
 
   it("passes startIndex through (negative = recent window)", async () => {

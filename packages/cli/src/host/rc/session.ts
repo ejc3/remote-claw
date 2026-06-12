@@ -11,6 +11,8 @@
 // A new worker SSE stream supersedes any prior one (the `gen` token) so exactly ONE follower delivers
 // downstream events — preventing duplicate turns on a reconnect race. (§17.2/§17.3.)
 
+import { randomUUID } from "node:crypto";
+
 /** A wake primitive: a promise that resolves on the next `wake()`, then re-arms. The async stand-in
  *  for threading.Condition.notify_all() — every follower awaiting `wait()` is released together. */
 class Gate {
@@ -48,14 +50,43 @@ class Gate {
 const HEARTBEAT_MS = 10_000;
 
 let counter = 0;
-/** A unique-enough id without Math.random/Date (kept deterministic-friendly for tests). */
+/** A unique-enough id without Math.random/Date (kept deterministic-friendly for tests). Used for
+ *  event/request ids, which are scoped UNDER a session's globally-unique id, so repeating across
+ *  launches is harmless. NOT used for the session id itself (see `randomSessionId`). */
 function newId(prefix = ""): string {
   counter += 1;
   return `${prefix}${counter.toString(36)}-${(counter * 2654435761) % 0xffffffff}`;
 }
 
+/** A GLOBALLY-unique session-id body. Unlike `newId` (a process-local counter that resets to 0 each
+ *  launch — so the first session of EVERY launch would mint the same `cse_…`), this never repeats
+ *  across launches. That matters because the broker channel token is `sess:<identityId>:<sessionId>`:
+ *  two launches under one identity minting the same id would land on ONE channel, and on a durable
+ *  backend the second session would read/extend the first's frames (a corrupt, merged transcript). */
+function randomSessionId(): string {
+  return randomUUID().replace(/-/g, "");
+}
+
 function nowIso(clock: () => number): string {
   return new Date(clock()).toISOString();
+}
+
+function stringField(o: Record<string, unknown>, key: string): string | null {
+  const v = o[key];
+  return typeof v === "string" && v !== "" ? v : null;
+}
+
+/** Extract a Claude permission mode from the shapes seen in session config and system init events.
+ *  The protocol has used both camelCase and snake_case; accept any non-empty string so new modes do
+ *  not require a relay deploy just to display accurately. */
+export function permissionModeFrom(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const o = value as Record<string, unknown>;
+  return (
+    stringField(o, "permissionMode") ??
+    stringField(o, "permission_mode") ??
+    permissionModeFrom(o.config)
+  );
 }
 
 /** What kind of correlated party produced an event: a client (downstream) or the worker (upstream). */
@@ -101,6 +132,9 @@ export function assistantText(payload: Record<string, unknown>): string {
 export interface SessionOptions {
   /** Injectable clock (ms since epoch) so tests stay deterministic; defaults to Date.now. */
   clock?: () => number;
+  /** Injectable session-id minter so tests stay deterministic; defaults to a crypto-random unique id
+   *  (`randomSessionId`) so ids never repeat across launches (a repeat is a broker-channel collision). */
+  newSessionId?: () => string;
 }
 
 /** Authoritative state + event bus for ONE Remote Control session. */
@@ -111,6 +145,7 @@ export class Session {
   readonly createdAt: string;
   workerEpoch = 1;
   workerStatus = "WORKER_STATUS_UNSPECIFIED";
+  permissionMode: string | null;
   closed = false;
   initialized = false;
 
@@ -136,6 +171,7 @@ export class Session {
     this.config = config ?? {};
     this.#clock = opts.clock ?? Date.now;
     this.createdAt = nowIso(this.#clock);
+    this.permissionMode = permissionModeFrom(this.config);
   }
 
   // ---- producers ----
@@ -245,6 +281,7 @@ export class Session {
   }
 
   close(): void {
+    if (this.closed) return;
     this.closed = true;
     this.#gate.wake();
   }
@@ -326,14 +363,16 @@ export class Session {
 export class RelayCore {
   readonly #sessions = new Map<string, Session>();
   readonly #clock: () => number;
+  readonly #newSessionId: () => string;
 
   constructor(opts: SessionOptions = {}) {
     this.#clock = opts.clock ?? Date.now;
+    this.#newSessionId = opts.newSessionId ?? randomSessionId;
   }
 
   /** Register a session for a worker `POST /v1/code/sessions`. */
   create(body: Record<string, unknown>): Session {
-    const sid = `cse_${newId("")}`.replace(/[^A-Za-z0-9_]/g, "");
+    const sid = `cse_${this.#newSessionId()}`.replace(/[^A-Za-z0-9_]/g, "");
     const s = new Session(
       sid,
       typeof body.title === "string" ? body.title : "remote-claw",

@@ -23,6 +23,10 @@ export const FRESH_WINDOW_MS = 60_000;
  *  any phase/needs change (relay's ANNOUNCE_KEEPALIVE_MS), so a healthy session stays well under this;
  *  crossing it means ≥2 keepalives were missed → we're RECONNECTING, not yet declared gone (#58). */
 export const CONNECTED_WINDOW_MS = 45_000;
+export const TRANSCRIPT_GAP_STALL_MS = 10_000;
+const DURABILITY_PROBE_ATTEMPTS = 3;
+const DURABILITY_PROBE_BASE_MS = 50;
+const PARTIAL_CHUNK_STALL_MS = 250;
 
 /** The viewer's view of the host link, derived purely from announce freshness (§4.3 / #58):
  *  connected (fresh) → reconnecting (a keepalive or two missed) → disconnected (gone past the window). */
@@ -35,6 +39,19 @@ export function connState(sentAt: number, now: number): ConnState {
   if (age < CONNECTED_WINDOW_MS) return "connected";
   if (age < FRESH_WINDOW_MS) return "reconnecting";
   return "disconnected";
+}
+
+/** Presence replay rule: keep the newest announce per session. Equal timestamps are accepted so a
+ *  same-millisecond mode/status update from the host can replace the previous body. */
+export function shouldAcceptAnnounce(existing: Announce | undefined, incoming: Announce): boolean {
+  return existing === undefined || incoming.sentAt >= existing.sentAt;
+}
+
+function parseIncarnation(body: Record<string, unknown>): string | null {
+  const raw = body.incarnation ?? body.launch_incarnation;
+  if (typeof raw === "string" && raw !== "") return raw;
+  if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+  return null;
 }
 
 /** The session's git state, snapshotted by the host at announce time (#49). null outside a repo. */
@@ -54,12 +71,16 @@ export interface Announce {
   title: string;
   cwd: string | null;
   sentAt: number;
+  /** Per relay-process launch id. A change means non-durable transcript seq may have restarted at 0. */
+  incarnation: string | null;
   /** Raw worker_status (idle/running/requires_action/…) — kept verbatim for display/debug. */
   status: string;
   /** Derived activity: "thinking" = actively generating, "idle" = not. Drives the working indicator. */
   phase: "idle" | "thinking";
   /** The worker is waiting on the human (an open permission gate or requires_action). */
   needs: boolean;
+  /** Current worker permission mode, when announced by a modern host. Old hosts omit it. */
+  mode?: string;
   /** The session's git snapshot for the branch/dirty/ahead-behind chip (#49); null outside a repo. */
   git: GitInfo | null;
 }
@@ -86,11 +107,20 @@ export interface Message {
   seq: number | null;
   text: string;
   msgId: string;
+  /** Present only on kind:"gap": the first seq the orderer is still waiting for. */
+  nextSeq?: number;
+  /** Present only on kind:"gap": buffered content entries blocked behind that missing seq. */
+  pending?: number;
+  /** Present only on kind:"gap": when this missing-seq stall was first observed. */
+  since?: number;
 }
 
 export class Viewer {
   readonly #client: BrokerClient;
   readonly #identityId: Uint8Array;
+  readonly #incarnations = new Map<string, string>();
+  readonly #incarnationListeners = new Map<string, Set<(incarnation: string) => void>>();
+  readonly #durability = new Map<string, boolean>();
 
   private constructor(
     identity: Identity,
@@ -138,6 +168,48 @@ export class Viewer {
     };
   }
 
+  #rememberIncarnation(sessionId: string, incarnation: string | null): void {
+    if (incarnation === null) return;
+    const prev = this.#incarnations.get(sessionId);
+    if (prev === undefined) {
+      this.#incarnations.set(sessionId, incarnation);
+      return;
+    }
+    if (prev === incarnation) return;
+    this.#incarnations.set(sessionId, incarnation);
+    const listeners = this.#incarnationListeners.get(sessionId);
+    if (listeners === undefined) return;
+    for (const fn of listeners) fn(incarnation);
+  }
+
+  #onIncarnationChange(sessionId: string, fn: (incarnation: string) => void): () => void {
+    let listeners = this.#incarnationListeners.get(sessionId);
+    if (listeners === undefined) {
+      listeners = new Set();
+      this.#incarnationListeners.set(sessionId, listeners);
+    }
+    listeners.add(fn);
+    return () => {
+      listeners?.delete(fn);
+      if (listeners?.size === 0) this.#incarnationListeners.delete(sessionId);
+    };
+  }
+
+  async #durable(sessionId: string, fallback?: boolean): Promise<boolean> {
+    for (let attempt = 0; attempt < DURABILITY_PROBE_ATTEMPTS; attempt++) {
+      try {
+        const durable = (await this.#client.seqCursor(sessionId)).durable;
+        this.#durability.set(sessionId, durable);
+        return durable;
+      } catch {
+        if (attempt < DURABILITY_PROBE_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, DURABILITY_PROBE_BASE_MS * 2 ** attempt));
+        }
+      }
+    }
+    return fallback ?? this.#durability.get(sessionId) ?? true;
+  }
+
   /**
    * Tail the identity bus; yield each fresh session_announce (decrypted under K_meta). Re-subscribes
    * when the stream ends: the bus run may not exist yet (you opened the app before any host
@@ -155,17 +227,22 @@ export class Viewer {
           } catch {
             continue; // a frame we can't open/parse (not ours / corrupt) — skip, never crash the list
           }
-          yield {
-            sessionId: String(body.session_id ?? frame.sessionId),
+          const sessionId = String(body.session_id ?? frame.sessionId);
+          const announce: Announce = {
+            sessionId,
             title: typeof body.title === "string" ? body.title : String(body.session_id ?? ""),
             cwd: typeof body.cwd === "string" ? body.cwd : null,
             sentAt: typeof body.sent_at === "number" ? body.sent_at : 0,
+            incarnation: parseIncarnation(body),
             // Presence fields (#48/#58). Pre-presence hosts omit them → benign defaults.
             status: typeof body.status === "string" ? body.status : "",
             phase: body.phase === "thinking" ? "thinking" : "idle",
             needs: body.needs === true,
             git: parseGit(body.git), // git chip (#49); null outside a repo / on an old host
           };
+          if (typeof body.mode === "string" && body.mode !== "") announce.mode = body.mode;
+          this.#rememberIncarnation(sessionId, announce.incarnation);
+          yield announce;
         }
       } catch {
         // A transient stream error (network blip / SSE reset / broker 5xx) must NOT end discovery —
@@ -186,45 +263,176 @@ export class Viewer {
    * nothing) even if the window evicts on a very long session. Loops until `signal` aborts.
    */
   async *transcript(sessionId: string, signal: AbortSignal): AsyncGenerator<Message> {
-    const orderer = new FrameOrderer();
-    while (!signal.aborted) {
-      // Re-read from the start of the run; the orderer's dedup window drops everything already
-      // delivered, so the re-subscribe is idempotent. (startIndex is a broker FRAME index — which
-      // counts in/out/meta/chunk frames — not the transcript seq, so the orderer, not startIndex,
-      // is what guarantees no gap and no duplicate across a reconnect.)
-      try {
-        for await (const frame of this.#client.streamFrames({
-          session: sessionId,
-          startIndex: 0,
-          signal,
-        })) {
-          if (frame.dir !== "out") continue; // the viewer renders host→web frames only
-          // The orderer releases a chunked message (parts > 1) as its parts together, in part order — so
-          // reassemble those with openMessage; a single frame opens directly.
-          const ready = orderer.accept(frame);
-          for (let i = 0; i < ready.length; ) {
-            const f = ready[i];
-            if (f === undefined) break;
-            const span = f.parts > 1 ? f.parts : 1;
-            const group = ready.slice(i, i + span);
-            i += span;
-            let text: string;
-            try {
-              text = td.decode(
-                span > 1 ? await this.#client.openMessage(group) : await this.#client.openFrame(f),
-              );
-            } catch {
-              continue; // a frame/message we can't open (not ours / corrupt) — skip, never crash the list
-            }
-            yield { kind: f.recordKind, seq: f.seq, text, msgId: f.msgId };
-          }
-        }
-      } catch {
-        // A transient stream error must NOT end the transcript — fall through to resume-or-retry and
-        // re-subscribe. The persistent FrameOrderer makes the re-read idempotent (no gap, no dup).
+    let orderer = new FrameOrderer();
+    let streamMode: "full" | "tail" = "full";
+    let durable: boolean | undefined;
+    let catchUpOnSubscribe = false;
+    let streamCursor = 0;
+    let gap: {
+      nextSeq: number;
+      pending: number;
+      since: number;
+      reported: string;
+      partial: boolean;
+    } | null = null;
+
+    const restarts: string[] = [];
+    let restartResolve: ((incarnation: string) => void) | null = null;
+    const nextRestart = () => {
+      const queued = restarts.shift();
+      if (queued !== undefined) return Promise.resolve(queued);
+      return new Promise<string>((resolve) => {
+        restartResolve = resolve;
+      });
+    };
+    const stopIncarnationWatch = this.#onIncarnationChange(sessionId, (incarnation) => {
+      if (restartResolve === null) {
+        restarts.push(incarnation);
+      } else {
+        restartResolve(incarnation);
+        restartResolve = null;
       }
-      if (signal.aborted) break;
-      await new Promise((r) => setTimeout(r, 150)); // run not up / stream closed → resume-or-retry
+    });
+
+    let restartPromise = nextRestart();
+    const gapSignal = (): Message | null => {
+      // Surface both genuinely missing seqs and an incomplete chunked message at the cursor. The latter
+      // should be transient, but if a later chunk failed after earlier chunks landed this is the only
+      // bounded recovery signal instead of a silent permanent stall.
+      const partial = orderer.stalledOnIncompleteSeq;
+      if (!orderer.stalledOnMissingSeq && !partial) return null;
+      if (gap === null || gap.nextSeq !== orderer.nextSeq || gap.partial !== partial) {
+        gap = {
+          nextSeq: orderer.nextSeq,
+          pending: orderer.pending,
+          since: Date.now(),
+          reported: "",
+          partial,
+        };
+      } else {
+        gap.pending = orderer.pending;
+      }
+      if (gap.partial && Date.now() - gap.since < PARTIAL_CHUNK_STALL_MS) return null;
+      const reportKey = `${gap.nextSeq}:${gap.pending}:${gap.partial ? "partial" : "missing"}`;
+      if (gap.reported === reportKey) return null;
+      gap.reported = reportKey;
+      return {
+        kind: "gap",
+        seq: null,
+        text: "",
+        msgId: `gap-${sessionId}-${gap.nextSeq}-${gap.since}`,
+        nextSeq: gap.nextSeq,
+        pending: gap.pending,
+        since: gap.since,
+      };
+    };
+    const partialGapTimer = (): Promise<{ type: "gap_timer" }> | null => {
+      if (gap === null || !gap.partial || gap.reported !== "") return null;
+      const delay = Math.max(0, gap.since + PARTIAL_CHUNK_STALL_MS - Date.now());
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve({ type: "gap_timer" }), delay);
+        if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
+      });
+    };
+
+    try {
+      while (!signal.aborted) {
+        // Re-read from the start of the run unless this is a non-durable incarnation. In tail mode the
+        // host's catch_up replay supplies the current incarnation's log after the live subscription is up.
+        const startIndex = streamMode === "tail" ? streamCursor : 0;
+        let cursor = startIndex;
+        try {
+          const frames = this.#client.streamFrames({
+            session: sessionId,
+            startIndex,
+            signal,
+          });
+          const iter = frames[Symbol.asyncIterator]();
+          let nextFrame = iter.next().then(
+            (res) => ({ type: "frame" as const, res }),
+            (error) => ({ type: "error" as const, error }),
+          );
+          if (catchUpOnSubscribe) {
+            catchUpOnSubscribe = false;
+            void this.requestHistory(sessionId, 0).catch(() => {});
+          }
+          for (;;) {
+            const timer = partialGapTimer();
+            const event = await Promise.race([
+              nextFrame,
+              restartPromise.then(() => ({ type: "restart" as const })),
+              ...(timer === null ? [] : [timer]),
+            ]);
+            if (event.type === "gap_timer") {
+              const stalled = gapSignal();
+              if (stalled !== null) yield stalled;
+              continue;
+            }
+            if (event.type === "restart") {
+              await iter.return?.(undefined);
+              restartPromise = nextRestart();
+              durable = await this.#durable(sessionId, durable);
+              if (durable) {
+                streamMode = "full";
+              } else {
+                orderer = new FrameOrderer();
+                streamMode = "tail";
+                catchUpOnSubscribe = true;
+                gap = null;
+              }
+              break;
+            }
+            if (event.type === "error") throw event.error;
+            if (event.res.done === true) {
+              const stalled = gapSignal();
+              if (stalled !== null) yield stalled;
+              break;
+            }
+            const frame = event.res.value;
+            cursor += 1;
+            streamCursor = Math.max(streamCursor, cursor);
+            nextFrame = iter.next().then(
+              (res) => ({ type: "frame" as const, res }),
+              (error) => ({ type: "error" as const, error }),
+            );
+            if (frame.dir !== "out") continue; // the viewer renders host→web frames only
+            // The orderer releases a chunked message (parts > 1) as its parts together, in part order — so
+            // reassemble those with openMessage; a single frame opens directly.
+            const ready = orderer.accept(frame);
+            if (ready.length === 0) {
+              const stalled = gapSignal();
+              if (stalled !== null) yield stalled;
+              continue;
+            }
+            if (ready.some((f) => f.seq !== null)) gap = null;
+            for (let i = 0; i < ready.length; ) {
+              const f = ready[i];
+              if (f === undefined) break;
+              const span = f.parts > 1 ? f.parts : 1;
+              const group = ready.slice(i, i + span);
+              i += span;
+              let text: string;
+              try {
+                text = td.decode(
+                  span > 1
+                    ? await this.#client.openMessage(group)
+                    : await this.#client.openFrame(f),
+                );
+              } catch {
+                continue; // a frame/message we can't open (not ours / corrupt) — skip, never crash the list
+              }
+              yield { kind: f.recordKind, seq: f.seq, text, msgId: f.msgId };
+            }
+          }
+        } catch {
+          // A transient stream error must NOT end the transcript — fall through to resume-or-retry and
+          // re-subscribe. The persistent FrameOrderer makes the re-read idempotent (no gap, no dup).
+        }
+        if (signal.aborted) break;
+        await new Promise((r) => setTimeout(r, 150)); // run not up / stream closed → resume-or-retry
+      }
+    } finally {
+      stopIncarnationWatch();
     }
   }
 

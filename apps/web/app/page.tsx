@@ -23,8 +23,36 @@ import {
   connState,
   type GitInfo,
   type Message,
+  shouldAcceptAnnounce,
+  TRANSCRIPT_GAP_STALL_MS,
   Viewer,
 } from "./lib/viewer";
+
+export interface TranscriptGap {
+  nextSeq: number;
+  pending: number;
+  since: number;
+}
+
+export function shouldShowGapRecovery(gap: TranscriptGap | null, now: number): boolean {
+  return gap !== null && now - gap.since >= TRANSCRIPT_GAP_STALL_MS;
+}
+
+function isGapMessage(
+  m: Message,
+): m is Message & Required<Pick<Message, "nextSeq" | "pending" | "since">> {
+  return (
+    m.kind === "gap" &&
+    typeof m.nextSeq === "number" &&
+    typeof m.pending === "number" &&
+    typeof m.since === "number"
+  );
+}
+
+function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
+  if (prev.some((m) => m.msgId === msg.msgId)) return prev;
+  return [...prev, msg];
+}
 
 export default function Home() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -263,7 +291,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
           setSessions((prev) => {
             const next = new Map(prev);
             const existing = next.get(a.sessionId);
-            if (existing === undefined || a.sentAt >= existing.sentAt) next.set(a.sessionId, a);
+            if (shouldAcceptAnnounce(existing, a)) next.set(a.sessionId, a);
             return next;
           });
         }
@@ -368,6 +396,9 @@ function Transcript(props: {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [gap, setGap] = useState<TranscriptGap | null>(null);
+  const [gapRetrying, setGapRetrying] = useState(false);
+  const autoGapRetry = useRef<string | null>(null);
 
   // Live connection state from the freshest announce (null until one arrives — then never scary).
   // Thinking/needs are only meaningful while connected; a stale announce's phase says nothing.
@@ -388,20 +419,34 @@ function Transcript(props: {
     }
     return m;
   }, [messages]);
-  // The session's real permission mode lives on the worker and isn't announced, so we track the last
-  // mode set from here (optimistic): null = "we haven't set one". setMode is fire-and-forget.
-  const [mode, setMode] = useState<string | null>(null);
+  // The host announces the worker's effective permission mode. A local click is only a transient
+  // optimistic override; the next mode-bearing announce wins, including when another device changed it.
+  const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
   const [modeSheet, setModeSheet] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const announceMode = announce?.mode;
+  const announceSentAt = announce?.sentAt;
+  const displayedMode = displayedPermissionMode(announceMode, optimisticMode);
+
+  useEffect(() => {
+    if (announceMode !== undefined && announceSentAt !== undefined) setOptimisticMode(null);
+  }, [announceMode, announceSentAt]);
 
   useEffect(() => {
     setMessages([]);
+    setGap(null);
+    autoGapRetry.current = null;
     const ac = new AbortController();
     void viewer.requestHistory(sessionId, 0).catch(() => {});
     (async () => {
       try {
         for await (const m of viewer.transcript(sessionId, ac.signal)) {
-          setMessages((prev) => [...prev, m]);
+          if (isGapMessage(m)) {
+            setGap({ nextSeq: m.nextSeq, pending: m.pending, since: m.since });
+          } else {
+            setGap(null);
+            setMessages((prev) => appendUniqueMessage(prev, m));
+          }
         }
       } catch {
         /* aborted on unmount / session switch */
@@ -414,6 +459,28 @@ function Transcript(props: {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const retryGap = useCallback(async () => {
+    if (gap === null) return;
+    setGapRetrying(true);
+    setSendError(null);
+    try {
+      await viewer.requestHistory(sessionId, gap.nextSeq);
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGapRetrying(false);
+    }
+  }, [gap, sessionId, viewer]);
+
+  const showGapRecovery = shouldShowGapRecovery(gap, now);
+  useEffect(() => {
+    if (!showGapRecovery || gap === null) return;
+    const key = `${gap.nextSeq}:${gap.since}`;
+    if (autoGapRetry.current === key) return;
+    autoGapRetry.current = key;
+    void retryGap();
+  }, [gap, retryGap, showGapRecovery]);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -459,17 +526,17 @@ function Transcript(props: {
     async (id: string) => {
       setModeSheet(false);
       setSendError(null);
-      const prev = mode;
-      setMode(id); // optimistic — revert if the control frame can't be sent
+      const prev = optimisticMode;
+      setOptimisticMode(id); // optimistic — revert if the control frame can't be sent
       try {
         await viewer.setMode(sessionId, id);
       } catch (e) {
         // Only revert if no newer choice landed while we were awaiting — else we'd clobber it.
-        setMode((cur) => (cur === id ? prev : cur));
+        setOptimisticMode((cur) => (cur === id ? prev : cur));
         setSendError(e instanceof Error ? e.message : String(e));
       }
     },
-    [mode, sessionId, viewer],
+    [optimisticMode, sessionId, viewer],
   );
 
   // Answer a worker permission_request (§17.4): seal a `permission` frame the host turns into the
@@ -491,7 +558,12 @@ function Transcript(props: {
       </div>
 
       <div className="transcript">
-        {messages.length === 0 && <p className="empty-pad">Waiting for the transcript…</p>}
+        {showGapRecovery && gap !== null && (
+          <GapRecovery gap={gap} retrying={gapRetrying} onRetry={() => void retryGap()} />
+        )}
+        {messages.length === 0 && !showGapRecovery && (
+          <p className="empty-pad">Waiting for the transcript…</p>
+        )}
         {messages.map((m) => (
           <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} resolved={resolved} />
         ))}
@@ -516,8 +588,8 @@ function Transcript(props: {
           onClick={() => setModeSheet(true)}
           title="Permission mode"
         >
-          <span className="mode-glyph">{modeGlyph(mode)}</span>
-          {modeLabel(mode)}
+          <span className="mode-glyph">{modeGlyph(displayedMode)}</span>
+          {modeLabel(displayedMode)}
         </button>
         <button
           type="button"
@@ -553,12 +625,33 @@ function Transcript(props: {
 
       {modeSheet && (
         <ModeSheet
-          current={mode}
+          current={displayedMode}
           onPick={(id) => void chooseMode(id)}
           onClose={() => setModeSheet(false)}
         />
       )}
     </section>
+  );
+}
+
+function GapRecovery({
+  gap,
+  retrying,
+  onRetry,
+}: {
+  gap: TranscriptGap;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="chat-status transcript-gap" data-state="reconnecting" role="alert">
+      <span>
+        Transcript out of sync — retrying… waiting for seq {gap.nextSeq} ({gap.pending} buffered)
+      </span>
+      <button type="button" className="gap-retry" disabled={retrying} onClick={onRetry}>
+        Retry
+      </button>
+    </div>
   );
 }
 
@@ -628,6 +721,13 @@ function modeLabel(id: string | null): string {
 }
 function modeGlyph(id: string | null): string {
   return MODES.find((m) => m.id === id)?.glyph ?? "⚙";
+}
+
+export function displayedPermissionMode(
+  announcedMode: string | undefined,
+  optimisticMode: string | null,
+): string | null {
+  return optimisticMode ?? announcedMode ?? null;
 }
 
 /** Bottom sheet to pick the session's permission mode — mirrors Claude Code's "Select mode" sheet. */
@@ -740,7 +840,7 @@ function ModeSheet({
 type GrantExtra = { answers?: Record<string, string | string[]>; toolUseId?: string };
 type GrantFn = (requestId: string, behavior: "allow" | "deny", extra?: GrantExtra) => Promise<void>;
 
-function Bubble({
+export function Bubble({
   message,
   onGrant,
   resolved,

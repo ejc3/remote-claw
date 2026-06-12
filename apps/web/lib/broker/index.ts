@@ -1,4 +1,5 @@
 import type { BrokerBackend } from "./backend";
+import { brokerCache } from "./broker-cache";
 import { LocalBackend } from "./local";
 import { VercelBackend } from "./vercel";
 
@@ -24,9 +25,7 @@ const KNOWN = new Set(["vercel", "local", "temporal", "turso"]);
 // would give each route its OWN LocalBackend map, so a publish and the matching subscribe would land
 // on different in-memory channels (the "0 sessions" failure). A globalThis singleton is the same Map
 // for every module instance in the process.
-const g = globalThis as unknown as { __rcBrokerCache?: Map<string, BrokerBackend> };
-if (g.__rcBrokerCache === undefined) g.__rcBrokerCache = new Map();
-const cache: Map<string, BrokerBackend> = g.__rcBrokerCache;
+const cache: Map<string, BrokerBackend> = brokerCache();
 
 /** The HTTP header an API client sends to pick the backend (same meaning as the `?backend=` param). */
 export const BACKEND_HEADER = "x-broker-backend";
@@ -49,9 +48,15 @@ export function isRequestableBackend(name: string): boolean {
 }
 
 /** The per-request backend selector: `?backend=` (browser URLs) or the header (API calls), whichever
- *  is present (param wins). Null → getBackend falls back to the BROKER_BACKEND env default. */
+ *  is present (param wins). A BLANK selector (`?backend=`, whitespace, or an empty header) is treated as
+ *  NO selection → null, so the route's null-guard skips validation and getBackend falls back to the
+ *  BROKER_BACKEND default (matching getBackend's own `trim() || default`). Without this, a blank value is
+ *  non-null but not requestable, so the routes 400 instead of using the default. The value is trimmed so
+ *  `?backend=%20turso%20` resolves like `turso` rather than failing the requestable check. */
 export function backendSelector(req: Request, url: URL): string | null {
-  return url.searchParams.get("backend") ?? req.headers.get(BACKEND_HEADER);
+  const raw = url.searchParams.get("backend") ?? req.headers.get(BACKEND_HEADER);
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : null;
 }
 
 /** Resolve the backend for a request. `requested` is the raw `?backend=` value (may be null/empty). */
@@ -89,3 +94,4 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
 
 export type { BrokerBackend } from "./backend";
 export { isClose, type RelayPayload } from "./backend";
+export { evictBackend } from "./broker-cache";

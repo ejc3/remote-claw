@@ -55,6 +55,8 @@ jobs:
         run: pnpm --filter remote-claw-web-tests run test:app
       - name: App e2e — Temporal (in-memory server + worker, flipped via ?backend=)
         run: pnpm --filter remote-claw-web-tests run test:app:temporal
+      - name: App e2e — Turso (durable libSQL file, flipped via ?backend=)
+        run: pnpm --filter remote-claw-web-tests run test:app:turso
       - name: App e2e — drain route on a REAL build (no standalone worker)
         run: pnpm --filter remote-claw-web-tests run test:app:drain
       - name: Unit + drift tests (incl. the pre-built workflow bundle is current)
@@ -76,4 +78,5 @@ jobs:
           path: |
             tests/web/test-results/
             tests/web/test-results-temporal/
+            tests/web/test-results-turso/
           retention-days: 7

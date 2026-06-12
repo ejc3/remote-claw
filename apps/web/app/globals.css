@@ -876,6 +876,19 @@ code {
   color: var(--danger);
   background: rgba(251, 113, 133, 0.08);
 }
+.transcript-gap {
+  justify-content: space-between;
+}
+.gap-retry {
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--warn);
+  background: rgba(251, 191, 36, 0.08);
+}
+.gap-retry:disabled {
+  opacity: 0.55;
+}
 
 /* composer */
 .composer {

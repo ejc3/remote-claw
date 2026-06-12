@@ -21,8 +21,6 @@ export const CONTENT_KINDS = new Set([
   "tool_result", // a tool's OUTPUT (keyed by tool_use_id) — Bash stdout, a Read's file, …
   "task", // a sub-agent Task lifecycle event (task_started/_updated/_notification)
   "permission_request", // a worker can_use_tool surfaced to the viewer to grant/deny (§17.4)
-  "permission_resolved", // a permission_request was answered (allow/deny) — LOGGED so a reload /
-  // catch_up renders it RESOLVED instead of re-prompting (#56); folds onto its request by request_id
 ]);
 
 /** Control frames (web → wrapper, `dir:in`) — sealed under control_key. */
@@ -37,8 +35,12 @@ export const CONTROL_KINDS = new Set([
   "attachment", // a viewer-sent file/photo (#44): the host writes it to disk + has claude Read it
 ]);
 
-/** Meta frames (acks + presence) — sealed under K_meta. */
-export const META_KINDS = new Set(["accepted", "session_announce"]);
+/** Meta frames (acks + presence + unordered replayable state) — sealed under K_meta. */
+export const META_KINDS = new Set([
+  "accepted",
+  "session_announce",
+  "permission_resolved", // a permission_request was answered; seq=null so gaps cannot stall it
+]);
 
 /**
  * The plane (key) a frame of `recordKind` is sealed under (§6A). Throws on an unknown kind rather

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { parsePermissionResolved } from "../app/lib/transcript.js";
-import { CONNECTED_WINDOW_MS, connState, FRESH_WINDOW_MS, parseGit } from "../app/lib/viewer.js";
+import {
+  type Announce,
+  CONNECTED_WINDOW_MS,
+  connState,
+  FRESH_WINDOW_MS,
+  parseGit,
+  shouldAcceptAnnounce,
+} from "../app/lib/viewer.js";
+import { displayedPermissionMode } from "../app/page.js";
 
 // The connection-state ladder (#58): connected (fresh) → reconnecting (a keepalive or two missed) →
 // disconnected (gone). Pure + clock-injected, so pin every boundary deterministically — the host
@@ -29,8 +37,48 @@ describe("connState", () => {
     expect(connState(now + 10_000, now)).toBe("connected"); // age < 0 → still inside the window
   });
 
+  it("accepts bounded host-behind clock skew but still degrades on the freshness ladder", () => {
+    // The accepted skew bound is the same freshness budget the UI already uses: a host clock behind by
+    // CONNECTED_WINDOW_MS+5s reads as reconnecting, and behind by FRESH_WINDOW_MS+5s reads gone.
+    expect(connState(now - (CONNECTED_WINDOW_MS + 5_000), now)).toBe("reconnecting");
+    expect(connState(now - (FRESH_WINDOW_MS + 5_000), now)).toBe("disconnected");
+  });
+
   it("orders the windows so the ladder is monotone", () => {
     expect(CONNECTED_WINDOW_MS).toBeLessThan(FRESH_WINDOW_MS);
+  });
+});
+
+function ann(sentAt: number, mode?: string): Announce {
+  const a: Announce = {
+    sessionId: "s",
+    title: "session",
+    cwd: null,
+    sentAt,
+    incarnation: null,
+    status: "",
+    phase: "idle",
+    needs: false,
+    git: null,
+  };
+  if (mode !== undefined) a.mode = mode;
+  return a;
+}
+
+describe("announce freshness merge", () => {
+  it("drops a smaller sent_at announce that arrives after a larger one, but accepts equal timestamps", () => {
+    const newest = ann(200, "plan");
+    expect(shouldAcceptAnnounce(newest, ann(199, "default"))).toBe(false);
+    expect(shouldAcceptAnnounce(newest, ann(200, "default"))).toBe(true);
+    expect(shouldAcceptAnnounce(undefined, ann(1))).toBe(true);
+  });
+});
+
+describe("permission mode display", () => {
+  it("uses announced mode as the stable value and local optimistic mode only as an override", () => {
+    expect(displayedPermissionMode("plan", null)).toBe("plan");
+    expect(displayedPermissionMode("default", "auto")).toBe("auto");
+    expect(displayedPermissionMode(undefined, null)).toBeNull();
   });
 });
 

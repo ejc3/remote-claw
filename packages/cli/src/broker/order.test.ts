@@ -53,7 +53,11 @@ describe("FrameOrderer (dedup + reorder, §6/§12)", () => {
     const p0 = frame({ msgId: "big", seq: 0, part: 0, parts: 2 });
     const p1 = frame({ msgId: "big", seq: 0, part: 1, parts: 2 });
     expect(o.accept(p0)).toEqual([]); // incomplete — the message's seq slot is held (like a gap)
+    expect(o.stalledOnMissingSeq).toBe(false);
+    expect(o.stalledOnIncompleteSeq).toBe(true);
+    expect(o.stalled).toBe(true);
     expect(o.accept(p1).map((f) => f.part)).toEqual([0, 1]); // complete → both parts, in part order
+    expect(o.stalled).toBe(false);
     expect(o.accept(p0)).toEqual([]); // a re-sent part is deduped by (msg_id, part)
     expect(o.nextSeq).toBe(1); // the whole chunked message occupied exactly ONE transcript seq
   });
@@ -96,6 +100,17 @@ describe("FrameOrderer (dedup + reorder, §6/§12)", () => {
     ).toEqual(["ann"]);
     expect(ids(o.accept(frame({ msgId: "ann", seq: null })))).toEqual([]); // dup
     expect(o.nextSeq).toBe(0); // null frames don't advance the content cursor
+  });
+
+  it("delivers permission_resolved immediately even while a content gap is open", () => {
+    const o = new FrameOrderer();
+    expect(ids(o.accept(frame({ msgId: "later", seq: 1 })))).toEqual([]);
+    expect(o.pending).toBe(1);
+    expect(
+      ids(o.accept(frame({ msgId: "resolved", seq: null, recordKind: "permission_resolved" }))),
+    ).toEqual(["resolved"]);
+    expect(o.nextSeq).toBe(0);
+    expect(o.pending).toBe(1);
   });
 
   it("drops a stale content frame whose seq is already past the cursor", () => {

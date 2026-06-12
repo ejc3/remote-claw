@@ -23,10 +23,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
-import { type BrokerClient, BrokerError } from "../../broker/client.js";
+import { type BrokerClient, BrokerError, type SeqCursor } from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import type { GitInfo } from "./gitinfo.js";
-import { assistantText, type RcEvent, type Session } from "./session.js";
+import { assistantText, permissionModeFrom, type RcEvent, type Session } from "./session.js";
 
 /** Sanitize a viewer-supplied attachment filename to a safe basename (no path traversal, no separators).
  *  A blank/odd name falls back to a generic one; the extension is preserved when present. (#44) */
@@ -78,6 +78,7 @@ const POST_RETRIES = 6;
 const POST_RETRY_BASE_MS = 50;
 const SEQ_RESUME_ATTEMPTS = 3;
 const SEQ_RESUME_RETRY_BASE_MS = 100;
+const RELAY_INCARNATION = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 // Re-announce presence at least this often while idle so the viewer's freshness check (#58) has a
 // steady signal. Sized UNDER the viewer's ~45s "connected" threshold (≈2× margin) so a single missed
 // announce + jitter doesn't read as a disconnect — but no faster, because each keepalive appends a
@@ -316,15 +317,22 @@ export class HostRcRelay {
    *  session ends. Must NOT be size-bounded: #tailInbound re-reads from index 0 on each reconnect, so
    *  an evicted-then-re-read `user` msg_id would re-inject a duplicate prompt into claude. */
   readonly #seen = new Set<string>();
-  /** In-memory transcript (content frames only) — replayed on a viewer `catch_up` (§6/§16). Left EMPTY
-   *  when `#durable`: a durable-log backend (Turso) keeps every frame, so its own subscribe(0) replays
-   *  the full history and the host need not hold (or re-post) a copy. The "one log, mediated by the
-   *  broker" model — the broker IS the history. */
-  readonly #log: { recordKind: string; seq: number; msgId: string; text: string }[] = [];
-  /** True when the broker backend is a durable log (`#client.durable`): the host skips building `#log`
+  /** In-memory replay log — content frames plus unordered state frames such as permission_resolved,
+   *  replayed on a viewer `catch_up` (§6/§16). Left EMPTY when `#durable`: a durable-log backend
+   *  (Turso) keeps every frame, so its own subscribe(0) replays the full history and the host need not
+   *  hold (or re-post) a copy. The "one log, mediated by the broker" model — the broker IS history. */
+  readonly #log: { recordKind: string; seq: number | null; msgId: string; text: string }[] = [];
+  /** True when the broker reports its EFFECTIVE backend is a durable log: the host skips building `#log`
    *  and skips replaying on `catch_up`, because subscribe() serves history straight from the durable
    *  frames table. False (capped/ephemeral backend) keeps the legacy host-replayed catch_up. */
-  readonly #durable: boolean;
+  #durable = false;
+  #durabilityDiscovered = false;
+  /** First inbound stream offset this relay incarnation may read. On durable restart this is set to the
+   *  current frame count before the pumps go live, fencing the fresh empty #seen set above all frames
+   *  written by earlier host incarnations. Non-durable backends keep the legacy 0 replay+dedup path. */
+  #inboundStartIndex = 0;
+  #durableCursorsReady = false;
+  #preparePromise: Promise<void> | null = null;
 
   /** Unanswered permission requests (request_id) — drives the announce's `needs` flag (#48/#58) and
    *  is cleared when the matching inbound `permission` answer arrives (which logs permission_resolved). */
@@ -362,7 +370,6 @@ export class HostRcRelay {
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
-    this.#durable = opts.client.durable;
     this.#identityId = opts.identityId;
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
@@ -396,6 +403,12 @@ export class HostRcRelay {
     cwd: string | null = null,
     git: GitInfo | null = null,
   ): Promise<void> {
+    // The bus announce publishes IMMEDIATELY — it must NOT wait on prepare() (the durable-cursor
+    // sample), because that round-trip would delay the bus publish enough to race a viewer's concurrent
+    // bus subscribe (the broker rejects a concurrent channel create). prepare() instead gates the
+    // INBOUND TAIL in serve(): the session's inbound cursor is sampled before any inbound is processed,
+    // and a viewer cannot post session-inbound faster than prepare() resolves (it must first receive
+    // this announce, subscribe to the session channel, and post — all well after the local sample).
     this.#annTitle = title;
     this.#annCwd = cwd;
     this.#annGit = git;
@@ -404,35 +417,37 @@ export class HostRcRelay {
   }
 
   /** Current presence: phase (idle/thinking) from worker_status, needs (a pending permission or the
-   *  worker awaiting a required action). A stable string key lets us re-announce only on change. */
-  #presence(): { status: string; phase: "idle" | "thinking"; needs: boolean } {
+   *  worker awaiting a required action), and the effective permission mode when known. A stable string
+   *  key lets us re-announce only on change. */
+  #presence(): { status: string; phase: "idle" | "thinking"; needs: boolean; mode: string | null } {
     const status = this.#session.workerStatus;
     const needs = status === "requires_action" || this.#openPerms.size > 0;
-    return { status, phase: phaseFor(status), needs };
+    return { status, phase: phaseFor(status), needs, mode: this.#session.permissionMode };
   }
 
   /** Post a session_announce carrying the current presence. Meta-plane + seq===null, so the broker
    *  never logs it — re-announcing is cheap and idempotent (the viewer keeps only the freshest). */
   async #sendAnnounce(): Promise<void> {
     const p = this.#presence();
+    const body: Record<string, unknown> = {
+      session_id: this.#sessionId,
+      title: this.#annTitle,
+      cwd: this.#annCwd,
+      sent_at: Date.now(),
+      incarnation: RELAY_INCARNATION,
+      status: p.status,
+      phase: p.phase,
+      needs: p.needs,
+      git: this.#annGit,
+    };
+    if (p.mode !== null) body.mode = p.mode;
     await this.#client.postFrame(
       this.#header("session_announce", null, `ann-${this.#sessionId}-${this.#annCount++}`),
-      utf8(
-        JSON.stringify({
-          session_id: this.#sessionId,
-          title: this.#annTitle,
-          cwd: this.#annCwd,
-          sent_at: Date.now(),
-          status: p.status,
-          phase: p.phase,
-          needs: p.needs,
-          git: this.#annGit,
-        }),
-      ),
+      utf8(JSON.stringify(body)),
     );
-    this.#lastPresenceKey = `${p.status}|${p.needs}`;
+    this.#lastPresenceKey = `${p.status}|${p.needs}|${p.mode ?? ""}`;
     this.#lastAnnounceAt = Date.now();
-    this.#trace.debug("announce", { phase: p.phase, needs: p.needs });
+    this.#trace.debug("announce", { phase: p.phase, needs: p.needs, mode: p.mode ?? "" });
   }
 
   /** Re-announce when presence changed, or when the keepalive floor elapsed (so the viewer's
@@ -443,7 +458,7 @@ export class HostRcRelay {
   async #maybeAnnounce(): Promise<void> {
     if (!this.#announced) return; // first announce() hasn't run yet — nothing to refresh
     const p = this.#presence();
-    const key = `${p.status}|${p.needs}`;
+    const key = `${p.status}|${p.needs}|${p.mode ?? ""}`;
     if (
       key !== this.#lastPresenceKey ||
       Date.now() - this.#lastAnnounceAt >= ANNOUNCE_KEEPALIVE_MS
@@ -496,10 +511,10 @@ export class HostRcRelay {
     }
   }
 
-  /** Post AND (on a non-durable backend) record a content frame so it can be replayed via catch_up. On
-   *  a durable backend the broker keeps the frame, so subscribe() serves the replay and the host copy is
-   *  pure waste — skip it. */
-  async #emit(recordKind: string, seq: number, msgId: string, text: string): Promise<void> {
+  /** Post AND (on a non-durable backend) record a replayable out-frame so it can be replayed via
+   *  catch_up. On a durable backend the broker keeps the frame, so subscribe() serves the replay and
+   *  the host copy is pure waste — skip it. */
+  async #emit(recordKind: string, seq: number | null, msgId: string, text: string): Promise<void> {
     await this.#post(recordKind, seq, msgId, text);
     if (!this.#durable) this.#log.push({ recordKind, seq, msgId, text });
     // Per-frame, so it's `trace`. Body length only at this level; the upstream-event log carries a
@@ -523,7 +538,7 @@ export class HostRcRelay {
   /** Replay the logged transcript from `since` onward — idempotent (the viewer dedups by seq/msg_id). */
   async #replay(since: number): Promise<void> {
     for (const e of [...this.#log]) {
-      if (e.seq >= since) await this.#post(e.recordKind, e.seq, e.msgId, e.text);
+      if (e.seq === null || e.seq >= since) await this.#post(e.recordKind, e.seq, e.msgId, e.text);
     }
   }
 
@@ -533,42 +548,7 @@ export class HostRcRelay {
    *  shared #publishLock/#halted, would otherwise leave a live session stranded behind a permanent seq
    *  gap. (Adversarial-review fix.) An external `signal` abort still stops both as before. */
   async serve(signal: AbortSignal): Promise<void> {
-    // #36 (durable face): on a durable backend the session's frames OUTLIVE this host process, so a NEW
-    // relay resuming the same session must CONTINUE its seq numbering — restarting at 0 would re-issue
-    // seqs the durable log already holds, and a viewer's orderer would drop the new content as duplicates.
-    // Resume `#seq = maxSeq + 1` from the broker (which reads the cleartext seq column; the host holds no
-    // store creds) BEFORE either pump can emit. The read is bounded-retried for transient broker blips; if
-    // every attempt fails, it logs ERROR and starts at 0 (non-blocking, but loud).
-    //
-    // Limitation: A2b resumes only the OUTBOUND `#seq`. On a durable backend, a host RESTART also gives
-    // `#tailInbound` a fresh empty `#seen`; subscribe(0) can then replay every historical `user` prompt
-    // from the durable log and re-inject old prompts into claude. Durable inbound-dedup recovery is
-    // pre-existing A1 design work and is not addressed here.
-    if (this.#durable && this.#seq === 0) {
-      let lastErr: unknown;
-      for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
-        try {
-          const max = await this.#client.maxSeq(this.#sessionId);
-          lastErr = undefined;
-          if (max !== null) {
-            this.#seq = max + 1;
-            this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
-          }
-          break;
-        } catch (e) {
-          lastErr = e;
-          if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
-            await new Promise((r) => setTimeout(r, SEQ_RESUME_RETRY_BASE_MS * 2 ** attempt));
-          }
-        }
-      }
-      if (lastErr !== undefined) {
-        this.#trace.error("seq resume failed after retries — starting at 0", {
-          attempts: SEQ_RESUME_ATTEMPTS,
-          error: (lastErr as Error)?.message ?? String(lastErr),
-        });
-      }
-    }
+    await this.prepare();
     const ac = new AbortController();
     const onAbort = () => ac.abort();
     if (signal.aborted) ac.abort();
@@ -592,6 +572,87 @@ export class HostRcRelay {
     }
   }
 
+  /** Sample the broker's durable cursors before this relay becomes discoverable or starts its pumps.
+   *  Idempotent so launch, announce(), and direct tests can all call it without racing duplicate cursor
+   *  reads. On a durable backend, failing to resume all cursors remains fail-closed. */
+  async prepare(): Promise<void> {
+    if (!this.#durabilityDiscovered) {
+      if (this.#preparePromise === null) this.#preparePromise = this.#discoverDurability();
+      await this.#preparePromise;
+    }
+    if (this.#durable && !this.#durableCursorsReady) {
+      throw new Error("durable broker reported but restart cursors are not ready");
+    }
+  }
+
+  /** Discover the broker's EFFECTIVE durability from the server before either pump starts. A failed
+   *  discovery means durability is still unknown, so the relay keeps the legacy non-durable path instead
+   *  of failing closed; fail-closed is reserved for the case where the server has already reported
+   *  `durable: true`. */
+  async #discoverDurability(): Promise<void> {
+    let seqCursor: SeqCursor;
+    try {
+      seqCursor = await this.#client.seqCursor(this.#sessionId);
+    } catch (e) {
+      this.#durabilityDiscovered = true;
+      this.#durable = false;
+      this.#trace.warn("durability discovery failed — using non-durable relay path", {
+        error: (e as Error)?.message ?? String(e),
+      });
+      return;
+    }
+
+    this.#durabilityDiscovered = true;
+    this.#durable = seqCursor.durable;
+    if (!this.#durable) {
+      this.#trace.debug("broker reported non-durable relay path");
+      return;
+    }
+    await this.#resumeDurableCursors(seqCursor);
+  }
+
+  /** Durable restart recovery has two independent cursors and both must be known BEFORE the pumps can
+   *  emit or consume anything. `maxSeq` resumes the outbound transcript seq. `frameCount` resumes the
+   *  inbound stream cursor because broker `startIndex` is a publish-order frame offset, not a transcript
+   *  seq; counting every row (in/out/meta/chunks) is what makes the first yielded frame exactly the
+   *  first publish after this relay incarnation's high-water mark. If either durable read fails after
+   *  bounded retries we fail closed: starting at seq/startIndex 0 would either corrupt ordering or
+   *  re-execute historical client actions from the durable log. */
+  async #resumeDurableCursors(seqCursor: SeqCursor): Promise<void> {
+    const max = seqCursor.maxSeq;
+    if (max !== null && this.#seq === 0) {
+      this.#seq = max + 1;
+      this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
+    }
+
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
+      try {
+        const count = await this.#client.frameCountCursor(this.#sessionId);
+        lastErr = undefined;
+        if (!count.durable)
+          throw new Error("broker durability changed while resuming durable cursors");
+        this.#inboundStartIndex = count.frameCount ?? 0;
+        this.#durableCursorsReady = true;
+        this.#trace.debug("resumed inbound cursor from durable log", {
+          startIndex: this.#inboundStartIndex,
+        });
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, SEQ_RESUME_RETRY_BASE_MS * 2 ** attempt));
+        }
+      }
+    }
+    this.#fatal = true;
+    this.#trace.error("inbound cursor resume failed after retries — aborting durable relay", {
+      attempts: SEQ_RESUME_ATTEMPTS,
+      error: (lastErr as Error)?.message ?? String(lastErr),
+    });
+    throw lastErr;
+  }
+
   /** OUTBOUND: tail the worker's upstream and relay each assistant/result as a content frame. */
   async #pumpUpstream(signal: AbortSignal): Promise<void> {
     this.#trace.debug("pumpUpstream start");
@@ -611,6 +672,11 @@ export class HostRcRelay {
           await this.#maybeAnnounce();
         }
         continue; // not a rendered content frame
+      }
+      const mode = permissionModeFrom(ev.payload);
+      if (mode !== null && mode !== this.#session.permissionMode) {
+        this.#session.permissionMode = mode;
+        await this.#maybeAnnounce();
       }
       const items = mapUpstreamItems(ev);
       this.#trace.debug("upstream event", {
@@ -679,7 +745,7 @@ export class HostRcRelay {
     this.#trace.debug("inbound subscribe");
     for await (const frame of this.#client.streamFrames({
       session: this.#sessionId,
-      startIndex: 0,
+      startIndex: this.#durable ? this.#inboundStartIndex : 0,
       signal,
     })) {
       if (frame.dir !== "in") continue; // ignore our own out-frames on the shared stream
@@ -748,17 +814,13 @@ export class HostRcRelay {
           if (body.answers !== null && typeof body.answers === "object") {
             extra.answers = body.answers as Record<string, string | string[]>;
           }
-          // Log a permission_resolved content frame so a later reload / catch_up renders the request
-          // as ANSWERED rather than re-prompting (#56); a failed post is fatal (a seq is burned).
-          // Clearing the gate also drops `needs` from presence — re-announce so the viewer's
-          // needs-you indicator clears (#58).
-          this.#session.pushControlResponse(body.request_id, behavior, extra);
-          const seq = this.#seq++;
+          // Log a permission_resolved unordered frame BEFORE the worker side effect. If the durable log
+          // publish fails, the worker must not act on a grant that reload/catch_up cannot observe (#56).
           await this.#fatalOnThrow(() =>
             this.#emit(
               "permission_resolved",
-              seq,
-              `permresolved-${seq}`,
+              null,
+              `permresolved-${body.request_id}`,
               JSON.stringify(
                 extra.answers
                   ? { request_id: body.request_id, behavior, answers: extra.answers }
@@ -766,6 +828,9 @@ export class HostRcRelay {
               ),
             ),
           );
+          this.#session.pushControlResponse(body.request_id, behavior, extra);
+          // Clearing the gate also drops `needs` from presence — re-announce so the viewer's
+          // needs-you indicator clears (#58).
           await this.#maybeAnnounce();
         }
       } else if (frame.recordKind === "attachment") {
@@ -868,8 +933,11 @@ export class HostRcRelay {
           this.#session.pushControlRequest("set_model", { model: body.model });
         break;
       case "set_mode":
-        if (typeof body.mode === "string")
+        if (typeof body.mode === "string" && body.mode !== "") {
+          this.#session.permissionMode = body.mode;
           this.#session.pushControlRequest("set_permission_mode", { mode: body.mode });
+          await this.#maybeAnnounce();
+        }
         break;
       case "end":
         this.#session.pushControlRequest("end_session");

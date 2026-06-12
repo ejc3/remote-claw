@@ -15,6 +15,8 @@ import { MitmProxy } from "./mitm.js";
 import { HostRcRelay } from "./relay.js";
 import { RelayCore, type Session } from "./session.js";
 
+const RELAY_TEARDOWN_WAIT_MS = 2000;
+
 /** How the child claude is launched with the proxy env (injectable for tests). */
 export type SpawnClaudeEnv = (
   bin: string,
@@ -30,8 +32,8 @@ export interface RcLaunchOptions {
   /** The broker origin (`--rc-app` / RC_APP). Its `/api` is the relay broker. */
   brokerUrl: string;
   /** Which broker backend to target (`--rc-backend` / RC_BACKEND), sent as the x-broker-backend header.
-   *  Omitted ⇒ the broker's default. A durable backend (turso) lets the host retire its #log/catch_up
-   *  replay (the durable log serves history via subscribe). Must match what viewers subscribe with. */
+   *  Omitted ⇒ the broker's default. The server reports whether the effective backend is durable, which
+   *  lets the host retire its #log/catch_up replay. Must match what viewers subscribe with. */
   backend?: string;
   /** Directory holding the MITM CA + leaf (generated if absent). */
   certsDir: string;
@@ -68,6 +70,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   // session id per relay; both share the env-configured sink (stderr, or RC_LOG_FILE for capture).
   const mitmTracer = tracerFromEnv("rc.mitm");
   const relayTracer = tracerFromEnv("rc.relay");
+  const relays = new Set<Promise<void>>();
 
   // If the broker is deployed behind Vercel Deployment Protection (SSO), the host's requests need the
   // automation-bypass secret to get past the edge. Read it from the env on this host; an unprotected
@@ -99,8 +102,13 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
         session: s,
         tracer: relayTracer,
       });
+      // Announce on the bus immediately (it must not wait on serve()'s durable-cursor prepare — that
+      // delay would race a viewer's concurrent bus subscribe). serve() samples the cursors before it
+      // starts the inbound tail, so the session inbound cursor is fixed before any inbound is processed.
       void relay.announce(title, cwd, git).catch(() => {});
-      void relay.serve(ac.signal).catch(() => {});
+      const served = relay.serve(ac.signal).catch(() => {});
+      relays.add(served);
+      void served.finally(() => relays.delete(served));
     },
   });
   await proxy.listen();
@@ -117,12 +125,33 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   // Clear both forms for the child; our proxy itself passes inference/OAuth straight through anyway.
   delete env.NO_PROXY;
   delete env.no_proxy;
+  // Defense-in-depth: the child claude is our payload, not our confidant. Strip host-only secrets it
+  // never needs so a compromised claude / hostile MCP can't read the host secret-file pointer or reuse
+  // the broker's deployment-protection bypass. The wrapper holds these; the child speaks only to our
+  // local MITM (which injects the bypass itself when it loops back to the broker).
+  delete env.REMOTE_CLAW_SECRET_FILE;
+  delete env.VERCEL_AUTOMATION_BYPASS_SECRET;
 
   try {
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
   } finally {
     ac.abort();
-    core.closeAll();
+    await waitForRelays(relays);
     await proxy.close();
+  }
+}
+
+async function waitForRelays(relays: Set<Promise<void>>): Promise<void> {
+  const pending = [...relays];
+  if (pending.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, RELAY_TEARDOWN_WAIT_MS);
+    if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
+  });
+  try {
+    await Promise.race([Promise.allSettled(pending), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }

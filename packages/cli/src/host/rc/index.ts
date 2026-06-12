@@ -9,6 +9,7 @@ export { HostRcRelay, type HostRcRelayOptions } from "./relay.js";
 export {
   assistantText,
   type EventSource,
+  permissionModeFrom,
   RcEvent,
   RelayCore,
   Session,

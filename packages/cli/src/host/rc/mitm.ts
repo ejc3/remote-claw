@@ -59,6 +59,7 @@ export class MitmProxy {
   readonly #leaf: { cert: Buffer; key: Buffer };
   readonly #trace: Tracer;
   #stopped = false;
+  #closePromise: Promise<void> | null = null;
 
   constructor(opts: MitmOptions) {
     this.#opts = opts;
@@ -84,13 +85,16 @@ export class MitmProxy {
   }
 
   async close(): Promise<void> {
+    if (this.#closePromise !== null) return this.#closePromise;
     this.#stopped = true;
     // Wake every worker-SSE follower NOW (close() sets #stopped, but a follower parked on the
     // session Gate's heartbeat wait wouldn't re-check it for up to HEARTBEAT_MS). Closing the
     // sessions wakes their gates so #streamWorker loops exit and end their responses immediately.
     this.#opts.core?.closeAll();
-    this.#server.close();
-    this.#inner.close();
+    this.#closePromise = Promise.all([closeServer(this.#server), closeServer(this.#inner)]).then(
+      () => undefined,
+    );
+    return this.#closePromise;
   }
 
   // ---- CONNECT handling ----
@@ -443,6 +447,19 @@ export function splitAuthority(authority: string): { host: string; port: number 
     host: authority.slice(0, idx),
     port: Number.parseInt(authority.slice(idx + 1) || "443", 10),
   };
+}
+
+function closeServer(server: Server): Promise<void> {
+  server.closeAllConnections?.();
+  return new Promise((resolve, reject) => {
+    server.close((err?: Error & { code?: string }) => {
+      if (err !== undefined && err.code !== "ERR_SERVER_NOT_RUNNING") {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 function readBody(req: IncomingMessage): Promise<Buffer> {

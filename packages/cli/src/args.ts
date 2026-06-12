@@ -23,8 +23,8 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-confirm": "value",
   // The single app origin (its /api is the broker, its web UI builds the #fragment deep link).
   "rc-app": "value",
-  // Pick the broker's durable backend this host targets (sent as the x-broker-backend header on every
-  // relay/stream call, and the basis for the host's `durable` decision). Omitted ⇒ the broker's default.
+  // Pick the broker backend this host targets (sent as the x-broker-backend header on every relay/stream
+  // call). Omitted ⇒ the broker's default; the host learns effective durability from the server.
   // Must match what viewers subscribe with — publish + subscribe for one channel address the same store.
   "rc-backend": "value",
 };

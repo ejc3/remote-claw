@@ -126,6 +126,50 @@ describe("wire frame codec (§8)", () => {
     expect(() => decodeFrame({ ...w, client_msg_id: 5 })).toThrow(/client_msg_id must be a string/);
   });
 
+  it("rejects oversized free-form routing strings at the wire boundary", async () => {
+    const w = await goodWire();
+    expect(() => decodeFrame({ ...w, session_id: "s".repeat(257) })).toThrow(WireError);
+    expect(() => decodeFrame({ ...w, session_id: "s".repeat(257) })).toThrow(
+      /session_id must be at most 256/,
+    );
+    expect(() => decodeFrame({ ...w, record_kind: "r".repeat(257) })).toThrow(WireError);
+    expect(() => decodeFrame({ ...w, msg_id: "m".repeat(1025) })).toThrow(WireError);
+    expect(() => decodeFrame({ ...w, client_msg_id: "c".repeat(257) })).toThrow(WireError);
+  });
+
+  it("rejects control characters in plane-determining routing strings", async () => {
+    const w = await goodWire();
+    expect(() => decodeFrame({ ...w, session_id: "sess\n1" })).toThrow(WireError);
+    expect(() => decodeFrame({ ...w, session_id: "sess\n1" })).toThrow(
+      /session_id must not contain ASCII control/,
+    );
+    expect(() => decodeFrame({ ...w, record_kind: "assistant\u0000x" })).toThrow(WireError);
+    expect(() => decodeFrame({ ...w, record_kind: "assistant\u007fx" })).toThrow(WireError);
+  });
+
+  it("round-trips a real-shaped RC frame within the routing string bounds", async () => {
+    const body = JSON.stringify({
+      request_id: "perm-e2e-1",
+      tool_name: "Bash",
+      tool_input: { command: "pnpm vitest run src" },
+    });
+    const frame = await seal(
+      KEY,
+      header({
+        sessionId: "cse_7f3e2d1c0b9a8",
+        recordKind: "permission_request",
+        msgId: "permission_request-42",
+        clientMsgId: "web-01HQRCF6KZ8N3Q9J4V2R",
+      }),
+      utf8(body),
+    );
+    const back = decodeFrame(JSON.parse(JSON.stringify(encodeFrame(frame))));
+    expect(back.sessionId).toBe("cse_7f3e2d1c0b9a8");
+    expect(back.recordKind).toBe("permission_request");
+    expect(back.clientMsgId).toBe("web-01HQRCF6KZ8N3Q9J4V2R");
+    expect(await open(KEY, back)).toEqual(utf8(body));
+  });
+
   it("a decoded frame whose ct was tampered fails AEAD open (the codec doesn't hide tamper)", async () => {
     const w = await goodWire();
     // Flip a byte by re-encoding a mutated ct: decode it (still valid base64url, 16+ bytes), then open must throw.

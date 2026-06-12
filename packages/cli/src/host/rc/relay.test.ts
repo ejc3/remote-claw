@@ -87,10 +87,11 @@ class FakeClient {
   }
   announces: Array<Record<string, unknown>> = [];
 
-  /** Mirrors BrokerClient.durable. False ⇒ the host keeps `#log` and replays catch_up (default, like
-   *  vercel); true ⇒ a durable-log backend (turso) where subscribe serves history and the host skips
-   *  both. Set BEFORE constructing the relay (it's read once in the constructor). */
+  /** Legacy synchronous client hint. The real relay no longer trusts this for safety; it waits for
+   *  seqCursor().durable from the server. */
   durable = false;
+  /** Server-reported effective durability returned by seqCursor()/frameCountCursor(). */
+  reportedDurable = false;
 
   /** Mirrors BrokerClient.maxSeq — the durable log's highest seq when a durable host (re)starts a
    *  session. null ⇒ start fresh at 0; a number ⇒ resume at value+1 (#36). serve() reads it on durable
@@ -99,20 +100,44 @@ class FakeClient {
   maxSeqThrows = false;
   maxSeqFailures = 0;
   maxSeqCalls = 0;
-  async maxSeq(_sessionId?: string): Promise<number | null> {
+  async seqCursor(_sessionId?: string): Promise<{ maxSeq: number | null; durable: boolean }> {
     this.maxSeqCalls++;
     if (this.maxSeqFailures > 0) {
       this.maxSeqFailures--;
       throw new BrokerError(500, "maxSeq failed");
     }
     if (this.maxSeqThrows) throw new BrokerError(500, "maxSeq failed");
-    return this.maxSeqValue;
+    return { maxSeq: this.maxSeqValue, durable: this.reportedDurable };
+  }
+  async maxSeq(sessionId?: string): Promise<number | null> {
+    return (await this.seqCursor(sessionId)).maxSeq;
+  }
+
+  frameCountCalls = 0;
+  frameCountThrows = false;
+  frameCountFailures = 0;
+  async frameCountCursor(
+    _sessionId?: string,
+  ): Promise<{ frameCount: number | null; durable: boolean }> {
+    this.frameCountCalls++;
+    if (this.frameCountFailures > 0) {
+      this.frameCountFailures--;
+      throw new BrokerError(500, "frameCount failed");
+    }
+    if (this.frameCountThrows) throw new BrokerError(500, "frameCount failed");
+    return { frameCount: this.#inbound.length, durable: this.reportedDurable };
+  }
+  async frameCount(sessionId?: string): Promise<number | null> {
+    return (await this.frameCountCursor(sessionId)).frameCount;
   }
 
   failSeq: number | null = null; // fail postMessage when header.seq === failSeq
+  failRecordKind: string | null = null; // fail postMessage when header.recordKind matches
+  onAnnounce: (() => void) | null = null;
 
   #inbound: Frame[] = [];
-  #wake: (() => void) | null = null;
+  #wakes = new Set<() => void>();
+  streamStarts: Array<number | undefined> = [];
 
   queueInbound(f: Frame): void {
     this.#inbound.push(f);
@@ -121,13 +146,17 @@ class FakeClient {
   /** Deliver an inbound frame to a LIVE stream (after streaming has started + parked). */
   pushInbound(f: Frame): void {
     this.#inbound.push(f);
-    this.#wake?.();
+    for (const wake of this.#wakes) wake();
+    this.#wakes.clear();
   }
 
   async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
     const text = new TextDecoder().decode(body);
     if (this.failSeq !== null && header.seq === this.failSeq) {
       throw new BrokerError(500, "injected failure");
+    }
+    if (this.failRecordKind !== null && header.recordKind === this.failRecordKind) {
+      throw new BrokerError(500, `injected ${header.recordKind} failure`);
     }
     this.posts.push({ recordKind: header.recordKind, seq: header.seq, msgId: header.msgId, text });
     return [{ ok: true, channel: "session", runId: "r", created: false }];
@@ -141,23 +170,33 @@ class FakeClient {
       } catch {
         /* ignore */
       }
+      this.onAnnounce?.();
     }
     this.posts.push({ recordKind: header.recordKind, seq: header.seq, msgId: header.msgId, text });
     return { ok: true, channel: "bus", runId: "r", created: false };
   }
 
-  async *streamFrames(opts: { signal?: AbortSignal }): AsyncGenerator<Frame> {
+  async *streamFrames(opts: { startIndex?: number; signal?: AbortSignal }): AsyncGenerator<Frame> {
+    this.streamStarts.push(opts.startIndex);
+    let cursor =
+      opts.startIndex === undefined
+        ? 0
+        : Math.max(0, Math.min(opts.startIndex, this.#inbound.length));
     for (;;) {
-      while (this.#inbound.length > 0) {
-        const f = this.#inbound.shift();
+      while (cursor < this.#inbound.length) {
+        const f = this.#inbound[cursor++];
         if (f !== undefined) yield f;
       }
       if (opts.signal?.aborted) return;
       await new Promise<void>((resolve) => {
-        this.#wake = resolve;
-        opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+        const wake = () => {
+          this.#wakes.delete(wake);
+          opts.signal?.removeEventListener("abort", wake);
+          resolve();
+        };
+        this.#wakes.add(wake);
+        opts.signal?.addEventListener("abort", wake, { once: true });
       });
-      this.#wake = null;
     }
   }
 
@@ -317,6 +356,133 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     await served;
 
     expect(client.announces.at(-1)?.needs).toBe(false);
+  });
+
+  it("permission_resolved is unordered (seq=null), does not burn content seq, and replays on catch_up", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "perm-v4",
+      request: { subtype: "can_use_tool", tool_name: "Bash", tool_input: { command: "echo" } },
+    });
+    await waitFor(() => client.content.some((p) => p.recordKind === "permission_request"));
+
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "perm-in-v4",
+        JSON.stringify({ request_id: "perm-v4", behavior: "allow" }),
+      ),
+    );
+    await waitFor(() => client.posts.some((p) => p.recordKind === "permission_resolved"));
+
+    const resolved = client.posts.find((p) => p.recordKind === "permission_resolved");
+    expect(resolved?.seq).toBeNull();
+    expect(JSON.parse(resolved?.text ?? "{}")).toMatchObject({
+      request_id: "perm-v4",
+      behavior: "allow",
+    });
+
+    session.pushUpstream(assistant("after permission"));
+    await waitFor(() => client.content.some((p) => p.recordKind === "assistant"));
+    expect(client.content.map((p) => p.seq)).toEqual([0, 1]);
+
+    client.pushInbound(inFrame("catch_up", "cu-perm-v4", JSON.stringify({ since: 1 })));
+    await waitFor(
+      () => client.posts.filter((p) => p.recordKind === "permission_resolved").length >= 2,
+    );
+    ac.abort();
+    await served;
+
+    const replayed = client.posts.filter((p) => p.recordKind === "permission_resolved").at(-1);
+    expect(replayed?.seq).toBeNull();
+    expect(replayed?.msgId).toBe(resolved?.msgId);
+  });
+
+  it("does not apply a permission grant when logging permission_resolved fails", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const pushControl = vi.spyOn(session, "pushControlResponse");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => "resolved",
+      () => "rejected",
+    );
+
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "perm-log-first",
+      request: { subtype: "can_use_tool", tool_name: "Bash", tool_input: { command: "echo" } },
+    });
+    await waitFor(() => client.content.some((p) => p.recordKind === "permission_request"));
+
+    client.failRecordKind = "permission_resolved";
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "perm-log-first-in",
+        JSON.stringify({ request_id: "perm-log-first", behavior: "allow" }),
+      ),
+    );
+
+    await expect(served).resolves.toBe("rejected");
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(client.posts.filter((p) => p.recordKind === "permission_resolved")).toHaveLength(0);
+  });
+});
+
+describe("HostRcRelay permission mode presence", () => {
+  it("seeds the announced mode from session config", async () => {
+    const session = new Session("s", "t", { permissionMode: "default" });
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+
+    await relay.announce("box");
+
+    expect(client.announces.at(-1)?.mode).toBe("default");
+  });
+
+  it("updates mode from a worker system init event and re-announces", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    await relay.announce("box");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream({ type: "system", subtype: "init", permissionMode: "plan" });
+    await waitFor(() => client.announces.at(-1)?.mode === "plan");
+    ac.abort();
+    await served;
+
+    expect(session.permissionMode).toBe("plan");
+    expect(client.announces.at(-1)?.mode).toBe("plan");
+  });
+
+  it("updates mode from an inbound set_mode verb, forwards it, and re-announces", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    await relay.announce("box");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    client.pushInbound(
+      inFrame("set_mode", "mode-1", JSON.stringify({ mode: "plan", expiry: Date.now() + 60_000 })),
+    );
+    await waitFor(() => client.announces.at(-1)?.mode === "plan");
+    ac.abort();
+    await served;
+
+    expect(session.permissionMode).toBe("plan");
+    expect(pushControl).toHaveBeenCalledWith("set_permission_mode", { mode: "plan" });
   });
 });
 
@@ -515,7 +681,7 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
   it("DURABLE: catch_up is consumed but never opened or replayed", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true; // turso-style backend (set before constructing the relay)
+    client.reportedDurable = true; // server-reported turso-style backend
     const relay = relayOf(session, client);
     const ac = new AbortController();
     const served = relay.serve(ac.signal).catch(() => {});
@@ -568,6 +734,84 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
   });
 });
 
+describe("HostRcRelay durable restart inbound safety", () => {
+  it("announce publishes WITHOUT sampling the durable cursors (so it can't race a viewer bus subscribe); serve() samples before the inbound tail", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const relay = relayOf(session, client);
+
+    // The bus announce must NOT do the durable-cursor round-trip (maxSeq/frameCount) — that delay would
+    // race a viewer's CONCURRENT bus subscribe in the broker (the in-process Workflow runtime rejects a
+    // concurrent channel create). The cursors are sampled in serve(), before the inbound tail, instead —
+    // and a viewer cannot post session-inbound faster than that local sample resolves (it must first
+    // receive this announce, subscribe to the session channel, and post).
+    await relay.announce("box");
+    expect(client.maxSeqCalls).toBe(0);
+    expect(client.frameCountCalls).toBe(0);
+
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+    await waitFor(() => client.streamStarts.length > 0);
+    // serve() sampled both durable cursors before starting the inbound tail.
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(1);
+
+    // A live inbound arriving after the sample is delivered (exactly once).
+    client.pushInbound(inFrame("user", "new-u-1", "new prompt", "new-c-1"));
+    await waitFor(() => pushUser.mock.calls.length === 1);
+    ac.abort();
+    await served;
+    expect(pushUser).toHaveBeenCalledWith("new prompt");
+    expect(client.content.find((p) => p.recordKind === "user")?.text).toBe("new prompt");
+  });
+
+  it("uses server-reported durable=true even when the local backend hint is false", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    client.queueInbound(inFrame("user", "old-u-1", "old prompt 1", "old-c-1"));
+    client.queueInbound(inFrame("user", "old-u-2", "old prompt 2", "old-c-2"));
+    client.queueInbound(
+      inFrame(
+        "permission",
+        "old-p-1",
+        JSON.stringify({ request_id: "perm-old", behavior: "allow" }),
+      ),
+    );
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const pushControl = vi.spyOn(session, "pushControlResponse");
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    await waitFor(() => client.streamStarts.length > 0);
+    await tick();
+
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(1);
+    expect(client.streamStarts[0]).toBe(3); // the three historical inbound frames are below the floor
+    expect(pushUser).not.toHaveBeenCalled();
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(client.content.filter((p) => p.recordKind === "user")).toHaveLength(0);
+    expect(client.content.filter((p) => p.recordKind === "permission_resolved")).toHaveLength(0);
+
+    client.pushInbound(inFrame("user", "new-u-1", "new prompt", "new-c-1"));
+    await waitFor(() => pushUser.mock.calls.length === 1);
+    ac.abort();
+    await served;
+
+    expect(pushUser).toHaveBeenCalledTimes(1);
+    expect(pushUser).toHaveBeenCalledWith("new prompt");
+    expect(pushControl).not.toHaveBeenCalled();
+    const users = client.content.filter((p) => p.recordKind === "user");
+    expect(users).toHaveLength(1);
+    expect(users[0]?.text).toBe("new prompt");
+    expect(client.content.filter((p) => p.recordKind === "permission_resolved")).toHaveLength(0);
+  });
+});
+
 // A2b/#36 (durable face) — on a durable backend the session's frames OUTLIVE the host process, so a
 // restarted relay must CONTINUE the seq timeline. serve() resumes `#seq = maxSeq + 1` from the broker's
 // durable log (cleartext seq column; host holds no store creds) before either pump emits — else a restart
@@ -576,7 +820,7 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
   it("resumes seq = durable MAX + 1 so a restart doesn't collide with prior frames", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
+    client.reportedDurable = true;
     client.maxSeqValue = 4; // a prior incarnation already wrote seq 0..4 to the durable log
     const relay = relayOf(session, client);
     const ac = new AbortController();
@@ -594,7 +838,7 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
   it("starts at 0 when the durable log is empty (maxSeq null) — a fresh session", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
+    client.reportedDurable = true;
     client.maxSeqValue = null;
     const relay = relayOf(session, client);
     const ac = new AbortController();
@@ -608,11 +852,11 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
     expect(client.content[0]?.seq).toBe(0);
   });
 
-  it("retries transient maxSeq failures before resuming from the durable log", async () => {
+  it("retries transient frameCount failures after durable=true before starting the pumps", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
-    client.maxSeqFailures = 2;
+    client.reportedDurable = true;
+    client.frameCountFailures = 2;
     client.maxSeqValue = 4;
     const relay = relayOf(session, client);
     const ac = new AbortController();
@@ -623,32 +867,57 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
     ac.abort();
     await served;
 
-    expect(client.maxSeqCalls).toBe(3);
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(3);
     expect(client.content[0]?.seq).toBe(5);
   });
 
-  it("does NOT query maxSeq on a non-durable backend (legacy path starts at 0)", async () => {
+  it("uses the legacy path when the server reports non-durable", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient(); // durable false
-    client.maxSeqValue = 9; // would resume at 10 IF consulted — it must not be on the ephemeral path
+    client.maxSeqValue = 9; // ignored because durable=false
     const relay = relayOf(session, client);
     const ac = new AbortController();
     const served = relay.serve(ac.signal).catch(() => {});
 
     session.pushUpstream(assistant("legacy"));
     await waitFor(() => client.content.length >= 1);
+    await waitFor(() => client.streamStarts.length > 0);
     ac.abort();
     await served;
 
-    expect(client.maxSeqCalls).toBe(0); // never consulted — no extra round-trip for ephemeral backends
+    expect(client.maxSeqCalls).toBe(1); // capability discovery only
+    expect(client.frameCountCalls).toBe(0);
+    expect(client.streamStarts[0]).toBe(0);
     expect(client.content[0]?.seq).toBe(0);
   });
 
-  it("falls back to 0 after maxSeq retries fail and logs an error", async () => {
+  it("uses the legacy path when durability discovery itself fails before durable=true is known", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
     client.maxSeqThrows = true;
+    client.maxSeqValue = 9;
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream(assistant("legacy after seq error"));
+    await waitFor(() => client.content.length >= 1);
+    await waitFor(() => client.streamStarts.length > 0);
+    ac.abort();
+    await served;
+
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(0);
+    expect(client.streamStarts[0]).toBe(0);
+    expect(client.content[0]?.seq).toBe(0);
+  });
+
+  it("fails loud after durable frameCount retries fail instead of reusing startIndex 0", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    client.frameCountThrows = true;
     const { tracer, errors } = spyTracer();
     const relay = new HostRcRelay({
       client: client as unknown as BrokerClient,
@@ -657,17 +926,15 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
       session,
       tracer,
     });
-    const ac = new AbortController();
-    const served = relay.serve(ac.signal).catch(() => {});
 
-    session.pushUpstream(assistant("resilient"));
-    await waitFor(() => client.content.length >= 1);
-    ac.abort();
-    await served;
+    await expect(relay.serve(new AbortController().signal)).rejects.toThrow(/frameCount failed/);
 
-    expect(client.maxSeqCalls).toBe(3);
-    expect(client.content[0]?.seq).toBe(0); // the throw was swallowed; the relay still served
-    expect(errors.find((e) => e.msg.includes("seq resume failed after retries"))).toBeDefined();
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(3);
+    expect(client.content).toHaveLength(0); // no seq 0 collision is posted
+    expect(
+      errors.find((e) => e.msg.includes("inbound cursor resume failed after retries")),
+    ).toBeDefined();
   });
 });
 

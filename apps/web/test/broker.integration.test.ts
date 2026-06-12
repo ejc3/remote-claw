@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { decodeFrame, deriveSessionKey, open, utf8, type WireFrame } from "@remote-claw/clawsec";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
-import { POST as relay } from "../app/api/relay/route";
+import { GET as frameCountRoute } from "../app/api/frame-count/route";
+import { MAX_RELAY_CIPHERTEXT_BYTES, POST as relay } from "../app/api/relay/route";
 import { GET as seqRoute } from "../app/api/seq/route";
 import { GET as stream } from "../app/api/stream/route";
 import { announceFrame, bearer, header, readSseData, testIdentity, wireFrame } from "./helpers";
@@ -45,6 +46,12 @@ function seqReq(auth: string | undefined, query = ""): Promise<Response> {
   return seqRoute(new Request(`${BASE}/api/seq${query}`, { headers }));
 }
 
+function frameCountReq(auth: string | undefined, query = ""): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (auth !== undefined) headers.authorization = auth;
+  return frameCountRoute(new Request(`${BASE}/api/frame-count${query}`, { headers }));
+}
+
 type BrokerGlobals = typeof globalThis & {
   __rcBrokerCache?: Map<string, unknown>;
   __rcTursoClient?: { close(): void };
@@ -64,7 +71,7 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
     const id = await testIdentity(20);
     const res = await seqReq(bearer(id.authToken), "?session=sess-seq");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ maxSeq: null });
+    expect(await res.json()).toEqual({ maxSeq: null, durable: false });
   });
 
   it("rejects an unauthenticated request", async () => {
@@ -75,10 +82,12 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
   it("returns the highest seq from the Turso route backend", async () => {
     const prevUrl = process.env.TURSO_DATABASE_URL;
     const prevToken = process.env.TURSO_AUTH_TOKEN;
+    const prevBackend = process.env.BROKER_BACKEND;
     const dir = await mkdtemp(join(tmpdir(), "rc-seq-route-"));
     clearEnvTursoBackend();
     process.env.TURSO_DATABASE_URL = `file:${join(dir, "seq.db")}`;
     delete process.env.TURSO_AUTH_TOKEN;
+    process.env.BROKER_BACKEND = "turso";
     try {
       const id = await testIdentity(21);
       const auth = bearer(id.authToken);
@@ -97,18 +106,79 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
           }),
           utf8(`message ${seq}`),
         );
-        expect((await post(frame, auth, sid, "turso")).status).toBe(200);
+        expect((await post(frame, auth, sid)).status).toBe(200);
       }
 
-      const res = await seqReq(auth, `?session=${encodeURIComponent(sid)}&backend=turso`);
+      const res = await seqReq(auth, `?session=${encodeURIComponent(sid)}`);
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ maxSeq: 7 });
+      expect(await res.json()).toEqual({ maxSeq: 7, durable: true });
     } finally {
       clearEnvTursoBackend();
       if (prevUrl === undefined) delete process.env.TURSO_DATABASE_URL;
       else process.env.TURSO_DATABASE_URL = prevUrl;
       if (prevToken === undefined) delete process.env.TURSO_AUTH_TOKEN;
       else process.env.TURSO_AUTH_TOKEN = prevToken;
+      if (prevBackend === undefined) delete process.env.BROKER_BACKEND;
+      else process.env.BROKER_BACKEND = prevBackend;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("broker: GET /api/frame-count (durable stream cursor)", () => {
+  it("returns {frameCount: null} for a backend without a durable frame count", async () => {
+    const id = await testIdentity(22);
+    const res = await frameCountReq(bearer(id.authToken), "?session=sess-count");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ frameCount: null, durable: false });
+  });
+
+  it("rejects an unauthenticated request", async () => {
+    const res = await frameCountReq(undefined);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns the stream length from the Turso route backend", async () => {
+    const prevUrl = process.env.TURSO_DATABASE_URL;
+    const prevToken = process.env.TURSO_AUTH_TOKEN;
+    const prevBackend = process.env.BROKER_BACKEND;
+    const dir = await mkdtemp(join(tmpdir(), "rc-count-route-"));
+    clearEnvTursoBackend();
+    process.env.TURSO_DATABASE_URL = `file:${join(dir, "count.db")}`;
+    delete process.env.TURSO_AUTH_TOKEN;
+    process.env.BROKER_BACKEND = "turso";
+    try {
+      const id = await testIdentity(23);
+      const auth = bearer(id.authToken);
+      const sid = "sess-turso-count";
+      const kSession = await deriveSessionKey(id.contentRoot, sid);
+
+      for (const seq of [2, 7]) {
+        const frame = await wireFrame(
+          kSession,
+          header(id, {
+            sessionId: sid,
+            recordKind: "assistant",
+            seq,
+            dir: "out",
+            msgId: `count-${seq}`,
+          }),
+          utf8(`message ${seq}`),
+        );
+        expect((await post(frame, auth, sid)).status).toBe(200);
+      }
+
+      const res = await frameCountReq(auth, `?session=${encodeURIComponent(sid)}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ frameCount: 2, durable: true });
+    } finally {
+      clearEnvTursoBackend();
+      if (prevUrl === undefined) delete process.env.TURSO_DATABASE_URL;
+      else process.env.TURSO_DATABASE_URL = prevUrl;
+      if (prevToken === undefined) delete process.env.TURSO_AUTH_TOKEN;
+      else process.env.TURSO_AUTH_TOKEN = prevToken;
+      if (prevBackend === undefined) delete process.env.BROKER_BACKEND;
+      else process.env.BROKER_BACKEND = prevBackend;
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -222,6 +292,24 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
       }),
     );
     expect(bad.status).toBe(400);
+  });
+
+  it("rejects ciphertext at the broker size cap while accepting a normal frame", async () => {
+    const id = await testIdentity(24);
+    const auth = bearer(id.authToken);
+    const normal = await announceFrame(id, { session_id: "s", sent_at: 1 });
+    const oversized: WireFrame = {
+      ...normal,
+      ct: Buffer.alloc(MAX_RELAY_CIPHERTEXT_BYTES).toString("base64url"),
+    };
+
+    const tooLarge = await post(oversized, auth);
+    expect(tooLarge.status).toBe(413);
+    expect((await tooLarge.json()).error).toMatch(/ciphertext exceeds/);
+
+    const ok = await post(normal, auth);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ ok: true, channel: "bus" });
   });
 
   it("rejects a non-integer startIndex with 400", async () => {

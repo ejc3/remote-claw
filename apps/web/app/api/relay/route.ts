@@ -1,7 +1,7 @@
 import { decodeFrame, encodeFrame, timingSafeEqual, WireError } from "@remote-claw/clawsec";
 import { AuthError, identityFromRequest } from "../../../lib/auth";
 import { backendSelector, getBackend, isRequestableBackend } from "../../../lib/broker";
-import { PublishConflictError } from "../../../lib/broker/backend";
+import { isClose, PublishConflictError } from "../../../lib/broker/backend";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
@@ -9,6 +9,11 @@ import { json } from "../../../lib/http";
 // per-session with ?session=<sid>) and deliver the frame via the selected backend. Gated by Bearer
 // auth_token; ciphertext only — the broker validates the §8 envelope SHAPE but never decrypts it.
 export const maxDuration = 60;
+
+// Largest valid viewer attachment is a 16 MiB base64 string (~12 MiB decoded bytes) inside a small
+// JSON envelope plus the 16-byte GCM tag. 17 MiB leaves room for that legitimate sealed frame while
+// rejecting unbounded ciphertext bodies before they hit the broker backend.
+export const MAX_RELAY_CIPHERTEXT_BYTES = 17 * 1024 * 1024;
 
 export async function POST(req: Request): Promise<Response> {
   let identityId: Uint8Array;
@@ -32,6 +37,16 @@ export async function POST(req: Request): Promise<Response> {
   } catch (e) {
     if (WireError.is(e)) return json({ error: e.message }, 400);
     throw e;
+  }
+  if (frame.ct.length >= MAX_RELAY_CIPHERTEXT_BYTES) {
+    return json({ error: "frame ciphertext exceeds the relay size cap" }, 413);
+  }
+  // Generation-race guard: Turso channel `gen` bumps only when a backend caller publishes the
+  // internal `__close` sentinel and a later publish reopens the token. The public relay route must
+  // never accept that sentinel, so a host restart's maxSeq/frameCount/subscribe window cannot cross
+  // a close+reopen on this HTTP surface.
+  if (isClose(frame as unknown as { __close: true })) {
+    return json({ error: "close sentinel is not accepted by /api/relay" }, 400);
   }
 
   // The frame must claim the AUTHENTICATED identity — a bearer for identity A can't publish a frame
