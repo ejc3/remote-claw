@@ -49,9 +49,15 @@ export function isRequestableBackend(name: string): boolean {
 }
 
 /** The per-request backend selector: `?backend=` (browser URLs) or the header (API calls), whichever
- *  is present (param wins). Null → getBackend falls back to the BROKER_BACKEND env default. */
+ *  is present (param wins). A BLANK selector (`?backend=`, whitespace, or an empty header) is treated as
+ *  NO selection → null, so the route's null-guard skips validation and getBackend falls back to the
+ *  BROKER_BACKEND default (matching getBackend's own `trim() || default`). Without this, a blank value is
+ *  non-null but not requestable, so the routes 400 instead of using the default. The value is trimmed so
+ *  `?backend=%20turso%20` resolves like `turso` rather than failing the requestable check. */
 export function backendSelector(req: Request, url: URL): string | null {
-  return url.searchParams.get("backend") ?? req.headers.get(BACKEND_HEADER);
+  const raw = url.searchParams.get("backend") ?? req.headers.get(BACKEND_HEADER);
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : null;
 }
 
 /** Resolve the backend for a request. `requested` is the raw `?backend=` value (may be null/empty). */

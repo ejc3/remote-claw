@@ -62,6 +62,9 @@ export async function runRcTrace(opts: RcTraceOptions): Promise<number> {
   // A pre-existing NO_PROXY could make the child BYPASS our MITM despite HTTPS_PROXY — clear it.
   delete env.NO_PROXY;
   delete env.no_proxy;
+  // Defense-in-depth (same as runRcLaunch): strip host-only secrets the spawned child never needs.
+  delete env.REMOTE_CLAW_SECRET_FILE;
+  delete env.VERCEL_AUTOMATION_BYPASS_SECRET;
 
   try {
     if (opts.spawnClaude) {

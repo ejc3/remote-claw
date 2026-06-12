@@ -83,4 +83,37 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     // …and is torn down once the child exits.
     expect(await portOpen(proxyPortDuringSpawn)).toBe(false);
   }, 20_000);
+
+  it("scrubs host-only secrets from the child env (Sec-env) but keeps the proxy env", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(71));
+    const certsDir = tmp();
+    const prevSecret = process.env.REMOTE_CLAW_SECRET_FILE;
+    const prevBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    process.env.REMOTE_CLAW_SECRET_FILE = "/home/u/.local/state/remote-claw/secret";
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET = "bypass-should-not-reach-child";
+    let seenEnv: NodeJS.ProcessEnv | null = null;
+    try {
+      await runRcLaunch({
+        claudeArgs: [],
+        identity: id,
+        brokerUrl: "http://broker.example",
+        certsDir,
+        spawnClaude: async (_bin, _args, env) => {
+          seenEnv = env;
+          return 0;
+        },
+      });
+    } finally {
+      if (prevSecret === undefined) delete process.env.REMOTE_CLAW_SECRET_FILE;
+      else process.env.REMOTE_CLAW_SECRET_FILE = prevSecret;
+      if (prevBypass === undefined) delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      else process.env.VERCEL_AUTOMATION_BYPASS_SECRET = prevBypass;
+    }
+    const env = seenEnv as unknown as NodeJS.ProcessEnv;
+    // The host-only secrets are gone from what the child claude sees…
+    expect(env.REMOTE_CLAW_SECRET_FILE).toBeUndefined();
+    expect(env.VERCEL_AUTOMATION_BYPASS_SECRET).toBeUndefined();
+    // …but the proxy env the child genuinely needs survives.
+    expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  }, 20_000);
 });

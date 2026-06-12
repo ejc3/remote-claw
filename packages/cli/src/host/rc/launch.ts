@@ -117,6 +117,12 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   // Clear both forms for the child; our proxy itself passes inference/OAuth straight through anyway.
   delete env.NO_PROXY;
   delete env.no_proxy;
+  // Defense-in-depth: the child claude is our payload, not our confidant. Strip host-only secrets it
+  // never needs so a compromised claude / hostile MCP can't read the host secret-file pointer or reuse
+  // the broker's deployment-protection bypass. The wrapper holds these; the child speaks only to our
+  // local MITM (which injects the bypass itself when it loops back to the broker).
+  delete env.REMOTE_CLAW_SECRET_FILE;
+  delete env.VERCEL_AUTOMATION_BYPASS_SECRET;
 
   try {
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);

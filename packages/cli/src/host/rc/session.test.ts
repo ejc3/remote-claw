@@ -31,6 +31,25 @@ describe("RelayCore", () => {
     expect(c.get(s.id)).toBe(s);
     expect(c.get("nope")).toBeUndefined();
   });
+
+  it("mints a globally-unique session id per launch — no cross-launch collision (K1)", () => {
+    // Two RelayCores model two process launches. The old counter-based id reset to 0 each launch, so
+    // the FIRST session of every launch was `cse_12654435761` — under one identity that is the SAME
+    // broker channel (`sess:<id>:<sessionId>`), corrupting a durable session's frames. Ids must differ.
+    const a = new RelayCore().create({ title: "t" }).id;
+    const b = new RelayCore().create({ title: "t" }).id;
+    expect(a).not.toBe(b);
+    // Shape: cse_ + a 32-hex crypto.randomUUID body (dashes stripped) — valid channel-token charset.
+    expect(a).toMatch(/^cse_[0-9a-f]{32}$/);
+    expect(b).toMatch(/^cse_[0-9a-f]{32}$/);
+  });
+
+  it("accepts an injected deterministic session-id minter (test determinism)", () => {
+    let n = 0;
+    const c = new RelayCore({ newSessionId: () => `fixed${++n}` });
+    expect(c.create({ title: "t" }).id).toBe("cse_fixed1");
+    expect(c.create({ title: "t" }).id).toBe("cse_fixed2");
+  });
 });
 
 describe("Session producers", () => {
