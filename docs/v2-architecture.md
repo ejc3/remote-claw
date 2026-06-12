@@ -1153,16 +1153,34 @@ Turso sidesteps the push/poll question: an **unbounded ordered libSQL log** with
 the DB itself serves catch-up. Reads are a poll (`SELECT … WHERE id > cursor`), but replay and live are
 the *same* query (no gap/dupe boundary), and unlike Vercel/Temporal it is **flagged durable**, so the
 broker serves catch-up and the host can retire its `#log` replay. Full schema and the RC-event/broker-
-frame split are in `docs/durable-log-design.md`. (Aside: Turso is also one of Workflow DevKit's embedded
-"Worlds" — the same engine, used there as a workflow store rather than a relay log.)
+frame split are in `docs/durable-log-design.md`. (Note: this is our **own** `BrokerBackend` port talking
+to libSQL directly — `publish`=`INSERT`, `subscribe`=poll — **not** a Workflow DevKit "World." There is
+no first-party Turso World; the World note below covers why building one would be more machinery for
+less.)
 
 ### The World abstraction (why "no worker" is a Vercel property, not universal)
 
-Workflow DevKit's runtime/queues/persistence are a swappable **World**. Managed = **Vercel** (Functions
-+ Queues + encrypted managed store). Self-hosted Worlds (**Postgres via graphile-worker, BullMQ, NATS
-JetStream, Cloudflare Durable Objects, Redis, Turso**) exist — but Postgres/BullMQ/JetStream **bring
-back a long-lived polling worker**, converging toward Temporal's operational shape. So "event-driven,
-zero-cost idle, no worker" is specifically the **Vercel World**, not a universal DevKit guarantee.
+Workflow DevKit's runtime/queues/persistence are a swappable **World** that bundles three jobs:
+**Storage** (the append-only event log + materialized runs/steps/hooks, written via atomic events),
+**Queue** (`queue()` to enqueue an invocation + a `createQueueHandler` the platform POSTs to —
+at-least-once with retries), and **Streamer** (per-run named streams). The shipped **first-party**
+Worlds are only three: **Vercel** (managed — Functions + Queues + encrypted store), **Local** (dev),
+and **Postgres** (the self-hosted reference). The `@workflow/world` interface is public, so other infra
+*can* be adapted with a custom World (the ecosystem page lists community ones), but those aren't bundled.
+The Postgres reference uses **graphile-worker**, which **requires a long-lived process polling the DB** —
+its own docs state it "does not work on serverless environments." So "event-driven, zero-cost idle, no
+worker" is specifically the **Vercel World**, not a universal DevKit guarantee.
+
+A **Turso World is buildable but not first-party, and wouldn't help us.** Turso gives Storage + Streamer
+almost for free (they're just libSQL tables — our `frames` table already *is* a Streamer in shape), but
+the **Queue is the gap**: on Vercel Functions (serverless, no polling worker) something must turn "a
+pending-invocation row exists" into "HTTP POST the `createQueueHandler` Function," and **a database
+can't push**. So a serverless Turso World would still need an external push-queue (Upstash QStash or
+Vercel Queues) to dispatch — Turso for durable state, QStash for durable dispatch, Functions for
+compute. That's strictly more machinery than our direct Turso log, which runs **no** workflows at all
+(no event-log replay, no step queue, no executor) — the DB *is* the relay. A Turso World would only
+matter if we wanted the full durable-execution programming model (steps, hooks, replay) backed by Turso
+instead of Vercel's managed platform; the relay doesn't need that model.
 
 ### Verdict (the auditable default)
 
