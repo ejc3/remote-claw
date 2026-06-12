@@ -98,6 +98,17 @@ describe("FrameOrderer (dedup + reorder, §6/§12)", () => {
     expect(o.nextSeq).toBe(0); // null frames don't advance the content cursor
   });
 
+  it("delivers permission_resolved immediately even while a content gap is open", () => {
+    const o = new FrameOrderer();
+    expect(ids(o.accept(frame({ msgId: "later", seq: 1 })))).toEqual([]);
+    expect(o.pending).toBe(1);
+    expect(
+      ids(o.accept(frame({ msgId: "resolved", seq: null, recordKind: "permission_resolved" }))),
+    ).toEqual(["resolved"]);
+    expect(o.nextSeq).toBe(0);
+    expect(o.pending).toBe(1);
+  });
+
   it("drops a stale content frame whose seq is already past the cursor", () => {
     const o = new FrameOrderer(5); // resume: next expected seq is 5
     expect(ids(o.accept(frame({ msgId: "old", seq: 3 })))).toEqual([]); // already delivered range

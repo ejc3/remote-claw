@@ -351,6 +351,52 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
 
     expect(client.announces.at(-1)?.needs).toBe(false);
   });
+
+  it("permission_resolved is unordered (seq=null), does not burn content seq, and replays on catch_up", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "perm-v4",
+      request: { subtype: "can_use_tool", tool_name: "Bash", tool_input: { command: "echo" } },
+    });
+    await waitFor(() => client.content.some((p) => p.recordKind === "permission_request"));
+
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "perm-in-v4",
+        JSON.stringify({ request_id: "perm-v4", behavior: "allow" }),
+      ),
+    );
+    await waitFor(() => client.posts.some((p) => p.recordKind === "permission_resolved"));
+
+    const resolved = client.posts.find((p) => p.recordKind === "permission_resolved");
+    expect(resolved?.seq).toBeNull();
+    expect(JSON.parse(resolved?.text ?? "{}")).toMatchObject({
+      request_id: "perm-v4",
+      behavior: "allow",
+    });
+
+    session.pushUpstream(assistant("after permission"));
+    await waitFor(() => client.content.some((p) => p.recordKind === "assistant"));
+    expect(client.content.map((p) => p.seq)).toEqual([0, 1]);
+
+    client.pushInbound(inFrame("catch_up", "cu-perm-v4", JSON.stringify({ since: 1 })));
+    await waitFor(
+      () => client.posts.filter((p) => p.recordKind === "permission_resolved").length >= 2,
+    );
+    ac.abort();
+    await served;
+
+    const replayed = client.posts.filter((p) => p.recordKind === "permission_resolved").at(-1);
+    expect(replayed?.seq).toBeNull();
+    expect(replayed?.msgId).toBe(resolved?.msgId);
+  });
 });
 
 describe("HostRcRelay attachments (#44)", () => {

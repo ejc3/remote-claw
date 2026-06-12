@@ -78,6 +78,7 @@ const POST_RETRIES = 6;
 const POST_RETRY_BASE_MS = 50;
 const SEQ_RESUME_ATTEMPTS = 3;
 const SEQ_RESUME_RETRY_BASE_MS = 100;
+const RELAY_INCARNATION = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 // Re-announce presence at least this often while idle so the viewer's freshness check (#58) has a
 // steady signal. Sized UNDER the viewer's ~45s "connected" threshold (≈2× margin) so a single missed
 // announce + jitter doesn't read as a disconnect — but no faster, because each keepalive appends a
@@ -316,11 +317,11 @@ export class HostRcRelay {
    *  session ends. Must NOT be size-bounded: #tailInbound re-reads from index 0 on each reconnect, so
    *  an evicted-then-re-read `user` msg_id would re-inject a duplicate prompt into claude. */
   readonly #seen = new Set<string>();
-  /** In-memory transcript (content frames only) — replayed on a viewer `catch_up` (§6/§16). Left EMPTY
-   *  when `#durable`: a durable-log backend (Turso) keeps every frame, so its own subscribe(0) replays
-   *  the full history and the host need not hold (or re-post) a copy. The "one log, mediated by the
-   *  broker" model — the broker IS the history. */
-  readonly #log: { recordKind: string; seq: number; msgId: string; text: string }[] = [];
+  /** In-memory replay log — content frames plus unordered state frames such as permission_resolved,
+   *  replayed on a viewer `catch_up` (§6/§16). Left EMPTY when `#durable`: a durable-log backend
+   *  (Turso) keeps every frame, so its own subscribe(0) replays the full history and the host need not
+   *  hold (or re-post) a copy. The "one log, mediated by the broker" model — the broker IS history. */
+  readonly #log: { recordKind: string; seq: number | null; msgId: string; text: string }[] = [];
   /** True when the broker reports its EFFECTIVE backend is a durable log: the host skips building `#log`
    *  and skips replaying on `catch_up`, because subscribe() serves history straight from the durable
    *  frames table. False (capped/ephemeral backend) keeps the legacy host-replayed catch_up. */
@@ -428,6 +429,7 @@ export class HostRcRelay {
           title: this.#annTitle,
           cwd: this.#annCwd,
           sent_at: Date.now(),
+          incarnation: RELAY_INCARNATION,
           status: p.status,
           phase: p.phase,
           needs: p.needs,
@@ -501,10 +503,10 @@ export class HostRcRelay {
     }
   }
 
-  /** Post AND (on a non-durable backend) record a content frame so it can be replayed via catch_up. On
-   *  a durable backend the broker keeps the frame, so subscribe() serves the replay and the host copy is
-   *  pure waste — skip it. */
-  async #emit(recordKind: string, seq: number, msgId: string, text: string): Promise<void> {
+  /** Post AND (on a non-durable backend) record a replayable out-frame so it can be replayed via
+   *  catch_up. On a durable backend the broker keeps the frame, so subscribe() serves the replay and
+   *  the host copy is pure waste — skip it. */
+  async #emit(recordKind: string, seq: number | null, msgId: string, text: string): Promise<void> {
     await this.#post(recordKind, seq, msgId, text);
     if (!this.#durable) this.#log.push({ recordKind, seq, msgId, text });
     // Per-frame, so it's `trace`. Body length only at this level; the upstream-event log carries a
@@ -528,7 +530,7 @@ export class HostRcRelay {
   /** Replay the logged transcript from `since` onward — idempotent (the viewer dedups by seq/msg_id). */
   async #replay(since: number): Promise<void> {
     for (const e of [...this.#log]) {
-      if (e.seq >= since) await this.#post(e.recordKind, e.seq, e.msgId, e.text);
+      if (e.seq === null || e.seq >= since) await this.#post(e.recordKind, e.seq, e.msgId, e.text);
     }
   }
 
@@ -789,17 +791,16 @@ export class HostRcRelay {
           if (body.answers !== null && typeof body.answers === "object") {
             extra.answers = body.answers as Record<string, string | string[]>;
           }
-          // Log a permission_resolved content frame so a later reload / catch_up renders the request
-          // as ANSWERED rather than re-prompting (#56); a failed post is fatal (a seq is burned).
+          // Log a permission_resolved unordered frame so a later reload / catch_up renders the request
+          // as ANSWERED rather than re-prompting (#56), and so a content gap cannot stall the resolve.
           // Clearing the gate also drops `needs` from presence — re-announce so the viewer's
           // needs-you indicator clears (#58).
           this.#session.pushControlResponse(body.request_id, behavior, extra);
-          const seq = this.#seq++;
           await this.#fatalOnThrow(() =>
             this.#emit(
               "permission_resolved",
-              seq,
-              `permresolved-${seq}`,
+              null,
+              `permresolved-${body.request_id}`,
               JSON.stringify(
                 extra.answers
                   ? { request_id: body.request_id, behavior, answers: extra.answers }

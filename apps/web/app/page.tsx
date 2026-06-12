@@ -23,8 +23,35 @@ import {
   connState,
   type GitInfo,
   type Message,
+  TRANSCRIPT_GAP_STALL_MS,
   Viewer,
 } from "./lib/viewer";
+
+export interface TranscriptGap {
+  nextSeq: number;
+  pending: number;
+  since: number;
+}
+
+export function shouldShowGapRecovery(gap: TranscriptGap | null, now: number): boolean {
+  return gap !== null && now - gap.since >= TRANSCRIPT_GAP_STALL_MS;
+}
+
+function isGapMessage(
+  m: Message,
+): m is Message & Required<Pick<Message, "nextSeq" | "pending" | "since">> {
+  return (
+    m.kind === "gap" &&
+    typeof m.nextSeq === "number" &&
+    typeof m.pending === "number" &&
+    typeof m.since === "number"
+  );
+}
+
+function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
+  if (prev.some((m) => m.msgId === msg.msgId)) return prev;
+  return [...prev, msg];
+}
 
 export default function Home() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -368,6 +395,9 @@ function Transcript(props: {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [gap, setGap] = useState<TranscriptGap | null>(null);
+  const [gapRetrying, setGapRetrying] = useState(false);
+  const autoGapRetry = useRef<string | null>(null);
 
   // Live connection state from the freshest announce (null until one arrives — then never scary).
   // Thinking/needs are only meaningful while connected; a stale announce's phase says nothing.
@@ -396,12 +426,19 @@ function Transcript(props: {
 
   useEffect(() => {
     setMessages([]);
+    setGap(null);
+    autoGapRetry.current = null;
     const ac = new AbortController();
     void viewer.requestHistory(sessionId, 0).catch(() => {});
     (async () => {
       try {
         for await (const m of viewer.transcript(sessionId, ac.signal)) {
-          setMessages((prev) => [...prev, m]);
+          if (isGapMessage(m)) {
+            setGap({ nextSeq: m.nextSeq, pending: m.pending, since: m.since });
+          } else {
+            setGap(null);
+            setMessages((prev) => appendUniqueMessage(prev, m));
+          }
         }
       } catch {
         /* aborted on unmount / session switch */
@@ -414,6 +451,28 @@ function Transcript(props: {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const retryGap = useCallback(async () => {
+    if (gap === null) return;
+    setGapRetrying(true);
+    setSendError(null);
+    try {
+      await viewer.requestHistory(sessionId, gap.nextSeq);
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGapRetrying(false);
+    }
+  }, [gap, sessionId, viewer]);
+
+  const showGapRecovery = shouldShowGapRecovery(gap, now);
+  useEffect(() => {
+    if (!showGapRecovery || gap === null) return;
+    const key = `${gap.nextSeq}:${gap.since}`;
+    if (autoGapRetry.current === key) return;
+    autoGapRetry.current = key;
+    void retryGap();
+  }, [gap, retryGap, showGapRecovery]);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -491,7 +550,12 @@ function Transcript(props: {
       </div>
 
       <div className="transcript">
-        {messages.length === 0 && <p className="empty-pad">Waiting for the transcript…</p>}
+        {showGapRecovery && gap !== null && (
+          <GapRecovery gap={gap} retrying={gapRetrying} onRetry={() => void retryGap()} />
+        )}
+        {messages.length === 0 && !showGapRecovery && (
+          <p className="empty-pad">Waiting for the transcript…</p>
+        )}
         {messages.map((m) => (
           <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} resolved={resolved} />
         ))}
@@ -559,6 +623,27 @@ function Transcript(props: {
         />
       )}
     </section>
+  );
+}
+
+function GapRecovery({
+  gap,
+  retrying,
+  onRetry,
+}: {
+  gap: TranscriptGap;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="chat-status transcript-gap" data-state="reconnecting" role="alert">
+      <span>
+        Transcript out of sync — retrying… waiting for seq {gap.nextSeq} ({gap.pending} buffered)
+      </span>
+      <button type="button" className="gap-retry" disabled={retrying} onClick={onRetry}>
+        Retry
+      </button>
+    </div>
   );
 }
 

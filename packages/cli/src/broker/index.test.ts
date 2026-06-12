@@ -9,7 +9,9 @@ describe("@remote-claw/cli/broker barrel (browser-safe surface)", () => {
     expect(typeof broker.planeForKind).toBe("function");
     expect(typeof broker.BrokerError).toBe("function");
     expect(broker.CONTENT_KINDS.has("assistant")).toBe(true);
+    expect(broker.CONTENT_KINDS.has("permission_resolved")).toBe(false);
     expect(broker.CONTROL_KINDS.has("interrupt")).toBe(true);
     expect(broker.META_KINDS.has("session_announce")).toBe(true);
+    expect(broker.META_KINDS.has("permission_resolved")).toBe(true);
   });
 });

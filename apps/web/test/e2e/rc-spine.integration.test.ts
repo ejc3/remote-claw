@@ -422,7 +422,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     expect(userInputs).toContain("/compact"); // slash command delivered as user input
   }, 40_000);
 
-  it("PRESENCE + PERMISSION_RESOLVED: announce carries phase/status/needs; granting a permission logs permission_resolved (content frame, replayed on catch_up)", async () => {
+  it("PRESENCE + PERMISSION_RESOLVED: announce carries phase/status/needs; granting a permission logs permission_resolved (unordered, replayed on catch_up)", async () => {
     // Uses fill(67) — a fresh identity so this test doesn't share broker state with the PERMISSION
     // test (fill(64)) or any other test. Two things are proven here with one worker lifecycle:
     //   (A) The session_announce body carries `status`, `phase`, and `needs`. The `needs` flag
@@ -431,8 +431,8 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     //       because the FakeRcWorker's busy→idle cycle is near-instant (no model latency). A separate
     //       unit test covers phaseFor() directly; here we prove the wire fields exist and that
     //       `needs` is driven by the open/closed state of the permission gate.
-    //   (B) Granting an inbound permission emits a LOGGED `permission_resolved` content frame (not just
-    //       the control_response sent to the worker) so a fresh viewer's catch_up replays it.
+    //   (B) Granting an inbound permission emits a LOGGED `permission_resolved` unordered frame (not
+    //       just the control_response sent to the worker) so a fresh viewer's catch_up replays it.
     const id = await deriveIdentity(new Uint8Array(32).fill(67));
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
@@ -548,13 +548,13 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     await waitFor(() => granted, 15_000);
     expect(granted).toBe(true);
 
-    // The permission_resolved content frame must appear in the live transcript.
+    // The permission_resolved unordered frame must appear in the live transcript.
     await waitFor(() => got.some((m) => m.kind === "permission_resolved"), 15_000);
     const resolvedFrame = got.find((m) => m.kind === "permission_resolved");
     const resolvedBody = JSON.parse(resolvedFrame?.text ?? "{}");
     expect(resolvedBody.request_id).toBe("perm-presence-1");
     expect(resolvedBody.behavior).toBe("allow");
-    expect(resolvedFrame?.seq).not.toBeNull(); // it is a LOGGED content frame with a seq
+    expect(resolvedFrame?.seq).toBeNull(); // unordered: a content gap must not stall it
 
     // After the grant the relay deletes from #openPerms and calls #maybeAnnounce: needs must drop.
     await waitFor(() => rawAnnounces.some((a) => a.needs === false && a.sentAt > 0), 15_000);
@@ -569,8 +569,8 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       needsTrue[0]?.sentAt ?? 0,
     );
 
-    // ── B (continued): fresh viewer's catch_up must replay permission_resolved — it is LOGGED (not
-    //    a meta-plane announce), so #replay() replays it exactly like any other content frame.
+    // ── B (continued): fresh viewer's catch_up must replay permission_resolved. It is unordered but
+    //    still replay-logged by the non-durable relay, so #replay() sends it again with the same msg_id.
     const late = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
     const lateMsgs: Message[] = [];
     tailInto(late, sid, lateMsgs, ac.signal);
