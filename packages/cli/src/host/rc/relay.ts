@@ -531,6 +531,25 @@ export class HostRcRelay {
    *  shared #publishLock/#halted, would otherwise leave a live session stranded behind a permanent seq
    *  gap. (Adversarial-review fix.) An external `signal` abort still stops both as before. */
   async serve(signal: AbortSignal): Promise<void> {
+    // #36 (durable face): on a durable backend the session's frames OUTLIVE this host process, so a NEW
+    // relay resuming the same session must CONTINUE its seq numbering — restarting at 0 would re-issue
+    // seqs the durable log already holds, and a viewer's orderer would drop the new content as duplicates.
+    // Resume `#seq = maxSeq + 1` from the broker (which reads the cleartext seq column; the host holds no
+    // store creds) BEFORE either pump can emit. Best-effort: a non-durable backend, an absent channel, or
+    // a failed read leaves #seq at 0 (a fresh session, or the legacy ephemeral behavior).
+    if (this.#durable && this.#seq === 0) {
+      try {
+        const max = await this.#client.maxSeq(this.#sessionId);
+        if (max !== null) {
+          this.#seq = max + 1;
+          this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
+        }
+      } catch (e) {
+        this.#trace.warn("seq resume failed — starting at 0", {
+          error: (e as Error)?.message ?? String(e),
+        });
+      }
+    }
     const ac = new AbortController();
     const onAbort = () => ac.abort();
     if (signal.aborted) ac.abort();

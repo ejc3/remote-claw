@@ -253,6 +253,26 @@ export class BrokerClient {
       yield decodeFrame(JSON.parse(data));
     }
   }
+
+  /**
+   * GET /api/seq — the highest transcript `seq` the broker's durable log holds for `sessionId` (or the
+   * bus when omitted), or null if the backend keeps no durable log / the channel is absent. A restarted
+   * host resumes `seq = max + 1` so its new frames don't collide with the durable ones (#36). Holds no
+   * store creds — the broker reads the cleartext `seq` column; the body is `{ maxSeq: number | null }`.
+   */
+  async maxSeq(sessionId?: string): Promise<number | null> {
+    const qs = sessionId !== undefined ? `?session=${encodeURIComponent(sessionId)}` : "";
+    const res = await this.#fetch(`${this.#baseUrl}/api/seq${qs}`, {
+      headers: {
+        authorization: this.#authHeader(),
+        ...this.#backendHeader(),
+        ...this.#bypassHeader(),
+      },
+    });
+    if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
+    const body = (await res.json()) as { maxSeq?: unknown };
+    return typeof body.maxSeq === "number" ? body.maxSeq : null;
+  }
 }
 
 /** Read an error reply body without throwing (best-effort message for BrokerError). */

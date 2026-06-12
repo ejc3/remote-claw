@@ -2,6 +2,7 @@ import { decodeFrame, deriveSessionKey, open, utf8, type WireFrame } from "@remo
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { POST as relay } from "../app/api/relay/route";
+import { GET as seqRoute } from "../app/api/seq/route";
 import { GET as stream } from "../app/api/stream/route";
 import { announceFrame, bearer, header, readSseData, testIdentity, wireFrame } from "./helpers";
 
@@ -26,6 +27,26 @@ function post(frame: WireFrame, auth: string, session?: string): Promise<Respons
 function sub(auth: string, query = ""): Promise<Response> {
   return stream(new Request(`${BASE}/api/stream${query}`, { headers: { authorization: auth } }));
 }
+
+function seqReq(auth: string | undefined, query = ""): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (auth !== undefined) headers.authorization = auth;
+  return seqRoute(new Request(`${BASE}/api/seq${query}`, { headers }));
+}
+
+describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
+  it("returns {maxSeq: null} for a backend without a durable maxSeq", async () => {
+    const id = await testIdentity(20);
+    const res = await seqReq(bearer(id.authToken), "?session=sess-seq");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ maxSeq: null });
+  });
+
+  it("rejects an unauthenticated request", async () => {
+    const res = await seqReq(undefined);
+    expect(res.status).toBe(401);
+  });
+});
 
 describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   it("E2E: a sealed bus announce round-trips host → POST /api/relay → bus → GET /api/stream → open", async () => {

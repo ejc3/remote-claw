@@ -114,6 +114,30 @@ export class TursoBackend implements BrokerBackend {
     }
   }
 
+  /**
+   * The highest `seq` in the live channel's current incarnation, or null if the channel is absent/closed
+   * or holds no seq-bearing frame yet. MAX(seq) ignores the NULL-seq rows (accepted/meta frames), so it
+   * returns the top transcript seq — exactly what a restarting host adds 1 to (#36). `seq` is cleartext,
+   * so this never opens a frame. Same absent/closed→null rule as subscribe (a reopened token is a fresh
+   * incarnation with no prior frames ⇒ the host restarts at 0).
+   */
+  async maxSeq(token: string): Promise<number | null> {
+    const c = this.#client;
+    await ensureSchema(c);
+    const ch = await c.execute({
+      sql: "SELECT gen, closed FROM channels WHERE token = ?",
+      args: [token],
+    });
+    const meta = ch.rows[0];
+    if (meta === undefined || Number(meta.closed) === 1) return null;
+    const r = await c.execute({
+      sql: "SELECT MAX(seq) AS m FROM frames WHERE token = ? AND gen = ?",
+      args: [token, Number(meta.gen)],
+    });
+    const m = r.rows[0]?.m;
+    return m === null || m === undefined ? null : Number(m);
+  }
+
   async subscribe(
     token: string,
     startIndex: number | undefined,
