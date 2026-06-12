@@ -81,7 +81,10 @@ export class BrokerClient {
   constructor(opts: BrokerClientOptions) {
     this.#baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.#provider = opts.provider;
-    this.#backend = opts.backend;
+    // Normalize the backend ONCE: trim, and treat blank as unset. So `durable` and the
+    // `x-broker-backend` header both see the same value — no host-vs-broker disagreement from stray
+    // whitespace (the broker trims `?backend=` before matching, but its requestable gate does not).
+    this.#backend = opts.backend?.trim() || undefined;
     this.#bypass = opts.protectionBypass;
     // The browser's global fetch is a built-in that MUST be called with `this === window`; storing
     // it on the instance and calling `this.#fetch(...)` rebinds `this` to the BrokerClient and throws
@@ -96,9 +99,9 @@ export class BrokerClient {
    *  backend (vercel) rolls old frames off its buffer, so there the host's `#log` is still the only full
    *  history — hence the conservative default (undefined/unknown backend ⇒ NOT durable, keep the #log). */
   get durable(): boolean {
-    // `.trim()` mirrors the broker's own backend resolution (it trims `?backend=` before matching), so a
-    // stray-whitespace backend value can't make host and broker disagree about which store is in play.
-    return this.#backend?.trim() === "turso";
+    // `#backend` is already trimmed/blank-normalized at construction, so this matches exactly what the
+    // `x-broker-backend` header sends — host and broker can't disagree about which store is in play.
+    return this.#backend === "turso";
   }
 
   /** `Authorization: Bearer <hex(auth_token)>` — recomputed by the broker into identity_id (§4.5). */

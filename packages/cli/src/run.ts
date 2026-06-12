@@ -158,8 +158,11 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
   }
   if (rcApp === "" && rcNames.length > 0 && !helpWanted) {
+    // Name the flags the user actually passed (e.g. --rc-backend) instead of always blaming --rc-file.
+    const named = rcNames.map((n) => `--${n}`).join(", ");
+    const verb = rcNames.length > 1 ? "need" : "needs";
     warn(
-      "remote-claw: --rc-file needs --rc-app (or RC_APP) to enable remote control; running plain claude\n",
+      `remote-claw: ${named} ${verb} --rc-app (or RC_APP) to enable remote control; running plain claude\n`,
     );
   }
   const spawnFn = opts.spawnFn ?? realSpawn;
