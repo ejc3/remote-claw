@@ -102,11 +102,11 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
         session: s,
         tracer: relayTracer,
       });
-      const served = (async () => {
-        await relay.prepare();
-        await relay.announce(title, cwd, git).catch(() => {});
-        await relay.serve(ac.signal);
-      })().catch(() => {});
+      // Announce on the bus immediately (it must not wait on serve()'s durable-cursor prepare — that
+      // delay would race a viewer's concurrent bus subscribe). serve() samples the cursors before it
+      // starts the inbound tail, so the session inbound cursor is fixed before any inbound is processed.
+      void relay.announce(title, cwd, git).catch(() => {});
+      const served = relay.serve(ac.signal).catch(() => {});
       relays.add(served);
       void served.finally(() => relays.delete(served));
     },

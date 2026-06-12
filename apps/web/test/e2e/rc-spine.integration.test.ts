@@ -586,7 +586,15 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     expect(resolvedFrame?.seq).toBeNull(); // unordered: a content gap must not stall it
 
     // After the grant the relay deletes from #openPerms and calls #maybeAnnounce: needs must drop.
-    await waitFor(() => rawAnnounces.some((a) => a.needs === false && a.sentAt > 0), 15_000);
+    // Wait for the GRANT's needs=false announce specifically — one at or after the first needs=true,
+    // NOT the session's INITIAL needs=false. The grant announce now lands slightly later (the durable
+    // permission_resolved log is written before the worker side effect + re-announce), so under
+    // full-suite load we must WAIT for it rather than race the assertion against it.
+    await waitFor(() => {
+      const nt = rawAnnounces.filter((a) => a.needs === true);
+      const nf = rawAnnounces.filter((a) => a.needs === false && a.sentAt > 0);
+      return nt.length > 0 && nf.some((a) => a.sentAt >= (nt[0]?.sentAt ?? 0));
+    }, 15_000);
     // We must have seen BOTH a needs=true announce and a later needs=false one for this session —
     // i.e., the full true→false transition happened on the bus.
     const needsTrue = rawAnnounces.filter((a) => a.needs === true);

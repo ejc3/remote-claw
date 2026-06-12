@@ -735,28 +735,36 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
 });
 
 describe("HostRcRelay durable restart inbound safety", () => {
-  it("samples durable cursors before announce so first post-announce inbound is not skipped", async () => {
+  it("announce publishes WITHOUT sampling the durable cursors (so it can't race a viewer bus subscribe); serve() samples before the inbound tail", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     client.reportedDurable = true;
     const pushUser = vi.spyOn(session, "pushUserInput");
     const relay = relayOf(session, client);
-    client.onAnnounce = () => {
-      client.pushInbound(inFrame("user", "fast-u-1", "first fast prompt", "fast-c-1"));
-    };
 
+    // The bus announce must NOT do the durable-cursor round-trip (maxSeq/frameCount) — that delay would
+    // race a viewer's CONCURRENT bus subscribe in the broker (the in-process Workflow runtime rejects a
+    // concurrent channel create). The cursors are sampled in serve(), before the inbound tail, instead —
+    // and a viewer cannot post session-inbound faster than that local sample resolves (it must first
+    // receive this announce, subscribe to the session channel, and post).
     await relay.announce("box");
+    expect(client.maxSeqCalls).toBe(0);
+    expect(client.frameCountCalls).toBe(0);
+
     const ac = new AbortController();
     const served = relay.serve(ac.signal).catch(() => {});
+    await waitFor(() => client.streamStarts.length > 0);
+    // serve() sampled both durable cursors before starting the inbound tail.
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(1);
+
+    // A live inbound arriving after the sample is delivered (exactly once).
+    client.pushInbound(inFrame("user", "new-u-1", "new prompt", "new-c-1"));
     await waitFor(() => pushUser.mock.calls.length === 1);
     ac.abort();
     await served;
-
-    expect(client.maxSeqCalls).toBe(1);
-    expect(client.frameCountCalls).toBe(1);
-    expect(client.streamStarts[0]).toBe(0);
-    expect(pushUser).toHaveBeenCalledWith("first fast prompt");
-    expect(client.content.find((p) => p.recordKind === "user")?.text).toBe("first fast prompt");
+    expect(pushUser).toHaveBeenCalledWith("new prompt");
+    expect(client.content.find((p) => p.recordKind === "user")?.text).toBe("new prompt");
   });
 
   it("uses server-reported durable=true even when the local backend hint is false", async () => {

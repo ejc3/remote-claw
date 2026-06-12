@@ -403,7 +403,12 @@ export class HostRcRelay {
     cwd: string | null = null,
     git: GitInfo | null = null,
   ): Promise<void> {
-    await this.prepare();
+    // The bus announce publishes IMMEDIATELY — it must NOT wait on prepare() (the durable-cursor
+    // sample), because that round-trip would delay the bus publish enough to race a viewer's concurrent
+    // bus subscribe (the broker rejects a concurrent channel create). prepare() instead gates the
+    // INBOUND TAIL in serve(): the session's inbound cursor is sampled before any inbound is processed,
+    // and a viewer cannot post session-inbound faster than prepare() resolves (it must first receive
+    // this announce, subscribe to the session channel, and post — all well after the local sample).
     this.#annTitle = title;
     this.#annCwd = cwd;
     this.#annGit = git;
