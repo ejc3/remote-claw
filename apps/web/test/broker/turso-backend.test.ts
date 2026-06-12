@@ -167,6 +167,44 @@ describe("TursoBackend — Turso-specific", () => {
     expect(seqs(await readN(present(await b.subscribe(t, 0)), 3))).toEqual([0, 1, 2]);
   });
 
+  it("sweeps frames older than the retention cutoff and prunes empty closed channels", async () => {
+    const closed = tok();
+    const live = tok();
+    const b = be();
+    await b.publish(closed, frame(0));
+    await b.publish(closed, { __close: true });
+    await b.publish(live, frame(1));
+    await b.publish(live, frame(2));
+
+    const old = Date.now() - 60_000;
+    const recent = Date.now();
+    await client.execute({
+      sql: "UPDATE frames SET created_at = ? WHERE token = ?",
+      args: [old, closed],
+    });
+    await client.execute({
+      sql: `UPDATE frames
+            SET created_at = CASE WHEN seq = 1 THEN ? ELSE ? END
+            WHERE token = ?`,
+      args: [old, recent, live],
+    });
+
+    expect(await b.sweep(30_000)).toBe(2);
+    expect(seqs(await readN(present(await b.subscribe(live, 0)), 1))).toEqual([2]);
+
+    const remaining = await client.execute({
+      sql: "SELECT seq FROM frames WHERE token = ? ORDER BY seq",
+      args: [live],
+    });
+    expect(remaining.rows.map((r) => Number(r.seq))).toEqual([2]);
+
+    const pruned = await client.execute({
+      sql: "SELECT token FROM channels WHERE token = ?",
+      args: [closed],
+    });
+    expect(pruned.rows).toHaveLength(0);
+  });
+
   it("picks up a frame published AFTER subscribe (the poll tail)", async () => {
     const t = tok();
     const b = be();

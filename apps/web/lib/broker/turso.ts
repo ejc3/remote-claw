@@ -27,6 +27,33 @@ export class TursoBackend implements BrokerBackend {
     this.#client = client ?? tursoClientFromEnv();
   }
 
+  async sweep(retainMs: number): Promise<number> {
+    const c = this.#client;
+    await ensureSchema(c);
+
+    const tx = await c.transaction("write");
+    try {
+      const deleted = await tx.execute({
+        sql: "DELETE FROM frames WHERE created_at < ?",
+        args: [Date.now() - retainMs],
+      });
+      await tx.execute({
+        sql: `DELETE FROM channels
+              WHERE closed = 1
+                AND NOT EXISTS (SELECT 1 FROM frames WHERE frames.token = channels.token)`,
+      });
+      await tx.commit();
+      return Number(deleted.rowsAffected);
+    } catch (e) {
+      try {
+        await tx.rollback();
+      } catch {
+        /* already settled */
+      }
+      throw e;
+    }
+  }
+
   async publish(token: string, payload: RelayPayload): Promise<PublishResult> {
     const c = this.#client;
     await ensureSchema(c);
