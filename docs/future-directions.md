@@ -291,5 +291,16 @@ The three findings converge on one decision:
    differentiator — Happy/Happier stream a *shell* to the phone, never `claude` itself.
 3. **Spike the durable-log `BrokerBackend` adapter** (§2) to retire the seq/restart/reconnect machinery,
    gated on the store-free trade.
+4. **Add outbound viewer-gating** (the missing broker-efficiency mechanism — see `v2-architecture.md`
+   §6D worked example). Today the host posts the transcript **unconditionally**: `#pumpUpstream` emits
+   every frame whether or not anyone is watching, because the zero-knowledge, store-free broker gives
+   the host **no viewer-presence back-channel**. Consequence: an idle fleet (many sessions, no viewers)
+   pays full relay price and each Vercel channel grinds to its event cap and **rolls every ~10 min** for
+   nothing. The fix is a **sealed presence beat** (a viewer→host "watching" signal on the bus) so the
+   host can gate outbound on ≥1 viewer, dropping an idle session to the ~20 s announce keepalive floor.
+   It must preserve zero-knowledge (presence is a sealed/meta-plane frame, not a broker-stored row) and
+   stay advisory (a missed beat must fail safe — keep relaying, never silently drop). Orthogonal to the
+   transport choice; the **Turso** backend sidesteps the *cost* of the gap (no per-run cap, no rolling)
+   but not the gap itself (it still accrues unbounded at-rest ciphertext absent the A2 retention sweep).
 
 None of these is committed; they are recorded here so the trade-offs are explicit when the time comes.
