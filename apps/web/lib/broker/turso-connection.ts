@@ -10,7 +10,7 @@ const g = globalThis as unknown as { __rcTursoClient?: Client };
 // Per-client "schema is ready" promise — `CREATE TABLE IF NOT EXISTS` is idempotent, but we only want to
 // issue it once per client (and share it across concurrent requests). Keyed by client so an injected
 // test client migrates independently of the env singleton.
-const migrated = new WeakMap<Client, Promise<void>>();
+let migrated = new WeakMap<Client, Promise<void>>();
 
 // The single durable log + a tiny channel-state row.
 //   channels — one row per token: is it live, and which incarnation (`gen`). `gen` bumps on a
@@ -41,6 +41,7 @@ const DDL = [
      UNIQUE (token, gen, msg_id, part)
    )`,
   `CREATE INDEX IF NOT EXISTS frames_token_gen_id ON frames (token, gen, id)`,
+  `CREATE INDEX IF NOT EXISTS frames_token_created_at ON frames (token, created_at)`,
 ];
 
 /** The env-configured libSQL client singleton. Throws clearly if the URL is missing. */
@@ -63,10 +64,34 @@ export function tursoClientFromEnv(): Client {
 export function ensureSchema(client: Client): Promise<void> {
   let p = migrated.get(client);
   if (p === undefined) {
-    p = client.batch(DDL, "write").then(() => undefined);
+    p = client.batch(DDL, "write").then(
+      () => undefined,
+      (e) => {
+        migrated.delete(client);
+        throw e;
+      },
+    );
     migrated.set(client, p);
   }
   return p;
+}
+
+export function resetTursoConnection(client?: Client): void {
+  if (client === undefined) {
+    migrated = new WeakMap();
+  } else {
+    migrated.delete(client);
+  }
+
+  const cached = g.__rcTursoClient;
+  if (cached !== undefined && (client === undefined || cached === client)) {
+    try {
+      cached.close();
+    } catch {
+      /* already closed */
+    }
+    delete g.__rcTursoClient;
+  }
 }
 
 /** Live-tail poll interval (ms) — libSQL has no server→client push, so subscribe() polls. Default 150

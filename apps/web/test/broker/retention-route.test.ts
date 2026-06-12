@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_RETENTION_MS, retentionMs } from "../../app/api/cron/retention/gate";
+import {
+  DEFAULT_RETENTION_MS,
+  retentionMs,
+  tursoIsActiveBackend,
+} from "../../app/api/cron/retention/gate";
 import { GET } from "../../app/api/cron/retention/route";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +16,7 @@ vi.mock("../../lib/broker", () => ({
 
 const env = process.env as Record<string, string | undefined>;
 const KEYS = [
+  "BROKER_BACKEND",
   "BROKER_RETENTION_MS",
   "CRON_SECRET",
   "NODE_ENV",
@@ -55,6 +60,14 @@ describe("retentionMs", () => {
     env.BROKER_RETENTION_MS = "120000";
     expect(retentionMs()).toBe(120_000);
   });
+
+  it("requires Turso to be the active broker backend", () => {
+    expect(tursoIsActiveBackend()).toBe(false);
+    env.BROKER_BACKEND = "vercel";
+    expect(tursoIsActiveBackend()).toBe(false);
+    env.BROKER_BACKEND = "turso";
+    expect(tursoIsActiveBackend()).toBe(true);
+  });
 });
 
 describe("retention cron route", () => {
@@ -71,6 +84,19 @@ describe("retention cron route", () => {
 
   it("falls back to swept:0 when Turso is not configured", async () => {
     env.CRON_SECRET = "cron";
+    env.BROKER_BACKEND = "turso";
+
+    const res = await GET(req("Bearer cron"));
+
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual({ swept: 0 });
+    expect(mocks.getBackend).not.toHaveBeenCalled();
+  });
+
+  it("falls back to swept:0 when Turso is configured but not the active backend", async () => {
+    env.CRON_SECRET = "cron";
+    env.BROKER_BACKEND = "vercel";
+    env.TURSO_DATABASE_URL = "file:test.db";
 
     const res = await GET(req("Bearer cron"));
 
@@ -81,6 +107,7 @@ describe("retention cron route", () => {
 
   it("falls back to swept:0 when the backend has no sweep hook", async () => {
     env.CRON_SECRET = "cron";
+    env.BROKER_BACKEND = "turso";
     env.TURSO_DATABASE_URL = "file:test.db";
     mocks.getBackend.mockResolvedValue({});
 
@@ -93,6 +120,7 @@ describe("retention cron route", () => {
   it("runs sweep with a valid retention override", async () => {
     env.BROKER_RETENTION_MS = "45000";
     env.CRON_SECRET = "cron";
+    env.BROKER_BACKEND = "turso";
     env.TURSO_DATABASE_URL = "file:test.db";
     const sweep = vi.fn().mockResolvedValue(3);
     mocks.getBackend.mockResolvedValue({ sweep });
@@ -107,6 +135,7 @@ describe("retention cron route", () => {
 
   it("returns 500 when backend construction or sweep fails", async () => {
     env.CRON_SECRET = "cron";
+    env.BROKER_BACKEND = "turso";
     env.TURSO_DATABASE_URL = "file:test.db";
     mocks.getBackend.mockRejectedValue(new Error("bad turso"));
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);

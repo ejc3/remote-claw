@@ -1,6 +1,6 @@
 import { getBackend } from "../../../../lib/broker";
 import { authorized } from "../../temporal/drain/gate";
-import { retentionMs, tursoConfigured } from "./gate";
+import { retentionMs, tursoConfigured, tursoIsActiveBackend } from "./gate";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -11,7 +11,7 @@ export async function GET(req: Request): Promise<Response> {
     return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
   }
 
-  if (!tursoConfigured()) return Response.json({ swept: 0 });
+  if (!tursoConfigured() || !tursoIsActiveBackend()) return Response.json({ swept: 0 });
 
   try {
     const backend = await getBackend("turso");

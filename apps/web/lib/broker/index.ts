@@ -1,4 +1,5 @@
 import type { BrokerBackend } from "./backend";
+import { brokerCache } from "./broker-cache";
 import { LocalBackend } from "./local";
 import { VercelBackend } from "./vercel";
 
@@ -24,9 +25,7 @@ const KNOWN = new Set(["vercel", "local", "temporal", "turso"]);
 // would give each route its OWN LocalBackend map, so a publish and the matching subscribe would land
 // on different in-memory channels (the "0 sessions" failure). A globalThis singleton is the same Map
 // for every module instance in the process.
-const g = globalThis as unknown as { __rcBrokerCache?: Map<string, BrokerBackend> };
-if (g.__rcBrokerCache === undefined) g.__rcBrokerCache = new Map();
-const cache: Map<string, BrokerBackend> = g.__rcBrokerCache;
+const cache: Map<string, BrokerBackend> = brokerCache();
 
 /** The HTTP header an API client sends to pick the backend (same meaning as the `?backend=` param). */
 export const BACKEND_HEADER = "x-broker-backend";
@@ -95,3 +94,4 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
 
 export type { BrokerBackend } from "./backend";
 export { isClose, type RelayPayload } from "./backend";
+export { evictBackend } from "./broker-cache";
