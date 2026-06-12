@@ -303,3 +303,28 @@ describe("TursoBackend.maxSeq — durable cross-restart seq cursor (A2b/#36)", (
     expect(await b.maxSeq(t)).toBe(0); // only the new gen's frames count
   });
 });
+
+describe("TursoBackend.frameCount — durable inbound stream cursor", () => {
+  it("returns null when the channel does not exist", async () => {
+    expect(await be().frameCount(tok())).toBeNull();
+  });
+
+  it("counts every frame row, including NULL-seq meta frames", async () => {
+    const t = tok();
+    const b = be();
+    await b.publish(t, frame(5, { msg_id: "content", part: 0 }));
+    await b.publish(t, { msg_id: "meta", part: 0 } as unknown as WireFrame);
+    await b.publish(t, frame(6, { msg_id: "content-2", part: 0 }));
+    expect(await b.frameCount(t)).toBe(3);
+  });
+
+  it("reflects only the current incarnation after a reopen", async () => {
+    const t = tok();
+    const b = be();
+    await b.publish(t, frame(7));
+    await b.publish(t, { __close: true });
+    expect(await b.frameCount(t)).toBeNull();
+    await b.publish(t, frame(0));
+    expect(await b.frameCount(t)).toBe(1);
+  });
+});

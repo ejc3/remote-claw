@@ -76,6 +76,14 @@ export interface BrokerBackend {
    */
   maxSeq?(token: string): Promise<number | null>;
 
+  /**
+   * The number of frames in the live channel incarnation, or null when there is no durable history for
+   * it (the channel is absent/closed). This is the broker subscribe cursor's unit: every publish-order
+   * row counts, including inbound, outbound, meta, and chunks. A restarted host uses it as the durable
+   * inbound `startIndex` floor so old client actions are not replayed into the worker.
+   */
+  frameCount?(token: string): Promise<number | null>;
+
   /** Optional retention hook for durable backends that store sealed frames at rest. */
   sweep?(retainMs: number): Promise<number>;
 }

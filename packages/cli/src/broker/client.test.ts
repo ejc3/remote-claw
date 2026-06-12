@@ -102,7 +102,7 @@ describe("BrokerClient transport", () => {
     expect(noSeen[0]?.["x-vercel-protection-bypass"]).toBeUndefined();
   });
 
-  it("maxSeq round-trips numbers/null and sends auth + backend headers", async () => {
+  it("maxSeq/frameCount round-trip numbers/null and send auth + backend headers", async () => {
     const seen: Array<{ url: string; headers: Record<string, string> }> = [];
     const capture: typeof fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       seen.push({
@@ -119,11 +119,13 @@ describe("BrokerClient transport", () => {
     });
 
     expect(await tursoClient.maxSeq("missing")).toBeNull();
+    expect(await tursoClient.frameCount("missing")).toBeNull();
     await tursoClient.postFrame(
       header(id, { recordKind: "accepted", seq: null, sessionId: "empty", msgId: "empty-1" }),
       utf8("{}"),
     );
     expect(await tursoClient.maxSeq("empty")).toBeNull();
+    expect(await tursoClient.frameCount("empty")).toBe(1);
     await tursoClient.postFrame(
       header(id, { recordKind: "assistant", seq: 2, sessionId: "seq-session", msgId: "seq-2" }),
       utf8("two"),
@@ -133,10 +135,17 @@ describe("BrokerClient transport", () => {
       utf8("seven"),
     );
     expect(await tursoClient.maxSeq("seq-session")).toBe(7);
+    expect(await tursoClient.frameCount("seq-session")).toBe(2);
 
     const seqCalls = seen.filter((call) => new URL(call.url).pathname === "/api/seq");
     expect(seqCalls).toHaveLength(3);
     for (const call of seqCalls) {
+      expect(call.headers.authorization).toBe(`Bearer ${toHex(id.authToken)}`);
+      expect(call.headers["x-broker-backend"]).toBe("turso");
+    }
+    const countCalls = seen.filter((call) => new URL(call.url).pathname === "/api/frame-count");
+    expect(countCalls).toHaveLength(3);
+    for (const call of countCalls) {
       expect(call.headers.authorization).toBe(`Bearer ${toHex(id.authToken)}`);
       expect(call.headers["x-broker-backend"]).toBe("turso");
     }

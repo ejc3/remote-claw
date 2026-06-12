@@ -325,6 +325,11 @@ export class HostRcRelay {
    *  and skips replaying on `catch_up`, because subscribe() serves history straight from the durable
    *  frames table. False (capped/ephemeral backend) keeps the legacy host-replayed catch_up. */
   readonly #durable: boolean;
+  /** First inbound stream offset this relay incarnation may read. On durable restart this is set to the
+   *  current frame count before the pumps go live, fencing the fresh empty #seen set above all frames
+   *  written by earlier host incarnations. Non-durable backends keep the legacy 0 replay+dedup path. */
+  #inboundStartIndex = 0;
+  #durableCursorsReady = false;
 
   /** Unanswered permission requests (request_id) — drives the announce's `needs` flag (#48/#58) and
    *  is cleared when the matching inbound `permission` answer arrives (which logs permission_resolved). */
@@ -533,42 +538,7 @@ export class HostRcRelay {
    *  shared #publishLock/#halted, would otherwise leave a live session stranded behind a permanent seq
    *  gap. (Adversarial-review fix.) An external `signal` abort still stops both as before. */
   async serve(signal: AbortSignal): Promise<void> {
-    // #36 (durable face): on a durable backend the session's frames OUTLIVE this host process, so a NEW
-    // relay resuming the same session must CONTINUE its seq numbering — restarting at 0 would re-issue
-    // seqs the durable log already holds, and a viewer's orderer would drop the new content as duplicates.
-    // Resume `#seq = maxSeq + 1` from the broker (which reads the cleartext seq column; the host holds no
-    // store creds) BEFORE either pump can emit. The read is bounded-retried for transient broker blips; if
-    // every attempt fails, it logs ERROR and starts at 0 (non-blocking, but loud).
-    //
-    // Limitation: A2b resumes only the OUTBOUND `#seq`. On a durable backend, a host RESTART also gives
-    // `#tailInbound` a fresh empty `#seen`; subscribe(0) can then replay every historical `user` prompt
-    // from the durable log and re-inject old prompts into claude. Durable inbound-dedup recovery is
-    // pre-existing A1 design work and is not addressed here.
-    if (this.#durable && this.#seq === 0) {
-      let lastErr: unknown;
-      for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
-        try {
-          const max = await this.#client.maxSeq(this.#sessionId);
-          lastErr = undefined;
-          if (max !== null) {
-            this.#seq = max + 1;
-            this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
-          }
-          break;
-        } catch (e) {
-          lastErr = e;
-          if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
-            await new Promise((r) => setTimeout(r, SEQ_RESUME_RETRY_BASE_MS * 2 ** attempt));
-          }
-        }
-      }
-      if (lastErr !== undefined) {
-        this.#trace.error("seq resume failed after retries — starting at 0", {
-          attempts: SEQ_RESUME_ATTEMPTS,
-          error: (lastErr as Error)?.message ?? String(lastErr),
-        });
-      }
-    }
+    if (this.#durable && !this.#durableCursorsReady) await this.#resumeDurableCursors();
     const ac = new AbortController();
     const onAbort = () => ac.abort();
     if (signal.aborted) ac.abort();
@@ -590,6 +560,66 @@ export class HostRcRelay {
     } finally {
       signal.removeEventListener("abort", onAbort);
     }
+  }
+
+  /** Durable restart recovery has two independent cursors and both must be known BEFORE the pumps can
+   *  emit or consume anything. `maxSeq` resumes the outbound transcript seq. `frameCount` resumes the
+   *  inbound stream cursor because broker `startIndex` is a publish-order frame offset, not a transcript
+   *  seq; counting every row (in/out/meta/chunks) is what makes the first yielded frame exactly the
+   *  first publish after this relay incarnation's high-water mark. If either durable read fails after
+   *  bounded retries we fail closed: starting at seq/startIndex 0 would either corrupt ordering or
+   *  re-execute historical client actions from the durable log. */
+  async #resumeDurableCursors(): Promise<void> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
+      try {
+        const max = await this.#client.maxSeq(this.#sessionId);
+        lastErr = undefined;
+        if (max !== null && this.#seq === 0) {
+          this.#seq = max + 1;
+          this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
+        }
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, SEQ_RESUME_RETRY_BASE_MS * 2 ** attempt));
+        }
+      }
+    }
+    if (lastErr !== undefined) {
+      this.#fatal = true;
+      this.#trace.error("seq resume failed after retries — aborting durable relay", {
+        attempts: SEQ_RESUME_ATTEMPTS,
+        error: (lastErr as Error)?.message ?? String(lastErr),
+      });
+      throw lastErr;
+    }
+
+    lastErr = undefined;
+    for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
+      try {
+        const count = await this.#client.frameCount(this.#sessionId);
+        lastErr = undefined;
+        this.#inboundStartIndex = count ?? 0;
+        this.#durableCursorsReady = true;
+        this.#trace.debug("resumed inbound cursor from durable log", {
+          startIndex: this.#inboundStartIndex,
+        });
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, SEQ_RESUME_RETRY_BASE_MS * 2 ** attempt));
+        }
+      }
+    }
+    this.#fatal = true;
+    this.#trace.error("inbound cursor resume failed after retries — aborting durable relay", {
+      attempts: SEQ_RESUME_ATTEMPTS,
+      error: (lastErr as Error)?.message ?? String(lastErr),
+    });
+    throw lastErr;
   }
 
   /** OUTBOUND: tail the worker's upstream and relay each assistant/result as a content frame. */
@@ -679,7 +709,7 @@ export class HostRcRelay {
     this.#trace.debug("inbound subscribe");
     for await (const frame of this.#client.streamFrames({
       session: this.#sessionId,
-      startIndex: 0,
+      startIndex: this.#durable ? this.#inboundStartIndex : 0,
       signal,
     })) {
       if (frame.dir !== "in") continue; // ignore our own out-frames on the shared stream

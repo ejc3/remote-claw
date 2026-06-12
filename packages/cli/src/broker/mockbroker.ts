@@ -79,6 +79,11 @@ export class MockBroker {
       return json({ maxSeq });
     }
 
+    if (url.pathname === "/api/frame-count") {
+      const token = session === null ? "bus" : `sess:${session}`;
+      return json({ frameCount: this.#channels.get(token)?.length ?? null });
+    }
+
     return json({ error: "not found" }, 404);
   }
 }

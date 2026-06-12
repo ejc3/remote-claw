@@ -273,6 +273,26 @@ export class BrokerClient {
     const body = (await res.json()) as { maxSeq?: unknown };
     return typeof body.maxSeq === "number" ? body.maxSeq : null;
   }
+
+  /**
+   * GET /api/frame-count — the current publish-order stream length for `sessionId` (or null if the
+   * backend has no durable frame log / the channel is absent). A restarted durable host uses this as
+   * the inbound `startIndex` floor: unlike `maxSeq`, it counts in/out/meta/chunk rows exactly like the
+   * broker's subscribe cursor.
+   */
+  async frameCount(sessionId?: string): Promise<number | null> {
+    const qs = sessionId !== undefined ? `?session=${encodeURIComponent(sessionId)}` : "";
+    const res = await this.#fetch(`${this.#baseUrl}/api/frame-count${qs}`, {
+      headers: {
+        authorization: this.#authHeader(),
+        ...this.#backendHeader(),
+        ...this.#bypassHeader(),
+      },
+    });
+    if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
+    const body = (await res.json()) as { frameCount?: unknown };
+    return typeof body.frameCount === "number" ? body.frameCount : null;
+  }
 }
 
 /** Read an error reply body without throwing (best-effort message for BrokerError). */

@@ -198,6 +198,32 @@ export class TursoBackend implements BrokerBackend {
     }
   }
 
+  /**
+   * Current live-incarnation stream length in the SAME units as subscribe(startIndex): publish-order
+   * frame rows, not transcript seq. This lets a restarted host subscribe from the durable high-water
+   * mark and avoid re-consuming old inbound client actions.
+   */
+  async frameCount(token: string): Promise<number | null> {
+    const c = this.#client;
+    await ensureSchema(c);
+    const tx = await c.transaction("read");
+    try {
+      const ch = await tx.execute({
+        sql: "SELECT gen, closed FROM channels WHERE token = ?",
+        args: [token],
+      });
+      const meta = ch.rows[0];
+      if (meta === undefined || Number(meta.closed) === 1) return null;
+      const r = await tx.execute({
+        sql: "SELECT COUNT(*) AS n FROM frames WHERE token = ? AND gen = ?",
+        args: [token, Number(meta.gen)],
+      });
+      return Number(r.rows[0]?.n ?? 0);
+    } finally {
+      tx.close();
+    }
+  }
+
   async subscribe(
     token: string,
     startIndex: number | undefined,
