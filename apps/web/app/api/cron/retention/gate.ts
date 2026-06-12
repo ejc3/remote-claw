@@ -16,7 +16,3 @@ export function tursoConfigured(): boolean {
   const url = process.env.TURSO_DATABASE_URL;
   return url !== undefined && url.trim() !== "";
 }
-
-export function tursoIsActiveBackend(): boolean {
-  return (process.env.BROKER_BACKEND?.trim() || "vercel") === "turso";
-}

@@ -53,7 +53,11 @@ describe("FrameOrderer (dedup + reorder, §6/§12)", () => {
     const p0 = frame({ msgId: "big", seq: 0, part: 0, parts: 2 });
     const p1 = frame({ msgId: "big", seq: 0, part: 1, parts: 2 });
     expect(o.accept(p0)).toEqual([]); // incomplete — the message's seq slot is held (like a gap)
+    expect(o.stalledOnMissingSeq).toBe(false);
+    expect(o.stalledOnIncompleteSeq).toBe(true);
+    expect(o.stalled).toBe(true);
     expect(o.accept(p1).map((f) => f.part)).toEqual([0, 1]); // complete → both parts, in part order
+    expect(o.stalled).toBe(false);
     expect(o.accept(p0)).toEqual([]); // a re-sent part is deduped by (msg_id, part)
     expect(o.nextSeq).toBe(1); // the whole chunked message occupied exactly ONE transcript seq
   });

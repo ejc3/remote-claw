@@ -132,6 +132,8 @@ class FakeClient {
   }
 
   failSeq: number | null = null; // fail postMessage when header.seq === failSeq
+  failRecordKind: string | null = null; // fail postMessage when header.recordKind matches
+  onAnnounce: (() => void) | null = null;
 
   #inbound: Frame[] = [];
   #wakes = new Set<() => void>();
@@ -153,6 +155,9 @@ class FakeClient {
     if (this.failSeq !== null && header.seq === this.failSeq) {
       throw new BrokerError(500, "injected failure");
     }
+    if (this.failRecordKind !== null && header.recordKind === this.failRecordKind) {
+      throw new BrokerError(500, `injected ${header.recordKind} failure`);
+    }
     this.posts.push({ recordKind: header.recordKind, seq: header.seq, msgId: header.msgId, text });
     return [{ ok: true, channel: "session", runId: "r", created: false }];
   }
@@ -165,6 +170,7 @@ class FakeClient {
       } catch {
         /* ignore */
       }
+      this.onAnnounce?.();
     }
     this.posts.push({ recordKind: header.recordKind, seq: header.seq, msgId: header.msgId, text });
     return { ok: true, channel: "bus", runId: "r", created: false };
@@ -396,6 +402,38 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     const replayed = client.posts.filter((p) => p.recordKind === "permission_resolved").at(-1);
     expect(replayed?.seq).toBeNull();
     expect(replayed?.msgId).toBe(resolved?.msgId);
+  });
+
+  it("does not apply a permission grant when logging permission_resolved fails", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const pushControl = vi.spyOn(session, "pushControlResponse");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => "resolved",
+      () => "rejected",
+    );
+
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "perm-log-first",
+      request: { subtype: "can_use_tool", tool_name: "Bash", tool_input: { command: "echo" } },
+    });
+    await waitFor(() => client.content.some((p) => p.recordKind === "permission_request"));
+
+    client.failRecordKind = "permission_resolved";
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "perm-log-first-in",
+        JSON.stringify({ request_id: "perm-log-first", behavior: "allow" }),
+      ),
+    );
+
+    await expect(served).resolves.toBe("rejected");
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(client.posts.filter((p) => p.recordKind === "permission_resolved")).toHaveLength(0);
   });
 });
 
@@ -697,6 +735,30 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
 });
 
 describe("HostRcRelay durable restart inbound safety", () => {
+  it("samples durable cursors before announce so first post-announce inbound is not skipped", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const relay = relayOf(session, client);
+    client.onAnnounce = () => {
+      client.pushInbound(inFrame("user", "fast-u-1", "first fast prompt", "fast-c-1"));
+    };
+
+    await relay.announce("box");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+    await waitFor(() => pushUser.mock.calls.length === 1);
+    ac.abort();
+    await served;
+
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(1);
+    expect(client.streamStarts[0]).toBe(0);
+    expect(pushUser).toHaveBeenCalledWith("first fast prompt");
+    expect(client.content.find((p) => p.recordKind === "user")?.text).toBe("first fast prompt");
+  });
+
   it("uses server-reported durable=true even when the local backend hint is false", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();

@@ -332,6 +332,7 @@ export class HostRcRelay {
    *  written by earlier host incarnations. Non-durable backends keep the legacy 0 replay+dedup path. */
   #inboundStartIndex = 0;
   #durableCursorsReady = false;
+  #preparePromise: Promise<void> | null = null;
 
   /** Unanswered permission requests (request_id) — drives the announce's `needs` flag (#48/#58) and
    *  is cleared when the matching inbound `permission` answer arrives (which logs permission_resolved). */
@@ -402,6 +403,7 @@ export class HostRcRelay {
     cwd: string | null = null,
     git: GitInfo | null = null,
   ): Promise<void> {
+    await this.prepare();
     this.#annTitle = title;
     this.#annCwd = cwd;
     this.#annGit = git;
@@ -541,10 +543,7 @@ export class HostRcRelay {
    *  shared #publishLock/#halted, would otherwise leave a live session stranded behind a permanent seq
    *  gap. (Adversarial-review fix.) An external `signal` abort still stops both as before. */
   async serve(signal: AbortSignal): Promise<void> {
-    if (!this.#durabilityDiscovered) await this.#discoverDurability();
-    if (this.#durable && !this.#durableCursorsReady) {
-      throw new Error("durable broker reported but restart cursors are not ready");
-    }
+    await this.prepare();
     const ac = new AbortController();
     const onAbort = () => ac.abort();
     if (signal.aborted) ac.abort();
@@ -565,6 +564,19 @@ export class HostRcRelay {
       ]);
     } finally {
       signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** Sample the broker's durable cursors before this relay becomes discoverable or starts its pumps.
+   *  Idempotent so launch, announce(), and direct tests can all call it without racing duplicate cursor
+   *  reads. On a durable backend, failing to resume all cursors remains fail-closed. */
+  async prepare(): Promise<void> {
+    if (!this.#durabilityDiscovered) {
+      if (this.#preparePromise === null) this.#preparePromise = this.#discoverDurability();
+      await this.#preparePromise;
+    }
+    if (this.#durable && !this.#durableCursorsReady) {
+      throw new Error("durable broker reported but restart cursors are not ready");
     }
   }
 
@@ -797,11 +809,8 @@ export class HostRcRelay {
           if (body.answers !== null && typeof body.answers === "object") {
             extra.answers = body.answers as Record<string, string | string[]>;
           }
-          // Log a permission_resolved unordered frame so a later reload / catch_up renders the request
-          // as ANSWERED rather than re-prompting (#56), and so a content gap cannot stall the resolve.
-          // Clearing the gate also drops `needs` from presence — re-announce so the viewer's
-          // needs-you indicator clears (#58).
-          this.#session.pushControlResponse(body.request_id, behavior, extra);
+          // Log a permission_resolved unordered frame BEFORE the worker side effect. If the durable log
+          // publish fails, the worker must not act on a grant that reload/catch_up cannot observe (#56).
           await this.#fatalOnThrow(() =>
             this.#emit(
               "permission_resolved",
@@ -814,6 +823,9 @@ export class HostRcRelay {
               ),
             ),
           );
+          this.#session.pushControlResponse(body.request_id, behavior, extra);
+          // Clearing the gate also drops `needs` from presence — re-announce so the viewer's
+          // needs-you indicator clears (#58).
           await this.#maybeAnnounce();
         }
       } else if (frame.recordKind === "attachment") {

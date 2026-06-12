@@ -24,6 +24,9 @@ export const FRESH_WINDOW_MS = 60_000;
  *  crossing it means ≥2 keepalives were missed → we're RECONNECTING, not yet declared gone (#58). */
 export const CONNECTED_WINDOW_MS = 45_000;
 export const TRANSCRIPT_GAP_STALL_MS = 10_000;
+const DURABILITY_PROBE_ATTEMPTS = 3;
+const DURABILITY_PROBE_BASE_MS = 50;
+const PARTIAL_CHUNK_STALL_MS = 250;
 
 /** The viewer's view of the host link, derived purely from announce freshness (§4.3 / #58):
  *  connected (fresh) → reconnecting (a keepalive or two missed) → disconnected (gone past the window). */
@@ -117,6 +120,7 @@ export class Viewer {
   readonly #identityId: Uint8Array;
   readonly #incarnations = new Map<string, string>();
   readonly #incarnationListeners = new Map<string, Set<(incarnation: string) => void>>();
+  readonly #durability = new Map<string, boolean>();
 
   private constructor(
     identity: Identity,
@@ -191,12 +195,19 @@ export class Viewer {
     };
   }
 
-  async #durable(sessionId: string): Promise<boolean> {
-    try {
-      return (await this.#client.seqCursor(sessionId)).durable;
-    } catch {
-      return false;
+  async #durable(sessionId: string, fallback?: boolean): Promise<boolean> {
+    for (let attempt = 0; attempt < DURABILITY_PROBE_ATTEMPTS; attempt++) {
+      try {
+        const durable = (await this.#client.seqCursor(sessionId)).durable;
+        this.#durability.set(sessionId, durable);
+        return durable;
+      } catch {
+        if (attempt < DURABILITY_PROBE_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, DURABILITY_PROBE_BASE_MS * 2 ** attempt));
+        }
+      }
     }
+    return fallback ?? this.#durability.get(sessionId) ?? true;
   }
 
   /**
@@ -254,9 +265,16 @@ export class Viewer {
   async *transcript(sessionId: string, signal: AbortSignal): AsyncGenerator<Message> {
     let orderer = new FrameOrderer();
     let streamMode: "full" | "tail" = "full";
+    let durable: boolean | undefined;
     let catchUpOnSubscribe = false;
     let streamCursor = 0;
-    let gap: { nextSeq: number; pending: number; since: number; reported: string } | null = null;
+    let gap: {
+      nextSeq: number;
+      pending: number;
+      since: number;
+      reported: string;
+      partial: boolean;
+    } | null = null;
 
     const restarts: string[] = [];
     let restartResolve: ((incarnation: string) => void) | null = null;
@@ -278,20 +296,24 @@ export class Viewer {
 
     let restartPromise = nextRestart();
     const gapSignal = (): Message | null => {
-      // Only a genuinely MISSING seq is a gap — not a chunked message at the cursor still accumulating
-      // its parts (which has pending>0 but is making progress and drains on its own).
-      if (!orderer.stalledOnMissingSeq) return null;
-      if (gap === null || gap.nextSeq !== orderer.nextSeq) {
+      // Surface both genuinely missing seqs and an incomplete chunked message at the cursor. The latter
+      // should be transient, but if a later chunk failed after earlier chunks landed this is the only
+      // bounded recovery signal instead of a silent permanent stall.
+      const partial = orderer.stalledOnIncompleteSeq;
+      if (!orderer.stalledOnMissingSeq && !partial) return null;
+      if (gap === null || gap.nextSeq !== orderer.nextSeq || gap.partial !== partial) {
         gap = {
           nextSeq: orderer.nextSeq,
           pending: orderer.pending,
           since: Date.now(),
           reported: "",
+          partial,
         };
       } else {
         gap.pending = orderer.pending;
       }
-      const reportKey = `${gap.nextSeq}:${gap.pending}`;
+      if (gap.partial && Date.now() - gap.since < PARTIAL_CHUNK_STALL_MS) return null;
+      const reportKey = `${gap.nextSeq}:${gap.pending}:${gap.partial ? "partial" : "missing"}`;
       if (gap.reported === reportKey) return null;
       gap.reported = reportKey;
       return {
@@ -303,6 +325,14 @@ export class Viewer {
         pending: gap.pending,
         since: gap.since,
       };
+    };
+    const partialGapTimer = (): Promise<{ type: "gap_timer" }> | null => {
+      if (gap === null || !gap.partial || gap.reported !== "") return null;
+      const delay = Math.max(0, gap.since + PARTIAL_CHUNK_STALL_MS - Date.now());
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve({ type: "gap_timer" }), delay);
+        if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
+      });
     };
 
     try {
@@ -327,14 +357,22 @@ export class Viewer {
             void this.requestHistory(sessionId, 0).catch(() => {});
           }
           for (;;) {
+            const timer = partialGapTimer();
             const event = await Promise.race([
               nextFrame,
               restartPromise.then(() => ({ type: "restart" as const })),
+              ...(timer === null ? [] : [timer]),
             ]);
+            if (event.type === "gap_timer") {
+              const stalled = gapSignal();
+              if (stalled !== null) yield stalled;
+              continue;
+            }
             if (event.type === "restart") {
               await iter.return?.(undefined);
               restartPromise = nextRestart();
-              if (await this.#durable(sessionId)) {
+              durable = await this.#durable(sessionId, durable);
+              if (durable) {
                 streamMode = "full";
               } else {
                 orderer = new FrameOrderer();
@@ -345,7 +383,11 @@ export class Viewer {
               break;
             }
             if (event.type === "error") throw event.error;
-            if (event.res.done === true) break;
+            if (event.res.done === true) {
+              const stalled = gapSignal();
+              if (stalled !== null) yield stalled;
+              break;
+            }
             const frame = event.res.value;
             cursor += 1;
             streamCursor = Math.max(streamCursor, cursor);

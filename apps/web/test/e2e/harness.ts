@@ -5,7 +5,9 @@
 // the live MITM of Claude's RC protocol (P4/W6), which needs a real claude binary + network.
 
 import type { Frame, FrameHeader, Identity } from "@remote-claw/clawsec";
+import { GET as frameCountRoute } from "../../app/api/frame-count/route";
 import { POST as relayRoute } from "../../app/api/relay/route";
+import { GET as seqRoute } from "../../app/api/seq/route";
 import { GET as streamRoute } from "../../app/api/stream/route";
 
 /** A `fetch` that dispatches BrokerClient's calls straight to the real route handlers, in-process. */
@@ -14,6 +16,8 @@ export const brokerFetch: typeof fetch = async (input, init) => {
   const req = new Request(url, init);
   if (url.pathname === "/api/relay") return relayRoute(req);
   if (url.pathname === "/api/stream") return streamRoute(req);
+  if (url.pathname === "/api/seq") return seqRoute(req);
+  if (url.pathname === "/api/frame-count") return frameCountRoute(req);
   return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
 };
 

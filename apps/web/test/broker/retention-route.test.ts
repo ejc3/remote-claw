@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_RETENTION_MS,
   retentionMs,
-  tursoIsActiveBackend,
+  tursoConfigured,
 } from "../../app/api/cron/retention/gate";
 import { GET } from "../../app/api/cron/retention/route";
 
@@ -75,12 +75,12 @@ describe("retentionMs", () => {
     }
   });
 
-  it("requires Turso to be the active broker backend", () => {
-    expect(tursoIsActiveBackend()).toBe(false);
+  it("treats a configured Turso URL as this deployment's requestable Turso store", () => {
+    expect(tursoConfigured()).toBe(false);
     env.BROKER_BACKEND = "vercel";
-    expect(tursoIsActiveBackend()).toBe(false);
-    env.BROKER_BACKEND = "turso";
-    expect(tursoIsActiveBackend()).toBe(true);
+    expect(tursoConfigured()).toBe(false);
+    env.TURSO_DATABASE_URL = " file:test.db ";
+    expect(tursoConfigured()).toBe(true);
   });
 });
 
@@ -107,16 +107,19 @@ describe("retention cron route", () => {
     expect(mocks.getBackend).not.toHaveBeenCalled();
   });
 
-  it("falls back to swept:0 when Turso is configured but not the active backend", async () => {
+  it("runs sweep when Turso is configured even if Vercel is the default backend", async () => {
     env.CRON_SECRET = "cron";
     env.BROKER_BACKEND = "vercel";
     env.TURSO_DATABASE_URL = "file:test.db";
+    const sweep = vi.fn().mockResolvedValue(2);
+    mocks.getBackend.mockResolvedValue({ sweep });
 
     const res = await GET(req("Bearer cron"));
 
     expect(res.status).toBe(200);
-    expect(await json(res)).toEqual({ swept: 0 });
-    expect(mocks.getBackend).not.toHaveBeenCalled();
+    expect(await json(res)).toEqual({ swept: 2 });
+    expect(mocks.getBackend).toHaveBeenCalledWith("turso");
+    expect(sweep).toHaveBeenCalledWith(DEFAULT_RETENTION_MS);
   });
 
   it("falls back to swept:0 when the backend has no sweep hook", async () => {

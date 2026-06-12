@@ -108,11 +108,23 @@ export class FrameOrderer {
   }
 
   /** True only when delivery is blocked on a genuinely MISSING seq: frames are buffered ABOVE the
-   *  cursor but the cursor's own slot is absent. This distinguishes a real gap (a never-arriving seq,
-   *  worth surfacing) from a chunked message AT the cursor still accumulating its parts (pending>0 but
-   *  NOT a gap — its parts are arriving, it's progress). The host posts a message's parts together, so a
-   *  partial slot at the cursor is transient; an empty cursor slot with later seqs buffered is the stall. */
+   *  cursor but the cursor's own slot is absent. */
   get stalledOnMissingSeq(): boolean {
     return this.#buffered.size > 0 && !this.#buffered.has(this.#nextSeq);
+  }
+
+  /** True when the cursor slot exists but is an incomplete chunked message. That should be transient
+   *  because the host publishes a message's parts together; surfacing it lets the viewer recover if a
+   *  later chunk failed after earlier chunks landed. */
+  get stalledOnIncompleteSeq(): boolean {
+    const cur = this.#buffered.get(this.#nextSeq);
+    if (cur === undefined) return false;
+    const parts = cur[0]?.parts ?? 1;
+    return parts > 1 && cur.length < parts;
+  }
+
+  /** Any cursor-level stall worth surfacing to the viewer's gap-recovery path. */
+  get stalled(): boolean {
+    return this.stalledOnMissingSeq || this.stalledOnIncompleteSeq;
   }
 }

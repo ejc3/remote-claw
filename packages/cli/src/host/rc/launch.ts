@@ -102,8 +102,11 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
         session: s,
         tracer: relayTracer,
       });
-      void relay.announce(title, cwd, git).catch(() => {});
-      const served = relay.serve(ac.signal).catch(() => {});
+      const served = (async () => {
+        await relay.prepare();
+        await relay.announce(title, cwd, git).catch(() => {});
+        await relay.serve(ac.signal);
+      })().catch(() => {});
       relays.add(served);
       void served.finally(() => relays.delete(served));
     },
