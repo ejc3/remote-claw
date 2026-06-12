@@ -1,7 +1,11 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { decodeFrame, deriveSessionKey, open, utf8, type WireFrame } from "@remote-claw/clawsec";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { POST as relay } from "../app/api/relay/route";
+import { GET as seqRoute } from "../app/api/seq/route";
 import { GET as stream } from "../app/api/stream/route";
 import { announceFrame, bearer, header, readSseData, testIdentity, wireFrame } from "./helpers";
 
@@ -12,10 +16,18 @@ afterAll(async () => {
 const BASE = "http://localhost";
 const td = new TextDecoder();
 
-function post(frame: WireFrame, auth: string, session?: string): Promise<Response> {
-  const qs = session === undefined ? "" : `?session=${encodeURIComponent(session)}`;
+function post(
+  frame: WireFrame,
+  auth: string,
+  session?: string,
+  backend?: string,
+): Promise<Response> {
+  const params = new URLSearchParams();
+  if (session !== undefined) params.set("session", session);
+  if (backend !== undefined) params.set("backend", backend);
+  const qs = params.toString();
   return relay(
-    new Request(`${BASE}/api/relay${qs}`, {
+    new Request(`${BASE}/api/relay${qs ? `?${qs}` : ""}`, {
       method: "POST",
       headers: { authorization: auth, "content-type": "application/json" },
       body: JSON.stringify(frame),
@@ -26,6 +38,81 @@ function post(frame: WireFrame, auth: string, session?: string): Promise<Respons
 function sub(auth: string, query = ""): Promise<Response> {
   return stream(new Request(`${BASE}/api/stream${query}`, { headers: { authorization: auth } }));
 }
+
+function seqReq(auth: string | undefined, query = ""): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (auth !== undefined) headers.authorization = auth;
+  return seqRoute(new Request(`${BASE}/api/seq${query}`, { headers }));
+}
+
+type BrokerGlobals = typeof globalThis & {
+  __rcBrokerCache?: Map<string, unknown>;
+  __rcTursoClient?: { close(): void };
+};
+
+function clearEnvTursoBackend(): void {
+  const g = globalThis as BrokerGlobals;
+  g.__rcBrokerCache?.delete("turso");
+  if (g.__rcTursoClient !== undefined) {
+    g.__rcTursoClient.close();
+    delete g.__rcTursoClient;
+  }
+}
+
+describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
+  it("returns {maxSeq: null} for a backend without a durable maxSeq", async () => {
+    const id = await testIdentity(20);
+    const res = await seqReq(bearer(id.authToken), "?session=sess-seq");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ maxSeq: null });
+  });
+
+  it("rejects an unauthenticated request", async () => {
+    const res = await seqReq(undefined);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns the highest seq from the Turso route backend", async () => {
+    const prevUrl = process.env.TURSO_DATABASE_URL;
+    const prevToken = process.env.TURSO_AUTH_TOKEN;
+    const dir = await mkdtemp(join(tmpdir(), "rc-seq-route-"));
+    clearEnvTursoBackend();
+    process.env.TURSO_DATABASE_URL = `file:${join(dir, "seq.db")}`;
+    delete process.env.TURSO_AUTH_TOKEN;
+    try {
+      const id = await testIdentity(21);
+      const auth = bearer(id.authToken);
+      const sid = "sess-turso-seq";
+      const kSession = await deriveSessionKey(id.contentRoot, sid);
+
+      for (const seq of [2, 7]) {
+        const frame = await wireFrame(
+          kSession,
+          header(id, {
+            sessionId: sid,
+            recordKind: "assistant",
+            seq,
+            dir: "out",
+            msgId: `seq-${seq}`,
+          }),
+          utf8(`message ${seq}`),
+        );
+        expect((await post(frame, auth, sid, "turso")).status).toBe(200);
+      }
+
+      const res = await seqReq(auth, `?session=${encodeURIComponent(sid)}&backend=turso`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ maxSeq: 7 });
+    } finally {
+      clearEnvTursoBackend();
+      if (prevUrl === undefined) delete process.env.TURSO_DATABASE_URL;
+      else process.env.TURSO_DATABASE_URL = prevUrl;
+      if (prevToken === undefined) delete process.env.TURSO_AUTH_TOKEN;
+      else process.env.TURSO_AUTH_TOKEN = prevToken;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   it("E2E: a sealed bus announce round-trips host → POST /api/relay → bus → GET /api/stream → open", async () => {

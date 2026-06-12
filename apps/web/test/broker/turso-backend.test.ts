@@ -177,3 +177,44 @@ describe("TursoBackend — Turso-specific", () => {
     expect(seqs(await reading)).toEqual([0, 1]);
   });
 });
+
+describe("TursoBackend.maxSeq — durable cross-restart seq cursor (A2b/#36)", () => {
+  it("returns null when the channel does not exist", async () => {
+    expect(await be().maxSeq(tok())).toBeNull();
+  });
+
+  it("returns the highest seq across published frames", async () => {
+    const t = tok();
+    const b = be();
+    await b.publish(t, frame(0));
+    await b.publish(t, frame(1));
+    await b.publish(t, frame(2));
+    expect(await b.maxSeq(t)).toBe(2);
+  });
+
+  it("ignores NULL-seq frames (accepted/meta) — MAX over seq-bearing rows only", async () => {
+    const t = tok();
+    const b = be();
+    await b.publish(t, frame(5, { msg_id: "a", part: 0 }));
+    // A frame with no seq stores seq=NULL (the `?? null` path); SQL MAX skips it.
+    await b.publish(t, { msg_id: "meta", part: 0 } as unknown as WireFrame);
+    expect(await b.maxSeq(t)).toBe(5);
+  });
+
+  it("returns null for a closed channel (a fresh incarnation restarts at 0)", async () => {
+    const t = tok();
+    const b = be();
+    await b.publish(t, frame(3));
+    await b.publish(t, { __close: true });
+    expect(await b.maxSeq(t)).toBeNull();
+  });
+
+  it("reflects only the current incarnation after a reopen (gen bump)", async () => {
+    const t = tok();
+    const b = be();
+    await b.publish(t, frame(7)); // gen 0, seq 7
+    await b.publish(t, { __close: true });
+    await b.publish(t, frame(0)); // reopen gen 1, seq 0
+    expect(await b.maxSeq(t)).toBe(0); // only the new gen's frames count
+  });
+});

@@ -92,6 +92,23 @@ class FakeClient {
    *  both. Set BEFORE constructing the relay (it's read once in the constructor). */
   durable = false;
 
+  /** Mirrors BrokerClient.maxSeq — the durable log's highest seq when a durable host (re)starts a
+   *  session. null ⇒ start fresh at 0; a number ⇒ resume at value+1 (#36). serve() reads it on durable
+   *  starts only. `maxSeqFailures` simulates transient read failures before a later success. */
+  maxSeqValue: number | null = null;
+  maxSeqThrows = false;
+  maxSeqFailures = 0;
+  maxSeqCalls = 0;
+  async maxSeq(_sessionId?: string): Promise<number | null> {
+    this.maxSeqCalls++;
+    if (this.maxSeqFailures > 0) {
+      this.maxSeqFailures--;
+      throw new BrokerError(500, "maxSeq failed");
+    }
+    if (this.maxSeqThrows) throw new BrokerError(500, "maxSeq failed");
+    return this.maxSeqValue;
+  }
+
   failSeq: number | null = null; // fail postMessage when header.seq === failSeq
 
   #inbound: Frame[] = [];
@@ -548,6 +565,109 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
     // The host re-posted the whole log — proving the `if (!this.#durable)` #emit guard still POPULATES
     // #log on the non-durable path (a regression that skipped it would make this replay empty).
     expect(client.content.map((p) => p.seq)).toEqual([0, 1, 2, 0, 1, 2]);
+  });
+});
+
+// A2b/#36 (durable face) — on a durable backend the session's frames OUTLIVE the host process, so a
+// restarted relay must CONTINUE the seq timeline. serve() resumes `#seq = maxSeq + 1` from the broker's
+// durable log (cleartext seq column; host holds no store creds) before either pump emits — else a restart
+// re-issues seqs the log already holds and a viewer's orderer drops the new content as duplicates.
+describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
+  it("resumes seq = durable MAX + 1 so a restart doesn't collide with prior frames", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.durable = true;
+    client.maxSeqValue = 4; // a prior incarnation already wrote seq 0..4 to the durable log
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream(assistant("after restart"));
+    await waitFor(() => client.content.length >= 1);
+    ac.abort();
+    await served;
+
+    expect(client.maxSeqCalls).toBe(1); // queried exactly once, on serve()
+    expect(client.content[0]?.seq).toBe(5); // resumed at MAX(4)+1 — NOT 0
+  });
+
+  it("starts at 0 when the durable log is empty (maxSeq null) — a fresh session", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.durable = true;
+    client.maxSeqValue = null;
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream(assistant("first ever"));
+    await waitFor(() => client.content.length >= 1);
+    ac.abort();
+    await served;
+
+    expect(client.content[0]?.seq).toBe(0);
+  });
+
+  it("retries transient maxSeq failures before resuming from the durable log", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.durable = true;
+    client.maxSeqFailures = 2;
+    client.maxSeqValue = 4;
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream(assistant("after transient failures"));
+    await waitFor(() => client.content.length >= 1);
+    ac.abort();
+    await served;
+
+    expect(client.maxSeqCalls).toBe(3);
+    expect(client.content[0]?.seq).toBe(5);
+  });
+
+  it("does NOT query maxSeq on a non-durable backend (legacy path starts at 0)", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient(); // durable false
+    client.maxSeqValue = 9; // would resume at 10 IF consulted — it must not be on the ephemeral path
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream(assistant("legacy"));
+    await waitFor(() => client.content.length >= 1);
+    ac.abort();
+    await served;
+
+    expect(client.maxSeqCalls).toBe(0); // never consulted — no extra round-trip for ephemeral backends
+    expect(client.content[0]?.seq).toBe(0);
+  });
+
+  it("falls back to 0 after maxSeq retries fail and logs an error", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.durable = true;
+    client.maxSeqThrows = true;
+    const { tracer, errors } = spyTracer();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      tracer,
+    });
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream(assistant("resilient"));
+    await waitFor(() => client.content.length >= 1);
+    ac.abort();
+    await served;
+
+    expect(client.maxSeqCalls).toBe(3);
+    expect(client.content[0]?.seq).toBe(0); // the throw was swallowed; the relay still served
+    expect(errors.find((e) => e.msg.includes("seq resume failed after retries"))).toBeDefined();
   });
 });
 
