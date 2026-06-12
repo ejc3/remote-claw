@@ -38,6 +38,12 @@ export function connState(sentAt: number, now: number): ConnState {
   return "disconnected";
 }
 
+/** Presence replay rule: keep the newest announce per session. Equal timestamps are accepted so a
+ *  same-millisecond mode/status update from the host can replace the previous body. */
+export function shouldAcceptAnnounce(existing: Announce | undefined, incoming: Announce): boolean {
+  return existing === undefined || incoming.sentAt >= existing.sentAt;
+}
+
 function parseIncarnation(body: Record<string, unknown>): string | null {
   const raw = body.incarnation ?? body.launch_incarnation;
   if (typeof raw === "string" && raw !== "") return raw;
@@ -70,6 +76,8 @@ export interface Announce {
   phase: "idle" | "thinking";
   /** The worker is waiting on the human (an open permission gate or requires_action). */
   needs: boolean;
+  /** Current worker permission mode, when announced by a modern host. Old hosts omit it. */
+  mode?: string;
   /** The session's git snapshot for the branch/dirty/ahead-behind chip (#49); null outside a repo. */
   git: GitInfo | null;
 }
@@ -221,6 +229,7 @@ export class Viewer {
             needs: body.needs === true,
             git: parseGit(body.git), // git chip (#49); null outside a repo / on an old host
           };
+          if (typeof body.mode === "string" && body.mode !== "") announce.mode = body.mode;
           this.#rememberIncarnation(sessionId, announce.incarnation);
           yield announce;
         }

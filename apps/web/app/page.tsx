@@ -23,6 +23,7 @@ import {
   connState,
   type GitInfo,
   type Message,
+  shouldAcceptAnnounce,
   TRANSCRIPT_GAP_STALL_MS,
   Viewer,
 } from "./lib/viewer";
@@ -290,7 +291,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
           setSessions((prev) => {
             const next = new Map(prev);
             const existing = next.get(a.sessionId);
-            if (existing === undefined || a.sentAt >= existing.sentAt) next.set(a.sessionId, a);
+            if (shouldAcceptAnnounce(existing, a)) next.set(a.sessionId, a);
             return next;
           });
         }
@@ -418,11 +419,18 @@ function Transcript(props: {
     }
     return m;
   }, [messages]);
-  // The session's real permission mode lives on the worker and isn't announced, so we track the last
-  // mode set from here (optimistic): null = "we haven't set one". setMode is fire-and-forget.
-  const [mode, setMode] = useState<string | null>(null);
+  // The host announces the worker's effective permission mode. A local click is only a transient
+  // optimistic override; the next mode-bearing announce wins, including when another device changed it.
+  const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
   const [modeSheet, setModeSheet] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const announceMode = announce?.mode;
+  const announceSentAt = announce?.sentAt;
+  const displayedMode = displayedPermissionMode(announceMode, optimisticMode);
+
+  useEffect(() => {
+    if (announceMode !== undefined && announceSentAt !== undefined) setOptimisticMode(null);
+  }, [announceMode, announceSentAt]);
 
   useEffect(() => {
     setMessages([]);
@@ -518,17 +526,17 @@ function Transcript(props: {
     async (id: string) => {
       setModeSheet(false);
       setSendError(null);
-      const prev = mode;
-      setMode(id); // optimistic — revert if the control frame can't be sent
+      const prev = optimisticMode;
+      setOptimisticMode(id); // optimistic — revert if the control frame can't be sent
       try {
         await viewer.setMode(sessionId, id);
       } catch (e) {
         // Only revert if no newer choice landed while we were awaiting — else we'd clobber it.
-        setMode((cur) => (cur === id ? prev : cur));
+        setOptimisticMode((cur) => (cur === id ? prev : cur));
         setSendError(e instanceof Error ? e.message : String(e));
       }
     },
-    [mode, sessionId, viewer],
+    [optimisticMode, sessionId, viewer],
   );
 
   // Answer a worker permission_request (§17.4): seal a `permission` frame the host turns into the
@@ -580,8 +588,8 @@ function Transcript(props: {
           onClick={() => setModeSheet(true)}
           title="Permission mode"
         >
-          <span className="mode-glyph">{modeGlyph(mode)}</span>
-          {modeLabel(mode)}
+          <span className="mode-glyph">{modeGlyph(displayedMode)}</span>
+          {modeLabel(displayedMode)}
         </button>
         <button
           type="button"
@@ -617,7 +625,7 @@ function Transcript(props: {
 
       {modeSheet && (
         <ModeSheet
-          current={mode}
+          current={displayedMode}
           onPick={(id) => void chooseMode(id)}
           onClose={() => setModeSheet(false)}
         />
@@ -713,6 +721,13 @@ function modeLabel(id: string | null): string {
 }
 function modeGlyph(id: string | null): string {
   return MODES.find((m) => m.id === id)?.glyph ?? "⚙";
+}
+
+export function displayedPermissionMode(
+  announcedMode: string | undefined,
+  optimisticMode: string | null,
+): string | null {
+  return optimisticMode ?? announcedMode ?? null;
 }
 
 /** Bottom sheet to pick the session's permission mode — mirrors Claude Code's "Select mode" sheet. */
@@ -825,7 +840,7 @@ function ModeSheet({
 type GrantExtra = { answers?: Record<string, string | string[]>; toolUseId?: string };
 type GrantFn = (requestId: string, behavior: "allow" | "deny", extra?: GrantExtra) => Promise<void>;
 
-function Bubble({
+export function Bubble({
   message,
   onGrant,
   resolved,

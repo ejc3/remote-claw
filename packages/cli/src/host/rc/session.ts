@@ -71,6 +71,24 @@ function nowIso(clock: () => number): string {
   return new Date(clock()).toISOString();
 }
 
+function stringField(o: Record<string, unknown>, key: string): string | null {
+  const v = o[key];
+  return typeof v === "string" && v !== "" ? v : null;
+}
+
+/** Extract a Claude permission mode from the shapes seen in session config and system init events.
+ *  The protocol has used both camelCase and snake_case; accept any non-empty string so new modes do
+ *  not require a relay deploy just to display accurately. */
+export function permissionModeFrom(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const o = value as Record<string, unknown>;
+  return (
+    stringField(o, "permissionMode") ??
+    stringField(o, "permission_mode") ??
+    permissionModeFrom(o.config)
+  );
+}
+
 /** What kind of correlated party produced an event: a client (downstream) or the worker (upstream). */
 export type EventSource = "client" | "worker";
 
@@ -127,6 +145,7 @@ export class Session {
   readonly createdAt: string;
   workerEpoch = 1;
   workerStatus = "WORKER_STATUS_UNSPECIFIED";
+  permissionMode: string | null;
   closed = false;
   initialized = false;
 
@@ -152,6 +171,7 @@ export class Session {
     this.config = config ?? {};
     this.#clock = opts.clock ?? Date.now;
     this.createdAt = nowIso(this.#clock);
+    this.permissionMode = permissionModeFrom(this.config);
   }
 
   // ---- producers ----
@@ -261,6 +281,7 @@ export class Session {
   }
 
   close(): void {
+    if (this.closed) return;
     this.closed = true;
     this.#gate.wake();
   }

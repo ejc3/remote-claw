@@ -144,6 +144,26 @@ async function waitFor(pred: () => boolean, ms = 8000): Promise<void> {
 }
 
 describe.skipIf(!RUN)("MITM proxy (fake worker over real TLS interception)", () => {
+  it("close is idempotent and owns RelayCore.closeAll", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-mitm-close-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    const certs = ensureCerts(dir);
+    const core = new RelayCore();
+    const session = core.create({ title: "close me" });
+    const proxy = new MitmProxy({
+      port: 0,
+      leafCert: certs.leafPem,
+      leafKey: certs.leafKey,
+      core,
+    });
+    await proxy.listen();
+
+    await proxy.close();
+    await proxy.close();
+
+    expect(session.closed).toBe(true);
+  });
+
   it("registers a session, serves the worker SSE (initialize first), and round-trips events", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rc-mitm-"));
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));

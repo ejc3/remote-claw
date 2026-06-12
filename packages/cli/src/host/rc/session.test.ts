@@ -2,7 +2,7 @@
 // TestClientEvent, plus async-generator-specific coverage (heartbeat ticks, supersede, close).
 
 import { describe, expect, it } from "vitest";
-import { assistantText, type RcEvent, RelayCore, Session } from "./session.js";
+import { assistantText, permissionModeFrom, type RcEvent, RelayCore, Session } from "./session.js";
 
 /** Drain a follower generator until `n` non-null events arrive (or it ends), returning those events. */
 async function takeEvents(gen: AsyncGenerator<RcEvent | null>, n: number): Promise<RcEvent[]> {
@@ -50,9 +50,33 @@ describe("RelayCore", () => {
     expect(c.create({ title: "t" }).id).toBe("cse_fixed1");
     expect(c.create({ title: "t" }).id).toBe("cse_fixed2");
   });
+
+  it("closeAll is idempotent and Session.close is safe to call twice", async () => {
+    const c = new RelayCore({ newSessionId: () => "fixed" });
+    const s = c.create({ title: "t" });
+    const gen = s.claimWorkerStream();
+
+    s.close();
+    s.close();
+    c.closeAll();
+    c.closeAll();
+
+    expect(s.closed).toBe(true);
+    expect(await drain(s.followDownstream(gen, () => false))).toEqual([]);
+  });
 });
 
 describe("Session producers", () => {
+  it("seeds permissionMode from config and recognizes system-init spellings", () => {
+    expect(new Session("cse_x", "t", { permissionMode: "default" }).permissionMode).toBe("default");
+    expect(new Session("cse_x", "t", { permission_mode: "plan" }).permissionMode).toBe("plan");
+    expect(new Session("cse_x", "t", { config: { permissionMode: "auto" } }).permissionMode).toBe(
+      "auto",
+    );
+    expect(permissionModeFrom({ permissionMode: "bypassPermissions" })).toBe("bypassPermissions");
+    expect(permissionModeFrom({ permissionMode: "" })).toBeNull();
+  });
+
   it("pushUserInput builds a client `user` event", () => {
     const s = new Session("cse_x", "t", {});
     const ev = s.pushUserInput("hello");

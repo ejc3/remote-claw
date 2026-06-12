@@ -399,6 +399,55 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
   });
 });
 
+describe("HostRcRelay permission mode presence", () => {
+  it("seeds the announced mode from session config", async () => {
+    const session = new Session("s", "t", { permissionMode: "default" });
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+
+    await relay.announce("box");
+
+    expect(client.announces.at(-1)?.mode).toBe("default");
+  });
+
+  it("updates mode from a worker system init event and re-announces", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    await relay.announce("box");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream({ type: "system", subtype: "init", permissionMode: "plan" });
+    await waitFor(() => client.announces.at(-1)?.mode === "plan");
+    ac.abort();
+    await served;
+
+    expect(session.permissionMode).toBe("plan");
+    expect(client.announces.at(-1)?.mode).toBe("plan");
+  });
+
+  it("updates mode from an inbound set_mode verb, forwards it, and re-announces", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    await relay.announce("box");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    client.pushInbound(
+      inFrame("set_mode", "mode-1", JSON.stringify({ mode: "plan", expiry: Date.now() + 60_000 })),
+    );
+    await waitFor(() => client.announces.at(-1)?.mode === "plan");
+    ac.abort();
+    await served;
+
+    expect(session.permissionMode).toBe("plan");
+    expect(pushControl).toHaveBeenCalledWith("set_permission_mode", { mode: "plan" });
+  });
+});
+
 describe("HostRcRelay attachments (#44)", () => {
   const dirs: string[] = [];
   afterAll(() => {

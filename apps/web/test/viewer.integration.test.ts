@@ -41,10 +41,23 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
     // The host announces the session on the bus; the viewer discovers it (decrypted under K_meta).
     await host.postFrame(
       header(id, { recordKind: "session_announce", sessionId: sid, msgId: "ann-w" }),
-      utf8(JSON.stringify({ session_id: sid, title: "web box", cwd: "/srv/app", sent_at: 1 })),
+      utf8(
+        JSON.stringify({
+          session_id: sid,
+          title: "web box",
+          cwd: "/srv/app",
+          sent_at: 1,
+          mode: "plan",
+        }),
+      ),
     );
     const [discovered] = await takeGen(viewer.announces(never), 1);
-    expect(discovered).toMatchObject({ sessionId: sid, title: "web box", cwd: "/srv/app" });
+    expect(discovered).toMatchObject({
+      sessionId: sid,
+      title: "web box",
+      cwd: "/srv/app",
+      mode: "plan",
+    });
 
     // The viewer sends a prompt; the host receives it on the session channel and decrypts it.
     const text = "hello from the browser";

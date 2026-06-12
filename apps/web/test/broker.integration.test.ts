@@ -5,7 +5,7 @@ import { decodeFrame, deriveSessionKey, open, utf8, type WireFrame } from "@remo
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { GET as frameCountRoute } from "../app/api/frame-count/route";
-import { POST as relay } from "../app/api/relay/route";
+import { MAX_RELAY_CIPHERTEXT_BYTES, POST as relay } from "../app/api/relay/route";
 import { GET as seqRoute } from "../app/api/seq/route";
 import { GET as stream } from "../app/api/stream/route";
 import { announceFrame, bearer, header, readSseData, testIdentity, wireFrame } from "./helpers";
@@ -292,6 +292,24 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
       }),
     );
     expect(bad.status).toBe(400);
+  });
+
+  it("rejects ciphertext at the broker size cap while accepting a normal frame", async () => {
+    const id = await testIdentity(24);
+    const auth = bearer(id.authToken);
+    const normal = await announceFrame(id, { session_id: "s", sent_at: 1 });
+    const oversized: WireFrame = {
+      ...normal,
+      ct: Buffer.alloc(MAX_RELAY_CIPHERTEXT_BYTES).toString("base64url"),
+    };
+
+    const tooLarge = await post(oversized, auth);
+    expect(tooLarge.status).toBe(413);
+    expect((await tooLarge.json()).error).toMatch(/ciphertext exceeds/);
+
+    const ok = await post(normal, auth);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ ok: true, channel: "bus" });
   });
 
   it("rejects a non-integer startIndex with 400", async () => {

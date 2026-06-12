@@ -61,6 +61,20 @@ describe("retentionMs", () => {
     expect(retentionMs()).toBe(120_000);
   });
 
+  it("falls back for non-canonical values and trims valid decimal integers", () => {
+    for (const raw of ["-1", "", "  ", "1.5", "1e3", "0x10", "+5", "9007199254740993"]) {
+      env.BROKER_RETENTION_MS = raw;
+      expect(retentionMs(), raw).toBe(DEFAULT_RETENTION_MS);
+    }
+    for (const [raw, expected] of [
+      [" 500 ", 500],
+      ["00500", 500],
+    ] as const) {
+      env.BROKER_RETENTION_MS = raw;
+      expect(retentionMs(), raw).toBe(expected);
+    }
+  });
+
   it("requires Turso to be the active broker backend", () => {
     expect(tursoIsActiveBackend()).toBe(false);
     env.BROKER_BACKEND = "vercel";

@@ -15,6 +15,8 @@ import { MitmProxy } from "./mitm.js";
 import { HostRcRelay } from "./relay.js";
 import { RelayCore, type Session } from "./session.js";
 
+const RELAY_TEARDOWN_WAIT_MS = 2000;
+
 /** How the child claude is launched with the proxy env (injectable for tests). */
 export type SpawnClaudeEnv = (
   bin: string,
@@ -68,6 +70,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   // session id per relay; both share the env-configured sink (stderr, or RC_LOG_FILE for capture).
   const mitmTracer = tracerFromEnv("rc.mitm");
   const relayTracer = tracerFromEnv("rc.relay");
+  const relays = new Set<Promise<void>>();
 
   // If the broker is deployed behind Vercel Deployment Protection (SSO), the host's requests need the
   // automation-bypass secret to get past the edge. Read it from the env on this host; an unprotected
@@ -100,7 +103,9 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
         tracer: relayTracer,
       });
       void relay.announce(title, cwd, git).catch(() => {});
-      void relay.serve(ac.signal).catch(() => {});
+      const served = relay.serve(ac.signal).catch(() => {});
+      relays.add(served);
+      void served.finally(() => relays.delete(served));
     },
   });
   await proxy.listen();
@@ -128,7 +133,22 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
   } finally {
     ac.abort();
-    core.closeAll();
+    await waitForRelays(relays);
     await proxy.close();
+  }
+}
+
+async function waitForRelays(relays: Set<Promise<void>>): Promise<void> {
+  const pending = [...relays];
+  if (pending.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, RELAY_TEARDOWN_WAIT_MS);
+    if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
+  });
+  try {
+    await Promise.race([Promise.allSettled(pending), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }

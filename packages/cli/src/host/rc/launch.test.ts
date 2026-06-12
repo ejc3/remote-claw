@@ -286,6 +286,73 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   }, 20_000);
 
+  it("awaits relay pumps on teardown so a final outbound frame flushes", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(73));
+    const certsDir = tmp();
+    const broker = new MockBroker();
+    broker.requireAuth(id.authToken);
+
+    let releaseAssistantPost: () => void = () => {};
+    let assistantPostStarted: Promise<void>;
+    let resolveAssistantPostStarted: () => void = () => {};
+    assistantPostStarted = new Promise((resolve) => {
+      resolveAssistantPostStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseAssistantPost = resolve;
+    });
+    let delayed = false;
+
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      const body = String(init?.body ?? "");
+      if (url.pathname === "/api/relay" && url.searchParams.has("session") && !delayed) {
+        const frame = JSON.parse(body) as { record_kind?: unknown };
+        if (frame.record_kind === "assistant") {
+          delayed = true;
+          resolveAssistantPostStarted();
+          await release;
+        }
+      }
+      return broker.fetch(input, init);
+    }) as typeof fetch;
+
+    const code = await runRcLaunch({
+      claudeArgs: [],
+      identity: id,
+      brokerUrl: "http://broker.test",
+      certsDir,
+      fetchFn,
+      spawnClaude: async (_bin, _args, env) => {
+        const m = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(env.HTTPS_PROXY ?? "");
+        if (m === null) throw new Error("missing HTTPS_PROXY");
+        const caPath = env.NODE_EXTRA_CA_CERTS;
+        if (caPath === undefined) throw new Error("missing NODE_EXTRA_CA_CERTS");
+        const agent = proxyAgent(Number.parseInt(m[1] as string, 10), readFileSync(caPath));
+        const reg = await rpc(agent, "POST", "/v1/code/sessions", { title: "flush test" });
+        const session = reg.session as { id?: unknown };
+        if (typeof session.id !== "string") throw new Error("session registration failed");
+
+        await rpc(agent, "POST", `/v1/code/sessions/${session.id}/worker/events`, {
+          events: [
+            {
+              payload: {
+                type: "assistant",
+                message: { content: [{ type: "text", text: "final frame" }] },
+              },
+            },
+          ],
+        });
+        await assistantPostStarted;
+        setTimeout(releaseAssistantPost, 50);
+        return 0;
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(broker.posts.some((p) => p.frame.record_kind === "assistant")).toBe(true);
+  }, 20_000);
+
   it("keeps root secret and derived keys out of launch traces, child env, and broker plaintext", async () => {
     const secret = new Uint8Array(32).fill("S".charCodeAt(0));
     const id = await deriveIdentity(secret);

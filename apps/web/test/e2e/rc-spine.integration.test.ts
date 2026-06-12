@@ -21,6 +21,7 @@ import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { parsePermissionResolved, parseQuestions } from "../../app/lib/transcript";
 import { type Announce, type Message, Viewer } from "../../app/lib/viewer";
+import { displayedPermissionMode } from "../../app/page";
 import { FakeRcWorker } from "./fake-rc-worker";
 import { brokerFetch } from "./harness";
 
@@ -420,6 +421,34 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     expect(verbs.find((v) => v.subtype === "set_permission_mode")?.req.mode).toBe("plan");
     expect(subs).toContain("end_session"); // `end` maps to end_session
     expect(userInputs).toContain("/compact"); // slash command delivered as user input
+  }, 40_000);
+
+  it("PERMISSION MODE: a change from one viewer converges on another viewer's chip", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(72));
+    const ac = new AbortController();
+    cleanup.push(() => ac.abort());
+    const { worker } = await startRc(id, ac);
+    const sid = await worker.register("rc box");
+    const verbs: Array<{ subtype: string; req: Record<string, unknown> }> = [];
+    worker.onControlRequest((subtype, req) => verbs.push({ subtype, req }));
+    worker.start(sid);
+
+    const driver = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const observer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const seen: Announce[] = [];
+    void (async () => {
+      for await (const a of observer.announces(ac.signal)) if (a.sessionId === sid) seen.push(a);
+    })().catch(() => {});
+    await waitFor(() => seen.length > 0, 15_000);
+
+    await driver.setMode(sid, "plan");
+
+    await waitFor(() => seen.some((a) => a.mode === "plan"), 15_000);
+    await waitFor(() => verbs.some((v) => v.subtype === "set_permission_mode"), 15_000);
+    const latestMode = [...seen].reverse().find((a) => a.mode !== undefined)?.mode;
+    expect(latestMode).toBe("plan");
+    expect(displayedPermissionMode(latestMode, null)).toBe("plan");
+    expect(verbs.find((v) => v.subtype === "set_permission_mode")?.req.mode).toBe("plan");
   }, 40_000);
 
   it("PRESENCE + PERMISSION_RESOLVED: announce carries phase/status/needs; granting a permission logs permission_resolved (unordered, replayed on catch_up)", async () => {

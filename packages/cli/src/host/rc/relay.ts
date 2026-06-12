@@ -26,7 +26,7 @@ import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError, type SeqCursor } from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import type { GitInfo } from "./gitinfo.js";
-import { assistantText, type RcEvent, type Session } from "./session.js";
+import { assistantText, permissionModeFrom, type RcEvent, type Session } from "./session.js";
 
 /** Sanitize a viewer-supplied attachment filename to a safe basename (no path traversal, no separators).
  *  A blank/odd name falls back to a generic one; the extension is preserved when present. (#44) */
@@ -410,36 +410,37 @@ export class HostRcRelay {
   }
 
   /** Current presence: phase (idle/thinking) from worker_status, needs (a pending permission or the
-   *  worker awaiting a required action). A stable string key lets us re-announce only on change. */
-  #presence(): { status: string; phase: "idle" | "thinking"; needs: boolean } {
+   *  worker awaiting a required action), and the effective permission mode when known. A stable string
+   *  key lets us re-announce only on change. */
+  #presence(): { status: string; phase: "idle" | "thinking"; needs: boolean; mode: string | null } {
     const status = this.#session.workerStatus;
     const needs = status === "requires_action" || this.#openPerms.size > 0;
-    return { status, phase: phaseFor(status), needs };
+    return { status, phase: phaseFor(status), needs, mode: this.#session.permissionMode };
   }
 
   /** Post a session_announce carrying the current presence. Meta-plane + seq===null, so the broker
    *  never logs it — re-announcing is cheap and idempotent (the viewer keeps only the freshest). */
   async #sendAnnounce(): Promise<void> {
     const p = this.#presence();
+    const body: Record<string, unknown> = {
+      session_id: this.#sessionId,
+      title: this.#annTitle,
+      cwd: this.#annCwd,
+      sent_at: Date.now(),
+      incarnation: RELAY_INCARNATION,
+      status: p.status,
+      phase: p.phase,
+      needs: p.needs,
+      git: this.#annGit,
+    };
+    if (p.mode !== null) body.mode = p.mode;
     await this.#client.postFrame(
       this.#header("session_announce", null, `ann-${this.#sessionId}-${this.#annCount++}`),
-      utf8(
-        JSON.stringify({
-          session_id: this.#sessionId,
-          title: this.#annTitle,
-          cwd: this.#annCwd,
-          sent_at: Date.now(),
-          incarnation: RELAY_INCARNATION,
-          status: p.status,
-          phase: p.phase,
-          needs: p.needs,
-          git: this.#annGit,
-        }),
-      ),
+      utf8(JSON.stringify(body)),
     );
-    this.#lastPresenceKey = `${p.status}|${p.needs}`;
+    this.#lastPresenceKey = `${p.status}|${p.needs}|${p.mode ?? ""}`;
     this.#lastAnnounceAt = Date.now();
-    this.#trace.debug("announce", { phase: p.phase, needs: p.needs });
+    this.#trace.debug("announce", { phase: p.phase, needs: p.needs, mode: p.mode ?? "" });
   }
 
   /** Re-announce when presence changed, or when the keepalive floor elapsed (so the viewer's
@@ -450,7 +451,7 @@ export class HostRcRelay {
   async #maybeAnnounce(): Promise<void> {
     if (!this.#announced) return; // first announce() hasn't run yet — nothing to refresh
     const p = this.#presence();
-    const key = `${p.status}|${p.needs}`;
+    const key = `${p.status}|${p.needs}|${p.mode ?? ""}`;
     if (
       key !== this.#lastPresenceKey ||
       Date.now() - this.#lastAnnounceAt >= ANNOUNCE_KEEPALIVE_MS
@@ -654,6 +655,11 @@ export class HostRcRelay {
           await this.#maybeAnnounce();
         }
         continue; // not a rendered content frame
+      }
+      const mode = permissionModeFrom(ev.payload);
+      if (mode !== null && mode !== this.#session.permissionMode) {
+        this.#session.permissionMode = mode;
+        await this.#maybeAnnounce();
       }
       const items = mapUpstreamItems(ev);
       this.#trace.debug("upstream event", {
@@ -910,8 +916,11 @@ export class HostRcRelay {
           this.#session.pushControlRequest("set_model", { model: body.model });
         break;
       case "set_mode":
-        if (typeof body.mode === "string")
+        if (typeof body.mode === "string" && body.mode !== "") {
+          this.#session.permissionMode = body.mode;
           this.#session.pushControlRequest("set_permission_mode", { mode: body.mode });
+          await this.#maybeAnnounce();
+        }
         break;
       case "end":
         this.#session.pushControlRequest("end_session");
