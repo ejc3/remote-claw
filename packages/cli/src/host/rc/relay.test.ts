@@ -93,13 +93,18 @@ class FakeClient {
   durable = false;
 
   /** Mirrors BrokerClient.maxSeq — the durable log's highest seq when a durable host (re)starts a
-   *  session. null ⇒ start fresh at 0; a number ⇒ resume at value+1 (#36). serve() reads it once (durable
-   *  only). `maxSeqThrows` simulates the read failing (host falls back to 0). */
+   *  session. null ⇒ start fresh at 0; a number ⇒ resume at value+1 (#36). serve() reads it on durable
+   *  starts only. `maxSeqFailures` simulates transient read failures before a later success. */
   maxSeqValue: number | null = null;
   maxSeqThrows = false;
+  maxSeqFailures = 0;
   maxSeqCalls = 0;
   async maxSeq(_sessionId?: string): Promise<number | null> {
     this.maxSeqCalls++;
+    if (this.maxSeqFailures > 0) {
+      this.maxSeqFailures--;
+      throw new BrokerError(500, "maxSeq failed");
+    }
     if (this.maxSeqThrows) throw new BrokerError(500, "maxSeq failed");
     return this.maxSeqValue;
   }
@@ -603,6 +608,25 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
     expect(client.content[0]?.seq).toBe(0);
   });
 
+  it("retries transient maxSeq failures before resuming from the durable log", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.durable = true;
+    client.maxSeqFailures = 2;
+    client.maxSeqValue = 4;
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream(assistant("after transient failures"));
+    await waitFor(() => client.content.length >= 1);
+    ac.abort();
+    await served;
+
+    expect(client.maxSeqCalls).toBe(3);
+    expect(client.content[0]?.seq).toBe(5);
+  });
+
   it("does NOT query maxSeq on a non-durable backend (legacy path starts at 0)", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient(); // durable false
@@ -620,12 +644,19 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
     expect(client.content[0]?.seq).toBe(0);
   });
 
-  it("falls back to 0 when the maxSeq read throws (best-effort, never blocks the session)", async () => {
+  it("falls back to 0 after maxSeq retries fail and logs an error", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     client.durable = true;
     client.maxSeqThrows = true;
-    const relay = relayOf(session, client);
+    const { tracer, errors } = spyTracer();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      tracer,
+    });
     const ac = new AbortController();
     const served = relay.serve(ac.signal).catch(() => {});
 
@@ -634,7 +665,9 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
     ac.abort();
     await served;
 
+    expect(client.maxSeqCalls).toBe(3);
     expect(client.content[0]?.seq).toBe(0); // the throw was swallowed; the relay still served
+    expect(errors.find((e) => e.msg.includes("seq resume failed after retries"))).toBeDefined();
   });
 });
 

@@ -69,6 +69,16 @@ export class MockBroker {
       return sse(all.slice(from));
     }
 
+    if (url.pathname === "/api/seq") {
+      const token = session === null ? "bus" : `sess:${session}`;
+      const all = this.#channels.get(token) ?? [];
+      const maxSeq = all.reduce<number | null>((max, frame) => {
+        if (typeof frame.seq !== "number") return max;
+        return max === null ? frame.seq : Math.max(max, frame.seq);
+      }, null);
+      return json({ maxSeq });
+    }
+
     return json({ error: "not found" }, 404);
   }
 }

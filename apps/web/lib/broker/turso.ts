@@ -124,18 +124,23 @@ export class TursoBackend implements BrokerBackend {
   async maxSeq(token: string): Promise<number | null> {
     const c = this.#client;
     await ensureSchema(c);
-    const ch = await c.execute({
-      sql: "SELECT gen, closed FROM channels WHERE token = ?",
-      args: [token],
-    });
-    const meta = ch.rows[0];
-    if (meta === undefined || Number(meta.closed) === 1) return null;
-    const r = await c.execute({
-      sql: "SELECT MAX(seq) AS m FROM frames WHERE token = ? AND gen = ?",
-      args: [token, Number(meta.gen)],
-    });
-    const m = r.rows[0]?.m;
-    return m === null || m === undefined ? null : Number(m);
+    const tx = await c.transaction("read");
+    try {
+      const ch = await tx.execute({
+        sql: "SELECT gen, closed FROM channels WHERE token = ?",
+        args: [token],
+      });
+      const meta = ch.rows[0];
+      if (meta === undefined || Number(meta.closed) === 1) return null;
+      const r = await tx.execute({
+        sql: "SELECT MAX(seq) AS m FROM frames WHERE token = ? AND gen = ?",
+        args: [token, Number(meta.gen)],
+      });
+      const m = r.rows[0]?.m;
+      return m === null || m === undefined ? null : Number(m);
+    } finally {
+      tx.close();
+    }
   }
 
   async subscribe(

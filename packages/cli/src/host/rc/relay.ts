@@ -76,6 +76,8 @@ const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
  *  dedups) closes that hole. */
 const POST_RETRIES = 6;
 const POST_RETRY_BASE_MS = 50;
+const SEQ_RESUME_ATTEMPTS = 3;
+const SEQ_RESUME_RETRY_BASE_MS = 100;
 // Re-announce presence at least this often while idle so the viewer's freshness check (#58) has a
 // steady signal. Sized UNDER the viewer's ~45s "connected" threshold (≈2× margin) so a single missed
 // announce + jitter doesn't read as a disconnect — but no faster, because each keepalive appends a
@@ -535,18 +537,35 @@ export class HostRcRelay {
     // relay resuming the same session must CONTINUE its seq numbering — restarting at 0 would re-issue
     // seqs the durable log already holds, and a viewer's orderer would drop the new content as duplicates.
     // Resume `#seq = maxSeq + 1` from the broker (which reads the cleartext seq column; the host holds no
-    // store creds) BEFORE either pump can emit. Best-effort: a non-durable backend, an absent channel, or
-    // a failed read leaves #seq at 0 (a fresh session, or the legacy ephemeral behavior).
+    // store creds) BEFORE either pump can emit. The read is bounded-retried for transient broker blips; if
+    // every attempt fails, it logs ERROR and starts at 0 (non-blocking, but loud).
+    //
+    // Limitation: A2b resumes only the OUTBOUND `#seq`. On a durable backend, a host RESTART also gives
+    // `#tailInbound` a fresh empty `#seen`; subscribe(0) can then replay every historical `user` prompt
+    // from the durable log and re-inject old prompts into claude. Durable inbound-dedup recovery is
+    // pre-existing A1 design work and is not addressed here.
     if (this.#durable && this.#seq === 0) {
-      try {
-        const max = await this.#client.maxSeq(this.#sessionId);
-        if (max !== null) {
-          this.#seq = max + 1;
-          this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
+        try {
+          const max = await this.#client.maxSeq(this.#sessionId);
+          lastErr = undefined;
+          if (max !== null) {
+            this.#seq = max + 1;
+            this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
+          }
+          break;
+        } catch (e) {
+          lastErr = e;
+          if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
+            await new Promise((r) => setTimeout(r, SEQ_RESUME_RETRY_BASE_MS * 2 ** attempt));
+          }
         }
-      } catch (e) {
-        this.#trace.warn("seq resume failed — starting at 0", {
-          error: (e as Error)?.message ?? String(e),
+      }
+      if (lastErr !== undefined) {
+        this.#trace.error("seq resume failed after retries — starting at 0", {
+          attempts: SEQ_RESUME_ATTEMPTS,
+          error: (lastErr as Error)?.message ?? String(lastErr),
         });
       }
     }

@@ -1,4 +1,4 @@
-import { deriveIdentity, type FrameHeader, type Identity, utf8 } from "@remote-claw/clawsec";
+import { deriveIdentity, type FrameHeader, type Identity, toHex, utf8 } from "@remote-claw/clawsec";
 import { beforeEach, describe, expect, it } from "vitest";
 import { securityProvider } from "../security/provider.js";
 import { BrokerClient, BrokerError } from "./client.js";
@@ -100,6 +100,46 @@ describe("BrokerClient transport", () => {
     });
     await noBypass.postFrame(header(id), utf8("{}"));
     expect(noSeen[0]?.["x-vercel-protection-bypass"]).toBeUndefined();
+  });
+
+  it("maxSeq round-trips numbers/null and sends auth + backend headers", async () => {
+    const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+    const capture: typeof fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      seen.push({
+        url: typeof input === "string" ? input : input.toString(),
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      });
+      return broker.fetch(input, init);
+    }) as typeof fetch;
+    const tursoClient = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: capture,
+      backend: "turso",
+    });
+
+    expect(await tursoClient.maxSeq("missing")).toBeNull();
+    await tursoClient.postFrame(
+      header(id, { recordKind: "accepted", seq: null, sessionId: "empty", msgId: "empty-1" }),
+      utf8("{}"),
+    );
+    expect(await tursoClient.maxSeq("empty")).toBeNull();
+    await tursoClient.postFrame(
+      header(id, { recordKind: "assistant", seq: 2, sessionId: "seq-session", msgId: "seq-2" }),
+      utf8("two"),
+    );
+    await tursoClient.postFrame(
+      header(id, { recordKind: "assistant", seq: 7, sessionId: "seq-session", msgId: "seq-7" }),
+      utf8("seven"),
+    );
+    expect(await tursoClient.maxSeq("seq-session")).toBe(7);
+
+    const seqCalls = seen.filter((call) => new URL(call.url).pathname === "/api/seq");
+    expect(seqCalls).toHaveLength(3);
+    for (const call of seqCalls) {
+      expect(call.headers.authorization).toBe(`Bearer ${toHex(id.authToken)}`);
+      expect(call.headers["x-broker-backend"]).toBe("turso");
+    }
   });
 
   it("throws BrokerError (with status) when the broker rejects (e.g. 401 wrong identity)", async () => {
