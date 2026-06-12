@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Client, createClient } from "@libsql/client";
 import type { WireFrame } from "@remote-claw/clawsec";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { TursoBackend } from "../../lib/broker/turso";
 
 // The Turso (libSQL) backend MUST honour the same durable-channel contract as LocalBackend (ordering,
@@ -29,6 +29,22 @@ function frame(seq: number, extra: Record<string, unknown> = {}): WireFrame {
   return { seq, ...extra } as unknown as WireFrame;
 }
 const seqs = (fs: WireFrame[]) => fs.map((f) => (f as unknown as { seq: number }).seq);
+
+async function storedSeqs(token: string): Promise<number[]> {
+  const res = await client.execute({
+    sql: "SELECT seq FROM frames WHERE token = ? ORDER BY seq",
+    args: [token],
+  });
+  return res.rows.map((r) => Number(r.seq));
+}
+
+async function channelExists(token: string): Promise<boolean> {
+  const res = await client.execute({
+    sql: "SELECT token FROM channels WHERE token = ?",
+    args: [token],
+  });
+  return res.rows.length === 1;
+}
 
 function present(stream: ReadableStream<WireFrame> | null): ReadableStream<WireFrame> {
   expect(stream).not.toBeNull();
@@ -165,6 +181,75 @@ describe("TursoBackend — Turso-specific", () => {
     await b.publish(t, frame(1, { msg_id: "big", part: 1 }));
     await b.publish(t, frame(2, { msg_id: "big", part: 2 }));
     expect(seqs(await readN(present(await b.subscribe(t, 0)), 3))).toEqual([0, 1, 2]);
+  });
+
+  it("sweeps whole stale sessions, preserving live sessions whose head is older than the cutoff", async () => {
+    const stale = tok();
+    const live = tok();
+    const b = be();
+    await b.publish(stale, frame(0));
+    await b.publish(stale, frame(1));
+    await b.publish(live, frame(0));
+    await b.publish(live, frame(1));
+
+    const old = Date.now() - 60_000;
+    const recent = Date.now();
+    await client.execute({
+      sql: "UPDATE frames SET created_at = ? WHERE token = ?",
+      args: [old, stale],
+    });
+    await client.execute({
+      sql: `UPDATE frames
+            SET created_at = CASE WHEN seq = 0 THEN ? ELSE ? END
+            WHERE token = ?`,
+      args: [old, recent, live],
+    });
+
+    expect(await b.sweep(30_000)).toBe(2);
+    expect(await b.subscribe(stale, 0)).toBeNull();
+    expect(await storedSeqs(stale)).toEqual([]);
+    expect(await channelExists(stale)).toBe(false);
+
+    expect(await channelExists(live)).toBe(true);
+    expect(await storedSeqs(live)).toEqual([0, 1]);
+    expect(seqs(await readN(present(await b.subscribe(live, 0)), 2))).toEqual([0, 1]);
+  });
+
+  it("does not prune a non-empty closed channel unless the whole session is stale", async () => {
+    const closed = tok();
+    const b = be();
+    await b.publish(closed, frame(0));
+    await b.publish(closed, { __close: true });
+    await client.execute({
+      sql: "UPDATE frames SET created_at = ? WHERE token = ?",
+      args: [Date.now(), closed],
+    });
+
+    expect(await b.sweep(30_000)).toBe(0);
+    expect(await channelExists(closed)).toBe(true);
+    expect(await storedSeqs(closed)).toEqual([0]);
+    expect(await b.subscribe(closed, 0)).toBeNull();
+  });
+
+  it("keeps a session whose newest frame is exactly at the retention cutoff", async () => {
+    const t = tok();
+    const b = be();
+    const retainMs = 30_000;
+    const now = Date.now();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await b.publish(t, frame(0));
+      await client.execute({
+        sql: "UPDATE frames SET created_at = ? WHERE token = ?",
+        args: [now - retainMs, t],
+      });
+
+      expect(await b.sweep(retainMs)).toBe(0);
+      expect(await channelExists(t)).toBe(true);
+      expect(await storedSeqs(t)).toEqual([0]);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("picks up a frame published AFTER subscribe (the poll tail)", async () => {

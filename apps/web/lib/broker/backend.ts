@@ -75,4 +75,7 @@ export interface BrokerBackend {
    * frames have already rolled off, so there is nothing to collide with).
    */
   maxSeq?(token: string): Promise<number | null>;
+
+  /** Optional retention hook for durable backends that store sealed frames at rest. */
+  sweep?(retainMs: number): Promise<number>;
 }

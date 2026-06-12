@@ -3,6 +3,8 @@ import type { WireFrame } from "@remote-claw/clawsec";
 import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } from "./backend";
 import { ensureSchema, tursoClientFromEnv, tursoPollMs } from "./turso-connection";
 
+const SWEEP_TOKEN_BATCH_SIZE = 100;
+
 // The Turso (libSQL) durable backend — the SINGLE shared, durable log behind the two broker routes,
 // selected with BROKER_BACKEND=turso or `?backend=turso`. A channel token addresses one append-only
 // `frames` log: the wrapper appends its out-frames and a client appends its in-frames (prompts,
@@ -25,6 +27,59 @@ export class TursoBackend implements BrokerBackend {
   /** Production uses the env-configured singleton; tests inject a `file:`/`:memory:` client. */
   constructor(client?: Client) {
     this.#client = client ?? tursoClientFromEnv();
+  }
+
+  /**
+   * Purges whole sessions idle longer than retainMs; never partial-deletes a live session (that would
+   * break the viewer's ordered replay).
+   */
+  async sweep(retainMs: number): Promise<number> {
+    const c = this.#client;
+    await ensureSchema(c);
+
+    const cutoff = Date.now() - retainMs;
+    let total = 0;
+
+    for (;;) {
+      const tx = await c.transaction("write");
+      try {
+        const stale = await tx.execute({
+          sql: `SELECT token
+                FROM frames
+                GROUP BY token
+                HAVING MAX(created_at) < ?
+                ORDER BY token
+                LIMIT ?`,
+          args: [cutoff, SWEEP_TOKEN_BATCH_SIZE],
+        });
+        const tokens = stale.rows.map((r) => String(r.token));
+        if (tokens.length === 0) {
+          await tx.commit();
+          return total;
+        }
+
+        const placeholders = tokens.map(() => "?").join(", ");
+        // Bounding ciphertext for a still-active long session is a deeper per-log retention policy
+        // decision; this sweep only removes fully idle sessions so replay never starts with a gap.
+        const deleted = await tx.execute({
+          sql: `DELETE FROM frames WHERE token IN (${placeholders})`,
+          args: tokens,
+        });
+        await tx.execute({
+          sql: `DELETE FROM channels WHERE token IN (${placeholders})`,
+          args: tokens,
+        });
+        await tx.commit();
+        total += Number(deleted.rowsAffected);
+      } catch (e) {
+        try {
+          await tx.rollback();
+        } catch {
+          /* already settled */
+        }
+        throw e;
+      }
+    }
   }
 
   async publish(token: string, payload: RelayPayload): Promise<PublishResult> {
