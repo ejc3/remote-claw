@@ -23,7 +23,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
-import { type BrokerClient, BrokerError } from "../../broker/client.js";
+import { type BrokerClient, BrokerError, type SeqCursor } from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import type { GitInfo } from "./gitinfo.js";
 import { assistantText, type RcEvent, type Session } from "./session.js";
@@ -321,10 +321,11 @@ export class HostRcRelay {
    *  the full history and the host need not hold (or re-post) a copy. The "one log, mediated by the
    *  broker" model — the broker IS the history. */
   readonly #log: { recordKind: string; seq: number; msgId: string; text: string }[] = [];
-  /** True when the broker backend is a durable log (`#client.durable`): the host skips building `#log`
+  /** True when the broker reports its EFFECTIVE backend is a durable log: the host skips building `#log`
    *  and skips replaying on `catch_up`, because subscribe() serves history straight from the durable
    *  frames table. False (capped/ephemeral backend) keeps the legacy host-replayed catch_up. */
-  readonly #durable: boolean;
+  #durable = false;
+  #durabilityDiscovered = false;
   /** First inbound stream offset this relay incarnation may read. On durable restart this is set to the
    *  current frame count before the pumps go live, fencing the fresh empty #seen set above all frames
    *  written by earlier host incarnations. Non-durable backends keep the legacy 0 replay+dedup path. */
@@ -367,7 +368,6 @@ export class HostRcRelay {
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
-    this.#durable = opts.client.durable;
     this.#identityId = opts.identityId;
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
@@ -538,7 +538,10 @@ export class HostRcRelay {
    *  shared #publishLock/#halted, would otherwise leave a live session stranded behind a permanent seq
    *  gap. (Adversarial-review fix.) An external `signal` abort still stops both as before. */
   async serve(signal: AbortSignal): Promise<void> {
-    if (this.#durable && !this.#durableCursorsReady) await this.#resumeDurableCursors();
+    if (!this.#durabilityDiscovered) await this.#discoverDurability();
+    if (this.#durable && !this.#durableCursorsReady) {
+      throw new Error("durable broker reported but restart cursors are not ready");
+    }
     const ac = new AbortController();
     const onAbort = () => ac.abort();
     if (signal.aborted) ac.abort();
@@ -562,6 +565,32 @@ export class HostRcRelay {
     }
   }
 
+  /** Discover the broker's EFFECTIVE durability from the server before either pump starts. A failed
+   *  discovery means durability is still unknown, so the relay keeps the legacy non-durable path instead
+   *  of failing closed; fail-closed is reserved for the case where the server has already reported
+   *  `durable: true`. */
+  async #discoverDurability(): Promise<void> {
+    let seqCursor: SeqCursor;
+    try {
+      seqCursor = await this.#client.seqCursor(this.#sessionId);
+    } catch (e) {
+      this.#durabilityDiscovered = true;
+      this.#durable = false;
+      this.#trace.warn("durability discovery failed — using non-durable relay path", {
+        error: (e as Error)?.message ?? String(e),
+      });
+      return;
+    }
+
+    this.#durabilityDiscovered = true;
+    this.#durable = seqCursor.durable;
+    if (!this.#durable) {
+      this.#trace.debug("broker reported non-durable relay path");
+      return;
+    }
+    await this.#resumeDurableCursors(seqCursor);
+  }
+
   /** Durable restart recovery has two independent cursors and both must be known BEFORE the pumps can
    *  emit or consume anything. `maxSeq` resumes the outbound transcript seq. `frameCount` resumes the
    *  inbound stream cursor because broker `startIndex` is a publish-order frame offset, not a transcript
@@ -569,39 +598,21 @@ export class HostRcRelay {
    *  first publish after this relay incarnation's high-water mark. If either durable read fails after
    *  bounded retries we fail closed: starting at seq/startIndex 0 would either corrupt ordering or
    *  re-execute historical client actions from the durable log. */
-  async #resumeDurableCursors(): Promise<void> {
+  async #resumeDurableCursors(seqCursor: SeqCursor): Promise<void> {
+    const max = seqCursor.maxSeq;
+    if (max !== null && this.#seq === 0) {
+      this.#seq = max + 1;
+      this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
+    }
+
     let lastErr: unknown;
     for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
       try {
-        const max = await this.#client.maxSeq(this.#sessionId);
+        const count = await this.#client.frameCountCursor(this.#sessionId);
         lastErr = undefined;
-        if (max !== null && this.#seq === 0) {
-          this.#seq = max + 1;
-          this.#trace.debug("resumed seq from durable log", { maxSeq: max, nextSeq: this.#seq });
-        }
-        break;
-      } catch (e) {
-        lastErr = e;
-        if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
-          await new Promise((r) => setTimeout(r, SEQ_RESUME_RETRY_BASE_MS * 2 ** attempt));
-        }
-      }
-    }
-    if (lastErr !== undefined) {
-      this.#fatal = true;
-      this.#trace.error("seq resume failed after retries — aborting durable relay", {
-        attempts: SEQ_RESUME_ATTEMPTS,
-        error: (lastErr as Error)?.message ?? String(lastErr),
-      });
-      throw lastErr;
-    }
-
-    lastErr = undefined;
-    for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
-      try {
-        const count = await this.#client.frameCount(this.#sessionId);
-        lastErr = undefined;
-        this.#inboundStartIndex = count ?? 0;
+        if (!count.durable)
+          throw new Error("broker durability changed while resuming durable cursors");
+        this.#inboundStartIndex = count.frameCount ?? 0;
         this.#durableCursorsReady = true;
         this.#trace.debug("resumed inbound cursor from durable log", {
           startIndex: this.#inboundStartIndex,

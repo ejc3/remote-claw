@@ -29,9 +29,9 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
   --rc-app <origin>  the app origin whose /api is the broker (or set RC_APP). With it, launching claude
                      wraps it in the MITM and bridges each session to the broker; without it, claude runs
                      transparently.
-  --rc-backend <n>   pick the broker's durable backend this host targets (or set RC_BACKEND): vercel |
-                     local | temporal | turso. Omitted ⇒ the broker's default. Must match what your
-                     viewers use. "turso" is a durable log, so the host serves history from it instead of
+  --rc-backend <n>   pick the broker backend this host targets (or set RC_BACKEND): vercel | local |
+                     temporal | turso. Omitted ⇒ the broker's default. Must match what your viewers use.
+                     When the server reports a durable log, the host serves history from it instead of
                      keeping (and replaying) an in-memory transcript.
 
 Diagnostics:

@@ -1,7 +1,7 @@
 import { decodeFrame, encodeFrame, timingSafeEqual, WireError } from "@remote-claw/clawsec";
 import { AuthError, identityFromRequest } from "../../../lib/auth";
 import { backendSelector, getBackend, isRequestableBackend } from "../../../lib/broker";
-import { PublishConflictError } from "../../../lib/broker/backend";
+import { isClose, PublishConflictError } from "../../../lib/broker/backend";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
@@ -32,6 +32,13 @@ export async function POST(req: Request): Promise<Response> {
   } catch (e) {
     if (WireError.is(e)) return json({ error: e.message }, 400);
     throw e;
+  }
+  // Generation-race guard: Turso channel `gen` bumps only when a backend caller publishes the
+  // internal `__close` sentinel and a later publish reopens the token. The public relay route must
+  // never accept that sentinel, so a host restart's maxSeq/frameCount/subscribe window cannot cross
+  // a close+reopen on this HTTP surface.
+  if (isClose(frame as unknown as { __close: true })) {
+    return json({ error: "close sentinel is not accepted by /api/relay" }, 400);
   }
 
   // The frame must claim the AUTHENTICATED identity — a bearer for identity A can't publish a frame

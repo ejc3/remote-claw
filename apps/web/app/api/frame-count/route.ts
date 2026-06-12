@@ -32,6 +32,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const backend = await getBackend(requested);
+  const durable = Boolean(backend.maxSeq);
   const frameCount = backend.frameCount ? await backend.frameCount(token) : null;
-  return json({ frameCount });
+  return json({ frameCount, durable });
 }

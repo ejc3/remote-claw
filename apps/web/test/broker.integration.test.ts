@@ -71,7 +71,7 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
     const id = await testIdentity(20);
     const res = await seqReq(bearer(id.authToken), "?session=sess-seq");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ maxSeq: null });
+    expect(await res.json()).toEqual({ maxSeq: null, durable: false });
   });
 
   it("rejects an unauthenticated request", async () => {
@@ -82,10 +82,12 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
   it("returns the highest seq from the Turso route backend", async () => {
     const prevUrl = process.env.TURSO_DATABASE_URL;
     const prevToken = process.env.TURSO_AUTH_TOKEN;
+    const prevBackend = process.env.BROKER_BACKEND;
     const dir = await mkdtemp(join(tmpdir(), "rc-seq-route-"));
     clearEnvTursoBackend();
     process.env.TURSO_DATABASE_URL = `file:${join(dir, "seq.db")}`;
     delete process.env.TURSO_AUTH_TOKEN;
+    process.env.BROKER_BACKEND = "turso";
     try {
       const id = await testIdentity(21);
       const auth = bearer(id.authToken);
@@ -104,18 +106,20 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
           }),
           utf8(`message ${seq}`),
         );
-        expect((await post(frame, auth, sid, "turso")).status).toBe(200);
+        expect((await post(frame, auth, sid)).status).toBe(200);
       }
 
-      const res = await seqReq(auth, `?session=${encodeURIComponent(sid)}&backend=turso`);
+      const res = await seqReq(auth, `?session=${encodeURIComponent(sid)}`);
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ maxSeq: 7 });
+      expect(await res.json()).toEqual({ maxSeq: 7, durable: true });
     } finally {
       clearEnvTursoBackend();
       if (prevUrl === undefined) delete process.env.TURSO_DATABASE_URL;
       else process.env.TURSO_DATABASE_URL = prevUrl;
       if (prevToken === undefined) delete process.env.TURSO_AUTH_TOKEN;
       else process.env.TURSO_AUTH_TOKEN = prevToken;
+      if (prevBackend === undefined) delete process.env.BROKER_BACKEND;
+      else process.env.BROKER_BACKEND = prevBackend;
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -126,7 +130,7 @@ describe("broker: GET /api/frame-count (durable stream cursor)", () => {
     const id = await testIdentity(22);
     const res = await frameCountReq(bearer(id.authToken), "?session=sess-count");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ frameCount: null });
+    expect(await res.json()).toEqual({ frameCount: null, durable: false });
   });
 
   it("rejects an unauthenticated request", async () => {
@@ -137,10 +141,12 @@ describe("broker: GET /api/frame-count (durable stream cursor)", () => {
   it("returns the stream length from the Turso route backend", async () => {
     const prevUrl = process.env.TURSO_DATABASE_URL;
     const prevToken = process.env.TURSO_AUTH_TOKEN;
+    const prevBackend = process.env.BROKER_BACKEND;
     const dir = await mkdtemp(join(tmpdir(), "rc-count-route-"));
     clearEnvTursoBackend();
     process.env.TURSO_DATABASE_URL = `file:${join(dir, "count.db")}`;
     delete process.env.TURSO_AUTH_TOKEN;
+    process.env.BROKER_BACKEND = "turso";
     try {
       const id = await testIdentity(23);
       const auth = bearer(id.authToken);
@@ -159,18 +165,20 @@ describe("broker: GET /api/frame-count (durable stream cursor)", () => {
           }),
           utf8(`message ${seq}`),
         );
-        expect((await post(frame, auth, sid, "turso")).status).toBe(200);
+        expect((await post(frame, auth, sid)).status).toBe(200);
       }
 
-      const res = await frameCountReq(auth, `?session=${encodeURIComponent(sid)}&backend=turso`);
+      const res = await frameCountReq(auth, `?session=${encodeURIComponent(sid)}`);
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ frameCount: 2 });
+      expect(await res.json()).toEqual({ frameCount: 2, durable: true });
     } finally {
       clearEnvTursoBackend();
       if (prevUrl === undefined) delete process.env.TURSO_DATABASE_URL;
       else process.env.TURSO_DATABASE_URL = prevUrl;
       if (prevToken === undefined) delete process.env.TURSO_AUTH_TOKEN;
       else process.env.TURSO_AUTH_TOKEN = prevToken;
+      if (prevBackend === undefined) delete process.env.BROKER_BACKEND;
+      else process.env.BROKER_BACKEND = prevBackend;
       await rm(dir, { recursive: true, force: true });
     }
   });

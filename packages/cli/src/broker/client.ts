@@ -40,11 +40,10 @@ export interface BrokerClientOptions {
   provider: SecurityProvider;
   /** Injectable fetch (tests / a custom agent). Defaults to the global fetch. */
   fetchFn?: typeof fetch;
-  /** Pick the broker's durable backend for this client's calls ("vercel" | "local" | "temporal" |
+  /** Pick the broker backend for this client's calls ("vercel" | "local" | "temporal" |
    *  "turso"). Sent as the `x-broker-backend` header on every /api/relay + /api/stream request; omitted
    *  ⇒ the broker's default. Publish and subscribe for one channel MUST agree, so it's set per client.
-   *  "turso" is a durable log (see `durable`): the broker retains every frame, so the host can retire
-   *  its in-memory transcript and let subscribe() serve history. */
+   *  The host learns whether the effective server backend is durable from /api/seq, not from this flag. */
   backend?: string;
   /** Vercel "Protection Bypass for Automation" secret. When the broker is deployed behind Vercel
    *  Deployment Protection (SSO), an unauthenticated request is bounced with a 401 auth wall before
@@ -71,12 +70,23 @@ export interface StreamOptions {
   signal?: AbortSignal;
 }
 
+export interface SeqCursor {
+  maxSeq: number | null;
+  durable: boolean;
+}
+
+export interface FrameCountCursor {
+  frameCount: number | null;
+  durable: boolean;
+}
+
 export class BrokerClient {
   readonly #baseUrl: string;
   readonly #provider: SecurityProvider;
   readonly #fetch: typeof fetch;
   readonly #backend: string | undefined;
   readonly #bypass: string | undefined;
+  #serverDurable: boolean | undefined;
 
   constructor(opts: BrokerClientOptions) {
     this.#baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -93,15 +103,11 @@ export class BrokerClient {
     this.#fetch = opts.fetchFn ?? globalThis.fetch.bind(globalThis);
   }
 
-  /** True when this client targets a DURABLE-log backend (currently only `turso`): the broker keeps
-   *  every frame forever, so a fresh subscribe(startIndex:0) alone replays the WHOLE transcript and the
-   *  host need not hold an in-memory `#log` or re-post it on a viewer `catch_up`. A capped/ephemeral
-   *  backend (vercel) rolls old frames off its buffer, so there the host's `#log` is still the only full
-   *  history — hence the conservative default (undefined/unknown backend ⇒ NOT durable, keep the #log). */
+  /** True only after the broker itself has reported a durable-log backend. This deliberately does NOT
+   *  infer durability from `#backend`: when the host omits --rc-backend, the deployment default may still
+   *  be Turso, and the safety decision must come from the server's effective backend. */
   get durable(): boolean {
-    // `#backend` is already trimmed/blank-normalized at construction, so this matches exactly what the
-    // `x-broker-backend` header sends — host and broker can't disagree about which store is in play.
-    return this.#backend === "turso";
+    return this.#serverDurable === true;
   }
 
   /** `Authorization: Bearer <hex(auth_token)>` — recomputed by the broker into identity_id (§4.5). */
@@ -258,9 +264,10 @@ export class BrokerClient {
    * GET /api/seq — the highest transcript `seq` the broker's durable log holds for `sessionId` (or the
    * bus when omitted), or null if the backend keeps no durable log / the channel is absent. A restarted
    * host resumes `seq = max + 1` so its new frames don't collide with the durable ones (#36). Holds no
-   * store creds — the broker reads the cleartext `seq` column; the body is `{ maxSeq: number | null }`.
+   * store creds — the broker reads the cleartext `seq` column; the body is
+   * `{ maxSeq: number | null, durable: boolean }`.
    */
-  async maxSeq(sessionId?: string): Promise<number | null> {
+  async seqCursor(sessionId?: string): Promise<SeqCursor> {
     const qs = sessionId !== undefined ? `?session=${encodeURIComponent(sessionId)}` : "";
     const res = await this.#fetch(`${this.#baseUrl}/api/seq${qs}`, {
       headers: {
@@ -270,8 +277,14 @@ export class BrokerClient {
       },
     });
     if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
-    const body = (await res.json()) as { maxSeq?: unknown };
-    return typeof body.maxSeq === "number" ? body.maxSeq : null;
+    const body = (await res.json()) as { maxSeq?: unknown; durable?: unknown };
+    const durable = body.durable === true;
+    this.#serverDurable = durable;
+    return { maxSeq: typeof body.maxSeq === "number" ? body.maxSeq : null, durable };
+  }
+
+  async maxSeq(sessionId?: string): Promise<number | null> {
+    return (await this.seqCursor(sessionId)).maxSeq;
   }
 
   /**
@@ -280,7 +293,7 @@ export class BrokerClient {
    * the inbound `startIndex` floor: unlike `maxSeq`, it counts in/out/meta/chunk rows exactly like the
    * broker's subscribe cursor.
    */
-  async frameCount(sessionId?: string): Promise<number | null> {
+  async frameCountCursor(sessionId?: string): Promise<FrameCountCursor> {
     const qs = sessionId !== undefined ? `?session=${encodeURIComponent(sessionId)}` : "";
     const res = await this.#fetch(`${this.#baseUrl}/api/frame-count${qs}`, {
       headers: {
@@ -290,8 +303,14 @@ export class BrokerClient {
       },
     });
     if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
-    const body = (await res.json()) as { frameCount?: unknown };
-    return typeof body.frameCount === "number" ? body.frameCount : null;
+    const body = (await res.json()) as { frameCount?: unknown; durable?: unknown };
+    const durable = body.durable === true;
+    this.#serverDurable = durable;
+    return { frameCount: typeof body.frameCount === "number" ? body.frameCount : null, durable };
+  }
+
+  async frameCount(sessionId?: string): Promise<number | null> {
+    return (await this.frameCountCursor(sessionId)).frameCount;
   }
 }
 

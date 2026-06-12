@@ -118,7 +118,9 @@ describe("BrokerClient transport", () => {
       backend: "turso",
     });
 
+    expect(tursoClient.durable).toBe(false); // no server capability has been read yet
     expect(await tursoClient.maxSeq("missing")).toBeNull();
+    expect(tursoClient.durable).toBe(true);
     expect(await tursoClient.frameCount("missing")).toBeNull();
     await tursoClient.postFrame(
       header(id, { recordKind: "accepted", seq: null, sessionId: "empty", msgId: "empty-1" }),
@@ -164,7 +166,7 @@ describe("BrokerClient transport", () => {
     expect((err as BrokerError).status).toBe(401);
   });
 
-  it("reports durable=true only for the turso backend (the host's catch_up-retire signal)", async () => {
+  it("discovers durable=true from the server, including a durable default with no backend header", async () => {
     const mk = (backend?: string): BrokerClient =>
       new BrokerClient({
         baseUrl: "http://broker.test",
@@ -172,11 +174,21 @@ describe("BrokerClient transport", () => {
         fetchFn: broker.fetch,
         ...(backend !== undefined ? { backend } : {}),
       });
-    expect(mk("turso").durable).toBe(true);
-    expect(mk("vercel").durable).toBe(false);
-    expect(mk("temporal").durable).toBe(false);
-    expect(mk("local").durable).toBe(false);
-    expect(mk(undefined).durable).toBe(false); // unknown/default backend ⇒ conservative (keep #log)
+    expect(mk("turso").durable).toBe(false); // the local flag alone is not trusted
+
+    const defaultClient = mk(undefined);
+    broker.durable = true;
+    const cursor = await defaultClient.seqCursor("default-turso-session");
+    expect(cursor).toEqual({ maxSeq: null, durable: true });
+    expect(defaultClient.durable).toBe(true);
+
+    broker.durable = false;
+    const vercelClient = mk("vercel");
+    expect(await vercelClient.seqCursor("default-vercel-session")).toEqual({
+      maxSeq: null,
+      durable: false,
+    });
+    expect(vercelClient.durable).toBe(false);
   });
 
   it("passes startIndex through (negative = recent window)", async () => {

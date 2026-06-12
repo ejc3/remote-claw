@@ -87,10 +87,11 @@ class FakeClient {
   }
   announces: Array<Record<string, unknown>> = [];
 
-  /** Mirrors BrokerClient.durable. False ⇒ the host keeps `#log` and replays catch_up (default, like
-   *  vercel); true ⇒ a durable-log backend (turso) where subscribe serves history and the host skips
-   *  both. Set BEFORE constructing the relay (it's read once in the constructor). */
+  /** Legacy synchronous client hint. The real relay no longer trusts this for safety; it waits for
+   *  seqCursor().durable from the server. */
   durable = false;
+  /** Server-reported effective durability returned by seqCursor()/frameCountCursor(). */
+  reportedDurable = false;
 
   /** Mirrors BrokerClient.maxSeq — the durable log's highest seq when a durable host (re)starts a
    *  session. null ⇒ start fresh at 0; a number ⇒ resume at value+1 (#36). serve() reads it on durable
@@ -99,20 +100,35 @@ class FakeClient {
   maxSeqThrows = false;
   maxSeqFailures = 0;
   maxSeqCalls = 0;
-  async maxSeq(_sessionId?: string): Promise<number | null> {
+  async seqCursor(_sessionId?: string): Promise<{ maxSeq: number | null; durable: boolean }> {
     this.maxSeqCalls++;
     if (this.maxSeqFailures > 0) {
       this.maxSeqFailures--;
       throw new BrokerError(500, "maxSeq failed");
     }
     if (this.maxSeqThrows) throw new BrokerError(500, "maxSeq failed");
-    return this.maxSeqValue;
+    return { maxSeq: this.maxSeqValue, durable: this.reportedDurable };
+  }
+  async maxSeq(sessionId?: string): Promise<number | null> {
+    return (await this.seqCursor(sessionId)).maxSeq;
   }
 
   frameCountCalls = 0;
-  async frameCount(_sessionId?: string): Promise<number | null> {
+  frameCountThrows = false;
+  frameCountFailures = 0;
+  async frameCountCursor(
+    _sessionId?: string,
+  ): Promise<{ frameCount: number | null; durable: boolean }> {
     this.frameCountCalls++;
-    return this.#inbound.length;
+    if (this.frameCountFailures > 0) {
+      this.frameCountFailures--;
+      throw new BrokerError(500, "frameCount failed");
+    }
+    if (this.frameCountThrows) throw new BrokerError(500, "frameCount failed");
+    return { frameCount: this.#inbound.length, durable: this.reportedDurable };
+  }
+  async frameCount(sessionId?: string): Promise<number | null> {
+    return (await this.frameCountCursor(sessionId)).frameCount;
   }
 
   failSeq: number | null = null; // fail postMessage when header.seq === failSeq
@@ -532,7 +548,7 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
   it("DURABLE: catch_up is consumed but never opened or replayed", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true; // turso-style backend (set before constructing the relay)
+    client.reportedDurable = true; // server-reported turso-style backend
     const relay = relayOf(session, client);
     const ac = new AbortController();
     const served = relay.serve(ac.signal).catch(() => {});
@@ -586,10 +602,10 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
 });
 
 describe("HostRcRelay durable restart inbound safety", () => {
-  it("starts inbound past durable history so old user prompts and permissions are not re-executed", async () => {
+  it("uses server-reported durable=true even when the local backend hint is false", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
+    client.reportedDurable = true;
     client.queueInbound(inFrame("user", "old-u-1", "old prompt 1", "old-c-1"));
     client.queueInbound(inFrame("user", "old-u-2", "old prompt 2", "old-c-2"));
     client.queueInbound(
@@ -639,7 +655,7 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
   it("resumes seq = durable MAX + 1 so a restart doesn't collide with prior frames", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
+    client.reportedDurable = true;
     client.maxSeqValue = 4; // a prior incarnation already wrote seq 0..4 to the durable log
     const relay = relayOf(session, client);
     const ac = new AbortController();
@@ -657,7 +673,7 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
   it("starts at 0 when the durable log is empty (maxSeq null) — a fresh session", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
+    client.reportedDurable = true;
     client.maxSeqValue = null;
     const relay = relayOf(session, client);
     const ac = new AbortController();
@@ -671,11 +687,11 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
     expect(client.content[0]?.seq).toBe(0);
   });
 
-  it("retries transient maxSeq failures before resuming from the durable log", async () => {
+  it("retries transient frameCount failures after durable=true before starting the pumps", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
-    client.maxSeqFailures = 2;
+    client.reportedDurable = true;
+    client.frameCountFailures = 2;
     client.maxSeqValue = 4;
     const relay = relayOf(session, client);
     const ac = new AbortController();
@@ -686,32 +702,57 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
     ac.abort();
     await served;
 
-    expect(client.maxSeqCalls).toBe(3);
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(3);
     expect(client.content[0]?.seq).toBe(5);
   });
 
-  it("does NOT query maxSeq on a non-durable backend (legacy path starts at 0)", async () => {
+  it("uses the legacy path when the server reports non-durable", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient(); // durable false
-    client.maxSeqValue = 9; // would resume at 10 IF consulted — it must not be on the ephemeral path
+    client.maxSeqValue = 9; // ignored because durable=false
     const relay = relayOf(session, client);
     const ac = new AbortController();
     const served = relay.serve(ac.signal).catch(() => {});
 
     session.pushUpstream(assistant("legacy"));
     await waitFor(() => client.content.length >= 1);
+    await waitFor(() => client.streamStarts.length > 0);
     ac.abort();
     await served;
 
-    expect(client.maxSeqCalls).toBe(0); // never consulted — no extra round-trip for ephemeral backends
+    expect(client.maxSeqCalls).toBe(1); // capability discovery only
+    expect(client.frameCountCalls).toBe(0);
+    expect(client.streamStarts[0]).toBe(0);
     expect(client.content[0]?.seq).toBe(0);
   });
 
-  it("fails loud after maxSeq retries fail instead of reusing seq 0", async () => {
+  it("uses the legacy path when durability discovery itself fails before durable=true is known", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.durable = true;
     client.maxSeqThrows = true;
+    client.maxSeqValue = 9;
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream(assistant("legacy after seq error"));
+    await waitFor(() => client.content.length >= 1);
+    await waitFor(() => client.streamStarts.length > 0);
+    ac.abort();
+    await served;
+
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(0);
+    expect(client.streamStarts[0]).toBe(0);
+    expect(client.content[0]?.seq).toBe(0);
+  });
+
+  it("fails loud after durable frameCount retries fail instead of reusing startIndex 0", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    client.frameCountThrows = true;
     const { tracer, errors } = spyTracer();
     const relay = new HostRcRelay({
       client: client as unknown as BrokerClient,
@@ -721,12 +762,14 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
       tracer,
     });
 
-    await expect(relay.serve(new AbortController().signal)).rejects.toThrow(/maxSeq failed/);
+    await expect(relay.serve(new AbortController().signal)).rejects.toThrow(/frameCount failed/);
 
-    expect(client.maxSeqCalls).toBe(3);
-    expect(client.frameCountCalls).toBe(0); // seq resume failed first, so no pump/cursor work starts
+    expect(client.maxSeqCalls).toBe(1);
+    expect(client.frameCountCalls).toBe(3);
     expect(client.content).toHaveLength(0); // no seq 0 collision is posted
-    expect(errors.find((e) => e.msg.includes("seq resume failed after retries"))).toBeDefined();
+    expect(
+      errors.find((e) => e.msg.includes("inbound cursor resume failed after retries")),
+    ).toBeDefined();
   });
 });
 

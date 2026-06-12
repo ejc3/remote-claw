@@ -18,6 +18,8 @@ export class MockBroker {
   readonly #channels = new Map<string, WireFrame[]>();
   /** Every POST seen, for assertions about routing/auth. */
   readonly posts: PostRecord[] = [];
+  /** Server-reported default durability when no backend selector is sent. */
+  durable = false;
   /** When set, the bearer hex an authorized request must present (else 401). */
   #requireBearer: string | null = null;
 
@@ -41,6 +43,11 @@ export class MockBroker {
 
   #unauthorized(bearer: string | null): boolean {
     return this.#requireBearer !== null && bearer !== this.#requireBearer;
+  }
+
+  #durableFor(init: RequestInit | undefined): boolean {
+    const backend = new Headers(init?.headers).get("x-broker-backend")?.trim();
+    return backend === "turso" || (backend === undefined && this.durable);
   }
 
   async #handle(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -76,12 +83,15 @@ export class MockBroker {
         if (typeof frame.seq !== "number") return max;
         return max === null ? frame.seq : Math.max(max, frame.seq);
       }, null);
-      return json({ maxSeq });
+      return json({ maxSeq, durable: this.#durableFor(init) });
     }
 
     if (url.pathname === "/api/frame-count") {
       const token = session === null ? "bus" : `sess:${session}`;
-      return json({ frameCount: this.#channels.get(token)?.length ?? null });
+      return json({
+        frameCount: this.#channels.get(token)?.length ?? null,
+        durable: this.#durableFor(init),
+      });
     }
 
     return json({ error: "not found" }, 404);

@@ -5,6 +5,7 @@ import { type Client, createClient } from "@libsql/client";
 import type { WireFrame } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { TursoBackend } from "../../lib/broker/turso";
+import { ensureSchema } from "../../lib/broker/turso-connection";
 
 // The Turso (libSQL) backend MUST honour the same durable-channel contract as LocalBackend (ordering,
 // resumable replay, recent-window, create-or-resume, subscribe-or-null, close-frees-token, multi-
@@ -29,6 +30,7 @@ function frame(seq: number, extra: Record<string, unknown> = {}): WireFrame {
   return { seq, ...extra } as unknown as WireFrame;
 }
 const seqs = (fs: WireFrame[]) => fs.map((f) => (f as unknown as { seq: number }).seq);
+const msgIds = (fs: WireFrame[]) => fs.map((f) => (f as unknown as { msg_id: string }).msg_id);
 
 async function storedSeqs(token: string): Promise<number[]> {
   const res = await client.execute({
@@ -326,5 +328,75 @@ describe("TursoBackend.frameCount — durable inbound stream cursor", () => {
     expect(await b.frameCount(t)).toBeNull();
     await b.publish(t, frame(0));
     expect(await b.frameCount(t)).toBe(1);
+  });
+
+  it("subscribe(token, frameCount) skips all historical rows and delivers only future inbound", async () => {
+    const t = tok();
+    const b = be();
+    await b.publish(t, frame(0, { dir: "out", msg_id: "old-out-0", part: 0 }));
+    await b.publish(t, {
+      seq: null,
+      dir: "in",
+      record_kind: "user",
+      msg_id: "old-in-0",
+      part: 0,
+    } as unknown as WireFrame);
+    await b.publish(t, { msg_id: "old-meta-0", part: 0 } as unknown as WireFrame);
+    await b.publish(t, frame(1, { dir: "out", msg_id: "old-out-1", part: 0 }));
+
+    const count = await b.frameCount(t);
+    expect(count).toBe(4);
+    const stream = present(await b.subscribe(t, count ?? 0));
+    await b.publish(t, {
+      seq: null,
+      dir: "in",
+      record_kind: "user",
+      msg_id: "new-in-0",
+      part: 0,
+    } as unknown as WireFrame);
+
+    expect(msgIds(await readN(stream, 2, 600))).toEqual(["new-in-0"]);
+  });
+
+  it("handles the empty live-channel N=0 cursor boundary", async () => {
+    const t = tok();
+    const b = be();
+    await ensureSchema(client);
+    await client.execute({
+      sql: "INSERT INTO channels (token, gen, closed, created_at) VALUES (?, 0, 0, ?)",
+      args: [t, Date.now()],
+    });
+
+    const count = await b.frameCount(t);
+    expect(count).toBe(0);
+    const stream = present(await b.subscribe(t, count ?? 0));
+    await b.publish(t, {
+      seq: null,
+      dir: "in",
+      record_kind: "user",
+      msg_id: "first-in",
+      part: 0,
+    } as unknown as WireFrame);
+
+    expect(msgIds(await readN(stream, 2, 600))).toEqual(["first-in"]);
+  });
+
+  it("handles the single-row N=1 cursor boundary", async () => {
+    const t = tok();
+    const b = be();
+    await b.publish(t, frame(0, { dir: "out", msg_id: "only-old", part: 0 }));
+
+    const count = await b.frameCount(t);
+    expect(count).toBe(1);
+    const stream = present(await b.subscribe(t, count ?? 0));
+    await b.publish(t, {
+      seq: null,
+      dir: "in",
+      record_kind: "user",
+      msg_id: "after-one",
+      part: 0,
+    } as unknown as WireFrame);
+
+    expect(msgIds(await readN(stream, 2, 600))).toEqual(["after-one"]);
   });
 });

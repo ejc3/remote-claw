@@ -231,6 +231,12 @@ export class TursoBackend implements BrokerBackend {
     const c = this.#client;
     await ensureSchema(c);
 
+    // Gen-consistency note for host restart cursors: maxSeq(), frameCount(), and subscribe() are
+    // separate reads, but a Turso gen bump requires publish(__close) followed by a later publish. The
+    // public /api/relay route accepts only decoded WireFrames and explicitly rejects the internal close
+    // sentinel, so no host/viewer request can close+reopen a session channel during the restart resume
+    // window. Direct backend callers that use __close are limited to tests/control paths and must not
+    // apply an old-gen frameCount as a new-gen subscribe cursor.
     const ch = await c.execute({
       sql: "SELECT gen, closed FROM channels WHERE token = ?",
       args: [token],

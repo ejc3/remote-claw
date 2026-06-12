@@ -34,6 +34,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const backend = await getBackend(requested);
+  const durable = Boolean(backend.maxSeq);
   const maxSeq = backend.maxSeq ? await backend.maxSeq(token) : null;
-  return json({ maxSeq });
+  return json({ maxSeq, durable });
 }
