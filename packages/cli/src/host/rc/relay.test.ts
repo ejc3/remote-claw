@@ -87,6 +87,11 @@ class FakeClient {
   }
   announces: Array<Record<string, unknown>> = [];
 
+  /** Mirrors BrokerClient.durable. False ⇒ the host keeps `#log` and replays catch_up (default, like
+   *  vercel); true ⇒ a durable-log backend (turso) where subscribe serves history and the host skips
+   *  both. Set BEFORE constructing the relay (it's read once in the constructor). */
+  durable = false;
+
   failSeq: number | null = null; // fail postMessage when header.seq === failSeq
 
   #inbound: Frame[] = [];
@@ -141,8 +146,12 @@ class FakeClient {
 
   /** msgIds whose openFrame should REJECT — simulates an AEAD/auth failure (forged/tampered frame). */
   failOpen = new Set<string>();
+  /** Every msgId passed to openFrame, in order — lets a test prove which inbound frames the relay
+   *  actually DECRYPTED (e.g. the durable path consumes a catch_up frame without ever opening it). */
+  opened: string[] = [];
 
   openFrame(frame: Frame): Promise<Uint8Array> {
+    this.opened.push(frame.msgId);
     if (this.failOpen.has(frame.msgId)) return Promise.reject(new Error("AEAD open failed"));
     return Promise.resolve(frame.ct); // inbound test frames stash plaintext in `ct`
   }
@@ -478,6 +487,67 @@ describe("HostRcRelay mid-session reconnect = complete history from the relay lo
     await served;
 
     expect(client.content.slice(3).map((p) => p.seq)).toEqual([1, 2]); // only the missing tail
+  });
+});
+
+// A2a — on a DURABLE-log backend (turso) the broker keeps every frame, so a (re)connecting viewer's
+// subscribe(startIndex:0) replays the whole transcript on its own. The host then must NOT also keep an
+// in-memory `#log` or re-post it on `catch_up` (that would be pure waste — the frames are already in the
+// durable log and already delivered by subscribe). "One log, mediated by the broker."
+describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", () => {
+  it("DURABLE: catch_up is consumed but never opened or replayed", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.durable = true; // turso-style backend (set before constructing the relay)
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    // Drive a few turns: the content frames are POSTed live (into the durable log, in production).
+    for (const a of ["a0", "a1", "a2"]) session.pushUpstream(assistant(a));
+    await waitFor(() => client.content.length >= 3);
+
+    // Deliver a catch_up, then a real `user` prompt BEHIND it on the same inbound stream. The inbound
+    // pump is FIFO, so the relay processing the user prompt PROVES it got past the catch_up (consumed,
+    // not stuck) — without us needing to peek at any private state.
+    client.pushInbound(inFrame("catch_up", "cu-d", JSON.stringify({ since: 0 })));
+    client.pushInbound(inFrame("user", "u-1", "hi from viewer"));
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    // The user frame WAS opened (decrypted) — the pump reached past the catch_up …
+    expect(client.opened).toContain("u-1");
+    // … but the catch_up frame was NEVER opened: the durable short-circuit skips it (its `since` is
+    // irrelevant — the durable log's own subscribe serves history). If that short-circuit regressed to
+    // open+replay, "cu-d" would appear here. (Pins relay.ts catch_up handler.)
+    expect(client.opened).not.toContain("cu-d");
+    // … and nothing was re-posted: the only content frames are the 3 live ones + the echoed user prompt
+    // (seq 3). No replay of seq 0–2 (contrast the non-durable test below, which re-posts them).
+    expect(client.content.map((p) => p.seq)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("NON-DURABLE (contrast): catch_up IS opened and replays the host #log", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient(); // durable defaults false — the legacy capped/ephemeral path
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    for (const a of ["a0", "a1", "a2"]) session.pushUpstream(assistant(a));
+    await waitFor(() => client.content.length >= 3);
+
+    // On a non-durable backend the host MUST still build #log and replay it on catch_up (the broker's
+    // buffer may have rolled). So the same catch_up opens the frame (to read `since`) and re-posts the log.
+    client.pushInbound(inFrame("catch_up", "cu-n", JSON.stringify({ since: 0 })));
+    await waitFor(() => client.content.length >= 6); // 3 live + 3 replayed
+    ac.abort();
+    await served;
+
+    expect(client.opened).toContain("cu-n"); // opened to read `since` (the durable branch would not)
+    // The host re-posted the whole log — proving the `if (!this.#durable)` #emit guard still POPULATES
+    // #log on the non-durable path (a regression that skipped it would make this replay empty).
+    expect(client.content.map((p) => p.seq)).toEqual([0, 1, 2, 0, 1, 2]);
   });
 });
 

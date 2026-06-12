@@ -115,6 +115,21 @@ describe("BrokerClient transport", () => {
     expect((err as BrokerError).status).toBe(401);
   });
 
+  it("reports durable=true only for the turso backend (the host's catch_up-retire signal)", async () => {
+    const mk = (backend?: string): BrokerClient =>
+      new BrokerClient({
+        baseUrl: "http://broker.test",
+        provider: securityProvider("sealed", id),
+        fetchFn: broker.fetch,
+        ...(backend !== undefined ? { backend } : {}),
+      });
+    expect(mk("turso").durable).toBe(true);
+    expect(mk("vercel").durable).toBe(false);
+    expect(mk("temporal").durable).toBe(false);
+    expect(mk("local").durable).toBe(false);
+    expect(mk(undefined).durable).toBe(false); // unknown/default backend ⇒ conservative (keep #log)
+  });
+
   it("passes startIndex through (negative = recent window)", async () => {
     for (const n of [1, 2, 3]) {
       await client.postFrame(header(id, { msgId: `a${n}` }), utf8(JSON.stringify({ n })));

@@ -29,6 +29,10 @@ export interface RcLaunchOptions {
   identity: Identity;
   /** The broker origin (`--rc-app` / RC_APP). Its `/api` is the relay broker. */
   brokerUrl: string;
+  /** Which broker backend to target (`--rc-backend` / RC_BACKEND), sent as the x-broker-backend header.
+   *  Omitted ⇒ the broker's default. A durable backend (turso) lets the host retire its #log/catch_up
+   *  replay (the durable log serves history via subscribe). Must match what viewers subscribe with. */
+  backend?: string;
   /** Directory holding the MITM CA + leaf (generated if absent). */
   certsDir: string;
   /** The claude binary (default "claude"). */
@@ -75,6 +79,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
       provider,
       ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
       ...(bypass ? { protectionBypass: bypass } : {}),
+      ...(opts.backend !== undefined ? { backend: opts.backend } : {}),
     });
 
   const proxy = new MitmProxy({

@@ -10,6 +10,11 @@
 //     every device's transcript shows it) and injected into claude (pushUserInput); a `catch_up`
 //     replays the log; a `permission` grant answers a worker control_request.
 //
+// catch_up has two regimes (see `#durable`): on a capped/ephemeral backend the host keeps an in-memory
+// `#log` and re-posts it on a viewer `catch_up`; on a DURABLE-log backend (Turso) the broker retains
+// every frame, so a viewer's subscribe(startIndex:0) replays the full history on its own — the host
+// builds no `#log` and ignores `catch_up`. One log, mediated by the broker.
+//
 // The transcript `seq` is allocated solely here (§6: clients never assign order), and a bounded
 // `#seen` set dedups the at-least-once inbound stream. Mirrors HostRelay's broker discipline, but
 // decoupled into the event-driven shape RC needs (a turn's response is async, tool turns interleave).
@@ -309,8 +314,15 @@ export class HostRcRelay {
    *  session ends. Must NOT be size-bounded: #tailInbound re-reads from index 0 on each reconnect, so
    *  an evicted-then-re-read `user` msg_id would re-inject a duplicate prompt into claude. */
   readonly #seen = new Set<string>();
-  /** In-memory transcript (content frames only) — replayed on a viewer `catch_up` (§6/§16). */
+  /** In-memory transcript (content frames only) — replayed on a viewer `catch_up` (§6/§16). Left EMPTY
+   *  when `#durable`: a durable-log backend (Turso) keeps every frame, so its own subscribe(0) replays
+   *  the full history and the host need not hold (or re-post) a copy. The "one log, mediated by the
+   *  broker" model — the broker IS the history. */
   readonly #log: { recordKind: string; seq: number; msgId: string; text: string }[] = [];
+  /** True when the broker backend is a durable log (`#client.durable`): the host skips building `#log`
+   *  and skips replaying on `catch_up`, because subscribe() serves history straight from the durable
+   *  frames table. False (capped/ephemeral backend) keeps the legacy host-replayed catch_up. */
+  readonly #durable: boolean;
 
   /** Unanswered permission requests (request_id) — drives the announce's `needs` flag (#48/#58) and
    *  is cleared when the matching inbound `permission` answer arrives (which logs permission_resolved). */
@@ -348,6 +360,7 @@ export class HostRcRelay {
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
+    this.#durable = opts.client.durable;
     this.#identityId = opts.identityId;
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
@@ -481,10 +494,12 @@ export class HostRcRelay {
     }
   }
 
-  /** Post AND record a content frame so it can be replayed via catch_up. */
+  /** Post AND (on a non-durable backend) record a content frame so it can be replayed via catch_up. On
+   *  a durable backend the broker keeps the frame, so subscribe() serves the replay and the host copy is
+   *  pure waste — skip it. */
   async #emit(recordKind: string, seq: number, msgId: string, text: string): Promise<void> {
     await this.#post(recordKind, seq, msgId, text);
-    this.#log.push({ recordKind, seq, msgId, text });
+    if (!this.#durable) this.#log.push({ recordKind, seq, msgId, text });
     // Per-frame, so it's `trace`. Body length only at this level; the upstream-event log carries a
     // content preview at debug (a content frame here may be any record_kind, so just the shape).
     this.#trace.trace("frame sealed", { kind: recordKind, seq, bytes: text.length });
@@ -666,10 +681,17 @@ export class HostRcRelay {
         // Content preview at debug (opt-in); bytes always.
         this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length, text });
       } else if (frame.recordKind === "catch_up") {
-        const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame)));
-        const since = typeof body.since === "number" ? body.since : 0;
-        this.#trace.debug("catch_up replay", { since, frames: this.#log.length });
-        await this.#replay(since);
+        if (this.#durable) {
+          // The durable backend's own log answers catch_up: the viewer's subscribe(startIndex:0) already
+          // replays the full history straight from the frames table, so there's nothing for the host to
+          // re-post. (We don't even open the frame — `since` is irrelevant when the broker serves it.)
+          this.#trace.debug("catch_up ignored — durable backend serves history");
+        } else {
+          const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame)));
+          const since = typeof body.since === "number" ? body.since : 0;
+          this.#trace.debug("catch_up replay", { since, frames: this.#log.length });
+          await this.#replay(since);
+        }
       } else if (frame.recordKind === "permission") {
         const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame)));
         // Act only if this answer closes an OPEN gate. `#openPerms.delete` returns false for a

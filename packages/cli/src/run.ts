@@ -126,7 +126,7 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // The remaining `--rc-*` namespace splits into flags the LAUNCH path consumes (the secret file +
   // the broker origin) and action modifiers that are only meaningful with a local action above.
   const rcNames = Object.keys(rc);
-  const stray = rcNames.filter((n) => n !== "rc-file" && n !== "rc-app");
+  const stray = rcNames.filter((n) => n !== "rc-file" && n !== "rc-app" && n !== "rc-backend");
   if (stray.length > 0) {
     const named = stray.map((k) => `--${k}`).join(", ");
     warn(`remote-claw: ${named} only applies to a --rc-* action (e.g. --rc-identity)\n`);
@@ -158,8 +158,11 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
   }
   if (rcApp === "" && rcNames.length > 0 && !helpWanted) {
+    // Name the flags the user actually passed (e.g. --rc-backend) instead of always blaming --rc-file.
+    const named = rcNames.map((n) => `--${n}`).join(", ");
+    const verb = rcNames.length > 1 ? "need" : "needs";
     warn(
-      "remote-claw: --rc-file needs --rc-app (or RC_APP) to enable remote control; running plain claude\n",
+      `remote-claw: ${named} ${verb} --rc-app (or RC_APP) to enable remote control; running plain claude\n`,
     );
   }
   const spawnFn = opts.spawnFn ?? realSpawn;
@@ -203,6 +206,12 @@ async function runRcLaunchPath(
   const secretPath = resolveSecretPath({
     ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
   }).path;
+  // Which broker backend this host targets: --rc-backend wins, else RC_BACKEND, else the broker's
+  // default (undefined ⇒ no x-broker-backend header). Empty/whitespace is treated as unset.
+  const backend =
+    (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
+    (process.env.RC_BACKEND ?? "").trim() ||
+    undefined;
   try {
     await ensureIdentity(secretPath); // local, idempotent — create on first run, no network
     const { secret } = await loadSecret(secretPath);
@@ -214,6 +223,7 @@ async function runRcLaunchPath(
       certsDir: join(dirname(secretPath), "mitm-certs"),
       claudeBin: bin,
       spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
+      ...(backend !== undefined ? { backend } : {}),
     });
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);

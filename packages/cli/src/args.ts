@@ -23,6 +23,10 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-confirm": "value",
   // The single app origin (its /api is the broker, its web UI builds the #fragment deep link).
   "rc-app": "value",
+  // Pick the broker's durable backend this host targets (sent as the x-broker-backend header on every
+  // relay/stream call, and the basis for the host's `durable` decision). Omitted ⇒ the broker's default.
+  // Must match what viewers subscribe with — publish + subscribe for one channel address the same store.
+  "rc-backend": "value",
 };
 // Not reserved: starting already remote-controlled is just claude's own `--remote-control`,
 // which the wrapper forwards verbatim — no `--rc-share`. The web deep link is built from the
