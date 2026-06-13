@@ -252,6 +252,38 @@ function assistant(text: string): Record<string, unknown> {
   return { type: "assistant", message: { content: [{ type: "text", text }] } };
 }
 
+describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
+  it("renders a local_prompt user event as a `user` frame but still drops a normal upstream user echo", async () => {
+    // A non-MITM driver (tmux/opencode) sets `local_prompt` on a prompt typed at the host TUI so it
+    // shows for viewers; a normal upstream user event (the worker's echo of a web prompt) is still
+    // dropped (the inbound pump already rendered it — rendering the echo too would double it).
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    session.pushUpstream({ type: "user", message: { role: "user", content: "web echo" } });
+    session.pushUpstream({
+      type: "user",
+      message: { role: "user", content: "typed at the host TUI" },
+      local_prompt: true,
+    });
+    await waitFor(() =>
+      client.content.some(
+        (p) => p.recordKind === "user" && p.text.includes("typed at the host TUI"),
+      ),
+    );
+    ac.abort();
+    await served;
+    const userTexts = client.content.filter((p) => p.recordKind === "user").map((p) => p.text);
+    expect(userTexts).toContain("typed at the host TUI"); // local-origin prompt surfaced
+    expect(userTexts.some((t) => t.includes("web echo"))).toBe(false); // normal upstream user text still dropped
+  });
+});
+
 describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
   it("a failing content post HALTS the relay (serve rejects) with a gap-free durable prefix", async () => {
     const session = new Session("s", "t", {});

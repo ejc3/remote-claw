@@ -150,6 +150,21 @@ function toolResultOutput(content: unknown): string {
   return text.length > TOOL_RESULT_CAP ? `${text.slice(0, TOOL_RESULT_CAP)}…[truncated]` : text;
 }
 
+/** A user message's prompt text (content is a raw string, or `text` blocks) — used only to surface a
+ *  driver-marked LOCAL-origin prompt as a `user` frame (see mapUpstreamItems' `local_prompt` branch). */
+function userPromptText(message: { content?: unknown } | undefined): string {
+  const c = message?.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  return c
+    .filter((b): b is { type: string; text: string } => {
+      const bb = b as { type?: unknown; text?: unknown };
+      return bb.type === "text" && typeof bb.text === "string";
+    })
+    .map((b) => b.text)
+    .join("");
+}
+
 /**
  * Expand a worker upstream event into the content frames the viewer renders. An assistant message
  * carries one or more blocks: `text` (the model's words) and `tool_use` (a tool call — including
@@ -209,6 +224,15 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
     const message = ev.payload.message as { content?: unknown } | undefined;
     const blocks = Array.isArray(message?.content) ? message.content : [];
     const items: OutItem[] = [];
+    // A LOCAL-origin prompt (a non-MITM driver sets `local_prompt`; real claude NEVER does) is surfaced
+    // as a `user` frame so a prompt typed at the host TUI (opencode/tmux) shows up for viewers. The
+    // MITM/claude path is byte-identical — it never sets the flag, so it keeps dropping ALL upstream
+    // user text (a web prompt is echoed by #pumpInbound; rendering its upstream copy too would double
+    // it). The driver must mark ONLY prompts it did NOT inject, or the double-echo returns.
+    if (ev.payload.local_prompt === true) {
+      const text = userPromptText(message);
+      if (text !== "") items.push({ kind: "user", text });
+    }
     for (const b of blocks) {
       const bb = (typeof b === "object" && b !== null ? b : {}) as {
         type?: string;
