@@ -217,3 +217,19 @@ export function userText(payload: Record<string, unknown>): string {
   if (typeof payload.text === "string") return payload.text;
   return "";
 }
+
+/** Concatenate the visible text of an OpenCode USER message's parts (the prompt as the user typed it).
+ *  Non-text and `synthetic` text parts (tool-synthesized scaffolding) are skipped. Used to (a) match a
+ *  user message against the injected-prompt multiset for echo suppression and (b) surface a LOCAL prompt
+ *  (typed at the TUI / another client / history) as a `local_prompt` user payload. Returns "" when the
+ *  message carries no real user text. */
+export function userPartsText(parts: readonly Part[]): string {
+  let out = "";
+  for (const part of parts) {
+    if (part.type !== "text") continue;
+    const t = part as TextPart;
+    if (t.synthetic === true) continue;
+    if (typeof t.text === "string") out += t.text;
+  }
+  return out;
+}

@@ -139,7 +139,8 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-backend" &&
       n !== "rc-driver" &&
       n !== "rc-oc-url" &&
-      n !== "rc-oc-model",
+      n !== "rc-oc-model" &&
+      n !== "rc-oc-session",
   );
   if (stray.length > 0) {
     const named = stray.map((k) => `--${k}`).join(", ");
@@ -302,6 +303,12 @@ async function runOpencodeDriverPath(
       ? { providerID: modelStr.slice(0, slash), modelID: modelStr.slice(slash + 1) }
       : DEFAULT_OPENCODE_MODEL;
   const password = (process.env.OPENCODE_SERVER_PASSWORD ?? "").trim() || undefined;
+  // Which OpenCode session to attach to (--rc-oc-session, else RC_OC_SESSION). Omitted ⇒ the driver
+  // auto-picks the server's most-recent session (else creates one) — the thin default.
+  const ocSessionId =
+    (typeof rc["rc-oc-session"] === "string" ? rc["rc-oc-session"] : "").trim() ||
+    (process.env.RC_OC_SESSION ?? "").trim() ||
+    undefined;
 
   try {
     await ensureIdentity(secretPath);
@@ -332,6 +339,7 @@ async function runOpencodeDriverPath(
         ...(baseUrl !== undefined ? { baseUrl } : {}),
         model,
         ...(password !== undefined ? { password } : {}),
+        ...(ocSessionId !== undefined ? { sessionId: ocSessionId } : {}),
       },
       ...(backend !== undefined ? { backend } : {}),
     };

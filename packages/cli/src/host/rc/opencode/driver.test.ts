@@ -3,7 +3,7 @@ import { deriveIdentity } from "@remote-claw/clawsec";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import type { Session } from "../session.js";
-import { OpencodeClient, type OpencodeEvent } from "./client.js";
+import { type HistoryMessage, OpencodeClient, type OpencodeEvent } from "./client.js";
 import { OpencodeDriver } from "./driver.js";
 
 // Driver-level CAPTURE test. We drive the REAL OpencodeDriver + a REAL HostRcRelay (via bridgeSession),
@@ -58,12 +58,22 @@ class FakeOpencodeClient extends OpencodeClient {
   prompts: Array<{ text: string; model: { providerID: string; modelID: string } }> = [];
   aborts = 0;
   replies: Array<{ permissionId: string; response: string }> = [];
+  /** Sessions returned by listSessions (the auto-pick). Empty ⇒ the driver creates one. */
+  sessionList: Array<{ id: string }> = [];
+  /** History returned by getMessages (the attach backfill). Empty by default. */
+  history: HistoryMessage[] = [];
 
   constructor(private readonly script: OpencodeEvent[]) {
     super({ baseUrl: "http://invalid.invalid" });
   }
   override async createSession(): Promise<string> {
     return "ses_fake";
+  }
+  override async listSessions(): Promise<Array<{ id: string }>> {
+    return this.sessionList;
+  }
+  override async getMessages(): Promise<HistoryMessage[]> {
+    return this.history;
   }
   override async promptAsync(
     _sessionId: string,
@@ -172,8 +182,15 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     expect(msg.content).toEqual([{ type: "text", text: "OK" }]);
     // uuid is the OpenCode messageID (stable across reconnects).
     expect(a?.payload.uuid).toBe("msg_asst");
-    // The user message (prompt echo) is NOT emitted as an assistant payload.
-    expect(upstream.filter((e) => e.eventType === "user")).toHaveLength(0);
+    // The user message in OK_SCRIPT was NOT injected by the driver (no downstream user event drove it),
+    // so it represents a LOCAL prompt (typed at the TUI). It surfaces as exactly ONE local_prompt `user`
+    // payload — and it lands BEFORE the assistant reply (prompt then answer).
+    const users = upstream.filter((e) => e.eventType === "user");
+    expect(users).toHaveLength(1);
+    const u = users[0];
+    expect(u?.payload.local_prompt).toBe(true);
+    expect((u?.payload.message as { content?: unknown })?.content).toBe("Reply with exactly: OK");
+    expect((u?.sequenceNum ?? 0) < (a?.sequenceNum ?? 0)).toBe(true); // prompt precedes the reply
   });
 
   it("dedups: re-delivering the completed message's parts does not produce a second payload", async () => {

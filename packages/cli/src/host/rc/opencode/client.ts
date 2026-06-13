@@ -41,6 +41,14 @@ export interface OpencodeModel {
   modelID: string;
 }
 
+/** One entry of GET /session/{id}/message — a message's `info` (id/role/time) + its `parts`. The
+ *  driver replays these on attach (history backfill) through the SAME coalesce path as live events, so
+ *  `info`/`parts` mirror what `message.updated`/`message.part.updated` carry on the SSE stream. */
+export interface HistoryMessage {
+  info: { id?: string; role?: string; time?: { completed?: number }; [k: string]: unknown };
+  parts: Array<Part & { messageID?: string }>;
+}
+
 export interface OpencodeClientOptions {
   /** Server origin; default http://127.0.0.1:4096. */
   baseUrl?: string;
@@ -93,6 +101,48 @@ export class OpencodeClient {
     const data = (await res.json()) as { id?: unknown };
     if (typeof data.id !== "string") throw new OpencodeError(res.status, "createSession: no id");
     return data.id;
+  }
+
+  /**
+   * List sessions, MOST-RECENTLY-UPDATED FIRST (the server's documented order: GET /session is
+   * "sorted by most recently updated"). The driver's auto-attach picks `[0]` — the active session — so
+   * running the wrapper bridges whatever OpenCode session is in use rather than imposing a new one.
+   * Returns just the `id` (the field auto-attach needs); the full Session object is server-owned.
+   */
+  async listSessions(): Promise<Array<{ id: string }>> {
+    const res = await this.#fetch(`${this.#baseUrl}/session`, {
+      method: "GET",
+      headers: this.#headers(false),
+    });
+    if (!res.ok) throw new OpencodeError(res.status, `listSessions failed: ${res.status}`);
+    const data = (await res.json()) as unknown;
+    if (!Array.isArray(data)) return [];
+    return data
+      .filter((s): s is { id: string } => {
+        const id = (s as { id?: unknown })?.id;
+        return typeof id === "string" && id !== "";
+      })
+      .map((s) => ({ id: s.id }));
+  }
+
+  /**
+   * Fetch a session's FULL message history (OpenCode's built-in resume): GET /session/{id}/message →
+   * `[{ info, parts }]` in chronological order. The driver replays these through the SAME coalesce +
+   * dedup path as the live stream so attach backfills the prior conversation, and a wrapper restart is a
+   * seamless re-attach (re-fetch). `info` carries id/role/time; `parts` is the part list per message.
+   */
+  async getMessages(sessionId: string): Promise<HistoryMessage[]> {
+    const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}/message`, {
+      method: "GET",
+      headers: this.#headers(false),
+    });
+    if (!res.ok) throw new OpencodeError(res.status, `getMessages failed: ${res.status}`);
+    const data = (await res.json()) as unknown;
+    if (!Array.isArray(data)) return [];
+    return data.filter((m): m is HistoryMessage => {
+      const mm = m as { info?: unknown; parts?: unknown };
+      return typeof mm.info === "object" && mm.info !== null && Array.isArray(mm.parts);
+    });
   }
 
   /**

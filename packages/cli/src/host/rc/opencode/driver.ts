@@ -24,12 +24,13 @@ import type { GitInfo } from "../gitinfo.js";
 import { RelayCore, type Session } from "../session.js";
 import {
   DEFAULT_OPENCODE_URL,
+  type HistoryMessage,
   OpencodeClient,
   type OpencodeClientOptions,
   type OpencodeEvent,
   type OpencodeModel,
 } from "./client.js";
-import { coalesceMessage, type Part, userText } from "./translate.js";
+import { coalesceMessage, type Part, userPartsText, userText } from "./translate.js";
 
 export const DEFAULT_OPENCODE_MODEL: OpencodeModel = {
   providerID: "ollama",
@@ -44,6 +45,10 @@ export interface OpencodeExtra {
   model?: OpencodeModel;
   /** Optional HTTP Basic password (OPENCODE_SERVER_PASSWORD). */
   password?: string;
+  /** Explicit OpenCode session to ATTACH to (`--rc-oc-session`). When set, the driver bridges THIS
+   *  session verbatim — no auto-pick, no create. When unset, the driver auto-picks the server's most
+   *  recent session (the active one), else creates a fresh one. THIN by default: bridge what's running. */
+  sessionId?: string;
   /** Injectable client (tests) — bypasses the real HTTP server. */
   client?: OpencodeClient;
 }
@@ -53,6 +58,8 @@ function readExtra(extra: Record<string, unknown> | undefined): OpencodeExtra {
   const out: OpencodeExtra = {};
   if (typeof extra.baseUrl === "string") out.baseUrl = extra.baseUrl;
   if (typeof extra.password === "string") out.password = extra.password;
+  if (typeof extra.sessionId === "string" && extra.sessionId !== "")
+    out.sessionId = extra.sessionId;
   if (extra.client instanceof OpencodeClient) out.client = extra.client;
   const m = extra.model as { providerID?: unknown; modelID?: unknown } | undefined;
   if (m && typeof m.providerID === "string" && typeof m.modelID === "string") {
@@ -94,10 +101,17 @@ export class OpencodeDriver implements Driver {
   /** Message ids already pushUpstream-ed — the DEDUP set (#2): never emit a message twice (an SSE
    *  reconnect can re-deliver a finished message's parts). */
   readonly #emitted = new Set<string>();
-  /** messageID → role, learned from `message.updated`. Only ASSISTANT messages are pushed upstream: the
-   *  USER message is the prompt echo (the relay's inbound pump already surfaces viewer prompts; pushing
-   *  the OpenCode user message would double-render it as an assistant bubble). */
+  /** messageID → role, learned from `message.updated` (and backfilled history). An ASSISTANT message is
+   *  pushed upstream as an `assistant` payload. A USER message is handled by origin (see #injectedTexts):
+   *  one WE injected is the echo of a viewer prompt (the relay's inbound pump already surfaced it) and is
+   *  SUPPRESSED; one we did NOT inject was typed at the OpenCode TUI / by another client and is surfaced
+   *  as a `local_prompt` `user` payload so it shows in the web viewer. */
   readonly #roles = new Map<string, string>();
+  /** Multiset of prompt texts the INJECT pump sent via prompt_async, keyed by text → count. When a
+   *  user-role message flushes we decrement the matching entry and SUPPRESS it (it's our own echo); a
+   *  user message with no matching entry is a LOCAL prompt (TUI / other client) → emitted `local_prompt`.
+   *  A multiset (not a set) so two identical prompts each suppress exactly one echo. */
+  readonly #injectedTexts = new Map<string, number>();
   /** The active model to use for the next prompt_async; updated by a set_model control verb. */
   #activeModel: OpencodeModel;
 
@@ -144,19 +158,31 @@ export class OpencodeDriver implements Driver {
       tracer: this.#ctx.tracer ?? tracerFromEnv("rc.relay"),
     });
 
-    // Create the OpenCode session up front so both pumps share the same ses_ id. A failure here is fatal
-    // to the driver (no session to bridge); tear down and report non-zero.
+    // ATTACH to the OpenCode session to bridge: an explicit --rc-oc-session, else the server's most-recent
+    // (active) session, else create a fresh one. A failure here is fatal (no session to bridge); tear down
+    // and report non-zero. This is the THIN default: bridge whatever OpenCode session is in use.
     let ocSessionId: string;
     try {
-      ocSessionId = await this.#client.createSession(this.#ctx.title);
+      ocSessionId = await this.#attach();
     } catch (e) {
-      this.#tracer.error("opencode createSession failed", { error: String(e) });
+      this.#tracer.error("opencode attach failed", { error: String(e) });
       ac.abort();
       session.close();
       await served.catch(() => {});
       return 1;
     }
-    this.#tracer.info("opencode session created", { session: session.id, opencode: ocSessionId });
+    this.#tracer.info("opencode session attached", { session: session.id, opencode: ocSessionId });
+
+    // HISTORY BACKFILL / RESUME (OpenCode's built-in): replay the session's prior messages through the
+    // SAME coalesce + dedup path as the live stream BEFORE subscribing, so the full conversation lands in
+    // the broker (and a wrapper restart re-attaches → re-fetches → no duplicates). Best-effort: a backfill
+    // failure must not stop the live bridge.
+    try {
+      await this.#backfillHistory(session, ocSessionId);
+    } catch (e) {
+      this.#tracer.warn("opencode history backfill failed", { error: String(e) });
+    }
+
     session.workerStatus = "running";
     session.wake();
 
@@ -181,6 +207,62 @@ export class OpencodeDriver implements Driver {
       session.close();
       await served.catch(() => {});
     }
+  }
+
+  /**
+   * Pick the OpenCode session to bridge (the THIN attach):
+   *   1. an explicit `--rc-oc-session` (extra.sessionId) → bridge it verbatim;
+   *   2. else the server's MOST-RECENT session (listSessions()[0], "sorted by most recently updated") →
+   *      bridge whatever's active rather than imposing a new one;
+   *   3. else (no sessions on the server) → create a fresh one.
+   * Returns the chosen `ses_…` id. A list failure falls through to create() so the driver still starts.
+   */
+  async #attach(): Promise<string> {
+    if (this.#extra.sessionId !== undefined) {
+      this.#tracer.debug("attaching to explicit session", { opencode: this.#extra.sessionId });
+      return this.#extra.sessionId;
+    }
+    let sessions: Array<{ id: string }> = [];
+    try {
+      sessions = await this.#client.listSessions();
+    } catch (e) {
+      this.#tracer.warn("listSessions failed; creating a fresh session", { error: String(e) });
+    }
+    const first = sessions[0];
+    if (first !== undefined) {
+      this.#tracer.debug("auto-attaching to most-recent session", { opencode: first.id });
+      return first.id;
+    }
+    const created = await this.#client.createSession(this.#ctx.title);
+    this.#tracer.debug("no existing session; created one", { opencode: created });
+    return created;
+  }
+
+  /**
+   * HISTORY BACKFILL / RESUME: fetch the attached session's full message history (GET /…/message) and
+   * replay it through the SAME flush path as the live stream — coalesce per message, dedup by messageID
+   * (#emitted), emit assistant turns as `assistant` and locally-typed user turns as `local_prompt`. Done
+   * ONCE on attach, before live subscription. Because it shares #emitted, a wrapper restart re-attaches,
+   * re-fetches the same history, and re-emits it with NO duplicates beyond a fresh broker session's first
+   * pass (the broker/viewer dedup by their own seq within a session; a new session starts the log over).
+   */
+  async #backfillHistory(session: Session, ocSessionId: string): Promise<void> {
+    const messages: HistoryMessage[] = await this.#client.getMessages(ocSessionId);
+    let count = 0;
+    for (const m of messages) {
+      const id = m.info.id;
+      if (typeof id !== "string" || id === "") continue;
+      if (typeof m.info.role === "string") this.#roles.set(id, m.info.role);
+      // Seed the buffer from the history parts, then flush via the shared path (dedup + coalesce +
+      // local_prompt origin handling all apply identically to live messages).
+      for (const part of m.parts) {
+        if (part && typeof part.id === "string") this.#bufferPart(id, part);
+      }
+      const before = session.snapshotUpstream().length;
+      this.#flushMessage(session, id);
+      if (session.snapshotUpstream().length > before) count++;
+    }
+    if (count > 0) this.#tracer.info("history backfilled", { messages: count });
   }
 
   /**
@@ -218,6 +300,10 @@ export class OpencodeDriver implements Driver {
         if (typeof info?.id === "string" && typeof info.role === "string") {
           this.#roles.set(info.id, info.role);
         }
+        // The user message never carries time.completed (verified live) — it's settled the moment the
+        // model starts responding. So when an ASSISTANT message appears, flush any buffered USER messages
+        // FIRST: the prompt (the local_prompt frame) must precede the assistant reply in the transcript.
+        if (info?.role === "assistant") this.#flushBufferedUsers(session);
         // An assistant message with time.completed is done — flush it now (don't wait for idle, so a
         // multi-message turn surfaces each message as it completes).
         if (info?.role === "assistant" && typeof info.id === "string" && info.time?.completed) {
@@ -251,6 +337,15 @@ export class OpencodeDriver implements Driver {
     }
   }
 
+  /** Flush every buffered message whose KNOWN role is "user". Called when an assistant message begins so
+   *  a local prompt surfaces BEFORE the assistant's reply (a user message never gets time.completed). A
+   *  buffered message of unknown/assistant role is left for its own completion/idle flush. */
+  #flushBufferedUsers(session: Session): void {
+    for (const id of [...this.#buffers.keys()]) {
+      if (this.#roles.get(id) === "user") this.#flushMessage(session, id);
+    }
+  }
+
   /** Buffer (or replace) a whole part under its messageID. OpenCode re-sends the whole part, so a later
    *  update for the same partID REPLACES the earlier one — that's the coalesce. */
   #bufferPart(messageId: string, part: Part): void {
@@ -264,21 +359,40 @@ export class OpencodeDriver implements Driver {
     buf.parts.set(part.id, part);
   }
 
-  /** Flush ONE completed message: coalesce its buffered parts to ≤2 UpstreamPayloads and pushUpstream
-   *  each ONCE. Dedups by messageID (#2) and clears the buffer. The USER message (the prompt echo) is
-   *  never emitted — the relay's inbound pump already surfaces viewer prompts. */
+  /** Flush ONE completed message: coalesce its buffered parts and pushUpstream ONCE. Dedups by messageID
+   *  (#2) and clears the buffer. Routing by role:
+   *   • assistant → an `assistant` (and, for completed tools, a `user` tool_result) payload (coalesce #1).
+   *   • user that WE injected → SUPPRESSED (the relay's inbound pump already echoed the viewer prompt;
+   *     pushing our echo would double it). We consume one matching entry from #injectedTexts.
+   *   • user we did NOT inject (TUI / another client / history) → a `local_prompt` `user` payload so it
+   *     shows in the web viewer (the relay's local_prompt branch renders it without double-echoing).
+   *   • unknown role → defaults to the assistant path so a real turn is never silently lost. */
   #flushMessage(session: Session, messageId: string): void {
     if (this.#emitted.has(messageId)) return; // DEDUP (#2): never emit a message twice
     const buf = this.#buffers.get(messageId);
     if (!buf) return;
     this.#buffers.delete(messageId);
     this.#emitted.add(messageId);
-    // Only assistant messages are relayed upstream. A known user role is skipped; an UNKNOWN role (we
-    // never saw its message.updated — rare) defaults to emitting, so a real assistant turn is never lost.
-    if (this.#roles.get(messageId) === "user") return;
     const parts = buf.order
       .map((id) => buf.parts.get(id))
       .filter((p): p is Part => p !== undefined);
+
+    if (this.#roles.get(messageId) === "user") {
+      const text = userPartsText(parts);
+      if (text !== "" && this.#consumeInjected(text)) return; // our own echo — suppress
+      if (text === "") return; // an empty/synthetic-only user message — nothing to surface
+      // A LOCAL prompt (typed at the OpenCode TUI / another client / history). Surface it as a
+      // local_prompt `user` payload so the web viewer renders it (relay.ts local_prompt branch).
+      session.pushUpstream({
+        type: "user",
+        uuid: messageId,
+        local_prompt: true,
+        message: { role: "user", content: text },
+      });
+      this.#tracer.debug("surfaced local prompt", { messageId, bytes: text.length });
+      return;
+    }
+
     const payloads = coalesceMessage(messageId, parts);
     for (const p of payloads) {
       session.pushUpstream(p as unknown as Record<string, unknown>); // COALESCE (#1): once per message
@@ -286,6 +400,22 @@ export class OpencodeDriver implements Driver {
     if (payloads.length > 0) {
       this.#tracer.debug("flushed message", { messageId, payloads: payloads.length });
     }
+  }
+
+  /** Record a prompt text the inject pump sent (multiset += 1) so its OpenCode user-message echo is
+   *  suppressed when it flushes. */
+  #recordInjected(text: string): void {
+    this.#injectedTexts.set(text, (this.#injectedTexts.get(text) ?? 0) + 1);
+  }
+
+  /** Consume one injected-text entry matching `text`. Returns true (and decrements) if this user message
+   *  is the echo of a prompt WE injected — caller suppresses it. False ⇒ a local/foreign prompt. */
+  #consumeInjected(text: string): boolean {
+    const n = this.#injectedTexts.get(text) ?? 0;
+    if (n <= 0) return false;
+    if (n === 1) this.#injectedTexts.delete(text);
+    else this.#injectedTexts.set(text, n - 1);
+    return true;
   }
 
   /**
@@ -321,6 +451,10 @@ export class OpencodeDriver implements Driver {
     if (ev.eventType === "user") {
       const text = userText(ev.payload);
       if (text === "") return; // nothing to inject — still acked (an empty prompt is "handled")
+      // Record the text BEFORE the POST so its OpenCode user-message echo (which can arrive on the SSE
+      // before promptAsync even resolves) is recognized as OURS and suppressed (#flushMessage), not
+      // double-rendered as a local_prompt.
+      this.#recordInjected(text);
       await this.#client.promptAsync(ocSessionId, { text, model: this.#activeModel });
       session.workerStatus = "running";
       session.wake();

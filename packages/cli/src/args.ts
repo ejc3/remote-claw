@@ -36,6 +36,10 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // (default ollama/qwen2.5:0.5b, env RC_OC_MODEL). Bedrock is the documented prod model path.
   "rc-oc-url": "value",
   "rc-oc-model": "value",
+  // Which OpenCode session to ATTACH to. Omitted ⇒ the driver bridges the server's MOST-RECENT
+  // (active) session, else creates one — so the wrapper joins whatever OpenCode session is in use
+  // (env RC_OC_SESSION). Set a `ses_…` id to pin a specific session.
+  "rc-oc-session": "value",
 };
 // Not reserved: starting already remote-controlled is just claude's own `--remote-control`,
 // which the wrapper forwards verbatim — no `--rc-share`. The web deep link is built from the
