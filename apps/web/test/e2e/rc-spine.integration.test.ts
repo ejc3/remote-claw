@@ -391,7 +391,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     expect(granted).toBe(true);
   }, 40_000);
 
-  it("CONTROL VERBS: interrupt / set_model / set_mode / end + slash-command reach the worker", async () => {
+  it("CONTROL VERBS: interrupt / set_model / set_mode reach the worker (end is local-only) + slash-command", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(65));
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
@@ -414,12 +414,14 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     await viewer.command(sid, "/compact");
     await viewer.endSession(sid);
 
-    await waitFor(() => verbs.length >= 4 && userInputs.includes("/compact"));
+    // `end` drives NO worker control_request (claude's REPL bridge rejects end_session — PR #92), so
+    // only THREE verbs reach the worker: interrupt / set_model / set_permission_mode.
+    await waitFor(() => verbs.length >= 3 && userInputs.includes("/compact"));
     const subs = verbs.map((v) => v.subtype);
     expect(subs).toContain("interrupt");
     expect(verbs.find((v) => v.subtype === "set_model")?.req.model).toBe("claude-opus-4-8");
     expect(verbs.find((v) => v.subtype === "set_permission_mode")?.req.mode).toBe("plan");
-    expect(subs).toContain("end_session"); // `end` maps to end_session
+    expect(subs).not.toContain("end_session"); // `end` is local-only (clears gates); claude has no end_session verb
     expect(userInputs).toContain("/compact"); // slash command delivered as user input
   }, 40_000);
 
