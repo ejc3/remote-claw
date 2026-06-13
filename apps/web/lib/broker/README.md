@@ -81,7 +81,10 @@ per-request.
 - **`web-preview.yml`** (on a Vercel preview): runs the deployment-targeted broker e2e, and — once the
   `DEV_SEED_TOKEN` secret is set (GitHub + the Vercel *Preview* env) — the Playwright UI e2e against the
   **vercel** backend. The vercel runtime (and the sqlite backend's Turso Cloud storage) only exist on a
-  real deployment, which is why their e2e lives here.
+  real deployment, which is why their e2e lives here. The sqlite/Turso-Cloud leg provisions REAL
+  per-session dbs, so a final `always()` step POSTs `/api/dev/sweep?retain=0` (the dev-only sweep route,
+  same prod-safe gate as `/api/dev/seed`) to reclaim them via the cold-index sweep — the run cleans up
+  after itself instead of leaking dbs until the daily retention cron.
 
 ## Production — per-session SQLite on Turso Cloud
 
