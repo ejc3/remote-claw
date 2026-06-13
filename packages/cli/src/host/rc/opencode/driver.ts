@@ -173,18 +173,11 @@ export class OpencodeDriver implements Driver {
     }
     this.#tracer.info("opencode session attached", { session: session.id, opencode: ocSessionId });
 
-    // HISTORY BACKFILL / RESUME (OpenCode's built-in): replay the session's prior messages through the
-    // SAME coalesce + dedup path as the live stream BEFORE subscribing, so the full conversation lands in
-    // the broker (and a wrapper restart re-attaches → re-fetches → no duplicates). Best-effort: a backfill
-    // failure must not stop the live bridge.
-    try {
-      await this.#backfillHistory(session, ocSessionId);
-    } catch (e) {
-      this.#tracer.warn("opencode history backfill failed", { error: String(e) });
-    }
-
-    session.workerStatus = "running";
-    session.wake();
+    // HISTORY BACKFILL / RESUME runs INSIDE #capturePump, on the first SSE event (when the subscription
+    // is LIVE) — NOT here. Backfilling before subscribing would lose any event arriving in the gap
+    // between the GET /message snapshot and the /event subscription (SSE has no replay) — e.g. a prompt
+    // another client (the TUI) sends during attach would vanish. Subscribe-first + #emitted dedup is
+    // lossless and order-preserving (history first, then live).
 
     try {
       await Promise.race([
@@ -271,8 +264,24 @@ export class OpencodeDriver implements Driver {
    * `session.idle` (turn end) or an assistant `message.updated` carrying `time.completed`.
    */
   async #capturePump(session: Session, ocSessionId: string, signal: AbortSignal): Promise<void> {
+    let backfilled = false;
     for await (const ev of this.#client.events(ocSessionId, signal)) {
       if (signal.aborted) return;
+      if (!backfilled) {
+        // The SSE is now LIVE (we received the first event — OpenCode sends `server.connected` on
+        // connect). Backfill history NOW, before handling any live data event, so prior turns land
+        // first and NOTHING is lost to a backfill-then-subscribe gap; #emitted dedups any message that
+        // also appears in the live stream. Best-effort: a backfill failure must not stop the bridge.
+        backfilled = true;
+        try {
+          await this.#backfillHistory(session, ocSessionId);
+        } catch (e) {
+          this.#tracer.warn("opencode history backfill failed", { error: String(e) });
+        }
+        session.workerStatus = "running";
+        session.wake();
+        if (ev.type === "server.connected") continue; // pure marker — nothing to process
+      }
       this.#onEvent(session, ev);
     }
   }
