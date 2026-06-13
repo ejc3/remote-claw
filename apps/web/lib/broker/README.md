@@ -94,8 +94,14 @@ BROKER_BACKEND=sqlite
 TURSO_API_TOKEN=<turso-platform-api-token>   # creates/looks-up per-session databases
 TURSO_ORG=<turso-org-slug>
 TURSO_GROUP=<group-the-session-dbs-live-in>
-TURSO_AUTH_TOKEN=<group-token>               # libSQL connect credential (auths the whole group)
+TURSO_GROUP_AUTH_TOKEN=<group-token>         # libSQL connect credential (auths the whole group)
 ```
+
+`TURSO_GROUP_AUTH_TOKEN` is deliberately NOT the conventional `TURSO_AUTH_TOKEN`: the Vercel↔Turso
+integration owns `TURSO_AUTH_TOKEN` (+ `TURSO_DATABASE_URL`) and points it at a *per-database* token for
+its own managed db — a different scope and a different org. The per-session fleet needs a *group* token,
+so it reads a distinct name to stay independent of (and un-clobbered by) the integration. Mint it with
+`turso group tokens create <group>`; the Platform API token comes from `turso auth api-tokens mint`.
 
 If those four are set, `selectLocatorFromEnv()` uses the `TursoCloudDbLocator` (one Turso Cloud db per
 channel token, created on first publish via the Platform API, connected with the group token);

@@ -25,6 +25,8 @@ export function sqliteConfigured(): boolean {
     process.env.TURSO_API_TOKEN?.trim() &&
       process.env.TURSO_ORG?.trim() &&
       process.env.TURSO_GROUP?.trim() &&
-      process.env.TURSO_AUTH_TOKEN?.trim(),
+      // The GROUP connect token — a distinct name from the integration-owned TURSO_AUTH_TOKEN; see
+      // selectLocatorFromEnv() in lib/broker/turso-cloud-locator.ts for why.
+      process.env.TURSO_GROUP_AUTH_TOKEN?.trim(),
   );
 }

@@ -185,12 +185,19 @@ export class TursoCloudDbLocator implements DbLocator {
  * The per-session storage locator chosen from the environment — this is the single switch between
  * cloud and local-file storage. If the Turso Cloud credentials are all present we use Turso Cloud
  * (one database per session); otherwise we use local files (one db per session under RC_SQLITE_DIR).
+ *
+ * The connect credential is read from `TURSO_GROUP_AUTH_TOKEN`, NOT the conventional `TURSO_AUTH_TOKEN`,
+ * ON PURPOSE: the Vercel↔Turso integration OWNS `TURSO_AUTH_TOKEN` (+ `TURSO_DATABASE_URL`) and sets it
+ * to a PER-DATABASE token for the integration's own managed db. Our fleet needs a GROUP token (one JWT
+ * that auths every per-session db in the group), so reusing that name would (a) be clobbered when the
+ * integration re-syncs and (b) connect with the wrong-scope token. A distinct name keeps the two
+ * independent. The Platform-API token / org / group names don't collide (the integration sets neither).
  */
 export function selectLocatorFromEnv(): DbLocator {
   const apiToken = process.env.TURSO_API_TOKEN?.trim();
   const org = process.env.TURSO_ORG?.trim();
   const group = process.env.TURSO_GROUP?.trim();
-  const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
+  const authToken = process.env.TURSO_GROUP_AUTH_TOKEN?.trim();
   if (apiToken && org && group && authToken) {
     return new TursoCloudDbLocator({ apiToken, org, group, authToken });
   }

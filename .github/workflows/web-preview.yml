@@ -42,9 +42,10 @@ jobs:
       # radius (grants access only to the preview already under test), like DEV_SEED_TOKEN above.
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
       # Opt-in flag for the REAL Turso Cloud sqlite e2e (below). Set it (GitHub secret) only when the
-      # Vercel Preview env also has the four Turso Cloud vars (TURSO_API_TOKEN/ORG/GROUP + group
-      # TURSO_AUTH_TOKEN, e.g. from the Vercel↔Turso integration) so ?backend=sqlite resolves to a real
-      # per-session Turso database. Until set, that step is skipped and web-preview stays green.
+      # Vercel Preview env also has the four Turso Cloud vars (TURSO_API_TOKEN/ORG/GROUP +
+      # TURSO_GROUP_AUTH_TOKEN — the group token, minted separately from the integration's per-db
+      # TURSO_AUTH_TOKEN) so ?backend=sqlite resolves to a real per-session Turso database. Until set,
+      # that step is skipped and web-preview stays green.
       TURSO_CLOUD_E2E: ${{ secrets.TURSO_CLOUD_E2E }}
     steps:
       - uses: actions/checkout@v4

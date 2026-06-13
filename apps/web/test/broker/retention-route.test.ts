@@ -24,13 +24,13 @@ const KEYS = [
   "TURSO_API_TOKEN",
   "TURSO_ORG",
   "TURSO_GROUP",
-  "TURSO_AUTH_TOKEN",
+  "TURSO_GROUP_AUTH_TOKEN",
 ] as const;
 const CLOUD_CREDS = {
   TURSO_API_TOKEN: "api",
   TURSO_ORG: "org",
   TURSO_GROUP: "grp",
-  TURSO_AUTH_TOKEN: "grouptok",
+  TURSO_GROUP_AUTH_TOKEN: "grouptok",
 };
 
 let saved: Record<string, string | undefined>;

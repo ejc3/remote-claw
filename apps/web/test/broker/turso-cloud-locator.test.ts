@@ -40,7 +40,7 @@ const ENV_KEYS = [
   "TURSO_API_TOKEN",
   "TURSO_ORG",
   "TURSO_GROUP",
-  "TURSO_AUTH_TOKEN",
+  "TURSO_GROUP_AUTH_TOKEN",
   "RC_SQLITE_DIR",
 ] as const;
 const saved: Record<string, string | undefined> = {};
@@ -191,7 +191,7 @@ describe("selectLocatorFromEnv", () => {
     process.env.TURSO_API_TOKEN = "t";
     process.env.TURSO_ORG = "org";
     process.env.TURSO_GROUP = "default";
-    process.env.TURSO_AUTH_TOKEN = "grp";
+    process.env.TURSO_GROUP_AUTH_TOKEN = "grp";
     expect(selectLocatorFromEnv()).toBeInstanceOf(TursoCloudDbLocator);
   });
 
@@ -200,7 +200,7 @@ describe("selectLocatorFromEnv", () => {
     delete process.env.TURSO_API_TOKEN;
     process.env.TURSO_ORG = "org";
     process.env.TURSO_GROUP = "default";
-    process.env.TURSO_AUTH_TOKEN = "grp";
+    process.env.TURSO_GROUP_AUTH_TOKEN = "grp";
     const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-sel-"));
     dirs.push(dir);
     process.env.RC_SQLITE_DIR = dir;
