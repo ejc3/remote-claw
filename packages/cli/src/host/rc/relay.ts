@@ -337,6 +337,10 @@ export class HostRcRelay {
   /** Unanswered permission requests (request_id) — drives the announce's `needs` flag (#48/#58) and
    *  is cleared when the matching inbound `permission` answer arrives (which logs permission_resolved). */
   readonly #openPerms = new Set<string>();
+  // AskUserQuestion's `questions` array, retained per open gate (keyed by request_id) so the answer can
+  // echo it in updatedInput — real claude's tool runs `call({questions, answers})`, so the answer MUST
+  // carry both or claude throws "q.map" on undefined questions. Cleared alongside the gate.
+  readonly #askqQuestions = new Map<string, unknown>();
   /** Whether announce() has run; gates the periodic re-announce so a session with a genuinely empty
    *  title/cwd still keepalives (and an un-announced session never does). */
   #announced = false;
@@ -692,10 +696,22 @@ export class HostRcRelay {
         let gateId: string | null = null;
         if (item.kind === "permission_request") {
           try {
-            const id = (JSON.parse(item.text) as { request_id?: unknown }).request_id;
+            const parsed = JSON.parse(item.text) as {
+              request_id?: unknown;
+              tool_name?: unknown;
+              tool_input?: { questions?: unknown };
+            };
+            const id = parsed.request_id;
             if (typeof id === "string" && id !== "") {
               gateId = id;
               this.#openPerms.add(id);
+              // Stash AskUserQuestion's questions so the answer's updatedInput carries {questions,answers}.
+              if (
+                parsed.tool_name === "AskUserQuestion" &&
+                parsed.tool_input?.questions !== undefined
+              ) {
+                this.#askqQuestions.set(id, parsed.tool_input.questions);
+              }
             }
           } catch {
             // a malformed permission_request body — don't track an unanswerable gate
@@ -707,7 +723,10 @@ export class HostRcRelay {
             this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text),
           );
         } catch (e) {
-          if (gateId !== null) this.#openPerms.delete(gateId); // publish failed → gate is unanswerable
+          if (gateId !== null) {
+            this.#openPerms.delete(gateId); // publish failed → gate is unanswerable
+            this.#askqQuestions.delete(gateId);
+          }
           throw e;
         }
       }
@@ -807,13 +826,22 @@ export class HostRcRelay {
           this.#trace.debug("permission response", { behavior });
           // An AskUserQuestion answer (#42) carries `answers` (+ the request's `tool_use_id`) — forward
           // them so pushControlResponse builds the real `updatedInput.answers` + `toolUseID` shape.
-          const extra: { toolUseId?: string; answers?: Record<string, string | string[]> } = {};
+          const extra: {
+            toolUseId?: string;
+            answers?: Record<string, string | string[]>;
+            questions?: unknown;
+          } = {};
           if (typeof body.tool_use_id === "string" && body.tool_use_id) {
             extra.toolUseId = body.tool_use_id;
           }
           if (body.answers !== null && typeof body.answers === "object") {
             extra.answers = body.answers as Record<string, string | string[]>;
           }
+          // Echo the AskUserQuestion's questions (stashed at gate-open) so claude's tool call() receives
+          // the full {questions, answers} input — omitting questions is the `q.map` crash. Clear either way.
+          const askqQuestions = this.#askqQuestions.get(body.request_id);
+          if (askqQuestions !== undefined) extra.questions = askqQuestions;
+          this.#askqQuestions.delete(body.request_id);
           // Log a permission_resolved unordered frame BEFORE the worker side effect. If the durable log
           // publish fails, the worker must not act on a grant that reload/catch_up cannot observe (#56).
           await this.#fatalOnThrow(() =>
@@ -951,6 +979,7 @@ export class HostRcRelay {
   #clearOpenPerms(): void {
     if (this.#openPerms.size === 0) return;
     this.#openPerms.clear();
+    this.#askqQuestions.clear();
     void this.#maybeAnnounce(); // #maybeAnnounce is self-swallowing; fire-and-forget the presence refresh
   }
 }

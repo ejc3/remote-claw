@@ -122,21 +122,38 @@ describe("Session producers", () => {
     expect(resp.response.behavior).toBe("allow");
   });
 
-  it("pushControlResponse builds the AskUserQuestion answer shape (toolUseID + updatedInput.answers)", () => {
-    // The exact shape real claude expects, verified live via --rc-trace (#42).
+  it("pushControlResponse builds the AskUserQuestion answer shape (toolUseID + updatedInput.{questions,answers})", () => {
+    // Real claude's AskUserQuestion runs call({questions, answers}); updatedInput MUST carry BOTH or it
+    // throws "undefined is not an object (evaluating 'q.map')". Verified vs the claude 2.1.x binary.
     const s = new Session("cse_x", "t", {});
+    const questions = [
+      { question: "Which name?", header: "Name", multiSelect: false, options: [] },
+    ];
     const ev = s.pushControlResponse("req-1", "allow", {
       toolUseId: "toolu_abc",
       answers: { "Which name?": "Orion" },
+      questions,
     });
     const resp = ev.payload.response as {
       request_id: string;
-      response: { behavior: string; toolUseID: string; updatedInput: { answers: unknown } };
+      response: {
+        behavior: string;
+        toolUseID: string;
+        updatedInput: { questions: unknown; answers: unknown };
+      };
     };
     expect(resp.request_id).toBe("req-1");
     expect(resp.response.behavior).toBe("allow");
     expect(resp.response.toolUseID).toBe("toolu_abc");
+    expect(resp.response.updatedInput.questions).toEqual(questions); // echoed back — the fix
     expect(resp.response.updatedInput.answers).toEqual({ "Which name?": "Orion" });
+  });
+
+  it("pushControlResponse falls back to updatedInput.{answers} when no questions are stashed", () => {
+    const s = new Session("cse_x", "t", {});
+    const ev = s.pushControlResponse("req-2", "allow", { answers: { Q: "A" } });
+    const resp = ev.payload.response as { response: { updatedInput: Record<string, unknown> } };
+    expect(resp.response.updatedInput).toEqual({ answers: { Q: "A" } }); // no questions key when absent
   });
 
   it("pushControlResponse omits toolUseID/updatedInput for a plain allow/deny", () => {

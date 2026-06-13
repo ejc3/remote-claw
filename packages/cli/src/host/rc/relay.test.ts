@@ -435,6 +435,64 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     expect(pushControl).not.toHaveBeenCalled();
     expect(client.posts.filter((p) => p.recordKind === "permission_resolved")).toHaveLength(0);
   });
+
+  it("echoes an AskUserQuestion's questions back in the answer's updatedInput (the q.map fix, #42)", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const pushControl = vi.spyOn(session, "pushControlResponse");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    // Worker raises an AskUserQuestion can_use_tool with its questions under `input` (real claude shape).
+    const questions = [
+      {
+        question: "Which name?",
+        header: "Name",
+        multiSelect: false,
+        options: [{ label: "Orion" }],
+      },
+    ];
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "askq-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        tool_use_id: "toolu_q1",
+        input: { questions },
+      },
+    });
+    await waitFor(() => client.content.some((p) => p.recordKind === "permission_request"));
+
+    // The viewer answers with the chosen option (+ the request's tool_use_id) but NOT the questions.
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "askq-1-in",
+        JSON.stringify({
+          request_id: "askq-1",
+          behavior: "allow",
+          tool_use_id: "toolu_q1",
+          answers: { "Which name?": "Orion" },
+        }),
+      ),
+    );
+    await waitFor(() => pushControl.mock.calls.length === 1);
+    ac.abort();
+    await served;
+
+    // The relay must reattach the ORIGINAL questions so claude's call({questions,answers}) doesn't q.map undefined.
+    expect(pushControl).toHaveBeenCalledWith(
+      "askq-1",
+      "allow",
+      expect.objectContaining({
+        toolUseId: "toolu_q1",
+        answers: { "Which name?": "Orion" },
+        questions,
+      }),
+    );
+  });
 });
 
 describe("HostRcRelay permission mode presence", () => {
