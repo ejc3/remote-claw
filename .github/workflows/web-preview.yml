@@ -41,6 +41,12 @@ jobs:
       # The automation-bypass secret (x-vercel-protection-bypass) gets the e2e through it. Low blast
       # radius (grants access only to the preview already under test), like DEV_SEED_TOKEN above.
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      # Opt-in flag for the REAL Turso Cloud sqlite e2e (below). Set it (GitHub secret) only when the
+      # Vercel Preview env also has the four Turso Cloud vars (TURSO_API_TOKEN/ORG/GROUP +
+      # TURSO_GROUP_AUTH_TOKEN — the group token, minted separately from the integration's per-db
+      # TURSO_AUTH_TOKEN) so ?backend=sqlite resolves to a real per-session Turso database. Until set,
+      # that step is skipped and web-preview stays green.
+      TURSO_CLOUD_E2E: ${{ secrets.TURSO_CLOUD_E2E }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,3 +80,51 @@ jobs:
         env:
           E2E_SEED_TOKEN: ${{ env.DEV_SEED_TOKEN }}
         run: pnpm --filter remote-claw-web-tests exec playwright test -c app-e2e.preview.config.ts
+
+      # The SAME spec, flipped to the per-session SQLite backend on REAL Turso Cloud storage — the only
+      # place the cloud locator's Platform-API create + group-token connect actually run. Identical UI
+      # assertions, just routed via ?backend=sqlite. Opt-in (TURSO_CLOUD_E2E, see env above) so it's
+      # skipped until the Vercel Preview env has the Turso Cloud creds.
+      - name: App UI e2e against the preview (sqlite — real Turso Cloud)
+        if: ${{ env.DEV_SEED_TOKEN != '' && env.TURSO_CLOUD_E2E != '' }}
+        env:
+          E2E_SEED_TOKEN: ${{ env.DEV_SEED_TOKEN }}
+          E2E_BACKEND: sqlite
+        run: pnpm --filter remote-claw-web-tests exec playwright test -c app-e2e.preview.config.ts
+
+      # Clean up after ourselves: the sqlite e2e above provisions REAL per-session Turso Cloud dbs, and
+      # nothing else drops them — left alone they'd accumulate. Hit the dev-only sweep route with retain=0
+      # so it reclaims them via the same cold-index sweep the prod cron uses. This is prod-safe on two
+      # levels: the dev-seed gate refuses production, AND a preview deploy uses a per-commit db scope
+      # (`rc-pr-<sha>-*` / `rc-pr-<sha>-index`), so the sweep only ever sees THIS deployment's dbs — it
+      # can't reach a production `rc-prod-` session (nor another preview's) though all share one org/group.
+      # `always()` so a failed e2e still cleans up; gated on the same secrets so it only runs when the
+      # cloud leg did. Best-effort — a non-200 logs a warning rather than redding the run.
+      - name: Reclaim the sqlite e2e's Turso Cloud dbs (clean up after itself)
+        if: ${{ always() && env.DEV_SEED_TOKEN != '' && env.TURSO_CLOUD_E2E != '' && env.WEB_E2E_URL != '' }}
+        run: |
+          # Delete this preview scope's dbs by name (POST /api/dev/sweep → locator.dropScope), LOOPING
+          # until the scope stays empty. A single pass isn't enough: /api/dev/seed keeps each session's
+          # HostRcRelay alive for SESSION_TTL_MS (60s), re-announcing to its bus channel — so a still-live
+          # relay recreates a db right after we delete it. The route returns `remaining` (re-listed after
+          # its deletes); we loop (~15s apart) until remaining=0 across a pass, i.e. until the relays have
+          # aged out. Bounded to ~4 min so a stuck relay can't hang the job. Best-effort: a non-200 or
+          # non-convergence logs a ::warning:: rather than failing the run.
+          ok=""
+          for i in $(seq 1 16); do
+            code=$(curl -sS -o /tmp/sweep.json -w '%{http_code}' -X POST \
+              "${WEB_E2E_URL%/}/api/dev/sweep" \
+              -H "x-dev-seed-token: ${DEV_SEED_TOKEN}" \
+              -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" || echo "000")
+            body=$(cat /tmp/sweep.json 2>/dev/null)
+            echo "pass $i — HTTP ${code}: ${body}"
+            if [ "$code" = "200" ]; then
+              deleted=$(printf '%s' "$body" | sed -n 's/.*"deleted":\([0-9]*\).*/\1/p')
+              remaining=$(printf '%s' "$body" | sed -n 's/.*"remaining":\([0-9]*\).*/\1/p')
+              # Converged once a pass deletes nothing AND leaves nothing (relays dead, scope empty).
+              if [ "${remaining:-1}" = "0" ] && [ "${deleted:-1}" = "0" ]; then ok="1"; break; fi
+            fi
+            sleep 15
+          done
+          [ -n "$ok" ] && echo "✅ scope fully reclaimed" || \
+            echo "::warning::dev/sweep did not converge to an empty scope (dbs may linger until manually pruned)"

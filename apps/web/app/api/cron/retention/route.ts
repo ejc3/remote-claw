@@ -1,6 +1,6 @@
 import { getBackend } from "../../../../lib/broker";
 import { authorized } from "../../temporal/drain/gate";
-import { retentionMs, tursoConfigured } from "./gate";
+import { retentionMs, sqliteConfigured } from "./gate";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -11,16 +11,16 @@ export async function GET(req: Request): Promise<Response> {
     return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
   }
 
-  if (!tursoConfigured()) return Response.json({ swept: 0 });
+  if (!sqliteConfigured()) return Response.json({ swept: 0 });
 
   try {
-    const backend = await getBackend("turso");
+    const backend = await getBackend("sqlite");
     if (backend.sweep === undefined) return Response.json({ swept: 0 });
 
     return Response.json({ swept: await backend.sweep(retentionMs()) });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    console.error("[turso-retention] sweep failed:", message);
+    console.error("[sqlite-retention] sweep failed:", message);
     return Response.json({ error: message }, { status: 500 });
   }
 }

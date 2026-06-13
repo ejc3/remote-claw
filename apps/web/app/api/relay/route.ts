@@ -41,7 +41,7 @@ export async function POST(req: Request): Promise<Response> {
   if (frame.ct.length >= MAX_RELAY_CIPHERTEXT_BYTES) {
     return json({ error: "frame ciphertext exceeds the relay size cap" }, 413);
   }
-  // Generation-race guard: Turso channel `gen` bumps only when a backend caller publishes the
+  // Generation-race guard: the sqlite channel's `gen` bumps only when a backend caller publishes the
   // internal `__close` sentinel and a later publish reopens the token. The public relay route must
   // never accept that sentinel, so a host restart's maxSeq/frameCount/subscribe window cannot cross
   // a close+reopen on this HTTP surface.

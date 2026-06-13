@@ -20,3 +20,6 @@ coverage/
 
 # MITM certs generated at runtime by the RC launch path / tests
 **/mitm-certs/
+
+# Per-session SQLite backend (BROKER_BACKEND=sqlite): one local libSQL database per channel token.
+**/.rc-sqlite/

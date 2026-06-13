@@ -161,45 +161,45 @@ describe("BrokerClient transport", () => {
       });
       return broker.fetch(input, init);
     }) as typeof fetch;
-    const tursoClient = new BrokerClient({
+    const sqliteClient = new BrokerClient({
       baseUrl: "http://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: capture,
-      backend: "turso",
+      backend: "sqlite",
     });
 
-    expect(tursoClient.durable).toBe(false); // no server capability has been read yet
-    expect(await tursoClient.maxSeq("missing")).toBeNull();
-    expect(tursoClient.durable).toBe(true);
-    expect(await tursoClient.frameCount("missing")).toBeNull();
-    await tursoClient.postFrame(
+    expect(sqliteClient.durable).toBe(false); // no server capability has been read yet
+    expect(await sqliteClient.maxSeq("missing")).toBeNull();
+    expect(sqliteClient.durable).toBe(true);
+    expect(await sqliteClient.frameCount("missing")).toBeNull();
+    await sqliteClient.postFrame(
       header(id, { recordKind: "accepted", seq: null, sessionId: "empty", msgId: "empty-1" }),
       utf8("{}"),
     );
-    expect(await tursoClient.maxSeq("empty")).toBeNull();
-    expect(await tursoClient.frameCount("empty")).toBe(1);
-    await tursoClient.postFrame(
+    expect(await sqliteClient.maxSeq("empty")).toBeNull();
+    expect(await sqliteClient.frameCount("empty")).toBe(1);
+    await sqliteClient.postFrame(
       header(id, { recordKind: "assistant", seq: 2, sessionId: "seq-session", msgId: "seq-2" }),
       utf8("two"),
     );
-    await tursoClient.postFrame(
+    await sqliteClient.postFrame(
       header(id, { recordKind: "assistant", seq: 7, sessionId: "seq-session", msgId: "seq-7" }),
       utf8("seven"),
     );
-    expect(await tursoClient.maxSeq("seq-session")).toBe(7);
-    expect(await tursoClient.frameCount("seq-session")).toBe(2);
+    expect(await sqliteClient.maxSeq("seq-session")).toBe(7);
+    expect(await sqliteClient.frameCount("seq-session")).toBe(2);
 
     const seqCalls = seen.filter((call) => new URL(call.url).pathname === "/api/seq");
     expect(seqCalls).toHaveLength(3);
     for (const call of seqCalls) {
       expect(call.headers.authorization).toBe(`Bearer ${toHex(id.authToken)}`);
-      expect(call.headers["x-broker-backend"]).toBe("turso");
+      expect(call.headers["x-broker-backend"]).toBe("sqlite");
     }
     const countCalls = seen.filter((call) => new URL(call.url).pathname === "/api/frame-count");
     expect(countCalls).toHaveLength(3);
     for (const call of countCalls) {
       expect(call.headers.authorization).toBe(`Bearer ${toHex(id.authToken)}`);
-      expect(call.headers["x-broker-backend"]).toBe("turso");
+      expect(call.headers["x-broker-backend"]).toBe("sqlite");
     }
   });
 
@@ -224,11 +224,11 @@ describe("BrokerClient transport", () => {
         fetchFn: broker.fetch,
         ...(backend !== undefined ? { backend } : {}),
       });
-    expect(mk("turso").durable).toBe(false); // the local flag alone is not trusted
+    expect(mk("sqlite").durable).toBe(false); // the local flag alone is not trusted
 
     const defaultClient = mk(undefined);
     broker.durable = true;
-    const cursor = await defaultClient.seqCursor("default-turso-session");
+    const cursor = await defaultClient.seqCursor("default-sqlite-session");
     expect(cursor).toEqual({ maxSeq: null, durable: true });
     expect(defaultClient.durable).toBe(true);
 

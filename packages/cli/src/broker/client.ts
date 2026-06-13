@@ -41,7 +41,7 @@ export interface BrokerClientOptions {
   /** Injectable fetch (tests / a custom agent). Defaults to the global fetch. */
   fetchFn?: typeof fetch;
   /** Pick the broker backend for this client's calls ("vercel" | "local" | "temporal" |
-   *  "turso"). Sent as the `x-broker-backend` header on every /api/relay + /api/stream request; omitted
+   *  "sqlite"). Sent as the `x-broker-backend` header on every /api/relay + /api/stream request; omitted
    *  ⇒ the broker's default. Publish and subscribe for one channel MUST agree, so it's set per client.
    *  The host learns whether the effective server backend is durable from /api/seq, not from this flag. */
   backend?: string;
@@ -105,7 +105,7 @@ export class BrokerClient {
 
   /** True only after the broker itself has reported a durable-log backend. This deliberately does NOT
    *  infer durability from `#backend`: when the host omits --rc-backend, the deployment default may still
-   *  be Turso, and the safety decision must come from the server's effective backend. */
+   *  be a durable libSQL log, and the safety decision must come from the server's effective backend. */
   get durable(): boolean {
     return this.#serverDurable === true;
   }

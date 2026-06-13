@@ -1062,14 +1062,14 @@ wanted, a small durable store could be added then. We investigated the options (
 Redis / Vercel Blob / Neon; Edge Config doesn't fit) and they're viable, but adding any
 of them now would pollute a deliberately lean design — **explicitly deferred.**
 
-## 6D. Broker backends — execution-model comparison (why Vercel Workflows, vs Temporal, vs Turso)
+## 6D. Broker backends — execution-model comparison (why Vercel Workflows, vs Temporal, vs per-session SQLite)
 
 The broker is a **pluggable port** (`BrokerBackend` in `apps/web/lib/broker/backend.ts`):
 `publish(token, frame)` and `subscribe(token, {startIndex})`, selected per-request via the
 `x-broker-backend` header / `?backend=`. Four implementations ship — `vercel` (live default),
-`temporal`, `turso`, `local` (dev/test). They divide on **one axis: who runs the execution, and
-whether reads are push or poll.** This section captures the verified design of each so the choice
-of default is auditable.
+`temporal`, `sqlite` (per-session libSQL — local file or Turso Cloud), `local` (dev/test). They divide
+on **one axis: who runs the execution, and whether reads are push or poll.** This section captures the
+verified design of each so the choice of default is auditable.
 
 ### Vercel Workflows — the live default (per-event materialization, push reads)
 
@@ -1147,16 +1147,19 @@ The supported scalable Temporal design is therefore the **split**: Temporal for 
 Temporal alone is not a broker. That's strictly more infrastructure than either shipped backend for no
 gain on this workload, which is why Temporal stays an opt-in backend, not the default.
 
-### Turso — the no-worker durable log (the durability answer)
+### Per-session SQLite — the no-worker durable log (the durability answer)
 
-Turso sidesteps the push/poll question: an **unbounded ordered libSQL log** with **no worker at all** —
-the DB itself serves catch-up. Reads are a poll (`SELECT … WHERE id > cursor`), but replay and live are
-the *same* query (no gap/dupe boundary), and unlike Vercel/Temporal it is **flagged durable**, so the
-broker serves catch-up and the host can retire its `#log` replay. Full schema and the RC-event/broker-
-frame split are in `docs/durable-log-design.md`. (Note: this is our **own** `BrokerBackend` port talking
-to libSQL directly — `publish`=`INSERT`, `subscribe`=poll — **not** a Workflow DevKit "World." There is
-no first-party Turso World; the World note below covers why building one would be more machinery for
-less.)
+The `sqlite` backend sidesteps the push/poll question: an **ordered libSQL log per session** with **no
+worker at all** — the DB itself serves catch-up. Reads are a poll (`SELECT … WHERE id > cursor`), but
+replay and live are the *same* query (no gap/dupe boundary), and unlike Vercel/Temporal it is **flagged
+durable**, so the broker serves catch-up and the host can retire its `#log` replay. The defining choice
+is **one database PER channel token** (not one shared log): physical isolation, retention = drop the db,
+a per-session write lock, and no cross-session at-rest exposure. The **only** deployment variable is
+where each db lives — a local `file:` (dev) or a Turso Cloud database created on demand via the Platform
+API and connected with a group token (prod) — behind the `DbLocator` seam, with no code change. Schema
+and the RC-event/broker-frame split are in `docs/durable-log-design.md`. (This is our **own**
+`BrokerBackend` port talking to libSQL directly — `publish`=`INSERT`, `subscribe`=poll — **not** a
+Workflow DevKit "World"; the World note below covers why building one would be more machinery for less.)
 
 ### The World abstraction (why "no worker" is a Vercel property, not universal)
 
@@ -1177,8 +1180,8 @@ the **Queue is the gap**: on Vercel Functions (serverless, no polling worker) so
 pending-invocation row exists" into "HTTP POST the `createQueueHandler` Function," and **a database
 can't push**. So a serverless Turso World would still need an external push-queue (Upstash QStash or
 Vercel Queues) to dispatch — Turso for durable state, QStash for durable dispatch, Functions for
-compute. That's strictly more machinery than our direct Turso log, which runs **no** workflows at all
-(no event-log replay, no step queue, no executor) — the DB *is* the relay. A Turso World would only
+compute. That's strictly more machinery than our direct per-session libSQL log, which runs **no**
+workflows at all (no event-log replay, no step queue, no executor) — the DB *is* the relay. A Turso World would only
 matter if we wanted the full durable-execution programming model (steps, hooks, replay) backed by Turso
 instead of Vercel's managed platform; the relay doesn't need that model.
 
@@ -1188,11 +1191,12 @@ instead of Vercel's managed platform; the relay doesn't need that model.
 | --- | --- | --- | --- | --- | --- | --- |
 | **Vercel** (default) | **push** (`getReadable` cursor/viewer) | `resumeHook` (event-driven) | **Vercel**, per-event | **none** | capped stream + host `#log` | 1 |
 | **Temporal** | poll a query | signal (2k pending cap) | your worker | standing worker | history (capped → terminates) | 1 (wrong-shaped) / 2 with Redis |
-| **Turso** | poll (`id > cursor`) | `INSERT OR IGNORE` | nobody (DB serves reads) | **none** | **unbounded ordered log** | 1 |
+| **Sqlite** | poll (`id > cursor`) | `INSERT … ON CONFLICT` | nobody (DB serves reads) | **none** | **ordered log per session** (file or Turso Cloud) | 1 |
 
 Vercel Workflows is the one managed system giving **event-driven execution + push fan-out + zero hosted
-infra** in a single piece (hence the live default); Turso is the clean **durable-log** opt-in; Temporal
-is durable orchestration that needs an external pub/sub bolted on to be a broker, so it stays opt-in.
+infra** in a single piece (hence the live default); per-session **SQLite** is the clean **durable-log**
+backend (local file in dev, one Turso Cloud db per session in prod); Temporal is durable orchestration
+that needs an external pub/sub bolted on to be a broker, so it stays opt-in.
 
 ### Worked example — a no-viewer fleet (the roll cycle, and the viewer-gating gap)
 

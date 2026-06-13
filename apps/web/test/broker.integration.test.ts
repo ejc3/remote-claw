@@ -54,16 +54,11 @@ function frameCountReq(auth: string | undefined, query = ""): Promise<Response> 
 
 type BrokerGlobals = typeof globalThis & {
   __rcBrokerCache?: Map<string, unknown>;
-  __rcTursoClient?: { close(): void };
 };
 
-function clearEnvTursoBackend(): void {
-  const g = globalThis as BrokerGlobals;
-  g.__rcBrokerCache?.delete("turso");
-  if (g.__rcTursoClient !== undefined) {
-    g.__rcTursoClient.close();
-    delete g.__rcTursoClient;
-  }
+function clearSqliteBackend(): void {
+  // Drop the cached sqlite backend so a fresh RC_SQLITE_DIR is picked up by the next getBackend().
+  (globalThis as BrokerGlobals).__rcBrokerCache?.delete("sqlite");
 }
 
 describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
@@ -79,19 +74,17 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns the highest seq from the Turso route backend", async () => {
-    const prevUrl = process.env.TURSO_DATABASE_URL;
-    const prevToken = process.env.TURSO_AUTH_TOKEN;
+  it("returns the highest seq from the sqlite route backend", async () => {
+    const prevDir = process.env.RC_SQLITE_DIR;
     const prevBackend = process.env.BROKER_BACKEND;
     const dir = await mkdtemp(join(tmpdir(), "rc-seq-route-"));
-    clearEnvTursoBackend();
-    process.env.TURSO_DATABASE_URL = `file:${join(dir, "seq.db")}`;
-    delete process.env.TURSO_AUTH_TOKEN;
-    process.env.BROKER_BACKEND = "turso";
+    clearSqliteBackend();
+    process.env.RC_SQLITE_DIR = dir;
+    process.env.BROKER_BACKEND = "sqlite";
     try {
       const id = await testIdentity(21);
       const auth = bearer(id.authToken);
-      const sid = "sess-turso-seq";
+      const sid = "sess-sqlite-seq";
       const kSession = await deriveSessionKey(id.contentRoot, sid);
 
       for (const seq of [2, 7]) {
@@ -113,11 +106,9 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ maxSeq: 7, durable: true });
     } finally {
-      clearEnvTursoBackend();
-      if (prevUrl === undefined) delete process.env.TURSO_DATABASE_URL;
-      else process.env.TURSO_DATABASE_URL = prevUrl;
-      if (prevToken === undefined) delete process.env.TURSO_AUTH_TOKEN;
-      else process.env.TURSO_AUTH_TOKEN = prevToken;
+      clearSqliteBackend();
+      if (prevDir === undefined) delete process.env.RC_SQLITE_DIR;
+      else process.env.RC_SQLITE_DIR = prevDir;
       if (prevBackend === undefined) delete process.env.BROKER_BACKEND;
       else process.env.BROKER_BACKEND = prevBackend;
       await rm(dir, { recursive: true, force: true });
@@ -138,19 +129,17 @@ describe("broker: GET /api/frame-count (durable stream cursor)", () => {
     expect(res.status).toBe(401);
   });
 
-  it("returns the stream length from the Turso route backend", async () => {
-    const prevUrl = process.env.TURSO_DATABASE_URL;
-    const prevToken = process.env.TURSO_AUTH_TOKEN;
+  it("returns the stream length from the sqlite route backend", async () => {
+    const prevDir = process.env.RC_SQLITE_DIR;
     const prevBackend = process.env.BROKER_BACKEND;
     const dir = await mkdtemp(join(tmpdir(), "rc-count-route-"));
-    clearEnvTursoBackend();
-    process.env.TURSO_DATABASE_URL = `file:${join(dir, "count.db")}`;
-    delete process.env.TURSO_AUTH_TOKEN;
-    process.env.BROKER_BACKEND = "turso";
+    clearSqliteBackend();
+    process.env.RC_SQLITE_DIR = dir;
+    process.env.BROKER_BACKEND = "sqlite";
     try {
       const id = await testIdentity(23);
       const auth = bearer(id.authToken);
-      const sid = "sess-turso-count";
+      const sid = "sess-sqlite-count";
       const kSession = await deriveSessionKey(id.contentRoot, sid);
 
       for (const seq of [2, 7]) {
@@ -172,11 +161,9 @@ describe("broker: GET /api/frame-count (durable stream cursor)", () => {
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ frameCount: 2, durable: true });
     } finally {
-      clearEnvTursoBackend();
-      if (prevUrl === undefined) delete process.env.TURSO_DATABASE_URL;
-      else process.env.TURSO_DATABASE_URL = prevUrl;
-      if (prevToken === undefined) delete process.env.TURSO_AUTH_TOKEN;
-      else process.env.TURSO_AUTH_TOKEN = prevToken;
+      clearSqliteBackend();
+      if (prevDir === undefined) delete process.env.RC_SQLITE_DIR;
+      else process.env.RC_SQLITE_DIR = prevDir;
       if (prevBackend === undefined) delete process.env.BROKER_BACKEND;
       else process.env.BROKER_BACKEND = prevBackend;
       await rm(dir, { recursive: true, force: true });
