@@ -974,8 +974,15 @@ export class HostRcRelay {
         }
         break;
       case "end":
-        this.#session.pushControlRequest("end_session");
-        this.#clearOpenPerms(); // ending the session orphans any open gate too
+        // claude's REPL bridge has NO remote session-end. Its control_request switch (verified against
+        // the 2.1.x binary — initialize / set_model / set_max_thinking_tokens / set_permission_mode /
+        // rename_session / set_color / file_suggestions / read_file / get_context_usage / get_usage /
+        // mcp_* / interrupt) has no `end_session` case, so sending it only drew an error control_response
+        // ("REPL bridge does not handle control_request subtype: end_session"). The REAL RC server hits
+        // the same wall — it emits end_session with reason:archived and is rejected identically (captured
+        // via --rc-trace; docs/protocol.md §11). So we drive NO worker control_request here; claude is
+        // ended at its own terminal (/quit, Ctrl-C). We still clear any open gate so `needs` can't stick.
+        this.#clearOpenPerms();
         break;
     }
   }

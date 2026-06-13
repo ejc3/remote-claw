@@ -249,7 +249,7 @@ The viewer's `PermissionRow` renders `effective = confirmed ?? decision`: the ho
 
 ## 11. Control verbs and freshness
 
-`interrupt` / `set_model` / `set_mode` / `end` ride the control plane (`dir:"in"`) and are forwarded by
+`interrupt` / `set_model` / `set_mode` / `end` ride the control plane (`dir:"in"`) and are handled by
 `#driveControlVerb` (`relay.ts`). Two defences against an **untrusted broker** replaying or forging a
 control action:
 
@@ -260,6 +260,30 @@ control action:
 - **Freshness / expiry** — the viewer stamps `expiry = now + FRESH_WINDOW_MS` on every control + catch_up
   frame (`viewer.ts` `#control` / `requestHistory`); a frame the broker withholds and replays past its
   `expiry` is dropped as stale (`relay.ts`).
+
+**What claude's REPL bridge actually accepts.** The worker side (claude's `[bridge:repl]` handler,
+function `LW5`, verified against the 2.1.x binary) switches on `control_request.subtype` and handles
+exactly: `initialize`, `set_model`, `set_max_thinking_tokens`, `set_permission_mode`, `rename_session`,
+`set_color`, `file_suggestions`, `read_file`, `get_context_usage`, `get_usage`, `mcp_status`,
+`mcp_authenticate` / `mcp_oauth_callback_url` / `mcp_reconnect`, and `interrupt`. Anything else hits the
+`default` arm and comes back as an **error** control_response: `REPL bridge does not handle
+control_request subtype: <x>`. (An *outbound-only* session — RC not enabled locally — additionally
+rejects everything except `initialize` with `This session is outbound-only…`.) So the relay drives only
+the three verbs claude handles: `interrupt`, `set_model`, `set_permission_mode`.
+
+**There is no remote session-end.** `end_session` is **not** in that switch, so the viewer's `end` verb
+drives no worker `control_request` — it only clears any open permission gate locally (the `needs`
+backstop, §12); claude is ended at its own terminal (`/quit`, Ctrl-C). This is not a remote-claw gap: the
+**real** RC server also emits `end_session` (with `reason:"archived"`) and claude rejects it identically
+— captured live via `--rc-trace`:
+
+```
+← control_request {"request":{"reason":"archived","subtype":"end_session"}, …}
+→ control_response {"subtype":"error","error":"REPL bridge does not handle control_request subtype: end_session"}
+```
+
+A true remote teardown would need a per-session abort hook in the relay (today `serve()` shares one
+`AbortController` across all of a launch's sessions) — noted as future work, not wired.
 
 Slash commands (`/compact`, `/clear`, …) deliberately ride the **`user`** path, not a control verb, so
 claude processes them as input and they are acked + echoed + replayable like any prompt (`viewer.ts`

@@ -1084,6 +1084,16 @@ describe("HostRcRelay control-verb auth + validation (#5)", () => {
     );
     expect(spy).toHaveBeenCalledWith("set_model", { model: "opus" });
   });
+
+  it("the `end` verb drives NO worker control_request (claude's REPL bridge rejects end_session)", async () => {
+    // Verified against the claude 2.1.x binary: the control_request switch has no `end_session` case, so
+    // it returns an error control_response ("REPL bridge does not handle control_request subtype:
+    // end_session") — the real RC server hits the same wall (docs/protocol.md §11). So `end` must NOT
+    // send a worker control_request; it only clears local gate state. The frame still authenticates
+    // (AEAD-opened) and the relay keeps running (the trailing `user` frame is processed).
+    const spy = await driveVerb("end", "v-end", JSON.stringify({ expiry: Date.now() + 60_000 }));
+    expect(spy).not.toHaveBeenCalled();
+  });
 });
 
 describe("HostRcRelay attachment size cap (#5)", () => {
