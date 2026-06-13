@@ -164,13 +164,19 @@ export function dbFileName(token: string): string {
   return `${token.replaceAll(":", "-")}.db`;
 }
 
-/** Pluggable storage: maps a channel token to a libSQL database, and lists/drops them for retention. */
+/**
+ * Pluggable storage — the ONLY thing that differs between a local-file deployment and a cloud one.
+ * `FileDbLocator` puts one `file:` db per token on local disk; `TursoCloudDbLocator` puts one Turso
+ * Cloud db per token (created via the Platform API). The backend engine is identical either way.
+ */
 export interface DbLocator {
-  /** Connection config for the token's database (used to OPEN — and, for file:, CREATE — it). */
+  /** Connection config for the token's database (used to OPEN it; the storage must already exist). */
   config(token: string): { url: string; authToken?: string };
+  /** Create the token's database if absent (write path). No-op for `file:` (createClient makes it). */
+  ensure(token: string): Promise<void>;
   /** Whether the token's database already exists. Read paths must NOT create one (subscribe-or-null). */
   exists(token: string): Promise<boolean>;
-  /** All database file paths in the store (for the retention sweep); omit if the store can't enumerate. */
+  /** All database paths/ids in the store (for the retention sweep); omit if the store can't enumerate. */
   listPaths?(): Promise<string[]>;
   /** Connection config for a raw store path (sweep probe). */
   configForPath?(path: string): { url: string; authToken?: string };
@@ -213,6 +219,9 @@ export class FileDbLocator implements DbLocator {
   configForPath(path: string): { url: string } {
     return { url: `file:${path}` };
   }
+
+  // No-op: opening a `file:` URL creates the database file, so there is nothing to pre-provision.
+  async ensure(_token: string): Promise<void> {}
 
   async exists(token: string): Promise<boolean> {
     return existsSync(this.#path(token));
@@ -268,6 +277,8 @@ class SessionDbCache {
   // Insertion order approximates LRU; reuse deletes+re-sets to bump an entry to most-recent.
   readonly #entries = new Map<string, CacheEntry>();
   readonly #migrated = new WeakMap<Client, Promise<void>>();
+  // Per-token mutex for the miss→create critical section (so only one client per token is opened).
+  readonly #createLocks = new Map<string, Promise<void>>();
 
   constructor(locator: DbLocator, max: number = sqliteMaxClients()) {
     this.#locator = locator;
@@ -291,29 +302,49 @@ class SessionDbCache {
 
   /** Borrow the token's client. `create:false` returns null if the database doesn't exist yet. */
   async acquire(token: string, create: boolean): Promise<Lease | null> {
-    let entry = this.#entries.get(token);
-    if (entry !== undefined) {
-      this.#entries.delete(token);
-      this.#entries.set(token, entry); // bump to MRU
-      entry.refs += 1;
-    } else {
-      if (!create && !(await this.#locator.exists(token))) return null;
+    const hit = this.#entries.get(token);
+    if (hit !== undefined) return this.#lease(token, hit);
+
+    // Miss: serialize the create section per token so concurrent first-touches coalesce onto ONE client
+    // — multiple clients to the same database would race (SQLITE_BUSY for file:, wasted connections for
+    // cloud). The locator's exists()/ensure() awaits also live here, so they can't interleave two opens.
+    //
+    // This lock is PER PROCESS (= per serverless instance). It fully coalesces concurrent requests within
+    // one instance (incl. Fluid Compute's per-instance concurrency). It does NOT span instances — and
+    // doesn't need to: file: mode (the SQLITE_BUSY reason) is single-instance only, and cloud mode is
+    // safe across instances because ensure() is idempotent (create-if-absent) and a libSQL database is
+    // single-writer, so concurrent write transactions are serialized server-side.
+    return this.#withCreateLock(token, async () => {
+      const again = this.#entries.get(token);
+      if (again !== undefined) return this.#lease(token, again); // created while we waited for the lock
+      if (create) {
+        await this.#locator.ensure(token); // provision the storage (file: no-op; cloud: Platform API)
+      } else if (!(await this.#locator.exists(token))) {
+        return null; // read path: never create a channel
+      }
       const client = createClient(this.#locator.config(token));
-      entry = { client, refs: 1 };
+      const entry: CacheEntry = { client, refs: 0 };
       this.#entries.set(token, entry);
-    }
-    const held = entry;
-    // EVERY borrow awaits the migration — it's an idempotent, per-client cached promise, so a cache HIT
-    // that lands while the first borrow is still migrating cannot run SQL against a schemaless database.
-    // refs is already > 0 here, so the entry can't be evicted out from under the await.
+      return this.#lease(token, entry);
+    });
+  }
+
+  /** Bump the entry to MRU, take a ref, ensure its schema, and hand back a single-release lease. */
+  async #lease(token: string, entry: CacheEntry): Promise<Lease> {
+    this.#entries.delete(token);
+    this.#entries.set(token, entry); // bump to MRU
+    entry.refs += 1;
+    // EVERY borrow awaits the migration — it's an idempotent, per-client cached promise, so a borrow that
+    // hit a still-migrating client cannot run SQL against a schemaless database. refs > 0 here, so the
+    // entry can't be evicted out from under the await.
     try {
-      await this.#ensureSchema(held.client);
+      await this.#ensureSchema(entry.client);
     } catch (e) {
-      held.refs -= 1;
-      if (held.refs <= 0 && this.#entries.get(token) === held) {
+      entry.refs -= 1;
+      if (entry.refs <= 0 && this.#entries.get(token) === entry) {
         this.#entries.delete(token);
         try {
-          held.client.close();
+          entry.client.close();
         } catch {
           /* ignore */
         }
@@ -323,14 +354,32 @@ class SessionDbCache {
     let released = false;
     this.#evict();
     return {
-      client: held.client,
+      client: entry.client,
       release: () => {
         if (released) return;
         released = true;
-        held.refs -= 1;
+        entry.refs -= 1;
         this.#evict();
       },
     };
+  }
+
+  /** A per-token async mutex — serializes the miss→create critical section (a promise chain per key). */
+  async #withCreateLock<T>(token: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.#createLocks.get(token) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mine = previous.catch(() => undefined).then(() => gate);
+    this.#createLocks.set(token, mine);
+    await previous.catch(() => undefined);
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.#createLocks.get(token) === mine) this.#createLocks.delete(token);
+    }
   }
 
   async runWrite<T>(token: string, fn: (c: Client) => Promise<T>): Promise<T> {

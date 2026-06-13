@@ -90,12 +90,14 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
       break;
     }
     case "sqlite": {
-      // Per-session libSQL — ONE database per channel token (BROKER_BACKEND=sqlite). Dynamic-imported
-      // like turso so @libsql/client + node:fs stay out of the bundle unless selected. File-mode is
-      // single-instance (per-instance disk), so like `local` it is only honoured as the deployment's
-      // OWN default, never a per-request override (see REQUESTABLE below).
+      // Per-session libSQL — ONE database per channel token (BROKER_BACKEND=sqlite). The ONLY thing that
+      // varies is the storage locator, chosen from env: Turso Cloud (one remote db per session) when the
+      // cloud creds are set, else local files under RC_SQLITE_DIR. Dynamic-imported like turso so
+      // @libsql/client + node:fs stay out of the bundle unless selected. File-mode is single-instance
+      // (per-instance disk), so like `local` it is only honoured as the deployment's OWN default.
       const { SqliteMultiBackend } = await import("./sqlite-multi");
-      backend = new SqliteMultiBackend();
+      const { selectLocatorFromEnv } = await import("./turso-cloud-locator");
+      backend = new SqliteMultiBackend(selectLocatorFromEnv());
       break;
     }
     default:
