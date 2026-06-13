@@ -5,6 +5,54 @@ through a Vercel Workflows broker. Design lives in `docs/v2-architecture.md`; th
 `packages/clawsec`, the CLI is `packages/cli`. Phase-0 reverse-engineering of Claude's RC protocol
 is in `docs/phase0-findings.md` (and consolidated in `docs/v2-architecture.md` §17).
 
+## Driving a real claude through the wrapper (RC modes + the stub gotcha)
+
+`remote-claw` runs the **real** `claude` behind a local MITM proxy (`HTTPS_PROXY` +
+`NODE_EXTRA_CA_CERTS`). Two modes, picked by flag:
+
+- **`--rc-app <origin> [--rc-backend <b>]`** (`runRcLaunch`, `launch.ts`) — intercepts claude's RC
+  endpoints (`/v1/code/sessions/**`) and bridges the session **to our broker**, E2E-encrypted.
+  Everything else (`/v1/messages`, OAuth) tunnels straight through to Anthropic. View it in **our** web
+  viewer (`apps/web`) with a `--rc-show-secret` pass. Anthropic never sees this session, so the
+  **official Claude app cannot** — by design.
+- **`--rc-trace`** (`runRcTrace`, `trace-run.ts`) — a transparent inspector: passes **everything
+  through to real `api.anthropic.com`** and just traces RC both ways (nothing hits our broker). The
+  session registers with Anthropic and **bridges** (`POST /v1/code/sessions/{id}/bridge` → a
+  `worker_jwt`), so the **official Claude app / mobile app drives it** while we capture every frame.
+
+### The CLAUDE_CODE_CHILD_SESSION stub gotcha (cost hours, twice)
+
+If the wrapper is started **from inside a claude session** (a terminal already in claude, or claude
+spawning it — e.g. this harness), the launcher's session identity leaks into the spawned claude via
+`...process.env`:
+
+- `CLAUDE_CODE_CHILD_SESSION` makes the child a **stub** that bridges to the *parent* session instead
+  of running as a real, independent claude — the MITM then drives a stub, and in trace mode the session
+  never gets a `worker_jwt` (so the app can't drive it).
+- `CLAUDE_CODE_SESSION_ID` pins/resumes the parent's id instead of minting a fresh `cse_`.
+
+**Both `launch.ts` and `trace-run.ts` scrub these** from the child env (alongside
+`REMOTE_CLAW_SECRET_FILE` / `VERCEL_AUTOMATION_BYPASS_SECRET`). Outside a claude session they're unset
+(no-op). When launching manually, also `unset` them in the launch shell as belt-and-suspenders.
+
+### Running + verifying a real (non-stub) session
+
+- claude needs a **TTY** or it drops to `--print` mode — launch under a pty:
+  `script -qfc "bash launch.sh" pty.log`.
+- Diagnostics: `RC_LOG=debug` (frame shapes) or `RC_LOG=trace` (full bodies); `RC_LOG_FILE=…` captures
+  to a clean file separate from the pty's TUI output.
+- **Verify it's real, not a stub:** the child claude env has **no** `CLAUDE_CODE_CHILD_SESSION`; and —
+  broker mode: a fresh `cse_<hex>` is "session created" + announces every ~20s; trace mode:
+  `POST …/bridge` returns a `worker_jwt`.
+
+### The Vercel bypass (`VERCEL_AUTOMATION_BYPASS_SECRET`)
+
+Unrelated to claude/Anthropic. Our broker is on Vercel with **Deployment Protection (SSO)**; the host
+sends `x-vercel-protection-bypass: <secret>` so its automated broker calls get past Vercel's edge
+without a browser login. Only used in **`--rc-app`** mode (reaching our broker); not needed in trace
+mode; scrubbed from the child claude's env. The full RC control-verb surface claude's REPL bridge
+accepts is documented in `docs/protocol.md §11`.
+
 ## Editing the docs (`docs/*.md`)
 
 `docs/index.html` renders the markdown **live** via marked.js (GFM, `breaks:false`) — so the

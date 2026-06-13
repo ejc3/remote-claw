@@ -286,6 +286,43 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   }, 20_000);
 
+  it("scrubs the launching claude's session identity so the child is a real, fresh claude (not a stub)", async () => {
+    // When remote-claw is started from INSIDE a claude session, CLAUDE_CODE_CHILD_SESSION makes the
+    // spawned claude a STUB bridged to the parent (the MITM would never drive a real session), and
+    // CLAUDE_CODE_SESSION_ID pins/resumes the parent's id. Both must be stripped from the child env so
+    // our claude mints its own fresh cse_ session.
+    const id = await deriveIdentity(new Uint8Array(32).fill(72));
+    const certsDir = tmp();
+    const prevChild = process.env.CLAUDE_CODE_CHILD_SESSION;
+    const prevSid = process.env.CLAUDE_CODE_SESSION_ID;
+    process.env.CLAUDE_CODE_CHILD_SESSION = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "parent-session-should-not-reach-child";
+    let seenEnv: NodeJS.ProcessEnv | null = null;
+    try {
+      await runRcLaunch({
+        claudeArgs: [],
+        identity: id,
+        brokerUrl: "http://broker.example",
+        certsDir,
+        spawnClaude: async (_bin, _args, env) => {
+          seenEnv = env;
+          return 0;
+        },
+      });
+    } finally {
+      if (prevChild === undefined) delete process.env.CLAUDE_CODE_CHILD_SESSION;
+      else process.env.CLAUDE_CODE_CHILD_SESSION = prevChild;
+      if (prevSid === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+      else process.env.CLAUDE_CODE_SESSION_ID = prevSid;
+    }
+    const env = seenEnv as unknown as NodeJS.ProcessEnv;
+    // The launching session's identity is gone from what the child claude sees…
+    expect(env.CLAUDE_CODE_CHILD_SESSION).toBeUndefined();
+    expect(env.CLAUDE_CODE_SESSION_ID).toBeUndefined();
+    // …but the proxy env the child genuinely needs survives.
+    expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  }, 20_000);
+
   it("awaits relay pumps on teardown so a final outbound frame flushes", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(73));
     const certsDir = tmp();

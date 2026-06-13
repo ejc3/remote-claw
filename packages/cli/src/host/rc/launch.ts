@@ -131,6 +131,18 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   // local MITM (which injects the bypass itself when it loops back to the broker).
   delete env.REMOTE_CLAW_SECRET_FILE;
   delete env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  // Scrub the LAUNCHING claude's session identity so OUR spawned `claude` is a fresh, independent,
+  // top-level session — not a child/continuation of whatever ran the wrapper. When remote-claw is
+  // started from INSIDE a claude session (a terminal already in claude, or claude itself spawning it),
+  // these leak in via `...process.env`:
+  //   • CLAUDE_CODE_CHILD_SESSION — makes the child a STUB that bridges to the parent instead of running
+  //     as a real claude (so the MITM would drive a stub, never a real session — verified: a wrapper
+  //     launched under Claude Code spawned a child bridged to the harness's own session).
+  //   • CLAUDE_CODE_SESSION_ID — pins/resumes the parent's session id instead of minting a new cse_.
+  // Outside a claude session these are unset, so deleting them is a no-op. The child mints its own
+  // session id when it enables /remote-control.
+  delete env.CLAUDE_CODE_CHILD_SESSION;
+  delete env.CLAUDE_CODE_SESSION_ID;
 
   try {
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
