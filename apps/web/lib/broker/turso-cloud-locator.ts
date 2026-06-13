@@ -13,6 +13,10 @@ import { type DbLocator, FileDbLocator } from "./sqlite-multi";
 
 const TURSO_API_BASE = "https://api.turso.tech";
 
+// The shared catalog db for the cold session index (one per group). A reserved name that can never
+// collide with a session db (those are `rc-<32 hex>`), and never itself catalogued/swept.
+const INDEX_DB_NAME = "rc-index";
+
 export interface TursoCloudOptions {
   /** Platform API token (org-scoped) — creates/lists/deletes databases. */
   apiToken: string;
@@ -63,10 +67,22 @@ export class TursoCloudDbLocator implements DbLocator {
   }
 
   config(token: string): { url: string; authToken: string } {
-    return {
-      url: `libsql://${this.#dbName(token)}-${this.#o.org}.turso.io`,
-      authToken: this.#o.authToken,
-    };
+    return this.#connect(this.#dbName(token));
+  }
+
+  idFor(token: string): string {
+    return this.#dbName(token);
+  }
+
+  /** The auth token a retention probe uses to connect a catalogued db by url (the group token). */
+  probeAuthToken(): string {
+    return this.#o.authToken;
+  }
+
+  /** Connection for a db by NAME — built from the name, not the API-returned Hostname, so it is always
+   *  byte-identical to config()'s url for the same session (the sweep busy-set/eviction key matches). */
+  #connect(name: string): { url: string; authToken: string } {
+    return { url: `libsql://${name}-${this.#o.org}.turso.io`, authToken: this.#o.authToken };
   }
 
   #api(path: string): string {
@@ -77,9 +93,23 @@ export class TursoCloudDbLocator implements DbLocator {
     return { authorization: `Bearer ${this.#o.apiToken}` };
   }
 
-  /** Create the database if absent (idempotent). A name conflict means it already exists → success. */
   async ensure(token: string): Promise<void> {
-    const name = this.#dbName(token);
+    await this.#createIfAbsent(this.#dbName(token));
+  }
+
+  /** The shared catalog db connection for the cold session index (retention strategy B). */
+  indexConfig(): { url: string; authToken: string } {
+    return this.#connect(INDEX_DB_NAME);
+  }
+
+  /** Provision the catalog db (idempotent), so a fresh deployment's first index write can connect. */
+  async ensureIndex(): Promise<void> {
+    await this.#createIfAbsent(INDEX_DB_NAME);
+  }
+
+  /** Create a database if absent (idempotent). A conflict — 409, or a 400/422 confirmed via GET — means
+   *  it already exists → success. */
+  async #createIfAbsent(name: string): Promise<void> {
     if (this.#known.has(name)) return;
     const res = await this.#fetch(this.#api("/databases"), {
       method: "POST",
@@ -90,15 +120,17 @@ export class TursoCloudDbLocator implements DbLocator {
       this.#known.add(name);
       return;
     }
-    // Some Platform API versions report an existing name as 400/422; confirm via GET before failing.
-    if ((res.status === 400 || res.status === 422) && (await this.exists(token))) return;
+    if ((res.status === 400 || res.status === 422) && (await this.#existsName(name))) return;
     throw new Error(
       `TursoCloud: create database "${name}" failed: ${res.status} ${await safeText(res)}`,
     );
   }
 
   async exists(token: string): Promise<boolean> {
-    const name = this.#dbName(token);
+    return this.#existsName(this.#dbName(token));
+  }
+
+  async #existsName(name: string): Promise<boolean> {
     if (this.#known.has(name)) return true;
     const res = await this.#fetch(this.#api(`/databases/${name}`), { headers: this.#authHeader() });
     if (res.status === 200) {
@@ -111,36 +143,9 @@ export class TursoCloudDbLocator implements DbLocator {
     );
   }
 
-  /**
-   * Retention support. Turso's Platform API has NO last-activity timestamp (list/usage give cumulative
-   * metrics only), so the sweep uses each db's OWN MAX(created_at) as the idle signal — listStored just
-   * enumerates the candidate dbs, the backend probes each. We restrict to OUR `rc-` databases so the
-   * sweep can never delete another db that happens to share the group. The connection `url` is built the
-   * SAME way config() builds it (NOT the API-returned Hostname) so the sweep's busy-set/eviction key
-   * matches a live session's cached client exactly.
-   */
-  async listStored(): Promise<Array<{ id: string; url: string; authToken: string }>> {
-    const res = await this.#fetch(
-      this.#api(`/databases?group=${encodeURIComponent(this.#o.group)}`),
-      { headers: this.#authHeader() },
-    );
-    if (!res.ok) {
-      throw new Error(`TursoCloud: list databases failed: ${res.status} ${await safeText(res)}`);
-    }
-    const body = (await res.json()) as { databases?: Array<{ Name?: unknown }> };
-    const out: Array<{ id: string; url: string; authToken: string }> = [];
-    for (const db of body.databases ?? []) {
-      const name = db.Name;
-      if (typeof name !== "string" || !name.startsWith("rc-")) continue; // only our per-session dbs
-      out.push({
-        id: name,
-        url: `libsql://${name}-${this.#o.org}.turso.io`,
-        authToken: this.#o.authToken,
-      });
-    }
-    return out;
-  }
-
+  // Retention uses the COLD session index (indexConfig/ensureIndex above), NOT a fleet list: Turso's
+  // list-databases is un-paginated and exposes no last-activity, so it can't scale. The sweep reads the
+  // index, probes each candidate's own MAX(created_at), and drops the idle ones via dropStored.
   async dropStored(name: string): Promise<void> {
     const res = await this.#fetch(this.#api(`/databases/${encodeURIComponent(name)}`), {
       method: "DELETE",

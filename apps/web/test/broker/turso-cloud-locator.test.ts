@@ -110,32 +110,33 @@ describe("TursoCloudDbLocator", () => {
     await expect(broken.exists(TOKEN_A)).rejects.toThrow(/get database/);
   });
 
-  it("listStored returns only our rc- dbs, with a url that matches config()'s construction", async () => {
-    const { fetchImpl } = makeFetch((url, method) =>
-      method === "GET" && url.includes("/databases?group=")
-        ? {
-            status: 200,
-            body: JSON.stringify({
-              databases: [{ Name: "rc-aaa" }, { Name: "rc-bbb" }, { Name: "someone-elses-db" }],
-            }),
-          }
-        : { status: 404 },
-    );
-    const loc = new TursoCloudDbLocator(opts(fetchImpl));
-    const stored = await loc.listStored();
-    expect(stored.map((s) => s.id)).toEqual(["rc-aaa", "rc-bbb"]); // non-rc db is never touched
-    expect(stored[0]).toEqual({
-      id: "rc-aaa",
-      url: "libsql://rc-aaa-myorg.turso.io",
-      authToken: "group-tok",
-    });
-    // The sweep keys its busy-set on config().url, so listStored's url must be built the same way.
-    expect(loc.config(TOKEN_A).url).toMatch(/^libsql:\/\/rc-[0-9a-f]{32}-myorg\.turso\.io$/);
+  it("idFor + probeAuthToken expose the db name + group token for the retention sweep", () => {
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+    expect(loc.idFor(TOKEN_A)).toMatch(/^rc-[0-9a-f]{32}$/);
+    // The id is the db name embedded in config()'s url, so dropStored(idFor) and the busy-set agree.
+    expect(loc.config(TOKEN_A).url).toBe(`libsql://${loc.idFor(TOKEN_A)}-myorg.turso.io`);
+    expect(loc.probeAuthToken()).toBe("group-tok");
   });
 
-  it("listStored throws on a list failure", async () => {
-    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 500 })).fetchImpl));
-    await expect(loc.listStored()).rejects.toThrow(/list databases/);
+  it("indexConfig points at the reserved rc-index catalog db (never a session name)", () => {
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+    expect(loc.indexConfig()).toEqual({
+      url: "libsql://rc-index-myorg.turso.io",
+      authToken: "group-tok",
+    });
+    expect(loc.idFor(TOKEN_A)).not.toBe("rc-index"); // a session db can't collide with the index db
+  });
+
+  it("ensureIndex creates the rc-index db (idempotent: a 409 conflict is success)", async () => {
+    const { fetchImpl, calls } = makeFetch((_url, method) =>
+      method === "POST" ? { status: 409, body: "exists" } : { status: 404 },
+    );
+    const loc = new TursoCloudDbLocator(opts(fetchImpl));
+    await expect(loc.ensureIndex()).resolves.toBeUndefined();
+    const post = calls.find((c) => c.method === "POST");
+    expect(post?.url).toContain("/databases");
+    await loc.ensureIndex(); // memoized — no second POST
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
 
   it("dropStored DELETEs the db and tolerates a 404 (already gone)", async () => {

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { type Client, createClient, type ResultSet, type Transaction } from "@libsql/client";
 import type { WireFrame } from "@remote-claw/clawsec";
 import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } from "./backend";
+import { SessionIndex, sqliteSweepBatch } from "./session-index";
 
 // The per-session SQLite (libSQL) durable backend — ONE database per channel token, rather than one
 // shared `frames` table for all sessions. Each token addresses its OWN database, so a session's frames
@@ -179,6 +180,9 @@ export function dbFileName(token: string): string {
 export interface DbLocator {
   /** Connection config for the token's database (used to OPEN it; the storage must already exist). */
   config(token: string): { url: string; authToken?: string };
+  /** The opaque drop/catalog handle for a token's db (the file path, or the cloud db name). Stable; used
+   *  as the dropStored() argument and the session-index primary key. */
+  idFor(token: string): string;
   /** Create the token's database if absent (write path). No-op for `file:` (createClient makes it). */
   ensure(token: string): Promise<void>;
   /** Configure a freshly-opened client (e.g. file: sets WAL + busy_timeout so its lock/concurrency
@@ -187,13 +191,17 @@ export interface DbLocator {
   prepare?(client: Client): Promise<void>;
   /** Whether the token's database already exists. Read paths must NOT create one (subscribe-or-null). */
   exists(token: string): Promise<boolean>;
-  /** Enumerate stored databases for the retention sweep (omit if the store can't enumerate). Each entry
-   *  carries a `url`(+`authToken`) to connect a probe and an opaque `id` drop handle — keeping the same
-   *  `url` the sweep's busy-set/eviction key on, so file (`file:<path>`) and cloud (`libsql://…`) share
-   *  one engine. The connection `url` MUST equal config()'s for the same db, so busy detection matches. */
-  listStored?(): Promise<Array<{ id: string; url: string; authToken?: string }>>;
-  /** Delete a stored database by its `id` (from listStored), reclaiming its space (retention). */
+  /** Delete a stored database by its `id` (from idFor / the session index), reclaiming its space. */
   dropStored?(id: string): Promise<void>;
+
+  // --- Retention via a COLD session index (both file and cloud — written once on create, walked in
+  //     resumable batches by the sweep; omit indexConfig ⇒ retention is a no-op). ---
+  /** Connection config for the shared catalog db that the SessionIndex lives in. */
+  indexConfig?(): { url: string; authToken?: string };
+  /** Provision the catalog db if needed (cloud: Platform-API create the `rc-index` db; file: no-op). */
+  ensureIndex?(): Promise<void>;
+  /** The auth token a retention probe uses to connect a catalogued db by its url (cloud: the group token). */
+  probeAuthToken?(): string | undefined;
 }
 
 function sqliteDir(): string {
@@ -228,6 +236,10 @@ export class FileDbLocator implements DbLocator {
     return { url: `file:${this.#path(token)}` };
   }
 
+  idFor(token: string): string {
+    return this.#path(token);
+  }
+
   // No-op: opening a `file:` URL creates the database file, so there is nothing to pre-provision.
   async ensure(_token: string): Promise<void> {}
 
@@ -247,13 +259,11 @@ export class FileDbLocator implements DbLocator {
     return existsSync(this.#path(token));
   }
 
-  async listStored(): Promise<Array<{ id: string; url: string }>> {
-    return readdirSync(this.#dir)
-      .filter((f) => f.endsWith(".db"))
-      .map((f) => {
-        const p = join(this.#dir, f);
-        return { id: p, url: `file:${p}` }; // id = path; url matches config()'s `file:<path>`
-      });
+  // The cold session-index catalog db lives alongside the session dbs (`_index.db`). It can't collide
+  // with a session file (those are `<token>-<24 hex>.db`) and is never catalogued/swept itself, so the
+  // index walks only real sessions. createClient auto-creates the file, so there's no ensureIndex.
+  indexConfig(): { url: string } {
+    return { url: `file:${join(this.#dir, "_index.db")}` };
   }
 
   async dropStored(path: string): Promise<void> {
@@ -510,6 +520,9 @@ export class SqliteMultiBackend implements BrokerBackend {
   readonly #cache: SessionDbCache;
   readonly #newClient: ClientFactory;
   readonly #pollMs = sqlitePollMs();
+  // The cold session index (retention strategy B), built lazily from the locator's indexConfig. undefined
+  // = not yet built; the promise resolves to null when the locator has no index (→ dir-scan retention).
+  #indexBuild: Promise<SessionIndex | null> | undefined;
 
   /** Production/dev uses the env-configured FileDbLocator; tests inject a tmp-dir locator (and may inject
    *  a client factory to fault-test the connection). */
@@ -534,11 +547,44 @@ export class SqliteMultiBackend implements BrokerBackend {
       );
       return res ?? { created: false, channelId: token };
     }
-    return this.#cache.runWrite(token, (c) =>
+    const result = await this.#cache.runWrite(token, (c) =>
       this.#withConnErrorEvict(token, c, () =>
         this.#publishFrame(token, c, payload as Partial<WireFrame>),
       ),
     );
+    // Catalog the db in the cold index — only on CREATE (once per session/incarnation), so this never
+    // touches the index on the per-frame hot path. Best-effort: the frame is already durable, so an index
+    // hiccup must not fail the publish (the worst case is one un-catalogued session escaping retention).
+    if (result.created) await this.#recordInIndex(token);
+    return result;
+  }
+
+  async #recordInIndex(token: string): Promise<void> {
+    try {
+      const index = await this.#getIndex();
+      if (index === null) return;
+      await index.add(this.#locator.idFor(token), this.#locator.config(token).url, Date.now());
+    } catch (e) {
+      console.warn("[sqlite] failed to catalog session in the retention index:", errorMessage(e));
+    }
+  }
+
+  /** Lazily build the cold SessionIndex from the locator's indexConfig (null if the locator has none). */
+  #getIndex(): Promise<SessionIndex | null> {
+    if (this.#indexBuild === undefined) {
+      this.#indexBuild = (async () => {
+        const cfg = this.#locator.indexConfig?.();
+        if (cfg === undefined) return null;
+        await this.#locator.ensureIndex?.();
+        const client = this.#newClient(cfg);
+        await this.#locator.prepare?.(client);
+        return new SessionIndex(client);
+      })().catch((e) => {
+        this.#indexBuild = undefined; // let a later call retry the build
+        throw e;
+      });
+    }
+    return this.#indexBuild;
   }
 
   /**
@@ -773,55 +819,83 @@ export class SqliteMultiBackend implements BrokerBackend {
   }
 
   /**
-   * Purges whole sessions (their entire database) idle longer than retainMs. Never partial-deletes a
+   * Purge whole sessions (their entire database) idle longer than retainMs. Never partial-deletes a
    * session, and never drops one with a live borrow (an active subscriber) — so replay never starts on a
-   * gap. An empty/unreadable database is treated as stale and reclaimed.
+   * gap. Uses the COLD session index when the locator provides one (cloud — scalable, resumable), else a
+   * fleet dir-scan (file — drift-free, single-box). An empty/unreadable db is treated as stale.
    */
   async sweep(retainMs: number): Promise<number> {
-    const listStored = this.#locator.listStored?.bind(this.#locator);
-    const dropStored = this.#locator.dropStored?.bind(this.#locator);
-    if (listStored === undefined || dropStored === undefined) return 0;
+    const index = await this.#getIndex();
+    return index !== null ? this.#sweepViaIndex(index, retainMs) : 0;
+  }
 
+  /** Walk the cold catalog in bounded, RESUMABLE batches (a persisted cursor that rotates through the
+   *  fleet across cron runs), probing only the current batch — the same index path for file and cloud,
+   *  so it's exercised by the file-backed tests. O(stale) per run. */
+  async #sweepViaIndex(index: SessionIndex, retainMs: number): Promise<number> {
     const cutoff = Date.now() - retainMs;
     const deadline = Date.now() + SWEEP_DEADLINE_MS;
-    // Skip sessions with a live borrow. Keyed on the connection url, which the locator guarantees equals
-    // listStored()'s url for the same db — so this works for file (`file:<path>`) and cloud (`libsql://…`).
+    const probeAuth = this.#locator.probeAuthToken?.();
     const busyUrls = new Set(this.#cache.activeTokens().map((t) => this.#locator.config(t).url));
-
+    let cursor = await index.getCursor();
     let swept = 0;
-    for (const { id, url, authToken } of await listStored()) {
-      if (Date.now() >= deadline) break;
-      if (busyUrls.has(url)) continue;
-      let stale: boolean;
-      let probe: Client | undefined;
-      try {
-        // newClient is INSIDE the try so a construction/connect throw is handled like an unreadable db
-        // (leave it for a later sweep) rather than aborting the whole sweep. Turso/libSQL has no
-        // last-activity API, so the activity signal is the db's OWN MAX(created_at) (the broker stamps
-        // every frame) — the same probe for file and cloud.
-        probe = this.#newClient(authToken !== undefined ? { url, authToken } : { url });
-        await this.#locator.prepare?.(probe); // WAL (file): read concurrently with a live writer
-        const r = await probe.execute("SELECT MAX(created_at) AS m FROM frames");
-        const m = r.rows[0]?.m;
-        stale = m === null || m === undefined ? true : Number(m) < cutoff;
-      } catch {
-        stale = false; // unreadable/locked → leave it for a later sweep
-      } finally {
-        try {
-          probe?.close();
-        } catch {
-          /* ignore */
+    for (;;) {
+      if (Date.now() >= deadline) {
+        await index.setCursor(cursor);
+        break;
+      }
+      const batch = await index.batchAfter(cursor, sqliteSweepBatch());
+      if (batch.length === 0) {
+        await index.setCursor(""); // reached the end → wrap to the start next run
+        break;
+      }
+      for (const { id, url } of batch) {
+        cursor = id;
+        if (await this.#probeAndMaybeDrop(id, url, probeAuth, cutoff, busyUrls)) {
+          await index.remove(id);
+          swept += 1;
         }
       }
-      if (stale) {
-        // Evict any idle cached client for this db FIRST, so a stale handle (open on the db we're about to
-        // drop) can't survive in the cache and serve the next access. If it raced into use, skip the drop.
-        if (this.#cache.evictByUrl(url) === "busy") continue;
-        await dropStored(id);
-        swept += 1;
-      }
+      await index.setCursor(cursor);
     }
     return swept;
+  }
+
+  /** Probe one catalogued db's own MAX(created_at) (Turso has no last-activity API); if idle and not
+   *  actively borrowed, evict its cached client and drop it. Returns true iff it was dropped. */
+  async #probeAndMaybeDrop(
+    id: string,
+    url: string,
+    authToken: string | undefined,
+    cutoff: number,
+    busyUrls: Set<string>,
+  ): Promise<boolean> {
+    if (busyUrls.has(url)) return false;
+    let stale: boolean;
+    let probe: Client | undefined;
+    try {
+      // newClient is INSIDE the try so a construction/connect throw is handled like an unreadable db
+      // (leave it for a later sweep) rather than aborting the whole sweep.
+      probe = this.#newClient(authToken !== undefined ? { url, authToken } : { url });
+      await this.#locator.prepare?.(probe); // WAL (file): read concurrently with a live writer
+      const r = await probe.execute("SELECT MAX(created_at) AS m FROM frames");
+      const m = r.rows[0]?.m;
+      stale = m === null || m === undefined ? true : Number(m) < cutoff;
+    } catch {
+      stale = false; // unreadable/locked → leave it for a later sweep
+    } finally {
+      try {
+        probe?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!stale) return false;
+    // Evict any idle cached client for this db FIRST, so a stale handle (open on the db we're about to
+    // drop) can't survive in the cache and serve the next access. If it raced into use, skip the drop.
+    if (this.#cache.evictByUrl(url) === "busy") return false;
+    await this.#locator.dropStored?.(id);
+    return true;
   }
 
   async #withConnErrorEvict<T>(token: string, c: Client, fn: () => Promise<T>): Promise<T> {

@@ -153,5 +153,12 @@ shuts down gracefully on SIGTERM/SIGINT.
   default 256), `RC_SQLITE_POLL_MS`. Each session db opens in **WAL** so reads (the poll-tail, the
   retention sweep probe) run concurrently with the writer — matching remote libSQL; writes serialize
   structurally (one writer connection per session token), not via a busy_timeout.
+- **Retention scales to an unlimited fleet via a COLD session index** — used in BOTH modes (so the same
+  engine runs locally, where it's fully testable). Turso's list-databases is un-paginated and has no
+  last-activity timestamp, so a fleet-wide list+probe can't scale. Instead a catalog db (cloud:
+  `rc-index`; file: `_index.db`) — written once on session-create, deleted on drop (never on the hot
+  publish path) — holds only `(db id, url, created_at)` (public routing metadata, no ciphertext or keys).
+  The retention cron walks it in resumable batches (`RC_SQLITE_SWEEP_BATCH`, a persisted cursor rotating
+  through the fleet across runs), probing only each batch's own `MAX(created_at)`.
 - The `local` backend keeps state in one process's memory, so it is **not** valid on a multi-instance
   / serverless deployment — it's for `pnpm dev` / `next start` and tests only.
