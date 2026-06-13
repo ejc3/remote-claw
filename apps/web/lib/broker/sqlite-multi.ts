@@ -212,6 +212,11 @@ export interface DbLocator {
   /** Drop the cold-index catalog db ITSELF (after its sessions are reclaimed), so a short-lived scope
    *  doesn't leave an empty index db behind. Used by the dev/CI cleanup; omit ⇒ no-op. */
   dropIndex?(): Promise<void>;
+  /** Delete EVERY db in this locator's scope by name (cataloged or not) — the dev/CI cleanup primitive
+   *  that also reclaims uncatalogued orphans the index sweep misses. Returns this pass's `deleted` count
+   *  and the `remaining` count re-listed after (nonzero ⇒ a live relay recreated one ⇒ loop). Cloud-only;
+   *  omit ⇒ the caller falls back to the index sweep. */
+  dropScope?(): Promise<{ deleted: number; remaining: number }>;
 }
 
 function sqliteDir(): string {

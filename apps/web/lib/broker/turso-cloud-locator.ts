@@ -230,6 +230,36 @@ export class TursoCloudDbLocator implements DbLocator {
   async dropIndex(): Promise<void> {
     await this.dropStored(this.#indexName);
   }
+
+  /** Platform-API names of every db in THIS scope (`rc-<scope>-*`: sessions, bus, and the index). The
+   *  trailing `-` in the prefix keeps `pr-abc` from matching `pr-abcd`. */
+  async #listScopeNames(): Promise<string[]> {
+    const res = await this.#fetch(this.#api("/databases"), { headers: this.#authHeader() });
+    if (!res.ok) {
+      throw new Error(`TursoCloud: list databases failed: ${res.status} ${await safeText(res)}`);
+    }
+    const body = (await res.json()) as { databases?: Array<{ Name?: string; name?: string }> };
+    const prefix = `${APP}-${this.#scope}-`;
+    return (body.databases ?? [])
+      .map((d) => d.Name ?? d.name ?? "")
+      .filter((n) => n.startsWith(prefix));
+  }
+
+  /**
+   * Delete EVERY db in this scope (`rc-<scope>-*`) via the Platform API — cataloged or NOT. This is the
+   * dev/CI cleanup primitive: unlike the cold-index sweep, it also reclaims dbs a crashed/early-frozen
+   * relay created (via ensure()) but never published/catalogued (0-frame orphans the index never lists).
+   * Returns {deleted} for this pass and {remaining} re-listed AFTER the deletes — a nonzero `remaining`
+   * means a still-live seed relay recreated a db mid-pass, so the caller should loop until it's 0 (i.e.
+   * until the relays have aged out). SCOPE-BOUNDED: it only ever names `rc-<scope>-…`, never another
+   * scope's (and the dev-seed gate keeps `scope` off `prod`).
+   */
+  async dropScope(): Promise<{ deleted: number; remaining: number }> {
+    const names = await this.#listScopeNames();
+    for (const name of names) await this.dropStored(name);
+    const remaining = await this.#listScopeNames();
+    return { deleted: names.length, remaining: remaining.length };
+  }
 }
 
 /**

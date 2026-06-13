@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ getBackend: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getBackend: vi.fn(), selectLocatorFromEnv: vi.fn() }));
 vi.mock("../../lib/broker", () => ({ getBackend: mocks.getBackend }));
+vi.mock("../../lib/broker/turso-cloud-locator", () => ({
+  selectLocatorFromEnv: mocks.selectLocatorFromEnv,
+}));
 
 import { POST } from "../../app/api/dev/sweep/route";
 
@@ -16,6 +19,7 @@ beforeEach(() => {
     delete env[k];
   }
   mocks.getBackend.mockReset();
+  mocks.selectLocatorFromEnv.mockReset();
 });
 afterEach(() => {
   for (const k of KEYS) {
@@ -37,69 +41,67 @@ function enablePreview(): void {
   env.VERCEL_URL = "preview-123.example.com";
   env.DEV_SEED_TOKEN = "seed-secret";
 }
+const URL_ = "https://preview-123.example.com/api/dev/sweep";
 
 describe("dev sweep route", () => {
-  it("404s when not enabled (no token) and never touches the backend", async () => {
-    const res = await POST(req("https://preview-123.example.com/api/dev/sweep"));
+  it("404s when not enabled (no token) and never touches the backend/locator", async () => {
+    const res = await POST(req(URL_));
     expect(res.status).toBe(404);
+    expect(mocks.selectLocatorFromEnv).not.toHaveBeenCalled();
     expect(mocks.getBackend).not.toHaveBeenCalled();
   });
 
   it("404s in production even with the matching token (cannot reap prod sessions)", async () => {
     enablePreview();
     env.VERCEL_ENV = "production";
-    const res = await POST(req("https://preview-123.example.com/api/dev/sweep", "seed-secret"));
+    const res = await POST(req(URL_, "seed-secret"));
     expect(res.status).toBe(404);
-    expect(mocks.getBackend).not.toHaveBeenCalled();
+    expect(mocks.selectLocatorFromEnv).not.toHaveBeenCalled();
   });
 
-  it("sweeps the sqlite backend with retain=0, drops its scope index, and returns the count", async () => {
+  it("cloud: deletes the whole scope by name and returns {deleted, remaining}", async () => {
     enablePreview();
-    const sweep = vi.fn().mockResolvedValue(7);
+    const dropScope = vi.fn().mockResolvedValue({ deleted: 9, remaining: 2 });
+    mocks.selectLocatorFromEnv.mockReturnValue({ dropScope });
+    const res = await POST(req(URL_, "seed-secret"));
+    expect(res.status).toBe(200);
+    // remaining:2 signals a still-live relay recreated dbs → the CI loop will call again.
+    expect(await res.json()).toEqual({ deleted: 9, remaining: 2 });
+    expect(dropScope).toHaveBeenCalledTimes(1);
+    expect(mocks.getBackend).not.toHaveBeenCalled(); // cloud path never falls back to the index sweep
+  });
+
+  it("file/local fallback (no dropScope): index sweep + drop the empty index", async () => {
+    enablePreview();
+    mocks.selectLocatorFromEnv.mockReturnValue({}); // FileDbLocator has no dropScope
+    const sweep = vi.fn().mockResolvedValue(4);
     const dropIndex = vi.fn().mockResolvedValue(undefined);
     mocks.getBackend.mockResolvedValue({ sweep, dropIndex });
-    const res = await POST(req("https://preview-123.example.com/api/dev/sweep", "seed-secret"));
+    const res = await POST(req(URL_, "seed-secret"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ swept: 7, indexDropped: true });
-    expect(mocks.getBackend).toHaveBeenCalledWith("sqlite");
-    expect(sweep).toHaveBeenCalledWith(0); // default window
-    expect(dropIndex).toHaveBeenCalledTimes(1); // cleanup also reclaims this scope's empty index db
+    expect(await res.json()).toEqual({ deleted: 4, remaining: 0, indexDropped: true });
+    expect(sweep).toHaveBeenCalledWith(0);
+    expect(dropIndex).toHaveBeenCalledTimes(1);
   });
 
-  it("a dropIndex failure does NOT mask a successful sweep (best-effort cleanup)", async () => {
+  it("fallback: a dropIndex failure does NOT mask a successful sweep (best-effort)", async () => {
     enablePreview();
-    const sweep = vi.fn().mockResolvedValue(3);
-    const dropIndex = vi.fn().mockRejectedValue(new Error("platform 503"));
-    mocks.getBackend.mockResolvedValue({ sweep, dropIndex });
-    const res = await POST(req("https://preview-123.example.com/api/dev/sweep", "seed-secret"));
-    expect(res.status).toBe(200); // the sweep reclaimed the dbs — still a success
-    expect(await res.json()).toEqual({ swept: 3, indexDropped: false });
-  });
-
-  it("honours a numeric ?retain window and ignores a non-numeric one (→ 0, never NaN)", async () => {
-    enablePreview();
-    const sweep = vi.fn().mockResolvedValue(0);
-    mocks.getBackend.mockResolvedValue({ sweep });
-
-    await POST(req("https://preview-123.example.com/api/dev/sweep?retain=60000", "seed-secret"));
-    expect(sweep).toHaveBeenLastCalledWith(60_000);
-
-    await POST(req("https://preview-123.example.com/api/dev/sweep?retain=7d", "seed-secret"));
-    expect(sweep).toHaveBeenLastCalledWith(0); // non-numeric → 0, not NaN
-  });
-
-  it("returns swept:0 when the selected backend has no sweep hook", async () => {
-    enablePreview();
-    mocks.getBackend.mockResolvedValue({}); // e.g. a non-sqlite backend
-    const res = await POST(req("https://preview-123.example.com/api/dev/sweep", "seed-secret"));
+    mocks.selectLocatorFromEnv.mockReturnValue({});
+    mocks.getBackend.mockResolvedValue({
+      sweep: vi.fn().mockResolvedValue(3),
+      dropIndex: vi.fn().mockRejectedValue(new Error("platform 503")),
+    });
+    const res = await POST(req(URL_, "seed-secret"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ swept: 0 });
+    expect(await res.json()).toEqual({ deleted: 3, remaining: 0, indexDropped: false });
   });
 
-  it("returns 500 when the sweep itself fails", async () => {
+  it("returns 500 when the scope delete itself fails", async () => {
     enablePreview();
-    mocks.getBackend.mockResolvedValue({ sweep: vi.fn().mockRejectedValue(new Error("boom")) });
-    const res = await POST(req("https://preview-123.example.com/api/dev/sweep", "seed-secret"));
+    mocks.selectLocatorFromEnv.mockReturnValue({
+      dropScope: vi.fn().mockRejectedValue(new Error("boom")),
+    });
+    const res = await POST(req(URL_, "seed-secret"));
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "boom" });
   });

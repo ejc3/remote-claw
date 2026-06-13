@@ -211,6 +211,51 @@ describe("TursoCloudDbLocator", () => {
     expect(del?.url).toContain("/databases/rc-pr-a1b2c3d-index");
   });
 
+  it("dropScope deletes EVERY db in the scope by name (incl. uncatalogued) but never another scope's", async () => {
+    // The Platform-API list returns dbs from THIS scope, a look-alike scope, prod, and the index. Only
+    // this scope's (`rc-pr-a1b2c3d-*`, including its index) must be deleted — the trailing `-` in the
+    // prefix keeps `pr-a1b2c3d` from matching `pr-a1b2c3dx`, and prod (`rc-prod-*`) is untouched.
+    let present = [
+      "rc-pr-a1b2c3d-s-1111111111111111",
+      "rc-pr-a1b2c3d-b-2222222222222222",
+      "rc-pr-a1b2c3d-s-3333333333333333", // a 0-frame orphan the index sweep would miss
+      "rc-pr-a1b2c3d-index",
+      "rc-pr-a1b2c3dx-s-4444444444444444", // look-alike scope — must NOT be deleted
+      "rc-prod-s-5555555555555555", // production — must NOT be deleted
+    ];
+    const deleted: string[] = [];
+    const fetchImpl = (async (input: unknown, init?: { method?: string }) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "GET" && url.endsWith("/databases")) {
+        return new Response(JSON.stringify({ databases: present.map((Name) => ({ Name })) }), {
+          status: 200,
+        });
+      }
+      if (method === "DELETE") {
+        const name = decodeURIComponent(url.split("/databases/")[1] ?? "");
+        deleted.push(name);
+        present = present.filter((n) => n !== name);
+        return new Response("{}", { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const loc = new TursoCloudDbLocator({ ...opts(fetchImpl), scope: "pr-a1b2c3d" });
+    const r = await loc.dropScope();
+    expect(deleted.sort()).toEqual(
+      [
+        "rc-pr-a1b2c3d-b-2222222222222222",
+        "rc-pr-a1b2c3d-index",
+        "rc-pr-a1b2c3d-s-1111111111111111",
+        "rc-pr-a1b2c3d-s-3333333333333333",
+      ].sort(),
+    );
+    expect(deleted).not.toContain("rc-pr-a1b2c3dx-s-4444444444444444"); // look-alike scope safe
+    expect(deleted).not.toContain("rc-prod-s-5555555555555555"); // production safe
+    expect(r).toEqual({ deleted: 4, remaining: 0 }); // re-list after deletes → scope empty
+  });
+
   it("ensureIndex creates the rc-<scope>-index db (idempotent: a 409 conflict is success)", async () => {
     const { fetchImpl, calls } = makeFetch((_url, method) =>
       method === "POST" ? { status: 409, body: "exists" } : { status: 404 },

@@ -103,18 +103,28 @@ jobs:
       - name: Reclaim the sqlite e2e's Turso Cloud dbs (clean up after itself)
         if: ${{ always() && env.DEV_SEED_TOKEN != '' && env.TURSO_CLOUD_E2E != '' && env.WEB_E2E_URL != '' }}
         run: |
-          # Wait out the seeded sessions' lifetime first. /api/dev/seed runs each session's HostRcRelay
-          # for SESSION_TTL_MS (60s), re-announcing presence to its bus channel on idle heartbeats the
-          # whole time — so a sweep run immediately would race LIVE relays that just recreate any db it
-          # drops (until their TTL abort). Sleeping past the TTL means every relay is dead and every db is
-          # idle, so the single sweep below reclaims them all and nothing repopulates. (Must exceed the
-          # seed route's SESSION_TTL_MS.)
-          echo "Waiting out the seed session TTL (65s) so the sweep doesn't race live relays…"
-          sleep 65
-          echo "Sweeping per-session Turso Cloud dbs created by the sqlite e2e…"
-          code=$(curl -sS -o /tmp/sweep.json -w '%{http_code}' -X POST \
-            "${WEB_E2E_URL%/}/api/dev/sweep?retain=0" \
-            -H "x-dev-seed-token: ${DEV_SEED_TOKEN}" \
-            -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" || echo "000")
-          echo "sweep HTTP ${code}: $(cat /tmp/sweep.json 2>/dev/null)"
-          [ "$code" = "200" ] || echo "::warning::dev/sweep cleanup did not return 200 (dbs will linger until manually pruned)"
+          # Delete this preview scope's dbs by name (POST /api/dev/sweep → locator.dropScope), LOOPING
+          # until the scope stays empty. A single pass isn't enough: /api/dev/seed keeps each session's
+          # HostRcRelay alive for SESSION_TTL_MS (60s), re-announcing to its bus channel — so a still-live
+          # relay recreates a db right after we delete it. The route returns `remaining` (re-listed after
+          # its deletes); we loop (~15s apart) until remaining=0 across a pass, i.e. until the relays have
+          # aged out. Bounded to ~4 min so a stuck relay can't hang the job. Best-effort: a non-200 or
+          # non-convergence logs a ::warning:: rather than failing the run.
+          ok=""
+          for i in $(seq 1 16); do
+            code=$(curl -sS -o /tmp/sweep.json -w '%{http_code}' -X POST \
+              "${WEB_E2E_URL%/}/api/dev/sweep" \
+              -H "x-dev-seed-token: ${DEV_SEED_TOKEN}" \
+              -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" || echo "000")
+            body=$(cat /tmp/sweep.json 2>/dev/null)
+            echo "pass $i — HTTP ${code}: ${body}"
+            if [ "$code" = "200" ]; then
+              deleted=$(printf '%s' "$body" | sed -n 's/.*"deleted":\([0-9]*\).*/\1/p')
+              remaining=$(printf '%s' "$body" | sed -n 's/.*"remaining":\([0-9]*\).*/\1/p')
+              # Converged once a pass deletes nothing AND leaves nothing (relays dead, scope empty).
+              if [ "${remaining:-1}" = "0" ] && [ "${deleted:-1}" = "0" ]; then ok="1"; break; fi
+            fi
+            sleep 15
+          done
+          [ -n "$ok" ] && echo "✅ scope fully reclaimed" || \
+            echo "::warning::dev/sweep did not converge to an empty scope (dbs may linger until manually pruned)"
