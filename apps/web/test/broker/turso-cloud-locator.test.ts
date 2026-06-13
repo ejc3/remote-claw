@@ -109,6 +109,54 @@ describe("TursoCloudDbLocator", () => {
     const broken = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 500 })).fetchImpl));
     await expect(broken.exists(TOKEN_A)).rejects.toThrow(/get database/);
   });
+
+  it("listStored returns only our rc- dbs, with a url that matches config()'s construction", async () => {
+    const { fetchImpl } = makeFetch((url, method) =>
+      method === "GET" && url.includes("/databases?group=")
+        ? {
+            status: 200,
+            body: JSON.stringify({
+              databases: [{ Name: "rc-aaa" }, { Name: "rc-bbb" }, { Name: "someone-elses-db" }],
+            }),
+          }
+        : { status: 404 },
+    );
+    const loc = new TursoCloudDbLocator(opts(fetchImpl));
+    const stored = await loc.listStored();
+    expect(stored.map((s) => s.id)).toEqual(["rc-aaa", "rc-bbb"]); // non-rc db is never touched
+    expect(stored[0]).toEqual({
+      id: "rc-aaa",
+      url: "libsql://rc-aaa-myorg.turso.io",
+      authToken: "group-tok",
+    });
+    // The sweep keys its busy-set on config().url, so listStored's url must be built the same way.
+    expect(loc.config(TOKEN_A).url).toMatch(/^libsql:\/\/rc-[0-9a-f]{32}-myorg\.turso\.io$/);
+  });
+
+  it("listStored throws on a list failure", async () => {
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 500 })).fetchImpl));
+    await expect(loc.listStored()).rejects.toThrow(/list databases/);
+  });
+
+  it("dropStored DELETEs the db and tolerates a 404 (already gone)", async () => {
+    const { fetchImpl, calls } = makeFetch((_url, method) => ({
+      status: method === "DELETE" ? 200 : 404,
+      body: "{}",
+    }));
+    const loc = new TursoCloudDbLocator(opts(fetchImpl));
+    await expect(loc.dropStored("rc-aaa")).resolves.toBeUndefined();
+    expect(calls.find((c) => c.method === "DELETE")?.url).toContain("/databases/rc-aaa");
+
+    const gone = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 404 })).fetchImpl));
+    await expect(gone.dropStored("rc-gone")).resolves.toBeUndefined();
+  });
+
+  it("dropStored throws on a hard delete failure", async () => {
+    const loc = new TursoCloudDbLocator(
+      opts(makeFetch(() => ({ status: 500, body: "boom" })).fetchImpl),
+    );
+    await expect(loc.dropStored("rc-x")).rejects.toThrow(/delete database/);
+  });
 });
 
 describe("selectLocatorFromEnv", () => {

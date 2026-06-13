@@ -111,9 +111,48 @@ export class TursoCloudDbLocator implements DbLocator {
     );
   }
 
-  // NOTE: sweep (listPaths/dropPath) is intentionally omitted for cloud — retention of per-session Turso
-  // databases is a follow-up (Platform API list + delete by age, or a Turso DB-level TTL). With these
-  // omitted, SqliteMultiBackend.sweep() returns 0 (a no-op) rather than dropping anything.
+  /**
+   * Retention support. Turso's Platform API has NO last-activity timestamp (list/usage give cumulative
+   * metrics only), so the sweep uses each db's OWN MAX(created_at) as the idle signal — listStored just
+   * enumerates the candidate dbs, the backend probes each. We restrict to OUR `rc-` databases so the
+   * sweep can never delete another db that happens to share the group. The connection `url` is built the
+   * SAME way config() builds it (NOT the API-returned Hostname) so the sweep's busy-set/eviction key
+   * matches a live session's cached client exactly.
+   */
+  async listStored(): Promise<Array<{ id: string; url: string; authToken: string }>> {
+    const res = await this.#fetch(
+      this.#api(`/databases?group=${encodeURIComponent(this.#o.group)}`),
+      { headers: this.#authHeader() },
+    );
+    if (!res.ok) {
+      throw new Error(`TursoCloud: list databases failed: ${res.status} ${await safeText(res)}`);
+    }
+    const body = (await res.json()) as { databases?: Array<{ Name?: unknown }> };
+    const out: Array<{ id: string; url: string; authToken: string }> = [];
+    for (const db of body.databases ?? []) {
+      const name = db.Name;
+      if (typeof name !== "string" || !name.startsWith("rc-")) continue; // only our per-session dbs
+      out.push({
+        id: name,
+        url: `libsql://${name}-${this.#o.org}.turso.io`,
+        authToken: this.#o.authToken,
+      });
+    }
+    return out;
+  }
+
+  async dropStored(name: string): Promise<void> {
+    const res = await this.#fetch(this.#api(`/databases/${encodeURIComponent(name)}`), {
+      method: "DELETE",
+      headers: this.#authHeader(),
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(
+        `TursoCloud: delete database "${name}" failed: ${res.status} ${await safeText(res)}`,
+      );
+    }
+    this.#known.delete(name); // forget it so a later publish re-provisions a fresh db
+  }
 }
 
 /**

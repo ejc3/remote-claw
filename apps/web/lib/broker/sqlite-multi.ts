@@ -187,12 +187,13 @@ export interface DbLocator {
   prepare?(client: Client): Promise<void>;
   /** Whether the token's database already exists. Read paths must NOT create one (subscribe-or-null). */
   exists(token: string): Promise<boolean>;
-  /** All database paths/ids in the store (for the retention sweep); omit if the store can't enumerate. */
-  listPaths?(): Promise<string[]>;
-  /** Connection config for a raw store path (sweep probe). */
-  configForPath?(path: string): { url: string; authToken?: string };
-  /** Delete a database by store path, reclaiming its space (retention). */
-  dropPath?(path: string): Promise<void>;
+  /** Enumerate stored databases for the retention sweep (omit if the store can't enumerate). Each entry
+   *  carries a `url`(+`authToken`) to connect a probe and an opaque `id` drop handle — keeping the same
+   *  `url` the sweep's busy-set/eviction key on, so file (`file:<path>`) and cloud (`libsql://…`) share
+   *  one engine. The connection `url` MUST equal config()'s for the same db, so busy detection matches. */
+  listStored?(): Promise<Array<{ id: string; url: string; authToken?: string }>>;
+  /** Delete a stored database by its `id` (from listStored), reclaiming its space (retention). */
+  dropStored?(id: string): Promise<void>;
 }
 
 function sqliteDir(): string {
@@ -227,10 +228,6 @@ export class FileDbLocator implements DbLocator {
     return { url: `file:${this.#path(token)}` };
   }
 
-  configForPath(path: string): { url: string } {
-    return { url: `file:${path}` };
-  }
-
   // No-op: opening a `file:` URL creates the database file, so there is nothing to pre-provision.
   async ensure(_token: string): Promise<void> {}
 
@@ -250,13 +247,16 @@ export class FileDbLocator implements DbLocator {
     return existsSync(this.#path(token));
   }
 
-  async listPaths(): Promise<string[]> {
+  async listStored(): Promise<Array<{ id: string; url: string }>> {
     return readdirSync(this.#dir)
       .filter((f) => f.endsWith(".db"))
-      .map((f) => join(this.#dir, f));
+      .map((f) => {
+        const p = join(this.#dir, f);
+        return { id: p, url: `file:${p}` }; // id = path; url matches config()'s `file:<path>`
+      });
   }
 
-  async dropPath(path: string): Promise<void> {
+  async dropStored(path: string): Promise<void> {
     // Remove the database and any SQLite sidecars (WAL/SHM/rollback journal). Best-effort.
     for (const p of [path, `${path}-wal`, `${path}-shm`, `${path}-journal`]) {
       try {
@@ -778,28 +778,29 @@ export class SqliteMultiBackend implements BrokerBackend {
    * gap. An empty/unreadable database is treated as stale and reclaimed.
    */
   async sweep(retainMs: number): Promise<number> {
-    const listPaths = this.#locator.listPaths?.bind(this.#locator);
-    const dropPath = this.#locator.dropPath?.bind(this.#locator);
-    const configForPath = this.#locator.configForPath?.bind(this.#locator);
-    if (listPaths === undefined || dropPath === undefined || configForPath === undefined) return 0;
+    const listStored = this.#locator.listStored?.bind(this.#locator);
+    const dropStored = this.#locator.dropStored?.bind(this.#locator);
+    if (listStored === undefined || dropStored === undefined) return 0;
 
     const cutoff = Date.now() - retainMs;
     const deadline = Date.now() + SWEEP_DEADLINE_MS;
-    const busy = new Set(
-      this.#cache.activeTokens().map((t) => this.#locator.config(t).url.replace(/^file:/, "")),
-    );
+    // Skip sessions with a live borrow. Keyed on the connection url, which the locator guarantees equals
+    // listStored()'s url for the same db — so this works for file (`file:<path>`) and cloud (`libsql://…`).
+    const busyUrls = new Set(this.#cache.activeTokens().map((t) => this.#locator.config(t).url));
 
     let swept = 0;
-    for (const path of await listPaths()) {
+    for (const { id, url, authToken } of await listStored()) {
       if (Date.now() >= deadline) break;
-      if (busy.has(path)) continue;
+      if (busyUrls.has(url)) continue;
       let stale: boolean;
       let probe: Client | undefined;
       try {
-        // createClient is INSIDE the try so a construction throw is handled like an unreadable db
-        // (leave it for a later sweep) rather than aborting the whole sweep.
-        probe = this.#newClient(configForPath(path));
-        await this.#locator.prepare?.(probe); // WAL: read concurrently with a live writer
+        // newClient is INSIDE the try so a construction/connect throw is handled like an unreadable db
+        // (leave it for a later sweep) rather than aborting the whole sweep. Turso/libSQL has no
+        // last-activity API, so the activity signal is the db's OWN MAX(created_at) (the broker stamps
+        // every frame) — the same probe for file and cloud.
+        probe = this.#newClient(authToken !== undefined ? { url, authToken } : { url });
+        await this.#locator.prepare?.(probe); // WAL (file): read concurrently with a live writer
         const r = await probe.execute("SELECT MAX(created_at) AS m FROM frames");
         const m = r.rows[0]?.m;
         stale = m === null || m === undefined ? true : Number(m) < cutoff;
@@ -813,11 +814,10 @@ export class SqliteMultiBackend implements BrokerBackend {
         }
       }
       if (stale) {
-        // Evict any idle cached client for this db FIRST, so a stale handle (open on the file we're about
-        // to unlink) can't survive in the cache and serve the next access. If it raced into use, skip the
-        // drop (it's no longer idle/stale).
-        if (this.#cache.evictByUrl(configForPath(path).url) === "busy") continue;
-        await dropPath(path);
+        // Evict any idle cached client for this db FIRST, so a stale handle (open on the db we're about to
+        // drop) can't survive in the cache and serve the next access. If it raced into use, skip the drop.
+        if (this.#cache.evictByUrl(url) === "busy") continue;
+        await dropStored(id);
         swept += 1;
       }
     }
