@@ -7,3 +7,5 @@ next-env.d.ts
 .workflow-vitest
 .workflow-data
 /.swc/
+# Per-session SQLite backend (BROKER_BACKEND=sqlite): one local libSQL database per channel token.
+.rc-sqlite/

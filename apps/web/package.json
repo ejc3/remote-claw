@@ -5,7 +5,7 @@
   "type": "module",
   "description": "remote-claw broker (P3): the per-identity bus + per-session ciphertext relay on Vercel Workflows. Two routes (POST /api/relay, GET /api/stream); no store.",
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "BROKER_BACKEND=sqlite next dev --webpack",
     "build": "next build --webpack",
     "clean:wdk": "rm -rf .workflow-data .workflow-vitest",
     "test": "vitest",

@@ -13,12 +13,13 @@ import { VercelBackend } from "./vercel";
 //   "local"            → in-process fake broker (next dev / tests / Playwright e2e)
 //   "temporal"         → Temporal durable workflows (needs a server + the relayChannel worker)
 //   "turso"            → durable libSQL log (one shared frames table; survives a wrapper restart)
+//   "sqlite"           → per-session libSQL: ONE database per channel token (the primary dev backend)
 //
 // Each backend is cached per-name (process-wide), so the LocalBackend's in-memory channel map and the
 // Temporal connection persist across requests. getBackend() is async only so the Temporal adapter can
 // be DYNAMICALLY imported — keeping the heavy @temporalio/client out of the bundle unless selected.
 
-const KNOWN = new Set(["vercel", "local", "temporal", "turso"]);
+const KNOWN = new Set(["vercel", "local", "temporal", "turso", "sqlite"]);
 
 // The cache lives on globalThis, NOT a module-level binding: Next can give the relay route and the
 // stream route SEPARATE instances of this module (per-route bundles) and re-import it on HMR — either
@@ -35,14 +36,17 @@ export function isKnownBackend(name: string): boolean {
   return KNOWN.has(name);
 }
 
-// Durable, shared backends are safe to pick PER REQUEST. `local` is process-memory, so picking it
-// per-request on a multi-instance / serverless deploy would land publish + subscribe on different
-// instances' maps. So `local` is only honoured when it's the deployment's OWN default (i.e. dev /
-// `next start` with BROKER_BACKEND=local) — never as a header/param override on a vercel/temporal
-// deployment.
+// Durable, SHARED backends are safe to pick PER REQUEST. `local` (process-memory) and `sqlite` (a
+// per-instance local disk in file-mode) are NOT shared across instances, so picking either per-request
+// on a multi-instance / serverless deploy would land publish + subscribe on different instances. So
+// they are only honoured when one is the deployment's OWN default (i.e. dev / `next start` with
+// BROKER_BACKEND=local|sqlite) — never as a header/param override on a vercel/temporal deployment. (A
+// future Turso-Cloud sqlite locator IS shared and would join this set.)
 const REQUESTABLE = new Set(["vercel", "temporal", "turso"]);
 
-/** True if `name` may be chosen by an incoming request's selector (header / ?backend=). */
+/** True if `name` may be chosen by an incoming request's selector (header / ?backend=). NOTE: `sqlite`
+ *  and `local` are deliberately NOT in REQUESTABLE — they are honoured only when one is the deployment's
+ *  own BROKER_BACKEND default, so a per-request override can't split publish/subscribe across instances. */
 export function isRequestableBackend(name: string): boolean {
   return REQUESTABLE.has(name) || name === (process.env.BROKER_BACKEND ?? "vercel");
 }
@@ -85,8 +89,19 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
       backend = new TursoBackend();
       break;
     }
+    case "sqlite": {
+      // Per-session libSQL — ONE database per channel token (BROKER_BACKEND=sqlite). Dynamic-imported
+      // like turso so @libsql/client + node:fs stay out of the bundle unless selected. File-mode is
+      // single-instance (per-instance disk), so like `local` it is only honoured as the deployment's
+      // OWN default, never a per-request override (see REQUESTABLE below).
+      const { SqliteMultiBackend } = await import("./sqlite-multi");
+      backend = new SqliteMultiBackend();
+      break;
+    }
     default:
-      throw new Error(`unknown backend "${name}" (expected: vercel | local | temporal | turso)`);
+      throw new Error(
+        `unknown backend "${name}" (expected: vercel | local | temporal | turso | sqlite)`,
+      );
   }
   cache.set(name, backend);
   return backend;
