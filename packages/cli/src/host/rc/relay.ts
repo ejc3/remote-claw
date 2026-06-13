@@ -921,7 +921,13 @@ export class HostRcRelay {
     await this.#fatalOnThrow(() =>
       this.#emit("user", seq, `user-${seq}`, `📎 ${name}${caption ? `\n${caption}` : ""}`),
     );
-    const prompt = `${caption || "Please look at this image."}\n\n[Attached image "${name}" saved at ${path} — use the Read tool to view it.]`;
+    // Hand claude the file the SAME way real Anthropic hands an app-uploaded image to the worker: it
+    // resolves the upload to a local file and rewrites the user message to `@"<abs-path>" <text>`
+    // (captured live via --rc-trace — the worker received `@"/…/uploads/…/IMG.jpeg" …What do you see?`),
+    // which claude attaches NATIVELY as an image block. We do the equivalent end-to-end ourselves: the
+    // decoded bytes are already on disk above, so we reference that path with the same `@"…"` syntax
+    // (quoted → tolerates spaces) instead of asking claude to call the Read tool.
+    const prompt = `@"${path}" ${caption || "What do you see in this image?"}`;
     this.#session.pushUserInput(prompt);
   }
 

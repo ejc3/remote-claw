@@ -562,6 +562,7 @@ describe("HostRcRelay attachments (#44)", () => {
       session,
       attachmentsDir: dir,
     });
+    const pushUser = vi.spyOn(session, "pushUserInput");
     const bytes = Buffer.from("PNGDATA-καλημέρα-\x00\x01\x02");
     client.queueInbound(
       inFrame(
@@ -595,6 +596,11 @@ describe("HostRcRelay attachments (#44)", () => {
     const echo = client.content.find((p) => p.recordKind === "user");
     expect(echo?.text).toContain("📎 IMG_1.png");
     expect(echo?.text).toContain("look at this");
+    // claude is handed the on-disk file via the native `@"<abs-path>"` reference (matches real
+    // Anthropic's upload resolution — frame 224), not a "use the Read tool" instruction.
+    const injected = (pushUser.mock.calls.at(-1)?.[0] as string | undefined) ?? "";
+    expect(injected).toMatch(/^@"[^"]*-IMG_1\.png" look at this$/);
+    expect(injected).toContain(`@"${join(dir, written)}"`);
   });
 
   it("rewrites the on-disk extension to match the mime, not the original name", async () => {
