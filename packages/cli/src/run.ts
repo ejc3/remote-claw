@@ -162,7 +162,7 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     // (driver.ts) and land in follow-up PRs; until then they validate-and-explain rather than misbehave.
     const driver = (
       (typeof rc["rc-driver"] === "string" ? rc["rc-driver"] : "").trim() ||
-      process.env.RC_DRIVER ||
+      (process.env.RC_DRIVER ?? "").trim() ||
       "mitm"
     ).toLowerCase();
     if (driver === "mitm") {

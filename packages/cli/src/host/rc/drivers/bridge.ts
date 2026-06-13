@@ -49,7 +49,13 @@ export function bridgeSession(a: BridgeArgs): Promise<void> {
   // died while the harness keeps running. The RETURNED promise lets a driver await teardown / observe
   // the end; the `relays` set still tracks it for the launcher's final-flush wait.
   const served = relay.serve(a.signal).catch((e: unknown) => {
-    a.tracer.debug("bridge: relay serve ended", { session: a.session.id, error: String(e) });
+    // The catch MUST stay no-throw (the prior inline code used `() => {}`): a logging sink that throws
+    // — e.g. a closed stderr fd — must not convert a handled relay error into an unhandled rejection.
+    try {
+      a.tracer.debug("bridge: relay serve ended", { session: a.session.id, error: String(e) });
+    } catch {
+      /* logging must never throw */
+    }
   });
   a.relays.add(served);
   void served.finally(() => a.relays.delete(served));
