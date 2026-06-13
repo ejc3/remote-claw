@@ -222,18 +222,31 @@ export class Session {
 
   /**
    * Answer a worker `can_use_tool` (the permission grant path, §17.4). A plain allow/deny sends
-   * `response:{behavior}`. An AskUserQuestion answer (#42) additionally carries `toolUseID` and
-   * `updatedInput:{answers}` — the exact shape real claude expects (captured via --rc-trace):
-   * `response:{behavior:"allow", toolUseID, updatedInput:{answers:{"<question>":"<choice>"}}}`.
+   * `response:{behavior}`. An AskUserQuestion answer (#42) additionally carries `toolUseID` and an
+   * `updatedInput` that REPLACES the tool input — and real claude's AskUserQuestion tool runs
+   * `call({questions, answers})`, so updatedInput MUST carry BOTH the original `questions` array and the
+   * `answers` ({"<questionText>":"<choice>"}). Omitting `questions` makes claude evaluate `q.map` on
+   * undefined → "undefined is not an object (evaluating 'q.map')". Verified stable in claude 2.1.76
+   * (Mar) … 2.1.177 (Jun): `async call({questions:A, answers:q={}, …}){return{data:{questions:A,answers:q,…}}}`.
    */
   pushControlResponse(
     requestId: string,
     behavior: "allow" | "deny" = "allow",
-    extra?: { toolUseId?: string; answers?: Record<string, string | string[]> },
+    extra?: {
+      toolUseId?: string;
+      answers?: Record<string, string | string[]>;
+      questions?: unknown;
+    },
   ): RcEvent {
     const response: Record<string, unknown> = { behavior };
     if (extra?.toolUseId) response.toolUseID = extra.toolUseId;
-    if (extra?.answers) response.updatedInput = { answers: extra.answers };
+    if (extra?.answers) {
+      // Echo the original questions alongside the answers — claude's tool call() destructures both.
+      response.updatedInput =
+        extra.questions !== undefined
+          ? { questions: extra.questions, answers: extra.answers }
+          : { answers: extra.answers };
+    }
     return this.#pushDownstream("control_response", {
       type: "control_response",
       response: { subtype: "success", request_id: requestId, response },
