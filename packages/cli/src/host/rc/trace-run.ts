@@ -65,6 +65,13 @@ export async function runRcTrace(opts: RcTraceOptions): Promise<number> {
   // Defense-in-depth (same as runRcLaunch): strip host-only secrets the spawned child never needs.
   delete env.REMOTE_CLAW_SECRET_FILE;
   delete env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  // Same as runRcLaunch: scrub the LAUNCHING claude's session identity so our spawned `claude` is a
+  // fresh, independent session — not a stub bridged to the launcher. Critical in trace mode: a stub
+  // (CLAUDE_CODE_CHILD_SESSION set) bridges to the parent instead of establishing its OWN bridge with
+  // Anthropic, so the session never registers a bridgeSessionId and the native/mobile app can't drive
+  // it. Outside a claude session these are unset (no-op).
+  delete env.CLAUDE_CODE_CHILD_SESSION;
+  delete env.CLAUDE_CODE_SESSION_ID;
 
   try {
     if (opts.spawnClaude) {
