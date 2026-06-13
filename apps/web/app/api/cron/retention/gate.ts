@@ -12,11 +12,19 @@ export function retentionMs(): number {
   return DEFAULT_RETENTION_MS;
 }
 
-/** True when this deployment's durable backend is the per-session sqlite backend — i.e. there is a
- *  per-session store for the retention sweep to operate on. Both storage modes sweep idle session dbs by
- *  walking a COLD session index in resumable batches (file: a local `_index.db`; cloud: an `rc-index`
- *  Turso db) and dropping the idle ones (each db's own MAX(created_at) is the idle signal — Turso exposes
- *  no last-activity timestamp). */
+/** True when this deployment can hold per-session sqlite dbs the retention sweep must reclaim. NOT just
+ *  when sqlite is the DEFAULT: `sqlite` is per-request selectable (REQUESTABLE), so a vercel/temporal
+ *  -default deployment with Turso Cloud creds still provisions real per-session cloud dbs via
+ *  `?backend=sqlite` — those must be swept too, or they grow unbounded. So: sqlite is the default, OR the
+ *  Turso Cloud creds are present (mirrors the drain gate's "default OR store-configured" shape). Both
+ *  storage modes then sweep by walking a COLD session index in resumable batches (file: a local
+ *  `_index.db`; cloud: an `rc-index` Turso db), dropping idle dbs by each db's own MAX(created_at). */
 export function sqliteConfigured(): boolean {
-  return process.env.BROKER_BACKEND?.trim() === "sqlite";
+  if (process.env.BROKER_BACKEND?.trim() === "sqlite") return true;
+  return Boolean(
+    process.env.TURSO_API_TOKEN?.trim() &&
+      process.env.TURSO_ORG?.trim() &&
+      process.env.TURSO_GROUP?.trim() &&
+      process.env.TURSO_AUTH_TOKEN?.trim(),
+  );
 }

@@ -70,6 +70,13 @@ function isConnectionLevelLibsqlError(client: Client, e: unknown): boolean {
   return code !== undefined && CONNECTION_LIBSQL_CODES.has(code);
 }
 
+/** Connection-level by error code only (no client handle) — for the index client, which the backend
+ *  doesn't hold directly; lets it drop+rebuild a dead index connection instead of stalling retention. */
+function isConnLevelLibsqlErrorByCode(e: unknown): boolean {
+  const code = errorCode(e);
+  return code !== undefined && CONNECTION_LIBSQL_CODES.has(code);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -565,6 +572,10 @@ export class SqliteMultiBackend implements BrokerBackend {
       if (index === null) return;
       await index.add(this.#locator.idFor(token), this.#locator.config(token).url, Date.now());
     } catch (e) {
+      // Best-effort: the frame is already durable, so an index hiccup must not fail the publish. But if
+      // the index CONNECTION died, drop the cached build so the next call reconnects (else every later
+      // catalog + the sweep would reuse a dead client and retention would stall).
+      if (isConnLevelLibsqlErrorByCode(e)) this.#indexBuild = undefined;
       console.warn("[sqlite] failed to catalog session in the retention index:", errorMessage(e));
     }
   }
@@ -839,24 +850,40 @@ export class SqliteMultiBackend implements BrokerBackend {
     const busyUrls = new Set(this.#cache.activeTokens().map((t) => this.#locator.config(t).url));
     let cursor = await index.getCursor();
     let swept = 0;
-    for (;;) {
-      if (Date.now() >= deadline) {
-        await index.setCursor(cursor);
-        break;
-      }
-      const batch = await index.batchAfter(cursor, sqliteSweepBatch());
-      if (batch.length === 0) {
-        await index.setCursor(""); // reached the end → wrap to the start next run
-        break;
-      }
-      for (const { id, url } of batch) {
-        cursor = id;
-        if (await this.#probeAndMaybeDrop(id, url, probeAuth, cutoff, busyUrls)) {
-          await index.remove(id);
-          swept += 1;
+    try {
+      for (;;) {
+        if (Date.now() >= deadline) break;
+        const batch = await index.batchAfter(cursor, sqliteSweepBatch());
+        if (batch.length === 0) {
+          await index.setCursor(""); // reached the end → wrap to the start next run
+          break;
         }
+        for (const { id, url } of batch) {
+          // Deadline check is PER ITEM: each cloud probe+drop is up to two network round-trips, so a
+          // 200-item batch could blow past the route maxDuration and be killed mid-batch (losing the
+          // cursor advance). Persist progress and stop cleanly instead.
+          if (Date.now() >= deadline) {
+            await index.setCursor(cursor);
+            return swept;
+          }
+          cursor = id;
+          if (await this.#probeAndMaybeDrop(id, url, probeAuth, cutoff, busyUrls)) {
+            await index.remove(id);
+            swept += 1;
+          }
+        }
+        await index.setCursor(cursor);
       }
-      await index.setCursor(cursor);
+    } catch (e) {
+      // A dead index connection must not stall retention forever: drop the cached build so the next cron
+      // run reconnects. Persist progress so we resume rather than re-probe from the top.
+      if (isConnLevelLibsqlErrorByCode(e)) this.#indexBuild = undefined;
+      try {
+        await index.setCursor(cursor);
+      } catch {
+        /* index is down; cursor will resume from its last persisted value */
+      }
+      throw e;
     }
     return swept;
   }
@@ -871,7 +898,26 @@ export class SqliteMultiBackend implements BrokerBackend {
     busyUrls: Set<string>,
   ): Promise<boolean> {
     if (busyUrls.has(url)) return false;
-    let stale: boolean;
+    const first = await this.#probeStale(url, authToken, cutoff);
+    if (!first.ok || !first.stale) return false;
+    // Evict any idle cached client FIRST, so any NEW publish must re-acquire (re-create) a fresh client —
+    // and skip the drop if a live borrow raced in (busy). THEN RE-PROBE: a frame that landed after the
+    // first read would bump MAX(created_at) past the cutoff, so we must NOT destroy a session that just
+    // came back. Only drop if it is STILL stale on the second read (TOCTOU data-loss guard — the residual
+    // window is just the two awaits between this re-probe and the drop).
+    if (this.#cache.evictByUrl(url) === "busy") return false;
+    const second = await this.#probeStale(url, authToken, cutoff);
+    if (!second.ok || !second.stale) return false;
+    await this.#locator.dropStored?.(id);
+    return true;
+  }
+
+  /** Read a db's MAX(created_at) and decide staleness. `ok:false` (unreadable/connect error) ⇒ never drop. */
+  async #probeStale(
+    url: string,
+    authToken: string | undefined,
+    cutoff: number,
+  ): Promise<{ ok: boolean; stale: boolean }> {
     let probe: Client | undefined;
     try {
       // newClient is INSIDE the try so a construction/connect throw is handled like an unreadable db
@@ -880,9 +926,9 @@ export class SqliteMultiBackend implements BrokerBackend {
       await this.#locator.prepare?.(probe); // WAL (file): read concurrently with a live writer
       const r = await probe.execute("SELECT MAX(created_at) AS m FROM frames");
       const m = r.rows[0]?.m;
-      stale = m === null || m === undefined ? true : Number(m) < cutoff;
+      return { ok: true, stale: m === null || m === undefined ? true : Number(m) < cutoff };
     } catch {
-      stale = false; // unreadable/locked → leave it for a later sweep
+      return { ok: false, stale: false }; // unreadable/locked → leave it for a later sweep
     } finally {
       try {
         probe?.close();
@@ -890,12 +936,6 @@ export class SqliteMultiBackend implements BrokerBackend {
         /* ignore */
       }
     }
-    if (!stale) return false;
-    // Evict any idle cached client for this db FIRST, so a stale handle (open on the db we're about to
-    // drop) can't survive in the cache and serve the next access. If it raced into use, skip the drop.
-    if (this.#cache.evictByUrl(url) === "busy") return false;
-    await this.#locator.dropStored?.(id);
-    return true;
   }
 
   async #withConnErrorEvict<T>(token: string, c: Client, fn: () => Promise<T>): Promise<T> {

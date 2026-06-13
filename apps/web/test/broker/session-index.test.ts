@@ -99,4 +99,43 @@ describe("SqliteMultiBackend cold-index retention", () => {
     const sub = await be.subscribe(A, undefined);
     expect(seqs(await take(sub as ReadableStream<WireFrame>, 1))).toEqual([7]);
   });
+
+  it("does NOT drop a session that gets a fresh frame between the two staleness probes (TOCTOU guard)", async () => {
+    const dir = tmp();
+    // A probe-intercepting factory: the 1st MAX(created_at) reads STALE (epoch 1), the 2nd reads FRESH
+    // (now) — simulating a publish that lands after the first probe. The backend must re-probe (after
+    // evicting the cached client) and, seeing it fresh, NOT drop the db.
+    let probeReads = 0;
+    const factory = ((config: { url: string; authToken?: string }) => {
+      const real = createClient(config);
+      return new Proxy(real, {
+        get(t, p) {
+          if (p === "execute") {
+            return async (...a: unknown[]) => {
+              const stmt = a[0];
+              const sql =
+                typeof stmt === "object" && stmt !== null && "sql" in stmt
+                  ? String((stmt as { sql: unknown }).sql)
+                  : String(stmt);
+              if (sql.includes("SELECT MAX(created_at) AS m FROM frames")) {
+                probeReads += 1;
+                return { rows: [{ m: probeReads >= 2 ? Date.now() : 1 }] };
+              }
+              const ex = (t as { execute: (...x: unknown[]) => Promise<unknown> }).execute.bind(t);
+              return ex(...a);
+            };
+          }
+          const v = Reflect.get(t, p, t);
+          return typeof v === "function" ? v.bind(t) : v;
+        },
+      });
+    }) as unknown as typeof createClient;
+
+    const be = new SqliteMultiBackend(new FileDbLocator(dir), factory);
+    await be.publish(A, frame(1));
+    // cutoff = now-1000: probe#1 m=1 (stale) → evict → probe#2 m=now (fresh, > cutoff) → keep.
+    expect(await be.sweep(1000)).toBe(0);
+    expect(probeReads).toBe(2); // proves it re-probed after eviction
+    expect(existsSync(join(dir, dbFileName(A)))).toBe(true); // the session (and its frame) survived
+  });
 });

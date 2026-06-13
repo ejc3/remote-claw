@@ -110,6 +110,31 @@ describe("TursoCloudDbLocator", () => {
     await expect(broken.exists(TOKEN_A)).rejects.toThrow(/get database/);
   });
 
+  it("the #known cache is TTL-bounded — an expired positive re-validates (cross-instance drop self-heals)", async () => {
+    const prev = process.env.RC_TURSO_KNOWN_TTL_MS;
+    process.env.RC_TURSO_KNOWN_TTL_MS = "0"; // entries expire immediately → never trust a stale positive
+    try {
+      let present = true; // flips when "another instance" drops the db
+      const { fetchImpl, calls } = makeFetch((_url, method) =>
+        method === "GET"
+          ? present
+            ? { status: 200, body: "{}" }
+            : { status: 404 }
+          : { status: 200, body: "{}" },
+      );
+      const loc = new TursoCloudDbLocator(opts(fetchImpl));
+      expect(await loc.exists(TOKEN_A)).toBe(true); // first GET → 200, cached
+      present = false; // the retention cron on another instance DELETEs it
+      // With the TTL elapsed, exists() must re-GET (not return a stale true) → 404 → false. This is the
+      // fix for the cross-instance stale-positive that otherwise opened a client against a deleted db.
+      expect(await loc.exists(TOKEN_A)).toBe(false);
+      expect(calls.filter((c) => c.method === "GET")).toHaveLength(2);
+    } finally {
+      if (prev === undefined) delete process.env.RC_TURSO_KNOWN_TTL_MS;
+      else process.env.RC_TURSO_KNOWN_TTL_MS = prev;
+    }
+  });
+
   it("idFor + probeAuthToken expose the db name + group token for the retention sweep", () => {
     const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
     expect(loc.idFor(TOKEN_A)).toMatch(/^rc-[0-9a-f]{32}$/);

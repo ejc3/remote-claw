@@ -45,8 +45,13 @@ export class TursoCloudDbLocator implements DbLocator {
     apiBase: string;
   };
   readonly #fetch: typeof fetch;
-  // Databases we've already confirmed/created this process — avoids a Platform API round-trip per call.
-  readonly #known = new Set<string>();
+  // Databases we've confirmed/created — avoids a Platform API round-trip per call. TTL-BOUNDED (name →
+  // expiry): the cache is per-process, but db create/delete is cluster-wide, so a positive entry can go
+  // stale when ANOTHER instance (or the retention cron) drops the db. The TTL bounds that staleness and
+  // makes it self-heal — after expiry the next call re-validates via the Platform API instead of opening
+  // a connection to a deleted db.
+  readonly #known = new Map<string, number>();
+  readonly #knownTtlMs: number;
 
   constructor(o: TursoCloudOptions) {
     this.#o = {
@@ -59,6 +64,22 @@ export class TursoCloudDbLocator implements DbLocator {
     const f = o.fetchImpl ?? globalThis.fetch;
     if (f === undefined) throw new Error("TursoCloudDbLocator: global fetch is unavailable");
     this.#fetch = f.bind(globalThis);
+    const ttl = Number.parseInt(process.env.RC_TURSO_KNOWN_TTL_MS ?? "", 10);
+    this.#knownTtlMs = Number.isFinite(ttl) && ttl >= 0 ? ttl : 300_000;
+  }
+
+  #isKnown(name: string): boolean {
+    const exp = this.#known.get(name);
+    if (exp === undefined) return false;
+    if (exp <= Date.now()) {
+      this.#known.delete(name);
+      return false; // expired → force a Platform-API re-check
+    }
+    return true;
+  }
+
+  #rememberKnown(name: string): void {
+    this.#known.set(name, Date.now() + this.#knownTtlMs);
   }
 
   /** Stable, collision-resistant, Turso-valid db name from a channel token (`rc-<32 hex>`). */
@@ -110,14 +131,14 @@ export class TursoCloudDbLocator implements DbLocator {
   /** Create a database if absent (idempotent). A conflict — 409, or a 400/422 confirmed via GET — means
    *  it already exists → success. */
   async #createIfAbsent(name: string): Promise<void> {
-    if (this.#known.has(name)) return;
+    if (this.#isKnown(name)) return;
     const res = await this.#fetch(this.#api("/databases"), {
       method: "POST",
       headers: { ...this.#authHeader(), "content-type": "application/json" },
       body: JSON.stringify({ name, group: this.#o.group }),
     });
     if (res.ok || res.status === 409) {
-      this.#known.add(name);
+      this.#rememberKnown(name);
       return;
     }
     if ((res.status === 400 || res.status === 422) && (await this.#existsName(name))) return;
@@ -131,10 +152,10 @@ export class TursoCloudDbLocator implements DbLocator {
   }
 
   async #existsName(name: string): Promise<boolean> {
-    if (this.#known.has(name)) return true;
+    if (this.#isKnown(name)) return true;
     const res = await this.#fetch(this.#api(`/databases/${name}`), { headers: this.#authHeader() });
     if (res.status === 200) {
-      this.#known.add(name);
+      this.#rememberKnown(name);
       return true;
     }
     if (res.status === 404) return false;

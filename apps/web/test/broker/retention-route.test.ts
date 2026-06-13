@@ -21,7 +21,17 @@ const KEYS = [
   "CRON_SECRET",
   "NODE_ENV",
   "VERCEL",
+  "TURSO_API_TOKEN",
+  "TURSO_ORG",
+  "TURSO_GROUP",
+  "TURSO_AUTH_TOKEN",
 ] as const;
+const CLOUD_CREDS = {
+  TURSO_API_TOKEN: "api",
+  TURSO_ORG: "org",
+  TURSO_GROUP: "grp",
+  TURSO_AUTH_TOKEN: "grouptok",
+};
 
 let saved: Record<string, string | undefined>;
 beforeEach(() => {
@@ -74,11 +84,15 @@ describe("retentionMs", () => {
     }
   });
 
-  it("is active only when the deployment's backend is the per-session sqlite backend", () => {
+  it("is active when sqlite is the default OR the Turso Cloud creds are present (per-request sqlite)", () => {
     expect(sqliteConfigured()).toBe(false);
     env.BROKER_BACKEND = "vercel";
     expect(sqliteConfigured()).toBe(false);
     env.BROKER_BACKEND = " sqlite ";
+    expect(sqliteConfigured()).toBe(true);
+    // vercel default but cloud creds present → still active (?backend=sqlite provisions real cloud dbs).
+    env.BROKER_BACKEND = "vercel";
+    Object.assign(env, CLOUD_CREDS);
     expect(sqliteConfigured()).toBe(true);
   });
 });
@@ -104,6 +118,20 @@ describe("retention cron route", () => {
     expect(res.status).toBe(200);
     expect(await json(res)).toEqual({ swept: 0 });
     expect(mocks.getBackend).not.toHaveBeenCalled();
+  });
+
+  it("runs sweep on a non-sqlite-default deployment when Turso Cloud creds are present", async () => {
+    env.CRON_SECRET = "cron";
+    env.BROKER_BACKEND = "vercel"; // not the default, but ?backend=sqlite sessions exist on cloud
+    Object.assign(env, CLOUD_CREDS);
+    const sweep = vi.fn().mockResolvedValue(4);
+    mocks.getBackend.mockResolvedValue({ sweep });
+
+    const res = await GET(req("Bearer cron"));
+
+    expect(res.status).toBe(200);
+    expect(await json(res)).toEqual({ swept: 4 });
+    expect(mocks.getBackend).toHaveBeenCalledWith("sqlite");
   });
 
   it("runs sweep against the sqlite backend when it is the deployment backend", async () => {
