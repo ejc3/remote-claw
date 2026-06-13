@@ -94,6 +94,10 @@ export class OpencodeDriver implements Driver {
   /** Message ids already pushUpstream-ed — the DEDUP set (#2): never emit a message twice (an SSE
    *  reconnect can re-deliver a finished message's parts). */
   readonly #emitted = new Set<string>();
+  /** messageID → role, learned from `message.updated`. Only ASSISTANT messages are pushed upstream: the
+   *  USER message is the prompt echo (the relay's inbound pump already surfaces viewer prompts; pushing
+   *  the OpenCode user message would double-render it as an assistant bubble). */
+  readonly #roles = new Map<string, string>();
   /** The active model to use for the next prompt_async; updated by a set_model control verb. */
   #activeModel: OpencodeModel;
 
@@ -211,6 +215,9 @@ export class OpencodeDriver implements Driver {
       }
       case "message.updated": {
         const info = ev.properties.info;
+        if (typeof info?.id === "string" && typeof info.role === "string") {
+          this.#roles.set(info.id, info.role);
+        }
         // An assistant message with time.completed is done — flush it now (don't wait for idle, so a
         // multi-message turn surfaces each message as it completes).
         if (info?.role === "assistant" && typeof info.id === "string" && info.time?.completed) {
@@ -258,13 +265,17 @@ export class OpencodeDriver implements Driver {
   }
 
   /** Flush ONE completed message: coalesce its buffered parts to ≤2 UpstreamPayloads and pushUpstream
-   *  each ONCE. Dedups by messageID (#2) and clears the buffer. */
+   *  each ONCE. Dedups by messageID (#2) and clears the buffer. The USER message (the prompt echo) is
+   *  never emitted — the relay's inbound pump already surfaces viewer prompts. */
   #flushMessage(session: Session, messageId: string): void {
     if (this.#emitted.has(messageId)) return; // DEDUP (#2): never emit a message twice
     const buf = this.#buffers.get(messageId);
     if (!buf) return;
     this.#buffers.delete(messageId);
     this.#emitted.add(messageId);
+    // Only assistant messages are relayed upstream. A known user role is skipped; an UNKNOWN role (we
+    // never saw its message.updated — rare) defaults to emitting, so a real assistant turn is never lost.
+    if (this.#roles.get(messageId) === "user") return;
     const parts = buf.order
       .map((id) => buf.parts.get(id))
       .filter((p): p is Part => p !== undefined);
