@@ -8,12 +8,18 @@ export const maxDuration = 300;
 // preview/CI run CLEANS UP AFTER ITSELF instead of leaking session dbs until the 7-day prod cron. It runs
 // the SAME cold-index sweep as /api/cron/retention, just with a caller-supplied (short) window.
 //
-// Gated by the SAME dev-seed gate as /api/dev/seed: a matching DEV_SEED_TOKEN on a NON-production preview
-// (or local dev) only — it can NEVER run on production (the gate refuses when VERCEL_ENV=production), so
-// the aggressive short window here cannot reap real prod sessions. Production reclamation stays the
-// /api/cron/retention cron with its 7-day default. (The sweep's own busy-set still protects any db with a
-// live subscriber, and it re-probes MAX(created_at) before dropping — see SqliteMultiBackend#sweep.)
+// PROD-SAFE on two independent levels:
+//  1. Gate — the SAME dev-seed gate as /api/dev/seed: a matching DEV_SEED_TOKEN on a NON-production
+//     preview (or local dev) only; it can NEVER run on a production deployment (the gate refuses when
+//     VERCEL_ENV=production).
+//  2. Namespace — even on a preview, selectLocatorFromEnv() derives a per-deployment db-name scope
+//     (production = `rc-prod-…`, preview = `rc-pr-<commit sha>-…`), so this sweep walks the preview's OWN
+//     `rc-pr-<sha>-index` and can't even ENUMERATE a production `rc-prod-` session db, let alone drop one
+//     — though both share one Turso org/group. (Busy-set + MAX(created_at) re-probe further guard a live db.)
+// Production reclamation stays the /api/cron/retention cron (7-day default), scoped to prod's namespace.
 const DIGITS = /^\d+$/;
+
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export async function POST(req: Request): Promise<Response> {
   const g = gate(req);
@@ -28,9 +34,22 @@ export async function POST(req: Request): Promise<Response> {
   try {
     const backend = await getBackend("sqlite");
     if (backend.sweep === undefined) return Response.json({ swept: 0 });
-    return Response.json({ swept: await backend.sweep(retainMs) });
+    const swept = await backend.sweep(retainMs);
+    // This deployment's scope is short-lived (a preview tied to the commit), so after reclaiming its
+    // sessions, drop the scope's own cold-index db too — otherwise every preview deploy leaves an empty
+    // `rc-<scope>-index` behind. dropIndex only deletes the catalog when it's EMPTY, so a partial sweep
+    // can't orphan remaining sessions. BEST-EFFORT: a dropIndex hiccup must not mask a successful sweep
+    // (the empty index is harmless; a later run reclaims it). The dev-seed gate already bars production.
+    let indexDropped = true;
+    try {
+      await backend.dropIndex?.();
+    } catch (e) {
+      indexDropped = false;
+      console.warn("[dev/sweep] index drop failed (sweep still succeeded):", errMsg(e));
+    }
+    return Response.json({ swept, indexDropped });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = errMsg(e);
     console.error("[dev/sweep] sweep failed:", message);
     return Response.json({ error: message }, { status: 500 });
   }

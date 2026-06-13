@@ -35,6 +35,15 @@ export class SessionIndex {
     this.#client = client;
   }
 
+  /** Close the underlying libSQL client (e.g. when the catalog db is being dropped). Best-effort. */
+  close(): void {
+    try {
+      this.#client.close();
+    } catch {
+      /* already closed */
+    }
+  }
+
   #ensure(): Promise<void> {
     if (this.#migrated === undefined) {
       this.#migrated = this.#client.batch(INDEX_DDL, "write").then(

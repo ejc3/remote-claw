@@ -53,15 +53,27 @@ describe("dev sweep route", () => {
     expect(mocks.getBackend).not.toHaveBeenCalled();
   });
 
-  it("sweeps the sqlite backend with retain=0 by default and returns the count", async () => {
+  it("sweeps the sqlite backend with retain=0, drops its scope index, and returns the count", async () => {
     enablePreview();
     const sweep = vi.fn().mockResolvedValue(7);
-    mocks.getBackend.mockResolvedValue({ sweep });
+    const dropIndex = vi.fn().mockResolvedValue(undefined);
+    mocks.getBackend.mockResolvedValue({ sweep, dropIndex });
     const res = await POST(req("https://preview-123.example.com/api/dev/sweep", "seed-secret"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ swept: 7 });
+    expect(await res.json()).toEqual({ swept: 7, indexDropped: true });
     expect(mocks.getBackend).toHaveBeenCalledWith("sqlite");
     expect(sweep).toHaveBeenCalledWith(0); // default window
+    expect(dropIndex).toHaveBeenCalledTimes(1); // cleanup also reclaims this scope's empty index db
+  });
+
+  it("a dropIndex failure does NOT mask a successful sweep (best-effort cleanup)", async () => {
+    enablePreview();
+    const sweep = vi.fn().mockResolvedValue(3);
+    const dropIndex = vi.fn().mockRejectedValue(new Error("platform 503"));
+    mocks.getBackend.mockResolvedValue({ sweep, dropIndex });
+    const res = await POST(req("https://preview-123.example.com/api/dev/sweep", "seed-secret"));
+    expect(res.status).toBe(200); // the sweep reclaimed the dbs — still a success
+    expect(await res.json()).toEqual({ swept: 3, indexDropped: false });
   });
 
   it("honours a numeric ?retain window and ignores a non-numeric one (→ 0, never NaN)", async () => {

@@ -93,11 +93,13 @@ jobs:
         run: pnpm --filter remote-claw-web-tests exec playwright test -c app-e2e.preview.config.ts
 
       # Clean up after ourselves: the sqlite e2e above provisions REAL per-session Turso Cloud dbs, and
-      # nothing else drops them — left alone they'd accumulate until the 7-day prod retention cron. Hit the
-      # dev-only sweep route (same dev-seed gate as /api/dev/seed → never runs on production) with retain=0
-      # so it reclaims every db the run just created, via the same cold-index sweep the prod cron uses.
+      # nothing else drops them — left alone they'd accumulate. Hit the dev-only sweep route with retain=0
+      # so it reclaims them via the same cold-index sweep the prod cron uses. This is prod-safe on two
+      # levels: the dev-seed gate refuses production, AND a preview deploy uses a per-commit db scope
+      # (`rc-pr-<sha>-*` / `rc-pr-<sha>-index`), so the sweep only ever sees THIS deployment's dbs — it
+      # can't reach a production `rc-prod-` session (nor another preview's) though all share one org/group.
       # `always()` so a failed e2e still cleans up; gated on the same secrets so it only runs when the
-      # cloud leg did. Best-effort (`|| true`) — a cleanup hiccup must not red the run (the cron backstops).
+      # cloud leg did. Best-effort — a non-200 logs a warning rather than redding the run.
       - name: Reclaim the sqlite e2e's Turso Cloud dbs (clean up after itself)
         if: ${{ always() && env.DEV_SEED_TOKEN != '' && env.TURSO_CLOUD_E2E != '' && env.WEB_E2E_URL != '' }}
         run: |

@@ -86,4 +86,8 @@ export interface BrokerBackend {
 
   /** Optional retention hook for durable backends that store sealed frames at rest. */
   sweep?(retainMs: number): Promise<number>;
+
+  /** Optional: drop the retention index/catalog itself, after a short-lived scope's sessions are swept
+   *  (per-session sqlite on a preview deployment). Lets the dev/CI cleanup leave nothing behind. */
+  dropIndex?(): Promise<void>;
 }

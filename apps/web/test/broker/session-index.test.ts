@@ -100,6 +100,24 @@ describe("SqliteMultiBackend cold-index retention", () => {
     expect(seqs(await take(sub as ReadableStream<WireFrame>, 1))).toEqual([7]);
   });
 
+  it("dropIndex removes the catalog ONLY when empty — a non-empty index is kept (no orphaning)", async () => {
+    const dir = tmp();
+    const be = new SqliteMultiBackend(new FileDbLocator(dir));
+    await be.publish(A, frame(1)); // catalogues A → the index now has a session
+    expect(existsSync(join(dir, "_index.db"))).toBe(true);
+
+    // dropIndex while a session is still catalogued must NOT delete the catalog (that would orphan A's
+    // db — nothing left to reclaim it). The index file survives.
+    await be.dropIndex();
+    expect(existsSync(join(dir, "_index.db"))).toBe(true);
+    expect(existsSync(join(dir, dbFileName(A)))).toBe(true);
+
+    // Once A is swept (index empty), dropIndex reclaims the now-empty catalog db itself.
+    expect(await be.sweep(-1)).toBe(1);
+    await be.dropIndex();
+    expect(existsSync(join(dir, "_index.db"))).toBe(false);
+  });
+
   it("does NOT drop a session that gets a fresh frame between the two staleness probes (TOCTOU guard)", async () => {
     const dir = tmp();
     // A probe-intercepting factory: the 1st MAX(created_at) reads STALE (epoch 1), the 2nd reads FRESH

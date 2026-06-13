@@ -111,6 +111,26 @@ channel token, created on first publish via the Platform API, connected with the
 otherwise it uses local files. **File storage is not durable on Vercel** (ephemeral, per-instance fs) —
 the file locator fails closed there, so configure Turso Cloud for a Vercel deployment.
 
+**Meaningful, scoped db names (isolation + scannability):** every db name is human-readable in
+`turso db list` — `rc-<scope>-<kind>-<16 hex>`:
+
+```
+rc-prod-s-3f9a1c2e8b7d6045          # production, session channel
+rc-prod-b-3f9a1c2e8b7d6045          # production, bus channel
+rc-pr-a1b2c3d-s-3f9a1c2e8b7d6045    # preview of commit a1b2c3d, session channel
+rc-prod-index   /   rc-pr-a1b2c3d-index    # the per-scope cold-index catalog db
+```
+
+`<scope>` is the deployment environment — `prod`, `pr-<7-char commit sha>` for a preview, or `dev` —
+derived automatically from `VERCEL_ENV`/`VERCEL_GIT_COMMIT_SHA` (override with `RC_TURSO_DB_SCOPE`). It's
+an **isolation boundary**, not just cosmetics: each scope catalogs into and sweeps **only its own**
+`rc-<scope>-index`, so prod and preview can share one Turso org/group yet (a) a preview's cleanup can
+never enumerate or drop a production session db, and (b) two concurrent preview deploys of different
+commits get distinct scopes and can't reclaim each other's dbs. The production retention cron sweeps the
+`rc-prod` scope; a preview's dbs (and its scope index) are reclaimed by the web-preview cleanup step
+(`/api/dev/sweep`, which also drops the now-empty `rc-<scope>-index`). `<kind>` is `s` (session) or `b`
+(bus). (Turso db names are capped at 36 chars, which this scheme respects.)
+
 ## Production — Temporal Cloud (alternative)
 
 Set these as **Vercel encrypted env vars**, scoped per environment (Production / Preview / Development)

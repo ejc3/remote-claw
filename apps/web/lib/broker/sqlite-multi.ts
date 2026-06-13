@@ -205,10 +205,13 @@ export interface DbLocator {
   //     resumable batches by the sweep; omit indexConfig ⇒ retention is a no-op). ---
   /** Connection config for the shared catalog db that the SessionIndex lives in. */
   indexConfig?(): { url: string; authToken?: string };
-  /** Provision the catalog db if needed (cloud: Platform-API create the `rc-index` db; file: no-op). */
+  /** Provision the catalog db if needed (cloud: Platform-API create the `rc-<scope>-index` db; file: no-op). */
   ensureIndex?(): Promise<void>;
   /** The auth token a retention probe uses to connect a catalogued db by its url (cloud: the group token). */
   probeAuthToken?(): string | undefined;
+  /** Drop the cold-index catalog db ITSELF (after its sessions are reclaimed), so a short-lived scope
+   *  doesn't leave an empty index db behind. Used by the dev/CI cleanup; omit ⇒ no-op. */
+  dropIndex?(): Promise<void>;
 }
 
 function sqliteDir(): string {
@@ -282,6 +285,11 @@ export class FileDbLocator implements DbLocator {
         /* already gone */
       }
     }
+  }
+
+  /** Drop the `_index.db` catalog (and its sidecars). Mirror of the cloud locator's dropIndex. */
+  async dropIndex(): Promise<void> {
+    await this.dropStored(join(this.#dir, "_index.db"));
   }
 }
 
@@ -838,6 +846,21 @@ export class SqliteMultiBackend implements BrokerBackend {
   async sweep(retainMs: number): Promise<number> {
     const index = await this.#getIndex();
     return index !== null ? this.#sweepViaIndex(index, retainMs) : 0;
+  }
+
+  /** Drop the cold-index catalog db itself, for the dev/CI cleanup of a short-lived scope AFTER its
+   *  sessions are swept — leaves no empty index db behind. SAFE: drops ONLY when the catalog has no
+   *  remaining sessions, so a sweep that intentionally left entries (non-zero retain, busy/fresh/
+   *  deadline-skipped) never has its catalog deleted out from under those still-reclaimable dbs. Closes
+   *  the catalog client and forgets the cached build (a later publish re-provisions both). No concurrent
+   *  publish during the post-sweep cleanup (same TOCTOU window the sweep itself accepts). */
+  async dropIndex(): Promise<void> {
+    const index = await this.#getIndex();
+    if (index === null) return; // locator has no droppable index (e.g. file dir without one)
+    if ((await index.batchAfter("", 1)).length > 0) return; // sessions remain → keep the catalog
+    this.#indexBuild = undefined;
+    index.close();
+    await this.#locator.dropIndex?.();
   }
 
   /** Walk the cold catalog in bounded, RESUMABLE batches (a persisted cursor that rotates through the

@@ -13,9 +13,28 @@ import { type DbLocator, FileDbLocator } from "./sqlite-multi";
 
 const TURSO_API_BASE = "https://api.turso.tech";
 
-// The shared catalog db for the cold session index (one per group). A reserved name that can never
-// collide with a session db (those are `rc-<32 hex>`), and never itself catalogued/swept.
-const INDEX_DB_NAME = "rc-index";
+// Turso db names are [a-z0-9-] and 1–36 chars. We spend that budget on a HUMAN-SCANNABLE name rather than
+// an opaque hash, so `turso db list` is meaningful:
+//
+//   rc-<scope>-<kind>-<16 hex>     e.g. rc-prod-s-3f9a1c2e8b7d6045   (prod, session channel)
+//                                       rc-prod-b-3f9a1c2e8b7d6045   (prod, bus channel)
+//                                       rc-pr-a1b2c3d-s-<16hex>      (preview of commit a1b2c3d)
+//   rc-<scope>-index               the per-scope cold-index catalog db (rc-prod-index / rc-pr-a1b2c3d-index)
+//
+//   • `rc`      — the app marker (these are remote-claw's dbs).
+//   • `<scope>` — the deployment ENVIRONMENT (see scopeFromEnv): `prod`, `pr-<7-char commit sha>` for a
+//                 preview, or `dev`. This is an isolation boundary, not cosmetics: each scope catalogs
+//                 into and sweeps ONLY its own `rc-<scope>-index`, so a preview deployment can never
+//                 enumerate — let alone drop — a production session db, and two concurrent preview
+//                 deployments (different commits ⇒ different scopes) can't reclaim each other's dbs.
+//   • `<kind>`  — `s` (session channel) or `b` (bus channel), so the two kinds are distinguishable.
+//   • `<hash>`  — sha256(channel token) truncated; the uniqueness/addressing component.
+//
+// Budget: `rc-`(3) + scope(≤14) + `-`+kind(1)+`-`(2) + 16 hex = ≤36. The scope is bounded to 14 chars.
+const APP = "rc";
+const DEFAULT_SCOPE = "dev";
+const SCOPE_MAX = 14;
+const HASH_LEN = 16;
 
 export interface TursoCloudOptions {
   /** Platform API token (org-scoped) — creates/lists/deletes databases. */
@@ -26,6 +45,8 @@ export interface TursoCloudOptions {
   group: string;
   /** Group token (libSQL connect credential) — auths every database in the group. */
   authToken: string;
+  /** Deployment scope embedded in every db name (`rc-<scope>-…`); isolates environments. Default `dev`. */
+  scope?: string;
   /** Override the Platform API base (tests). */
   apiBase?: string;
   /** Injectable fetch (tests). */
@@ -52,6 +73,11 @@ export class TursoCloudDbLocator implements DbLocator {
   // a connection to a deleted db.
   readonly #known = new Map<string, number>();
   readonly #knownTtlMs: number;
+  // The deployment scope embedded in every db name (`rc-<scope>-…`) and the per-scope cold-index name.
+  // Isolates a preview/dev deployment's dbs (and its sweep) from production's — see scopeFromEnv and the
+  // db-naming comment above.
+  readonly #scope: string;
+  readonly #indexName: string;
 
   constructor(o: TursoCloudOptions) {
     this.#o = {
@@ -66,6 +92,16 @@ export class TursoCloudDbLocator implements DbLocator {
     this.#fetch = f.bind(globalThis);
     const ttl = Number.parseInt(process.env.RC_TURSO_KNOWN_TTL_MS ?? "", 10);
     this.#knownTtlMs = Number.isFinite(ttl) && ttl >= 0 ? ttl : 300_000;
+    // A Turso db name is [a-z0-9-], 1–36 chars; `rc-<scope>-<kind>-<16 hex>` must fit, so bound the scope
+    // to SCOPE_MAX and reject an out-of-charset value rather than fail opaquely at create time.
+    const scope = (o.scope ?? DEFAULT_SCOPE).toLowerCase();
+    if (!new RegExp(`^[a-z0-9][a-z0-9-]{0,${SCOPE_MAX - 1}}$`).test(scope)) {
+      throw new Error(
+        `TursoCloudDbLocator: invalid db scope "${o.scope}" (need [a-z0-9-], ≤${SCOPE_MAX} chars)`,
+      );
+    }
+    this.#scope = scope;
+    this.#indexName = `${APP}-${scope}-index`;
   }
 
   #isKnown(name: string): boolean {
@@ -82,9 +118,17 @@ export class TursoCloudDbLocator implements DbLocator {
     this.#known.set(name, Date.now() + this.#knownTtlMs);
   }
 
-  /** Stable, collision-resistant, Turso-valid db name from a channel token (`rc-<32 hex>`). */
+  /** The channel KIND, for a meaningful + distinguishable name: `s` (session), `b` (bus), `x` (other). */
+  #kind(token: string): string {
+    if (token.startsWith("sess:")) return "s";
+    if (token.startsWith("bus:")) return "b";
+    return "x";
+  }
+
+  /** Stable, collision-resistant, human-scannable Turso db name (`rc-<scope>-<kind>-<16 hex>`). */
   #dbName(token: string): string {
-    return `rc-${createHash("sha256").update(token, "utf8").digest("hex").slice(0, 32)}`;
+    const hash = createHash("sha256").update(token, "utf8").digest("hex").slice(0, HASH_LEN);
+    return `${APP}-${this.#scope}-${this.#kind(token)}-${hash}`;
   }
 
   config(token: string): { url: string; authToken: string } {
@@ -118,14 +162,15 @@ export class TursoCloudDbLocator implements DbLocator {
     await this.#createIfAbsent(this.#dbName(token));
   }
 
-  /** The shared catalog db connection for the cold session index (retention strategy B). */
+  /** The catalog db connection for the cold session index (retention strategy B). Per-SCOPE, so a
+   *  preview/dev deployment's sweep walks ONLY its own scope's index — never production's. */
   indexConfig(): { url: string; authToken: string } {
-    return this.#connect(INDEX_DB_NAME);
+    return this.#connect(this.#indexName);
   }
 
   /** Provision the catalog db (idempotent), so a fresh deployment's first index write can connect. */
   async ensureIndex(): Promise<void> {
-    await this.#createIfAbsent(INDEX_DB_NAME);
+    await this.#createIfAbsent(this.#indexName);
   }
 
   /** Create a database if absent (idempotent). A conflict — 409, or a 400/422 confirmed via GET — means
@@ -179,6 +224,12 @@ export class TursoCloudDbLocator implements DbLocator {
     }
     this.#known.delete(name); // forget it so a later publish re-provisions a fresh db
   }
+
+  /** Drop this scope's cold-index catalog db itself (after a scope's sessions are all reclaimed), so a
+   *  short-lived preview/dev scope doesn't leave an empty `rc-<scope>-index` behind every deployment. */
+  async dropIndex(): Promise<void> {
+    await this.dropStored(this.#indexName);
+  }
 }
 
 /**
@@ -199,7 +250,32 @@ export function selectLocatorFromEnv(): DbLocator {
   const group = process.env.TURSO_GROUP?.trim();
   const authToken = process.env.TURSO_GROUP_AUTH_TOKEN?.trim();
   if (apiToken && org && group && authToken) {
-    return new TursoCloudDbLocator({ apiToken, org, group, authToken });
+    return new TursoCloudDbLocator({ apiToken, org, group, authToken, scope: scopeFromEnv() });
   }
   return new FileDbLocator();
+}
+
+/**
+ * The deployment scope embedded in every db name (`rc-<scope>-…`). Only an EXPLICIT
+ * `VERCEL_ENV=production` → `prod`; a preview deploy → `pr-<7-char commit sha>` (ties non-prod to the
+ * deployment, so two concurrent preview deploys of DIFFERENT commits get distinct scopes and can't
+ * reclaim each other's dbs); anything else — development, an UNSET env (local / self-host / CI), or an
+ * unknown value — → `dev`. Unset deliberately resolves to `dev`, NOT `prod`: the `prod` scope is the
+ * precious one, so it must be opted into explicitly (Vercel always sets VERCEL_ENV=production on the
+ * production deployment; a self-host sets RC_TURSO_DB_SCOPE=prod). This keeps the dev-only cleanup sweep
+ * SAFE — it can never resolve to `prod` off-Vercel where the dev-seed gate's `VERCEL_ENV!=="production"`
+ * check would otherwise leave it open. Each scope catalogs into and sweeps ONLY its own `rc-<scope>-index`,
+ * so a preview/dev deployment can never enumerate or drop a production session. Overridable with
+ * RC_TURSO_DB_SCOPE; bounded to SCOPE_MAX.
+ */
+function scopeFromEnv(): string {
+  const explicit = process.env.RC_TURSO_DB_SCOPE?.trim();
+  if (explicit) return explicit;
+  const env = process.env.VERCEL_ENV?.trim().toLowerCase();
+  if (env === "production") return "prod";
+  if (env === "preview") {
+    const sha = (process.env.VERCEL_GIT_COMMIT_SHA ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    return sha ? `pr-${sha.slice(0, 7)}` : "preview";
+  }
+  return "dev"; // development / unset / unknown — never `prod` unless explicitly asked
 }
