@@ -27,6 +27,10 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // call). Omitted ⇒ the broker's default; the host learns effective durability from the server.
   // Must match what viewers subscribe with — publish + subscribe for one channel address the same store.
   "rc-backend": "value",
+  // Which capture/inject driver runs the harness: mitm (default — real claude behind our MITM),
+  // tmux (plain claude in a tmux pane; provider-agnostic, Bedrock-capable), or opencode (drive
+  // `opencode serve`). Same broker/client/viewer for all (§ pluggable-harness).
+  "rc-driver": "value",
 };
 // Not reserved: starting already remote-controlled is just claude's own `--remote-control`,
 // which the wrapper forwards verbatim — no `--rc-share`. The web deep link is built from the

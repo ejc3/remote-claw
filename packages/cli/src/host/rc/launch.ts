@@ -10,9 +10,9 @@ import { BrokerClient } from "../../broker/client.js";
 import { securityProvider } from "../../security/provider.js";
 import { tracerFromEnv } from "../../trace.js";
 import { ensureCerts } from "./certs.js";
+import { bridgeSession } from "./drivers/bridge.js";
 import { type GitInfo, gitInfo } from "./gitinfo.js";
 import { MitmProxy } from "./mitm.js";
-import { HostRcRelay } from "./relay.js";
 import { RelayCore, type Session } from "./session.js";
 
 const RELAY_TEARDOWN_WAIT_MS = 2000;
@@ -93,22 +93,22 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     tracer: mitmTracer,
     onSession: (s) => {
       opts.onSession?.(s);
-      // Each RC session the child opens gets its own relay: announce presence on the bus, then bridge
-      // its turns to the broker until the wrapper exits.
-      const relay = new HostRcRelay({
-        client: newClient(),
-        identityId: opts.identity.identityId,
-        sessionId: s.id,
+      // Each RC session the child opens gets its own relay, bridged to the broker until the wrapper
+      // exits. The wiring (announce-now-then-serve — announce must NOT wait on serve()'s durable-cursor
+      // prepare, which would race a viewer's concurrent bus subscribe — tracked in `relays` for the
+      // teardown flush) is shared with every other driver via bridgeSession: the seam keeps the
+      // relay/broker contract identical across harnesses (mitm/tmux/opencode).
+      bridgeSession({
         session: s,
+        newClient,
+        identityId: opts.identity.identityId,
+        title,
+        cwd,
+        git,
+        signal: ac.signal,
+        relays,
         tracer: relayTracer,
       });
-      // Announce on the bus immediately (it must not wait on serve()'s durable-cursor prepare — that
-      // delay would race a viewer's concurrent bus subscribe). serve() samples the cursors before it
-      // starts the inbound tail, so the session inbound cursor is fixed before any inbound is processed.
-      void relay.announce(title, cwd, git).catch(() => {});
-      const served = relay.serve(ac.signal).catch(() => {});
-      relays.add(served);
-      void served.finally(() => relays.delete(served));
     },
   });
   await proxy.listen();
