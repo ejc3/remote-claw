@@ -41,6 +41,22 @@ export function connState(sentAt: number, now: number): ConnState {
   return "disconnected";
 }
 
+/** What to show in an EMPTY transcript, distinguished by the host link (`cs`) so a live-but-idle session
+ *  (connected, no turns yet) reads as "ready for a prompt" — NOT the ambiguous "waiting for the
+ *  transcript…", which implies content is still arriving. `null` = no announce seen yet (connecting). */
+export function emptyTranscriptHint(cs: ConnState | null): string {
+  switch (cs) {
+    case "connected":
+      return "No messages yet — send a prompt to start.";
+    case "reconnecting":
+      return "Reconnecting to the session…";
+    case "disconnected":
+      return "The host is offline — waiting for it to reconnect.";
+    default:
+      return "Connecting…"; // no announce yet — we haven't reached the session
+  }
+}
+
 /** Presence replay rule: keep the newest announce per session. Equal timestamps are accepted so a
  *  same-millisecond mode/status update from the host can replace the previous body. */
 export function shouldAcceptAnnounce(existing: Announce | undefined, incoming: Announce): boolean {

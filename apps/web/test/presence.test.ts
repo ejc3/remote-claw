@@ -4,6 +4,7 @@ import {
   type Announce,
   CONNECTED_WINDOW_MS,
   connState,
+  emptyTranscriptHint,
   FRESH_WINDOW_MS,
   parseGit,
   shouldAcceptAnnounce,
@@ -46,6 +47,29 @@ describe("connState", () => {
 
   it("orders the windows so the ladder is monotone", () => {
     expect(CONNECTED_WINDOW_MS).toBeLessThan(FRESH_WINDOW_MS);
+  });
+});
+
+// The empty-transcript hint must DISTINGUISH a live-but-idle session from "still loading": a connected
+// session with no turns yet should invite a prompt, not read as if content is still arriving.
+describe("emptyTranscriptHint", () => {
+  it("invites a prompt when connected + idle (not 'waiting for the transcript')", () => {
+    const hint = emptyTranscriptHint("connected");
+    expect(hint).toMatch(/no messages yet/i);
+    expect(hint).toMatch(/prompt/i);
+    expect(hint).not.toMatch(/waiting for the transcript/i);
+  });
+
+  it("reads as connecting before any announce (null)", () => {
+    expect(emptyTranscriptHint(null)).toMatch(/connecting/i);
+  });
+
+  it("reflects a degraded host link distinctly from the idle/connecting states", () => {
+    expect(emptyTranscriptHint("reconnecting")).toMatch(/reconnect/i);
+    expect(emptyTranscriptHint("disconnected")).toMatch(/offline|reconnect/i);
+    // every state yields a distinct message, so the empty pane is never ambiguous
+    const all = ["connected", "reconnecting", "disconnected", null] as const;
+    expect(new Set(all.map((s) => emptyTranscriptHint(s))).size).toBe(4);
   });
 });
 

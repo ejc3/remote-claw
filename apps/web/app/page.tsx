@@ -21,6 +21,7 @@ import {
   type Announce,
   type ConnState,
   connState,
+  emptyTranscriptHint,
   type GitInfo,
   type Message,
   shouldAcceptAnnounce,
@@ -562,7 +563,7 @@ function Transcript(props: {
           <GapRecovery gap={gap} retrying={gapRetrying} onRetry={() => void retryGap()} />
         )}
         {messages.length === 0 && !showGapRecovery && (
-          <p className="empty-pad">Waiting for the transcript…</p>
+          <p className="empty-pad">{emptyTranscriptHint(cs)}</p>
         )}
         {messages.map((m) => (
           <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} resolved={resolved} />
