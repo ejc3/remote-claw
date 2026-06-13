@@ -16,9 +16,14 @@ import { OpencodeDriver } from "./driver.js";
 // The load-bearing assertion: ONE coalesced assistant upstream payload reaches the Session (NOT one per
 // part.updated) — review #1. Plus dedup (#2) and ack-incl-initialize (#5).
 
-/** A no-op broker that records what the relay posts and parks its inbound stream until aborted. */
+/** A no-op broker that records what the relay posts (recordKind/seq + the plaintext body — relay #post
+ *  passes utf8(text), so this is exactly what a viewer renders) and parks its inbound stream until
+ *  aborted. `content` is the durable transcript (seq !== null). */
 class FakeBroker {
-  posts: Array<{ recordKind: string; seq: number | null }> = [];
+  posts: Array<{ recordKind: string; seq: number | null; text: string }> = [];
+  get content() {
+    return this.posts.filter((p) => p.seq !== null);
+  }
   async seqCursor(): Promise<{ maxSeq: number | null; durable: boolean }> {
     return { maxSeq: null, durable: false };
   }
@@ -31,12 +36,20 @@ class FakeBroker {
   async frameCount(): Promise<number | null> {
     return null;
   }
-  async postMessage(header: FrameHeader): Promise<unknown[]> {
-    this.posts.push({ recordKind: header.recordKind, seq: header.seq });
+  async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
+    this.posts.push({
+      recordKind: header.recordKind,
+      seq: header.seq,
+      text: new TextDecoder().decode(body),
+    });
     return [{ ok: true }];
   }
-  async postFrame(header: FrameHeader): Promise<unknown> {
-    this.posts.push({ recordKind: header.recordKind, seq: header.seq });
+  async postFrame(header: FrameHeader, body: Uint8Array): Promise<unknown> {
+    this.posts.push({
+      recordKind: header.recordKind,
+      seq: header.seq,
+      text: new TextDecoder().decode(body),
+    });
     return { ok: true };
   }
   async *streamFrames(opts: { signal?: AbortSignal }): AsyncGenerator<Frame> {
@@ -264,5 +277,122 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     expect(gates.length).toBeGreaterThanOrEqual(1);
     // …and the viewer's allow answer was POSTed to OpenCode as "once".
     expect(client.replies).toEqual([{ permissionId: "per_1", response: "once" }]);
+  });
+
+  // Scenario (g): the cheap model (qwen2.5:0.5b) does not reliably surface a permission gate live, so the
+  // permission ROUND-TRIP is proven deterministically here against the driver's own translation:
+  //   • permission.asked → the EXACT can_use_tool control_request shape mapUpstreamItems renders, and
+  //   • a viewer DENY → POST .../permissions/{id} { response: "reject" } (allow → "once" is proven above).
+  it("(g) surfaces a permission gate as can_use_tool and maps deny → reject", async () => {
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      {
+        type: "permission.asked",
+        properties: {
+          sessionID: SES,
+          id: "per_deny",
+          permission: "Bash",
+          metadata: { command: "rm -rf /" },
+          tool: { messageID: "msg_b", callID: "call_2" },
+        },
+      } as OpencodeEvent,
+      idle(),
+    ]);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const ready = new Promise<Session>((resolve) => {
+      const orig = ctx.onSession;
+      ctx.onSession = (s: Session) => {
+        orig?.(s);
+        s.pushControlResponse("per_deny", "deny"); // the viewer denies the gate
+        resolve(s);
+      };
+    });
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await ready;
+    await run;
+
+    const session = captured as unknown as Session;
+    // The gate surfaced as a can_use_tool control_request with the exact shape the relay renders.
+    const gate = session
+      .snapshotUpstream()
+      .find(
+        (e) => e.eventType === "control_request" && (e.payload.request_id as string) === "per_deny",
+      );
+    expect(gate).toBeDefined();
+    const req = gate?.payload.request as {
+      subtype?: string;
+      tool_name?: string;
+      tool_use_id?: string;
+      input?: unknown;
+    };
+    expect(req?.subtype).toBe("can_use_tool");
+    expect(req?.tool_name).toBe("Bash");
+    expect(req?.tool_use_id).toBe("call_2");
+    expect(req?.input).toEqual({ command: "rm -rf /" });
+    // The deny answer was POSTed to OpenCode as "reject".
+    expect(client.replies).toEqual([{ permissionId: "per_deny", response: "reject" }]);
+  });
+
+  // Scenario (c) DETERMINISTIC: the tiny live model rarely calls a tool, so we prove the tool path
+  // end-to-end here — a real completed-tool SSE sequence (assistant message with a `tool` part going
+  // completed) flushed through the REAL relay must produce a `tool_use` content frame AND a following
+  // `tool_result` content frame (the bodies mapUpstreamItems renders). This is the rigorous proof for (c).
+  it("(c-det) a completed tool turn → a tool_use frame + a tool_result frame at the broker", async () => {
+    const TOOL_SCRIPT: OpencodeEvent[] = [
+      { type: "server.connected", properties: {} },
+      { type: "session.status", properties: { sessionID: SES, status: { type: "busy" } } },
+      part({ type: "step-start", id: "prt_s", messageID: "msg_tool" }),
+      // a `tool` part: first running, then re-sent completed (the coalescer keeps the latest).
+      part({
+        type: "tool",
+        id: "prt_t",
+        messageID: "msg_tool",
+        callID: "call_echo",
+        tool: "bash",
+        state: { status: "running", input: { command: "echo hello" } },
+      }),
+      part({
+        type: "tool",
+        id: "prt_t",
+        messageID: "msg_tool",
+        callID: "call_echo",
+        tool: "bash",
+        state: { status: "completed", input: { command: "echo hello" }, output: "hello\n" },
+      }),
+      part({ type: "step-finish", id: "prt_f", messageID: "msg_tool" }),
+      msgUpdated({ id: "msg_tool", role: "assistant", time: { created: 1, completed: 2 } }),
+      idle(),
+    ];
+    const client = new FakeOpencodeClient(TOOL_SCRIPT);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const code = await new OpencodeDriver(ctx).run(ac.signal);
+    expect(code).toBe(0);
+    expect(captured).not.toBeNull();
+
+    // The relay posted a tool_use content frame and a tool_result content frame.
+    const toolUses = broker.content.filter((p) => p.recordKind === "tool_use");
+    const toolResults = broker.content.filter((p) => p.recordKind === "tool_result");
+    expect(toolUses).toHaveLength(1);
+    expect(toolResults).toHaveLength(1);
+    // tool_use body is {name,input,sub}; tool_result body is {tool_use_id,is_error,output,sub}.
+    const tu = JSON.parse(toolUses[0]?.text ?? "{}");
+    expect(tu.name).toBe("bash");
+    expect(tu.input).toEqual({ command: "echo hello" });
+    const tr = JSON.parse(toolResults[0]?.text ?? "{}");
+    expect(tr.tool_use_id).toBe("call_echo");
+    expect(tr.is_error).toBe(false);
+    expect(tr.output).toContain("hello");
+    // Ordering: the tool_use frame precedes its tool_result frame.
+    expect((toolUses[0]?.seq as number) < (toolResults[0]?.seq as number)).toBe(true);
   });
 });
