@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createClient } from "@libsql/client";
 import type { WireFrame } from "@remote-claw/clawsec";
 import { afterEach, describe, expect, it } from "vitest";
 import { dbFileName, FileDbLocator, SqliteMultiBackend } from "../../lib/broker/sqlite-multi";
@@ -235,5 +236,45 @@ describe("SqliteMultiBackend", () => {
     // Now A is idle and gets reclaimed.
     expect(await be.sweep(-1)).toBe(1);
     expect(existsSync(pathA)).toBe(false);
+  });
+});
+
+describe("FileDbLocator lock semantics", () => {
+  it("opens each session database in WAL mode (reads run concurrently with the writer, like remote libSQL)", async () => {
+    const { be, dir } = mkBackend();
+    await be.publish(A, frame(1)); // goes through prepare() on the real create path
+    const c = createClient({ url: `file:${join(dir, dbFileName(A))}` });
+    try {
+      const jm = await c.execute("PRAGMA journal_mode");
+      // WAL persists in the db header, so EVERY connection (poll-tail subscribe, sweep probe, this one)
+      // gets reader/writer concurrency — no reader↔writer SQLITE_BUSY, matching Turso's MVCC reads.
+      expect(String(jm.rows[0]?.journal_mode).toLowerCase()).toBe("wal");
+    } finally {
+      c.close();
+    }
+  });
+
+  it("a reader sees the last committed snapshot while a writer holds an open transaction (no SQLITE_BUSY)", async () => {
+    const { dir } = mkBackend();
+    const loc = new FileDbLocator(dir);
+    const writer = createClient(loc.config(A));
+    const reader = createClient(loc.config(A));
+    await loc.prepare(writer); // enables WAL (persisted)
+    try {
+      await writer.execute("CREATE TABLE IF NOT EXISTS t (x INTEGER)");
+      await writer.execute("INSERT INTO t (x) VALUES (1)"); // committed
+      const tx = await writer.transaction("write");
+      await tx.execute("INSERT INTO t (x) VALUES (2)"); // uncommitted; holds the write lock
+      // WAL: the reader proceeds against the last committed snapshot instead of blocking/erroring.
+      const mid = await reader.execute("SELECT COUNT(*) AS n FROM t");
+      expect(Number(mid.rows[0]?.n)).toBe(1);
+      await tx.commit();
+      tx.close();
+      const after = await reader.execute("SELECT COUNT(*) AS n FROM t");
+      expect(Number(after.rows[0]?.n)).toBe(2);
+    } finally {
+      writer.close();
+      reader.close();
+    }
   });
 });

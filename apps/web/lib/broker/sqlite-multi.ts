@@ -174,6 +174,10 @@ export interface DbLocator {
   config(token: string): { url: string; authToken?: string };
   /** Create the token's database if absent (write path). No-op for `file:` (createClient makes it). */
   ensure(token: string): Promise<void>;
+  /** Configure a freshly-opened client (e.g. file: sets WAL + busy_timeout so its lock/concurrency
+   *  semantics match a remote single-writer libSQL). Optional; omit when the store needs no per-client
+   *  setup (remote Turso serializes writes server-side). */
+  prepare?(client: Client): Promise<void>;
   /** Whether the token's database already exists. Read paths must NOT create one (subscribe-or-null). */
   exists(token: string): Promise<boolean>;
   /** All database paths/ids in the store (for the retention sweep); omit if the store can't enumerate. */
@@ -222,6 +226,18 @@ export class FileDbLocator implements DbLocator {
 
   // No-op: opening a `file:` URL creates the database file, so there is nothing to pre-provision.
   async ensure(_token: string): Promise<void> {}
+
+  // Align local-file lock semantics with a remote single-writer libSQL so concurrency has the SAME SHAPE
+  // in dev and prod. WAL lets readers (the poll-tail subscribe, the sweep probe) proceed concurrently
+  // with the writer instead of hitting reader↔writer SQLITE_BUSY — matching Turso's MVCC-style reads.
+  // WRITE serialization is structural, not a busy_timeout: the cache opens exactly ONE writer connection
+  // per session token (create-lock + per-client write-lock), so two writers to one file never race —
+  // the same one-writer-per-session shape cloud has (one client per token + server-side single-writer).
+  // (@libsql/client does not honour a PRAGMA busy_timeout for transaction lock waits, so we don't rely
+  // on one; the single-writer invariant is what guarantees writes serialize rather than fail.)
+  async prepare(client: Client): Promise<void> {
+    await client.execute("PRAGMA journal_mode = WAL");
+  }
 
   async exists(token: string): Promise<boolean> {
     return existsSync(this.#path(token));
@@ -323,6 +339,7 @@ class SessionDbCache {
         return null; // read path: never create a channel
       }
       const client = createClient(this.#locator.config(token));
+      await this.#locator.prepare?.(client); // file: WAL + busy_timeout; cloud: server serializes writes
       const entry: CacheEntry = { client, refs: 0 };
       this.#entries.set(token, entry);
       return this.#lease(token, entry);
@@ -741,6 +758,7 @@ export class SqliteMultiBackend implements BrokerBackend {
         // createClient is INSIDE the try so a construction throw is handled like an unreadable db
         // (leave it for a later sweep) rather than aborting the whole sweep.
         probe = createClient(configForPath(path));
+        await this.#locator.prepare?.(probe); // WAL/busy_timeout: read concurrently with a live writer
         const r = await probe.execute("SELECT MAX(created_at) AS m FROM frames");
         const m = r.rows[0]?.m;
         stale = m === null || m === undefined ? true : Number(m) < cutoff;

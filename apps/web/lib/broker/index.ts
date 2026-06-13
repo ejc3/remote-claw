@@ -36,17 +36,17 @@ export function isKnownBackend(name: string): boolean {
   return KNOWN.has(name);
 }
 
-// Durable, SHARED backends are safe to pick PER REQUEST. `local` (process-memory) and `sqlite` (a
-// per-instance local disk in file-mode) are NOT shared across instances, so picking either per-request
-// on a multi-instance / serverless deploy would land publish + subscribe on different instances. So
-// they are only honoured when one is the deployment's OWN default (i.e. dev / `next start` with
-// BROKER_BACKEND=local|sqlite) — never as a header/param override on a vercel/temporal deployment. (A
-// future Turso-Cloud sqlite locator IS shared and would join this set.)
-const REQUESTABLE = new Set(["vercel", "temporal", "turso"]);
+// Durable backends are safe to pick PER REQUEST. `local` is the lone exception: it's process MEMORY, so
+// on a multi-instance / serverless deploy a per-request pick would land publish + subscribe on different
+// instances — it's honoured only as the deployment's OWN default (dev / `next start`). `sqlite` IS
+// requestable: its storage is either a single local process's disk (dev / `next start` / e2e) or a
+// SHARED remote Turso db (multi-instance / Vercel), and file-mode on Vercel is guarded off — so a
+// selected `sqlite` request always reaches a CONSISTENT store, the way `vercel`/`temporal`/`turso` do.
+const REQUESTABLE = new Set(["vercel", "temporal", "turso", "sqlite"]);
 
-/** True if `name` may be chosen by an incoming request's selector (header / ?backend=). NOTE: `sqlite`
- *  and `local` are deliberately NOT in REQUESTABLE — they are honoured only when one is the deployment's
- *  own BROKER_BACKEND default, so a per-request override can't split publish/subscribe across instances. */
+/** True if `name` may be chosen by an incoming request's selector (header / ?backend=). Only `local` is
+ *  deliberately NOT in REQUESTABLE — it is process memory, honoured solely as the deployment's own
+ *  BROKER_BACKEND default, so a per-request override can't split publish/subscribe across instances. */
 export function isRequestableBackend(name: string): boolean {
   return REQUESTABLE.has(name) || name === (process.env.BROKER_BACKEND ?? "vercel");
 }
@@ -90,11 +90,10 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
       break;
     }
     case "sqlite": {
-      // Per-session libSQL — ONE database per channel token (BROKER_BACKEND=sqlite). The ONLY thing that
-      // varies is the storage locator, chosen from env: Turso Cloud (one remote db per session) when the
-      // cloud creds are set, else local files under RC_SQLITE_DIR. Dynamic-imported like turso so
-      // @libsql/client + node:fs stay out of the bundle unless selected. File-mode is single-instance
-      // (per-instance disk), so like `local` it is only honoured as the deployment's OWN default.
+      // Per-session libSQL — ONE database per channel token (BROKER_BACKEND=sqlite, or ?backend=sqlite).
+      // The ONLY thing that varies is the storage locator, chosen from env: Turso Cloud (one remote db
+      // per session) when the cloud creds are set, else local files under RC_SQLITE_DIR. Dynamic-imported
+      // like turso so @libsql/client + node:fs stay out of the bundle unless selected.
       const { SqliteMultiBackend } = await import("./sqlite-multi");
       const { selectLocatorFromEnv } = await import("./turso-cloud-locator");
       backend = new SqliteMultiBackend(selectLocatorFromEnv());
