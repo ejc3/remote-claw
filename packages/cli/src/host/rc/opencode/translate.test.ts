@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  type Part,
-  coalesceMessage,
-  partToBlocks,
-  userText,
-} from "./translate.js";
+import { coalesceMessage, type Part, partToBlocks, userText } from "./translate.js";
 
 // Golden fixtures: each Part shape mirrors the live `opencode serve` GET /doc Part schemas (verified by
 // curling the server). The assertions PIN the exact content-block JSON the relay's mapUpstreamItems
@@ -81,7 +76,12 @@ describe("partToBlocks", () => {
     expect(partToBlocks(failed)).toEqual({
       assistant: [{ type: "tool_use", name: "Bash", input: { command: "nope" }, id: "call_7" }],
       toolResults: [
-        { type: "tool_result", tool_use_id: "call_7", content: "command not found", is_error: true },
+        {
+          type: "tool_result",
+          tool_use_id: "call_7",
+          content: "command not found",
+          is_error: true,
+        },
       ],
     });
   });
