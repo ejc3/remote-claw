@@ -10,7 +10,13 @@
 // assistant message and a `tool_result` block on a FOLLOWING user message. So a completed assistant
 // message with tool calls coalesces into up to two UpstreamPayloads (assistant, then user).
 
-import type { ContentBlock, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock } from "../driver.js";
+import type {
+  ContentBlock,
+  TextBlock,
+  ThinkingBlock,
+  ToolResultBlock,
+  ToolUseBlock,
+} from "../driver.js";
 
 /** The OpenCode `Part` shapes the driver acts on (the load-bearing subset of the Part union — verified
  *  against the live server's GET /doc OpenAPI). Fields we don't read are left off; an `unknown`-typed
@@ -49,25 +55,27 @@ export interface ToolPart {
   state: ToolState;
 }
 
-/** Parts the driver deliberately drops (turn boundaries / housekeeping / not-yet-supported), kept here
- *  so `partToBlocks` can name them explicitly rather than via a silent default. */
+/** The three part types the driver actually renders — a clean discriminated union that narrows on
+ *  `type`. `partToBlocks` switches over THIS, after a guard filters out everything else. */
+export type KnownPart = TextPart | ReasoningPart | ToolPart;
+
+/** Parts the driver deliberately drops (turn boundaries / housekeeping / not-yet-supported). `type` is
+ *  a plain string so any unhandled/new part type is accepted from the SSE; the guard below routes it to
+ *  the EMPTY case rather than the rendered switch (which only sees a KnownPart). */
 export interface OtherPart {
-  type:
-    | "step-start"
-    | "step-finish"
-    | "snapshot"
-    | "patch"
-    | "agent"
-    | "retry"
-    | "compaction"
-    | "file"
-    | "subtask"
-    | string;
+  type: string;
   id: string;
-  [k: string]: unknown;
 }
 
-export type Part = TextPart | ReasoningPart | ToolPart | OtherPart;
+export type Part = KnownPart | OtherPart;
+
+const KNOWN_PART_TYPES = new Set(["text", "reasoning", "tool"]);
+
+/** Type guard: is this a part the driver renders? Filters the raw SSE Part down to KnownPart so the
+ *  switch in `partToBlocks` narrows cleanly (no `unknown`-typed `state`/`text` from the union widening). */
+function isKnownPart(part: Part): part is KnownPart {
+  return KNOWN_PART_TYPES.has(part.type);
+}
 
 /** A part's translation: blocks that belong on the ASSISTANT message and (for completed tool calls)
  *  blocks that belong on the FOLLOWING user message (tool_result). claude's protocol keeps these on
@@ -89,6 +97,7 @@ const EMPTY: PartBlocks = { assistant: [], toolResults: [] };
  * anyway; dropping synthetic here avoids double-rendering the user prompt echo). Everything else → EMPTY.
  */
 export function partToBlocks(part: Part): PartBlocks {
+  if (!isKnownPart(part)) return EMPTY; // step/snapshot/patch/agent/retry/compaction/file/subtask/new
   switch (part.type) {
     case "text": {
       const text = typeof part.text === "string" ? part.text : "";
