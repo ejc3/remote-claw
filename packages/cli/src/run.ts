@@ -9,13 +9,19 @@ import { constants } from "node:os";
 import { dirname, join } from "node:path";
 import { deriveIdentity } from "@remote-claw/clawsec";
 import { classifyArgs } from "./args.js";
+import { BrokerClient } from "./broker/client.js";
 import { RC_HELP } from "./help.js";
+import type { DriverContext } from "./host/rc/driver.js";
+import { gitInfo } from "./host/rc/gitinfo.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
+import { DEFAULT_OPENCODE_MODEL, runOpencodeDriver } from "./host/rc/opencode/driver.js";
 import { runRcTrace } from "./host/rc/trace-run.js";
 import { runIdentity } from "./identity.js";
 import { runPass } from "./pass.js";
+import { securityProvider } from "./security/provider.js";
 import { runShowSecret } from "./showsecret.js";
 import { ensureIdentity, loadSecret, resolveSecretPath } from "./store.js";
+import { tracerFromEnv } from "./trace.js";
 
 /** Map a signal name to its number (for the shell-standard 128+N exit code). */
 function signalExitCode(signal: NodeJS.Signals): number {
@@ -127,7 +133,13 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // the broker origin) and action modifiers that are only meaningful with a local action above.
   const rcNames = Object.keys(rc);
   const stray = rcNames.filter(
-    (n) => n !== "rc-file" && n !== "rc-app" && n !== "rc-backend" && n !== "rc-driver",
+    (n) =>
+      n !== "rc-file" &&
+      n !== "rc-app" &&
+      n !== "rc-backend" &&
+      n !== "rc-driver" &&
+      n !== "rc-oc-url" &&
+      n !== "rc-oc-model",
   );
   if (stray.length > 0) {
     const named = stray.map((k) => `--${k}`).join(", ");
@@ -168,11 +180,13 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     if (driver === "mitm") {
       return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
     }
-    if (driver === "tmux" || driver === "opencode") {
-      const doc = driver === "tmux" ? "tmux-driver" : "opencode-driver";
+    if (driver === "opencode") {
+      return runOpencodeDriverPath(rcApp, rc, claudeArgs, warn);
+    }
+    if (driver === "tmux") {
       warn(
-        `remote-claw: --rc-driver=${driver} is not wired yet (mitm is the only live driver); ` +
-          `the seam + design are ready — see docs/${doc}.md\n`,
+        `remote-claw: --rc-driver=tmux is not wired yet (mitm/opencode are the live drivers); ` +
+          `the seam + design are ready — see docs/tmux-driver.md\n`,
       );
       return 2;
     }
@@ -249,6 +263,91 @@ async function runRcLaunchPath(
     });
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
+}
+
+/**
+ * The `--rc-driver=opencode` path: resolve the identity (auto-created on first run) and bridge an
+ * `opencode serve` session to the broker — NO MITM, no spawned claude. Builds the same DriverContext
+ * shape runRcLaunchPath builds for the MITM (identity, backend, newClient, title, cwd, git), plus the
+ * OpenCode knobs (server url + model). Runs until SIGINT/SIGTERM (so Ctrl-C tears the driver down).
+ */
+async function runOpencodeDriverPath(
+  brokerUrl: string,
+  rc: Record<string, unknown>,
+  claudeArgs: string[],
+  warn: (line: string) => void,
+): Promise<number> {
+  const secretPath = resolveSecretPath({
+    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
+  }).path;
+  const backend =
+    (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
+    (process.env.RC_BACKEND ?? "").trim() ||
+    undefined;
+  // OpenCode server origin (--rc-oc-url, else OPENCODE_URL, else the default loopback). The model is
+  // "providerID/modelID" (--rc-oc-model, else RC_OC_MODEL, else ollama/qwen2.5:0.5b for the dev loop;
+  // Bedrock is the documented prod path).
+  const baseUrl =
+    (typeof rc["rc-oc-url"] === "string" ? rc["rc-oc-url"] : "").trim() ||
+    (process.env.OPENCODE_URL ?? "").trim() ||
+    undefined;
+  const modelStr =
+    (typeof rc["rc-oc-model"] === "string" ? rc["rc-oc-model"] : "").trim() ||
+    (process.env.RC_OC_MODEL ?? "").trim();
+  const slash = modelStr.indexOf("/");
+  const model =
+    slash > 0
+      ? { providerID: modelStr.slice(0, slash), modelID: modelStr.slice(slash + 1) }
+      : DEFAULT_OPENCODE_MODEL;
+  const password = (process.env.OPENCODE_SERVER_PASSWORD ?? "").trim() || undefined;
+
+  try {
+    await ensureIdentity(secretPath);
+    const { secret } = await loadSecret(secretPath);
+    const identity = await deriveIdentity(secret);
+    const provider = securityProvider("sealed", identity);
+    const cwd = process.cwd();
+    const git = await gitInfo(cwd);
+    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const newClient = () =>
+      new BrokerClient({
+        baseUrl: brokerUrl,
+        provider,
+        ...(bypass ? { protectionBypass: bypass } : {}),
+        ...(backend !== undefined ? { backend } : {}),
+      });
+
+    const ctx: DriverContext = {
+      harnessArgs: claudeArgs,
+      identity,
+      brokerUrl,
+      title: "remote-claw",
+      cwd,
+      git,
+      newClient,
+      tracer: tracerFromEnv("rc.opencode"),
+      extra: {
+        ...(baseUrl !== undefined ? { baseUrl } : {}),
+        model,
+        ...(password !== undefined ? { password } : {}),
+      },
+      ...(backend !== undefined ? { backend } : {}),
+    };
+
+    const ac = new AbortController();
+    const onSig = () => ac.abort();
+    process.once("SIGINT", onSig);
+    process.once("SIGTERM", onSig);
+    try {
+      return await runOpencodeDriver(ctx, ac.signal);
+    } finally {
+      process.removeListener("SIGINT", onSig);
+      process.removeListener("SIGTERM", onSig);
+    }
+  } catch (e) {
+    warn(`remote-claw: could not start opencode driver: ${(e as Error)?.message ?? e}\n`);
     return 1;
   }
 }

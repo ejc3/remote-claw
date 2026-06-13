@@ -31,6 +31,11 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // tmux (plain claude in a tmux pane; provider-agnostic, Bedrock-capable), or opencode (drive
   // `opencode serve`). Same broker/client/viewer for all (§ pluggable-harness).
   "rc-driver": "value",
+  // OpenCode driver knobs (only meaningful with --rc-driver=opencode). The server origin
+  // (default 127.0.0.1:4096, env OPENCODE_URL) and the model as "providerID/modelID"
+  // (default ollama/qwen2.5:0.5b, env RC_OC_MODEL). Bedrock is the documented prod model path.
+  "rc-oc-url": "value",
+  "rc-oc-model": "value",
 };
 // Not reserved: starting already remote-controlled is just claude's own `--remote-control`,
 // which the wrapper forwards verbatim — no `--rc-share`. The web deep link is built from the
