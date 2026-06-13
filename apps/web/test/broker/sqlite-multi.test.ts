@@ -274,6 +274,25 @@ describe("SqliteMultiBackend", () => {
     expect(await be.sweep(-1)).toBe(1);
     expect(existsSync(pathA)).toBe(false);
   });
+
+  it("sweep evicts the cached client so a swept session reopens fresh (no stale open handle)", async () => {
+    const { be, dir } = mkBackend();
+    await be.publish(A, frame(1)); // creates AND caches A's client
+    expect(existsSync(join(dir, dbFileName(A)))).toBe(true);
+
+    expect(await be.sweep(-1)).toBe(1); // drops A's db AND must evict its now-stale cached client
+    expect(existsSync(join(dir, dbFileName(A)))).toBe(false);
+
+    // Without the eviction the cached client (open on the unlinked file) would still answer here; with
+    // it, subscribe goes through a fresh exists() check and correctly sees no channel.
+    expect(await be.subscribe(A, undefined)).toBeNull();
+
+    // A republish starts a brand-new incarnation in a fresh db.
+    const r = await be.publish(A, frame(9));
+    expect(r.created).toBe(true);
+    const sub = await be.subscribe(A, undefined);
+    expect(seqs(await take(sub as ReadableStream<WireFrame>, 1))).toEqual([9]);
+  });
 });
 
 describe("FileDbLocator lock semantics", () => {

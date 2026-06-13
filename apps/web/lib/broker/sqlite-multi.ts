@@ -287,6 +287,7 @@ interface Lease {
 interface CacheEntry {
   client: Client;
   refs: number;
+  url: string; // the connection url (e.g. `file:<path>`) — lets the sweep evict by store path
 }
 
 // A bounded, ref-counted LRU of per-session libSQL clients. Opening one client per session and caching
@@ -351,9 +352,10 @@ class SessionDbCache {
       } else if (!(await this.#locator.exists(token))) {
         return null; // read path: never create a channel
       }
-      const client = this.#newClient(this.#locator.config(token));
+      const cfg = this.#locator.config(token);
+      const client = this.#newClient(cfg);
       await this.#locator.prepare?.(client); // file: WAL; cloud: server serializes writes
-      const entry: CacheEntry = { client, refs: 0 };
+      const entry: CacheEntry = { client, refs: 0, url: cfg.url };
       this.#entries.set(token, entry);
       return this.#lease(token, entry);
     });
@@ -458,6 +460,29 @@ class SessionDbCache {
     const out: string[] = [];
     for (const [token, entry] of this.#entries) if (entry.refs > 0) out.push(token);
     return out;
+  }
+
+  /**
+   * Evict the IDLE cached client for a connection url, so the retention sweep can drop its db without a
+   * stale client (open on the unlinked file) surviving in the cache and serving the next access. Returns
+   * "busy" if a live borrow holds it — the caller must NOT drop the db then (it raced into use) — else
+   * "evicted" (closed + removed) or "absent" (nothing cached). Closing the dropped-then-evicted handle
+   * also re-checks the refs at drop time, closing the activeTokens()-snapshot TOCTOU.
+   */
+  evictByUrl(url: string): "evicted" | "busy" | "absent" {
+    for (const [token, entry] of this.#entries) {
+      if (entry.url !== url) continue;
+      if (entry.refs > 0) return "busy";
+      this.#entries.delete(token);
+      writeLocks.delete(entry.client);
+      try {
+        entry.client.close();
+      } catch {
+        /* already closed */
+      }
+      return "evicted";
+    }
+    return "absent";
   }
 
   #evict(): void {
@@ -788,6 +813,10 @@ export class SqliteMultiBackend implements BrokerBackend {
         }
       }
       if (stale) {
+        // Evict any idle cached client for this db FIRST, so a stale handle (open on the file we're about
+        // to unlink) can't survive in the cache and serve the next access. If it raced into use, skip the
+        // drop (it's no longer idle/stale).
+        if (this.#cache.evictByUrl(configForPath(path).url) === "busy") continue;
         await dropPath(path);
         swept += 1;
       }
