@@ -126,7 +126,9 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // The remaining `--rc-*` namespace splits into flags the LAUNCH path consumes (the secret file +
   // the broker origin) and action modifiers that are only meaningful with a local action above.
   const rcNames = Object.keys(rc);
-  const stray = rcNames.filter((n) => n !== "rc-file" && n !== "rc-app" && n !== "rc-backend");
+  const stray = rcNames.filter(
+    (n) => n !== "rc-file" && n !== "rc-app" && n !== "rc-backend" && n !== "rc-driver",
+  );
   if (stray.length > 0) {
     const named = stray.map((k) => `--${k}`).join(", ");
     warn(`remote-claw: ${named} only applies to a --rc-* action (e.g. --rc-identity)\n`);
@@ -155,7 +157,27 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // claude's help — fall through to a plain spawn.
   const rcApp = (typeof rc["rc-app"] === "string" ? rc["rc-app"] : "") || process.env.RC_APP || "";
   if (rcApp !== "" && !helpWanted) {
-    return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
+    // Which capture/inject driver runs the harness: --rc-driver / RC_DRIVER, default "mitm" (today's
+    // behavior, byte-for-byte). tmux/opencode bridge to the SAME broker via the pluggable seam
+    // (driver.ts) and land in follow-up PRs; until then they validate-and-explain rather than misbehave.
+    const driver = (
+      (typeof rc["rc-driver"] === "string" ? rc["rc-driver"] : "").trim() ||
+      (process.env.RC_DRIVER ?? "").trim() ||
+      "mitm"
+    ).toLowerCase();
+    if (driver === "mitm") {
+      return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
+    }
+    if (driver === "tmux" || driver === "opencode") {
+      const doc = driver === "tmux" ? "tmux-driver" : "opencode-driver";
+      warn(
+        `remote-claw: --rc-driver=${driver} is not wired yet (mitm is the only live driver); ` +
+          `the seam + design are ready — see docs/${doc}.md\n`,
+      );
+      return 2;
+    }
+    warn(`remote-claw: unknown --rc-driver=${driver} (expected mitm | tmux | opencode)\n`);
+    return 2;
   }
   if (rcApp === "" && rcNames.length > 0 && !helpWanted) {
     // Name the flags the user actually passed (e.g. --rc-backend) instead of always blaming --rc-file.
