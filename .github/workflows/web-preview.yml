@@ -41,6 +41,11 @@ jobs:
       # The automation-bypass secret (x-vercel-protection-bypass) gets the e2e through it. Low blast
       # radius (grants access only to the preview already under test), like DEV_SEED_TOKEN above.
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      # Opt-in flag for the REAL Turso Cloud sqlite e2e (below). Set it (GitHub secret) only when the
+      # Vercel Preview env also has the four Turso Cloud vars (TURSO_API_TOKEN/ORG/GROUP + group
+      # TURSO_AUTH_TOKEN, e.g. from the Vercel↔Turso integration) so ?backend=sqlite resolves to a real
+      # per-session Turso database. Until set, that step is skipped and web-preview stays green.
+      TURSO_CLOUD_E2E: ${{ secrets.TURSO_CLOUD_E2E }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,4 +78,15 @@ jobs:
         if: ${{ env.DEV_SEED_TOKEN != '' }}
         env:
           E2E_SEED_TOKEN: ${{ env.DEV_SEED_TOKEN }}
+        run: pnpm --filter remote-claw-web-tests exec playwright test -c app-e2e.preview.config.ts
+
+      # The SAME spec, flipped to the per-session SQLite backend on REAL Turso Cloud storage — the only
+      # place the cloud locator's Platform-API create + group-token connect actually run. Identical UI
+      # assertions, just routed via ?backend=sqlite. Opt-in (TURSO_CLOUD_E2E, see env above) so it's
+      # skipped until the Vercel Preview env has the Turso Cloud creds.
+      - name: App UI e2e against the preview (sqlite — real Turso Cloud)
+        if: ${{ env.DEV_SEED_TOKEN != '' && env.TURSO_CLOUD_E2E != '' }}
+        env:
+          E2E_SEED_TOKEN: ${{ env.DEV_SEED_TOKEN }}
+          E2E_BACKEND: sqlite
         run: pnpm --filter remote-claw-web-tests exec playwright test -c app-e2e.preview.config.ts

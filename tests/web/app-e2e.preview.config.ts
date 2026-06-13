@@ -1,10 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // The SAME app e2e (app-e2e/transcript.spec.ts) run against a DEPLOYED Vercel PREVIEW — the only place
-// the Vercel Workflows runtime actually exists, so this is how the **vercel backend** UI e2e runs.
+// the Vercel Workflows runtime (and the sqlite backend's real Turso Cloud storage) actually exist, so
+// this is how the **vercel** and **sqlite/Turso-Cloud** backend UI e2e run.
 // No webServer: the app is already deployed; `baseURL` is the preview URL (WEB_E2E_URL). The seed route
-// is reached with the DEV_SEED_TOKEN secret (E2E_SEED_TOKEN). E2E_BACKEND is unset, so the spec uses the
-// deployment's default (vercel). Driven by .github/workflows/web-preview.yml on a successful preview.
+// is reached with the DEV_SEED_TOKEN secret (E2E_SEED_TOKEN). E2E_BACKEND selects the backend to flip to
+// via ?backend=: unset ⇒ the deployment default (vercel); `sqlite` ⇒ the per-session backend on real
+// Turso Cloud. Driven by .github/workflows/web-preview.yml on a successful preview.
 
 const BASE = process.env.WEB_E2E_URL;
 
