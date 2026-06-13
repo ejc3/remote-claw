@@ -47,7 +47,7 @@ export class MockBroker {
 
   #durableFor(init: RequestInit | undefined): boolean {
     const backend = new Headers(init?.headers).get("x-broker-backend")?.trim();
-    return backend === "turso" || (backend === undefined && this.durable);
+    return backend === "sqlite" || (backend === undefined && this.durable);
   }
 
   async #handle(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {

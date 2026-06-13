@@ -1,8 +1,9 @@
 name: web-e2e
 
-# Self-contained end-to-end + stress tests for the broker, covering the LocalBackend and the Temporal
-# backend (an in-memory `temporal server start-dev` — no Docker, no external account). The Vercel
-# backend's durable runtime only exists on a Vercel deployment, so its e2e lives in web-preview.yml.
+# Self-contained end-to-end + stress tests for the broker, covering the Local, Temporal (an in-memory
+# `temporal server start-dev` — no Docker, no account), and per-session SQLite (local libSQL file)
+# backends. The Vercel backend's durable runtime only exists on a Vercel deployment, so its e2e lives in
+# web-preview.yml; the sqlite backend's Turso Cloud storage mode is likewise exercised on a real deploy.
 on:
   push:
     branches: [main]
@@ -55,8 +56,8 @@ jobs:
         run: pnpm --filter remote-claw-web-tests run test:app
       - name: App e2e — Temporal (in-memory server + worker, flipped via ?backend=)
         run: pnpm --filter remote-claw-web-tests run test:app:temporal
-      - name: App e2e — Turso (durable libSQL file, flipped via ?backend=)
-        run: pnpm --filter remote-claw-web-tests run test:app:turso
+      - name: App e2e — Sqlite (per-session libSQL file, flipped via ?backend=)
+        run: pnpm --filter remote-claw-web-tests run test:app:sqlite
       - name: App e2e — drain route on a REAL build (no standalone worker)
         run: pnpm --filter remote-claw-web-tests run test:app:drain
       - name: Unit + drift tests (incl. the pre-built workflow bundle is current)
@@ -78,5 +79,5 @@ jobs:
           path: |
             tests/web/test-results/
             tests/web/test-results-temporal/
-            tests/web/test-results-turso/
+            tests/web/test-results-sqlite/
           retention-days: 7

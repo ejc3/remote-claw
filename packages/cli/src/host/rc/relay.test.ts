@@ -673,7 +673,7 @@ describe("HostRcRelay mid-session reconnect = complete history from the relay lo
   });
 });
 
-// A2a — on a DURABLE-log backend (turso) the broker keeps every frame, so a (re)connecting viewer's
+// A2a — on a DURABLE-log backend (per-session SQLite) the broker keeps every frame, so a (re)connecting viewer's
 // subscribe(startIndex:0) replays the whole transcript on its own. The host then must NOT also keep an
 // in-memory `#log` or re-post it on `catch_up` (that would be pure waste — the frames are already in the
 // durable log and already delivered by subscribe). "One log, mediated by the broker."
@@ -681,7 +681,7 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
   it("DURABLE: catch_up is consumed but never opened or replayed", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    client.reportedDurable = true; // server-reported turso-style backend
+    client.reportedDurable = true; // server-reported durable libSQL backend
     const relay = relayOf(session, client);
     const ac = new AbortController();
     const served = relay.serve(ac.signal).catch(() => {});

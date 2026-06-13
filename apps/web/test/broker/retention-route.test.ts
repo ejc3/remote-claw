@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_RETENTION_MS,
   retentionMs,
-  tursoConfigured,
+  sqliteConfigured,
 } from "../../app/api/cron/retention/gate";
 import { GET } from "../../app/api/cron/retention/route";
 
@@ -20,7 +20,6 @@ const KEYS = [
   "BROKER_RETENTION_MS",
   "CRON_SECRET",
   "NODE_ENV",
-  "TURSO_DATABASE_URL",
   "VERCEL",
 ] as const;
 
@@ -75,19 +74,19 @@ describe("retentionMs", () => {
     }
   });
 
-  it("treats a configured Turso URL as this deployment's requestable Turso store", () => {
-    expect(tursoConfigured()).toBe(false);
+  it("is active only when the deployment's backend is the per-session sqlite backend", () => {
+    expect(sqliteConfigured()).toBe(false);
     env.BROKER_BACKEND = "vercel";
-    expect(tursoConfigured()).toBe(false);
-    env.TURSO_DATABASE_URL = " file:test.db ";
-    expect(tursoConfigured()).toBe(true);
+    expect(sqliteConfigured()).toBe(false);
+    env.BROKER_BACKEND = " sqlite ";
+    expect(sqliteConfigured()).toBe(true);
   });
 });
 
 describe("retention cron route", () => {
   it("uses the shared auth gate and returns 404 when unauthorized", async () => {
     env.CRON_SECRET = "cron";
-    env.TURSO_DATABASE_URL = "file:test.db";
+    env.BROKER_BACKEND = "sqlite";
 
     const res = await GET(req("Bearer wrong"));
 
@@ -96,9 +95,9 @@ describe("retention cron route", () => {
     expect(mocks.getBackend).not.toHaveBeenCalled();
   });
 
-  it("falls back to swept:0 when Turso is not configured", async () => {
+  it("falls back to swept:0 when sqlite is not the deployment backend", async () => {
     env.CRON_SECRET = "cron";
-    env.BROKER_BACKEND = "turso";
+    env.BROKER_BACKEND = "vercel";
 
     const res = await GET(req("Bearer cron"));
 
@@ -107,10 +106,9 @@ describe("retention cron route", () => {
     expect(mocks.getBackend).not.toHaveBeenCalled();
   });
 
-  it("runs sweep when Turso is configured even if Vercel is the default backend", async () => {
+  it("runs sweep against the sqlite backend when it is the deployment backend", async () => {
     env.CRON_SECRET = "cron";
-    env.BROKER_BACKEND = "vercel";
-    env.TURSO_DATABASE_URL = "file:test.db";
+    env.BROKER_BACKEND = "sqlite";
     const sweep = vi.fn().mockResolvedValue(2);
     mocks.getBackend.mockResolvedValue({ sweep });
 
@@ -118,14 +116,13 @@ describe("retention cron route", () => {
 
     expect(res.status).toBe(200);
     expect(await json(res)).toEqual({ swept: 2 });
-    expect(mocks.getBackend).toHaveBeenCalledWith("turso");
+    expect(mocks.getBackend).toHaveBeenCalledWith("sqlite");
     expect(sweep).toHaveBeenCalledWith(DEFAULT_RETENTION_MS);
   });
 
-  it("falls back to swept:0 when the backend has no sweep hook", async () => {
+  it("falls back to swept:0 when the backend has no sweep hook (e.g. cloud storage)", async () => {
     env.CRON_SECRET = "cron";
-    env.BROKER_BACKEND = "turso";
-    env.TURSO_DATABASE_URL = "file:test.db";
+    env.BROKER_BACKEND = "sqlite";
     mocks.getBackend.mockResolvedValue({});
 
     const res = await GET(req("Bearer cron"));
@@ -137,8 +134,7 @@ describe("retention cron route", () => {
   it("runs sweep with a valid retention override", async () => {
     env.BROKER_RETENTION_MS = "45000";
     env.CRON_SECRET = "cron";
-    env.BROKER_BACKEND = "turso";
-    env.TURSO_DATABASE_URL = "file:test.db";
+    env.BROKER_BACKEND = "sqlite";
     const sweep = vi.fn().mockResolvedValue(3);
     mocks.getBackend.mockResolvedValue({ sweep });
 
@@ -146,21 +142,20 @@ describe("retention cron route", () => {
 
     expect(res.status).toBe(200);
     expect(await json(res)).toEqual({ swept: 3 });
-    expect(mocks.getBackend).toHaveBeenCalledWith("turso");
+    expect(mocks.getBackend).toHaveBeenCalledWith("sqlite");
     expect(sweep).toHaveBeenCalledWith(45_000);
   });
 
   it("returns 500 when backend construction or sweep fails", async () => {
     env.CRON_SECRET = "cron";
-    env.BROKER_BACKEND = "turso";
-    env.TURSO_DATABASE_URL = "file:test.db";
-    mocks.getBackend.mockRejectedValue(new Error("bad turso"));
+    env.BROKER_BACKEND = "sqlite";
+    mocks.getBackend.mockRejectedValue(new Error("bad sqlite"));
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const res = await GET(req("Bearer cron"));
 
     expect(res.status).toBe(500);
-    expect(await json(res)).toEqual({ error: "bad turso" });
-    expect(error).toHaveBeenCalledWith("[turso-retention] sweep failed:", "bad turso");
+    expect(await json(res)).toEqual({ error: "bad sqlite" });
+    expect(error).toHaveBeenCalledWith("[sqlite-retention] sweep failed:", "bad sqlite");
   });
 });

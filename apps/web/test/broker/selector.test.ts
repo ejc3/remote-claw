@@ -28,16 +28,16 @@ describe("backendSelector blank handling (Sel-400)", () => {
   });
 
   it("returns the trimmed value for a real selector (param wins over header)", () => {
-    expect(sel("?backend=turso")).toBe("turso");
-    expect(sel("?backend=%20turso%20")).toBe("turso");
-    expect(sel("?backend=turso", "temporal")).toBe("turso");
+    expect(sel("?backend=sqlite")).toBe("sqlite");
+    expect(sel("?backend=%20sqlite%20")).toBe("sqlite");
+    expect(sel("?backend=sqlite", "temporal")).toBe("sqlite");
     expect(sel("", "temporal")).toBe("temporal");
   });
 
   it("an explicit empty ?backend= shadows the header (param wins) → null → default", () => {
     // A present-but-empty param explicitly means 'no backend' and beats the header — consistent with
     // 'param wins'. Both resolve to null so the route uses the BROKER_BACKEND default.
-    expect(sel("?backend=", "turso")).toBeNull();
+    expect(sel("?backend=", "sqlite")).toBeNull();
   });
 });
 
@@ -47,7 +47,7 @@ describe("isRequestableBackend (the route guard a real invalid value still hits)
   });
 
   it("accepts the requestable durable/shared backends", () => {
-    expect(isRequestableBackend("turso")).toBe(true);
+    expect(isRequestableBackend("sqlite")).toBe(true);
     expect(isRequestableBackend("temporal")).toBe(true);
     expect(isRequestableBackend("vercel")).toBe(true);
   });

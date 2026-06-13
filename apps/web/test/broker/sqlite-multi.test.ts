@@ -1,13 +1,13 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createClient } from "@libsql/client";
+import { type Client, createClient } from "@libsql/client";
 import type { WireFrame } from "@remote-claw/clawsec";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { dbFileName, FileDbLocator, SqliteMultiBackend } from "../../lib/broker/sqlite-multi";
 
-// The per-session SQLite backend must honour the SAME durable-channel contract as the shared turso /
-// local backends (ordering, resumable replay, recent-window, create-or-resume, subscribe-or-null,
+// The per-session SQLite backend must honour the SAME durable-channel contract as the local backend
+// (ordering, resumable replay, recent-window, create-or-resume, subscribe-or-null,
 // close-frees-token, multi-subscriber fan-out, idempotent dedup), but with ONE database per channel
 // token. Run against a REAL libSQL backed by local FILES in a temp dir (no cloud, plain CI). Plus the
 // per-session specifics: physical isolation (one file per token), retention = drop the file, and the
@@ -60,25 +60,62 @@ async function drain(stream: ReadableStream<WireFrame>): Promise<WireFrame[]> {
   return out;
 }
 
+function codedError(message: string, code: string): Error & { code: string } {
+  const e = new Error(message) as Error & { code: string };
+  e.code = code;
+  return e;
+}
+
+/** Wrap a client so the FIRST frame-poll SELECT throws a transient SERVER_ERROR, then behaves normally. */
+function failOnceOnFramePoll(base: Client): Client {
+  let failed = false;
+  return new Proxy(base, {
+    get(target, prop) {
+      if (prop === "execute") {
+        return async (...args: unknown[]) => {
+          const stmt = args[0];
+          const sql =
+            typeof stmt === "object" && stmt !== null && "sql" in stmt
+              ? String((stmt as { sql: unknown }).sql)
+              : String(stmt);
+          if (!failed && sql.includes("SELECT id, frame FROM frames")) {
+            failed = true;
+            throw codedError("temporary server error", "SERVER_ERROR");
+          }
+          const execute = target.execute.bind(target) as (...a: unknown[]) => Promise<unknown>;
+          return execute(...args);
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Client;
+}
+
 const A = "sess:00000000000000000000000000000000:cse_aaaa";
 const B = "sess:00000000000000000000000000000000:cse_bbbb";
 const BUS = "bus:00000000000000000000000000000000";
 
 describe("dbFileName", () => {
-  it("maps a token to a URL/filename-safe name with a reversible ':'→'-'", () => {
-    expect(dbFileName(BUS)).toBe("bus-00000000000000000000000000000000.db");
-    expect(dbFileName(A)).toBe("sess-00000000000000000000000000000000-cse_aaaa.db");
+  it("is filename-safe for ANY token — a hostile session_id is neutralized (no '/' , no traversal)", () => {
+    for (const t of [BUS, A, "sess:00:../../etc/passwd", "sess:00:a/b/c", "sess:00:weird.name"]) {
+      const name = dbFileName(t);
+      expect(name).toMatch(/^[A-Za-z0-9_-]+\.db$/);
+      expect(name.includes("/")).toBe(false);
+      expect(name.includes("..")).toBe(false);
+    }
   });
 
-  it("is injective for distinct safe tokens", () => {
-    expect(dbFileName(A)).not.toBe(dbFileName(B));
+  it("is injective — distinct tokens never collide onto one database, even with the same sanitized prefix", () => {
+    // `a/b` and `a-b` sanitize to the SAME prefix; the content hash must still keep them distinct.
+    const tokens = [A, B, BUS, "sess:00:a/b", "sess:00:a-b", "sess:00:..-b"];
+    const names = tokens.map(dbFileName);
+    expect(new Set(names).size).toBe(tokens.length);
   });
 
-  it("throws (fail-closed) on a token carrying an unsafe char — no traversal, no collision", () => {
-    expect(() => dbFileName("sess:00:../../etc/passwd")).toThrow(/unsafe/);
-    expect(() => dbFileName("sess:00:a/b")).toThrow(/unsafe/);
-    expect(() => dbFileName("sess:00:a-b")).toThrow(/unsafe/); // '-' is reserved for the ':' mapping
-    expect(() => dbFileName("")).toThrow(/unsafe/);
+  it("is deterministic and carries a readable prefix", () => {
+    expect(dbFileName(A)).toBe(dbFileName(A));
+    expect(dbFileName(A).startsWith("sess-")).toBe(true);
   });
 });
 
@@ -251,6 +288,33 @@ describe("FileDbLocator lock semantics", () => {
       expect(String(jm.rows[0]?.journal_mode).toLowerCase()).toBe("wal");
     } finally {
       c.close();
+    }
+  });
+
+  it("keeps a live-tail subscriber open across one transient poll error (retries, doesn't tear down)", async () => {
+    const prevPoll = process.env.RC_SQLITE_POLL_MS;
+    process.env.RC_SQLITE_POLL_MS = "10"; // fast retry (read before the backend is constructed)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-transient-"));
+    dirs.push(dir);
+    try {
+      const be = new SqliteMultiBackend(new FileDbLocator(dir), (config) =>
+        failOnceOnFramePoll(createClient(config)),
+      );
+      await be.publish(A, frame(0));
+      const stream = await be.subscribe(A, 1); // start after frame 0; the first frame poll throws once
+      const reading = take(stream as ReadableStream<WireFrame>, 2);
+      await be.publish(A, frame(1));
+      await be.publish(A, frame(2));
+      expect(seqs(await reading)).toEqual([1, 2]);
+      expect(warn).toHaveBeenCalledWith(
+        "[sqlite] transient subscribe poll failed; retrying:",
+        "temporary server error",
+      );
+    } finally {
+      warn.mockRestore();
+      if (prevPoll === undefined) delete process.env.RC_SQLITE_POLL_MS;
+      else process.env.RC_SQLITE_POLL_MS = prevPoll;
     }
   });
 

@@ -11,8 +11,8 @@
 //     replays the log; a `permission` grant answers a worker control_request.
 //
 // catch_up has two regimes (see `#durable`): on a capped/ephemeral backend the host keeps an in-memory
-// `#log` and re-posts it on a viewer `catch_up`; on a DURABLE-log backend (Turso) the broker retains
-// every frame, so a viewer's subscribe(startIndex:0) replays the full history on its own — the host
+// `#log` and re-posts it on a viewer `catch_up`; on a DURABLE-log backend (per-session SQLite) the broker
+// retains every frame, so a viewer's subscribe(startIndex:0) replays the full history on its own — the host
 // builds no `#log` and ignores `catch_up`. One log, mediated by the broker.
 //
 // The transcript `seq` is allocated solely here (§6: clients never assign order), and a bounded
@@ -319,7 +319,7 @@ export class HostRcRelay {
   readonly #seen = new Set<string>();
   /** In-memory replay log — content frames plus unordered state frames such as permission_resolved,
    *  replayed on a viewer `catch_up` (§6/§16). Left EMPTY when `#durable`: a durable-log backend
-   *  (Turso) keeps every frame, so its own subscribe(0) replays the full history and the host need not
+   *  (per-session SQLite) keeps every frame, so its own subscribe(0) replays the full history and the host need not
    *  hold (or re-post) a copy. The "one log, mediated by the broker" model — the broker IS history. */
   readonly #log: { recordKind: string; seq: number | null; msgId: string; text: string }[] = [];
   /** True when the broker reports its EFFECTIVE backend is a durable log: the host skips building `#log`

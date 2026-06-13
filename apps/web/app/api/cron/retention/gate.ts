@@ -12,7 +12,9 @@ export function retentionMs(): number {
   return DEFAULT_RETENTION_MS;
 }
 
-export function tursoConfigured(): boolean {
-  const url = process.env.TURSO_DATABASE_URL;
-  return url !== undefined && url.trim() !== "";
+/** True when this deployment's durable backend is the per-session sqlite backend — i.e. there is a
+ *  per-session store for the retention sweep to operate on. (File storage sweeps idle session dbs;
+ *  Turso Cloud storage sweep is a follow-up, so it currently returns swept:0.) */
+export function sqliteConfigured(): boolean {
+  return process.env.BROKER_BACKEND?.trim() === "sqlite";
 }

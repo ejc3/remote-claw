@@ -1,12 +1,13 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { type Client, createClient, type ResultSet, type Transaction } from "@libsql/client";
 import type { WireFrame } from "@remote-claw/clawsec";
 import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } from "./backend";
 
-// The per-session SQLite (libSQL) durable backend — ONE database per channel token, the inverse of the
-// shared-log `turso` backend (one `frames` table for everyone, partitioned by `(token, gen)`). Here each
-// token addresses its OWN database file (`<token>.db`), so a session's frames are physically isolated:
+// The per-session SQLite (libSQL) durable backend — ONE database per channel token, rather than one
+// shared `frames` table for all sessions. Each token addresses its OWN database, so a session's frames
+// are physically isolated:
 // retention is "drop the file", there is no cross-session write contention (SQLite serializes writes per
 // database, so the write lock is per-session, not one global mutex), and a leaked/compromised channel
 // can't even see another session's at-rest ciphertext. This is the broker's "dumb per-channel pipe"
@@ -23,6 +24,11 @@ import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } fr
 const SWEEP_DEADLINE_MS = 250_000;
 
 const writeLocks = new WeakMap<Client, Promise<void>>();
+
+/** How a libSQL client is opened from a connection config. Defaults to @libsql/client's createClient;
+ *  injectable so tests can wrap the client (e.g. fault-inject a transient poll error) and so a future
+ *  deployment could supply an instrumented driver. */
+export type ClientFactory = typeof createClient;
 
 const TRANSIENT_LIBSQL_CODES = new Set([
   "SQLITE_BUSY",
@@ -150,18 +156,19 @@ const DDL = [
 ];
 
 /**
- * A channel token's database filename. The token is already URL/filename-safe by construction —
- * `bus:<identity_hex>` or `sess:<identity_hex>:<session_id>`, where identity_hex is `[0-9a-f]{32}` and a
- * real session_id is `[A-Za-z0-9_]` (session.ts `randomSessionId`). The ONLY non-filename char is the
- * `:` separator, mapped reversibly to `-` (which can't appear elsewhere). We GUARD the charset and throw
- * on anything else (fail-closed): a hostile `?session=../x` that slipped past wire validation can never
- * become a path-traversal or collide two sessions onto one database.
+ * A channel token's database filename. A real token (`bus:<hex>` / `sess:<hex>:<session_id>`) is
+ * filename-friendly, but the wire layer permits ANY non-control session_id up to 256 chars (hyphens,
+ * dots, even `/`), so a pure reversible mapping can't be both traversal-safe and collision-free here.
+ * Instead: a readable, sanitized PREFIX (so a directory listing stays human-scannable) plus a short
+ * content HASH that guarantees (a) two distinct tokens never collide onto one database — which would
+ * leak one session's frames into another — and (b) no path traversal (the output is only `[A-Za-z0-9_-]`
+ * and is bounded length). The hash is purely an internal filename detail; the channel token stays the
+ * URL-friendly addressing key everywhere else.
  */
 export function dbFileName(token: string): string {
-  if (!/^[A-Za-z0-9_:]+$/.test(token)) {
-    throw new Error(`unsafe channel token for a sqlite filename: ${JSON.stringify(token)}`);
-  }
-  return `${token.replaceAll(":", "-")}.db`;
+  const prefix = token.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 80);
+  const hash = createHash("sha256").update(token, "utf8").digest("hex").slice(0, 24);
+  return `${prefix}-${hash}.db`;
 }
 
 /**
@@ -295,10 +302,16 @@ class SessionDbCache {
   readonly #migrated = new WeakMap<Client, Promise<void>>();
   // Per-token mutex for the miss→create critical section (so only one client per token is opened).
   readonly #createLocks = new Map<string, Promise<void>>();
+  readonly #newClient: ClientFactory;
 
-  constructor(locator: DbLocator, max: number = sqliteMaxClients()) {
+  constructor(
+    locator: DbLocator,
+    max: number = sqliteMaxClients(),
+    newClient: ClientFactory = createClient,
+  ) {
     this.#locator = locator;
     this.#max = max;
+    this.#newClient = newClient;
   }
 
   #ensureSchema(client: Client): Promise<void> {
@@ -338,8 +351,8 @@ class SessionDbCache {
       } else if (!(await this.#locator.exists(token))) {
         return null; // read path: never create a channel
       }
-      const client = createClient(this.#locator.config(token));
-      await this.#locator.prepare?.(client); // file: WAL + busy_timeout; cloud: server serializes writes
+      const client = this.#newClient(this.#locator.config(token));
+      await this.#locator.prepare?.(client); // file: WAL; cloud: server serializes writes
       const entry: CacheEntry = { client, refs: 0 };
       this.#entries.set(token, entry);
       return this.#lease(token, entry);
@@ -470,12 +483,15 @@ class SessionDbCache {
 export class SqliteMultiBackend implements BrokerBackend {
   readonly #locator: DbLocator;
   readonly #cache: SessionDbCache;
+  readonly #newClient: ClientFactory;
   readonly #pollMs = sqlitePollMs();
 
-  /** Production/dev uses the env-configured FileDbLocator; tests inject a tmp-dir locator. */
-  constructor(locator: DbLocator = new FileDbLocator()) {
+  /** Production/dev uses the env-configured FileDbLocator; tests inject a tmp-dir locator (and may inject
+   *  a client factory to fault-test the connection). */
+  constructor(locator: DbLocator = new FileDbLocator(), newClient: ClientFactory = createClient) {
     this.#locator = locator;
-    this.#cache = new SessionDbCache(locator);
+    this.#newClient = newClient;
+    this.#cache = new SessionDbCache(locator, sqliteMaxClients(), newClient);
   }
 
   async publish(token: string, payload: RelayPayload): Promise<PublishResult> {
@@ -757,8 +773,8 @@ export class SqliteMultiBackend implements BrokerBackend {
       try {
         // createClient is INSIDE the try so a construction throw is handled like an unreadable db
         // (leave it for a later sweep) rather than aborting the whole sweep.
-        probe = createClient(configForPath(path));
-        await this.#locator.prepare?.(probe); // WAL/busy_timeout: read concurrently with a live writer
+        probe = this.#newClient(configForPath(path));
+        await this.#locator.prepare?.(probe); // WAL: read concurrently with a live writer
         const r = await probe.execute("SELECT MAX(created_at) AS m FROM frames");
         const m = r.rows[0]?.m;
         stale = m === null || m === undefined ? true : Number(m) < cutoff;

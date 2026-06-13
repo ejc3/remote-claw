@@ -70,7 +70,7 @@ export interface BrokerBackend {
    * durable history for it (the channel is absent/closed). Reads only the §8 CLEARTEXT `seq` routing
    * column — never decrypts, so E2E is preserved. Lets a RESTARTED host resume `seq = max + 1` instead
    * of restarting at 0 and colliding with the durable frames (which a viewer's orderer would then drop
-   * as duplicates — the durable-backend face of #36). OPTIONAL: only a durable backend (Turso)
+   * as duplicates — the durable-backend face of #36). OPTIONAL: only a durable backend (sqlite)
    * implements it; ephemeral/capped backends omit it, and the host simply starts fresh at 0 (their old
    * frames have already rolled off, so there is nothing to collide with).
    */
