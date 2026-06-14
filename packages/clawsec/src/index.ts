@@ -10,6 +10,21 @@ export {
   sealChunked,
   splitPlaintext,
 } from "./chunk.js";
+export {
+  decodeHandoffBox,
+  encodeHandoffBox,
+  formatOtk,
+  generateOtk,
+  type HandoffBox,
+  HandoffError,
+  type HandoffErrorReason,
+  handoffClaimProof,
+  handoffId,
+  handoffProofHash,
+  openHandoff,
+  parseOtk,
+  sealHandoff,
+} from "./handoff.js";
 export { hkdfExpand, hkdfExtract } from "./hkdf.js";
 export { deriveIdentity, deriveSessionKey, type Identity } from "./kdf.js";
 export { formatPass, PassError, type PassErrorReason, parsePass } from "./pass.js";
