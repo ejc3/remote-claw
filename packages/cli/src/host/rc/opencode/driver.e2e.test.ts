@@ -36,11 +36,13 @@ const BASE = process.env.OPENCODE_URL ?? "http://127.0.0.1:4096";
 // our assertions are STRUCTURAL (frame counts/order/no-dup/isolation) + prompt echoes, not exact model
 // text, so a less-coherent tiny model still satisfies them.
 const MODEL = ((): { providerID: string; modelID: string } => {
-  const raw = (process.env.RC_OPENCODE_E2E_MODEL ?? "ollama/qwen2.5:0.5b").trim();
-  const slash = raw.indexOf("/");
-  return slash > 0
-    ? { providerID: raw.slice(0, slash), modelID: raw.slice(slash + 1) }
-    : { providerID: "ollama", modelID: "qwen2.5:0.5b" };
+  const DEFAULT = { providerID: "ollama", modelID: "qwen2.5:0.5b" };
+  const raw = (process.env.RC_OPENCODE_E2E_MODEL ?? "").trim();
+  const slash = raw.indexOf("/"); // FIRST slash splits "provider/rest"; rest keeps any further slashes
+  if (slash <= 0) return DEFAULT; // unset, no slash, or leading slash ("/m") → malformed → default
+  const providerID = raw.slice(0, slash);
+  const modelID = raw.slice(slash + 1);
+  return providerID && modelID ? { providerID, modelID } : DEFAULT; // trailing slash → empty modelID → default
 })();
 const TINY = "Reply with exactly: OK"; // tiny prompt — keeps the cheap model fast + cheap
 
@@ -127,8 +129,20 @@ async function waitFor(pred: () => boolean, ms: number): Promise<boolean> {
 
 /** Generous per-turn budget for a LIVE local model. A cooperating model satisfies a tiny prompt well
  *  under this; only a slow/contended box (or a dead server) hits it — and that SKIPS, never fails. Tune
- *  with RC_OPENCODE_E2E_TURN_MS for a slower box. */
-const TURN_MS = Number(process.env.RC_OPENCODE_E2E_TURN_MS) || 120_000;
+ *  with RC_OPENCODE_E2E_TURN_MS for a slower box. A non-positive/NaN value (unset, "0", "-5", "abc") is
+ *  ignored: `> 0` rejects a negative (which would make waitFor's deadline already-past → skip everything),
+ *  and `isFinite` rejects NaN — both of which a bare `Number(env) || …` would mishandle. */
+const TURN_MS = ((): number => {
+  const n = Number(process.env.RC_OPENCODE_E2E_TURN_MS);
+  return Number.isFinite(n) && n > 0 ? n : 120_000;
+})();
+
+/** Suite-wide vitest per-test ceiling, set on the describe() below (vitest cascades it to every test).
+ *  The longest test, (e) history/resume, runs 4 sequential live gates (2 seedGate + 2 turnGate), each up
+ *  to TURN_MS, so the ceiling must exceed 4×TURN_MS — otherwise vitest's OWN timeout HARD-FAILS a slow
+ *  test before its gate can reach ctx.skip(), defeating skip-not-fail. +30s headroom for setup/teardown.
+ *  A single shared ceiling (vs per-test) keeps it scaling automatically with RC_OPENCODE_E2E_TURN_MS. */
+const SUITE_TIMEOUT_MS = 4 * TURN_MS + 30_000;
 
 /** vitest TestContext slice we use to dynamically SKIP (not fail) a live test. */
 type SkipCtx = { skip: (note?: string) => void };
@@ -183,7 +197,7 @@ async function withDriver(
 
 const client = new OpencodeClient({ baseUrl: BASE });
 
-describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", () => {
+describe("OpenCode driver — LIVE e2e (opencode serve)", { timeout: SUITE_TIMEOUT_MS }, () => {
   beforeAll(async () => {
     live = await probe();
     if (!live) {
@@ -219,7 +233,6 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
       // The driver-injected prompt is NOT surfaced as a local_prompt (it's our own echo).
       expect(broker.content.filter((p) => p.recordKind === "user")).toHaveLength(0);
     },
-    90000,
   );
 
   it("(b) two prompts → two ordered assistant frames, no dup", async (ctx) => {
@@ -249,7 +262,7 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
     expect(seqs[1]).toBeGreaterThan(seqs[0] as number);
     // No driver-injected prompt is double-emitted as a user frame.
     expect(broker.content.filter((p) => p.recordKind === "user")).toHaveLength(0);
-  }, 150000);
+  });
 
   it("(c) tool use → tool_use + tool_result frames render (best-effort: documented if the model declines)", async (ctx) => {
     await gate(ctx);
@@ -259,6 +272,9 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
       async ({ session, broker }) => {
         // Nudge the model to use a tool. The tiny model is unreliable about tool calls, so we wait a
         // bounded time and DOCUMENT the outcome rather than hard-failing on the model's behavior.
+        // NOTE: this is the ONE live test that uses bounded waitFor, NOT turnGate — by design. A model
+        // that simply declines to call a tool is a documented PASS (see below), not a skip; turnGate
+        // would wrongly SKIP that legitimate outcome. (gate(ctx) above still skips if the server is down.)
         session.pushUserInput(
           "Use the bash tool to run exactly: echo hello. Then reply with the output.",
         );
@@ -322,7 +338,7 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
     const firstUser = users[0]?.seq as number;
     const firstAsst = broker.content.find((p) => p.recordKind === "assistant")?.seq as number;
     if (firstAsst !== undefined) expect(firstUser).toBeLessThan(firstAsst);
-  }, 120000);
+  });
 
   it("(d2) a driver-INJECTED prompt is suppressed (NOT double-emitted as a user frame)", async (ctx) => {
     await gate(ctx);
@@ -342,7 +358,7 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
     // The injected prompt's OpenCode user-message echo is suppressed — zero user frames.
     expect(broker.content.filter((p) => p.recordKind === "user")).toHaveLength(0);
     expect(broker.content.some((p) => p.recordKind === "assistant")).toBe(true);
-  }, 90000);
+  });
 
   it("(e) history/resume — pre-seed a session, attach → full backlog backfilled in order; restart → no dup", async (ctx) => {
     await gate(ctx);
@@ -380,7 +396,7 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
     });
     expect(b2.content.filter((p) => p.recordKind === "assistant").length).toBe(2);
     expect(b2.content.filter((p) => p.recordKind === "user").length).toBe(2);
-  }, 200000);
+  });
 
   it("(f) interrupt → an abort reaches the live server", async (ctx) => {
     await gate(ctx);
@@ -423,7 +439,7 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
       },
     );
     expect(broker.content.some((p) => p.text.includes("⚠ OpenCode error"))).toBe(true);
-  }, 60000);
+  });
 
   it("(i) /compact routes to the native summarize endpoint, NOT a model prompt", async (ctx) => {
     await gate(ctx);
@@ -499,7 +515,7 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
     expect(bText).not.toContain("ALPHA");
     expect(aText.length).toBeGreaterThan(0);
     expect(bText.length).toBeGreaterThan(0);
-  }, 150000);
+  });
 });
 
 /** Pre-seed gate: poll until the session has >= n COMPLETED messages; SKIP (not fail) if the live model
