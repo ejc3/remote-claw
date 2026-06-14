@@ -411,6 +411,78 @@ describe("runTmuxDriver wiring", () => {
     }
   });
 
+  it("does NOT surface a sub-agent line until its .meta.json link is readable (then nests it)", async () => {
+    // The race: the agent-<id>.jsonl can be written (and gain content) a beat BEFORE its .meta.json
+    // sidecar. Surfacing a line then would FLAT-FLOOD the main view (no parent_tool_use_id to nest it).
+    // The driver must withhold the sub line until readAgentTaskId succeeds — then emit it nested.
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-driver-race-cwd-");
+    const home = tmp("rc-driver-race-home-");
+    const projDir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(projDir, { recursive: true });
+    const transcript = join(projDir, "racesess.jsonl");
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    let discovered: string | null = null;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        onTranscript: (p) => {
+          discovered = p;
+        },
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      await appendFile(
+        transcript,
+        `${JSON.stringify({ type: "assistant", uuid: "parent-r", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_R", name: "Agent", input: { description: "x" } }] } })}\n`,
+      );
+      await waitFor(() => discovered !== null);
+      const path = discovered;
+      if (path === null) throw new Error("transcript not discovered");
+      const subDir = subagentDir(path);
+      await mkdir(subDir, { recursive: true });
+      // Write the sub-agent LINE with NO meta yet — it must stay withheld (no frame).
+      await appendFile(
+        join(subDir, "agent-rr.jsonl"),
+        `${JSON.stringify({ type: "assistant", uuid: "sub-r", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: "PEAR before meta" }] } })}\n`,
+      );
+      // Give several poll cycles a chance to (wrongly) surface it; it must NOT appear.
+      await new Promise((r) => setTimeout(r, 80));
+      expect(client.content.some((p) => p.text.includes("PEAR"))).toBe(false);
+      // Now the sidecar lands → the SAME line is surfaced, nested under the Agent.
+      await writeFile(
+        join(subDir, "agent-rr.meta.json"),
+        JSON.stringify({ agentType: "general-purpose", description: "x", toolUseId: "toolu_R" }),
+      );
+      await waitFor(() =>
+        client.content.some((p) => p.recordKind === "assistant_sub" && p.text.includes("PEAR")),
+      );
+      expect(
+        client.content.some((p) => p.recordKind === "assistant_sub" && p.text.includes("PEAR")),
+      ).toBe(true);
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
   it("throws a clear error when tmux is absent", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();

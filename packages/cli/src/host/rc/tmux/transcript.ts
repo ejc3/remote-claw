@@ -222,6 +222,41 @@ export function transcriptToPayload(line: string): UpstreamPayload | null {
   return payload;
 }
 
+/** A transcript line's ISO-8601 `timestamp` (e.g. `2026-06-07T18:18:59.563Z`), used to MERGE the main
+ *  transcript with the separate sub-agent files into one chronological stream. Returns "" when the field
+ *  is absent or the line is unparseable — those are non-message lines the reshape drops anyway, so where
+ *  they sort is moot. ISO-8601 UTC (`…Z`) compares correctly as a plain string. Never throws. */
+export function lineTimestamp(line: string): string {
+  try {
+    const ts = (JSON.parse(line) as { timestamp?: unknown }).timestamp;
+    return typeof ts === "string" ? ts : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Merge a drain batch's main-transcript lines with its sub-agent lines into ONE chronological stream,
+ *  ordered by each line's `timestamp`. The main transcript and every sub-agent file are SEPARATE
+ *  append-only streams, so emitting "all main, then all sub" can sequence a parent Agent's completion
+ *  (in the main file) BEFORE the sub-agent output that must nest inside that Agent turn. Re-interleaving
+ *  by timestamp fixes the backfill/attach drain (a whole history read at once) and a sub-agent that
+ *  finishes within one poll. Stable on equal timestamps — main lines (listed first) keep priority,
+ *  matching the prior main-before-sub tiebreak. A line with no parseable timestamp ("") sorts to the
+ *  front, but such non-message lines are dropped by transcriptToPayload, so their slot is moot. Pure. */
+export function mergeBatchByTimestamp(
+  mainLines: readonly string[],
+  subLines: readonly { line: string; parentTaskId: string }[],
+): { line: string; parentTaskId: string | undefined }[] {
+  const items: { line: string; parentTaskId: string | undefined }[] = [
+    ...mainLines.map((line) => ({ line, parentTaskId: undefined })),
+    ...subLines,
+  ];
+  return items
+    .map((item, idx) => ({ ...item, idx, ts: lineTimestamp(item.line) }))
+    .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.idx - b.idx))
+    .map(({ line, parentTaskId }) => ({ line, parentTaskId }));
+}
+
 /** Split a freshly-read chunk into complete lines + a trailing partial. Pure, so the partial-line
  *  buffering is unit-testable. `buffered` is the leftover from the previous read; the returned
  *  `rest` is buffered until the next read appends to it. */

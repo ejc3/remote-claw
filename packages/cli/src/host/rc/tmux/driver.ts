@@ -22,6 +22,7 @@ import { realTmuxExec, TmuxCtl, type TmuxExec } from "./tmuxctl.js";
 import {
   findNewestTranscript,
   listSubagentFiles,
+  mergeBatchByTimestamp,
   projectDir,
   readAgentTaskId,
   snapshotTranscriptInodes,
@@ -293,7 +294,8 @@ export async function runTmuxDriver(
   // Drain newly-appended lines from the main transcript AND every discovered sub-agent file. Idempotent
   // via seenUuids, so a final teardown drain that overlaps the loop's own poll is safe.
   const drainTailer = async (): Promise<void> => {
-    if (tailer !== null) for (const line of await tailer.poll()) handleLine(line);
+    const mainLines = tailer !== null ? await tailer.poll() : [];
+    const subLines: { line: string; parentTaskId: string }[] = [];
     if (subDir !== null) {
       for (const p of await listSubagentFiles(subDir)) {
         if (subTailers.has(p)) continue;
@@ -305,8 +307,24 @@ export async function runTmuxDriver(
         tracer.debug("subagent transcript discovered", { path: p, taskId });
       }
       for (const { tailer: t, taskId } of subTailers.values()) {
-        for (const line of await t.poll()) handleLine(line, taskId);
+        for (const line of await t.poll()) subLines.push({ line, parentTaskId: taskId });
       }
+    }
+    // Fast path (the common case — no sub-agent output this batch): the main file is a single append-only
+    // stream, so its lines are already chronological. Emit directly, with zero timestamp parsing.
+    if (subLines.length === 0) {
+      for (const line of mainLines) handleLine(line);
+      return;
+    }
+    // Mixed batch — main + sub lines must interleave by their transcript `timestamp`, NOT "all main then
+    // all sub". The parent Agent's completion lives in the main file, the sub-agent's work in its own; the
+    // viewer renders by sequence (sub frames indent but don't reorder), so emitting the parent answer
+    // before the sub lines would show the sub-agent work AFTER the answer instead of nested in the Agent
+    // turn. This happens on the backfill/attach drain (a whole history read at once) and a sub-agent that
+    // finishes within one poll; steady-state (sub output trickles across polls while the parent blocks)
+    // never co-batches a completion with its sub lines, so it stays on the fast path (codex review).
+    for (const { line, parentTaskId } of mergeBatchByTimestamp(mainLines, subLines)) {
+      handleLine(line, parentTaskId);
     }
   };
 

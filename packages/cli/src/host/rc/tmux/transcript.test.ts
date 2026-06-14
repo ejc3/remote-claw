@@ -11,7 +11,9 @@ import { assistantText } from "../session.js";
 import {
   findNewestTranscript,
   inodeKey,
+  lineTimestamp,
   listSubagentFiles,
+  mergeBatchByTimestamp,
   projectDir,
   projectSlug,
   readAgentTaskId,
@@ -177,6 +179,67 @@ describe("transcriptToPayload — the one reshape", () => {
     expect(p?.type).toBe("assistant");
     expect(p?.uuid).toBe("sub-asst-1");
     expect((p?.message?.content as Array<{ text?: string }>)[0]?.text).toBe("sub-agent says hi");
+  });
+});
+
+describe("lineTimestamp", () => {
+  it("reads the ISO-8601 timestamp; '' when absent/unparseable", () => {
+    expect(
+      lineTimestamp(JSON.stringify({ type: "assistant", timestamp: "2026-06-07T18:18:59.563Z" })),
+    ).toBe("2026-06-07T18:18:59.563Z");
+    expect(lineTimestamp(JSON.stringify({ type: "assistant" }))).toBe(""); // no timestamp field
+    expect(lineTimestamp(JSON.stringify({ timestamp: 123 }))).toBe(""); // non-string
+    expect(lineTimestamp("{not json")).toBe(""); // unparseable
+  });
+});
+
+describe("mergeBatchByTimestamp — interleave main + sub-agent lines chronologically", () => {
+  const line = (ts: string, uuid: string) =>
+    JSON.stringify({
+      type: "assistant",
+      uuid,
+      timestamp: ts,
+      message: { role: "assistant", content: [] },
+    });
+
+  it("sequences a sub-agent line BETWEEN the parent Agent's tool_use and its later completion (the bug fix)", () => {
+    // The mixed-batch case: the MAIN file already holds the whole Agent turn (tool_use @ t0 → final
+    // answer @ t5) and the SUB file holds the sub-agent's work @ t2. Draining "all main then all sub"
+    // would put the answer (t5) before the sub line (t2); merging by timestamp restores nesting order.
+    const mainLines = [
+      line("2026-06-07T00:00:00.000Z", "agent-tooluse"),
+      line("2026-06-07T00:00:05.000Z", "parent-answer"),
+    ];
+    const subLines = [
+      { line: line("2026-06-07T00:00:02.000Z", "sub-work"), parentTaskId: "toolu_AGENT" },
+    ];
+    const merged = mergeBatchByTimestamp(mainLines, subLines);
+    const uuids = merged.map((m) => JSON.parse(m.line).uuid);
+    expect(uuids).toEqual(["agent-tooluse", "sub-work", "parent-answer"]); // chronological, sub nested mid-turn
+    // The sub line keeps its nesting key; the main lines carry none.
+    expect(merged.find((m) => JSON.parse(m.line).uuid === "sub-work")?.parentTaskId).toBe(
+      "toolu_AGENT",
+    );
+    expect(
+      merged.find((m) => JSON.parse(m.line).uuid === "parent-answer")?.parentTaskId,
+    ).toBeUndefined();
+  });
+
+  it("is stable on an equal timestamp — main (listed first) keeps priority", () => {
+    const ts = "2026-06-07T00:00:01.000Z";
+    const merged = mergeBatchByTimestamp(
+      [line(ts, "main-a")],
+      [{ line: line(ts, "sub-b"), parentTaskId: "X" }],
+    );
+    expect(merged.map((m) => JSON.parse(m.line).uuid)).toEqual(["main-a", "sub-b"]);
+  });
+
+  it("a missing-timestamp line sorts to the front (it's a dropped non-message type downstream anyway)", () => {
+    const merged = mergeBatchByTimestamp(
+      [JSON.stringify({ type: "file-history-snapshot" }), line("2026-06-07T00:00:01.000Z", "real")],
+      [],
+    );
+    expect(JSON.parse(merged[1]?.line ?? "{}").uuid).toBe("real"); // the timestamped real line stays last
   });
 });
 

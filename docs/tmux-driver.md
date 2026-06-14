@@ -119,6 +119,13 @@ Then `s.pushUpstream(payload)` — and the relay's outbound pump does the rest, 
 > `*_sub` and the viewer indents them under the Agent — exactly how native Remote Control relays
 > sub-agent frames, so sub-agent work does NOT flood the main transcript. A file is tailed only once its
 > `.meta.json` link is readable, so every surfaced sub-agent line is guaranteed to nest (never flat).
+> Because the main transcript and each sub-agent file are SEPARATE append streams, a drain that picks up
+> both at once (the backfill/attach read of a whole history, or a sub-agent that finishes inside one
+> poll) **interleaves them by each line's `timestamp`** (`mergeBatchByTimestamp`) before emitting — else
+> the parent Agent's completion (in the main file) would be sequenced before the sub-agent output it
+> nests, and the viewer (which renders by sequence) would show the sub-agent work *after* the parent's
+> answer. Steady-state (sub output trickles in across polls while the parent blocks on the Task) never
+> co-batches a completion with its sub lines, so it stays on the zero-overhead fast path.
 > The sidecar `toolUseId` matches the Agent tool_use in the main transcript (verified live). NOTE a
 > version difference: claude 2.1.63 instead streamed sub-agent messages as `agent_progress` `progress`
 > lines in the MAIN transcript; 2.1.177 (current) uses the separate `subagents/` files + `.meta.json`,
