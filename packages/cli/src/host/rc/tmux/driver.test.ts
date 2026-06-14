@@ -9,7 +9,7 @@
 // No real tmux, no real claude, no real broker — every side effect is injected.
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deriveIdentity, type Frame, type FrameHeader, type Identity } from "@remote-claw/clawsec";
@@ -17,7 +17,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import { runTmuxDriver } from "./driver.js";
 import type { TmuxExec, TmuxExecResult } from "./tmuxctl.js";
-import { projectSlug } from "./transcript.js";
+import { projectSlug, subagentDir } from "./transcript.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -335,6 +335,80 @@ describe("runTmuxDriver wiring", () => {
     );
     expect(code).toBe(0); // clean pane death (not a pump crash)
     expect(calls.some((c) => c[0] === "kill-session")).toBe(true);
+  });
+
+  it("captures a sub-agent file (subagents/agent-*.jsonl) NESTED under its Agent via .meta.json (assistant_sub)", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-driver-sub-cwd-");
+    const home = tmp("rc-driver-sub-home-");
+    const projDir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(projDir, { recursive: true });
+    const transcript = join(projDir, "subsess.jsonl");
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    let discovered: string | null = null;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        onTranscript: (p) => {
+          discovered = p;
+        },
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      // The parent's main transcript: the Agent tool_use that spawns the sub-agent.
+      await appendFile(
+        transcript,
+        `${JSON.stringify({ type: "assistant", uuid: "parent-1", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_AGENT", name: "Agent", input: { description: "review" } }] } })}\n`,
+      );
+      await waitFor(() => discovered !== null);
+      const path = discovered;
+      if (path === null) throw new Error("transcript not discovered");
+      // The sub-agent's OWN output lives in subagents/agent-<id>.jsonl; the .meta.json links it to the
+      // spawning Agent's tool_use_id. Write the meta FIRST (the driver only tails once it's readable).
+      const subDir = subagentDir(path);
+      await mkdir(subDir, { recursive: true });
+      await writeFile(
+        join(subDir, "agent-acca.meta.json"),
+        JSON.stringify({
+          agentType: "general-purpose",
+          description: "review",
+          toolUseId: "toolu_AGENT",
+        }),
+      );
+      await appendFile(
+        join(subDir, "agent-acca.jsonl"),
+        `${JSON.stringify({ type: "assistant", uuid: "sub-1", agentId: "acca", isSidechain: true, message: { role: "assistant", content: [{ type: "text", text: "MANGO from the sub-agent" }] } })}\n`,
+      );
+      // The sub-agent text reaches the viewer as a NESTED (assistant_sub) frame — not dropped, not flat.
+      await waitFor(() =>
+        client.content.some((p) => p.recordKind === "assistant_sub" && p.text.includes("MANGO")),
+      );
+      expect(
+        client.content.some((p) => p.recordKind === "assistant_sub" && p.text.includes("MANGO")),
+      ).toBe(true);
+      // The parent Agent tool_use itself relayed as a TOP-LEVEL tool_use (not _sub).
+      expect(client.content.some((p) => p.recordKind === "tool_use")).toBe(true);
+    } finally {
+      ac.abort();
+      await run;
+    }
   });
 
   it("throws a clear error when tmux is absent", async () => {

@@ -21,8 +21,11 @@ import { StatusTracker } from "./status.js";
 import { realTmuxExec, TmuxCtl, type TmuxExec } from "./tmuxctl.js";
 import {
   findNewestTranscript,
+  listSubagentFiles,
   projectDir,
+  readAgentTaskId,
   snapshotTranscriptInodes,
+  subagentDir,
   TranscriptTailer,
   transcriptToPayload,
 } from "./transcript.js";
@@ -263,21 +266,47 @@ export async function runTmuxDriver(
   const paneWatchMs = deps.paneWatchMs ?? PANE_WATCH_MS;
   const paneCheckEvery = Math.max(1, Math.round(paneWatchMs / pollMs)); // ≈paneWatchMs between probes
   let tailer: TranscriptTailer | null = null;
+  // Sub-agent (Agent/Task) output lives in sibling `subagents/agent-*.jsonl` files (+ a `.meta.json`
+  // sidecar) the main tailer can't see. We tail them too and overlay `parent_tool_use_id` = the spawning
+  // Agent's tool_use_id (from the sidecar's `toolUseId`) so the viewer NESTS sub-agent work under the
+  // Agent — like native RC — instead of dropping it or flooding the main transcript. A file is tailed
+  // only once its `.meta.json` link is readable, so every surfaced sub-agent line is guaranteed to nest.
+  let subDir: string | null = null;
+  const subTailers = new Map<string, { tailer: TranscriptTailer; taskId: string }>();
 
-  // Drain newly-appended transcript lines once. Idempotent via seenUuids, so a final teardown drain that
-  // overlaps the loop's own poll is safe.
+  // Reshape → (overlay nesting) → dedup → status → pushUpstream for one line. `parentTaskId`, when given
+  // (a sub-agent file), overrides parent_tool_use_id so the line nests under its Agent. seenUuids dedups
+  // across the main + every sub-agent tailer.
+  const handleLine = (line: string, parentTaskId?: string): void => {
+    const payload = transcriptToPayload(line);
+    if (payload === null) return;
+    if (parentTaskId !== undefined) payload.parent_tool_use_id = parentTaskId;
+    const uuid = typeof payload.uuid === "string" ? payload.uuid : null;
+    if (uuid !== null) {
+      if (seenUuids.has(uuid)) return; // dedup BEFORE pushUpstream (review #2)
+      seenUuids.add(uuid);
+    }
+    status.onLine(payload);
+    session.pushUpstream(payload);
+  };
+
+  // Drain newly-appended lines from the main transcript AND every discovered sub-agent file. Idempotent
+  // via seenUuids, so a final teardown drain that overlaps the loop's own poll is safe.
   const drainTailer = async (): Promise<void> => {
-    if (tailer === null) return;
-    for (const line of await tailer.poll()) {
-      const payload = transcriptToPayload(line);
-      if (payload === null) continue;
-      const uuid = typeof payload.uuid === "string" ? payload.uuid : null;
-      if (uuid !== null) {
-        if (seenUuids.has(uuid)) continue; // dedup BEFORE pushUpstream (review #2)
-        seenUuids.add(uuid);
+    if (tailer !== null) for (const line of await tailer.poll()) handleLine(line);
+    if (subDir !== null) {
+      for (const p of await listSubagentFiles(subDir)) {
+        if (subTailers.has(p)) continue;
+        // Only start tailing once the .meta.json link is readable — so the sub-agent's lines are
+        // surfaced NESTED (never flat-flooding). The sidecar lands with the file, so this is immediate.
+        const taskId = await readAgentTaskId(p);
+        if (taskId === null) continue; // meta not ready yet — retry next drain (no lines lost)
+        subTailers.set(p, { tailer: new TranscriptTailer(p), taskId });
+        tracer.debug("subagent transcript discovered", { path: p, taskId });
       }
-      status.onLine(payload);
-      session.pushUpstream(payload);
+      for (const { tailer: t, taskId } of subTailers.values()) {
+        for (const line of await t.poll()) handleLine(line, taskId);
+      }
     }
   };
 
@@ -294,8 +323,9 @@ export async function runTmuxDriver(
         });
         if (path !== null) {
           tailer = new TranscriptTailer(path);
+          subDir = subagentDir(path); // sibling subagents/ dir — tailed for sub-agent (Agent) output
           deps.onTranscript?.(path);
-          tracer.debug("transcript discovered", { path });
+          tracer.debug("transcript discovered", { path, subDir });
         } else if (!warnedNoTranscript && Date.now() - spawnedAt > discoveryWarnMs) {
           warnedNoTranscript = true;
           tracer.warn("no transcript discovered yet — claude may not have started a turn", {

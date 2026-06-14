@@ -11,10 +11,13 @@ import { assistantText } from "../session.js";
 import {
   findNewestTranscript,
   inodeKey,
+  listSubagentFiles,
   projectDir,
   projectSlug,
+  readAgentTaskId,
   snapshotTranscriptInodes,
   splitLines,
+  subagentDir,
   TranscriptTailer,
   transcriptPath,
   transcriptToPayload,
@@ -159,6 +162,22 @@ describe("transcriptToPayload — the one reshape", () => {
     expect(transcriptToPayload("42")).toBeNull(); // valid JSON, not an object
     expect(transcriptToPayload("null")).toBeNull();
   });
+
+  it("reshapes a real SUB-AGENT file line (assistant, isSidechain) like a normal assistant line", () => {
+    // A sub-agent file line carries agentId/isSidechain but the SAME message envelope; the driver
+    // overlays parent_tool_use_id from the .meta.json (not present on the line itself).
+    const line = JSON.stringify({
+      type: "assistant",
+      uuid: "sub-asst-1",
+      agentId: "acca154f08974f322",
+      isSidechain: true,
+      message: { role: "assistant", content: [{ type: "text", text: "sub-agent says hi" }] },
+    });
+    const p = transcriptToPayload(line);
+    expect(p?.type).toBe("assistant");
+    expect(p?.uuid).toBe("sub-asst-1");
+    expect((p?.message?.content as Array<{ text?: string }>)[0]?.text).toBe("sub-agent says hi");
+  });
 });
 
 describe("splitLines — partial-line buffering", () => {
@@ -294,6 +313,41 @@ describe("findNewestTranscript", () => {
     const base = Date.now(); // spawn happens AFTER the stale file was created
     await appendFile(stale, "still being written\n"); // mtime is fresh, but birthtime predates spawn
     expect(await findNewestTranscript(dir, base, { slackMs: 5 })).toBeNull();
+  });
+});
+
+describe("subagents/: subagentDir / listSubagentFiles / readAgentTaskId", () => {
+  it("derives the sibling subagents/ dir from a transcript path", () => {
+    expect(subagentDir("/home/u/.claude/projects/-p/abc123.jsonl")).toBe(
+      "/home/u/.claude/projects/-p/abc123/subagents",
+    );
+  });
+
+  it("lists only agent-*.jsonl (not .meta.json) as full paths; [] when the dir is absent", async () => {
+    const dir = join(tmp(), "sub");
+    expect(await listSubagentFiles(dir)).toEqual([]); // dir doesn't exist yet (no sub-agent spawned)
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "agent-aaa.jsonl"), "");
+    await writeFile(join(dir, "agent-aaa.meta.json"), "{}");
+    await writeFile(join(dir, "agent-bbb.jsonl"), "");
+    await writeFile(join(dir, "notes.jsonl"), ""); // not an agent file
+    const found = await listSubagentFiles(dir);
+    expect(found.sort()).toEqual([join(dir, "agent-aaa.jsonl"), join(dir, "agent-bbb.jsonl")]);
+  });
+
+  it("reads the spawning Agent's toolUseId from the sibling .meta.json (null if absent/bad)", async () => {
+    const dir = join(tmp(), "meta");
+    await mkdir(dir, { recursive: true });
+    const agent = join(dir, "agent-acca.jsonl");
+    expect(await readAgentTaskId(agent)).toBeNull(); // no sidecar yet
+    await writeFile(
+      join(dir, "agent-acca.meta.json"),
+      JSON.stringify({ agentType: "general-purpose", description: "x", toolUseId: "toolu_TASK" }),
+    );
+    expect(await readAgentTaskId(agent)).toBe("toolu_TASK");
+    // a sidecar lacking toolUseId → null (we won't surface a sub-agent line we can't nest)
+    await writeFile(join(dir, "agent-acca.meta.json"), JSON.stringify({ description: "no link" }));
+    expect(await readAgentTaskId(agent)).toBeNull();
   });
 });
 
