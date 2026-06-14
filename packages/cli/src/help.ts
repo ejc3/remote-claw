@@ -24,6 +24,9 @@ Identity (local; never launches claude, never touches the network):
                      or set REMOTE_CLAW_SECRET_FILE)
   --rc-json          machine-readable output for an rc action (never prints the master secret)
   --rc-quiet         minimal output for an rc action (never prints the master secret)
+  --rc-qr            with --rc-pass: also render the pass as a scannable terminal QR. With --rc-app
+                     (or RC_APP) it encodes the viewer deep link <origin>/#<pass> (scan → opens the
+                     viewer); otherwise the bare pass. --rc-json adds it as a "qr" field instead.
 
 Remote control (relay sessions to the broker so a phone/laptop can watch + steer):
   --rc-app <origin>  the app origin whose /api is the broker (or set RC_APP). With it, launching claude
