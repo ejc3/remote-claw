@@ -361,6 +361,22 @@ describe("runTmuxDriver wiring", () => {
         (p) => p.recordKind === "user" && p.text.includes("typed locally"),
       );
       expect(local).toHaveLength(1); // the locally-typed prompt surfaced (local_prompt)
+
+      // 4) TRIM robustness: an injected prompt whose transcript echo has trailing whitespace still matches
+      // (ledger keys are trimmed) → suppressed, not double-shown.
+      client.pushInbound(inFrame(identity, "user", "msg-2", "trim me"));
+      await waitFor(
+        () => spy.calls.filter((c) => c[0] === "send-keys" && c.includes("Enter")).length >= 2,
+      );
+      await waitFor(() =>
+        client.content.some((p) => p.recordKind === "user" && p.text.includes("trim me")),
+      );
+      await appendFile(transcript, userFrame("u-trim", "trim me  \n")); // echo with trailing whitespace
+      await new Promise((r) => setTimeout(r, 60));
+      const trimmed = client.content.filter(
+        (p) => p.recordKind === "user" && p.text.includes("trim me"),
+      );
+      expect(trimmed).toHaveLength(1); // trailing-whitespace echo trim-matched → suppressed (no double)
     } finally {
       ac.abort();
       await run;

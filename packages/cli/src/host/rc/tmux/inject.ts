@@ -135,10 +135,13 @@ export interface InjectPumpOptions {
     error: unknown,
     info?: { attempt: number; phase: "paste" | "submit" | "interrupt" },
   ) => void;
-  /** Called with a prompt's text right after it is SUCCESSFULLY submitted, so the driver can record it in
-   *  its local-prompt ledger — claude echoes the prompt as a `user` transcript line, which must be
-   *  recognized as OURS (suppressed) and not re-rendered as a locally-typed prompt. Fired synchronously
-   *  after the Enter lands and BEFORE the next capture poll could read the echo. */
+  /** Called with a prompt's text right AFTER it is successfully submitted (Enter sent, ack'd), so the
+   *  driver records it in its local-prompt ledger. Recording AFTER submit keeps this display-side
+   *  bookkeeping strictly DOWNSTREAM of the command: the ledger can NEVER block, reorder, or alter the
+   *  prompt sent to claude (load-bearing — the remote transcript may be lossy, but commands to claude must
+   *  not be). The small window between submit and this record is display-only: at worst claude's transcript
+   *  echo is briefly mis-tagged as a local prompt (a harmless double-show in the viewer), never a
+   *  wrong/dropped command. */
   onInjected?: (text: string) => void;
 }
 
@@ -196,10 +199,13 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
         (attempt, error) => opts.onError?.(ev.eventType, error, { attempt, phase: "submit" }),
       );
       if (submitted) {
-        // Record BEFORE acking so the ledger entry is in place before the echo can be captured (the
-        // capture loop only reads the transcript on its next timer poll, after claude writes the line).
-        opts.onInjected?.(text);
+        // ACK FIRST — the ack is what stops a reclaimed stream from REPLAYING (double-injecting) this
+        // command, so the command path must complete before any display-side bookkeeping. THEN record in
+        // the local-prompt ledger. Both are synchronous with no await between them, so the entry is still
+        // in place before the next capture poll could read claude's echo. (Commands to claude must never
+        // be lossy; the ledger is display-only — see onInjected.)
         session.ack(ev.eventId);
+        opts.onInjected?.(text);
       }
     } else if (isInterrupt(ev)) {
       const sent = await retryUntil(

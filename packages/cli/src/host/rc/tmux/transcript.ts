@@ -284,6 +284,14 @@ export function userMessageText(message: { content?: unknown } | undefined): str
     .join("");
 }
 
+/** True if a user payload's message carries any `tool_result` block — i.e. it's a tool-OUTPUT turn, not a
+ *  typed prompt. The local-prompt ledger skips these so a (theoretical) text+tool_result turn never has
+ *  its tool_result dropped by echo-suppression; real claude writes tool_results as their own user turns. */
+export function messageHasToolResult(message: { content?: unknown } | undefined): boolean {
+  const c = message?.content;
+  return Array.isArray(c) && c.some((b) => (b as { type?: unknown }).type === "tool_result");
+}
+
 /** A transcript line's ISO-8601 `timestamp` (e.g. `2026-06-07T18:18:59.563Z`), used to MERGE the main
  *  transcript with the separate sub-agent files into one chronological stream. Returns "" when the field
  *  is absent or the line is unparseable. ISO-8601 UTC (`…Z`) compares correctly as a plain string. In

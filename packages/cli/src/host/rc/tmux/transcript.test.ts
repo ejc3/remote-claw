@@ -15,6 +15,7 @@ import {
   lineTimestamp,
   listSubagentFiles,
   mergeBatchByTimestamp,
+  messageHasToolResult,
   projectDir,
   projectSlug,
   readAgentTaskId,
@@ -262,6 +263,21 @@ describe("userMessageText — extract a user turn's text for the local-prompt le
     expect(userMessageText(undefined)).toBe("");
     expect(userMessageText({})).toBe("");
     expect(userMessageText({ content: 42 as unknown as string })).toBe("");
+  });
+});
+
+describe("messageHasToolResult — guard the ledger off tool-output turns", () => {
+  it("true when content has a tool_result block", () => {
+    expect(
+      messageHasToolResult({
+        content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }],
+      }),
+    ).toBe(true);
+  });
+  it("false for a text-only turn, a string content, or undefined", () => {
+    expect(messageHasToolResult({ content: [{ type: "text", text: "hi" }] })).toBe(false);
+    expect(messageHasToolResult({ content: "hi" })).toBe(false);
+    expect(messageHasToolResult(undefined)).toBe(false);
   });
 });
 

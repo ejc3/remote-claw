@@ -36,6 +36,7 @@ import {
   findTranscriptById,
   listSubagentFiles,
   mergeBatchByTimestamp,
+  messageHasToolResult,
   projectDir,
   readAgentTaskId,
   snapshotTranscriptInodes,
@@ -374,15 +375,21 @@ export async function runTmuxDriver(
   // claude's final lines reach the viewer before abort (the relay stops consuming once aborted, review
   // codex#2). seenUuids makes the extra drain idempotent.
   const seenUuids = new Set<string>(); // review #2: re-pushing a uuid does NOT dedup at the relay
-  // LOCAL-PROMPT LEDGER (parity with the opencode driver): a multiset of the prompt texts WE injected via
-  // the pane. claude echoes every prompt as a `user` transcript line; one that matches a recorded inject
-  // is OUR echo (the relay already showed the viewer's prompt → suppress it), while an unmatched user-text
-  // line was typed at the LOCAL tmux TUI → tag `local_prompt` so the relay surfaces it for viewers.
-  // FIFO-capped so a never-matching echo (e.g. claude reshaping the text) can't grow it unbounded.
+  // LOCAL-PROMPT LEDGER (parity with the opencode driver) — a DISPLAY-side concern only; it never touches
+  // the inject path (commands to claude must not be lossy; the remote transcript may be). A multiset of
+  // the prompt texts WE injected via the pane. claude echoes every prompt as a `user` transcript line; one
+  // that matches a recorded inject is OUR echo (the relay already showed the viewer's prompt → suppress
+  // it), while an unmatched user-text line was typed at the LOCAL tmux TUI → tag `local_prompt` so the
+  // relay surfaces it. Keys are TRIMMED so trailing-whitespace drift in claude's echo still matches.
+  // FIFO-capped so a never-matching echo (e.g. claude reshaping the text) can't grow it unbounded, and
+  // cleared on rotation (text keys aren't session-scoped — see attach). Best-effort by design: two
+  // identical prompts (one injected, one locally typed) are indistinguishable — same documented limit as
+  // opencode. A mis-classification only mis-renders the transcript, never a command.
   const injectedTexts = new Map<string, number>();
   const INJECTED_LEDGER_CAP = 256;
   const recordInjected = (text: string): void => {
-    injectedTexts.set(text, (injectedTexts.get(text) ?? 0) + 1);
+    const key = text.trim();
+    injectedTexts.set(key, (injectedTexts.get(key) ?? 0) + 1);
     while (injectedTexts.size > INJECTED_LEDGER_CAP) {
       const oldest = injectedTexts.keys().next().value; // Map preserves insertion order → FIFO eviction
       if (oldest === undefined) break;
@@ -391,10 +398,11 @@ export async function runTmuxDriver(
   };
   /** Consume one matching entry; true ⇒ this user line is OUR injected echo (caller suppresses it). */
   const consumeInjected = (text: string): boolean => {
-    const n = injectedTexts.get(text) ?? 0;
+    const key = text.trim();
+    const n = injectedTexts.get(key) ?? 0;
     if (n <= 0) return false;
-    if (n === 1) injectedTexts.delete(text);
-    else injectedTexts.set(text, n - 1);
+    if (n === 1) injectedTexts.delete(key);
+    else injectedTexts.set(key, n - 1);
     return true;
   };
   const discoveryWarnMs = deps.discoveryWarnMs ?? DISCOVERY_WARN_MS;
@@ -416,6 +424,11 @@ export async function runTmuxDriver(
   // it is safe (no concurrent-sibling guesswork). A no-op if already on `path`.
   const attach = (path: string): void => {
     if (path === currentPath) return;
+    // On a ROTATION (not the first attach), clear the local-prompt ledger: its keys are TEXT, not
+    // session-scoped, so a stale entry from the old session would wrongly suppress an identical prompt
+    // typed in the new one. (seenUuids stays — uuids are globally unique, so keeping it is safe.) Skip on
+    // the first attach so a prompt injected before discovery still has its echo suppressed.
+    if (currentPath !== null) injectedTexts.clear();
     tailer = new TranscriptTailer(path);
     subDir = subagentDir(path);
     subTailers.clear();
@@ -443,17 +456,25 @@ export async function runTmuxDriver(
       if (seenUuids.has(uuid)) return; // dedup BEFORE pushUpstream (review #2)
       seenUuids.add(uuid);
     }
-    // Local-prompt ledger — only TOP-LEVEL user TEXT turns (a sub-agent's user lines are tool_results, no
-    // text; tool_result-only turns have no text either → pass through for the relay's tool_result branch).
-    if (payload.type === "user" && parentTaskId === undefined) {
+    // Local-prompt ledger — only TOP-LEVEL user TEXT turns (a sub-agent's user lines carry parentTaskId;
+    // a tool_result turn is handled by the relay's tool_result branch and must NOT be suppressed). A match
+    // means it's OUR injected prompt's echo → drop the FRAME (the relay already showed the viewer's
+    // prompt), but STILL feed status.onLine below so the turn boundary clears any abandoned open tool.
+    let suppressFrame = false;
+    if (
+      payload.type === "user" &&
+      parentTaskId === undefined &&
+      !messageHasToolResult(payload.message)
+    ) {
       const text = userMessageText(payload.message);
       if (text !== "") {
-        if (consumeInjected(text)) return; // OUR injected prompt's echo — drop (the relay already showed it)
-        payload.local_prompt = true; // typed at the local pane → surface it for viewers
+        if (consumeInjected(text))
+          suppressFrame = true; // our echo — drop the display frame only
+        else payload.local_prompt = true; // typed at the local pane → surface it for viewers
       }
     }
-    status.onLine(payload);
-    session.pushUpstream(payload);
+    status.onLine(payload); // ALWAYS: a top-level user text turn is a turn boundary even when suppressed
+    if (!suppressFrame) session.pushUpstream(payload);
   };
 
   // Drain newly-appended lines from the main transcript AND every discovered sub-agent file. Idempotent
