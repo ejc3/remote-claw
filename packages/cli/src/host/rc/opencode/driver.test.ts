@@ -3,7 +3,12 @@ import { deriveIdentity } from "@remote-claw/clawsec";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import type { Session } from "../session.js";
-import { type HistoryMessage, OpencodeClient, type OpencodeEvent } from "./client.js";
+import {
+  type HistoryMessage,
+  OpencodeClient,
+  type OpencodeEvent,
+  parseSseFrame,
+} from "./client.js";
 import { OpencodeDriver } from "./driver.js";
 
 // Driver-level CAPTURE test. We drive the REAL OpencodeDriver + a REAL HostRcRelay (via bridgeSession),
@@ -104,13 +109,34 @@ class FakeOpencodeClient extends OpencodeClient {
   ): Promise<void> {
     this.replies.push({ permissionId, response });
   }
-  override async *events(_sessionId: string, _signal: AbortSignal): AsyncGenerator<OpencodeEvent> {
-    for (const ev of this.script) {
+  /** How many times events() has been (re)subscribed — the reconnect test asserts this grows. */
+  connections = 0;
+  /** Per-connection scripts. When set, the Nth events() call replays scripts[N]; every connection EOFs
+   *  after its script EXCEPT the last, which PARKS until aborted (a real long-lived SSE stays open). When
+   *  unset, every connection replays `script` then parks. A connection whose script ends before the last
+   *  models a transient SSE drop the driver must reconnect from (review #2). */
+  connectionScripts: OpencodeEvent[][] | null = null;
+
+  override async *events(_sessionId: string, signal: AbortSignal): AsyncGenerator<OpencodeEvent> {
+    const idx = this.connections;
+    this.connections++;
+    const scripts = this.connectionScripts;
+    const events = scripts ? (scripts[Math.min(idx, scripts.length - 1)] ?? []) : this.script;
+    // The LAST connection (or the only one) parks after its script; earlier connections EOF to model a
+    // drop. A real SSE stream stays open after a turn, so parking-until-abort is the faithful default.
+    const isLast = scripts ? idx >= scripts.length - 1 : true;
+    for (const ev of events) {
+      if (signal.aborted) return;
       // Yield to the event loop so the inject pump + relay interleave realistically.
       await new Promise((r) => setTimeout(r, 0));
       yield ev;
     }
-    // Stream ends here → the driver's capture pump returns → run() proceeds to teardown.
+    if (!isLast) return; // EOF → the driver's #capturePump must reconnect (NOT tear down) — review #2.
+    // Park until aborted: a live SSE stays open after a turn. run() ends only on the parent abort.
+    await new Promise<void>((resolve) => {
+      if (signal.aborted) return resolve();
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
   }
 }
 
@@ -167,6 +193,21 @@ async function makeCtx(
   };
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Poll `pred` up to `ms`, returning its final value. The fake SSE now PARKS after its script (a real
+ *  stream stays open — review #2), so run() no longer resolves on EOF; tests wait for their condition,
+ *  then abort and await the exit code. */
+async function waitFor(pred: () => boolean, ms = 2000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (!pred() && Date.now() < end) await sleep(5);
+  return pred();
+}
+/** The captured Session's upstream snapshot (the `captured` ref is set in an onSession callback that TS
+ *  can't see, so it narrows to never — this cast reads it back safely). */
+function up(s: Session | null) {
+  return (s as unknown as Session | null)?.snapshotUpstream() ?? [];
+}
+
 describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
   let ac: AbortController | null = null;
   afterEach(() => ac?.abort());
@@ -179,7 +220,11 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
       captured = s;
     });
     ac = new AbortController();
-    const code = await new OpencodeDriver(ctx).run(ac.signal);
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    // The fake SSE parks after its script (review #2), so wait for the assistant to flush, then abort.
+    await waitFor(() => up(captured).some((e) => e.eventType === "assistant"));
+    ac.abort();
+    const code = await run;
     expect(code).toBe(0);
 
     const session = captured as unknown as Session;
@@ -221,7 +266,13 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
       captured = s;
     });
     ac = new AbortController();
-    await new OpencodeDriver(ctx).run(ac.signal);
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    // The whole replayed script yields with a 0ms tick per event; wait for the assistant, then let the
+    // re-delivery (appended after idle) drain before aborting so dedup has a chance to (not) re-emit.
+    await waitFor(() => up(captured).some((e) => e.eventType === "assistant"));
+    await sleep(50);
+    ac.abort();
+    await run;
     const session = captured as unknown as Session;
     expect(session.snapshotUpstream().filter((e) => e.eventType === "assistant")).toHaveLength(1);
   });
@@ -265,6 +316,10 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     });
     const run = new OpencodeDriver(ctx).run(ac.signal);
     await session0Promise;
+    // The fake SSE parks (review #2); wait for the inject pump to drain the prompt + permission reply,
+    // then abort and await the exit code.
+    await waitFor(() => client.prompts.length >= 1 && client.replies.length >= 1);
+    ac.abort();
     await run;
 
     // A prompt was injected with the default ollama model.
@@ -314,6 +369,8 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     });
     const run = new OpencodeDriver(ctx).run(ac.signal);
     await ready;
+    await waitFor(() => client.replies.length >= 1);
+    ac.abort();
     await run;
 
     const session = captured as unknown as Session;
@@ -375,7 +432,10 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
       captured = s;
     });
     ac = new AbortController();
-    const code = await new OpencodeDriver(ctx).run(ac.signal);
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => broker.content.some((p) => p.recordKind === "tool_result"));
+    ac.abort();
+    const code = await run;
     expect(code).toBe(0);
     expect(captured).not.toBeNull();
 
@@ -394,5 +454,204 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     expect(tr.output).toContain("hello");
     // Ordering: the tool_use frame precedes its tool_result frame.
     expect((toolUses[0]?.seq as number) < (toolResults[0]?.seq as number)).toBe(true);
+  });
+});
+
+// ── HARDENING TESTS (code-review consensus #1–#4) ────────────────────────────────────────────────
+// Deterministic proofs of the robustness fixes the happy-path suite doesn't exercise.
+
+/** Build a HistoryMessage (GET /message entry) from an info + parts. */
+function histMsg(
+  info: Record<string, unknown>,
+  parts: Array<Record<string, unknown>>,
+): HistoryMessage {
+  return { info, parts } as unknown as HistoryMessage;
+}
+
+describe("OpencodeDriver hardening", () => {
+  let ac: AbortController | null = null;
+  afterEach(() => ac?.abort());
+
+  // FIX #1 — attach mid-turn: an INCOMPLETE assistant in history must NOT be flushed at backfill (no
+  // truncated answer); the LIVE completion must flush the FULL text exactly once (no truncation, no dup).
+  it("(#1) attach mid-turn: incomplete assistant is buffered at backfill, then live completion flushes the full text once", async () => {
+    // History: a finished user prompt + an assistant message that is STILL STREAMING (a partial part, no
+    // time.completed). Backfill must surface the user prompt but withhold the partial assistant.
+    const history: HistoryMessage[] = [
+      histMsg({ id: "msg_u", role: "user", time: { created: 1 } }, [
+        { type: "text", id: "prt_u", messageID: "msg_u", text: "Stream please" },
+      ]),
+      histMsg({ id: "msg_a", role: "assistant", time: { created: 2 } /* no completed */ }, [
+        { type: "text", id: "prt_a", messageID: "msg_a", text: "partial" }, // mid-stream snapshot
+      ]),
+    ];
+    // Use TWO connections so there's a deterministic backoff window to observe the post-backfill state:
+    //  connection 1 backfills (history) then EOFs immediately (just server.connected) — during the
+    //  reconnect backoff we assert the incomplete assistant was withheld;
+    //  connection 2 (the reconnect) delivers the LIVE completion (full text) and idles, then parks.
+    const client = new FakeOpencodeClient([]);
+    client.connectionScripts = [
+      [{ type: "server.connected", properties: {} }], // backfill-only, then EOF
+      [
+        { type: "server.connected", properties: {} },
+        part({ type: "text", id: "prt_a", messageID: "msg_a", text: "partial and then the rest" }),
+        msgUpdated({ id: "msg_a", role: "assistant", time: { created: 2, completed: 3 } }),
+        idle(),
+      ],
+    ];
+    client.history = history;
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+
+    // Wait for the user prompt to appear (proves backfill ran on connection 1), then assert no assistant
+    // yet — the incomplete assistant in history was BUFFERED, not flushed (#1). Connection 2 hasn't
+    // delivered the completion yet (we're inside the reconnect backoff window).
+    await waitFor(() => up(captured).some((e) => e.eventType === "user"));
+    const midBackfill = up(captured).filter((e) => e.eventType === "assistant");
+    expect(midBackfill).toHaveLength(0); // the incomplete assistant was NOT flushed at backfill (#1)
+
+    // Now wait for the live completion (connection 2) to flush the assistant.
+    await waitFor(() => up(captured).some((e) => e.eventType === "assistant"), 3000);
+    ac.abort();
+    await run;
+
+    const session = captured as unknown as Session;
+    const assistants = session.snapshotUpstream().filter((e) => e.eventType === "assistant");
+    // EXACTLY ONE assistant payload — and it's the FULL text, not the truncated "partial".
+    expect(assistants).toHaveLength(1);
+    const msg = assistants[0]?.payload.message as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(msg.content).toEqual([{ type: "text", text: "partial and then the rest" }]);
+  });
+
+  // FIX #2 — SSE reconnect: a simulated stream drop+reconnect must KEEP the pump alive (run() must NOT
+  // resolve, opencode must NOT be aborted), and the re-backfill on reconnect must produce no duplicates.
+  it("(#2) a transient SSE drop reconnects (no run() exit, no opencode abort) and re-backfill does not duplicate", async () => {
+    // Connection 1: completes a turn, then EOFs (the drop). Connection 2 (the reconnect): re-delivers the
+    // SAME finished message (as a real reconnect would) then parks. The driver must reconnect and dedup.
+    const turn: OpencodeEvent[] = [
+      { type: "server.connected", properties: {} },
+      part({ type: "text", id: "prt_ok", messageID: "msg_r", text: "OK" }),
+      msgUpdated({ id: "msg_r", role: "assistant", time: { created: 1, completed: 2 } }),
+      idle(),
+    ];
+    const reconnect: OpencodeEvent[] = [
+      { type: "server.connected", properties: {} },
+      // a reconnect re-delivers the finished message's parts + completion — must be deduped (#2)
+      part({ type: "text", id: "prt_ok", messageID: "msg_r", text: "OK" }),
+      msgUpdated({ id: "msg_r", role: "assistant", time: { created: 1, completed: 2 } }),
+      idle(),
+    ];
+    const client = new FakeOpencodeClient([]);
+    client.connectionScripts = [turn, reconnect];
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    let resolved = false;
+    const run = new OpencodeDriver(ctx).run(ac.signal).then((c) => {
+      resolved = true;
+      return c;
+    });
+
+    // Wait for the reconnect to happen (events() called twice) AND the assistant to flush.
+    await waitFor(() => client.connections >= 2);
+    await waitFor(() => up(captured).some((e) => e.eventType === "assistant"));
+    await sleep(50); // let any (incorrect) duplicate land
+
+    // The drop did NOT end run() and did NOT abort opencode — the bridge survived the transient close.
+    expect(resolved).toBe(false);
+    expect(client.aborts).toBe(0);
+    // Re-backfill across the reconnect produced NO duplicate: exactly one assistant payload.
+    const assistants = up(captured).filter((e) => e.eventType === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(client.connections).toBeGreaterThanOrEqual(2); // it actually reconnected
+
+    ac.abort();
+    const code = await run;
+    expect(code).toBe(0);
+    expect(resolved).toBe(true); // NOW it resolves — only on the parent abort
+  });
+
+  // FIX #3 — a FAILED promptAsync must roll back the suppression token so a later identical LOCAL prompt
+  // is NOT falsely suppressed (it must surface as a local_prompt).
+  it("(#3) a failed inject rolls back its suppression token (a later identical local prompt is not suppressed)", async () => {
+    // The live SSE: a LOCAL user message with the SAME text the failed inject tried to send. With the
+    // rollback, it must surface as a local_prompt; without it, the leaked token would suppress it.
+    const SAME = "duplicate text";
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      part({ type: "text", id: "prt_u", messageID: "msg_local", text: SAME }),
+      msgUpdated({ id: "msg_local", role: "user", time: { created: 1 } }),
+      // an assistant message so #flushBufferedUsers fires and the user message flushes
+      part({ type: "text", id: "prt_a", messageID: "msg_a2", text: "reply" }),
+      msgUpdated({ id: "msg_a2", role: "assistant", time: { created: 2, completed: 3 } }),
+      idle(),
+    ]);
+    // Make promptAsync FAIL so the inject's recorded token must roll back.
+    client.promptAsync = async () => {
+      throw new Error("simulated prompt POST failure");
+    };
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const ready = new Promise<Session>((resolve) => {
+      const orig = ctx.onSession;
+      ctx.onSession = (s: Session) => {
+        orig?.(s);
+        s.pushUserInput(SAME); // the driver tries to inject this; the POST fails → token must roll back
+        resolve(s);
+      };
+    });
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await ready;
+    // Wait for the LOCAL user message (same text) to flush — it must NOT be suppressed.
+    await waitFor(() => up(captured).some((e) => e.eventType === "user"));
+    ac.abort();
+    await run;
+
+    const session = captured as unknown as Session;
+    const users = session.snapshotUpstream().filter((e) => e.eventType === "user");
+    // The local prompt with the same text surfaced (NOT falsely suppressed by a leaked token — #3).
+    expect(users).toHaveLength(1);
+    expect(users[0]?.payload.local_prompt).toBe(true);
+    expect((users[0]?.payload.message as { content?: unknown })?.content).toBe(SAME);
+  });
+
+  // FIX #4 — the SSE parser must accept CRLF framing (a `\r\n`-separated frame must parse).
+  it("(#4) parseSseFrame parses a CRLF-framed data line", () => {
+    // A frame whose data line ends in \r (after LF-normalization in events(), a block is the inter-blank
+    // content). parseSseFrame receives a LF-normalized block; assert it parses a typical data line, AND
+    // that the raw CRLF normalization in events() collapses \r\n → \n so framing works.
+    const obj = { type: "session.idle", properties: { sessionID: "ses_x" } };
+    const lfBlock = `data: ${JSON.stringify(obj)}`;
+    expect(parseSseFrame(lfBlock)?.type).toBe("session.idle");
+
+    // Multi-line data (SSE allows several data: lines per frame) concatenates.
+    const json = JSON.stringify({ type: "server.heartbeat", properties: {} });
+    const half = json.length >> 1;
+    const multi = `data: ${json.slice(0, half)}\ndata: ${json.slice(half)}`;
+    expect(parseSseFrame(multi)?.type).toBe("server.heartbeat");
+
+    // A `:comment` keepalive (no data:) → null (skipped, not a kill).
+    expect(parseSseFrame(":keepalive")).toBeNull();
+    // Malformed JSON → null.
+    expect(parseSseFrame("data: {not json")).toBeNull();
+
+    // The CRLF normalization that events() applies before framing: \r\n\r\n frames split, \r\n lines
+    // become \n. Prove the normalization the parser depends on: a CRLF block normalizes to the LF block.
+    const crlfBlock = lfBlock.replace(/\n/g, "\r\n");
+    expect(parseSseFrame(crlfBlock.replace(/\r\n?/g, "\n"))?.type).toBe("session.idle");
   });
 });

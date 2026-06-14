@@ -141,6 +141,11 @@ export function partToBlocks(part: Part): PartBlocks {
       return { assistant: [toolUse], toolResults: [] };
     }
     // step boundaries, snapshot, patch, agent, retry, compaction, file, subtask, unknown → dropped here.
+    // V1 LIMITATION (review #7): a `subtask` part marks a Task/SUBAGENT spawned as a CHILD OpenCode
+    // session. We drop it here and the driver never tags messages with a parentToolUseId, so a Task run
+    // shows no nested Task row / no subagent output in the viewer. coalesceMessage already accepts a
+    // parentToolUseId for when child-session bridging lands (follow whichever child sessions a parent
+    // spawns and tag their messages); that is deferred follow-up work, not a bug.
     default:
       return EMPTY;
   }

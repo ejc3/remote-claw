@@ -15,6 +15,25 @@
 //   #5 ACK       — followDownstream only suppresses replay for ids in #acked; a non-MITM driver has no
 //                  /worker/events/delivery, so we call session.ack(ev.eventId) after EVERY successful
 //                  inject, INCLUDING the leading `initialize` control_request.
+//
+// V1 LIMITATIONS (documented, intentional — not bugs):
+//   • SUBAGENTS NOT BRIDGED (review #7). OpenCode spawns a Task/subagent as a CHILD session and emits a
+//     `subtask` part on the parent message. translate.ts drops `subtask` parts (partToBlocks → EMPTY) and
+//     the driver never passes parentToolUseId, so coalesceMessage tags nothing; the client also filters
+//     events to ONE sessionID, so child-session events are not captured. A Task run therefore shows no
+//     nested Task row / no subagent output in the web viewer. Bridging child sessions (follow whichever
+//     child sessions a parent spawns, tag their messages with the parent Task tool_use id) is follow-up
+//     work — coalesceMessage already accepts a parentToolUseId for when it lands.
+//   • RELAY DEATH DOES NOT END OPENCODE (review #8, intentional). bridgeSession's serve() can end (the
+//     broker dropped / the remote viewer went away); the driver KEEPS opencode running. The wrapper is
+//     thin: the local TUI stays usable and the remote view reconnects when the broker recovers. run()
+//     ends only on the PARENT signal abort — we deliberately do NOT race `served` to abort opencode (that
+//     would kill the user's live local session on a transient broker blip).
+//   • IDENTICAL-PROMPT COLLISION (review #9). Echo suppression correlates a flushed OpenCode user message
+//     to a driver-injected prompt by TEXT (the #injectedTexts multiset). If a web prompt "X" and a TUI
+//     prompt "X" race before the first echo flushes, the driver can mis-attribute one for the other
+//     (suppress the local one / surface the injected one). Rare and self-limited to identical text;
+//     revisit with message-id correlation if OpenCode exposes the prompt's resulting message id.
 
 import type { BrokerClient } from "../../../broker/client.js";
 import { type Tracer, tracerFromEnv } from "../../../trace.js";
@@ -77,6 +96,62 @@ interface MessageBuffer {
   order: string[];
 }
 
+/** Default cap for the bounded dedup/correlation structures (#emitted, #injectedTexts, #roles). Mirrors
+ *  the relay's #seen discipline: keep the WINDOW of recent ids large enough that a re-backfill after a
+ *  reconnect (review #2) still finds its just-emitted ids (no truncation/dup), but bounded so a very
+ *  long-lived bridge can't grow unbounded. A single turn touches O(1) ids; 4096 covers thousands of
+ *  recent turns — far more than any reconnect re-backfill replays. */
+const DEFAULT_EMITTED_CAP = 4096;
+
+/** SSE reconnect backoff bounds (review #2). A transient close reconnects after MIN; repeated failures
+ *  (server down) back off exponentially up to MAX. The backoff is reset to MIN after a connection that
+ *  lived (a clean EOF), so a healthy-then-blip reconnect is fast. */
+const RECONNECT_BACKOFF_MIN_MS = 250;
+const RECONNECT_BACKOFF_MAX_MS = 5000;
+
+/** A Set with a FIFO eviction cap: re-adding a present key refreshes its recency (moves it to newest), and
+ *  adding past the cap evicts the OLDEST key. Preserves recent-id dedup across a reconnect's re-backfill
+ *  (the relay's bounded-#seen approach) while bounding memory on a long-lived bridge (review #6). A Set in
+ *  JS already iterates in insertion order, so we delete-then-re-add to bump recency. */
+class BoundedSet {
+  readonly #set = new Set<string>();
+  constructor(private readonly cap: number) {}
+  has(key: string): boolean {
+    return this.#set.has(key);
+  }
+  add(key: string): void {
+    if (this.#set.has(key)) this.#set.delete(key); // bump recency: re-insert at the newest position
+    this.#set.add(key);
+    while (this.#set.size > this.cap) {
+      const oldest = this.#set.values().next().value;
+      if (oldest === undefined) break;
+      this.#set.delete(oldest);
+    }
+  }
+  get size(): number {
+    return this.#set.size;
+  }
+}
+
+/** A Map with a FIFO eviction cap (same eviction discipline as BoundedSet, keyed value preserved). Used to
+ *  bound #roles so a long-lived bridge doesn't accumulate one role entry per message forever (review #6). */
+class BoundedMap<V> {
+  readonly #map = new Map<string, V>();
+  constructor(private readonly cap: number) {}
+  get(key: string): V | undefined {
+    return this.#map.get(key);
+  }
+  set(key: string, value: V): void {
+    if (this.#map.has(key)) this.#map.delete(key); // bump recency
+    this.#map.set(key, value);
+    while (this.#map.size > this.cap) {
+      const oldest = this.#map.keys().next().value;
+      if (oldest === undefined) break;
+      this.#map.delete(oldest);
+    }
+  }
+}
+
 export class OpencodeDriver implements Driver {
   readonly capabilities: DriverCapabilities = {
     // We surface OpenCode permission gates as can_use_tool and round-trip the answer to .../permissions.
@@ -96,21 +171,26 @@ export class OpencodeDriver implements Driver {
   readonly #tracer: Tracer;
 
   /** Buffered in-flight assistant messages, keyed by OpenCode messageID. Flushed (and removed) on
-   *  session.idle / a completed assistant message.updated. */
+   *  session.idle / a completed assistant message.updated. Self-bounded (cleared on flush / re-seeded
+   *  per incomplete message), so it never needs an explicit cap. */
   readonly #buffers = new Map<string, MessageBuffer>();
   /** Message ids already pushUpstream-ed — the DEDUP set (#2): never emit a message twice (an SSE
-   *  reconnect can re-deliver a finished message's parts). */
-  readonly #emitted = new Set<string>();
+   *  reconnect can re-deliver a finished message's parts). FIFO-bounded (review #6) so a long-lived
+   *  bridge can't grow it without limit; the window is large enough that a reconnect's re-backfill still
+   *  finds every recently-emitted id (coordinated with #2 — no truncation/dup across a reconnect). */
+  readonly #emitted = new BoundedSet(DEFAULT_EMITTED_CAP);
   /** messageID → role, learned from `message.updated` (and backfilled history). An ASSISTANT message is
    *  pushed upstream as an `assistant` payload. A USER message is handled by origin (see #injectedTexts):
    *  one WE injected is the echo of a viewer prompt (the relay's inbound pump already surfaced it) and is
    *  SUPPRESSED; one we did NOT inject was typed at the OpenCode TUI / by another client and is surfaced
-   *  as a `local_prompt` `user` payload so it shows in the web viewer. */
-  readonly #roles = new Map<string, string>();
+   *  as a `local_prompt` `user` payload so it shows in the web viewer. FIFO-bounded (review #6). */
+  readonly #roles = new BoundedMap<string>(DEFAULT_EMITTED_CAP);
   /** Multiset of prompt texts the INJECT pump sent via prompt_async, keyed by text → count. When a
    *  user-role message flushes we decrement the matching entry and SUPPRESS it (it's our own echo); a
    *  user message with no matching entry is a LOCAL prompt (TUI / other client) → emitted `local_prompt`.
-   *  A multiset (not a set) so two identical prompts each suppress exactly one echo. */
+   *  A multiset (not a set) so two identical prompts each suppress exactly one echo. Bounded: entries are
+   *  decremented+deleted on a matched echo, and a failed inject ROLLS BACK its entry (review #3), so this
+   *  only holds in-flight (un-echoed) prompts — naturally small. */
   readonly #injectedTexts = new Map<string, number>();
   /** The active model to use for the next prompt_async; updated by a set_model control verb. */
   #activeModel: OpencodeModel;
@@ -234,10 +314,19 @@ export class OpencodeDriver implements Driver {
   /**
    * HISTORY BACKFILL / RESUME: fetch the attached session's full message history (GET /…/message) and
    * replay it through the SAME flush path as the live stream — coalesce per message, dedup by messageID
-   * (#emitted), emit assistant turns as `assistant` and locally-typed user turns as `local_prompt`. Done
-   * ONCE on attach, before live subscription. Because it shares #emitted, a wrapper restart re-attaches,
-   * re-fetches the same history, and re-emits it with NO duplicates beyond a fresh broker session's first
-   * pass (the broker/viewer dedup by their own seq within a session; a new session starts the log over).
+   * (#emitted), emit assistant turns as `assistant` and locally-typed user turns as `local_prompt`. Run on
+   * attach AND after EACH (re)connect (review #2) — #emitted dedups what was already emitted, so a re-run
+   * re-emits nothing already shown. Because it shares #emitted, a wrapper restart re-attaches, re-fetches
+   * the same history, and re-emits it with NO duplicates beyond a fresh broker session's first pass (the
+   * broker/viewer dedup by their own seq within a session; a new session starts the log over).
+   *
+   * MID-TURN ATTACH (review #1, CRITICAL): an ASSISTANT message is flushed here ONLY when it is COMPLETE
+   * (`info.time.completed`). If we attach while an assistant message is still streaming, flushing the
+   * partial would mark it #emitted and the LIVE completion would then be deduped away — the viewer would
+   * be stuck with truncated output forever. So for an INCOMPLETE assistant we SEED its parts into #buffers
+   * + record its role WITHOUT touching #emitted; the live `message.updated` (completed) / `session.idle`
+   * then flushes the FULL message exactly once. User messages carry no `completed` flag (they settle the
+   * moment the model starts) — they flush as before.
    */
   async #backfillHistory(session: Session, ocSessionId: string): Promise<void> {
     const messages: HistoryMessage[] = await this.#client.getMessages(ocSessionId);
@@ -245,11 +334,19 @@ export class OpencodeDriver implements Driver {
     for (const m of messages) {
       const id = m.info.id;
       if (typeof id !== "string" || id === "") continue;
-      if (typeof m.info.role === "string") this.#roles.set(id, m.info.role);
-      // Seed the buffer from the history parts, then flush via the shared path (dedup + coalesce +
-      // local_prompt origin handling all apply identically to live messages).
+      const role = typeof m.info.role === "string" ? m.info.role : undefined;
+      if (role !== undefined) this.#roles.set(id, role);
+      if (this.#emitted.has(id)) continue; // already emitted on a prior connection's backfill / live
+      // Seed the buffer from the history parts (shared with the live path: coalesce + later flush).
       for (const part of m.parts) {
         if (part && typeof part.id === "string") this.#bufferPart(id, part);
+      }
+      // An INCOMPLETE assistant message (mid-turn attach) is left BUFFERED, not flushed — the live
+      // completion flushes the full text. Everything else (a completed assistant, or a user message that
+      // has no `completed` flag) flushes now via the shared path (dedup + coalesce + local_prompt origin).
+      if (role === "assistant" && m.info.time?.completed === undefined) {
+        this.#tracer.debug("backfill: buffering incomplete assistant for live completion", { id });
+        continue;
       }
       const before = session.snapshotUpstream().length;
       this.#flushMessage(session, id);
@@ -262,8 +359,47 @@ export class OpencodeDriver implements Driver {
    * CAPTURE: subscribe to GET /event (filtered to our ses_), buffer parts per messageID, and flush a
    * COMPLETED message to pushUpstream ONCE (review #1 coalesce, #2 dedup). Completion is signalled by
    * `session.idle` (turn end) or an assistant `message.updated` carrying `time.completed`.
+   *
+   * RECONNECT LOOP (review #2, CRITICAL): the SSE connection can EOF/error transiently (a proxy timeout,
+   * the server restarting, a dropped TCP). A single subscription ending used to end run() → teardown →
+   * client.abort(), CANCELLING the user's active OpenCode turn. Instead we wrap one connection in a loop
+   * that RECONNECTS with capped backoff and ONLY ends when the parent signal aborts. Each (re)connect
+   * re-runs backfill on its first event (deduped by #emitted; with fix #1 an incomplete assistant
+   * re-seeds and completes live) — subscribe-first, lossless, no truncation/dup across reconnects.
    */
   async #capturePump(session: Session, ocSessionId: string, signal: AbortSignal): Promise<void> {
+    let backoffMs = RECONNECT_BACKOFF_MIN_MS;
+    while (!signal.aborted) {
+      try {
+        await this.#captureConnection(session, ocSessionId, signal);
+        // A clean EOF (the generator returned). If the parent hasn't aborted, this was a transient close
+        // — reconnect immediately (reset backoff; a healthy connection lived its life).
+        backoffMs = RECONNECT_BACKOFF_MIN_MS;
+      } catch (e) {
+        // A connect/transport error (the server is down / restarting). Back off before retrying so we
+        // don't hot-loop; the parent abort still wins (the sleep is abort-aware).
+        if (signal.aborted) return;
+        this.#tracer.warn("opencode SSE connection dropped; reconnecting", {
+          error: String(e),
+          backoffMs,
+        });
+      }
+      if (signal.aborted) return;
+      // Mark the bridge as "reconnecting" so presence reflects the gap rather than a stale "running".
+      session.workerStatus = "idle";
+      session.wake();
+      await sleepAbortable(backoffMs, signal);
+      backoffMs = Math.min(backoffMs * 2, RECONNECT_BACKOFF_MAX_MS);
+    }
+  }
+
+  /** Drive ONE SSE connection (one `events()` generator): backfill on the first event, then dispatch.
+   *  Returns on a clean EOF, throws on a transport error — #capturePump decides whether to reconnect. */
+  async #captureConnection(
+    session: Session,
+    ocSessionId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     let backfilled = false;
     for await (const ev of this.#client.events(ocSessionId, signal)) {
       if (signal.aborted) return;
@@ -271,7 +407,8 @@ export class OpencodeDriver implements Driver {
         // The SSE is now LIVE (we received the first event — OpenCode sends `server.connected` on
         // connect). Backfill history NOW, before handling any live data event, so prior turns land
         // first and NOTHING is lost to a backfill-then-subscribe gap; #emitted dedups any message that
-        // also appears in the live stream. Best-effort: a backfill failure must not stop the bridge.
+        // also appears in the live stream (and is re-run on EACH reconnect — review #2). Best-effort: a
+        // backfill failure must not stop the bridge.
         backfilled = true;
         try {
           await this.#backfillHistory(session, ocSessionId);
@@ -417,6 +554,14 @@ export class OpencodeDriver implements Driver {
     this.#injectedTexts.set(text, (this.#injectedTexts.get(text) ?? 0) + 1);
   }
 
+  /** Roll back a recorded injected-text entry (multiset -= 1) when the prompt POST FAILED so no echo will
+   *  arrive (review #3). Symmetric with #recordInjected; the count never goes negative. */
+  #unrecordInjected(text: string): void {
+    const n = this.#injectedTexts.get(text) ?? 0;
+    if (n <= 1) this.#injectedTexts.delete(text);
+    else this.#injectedTexts.set(text, n - 1);
+  }
+
   /** Consume one injected-text entry matching `text`. Returns true (and decrements) if this user message
    *  is the echo of a prompt WE injected — caller suppresses it. False ⇒ a local/foreign prompt. */
   #consumeInjected(text: string): boolean {
@@ -464,7 +609,16 @@ export class OpencodeDriver implements Driver {
       // before promptAsync even resolves) is recognized as OURS and suppressed (#flushMessage), not
       // double-rendered as a local_prompt.
       this.#recordInjected(text);
-      await this.#client.promptAsync(ocSessionId, { text, model: this.#activeModel });
+      try {
+        await this.#client.promptAsync(ocSessionId, { text, model: this.#activeModel });
+      } catch (e) {
+        // The POST failed: no echo will ever arrive for this text, so the recorded suppression token would
+        // leak — a LATER identical local prompt would be falsely suppressed (and #injectedTexts would grow
+        // unboundedly). Roll the token back, then re-throw so #injectPump withholds the ack and retries
+        // (review #3). The retry re-records before re-POSTing, so the multiset stays correct.
+        this.#unrecordInjected(text);
+        throw e;
+      }
       session.workerStatus = "running";
       session.wake();
       this.#tracer.debug("injected prompt", { bytes: text.length });
@@ -542,6 +696,23 @@ function waitAbort(signal: AbortSignal): Promise<void> {
   return new Promise((resolve) =>
     signal.addEventListener("abort", () => resolve(), { once: true }),
   );
+}
+
+/** Sleep `ms`, but resolve EARLY if `signal` aborts (the reconnect-backoff wait — review #2). Never
+ *  rejects: the caller re-checks signal.aborted after it returns. */
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** Entry point the dispatcher calls: construct the driver and run it. Mirrors runRcLaunch's signature

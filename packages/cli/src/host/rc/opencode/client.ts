@@ -195,10 +195,13 @@ export class OpencodeClient {
   }
 
   /**
-   * Async-iterable over the server-wide SSE stream (GET /event), pre-filtered to one session by
-   * `properties.sessionID` (events with no sessionID — server.connected/heartbeat — pass through so the
-   * driver can refresh presence). Exits when `signal` aborts or the stream closes. Parses the
-   * `data: <json>\n\n` SSE framing; non-JSON / comment (`:keepalive`) lines are skipped.
+   * Async-iterable over the server-wide SSE stream (GET /event) for ONE connection, pre-filtered to one
+   * session by `properties.sessionID` (events with no sessionID — server.connected/heartbeat — pass
+   * through so the driver can refresh presence). The generator ENDS on stream EOF (`return`) or throws on
+   * a connect/transport error; it does NOT reconnect — the driver's #capturePump owns the reconnect loop
+   * (so a transient SSE close doesn't tear down the bridge — review #2). Parses the `data: <json>` SSE
+   * framing; non-JSON / comment (`:keepalive`) lines are skipped. CRLF-safe (review #4): a frame may be
+   * separated by `\r\n\r\n` OR `\n\n`, and individual lines by `\r\n`/`\n`/`\r`.
    */
   async *events(sessionId: string, signal: AbortSignal): AsyncGenerator<OpencodeEvent> {
     const res = await this.#fetch(`${this.#baseUrl}/event`, {
@@ -215,24 +218,15 @@ export class OpencodeClient {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) return;
-        buf += decoder.decode(value, { stream: true });
+        // Normalize CRLF/CR → LF up front so frame + line splitting is uniform (review #4). The OpenCode
+        // server emits LF today, but a CRLF proxy in front of it must still frame correctly.
+        buf += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
         // SSE frames are separated by a blank line. Each frame may carry several `data:` lines.
         for (let sep = buf.indexOf("\n\n"); sep >= 0; sep = buf.indexOf("\n\n")) {
           const block = buf.slice(0, sep);
           buf = buf.slice(sep + 2);
-          const data = block
-            .split("\n")
-            .filter((l) => l.startsWith("data:"))
-            .map((l) => l.slice(5).trimStart())
-            .join("");
-          if (data === "") continue;
-          let obj: OpencodeEvent;
-          try {
-            obj = JSON.parse(data) as OpencodeEvent;
-          } catch {
-            continue; // malformed frame — skip rather than kill the stream
-          }
-          if (typeof obj?.type !== "string") continue;
+          const obj = parseSseFrame(block);
+          if (obj === null) continue; // empty/malformed/non-typed frame — skip, don't kill the stream
           const evSession = obj.properties?.sessionID;
           // Pass through session-less server events (connected/heartbeat); filter the rest to ours.
           if (evSession !== undefined && evSession !== sessionId) continue;
@@ -248,4 +242,24 @@ export class OpencodeClient {
       }
     }
   }
+}
+
+/** Parse ONE SSE frame block (its `\n\n`-delimited lines, already LF-normalized) into an OpencodeEvent,
+ *  or null if it carries no parseable typed event. Concatenates all `data:` lines per the SSE spec and
+ *  skips `:comment` keepalives. Exported for the unit test that pins CRLF framing (review #4). */
+export function parseSseFrame(block: string): OpencodeEvent | null {
+  const data = block
+    .split("\n")
+    .filter((l) => l.startsWith("data:"))
+    .map((l) => l.slice(5).trimStart())
+    .join("");
+  if (data === "") return null;
+  let obj: OpencodeEvent;
+  try {
+    obj = JSON.parse(data) as OpencodeEvent;
+  } catch {
+    return null; // malformed frame — skip rather than kill the stream
+  }
+  if (typeof obj?.type !== "string") return null;
+  return obj;
 }
