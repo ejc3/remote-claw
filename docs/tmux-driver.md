@@ -178,12 +178,19 @@ there is no remote way to answer them. v1 runs `--dangerously-skip-permissions` 
 `--permission-prompt-tool <mcp>` and route the call through the relay's **existing**
 `permission_request` ⇄ `permission` round-trip — no relay change.
 
-### 2.6 Attachments — free
+### 2.6 Attachments — viewer→pane is free; local-paste is NOT captured
 
-Attachments are **relay-owned**: `relay.#handleAttachment` decrypts the viewer's bytes, writes the
-file, and injects a normal `user` prompt with a `Read` directive. The driver never sees an
-`attachment` frame — only the resulting downstream `user` event — so attachments work for any driver
-that supports `user` injection. No tmux code needed; `capabilities.attachments = true`.
+The **viewer→pane** direction is relay-owned and works for free: `relay.#handleAttachment` decrypts the
+viewer's bytes, writes the file, and injects a normal `user` prompt with a `Read` directive. The driver
+never sees an `attachment` frame — only the resulting downstream `user` event — so it works for any
+driver that supports `user` injection. No tmux code needed; `capabilities.attachments = true`.
+
+**Caveat (the other direction — confirmed against real transcripts):** an image the human pastes
+**locally** into the tmux pane is written as a top-level `type:"attachment"` line whose content is an
+`{type:"image"}` block, and `transcriptToPayload` keeps only `assistant`/`user`/`system` — so a
+locally-pasted image is **silently dropped** from the remote view. `capabilities.attachments = true`
+covers the inbound (viewer) path, not the local-paste outbound path. Surfacing local attachments
+(write the bytes locally + relay a marker) is follow-up work, tracked in §7.
 
 ---
 
@@ -311,6 +318,8 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
    `parent_tool_use_id`-tagged so the viewer indents it under the Agent, matching native RC (no longer
    dropped, and not flooding the main transcript). Live-verified on claude 2.1.177. Residual: a sub-agent
    whose `.meta.json` never becomes readable would not be surfaced (none observed).
+   - **Locally-pasted images are dropped** (§2.6): a `type:"attachment"` line carrying an `image` block
+     is not relayed. Follow-up: surface local attachments via a written-file marker.
 2. **Silent shape drift** — `mapUpstreamItems` drops off-shape frames; guarded by real-line contract
    tests.
 3. **Status is heuristic** (append timing, not claude's `worker_status`); debounced. An orphaned

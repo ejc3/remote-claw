@@ -177,6 +177,22 @@ export class OpencodeClient {
     if (!res.ok) throw new OpencodeError(res.status, `abort failed: ${res.status}`);
   }
 
+  /** Compact/summarize the session — POST /session/{id}/summarize { providerID, modelID }. This is the
+   *  native equivalent of the `/compact` slash command (verified against the live OpenAPI: the route +
+   *  the SummarizePayload {providerID, modelID, auto?}). The server kicks off a compaction turn whose
+   *  output arrives over events(), so we just check the 200 boolean ack here. */
+  async summarize(sessionId: string, model: OpencodeModel): Promise<void> {
+    const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}/summarize`, {
+      method: "POST",
+      headers: this.#headers(true),
+      body: JSON.stringify({ providerID: model.providerID, modelID: model.modelID, auto: false }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new OpencodeError(res.status, `summarize failed: ${res.status} ${detail}`.trim());
+    }
+  }
+
   /** Answer a permission gate: POST /session/{id}/permissions/{permID} { response }. */
   async replyPermission(
     sessionId: string,

@@ -170,8 +170,10 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
 
     if (ev.eventType === "user") {
       const text = downstreamUserText(ev);
-      if (text === "") {
-        session.ack(ev.eventId); // nothing to type — ack so it isn't reconsidered
+      // A blank prompt — empty OR whitespace-only (a human who hit send on spaces / a stray newline) —
+      // is a no-op, not a junk turn pasted into the pane. Still acked (it's "handled").
+      if (text.trim() === "") {
+        session.ack(ev.eventId);
         continue;
       }
       // Phase 1: get the text into the box (retry as a unit). Phase 2: submit it (retry Enter alone).

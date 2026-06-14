@@ -15,6 +15,9 @@
 //   (f) interrupt → an abort reaches the live server.
 //   (g) permissions → unit-proven translate path (the cheap model/tools don't reliably surface a gate;
 //       documented + asserted on the driver's own gate→reply mapping).
+//   (h) session.error (bad model) → a `result` error frame reaches the viewer (not a silent idle).
+//   (i) /compact → routes to the native summarize endpoint, NOT a model prompt.
+//   (j) two drivers on the SAME server stay isolated (the server-wide /event filter — no cross-talk).
 //
 // Skipped automatically (with a clear message) when the live server is unreachable, so CI without an
 // opencode server stays green; run locally with the server up to exercise the real path.
@@ -342,6 +345,99 @@ describe("OpenCode driver — LIVE e2e (opencode serve + ollama/qwen2.5:0.5b)", 
     });
     expect(aborts).toBeGreaterThanOrEqual(1); // the abort POST reached the server
   }, 60000);
+
+  it("(h) session.error surfaces a `result` frame (bad model), not a silent idle", async () => {
+    if (!live) return;
+    const ses = await client.createSession("e2e-h");
+    // A nonexistent model makes the live server emit session.error mid-turn; the driver must surface it.
+    const broker = await withDriver(
+      {
+        client,
+        sessionId: ses,
+        model: { providerID: "ollama", modelID: "this-model-does-not-exist-zzz" },
+      },
+      async ({ session, broker }) => {
+        session.pushUserInput("Reply with: X");
+        await waitFor(() => broker.content.some((p) => p.text.includes("OpenCode error")), 30000);
+      },
+    );
+    expect(broker.content.some((p) => p.text.includes("⚠ OpenCode error"))).toBe(true);
+  }, 60000);
+
+  it("(i) /compact routes to the native summarize endpoint, NOT a model prompt", async () => {
+    if (!live) return;
+    const ses = await client.createSession("e2e-i");
+    let summarized = 0;
+    let prompted = 0;
+    const spy = new OpencodeClient({ baseUrl: BASE });
+    const origSummarize = spy.summarize.bind(spy);
+    spy.summarize = async (s, m) => {
+      summarized++;
+      return origSummarize(s, m);
+    };
+    const origPrompt = spy.promptAsync.bind(spy);
+    spy.promptAsync = async (s, a) => {
+      prompted++;
+      return origPrompt(s, a);
+    };
+    await withDriver({ client: spy, sessionId: ses, model: MODEL }, async ({ session }) => {
+      session.pushUserInput("/compact");
+      await waitFor(() => summarized >= 1, 30000);
+    });
+    expect(summarized).toBeGreaterThanOrEqual(1); // routed to summarize
+    expect(prompted).toBe(0); // and NOT fed to the model as a prompt
+  }, 60000);
+
+  it("(j) two drivers on the SAME server stay isolated (server-wide /event filter, no cross-talk)", async () => {
+    if (!live) return;
+    const sesA = await client.createSession("e2e-jA");
+    const sesB = await client.createSession("e2e-jB");
+    const bA = new FakeBroker();
+    const bB = new FakeBroker();
+    let sA: Session | null = null;
+    let sB: Session | null = null;
+    const ctxA = await makeCtx(bA, { client, sessionId: sesA, model: MODEL }, (s) => {
+      sA = s;
+    });
+    const ctxB = await makeCtx(bB, { client, sessionId: sesB, model: MODEL }, (s) => {
+      sB = s;
+    });
+    const acA = new AbortController();
+    const acB = new AbortController();
+    const runA = new OpencodeDriver(ctxA as never).run(acA.signal);
+    const runB = new OpencodeDriver(ctxB as never).run(acB.signal);
+    try {
+      await waitFor(() => sA !== null && sB !== null, 5000);
+      await sleep(1200); // let both SSE subscriptions connect
+      (sA as unknown as Session).pushUserInput("Reply with exactly: ALPHA");
+      (sB as unknown as Session).pushUserInput("Reply with exactly: BETA");
+      await waitFor(
+        () =>
+          bA.content.some((p) => p.recordKind === "assistant") &&
+          bB.content.some((p) => p.recordKind === "assistant"),
+        60000,
+      );
+      await sleep(800);
+    } finally {
+      acA.abort();
+      acB.abort();
+      await Promise.all([runA.catch(() => {}), runB.catch(() => {})]);
+    }
+    const aText = bA.content
+      .filter((p) => p.recordKind === "assistant")
+      .map((p) => p.text)
+      .join(" ");
+    const bText = bB.content
+      .filter((p) => p.recordKind === "assistant")
+      .map((p) => p.text)
+      .join(" ");
+    // Neither viewer ever sees the OTHER session's reply — the per-sessionID filter holds under
+    // concurrent traffic on the one server-wide /event stream.
+    expect(aText).not.toContain("BETA");
+    expect(bText).not.toContain("ALPHA");
+    expect(aText.length).toBeGreaterThan(0);
+    expect(bText.length).toBeGreaterThan(0);
+  }, 150000);
 });
 
 /** Poll GET /session/{id}/message until it has >= n messages (used to pre-seed history out of band). */

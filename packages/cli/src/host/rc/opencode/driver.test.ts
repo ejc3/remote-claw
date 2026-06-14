@@ -102,6 +102,10 @@ class FakeOpencodeClient extends OpencodeClient {
   override async abort(): Promise<void> {
     this.aborts++;
   }
+  summarizes: string[] = [];
+  override async summarize(sessionId: string): Promise<void> {
+    this.summarizes.push(sessionId);
+  }
   override async replyPermission(
     _sessionId: string,
     permissionId: string,
@@ -155,6 +159,12 @@ function msgUpdated(info: Record<string, unknown>): OpencodeEvent {
 }
 function idle(): OpencodeEvent {
   return { type: "session.idle", properties: { sessionID: SES } };
+}
+function sessionError(error: unknown): OpencodeEvent {
+  return {
+    type: "session.error",
+    properties: { sessionID: SES, error },
+  } as unknown as OpencodeEvent;
 }
 
 // The captured live sequence for "Reply with exactly: OK": the user prompt echo part (synthetic-free
@@ -653,5 +663,71 @@ describe("OpencodeDriver hardening", () => {
     // become \n. Prove the normalization the parser depends on: a CRLF block normalizes to the LF block.
     const crlfBlock = lfBlock.replace(/\n/g, "\r\n");
     expect(parseSseFrame(crlfBlock.replace(/\r\n?/g, "\n"))?.type).toBe("session.idle");
+  });
+});
+
+// Behaviors the driver doc PROMISES that a live human-style verification found unimplemented (now honored):
+//   • /compact routes to the native summarize endpoint (not fed to the model as literal text);
+//   • session.error surfaces a result frame so the viewer isn't stuck "working" on a failed turn;
+//   • a whitespace-only prompt is a no-op, not a burned model turn.
+describe("OpencodeDriver — documented behavior (session.error / /compact / blank prompts)", () => {
+  let ac: AbortController | null = null;
+  afterEach(() => ac?.abort());
+
+  it("routes /compact to the native summarize endpoint, NOT a model prompt", async () => {
+    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ctx.onSession = (s: Session) => s.pushUserInput("/compact");
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => client.summarizes.length >= 1);
+    ac.abort();
+    await run;
+    expect(client.summarizes).toEqual([SES]); // summarize hit the attached session
+    expect(client.prompts).toHaveLength(0); // and it was NOT sent to the model as a prompt
+  });
+
+  it("treats a whitespace-only prompt as a no-op (no burned model turn)", async () => {
+    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
+    const broker = new FakeBroker();
+    let s0: Session | null = null;
+    const ctx = await makeCtx(client, broker, () => {});
+    ctx.onSession = (s: Session) => {
+      s0 = s;
+      s.pushUserInput("   \n  "); // spaces + a stray newline — non-empty but blank
+    };
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => s0 !== null);
+    await sleep(150); // let the inject pump process (and, correctly, skip) the blank prompt
+    ac.abort();
+    await run;
+    expect(client.prompts).toHaveLength(0); // no model turn burned
+    expect(client.summarizes).toHaveLength(0);
+  });
+
+  it("surfaces session.error as a result frame the viewer renders, then goes idle", async () => {
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      { type: "session.status", properties: { sessionID: SES, status: { type: "busy" } } },
+      sessionError({ name: "ProviderError", data: { message: "model not found: zzz" } }),
+    ]);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    // End-to-end: the error reaches the BROKER as a content frame (what the viewer renders).
+    await waitFor(() => broker.content.some((p) => p.text.includes("model not found: zzz")));
+    ac.abort();
+    await run;
+    expect(
+      broker.content.some((p) => p.text.includes("⚠ OpenCode error: model not found: zzz")),
+    ).toBe(true);
+    // …and the session left the "working" state rather than hanging.
+    expect((captured as unknown as Session).workerStatus).toBe("idle");
   });
 });

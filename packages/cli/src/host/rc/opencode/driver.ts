@@ -103,6 +103,26 @@ interface MessageBuffer {
  *  recent turns — far more than any reconnect re-backfill replays. */
 const DEFAULT_EMITTED_CAP = 4096;
 
+/** Best-effort human-readable text from a `session.error` payload (OpenCode sends `error.toObject()`,
+ *  typically `{ name, data: { message } }`, but shapes vary by provider). Falls back through message →
+ *  name → JSON so the viewer always gets SOMETHING rather than a silent failure. */
+function errText(error: unknown): string {
+  if (error == null) return "unknown error";
+  if (typeof error === "string") return error;
+  if (typeof error === "object") {
+    const e = error as { message?: unknown; name?: unknown; data?: { message?: unknown } };
+    if (typeof e.data?.message === "string" && e.data.message !== "") return e.data.message;
+    if (typeof e.message === "string" && e.message !== "") return e.message;
+    if (typeof e.name === "string" && e.name !== "") return e.name;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "unknown error";
+    }
+  }
+  return String(error);
+}
+
 /** SSE reconnect backoff bounds (review #2). A transient close reconnects after MIN; repeated failures
  *  (server down) back off exponentially up to MAX. The backoff is reset to MIN after a connection that
  *  lived (a clean EOF), so a healthy-then-blip reconnect is fast. */
@@ -471,6 +491,18 @@ export class OpencodeDriver implements Driver {
         session.wake();
         break;
       }
+      case "session.error": {
+        // A run FAILED (provider 5xx, bad model, OOM, …). Flush any partial first, then surface the
+        // error as a `result` frame so the viewer SHOWS the failure AND leaves the "working" state —
+        // otherwise it just flips idle with no explanation (the documented contract).
+        for (const id of [...this.#buffers.keys()]) this.#flushMessage(session, id);
+        const msg = errText(ev.properties.error);
+        this.#tracer.warn("session.error", { error: msg });
+        session.pushUpstream({ type: "result", result: `⚠ OpenCode error: ${msg}` });
+        session.workerStatus = "idle";
+        session.wake();
+        break;
+      }
       case "permission.asked":
         this.#onPermissionAsked(session, ev);
         break;
@@ -604,7 +636,18 @@ export class OpencodeDriver implements Driver {
   ): Promise<void> {
     if (ev.eventType === "user") {
       const text = userText(ev.payload);
-      if (text === "") return; // nothing to inject — still acked (an empty prompt is "handled")
+      // A blank prompt (empty OR whitespace-only — a human who hit send on spaces / a stray newline) is
+      // a no-op, not a burned model turn. Still acked (it's "handled").
+      if (text.trim() === "") return;
+      // Slash-command routing (documented): `/compact` runs OpenCode's native summarize endpoint rather
+      // than feeding the literal string to the model. Other slash commands pass through as a prompt.
+      if (text.trim() === "/compact") {
+        await this.#client.summarize(ocSessionId, this.#activeModel);
+        session.workerStatus = "running";
+        session.wake();
+        this.#tracer.debug("routed /compact → summarize");
+        return;
+      }
       // Record the text BEFORE the POST so its OpenCode user-message echo (which can arrive on the SSE
       // before promptAsync even resolves) is recognized as OURS and suppressed (#flushMessage), not
       // double-rendered as a local_prompt.

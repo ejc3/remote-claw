@@ -176,8 +176,11 @@ for await (const ev of session.followDownstream(gen, () => stop.aborted)) {
 }
 ```
 
-Slash commands ride the `user` path like the claude protocol; known commands route to native
-equivalents (`/compact` -> `POST /session/{id}/summarize`, `/command`), else pass through as a prompt.
+Slash commands ride the `user` path like the claude protocol. `/compact` is routed to its native
+equivalent (`POST /session/{id}/summarize`) **and is implemented + live-verified** — without it the
+literal string `/compact` would be fed to the model. Every other slash command currently passes through
+as a prompt (full `/command` routing via `POST /session/{id}/command` is follow-up). A blank prompt
+(empty OR whitespace-only) is a no-op, not a burned model turn.
 `SMALL_MODEL` defaults to the cheap Bedrock model (`us.amazon.nova-micro-v1:0`) so debugging + e2e
 loops stay cheap (configurable via `--rc-oc-model` / `RC_OC_MODEL`). Permission answers are NOT
 handled here — they arrive via the relay calling `session.pushControlResponse`, observed by the
