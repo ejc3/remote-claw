@@ -714,6 +714,33 @@ describe("OpencodeDriver — documented behavior (session.error / /compact / bla
     expect(client.prompts).toHaveLength(0); // /compact was not fed to the model as a prompt
   });
 
+  it("a FAILED /compact dispatch surfaces an error result and returns to idle (not stuck 'running')", async () => {
+    // Fire-and-forget /compact sets workerStatus="running" then dispatches summarize. If summarize
+    // REJECTS, no server-side turn ever starts, so no session.status/session.error will clear the
+    // "running" — the .catch must surface the error AND drop to idle itself (codex review). The script
+    // has NO session.idle, so the ONLY route back to idle is that .catch.
+    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }]);
+    client.summarize = () => Promise.reject(new Error("summarize boom"));
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+      s.pushUserInput("/compact");
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => broker.content.some((p) => p.text.includes("summarize boom")));
+    ac.abort();
+    await run;
+    // The failure reached the viewer as a result frame (impossible without the .catch surfacing it)…
+    expect(broker.content.some((p) => p.text.includes("⚠ OpenCode error: summarize boom"))).toBe(
+      true,
+    );
+    // …and the session left "running" rather than hanging on a turn that never began.
+    expect((captured as unknown as Session).workerStatus).toBe("idle");
+    expect(client.prompts).toHaveLength(0); // still not sent to the model as a prompt
+  });
+
   it("treats a whitespace-only prompt as a no-op (no burned model turn)", async () => {
     const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
     const broker = new FakeBroker();

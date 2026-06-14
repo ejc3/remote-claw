@@ -88,4 +88,22 @@ describe("OpencodeClient.events (server-wide stream → per-session filter)", ()
     }
     expect(got).toEqual(["server.connected", "message.updated:ses_1"]);
   });
+
+  it("keeps own-session events whose id is ONLY nested (part.sessionID / info.sessionID), drops others", async () => {
+    // Session-scoped sub-shapes carry the session id ONLY nested — not at properties.sessionID. The
+    // filter must derive it from properties.part.sessionID / properties.info.sessionID, else it would
+    // drop the driver's OWN assistant/tool content (codex review). Prove both nested own-session shapes
+    // pass and a nested OTHER-session shape is dropped.
+    const c = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: streamingFetch([
+        frame({ type: "message.part.updated", properties: { part: { sessionID: "ses_1" } } }), // ours (nested in part) → KEEP
+        frame({ type: "message.updated", properties: { info: { sessionID: "ses_1" } } }), // ours (nested in info) → KEEP
+        frame({ type: "message.part.updated", properties: { part: { sessionID: "ses_OTHER" } } }), // other (nested) → DROP
+      ]),
+    });
+    const got: string[] = [];
+    for await (const ev of c.events("ses_1", new AbortController().signal)) got.push(ev.type);
+    expect(got).toEqual(["message.part.updated", "message.updated"]);
+  });
 });

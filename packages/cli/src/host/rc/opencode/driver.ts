@@ -649,9 +649,17 @@ export class OpencodeDriver implements Driver {
         // logged); the compaction's output arrives over the SSE like any turn, and the pump stays free.
         session.workerStatus = "running";
         session.wake();
-        this.#client
-          .summarize(ocSessionId, this.#activeModel)
-          .catch((e) => this.#tracer.warn("summarize failed", { error: String(e) }));
+        this.#client.summarize(ocSessionId, this.#activeModel).catch((e) => {
+          // The dispatch failed before any server-side turn started, so NO session.status/session.error
+          // will ever arrive to clear the "running" we just set — and the downstream event is already
+          // acked (fire-and-forget), so a reconnect can't retry. Surface the failure as a result frame
+          // and drop back to idle ourselves, exactly like the session.error path (codex review).
+          const msg = errText(e);
+          this.#tracer.warn("summarize failed", { error: msg });
+          session.pushUpstream({ type: "result", result: `⚠ OpenCode error: ${msg}` });
+          session.workerStatus = "idle";
+          session.wake();
+        });
         this.#tracer.debug("routed /compact → summarize (dispatched)");
         return;
       }
