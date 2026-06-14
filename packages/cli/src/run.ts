@@ -141,7 +141,9 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-driver" &&
       n !== "rc-oc-url" &&
       n !== "rc-oc-model" &&
-      n !== "rc-oc-session",
+      n !== "rc-oc-session" &&
+      n !== "rc-session-hook" &&
+      n !== "rc-no-session-hook",
   );
   if (stray.length > 0) {
     const named = stray.map((k) => `--${k}`).join(", ");
@@ -407,6 +409,18 @@ async function runTmuxDriverPath(
       tracer: tracerFromEnv("rc.tmux"),
       ...(backend !== undefined ? { backend } : {}),
     };
+    // SessionStart hook (merged with any --settings) for exact transcript discovery + rotation-follow,
+    // no scan. DEFAULT ON; disable with `--rc-no-session-hook` or RC_SESSION_HOOK=0. Precedence:
+    // --rc-no-session-hook > --rc-session-hook > RC_SESSION_HOOK env > default(on).
+    const envHook = (process.env.RC_SESSION_HOOK ?? "").trim().toLowerCase();
+    const injectSessionHook =
+      rc["rc-no-session-hook"] === true
+        ? false
+        : rc["rc-session-hook"] === true
+          ? true
+          : ["0", "false", "no"].includes(envHook)
+            ? false
+            : true;
     // Couple Ctrl-C / SIGTERM to the driver's abort so teardown (flush + kill-session) runs. Record
     // which signal fired so we return the shell-standard 128+N code (codex review #9) instead of 0.
     const ac = new AbortController();
@@ -420,7 +434,7 @@ async function runTmuxDriverPath(
     process.once("SIGINT", onInt);
     process.once("SIGTERM", onTerm);
     try {
-      const code = await runTmuxDriver(ctx, ac.signal);
+      const code = await runTmuxDriver(ctx, ac.signal, { injectSessionHook });
       return firedSignal !== null ? signalExitCode(firedSignal) : code;
     } finally {
       process.removeListener("SIGINT", onInt);

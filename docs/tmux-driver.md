@@ -360,13 +360,21 @@ to `<id>.jsonl`, which the newest-file heuristic would miss), and only a picker 
 `--resume`) falls back to newest-file. `findTranscriptById` checks the O(1) direct path every poll and
 only does the cross-project scan on the slow cadence (and only for a real file, never a dir/symlink).
 
-**Follow-up — a SessionStart hook (the clean fix), and rotation-follow:** Claude Code hooks deliver the
-exact `transcript_path` + `session_id` (absolute, already hashed) on stdin, and `SessionStart` re-fires on
-`/clear`/`/compact`/resume — so a hook injected via a project/ephemeral `.claude/settings.json` would
-retire the scan/pin heuristics AND give rotation-follow for free (tracked in issue #101). Until then,
-following a `/clear`/`/branch` rotation by switching the tailer to the newest created-after-spawn file
-needs care (don't abandon our session for a concurrent sibling's newer file). Today the bridge tracks the
-originally-spawned session.
+### 7.1.1 SessionStart hook (`--rc-session-hook`) — exact discovery + rotation-follow
+
+**On by default** (disable with `--rc-no-session-hook` or `RC_SESSION_HOOK=0`). The driver injects a
+Claude Code **SessionStart hook** via an **inline `--settings`** (no file written to the user's project), MERGED with any
+`--settings` the user already passed (their settings + other hooks preserved; our SessionStart hook
+appended). The hook appends each payload — which carries the **exact, already-resolved `transcript_path`
++ `session_id` + `source`** — as one NDJSON line to a per-session sentinel file the driver tails.
+
+Live-verified (claude 2.1.x): inline `--settings` ingests the hook and it FIRES (even under `-p`),
+delivering the absolute transcript path. So with the hook on, discovery reads the sentinel — **exact, no
+scan, no long-cwd-hash problem** — and a new sentinel line (a `/clear`/`/branch`/`/compact`/resume that
+mints a new transcript) is followed automatically: the driver flushes the old file and switches the
+tailer (an **unambiguous** rotation signal, unlike newest-in-cwd). If the hook never fires (e.g. `--bare`
+disables hooks — verified: the sentinel stays empty but the pinned `<uuid>.jsonl` is still written), the
+driver **falls back** to the `--session-id` pin discovery above. Tracked in issue #101.
 
 ### 7.2 Local-prompt visibility (follow-up)
 
