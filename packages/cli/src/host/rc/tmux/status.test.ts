@@ -106,6 +106,24 @@ describe("StatusTracker", () => {
     expect(s.workerStatus).toBe("idle"); // the orphaned tool was cleared at the turn boundary
   });
 
+  it("does NOT treat a NESTED sub-agent user prompt as a turn boundary (parent's Agent tool stays open)", () => {
+    const { s, t, st } = track();
+    // The parent opens the Agent/Task spawner tool — it stays open until its tool_result lands.
+    st.onLine({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "toolu_AGENT", name: "Agent", input: {} }] },
+    });
+    // A NESTED sub-agent user prompt (parent_tool_use_id set) arrives. It must NOT wipe the parent's
+    // open Agent tool — otherwise the host would flip to idle mid-turn while the sub-agent runs.
+    st.onLine({
+      type: "user",
+      parent_tool_use_id: "toolu_AGENT",
+      message: { content: [{ type: "text", text: "sub-agent: do the thing" }] },
+    });
+    t.fire();
+    expect(s.workerStatus).toBe("running"); // parent Agent tool still open → stays running (not idle)
+  });
+
   it("force-idles after the hard window when a tool_use is orphaned with no new prompt (wf#2)", () => {
     const s = new Session("cse_1", "t", null);
     const t = manualTimer();
