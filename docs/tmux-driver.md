@@ -337,23 +337,36 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
 9. **One driver per wrapper process** (RelayCore is per-launch); pane-liveness ends the bridge when
    claude exits / the pane closes.
 
-### 7.1 Known v1 discovery limitations (definitive fix: pin the child session id)
+### 7.1 Session-id pin (deterministic first attach) + rotation (follow-up)
 
-Because the driver scrubs `CLAUDE_CODE_SESSION_ID`, the spawned claude mints its **own** session id that
-the driver doesn't know up front, so capture finds the transcript heuristically (newest fresh file in
-the shared `~/.claude/projects/<slug(cwd)>/`). Two cases the heuristic can't resolve:
+The driver mints a fresh **v4 UUID** and spawns `claude --session-id <uuid>` (NO `--resume`), so the
+transcript path — `<uuid>.jsonl` — is known up front. Discovery looks up **our exact id**
+(`findTranscriptById`, which scans across project dirs so it's robust even when claude hashes a very long
+cwd into a suffixed dir name), and only falls back to the newest-fresh heuristic when the *user* passed
+their own session/resume flag. This makes the **first attach deterministic** and a **concurrent sibling
+claude in the same cwd can no longer be mis-attached** — we wait for our id, never guess. (We still scrub
+the inherited `CLAUDE_CODE_SESSION_ID` so the parent's id can't leak; we pass our own fresh one.)
 
-- **A concurrent sibling claude in the same cwd**, racing its first turn against ours, can be
-  mis-attached (its transcript streamed into this session's bridge). `onAmbiguity` warns when more than
-  one fresh file qualifies, but a single wrong-but-fresh file is silently picked.
-- **`/clear` (or anything that mints a new session id) mid-pane** starts a new transcript file the bound
-  tailer doesn't follow; consistent with the 1:1 wrapper=session model, the bridge tracks the
-  originally-spawned session.
+Live-verified behaviour of `--session-id` (claude 2.1.x; full matrix in
+`rc-traces/c-session-id-pin-findings.md`): a non-UUID/ULID is rejected ("must be a valid UUID"); reusing
+an existing id without `--resume` **errors** ("already in use") — no silent resume, so a collision is
+safe but pinned ids are single-use; `/compact` stays **in place**; **`/clear` and `/branch` ROTATE** to a
+new `<uuid>.jsonl` (the old file goes quiet with no in-file marker), so the pin governs the FIRST session
+only.
 
-The **definitive fix** for both is to *pin* the child's session id (a fresh ULID we generate, not the
-parent's) so the transcript path is known exactly — `findNewestTranscript` and the whole heuristic go
-away. Deferred because it needs **live validation** that claude accepts a fresh `CLAUDE_CODE_SESSION_ID`
-without resume-error. The same change re-enables a stable id across `/clear`.
+When the **user** drives the session (`--resume`/`--session-id`/`--continue`, long/short/`=value`), we
+don't pin; if they gave an explicit id we still track THAT transcript by id (a `--resume <id>` *appends*
+to `<id>.jsonl`, which the newest-file heuristic would miss), and only a picker (`--continue`/bare
+`--resume`) falls back to newest-file. `findTranscriptById` checks the O(1) direct path every poll and
+only does the cross-project scan on the slow cadence (and only for a real file, never a dir/symlink).
+
+**Follow-up — a SessionStart hook (the clean fix), and rotation-follow:** Claude Code hooks deliver the
+exact `transcript_path` + `session_id` (absolute, already hashed) on stdin, and `SessionStart` re-fires on
+`/clear`/`/compact`/resume — so a hook injected via a project/ephemeral `.claude/settings.json` would
+retire the scan/pin heuristics AND give rotation-follow for free (tracked in issue #101). Until then,
+following a `/clear`/`/branch` rotation by switching the tailer to the newest created-after-spawn file
+needs care (don't abandon our session for a concurrent sibling's newer file). Today the bridge tracks the
+originally-spawned session.
 
 ### 7.2 Local-prompt visibility (follow-up)
 

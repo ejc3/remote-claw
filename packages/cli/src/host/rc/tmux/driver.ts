@@ -12,6 +12,7 @@
 // #6 local-prompt visibility (documented limitation — a prompt typed into the LOCAL tmux TUI is
 // upstream `user` text the relay drops, so it won't show in the web transcript), #9 strict inject queue.
 
+import { randomUUID } from "node:crypto";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import type { Driver, DriverContext } from "../driver.js";
 import { bridgeSession } from "../drivers/bridge.js";
@@ -21,6 +22,7 @@ import { StatusTracker } from "./status.js";
 import { realTmuxExec, TmuxCtl, type TmuxExec } from "./tmuxctl.js";
 import {
   findNewestTranscript,
+  findTranscriptById,
   listSubagentFiles,
   mergeBatchByTimestamp,
   projectDir,
@@ -88,6 +90,44 @@ export function shellQuoteCommand(parts: readonly string[]): string {
   return parts.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ");
 }
 
+/** Detect whether the user's harness args already drive the session, and extract an explicit id if they
+ *  gave one. Recognizes the long forms `--session-id` / `--resume` / `--continue` (incl. `--flag=value`)
+ *  and the short `-r` / `-c`; an id is the `=value` or the next non-`-` token for `--session-id`/`--resume`
+ *  /`-r`. Stops at a `--` separator (anything after is a literal, not an option) so `-r` as a flag VALUE
+ *  past `--` doesn't false-trigger. When the user owns the session we don't pin; when they gave an explicit
+ *  id we TRACK that transcript by id (a `--resume <id>` appends to `<id>.jsonl`); a picker (`--continue` /
+ *  bare `--resume`) leaves the id unknown. Pure, exported for unit tests. */
+export function parseUserSession(args: readonly string[]): {
+  ownsSession: boolean;
+  explicitId: string | null;
+} {
+  const sep = args.indexOf("--");
+  const opts = sep === -1 ? args : args.slice(0, sep);
+  let ownsSession = false;
+  let explicitId: string | null = null;
+  const takeNext = (i: number): void => {
+    const v = opts[i + 1];
+    if (v !== undefined && !v.startsWith("-")) explicitId = v;
+  };
+  for (let i = 0; i < opts.length; i++) {
+    const a = opts[i] ?? "";
+    const long = a.match(/^--(session-id|resume|continue)(?:=(.*))?$/);
+    if (long) {
+      ownsSession = true;
+      if (long[1] !== "continue") {
+        if (long[2] !== undefined && long[2] !== "") explicitId = long[2];
+        else takeNext(i);
+      }
+    } else if (a === "-r") {
+      ownsSession = true;
+      takeNext(i);
+    } else if (a === "-c") {
+      ownsSession = true;
+    }
+  }
+  return { ownsSession, explicitId };
+}
+
 export interface TmuxDriverDeps {
   /** Injectable tmux exec (tests pass a spy; default is the real `tmux` binary). */
   tmuxExec?: TmuxExec;
@@ -105,6 +145,9 @@ export interface TmuxDriverDeps {
   paneWatchMs?: number;
   /** Warn if no transcript is discovered within this many ms of spawn (default DISCOVERY_WARN_MS). */
   discoveryWarnMs?: number;
+  /** Override the pinned session id (tests) — makes the spawned `<uuid>.jsonl` filename deterministic
+   *  without parsing the tmux command. Production mints a fresh v4 UUID. */
+  sessionId?: string;
 }
 
 const sleepReal = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -210,11 +253,29 @@ export async function runTmuxDriver(
     ...[...SCRUB_ENV].flatMap((k) => ["-u", k]),
     ...PROXY_CA_VARS.filter((k) => parentEnv[k] === undefined).flatMap((k) => ["-u", k]),
   ];
+  // PIN the session id (verified: `claude --session-id <uuid>` with NO --resume starts a FRESH session
+  // and writes its transcript at exactly `<uuid>.jsonl`). This makes the first attach DETERMINISTIC and
+  // disambiguates concurrent same-cwd siblings (no `findNewestTranscript` guesswork). claude requires a
+  // valid v4 UUID (a ULID is rejected). We still SCRUB the inherited CLAUDE_CODE_SESSION_ID (no parent
+  // leak) and pass a fresh one as a flag.
+  //
+  // If the USER already drives the session (--session-id / --resume / --continue, long, short, or
+  // `=value` forms), we do NOT pin. We still TRACK by id when they gave an explicit one — `--resume <id>`
+  // APPENDS to `<id>.jsonl` (verified; -p), which `findNewestTranscript` would miss as "not fresh", so we
+  // locate it by id. Only a picker (`--continue` / bare `--resume`) leaves the id unknown → newest-file
+  // heuristic. NOTE: an in-session `/clear` or `/branch` ROTATES to a NEW uuid file (verified) —
+  // following that rotation is a separate follow-up; this governs the FIRST attach (the common case).
+  const userSession = parseUserSession(ctx.harnessArgs);
+  const sessionUuid = userSession.ownsSession ? null : (deps.sessionId ?? randomUUID());
+  // The id whose transcript we TRACK: our pin, else the user's explicit resume/session id, else null
+  // (unknown — picker/continue → newest-file heuristic).
+  const trackedId = sessionUuid ?? userSession.explicitId;
   const command = shellQuoteCommand([
     "env",
     ...envUnset,
     bin,
     "--dangerously-skip-permissions",
+    ...(sessionUuid !== null ? ["--session-id", sessionUuid] : []),
     ...ctx.harnessArgs,
   ]);
   // Snapshot pre-existing transcript inodes BEFORE spawn so capture can never attach to a concurrent
@@ -328,22 +389,38 @@ export async function runTmuxDriver(
     }
   };
 
+  // The cross-project scan in findTranscriptById is an O(project-dirs) sweep; the O(1) direct-path check
+  // happens every poll, but we only run the scan on the slow (pane-watch) cadence so a user with many
+  // ~/.claude/projects dirs doesn't pay a readdir+stat sweep every pollMs while the first turn is pending.
+  const scanEvery = Math.max(1, Math.round((deps.paneWatchMs ?? PANE_WATCH_MS) / pollMs));
   const capture = (async () => {
     let warnedNoTranscript = false;
     let goneStreak = 0;
     let tick = 0;
+    let discoverTick = 0;
     while (!stop.aborted) {
       if (tailer === null) {
-        const path = await findNewestTranscript(dir, spawnedAt, {
-          exclude: preexisting,
-          onAmbiguity: (paths) =>
-            tracer.warn("multiple fresh transcripts — picking newest", { paths: paths.join(", ") }),
-        });
+        // When we know the tracked id (our PIN, or the user's explicit --resume/--session-id id), wait for
+        // THAT EXACT transcript — authoritative and unambiguous, so a concurrent same-cwd sibling can NEVER
+        // be mis-attached. Only an unknown id (a --continue/picker session) falls back to the newest-file
+        // heuristic. claude creates the file lazily on the first turn, so a null just means "poll again".
+        const path =
+          trackedId !== null
+            ? await findTranscriptById(ctx.cwd, trackedId, deps.home, {
+                scanOtherDirs: discoverTick++ % scanEvery === 0,
+              })
+            : await findNewestTranscript(dir, spawnedAt, {
+                exclude: preexisting,
+                onAmbiguity: (paths) =>
+                  tracer.warn("multiple fresh transcripts — picking newest", {
+                    paths: paths.join(", "),
+                  }),
+              });
         if (path !== null) {
           tailer = new TranscriptTailer(path);
           subDir = subagentDir(path); // sibling subagents/ dir — tailed for sub-agent (Agent) output
           deps.onTranscript?.(path);
-          tracer.debug("transcript discovered", { path, subDir });
+          tracer.debug("transcript discovered", { path, subDir, byId: trackedId !== null });
         } else if (!warnedNoTranscript && Date.now() - spawnedAt > discoveryWarnMs) {
           warnedNoTranscript = true;
           tracer.warn("no transcript discovered yet — claude may not have started a turn", {

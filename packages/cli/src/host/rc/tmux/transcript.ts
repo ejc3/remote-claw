@@ -17,6 +17,7 @@
 // per-line `pushUpstream` is correct — but a re-read after a watch/poll race can re-emit a line, so the
 // caller dedups by `uuid` (review #2: re-pushing the same uuid does NOT dedup at the relay).
 
+import type { Dirent } from "node:fs";
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -34,10 +35,55 @@ export function projectDir(cwd: string, home: string = homedir()): string {
 }
 
 /** The transcript file for a known session id (claude names it `<sessionId>.jsonl`). When the tmux
- *  driver scrubs the parent session id, the spawned claude mints its OWN id, so we usually don't know
- *  it up front and use `findNewestTranscript` instead — but if a caller does know it, this is direct. */
+ *  driver PINS the id (`claude --session-id <uuid>`), the path is known up front; this composes it. */
 export function transcriptPath(cwd: string, sessionId: string, home: string = homedir()): string {
   return join(projectDir(cwd, home), `${sessionId}.jsonl`);
+}
+
+/**
+ * Locate a transcript by its (pinned) session id. FIRST checks the direct computed path
+ * `transcriptPath(cwd,…)` (O(1), the common case). If that misses AND `scanOtherDirs` is set, SCANS
+ * `~/.claude/projects/<*>/<id>.jsonl` across every project dir — because claude adds a hash suffix to the
+ * project-dir name for VERY LONG cwd paths (verified against Happier's diagnose notes), which
+ * `projectSlug` does not model, so the computed path can be wrong for a long cwd. The pinned id is
+ * globally unique, so a name match is unambiguous. The caller throttles the cross-dir scan (it's an
+ * O(project-dirs) sweep) by passing `scanOtherDirs` only on a slow cadence; the direct check stays every
+ * poll. Only REGULAR FILES match (a dir/FIFO/symlink named `<id>.jsonl` is ignored), and the scan skips
+ * non-directory / symlinked entries under projects (stays in-tree). Returns the path or null. Never throws.
+ */
+export async function findTranscriptById(
+  cwd: string,
+  sessionId: string,
+  home: string = homedir(),
+  opts: { scanOtherDirs?: boolean } = {},
+): Promise<string | null> {
+  const direct = transcriptPath(cwd, sessionId, home);
+  if (await isRegularFile(direct)) return direct;
+  if (opts.scanOtherDirs === false) return null; // throttled: direct-path-only this poll
+  const root = join(home, ".claude", "projects");
+  let entries: Dirent[];
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return null; // projects root not created yet
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue; // skip files + SYMLINKS (perf + stay in-tree)
+    const p = join(root, e.name, `${sessionId}.jsonl`);
+    if (await isRegularFile(p)) return p;
+  }
+  return null;
+}
+
+/** True iff `p` is a stat-able REGULAR file. A dir/FIFO/socket named like a transcript must NOT be bound
+ *  to the tailer (it would open-block or tail nothing). `stat` follows a symlink, so a symlink → real
+ *  file is accepted. Never throws. */
+async function isRegularFile(p: string): Promise<boolean> {
+  try {
+    return (await stat(p)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** A stable identity for a file: `dev:ino:birthtime`. dev:ino names the inode; birthtime distinguishes a
