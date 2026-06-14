@@ -17,11 +17,20 @@ function capture() {
 
 let dir: string;
 let secretPath: string;
+let prevRcApp: string | undefined;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "rc-pass-"));
   secretPath = join(dir, "secret");
+  // The --rc-qr origin falls back to process.env.RC_APP in production; null it so the no-origin tests
+  // are deterministic regardless of the ambient environment.
+  prevRcApp = process.env.RC_APP;
+  delete process.env.RC_APP;
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  if (prevRcApp === undefined) delete process.env.RC_APP;
+  else process.env.RC_APP = prevRcApp;
+});
 
 function rc(extra: Record<string, RcValue> = {}): Record<string, RcValue> {
   return { "rc-pass": true, "rc-file": secretPath, ...extra };
@@ -84,6 +93,88 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
     await runPass(rc({ "rc-quiet": true }), [], { stdout: out.write, stderr: () => {} });
     expect(out.text()).not.toContain(token); // the rc1_ secret never appears in the pass
     expect(out.text()).not.toContain("rc1_");
+  });
+
+  it("--rc-qr (no origin): pass on stdout, a terminal QR + 'bare pass' note on stderr, no secret leak", async () => {
+    const { token, secret } = await seed();
+    const out = capture();
+    const e = capture();
+    const code = await runPass(rc({ "rc-qr": true }), [], { stdout: out.write, stderr: e.write });
+    expect(code).toBe(0);
+    expect(out.text().trim()).toMatch(PASS_RE); // stdout is STILL exactly the pass (pipe-safe)
+    expect(out.text()).toBe(`${out.text().trim()}\n`);
+    expect(e.text()).toMatch(/[▀▄█]/u); // the QR rendered to stderr
+    expect(e.text()).toMatch(/scan to load the pass/);
+    assertNoSecretLeak(out.text() + e.text(), { token, secret }); // the master secret never appears
+  });
+
+  it("--rc-qr --rc-app: stderr QR + 'open the viewer' deep-link note; stdout still just the pass", async () => {
+    await seed();
+    const out = capture();
+    const e = capture();
+    const code = await runPass(rc({ "rc-qr": true, "rc-app": "https://app.example.com" }), [], {
+      stdout: out.write,
+      stderr: e.write,
+    });
+    expect(code).toBe(0);
+    expect(out.text().trim()).toMatch(PASS_RE);
+    expect(e.text()).toMatch(/[▀▄█]/u);
+    expect(e.text()).toMatch(/scan to open the viewer/);
+  });
+
+  it("--rc-json --rc-qr --rc-app: JSON gains a `qr` deep-link field; no terminal art", async () => {
+    await seed();
+    const out = capture();
+    const code = await runPass(
+      rc({ "rc-json": true, "rc-qr": true, "rc-app": "https://app.example.com" }),
+      [],
+      {
+        stdout: out.write,
+        stderr: () => {},
+      },
+    );
+    expect(code).toBe(0);
+    const j = JSON.parse(out.text());
+    expect(j.pass).toMatch(PASS_RE);
+    expect(j.qr).toBe(`https://app.example.com/#${j.pass}`);
+    expect(out.text()).not.toMatch(/[▀▄█]/u); // JSON mode = payload field, not art
+  });
+
+  it("--rc-json --rc-qr (no origin): `qr` equals the bare pass", async () => {
+    await seed();
+    const out = capture();
+    await runPass(rc({ "rc-json": true, "rc-qr": true }), [], {
+      stdout: out.write,
+      stderr: () => {},
+    });
+    const j = JSON.parse(out.text());
+    expect(j.qr).toBe(j.pass);
+  });
+
+  it("--rc-quiet --rc-qr: quiet wins — ONLY the pass on stdout, nothing on stderr", async () => {
+    await seed();
+    const out = capture();
+    const e = capture();
+    await runPass(rc({ "rc-quiet": true, "rc-qr": true }), [], {
+      stdout: out.write,
+      stderr: e.write,
+    });
+    expect(out.text().trim()).toMatch(PASS_RE);
+    expect(out.text()).not.toMatch(/[▀▄█]/u);
+    expect(e.text()).toBe("");
+  });
+
+  it("--rc-qr reads RC_APP from the injected env when --rc-app is absent", async () => {
+    await seed();
+    const out = capture();
+    const code = await runPass(rc({ "rc-json": true, "rc-qr": true }), [], {
+      stdout: out.write,
+      stderr: () => {},
+      env: { env: { RC_APP: "https://env.example.com" } as NodeJS.ProcessEnv, homedir: () => dir },
+    });
+    expect(code).toBe(0);
+    const j = JSON.parse(out.text());
+    expect(j.qr).toBe(`https://env.example.com/#${j.pass}`);
   });
 
   it("no identity present: exit 1 with a 'run --rc-identity first' hint, nothing on stdout", async () => {

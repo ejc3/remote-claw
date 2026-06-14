@@ -10,7 +10,8 @@
     "./rc": "./src/host/rc/index.ts"
   },
   "dependencies": {
-    "@remote-claw/clawsec": "workspace:*"
+    "@remote-claw/clawsec": "workspace:*",
+    "qrcode-terminal": "^0.12.0"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
