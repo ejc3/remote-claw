@@ -40,6 +40,13 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // (active) session, else creates one — so the wrapper joins whatever OpenCode session is in use
   // (env RC_OC_SESSION). Set a `ses_…` id to pin a specific session.
   "rc-oc-session": "value",
+  // tmux driver only: inject a Claude Code SessionStart HOOK (via merged `--settings`) so the spawned
+  // claude reports its EXACT transcript_path + session_id on startup and every rotation (/clear,/compact)
+  // — exact discovery with no scan, and rotation-follow for free. Merges with any user `--settings`.
+  // DEFAULT ON; disable with `--rc-no-session-hook` (or RC_SESSION_HOOK=0). When the hook can't fire
+  // (e.g. `--bare`) the driver falls back to the --session-id pin + transcript lookup.
+  "rc-session-hook": "boolean",
+  "rc-no-session-hook": "boolean",
 };
 // Not reserved: starting already remote-controlled is just claude's own `--remote-control`,
 // which the wrapper forwards verbatim — no `--rc-share`. The web deep link is built from the

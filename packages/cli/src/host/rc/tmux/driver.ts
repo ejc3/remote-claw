@@ -13,11 +13,21 @@
 // upstream `user` text the relay drops, so it won't show in the web transcript), #9 strict inject queue.
 
 import { randomUUID } from "node:crypto";
+import { readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import type { Driver, DriverContext } from "../driver.js";
 import { bridgeSession } from "../drivers/bridge.js";
 import { RelayCore, type Session } from "../session.js";
 import { INJECT_BUFFER, runInjectPump } from "./inject.js";
+import {
+  extractSettingsArg,
+  insertSettingsArg,
+  mergeSessionHookSettings,
+  parseSentinel,
+  type SessionHookEvent,
+} from "./sessionhook.js";
 import { StatusTracker } from "./status.js";
 import { realTmuxExec, TmuxCtl, type TmuxExec } from "./tmuxctl.js";
 import {
@@ -148,6 +158,12 @@ export interface TmuxDriverDeps {
   /** Override the pinned session id (tests) — makes the spawned `<uuid>.jsonl` filename deterministic
    *  without parsing the tmux command. Production mints a fresh v4 UUID. */
   sessionId?: string;
+  /** Inject a Claude Code SessionStart hook (merged with the user's --settings) so the spawned claude
+   *  reports its exact transcript_path/session_id to a sentinel file — exact discovery + rotation-follow,
+   *  no scan (`--rc-session-hook`). */
+  injectSessionHook?: boolean;
+  /** Override the hook sentinel file path (tests). Production derives one under tmpdir per session. */
+  sentinelPath?: string;
 }
 
 const sleepReal = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -159,6 +175,11 @@ export const PANE_WATCH_MS = 1000;
 export const PANE_GONE_CONFIRMATIONS = 2;
 /** How long after spawn to wait for claude's transcript before warning it may not be writing one. */
 export const DISCOVERY_WARN_MS = 15_000;
+/** With the SessionStart hook ON but the session id UNKNOWN (a `--continue`/picker run, no pin), how long
+ *  to let the hook sentinel report the EXACT transcript before falling back to the newest-file guess — so
+ *  a concurrent same-cwd sibling isn't mis-attached in the window before the hook fires. After this we
+ *  still fall back (covers `--bare`, where the hook can't fire at all). */
+export const HOOK_GRACE_MS = 4000;
 /** Bounded wait for the relay's final flush + the pumps to settle on teardown, so a hung `serve()` or a
  *  hung tmux exec can't block `kill-session` (codex review #3/#7) — mirrors launch.ts's bounded wait. */
 export const TEARDOWN_FLUSH_MS = 2000;
@@ -270,13 +291,40 @@ export async function runTmuxDriver(
   // The id whose transcript we TRACK: our pin, else the user's explicit resume/session id, else null
   // (unknown — picker/continue → newest-file heuristic).
   const trackedId = sessionUuid ?? userSession.explicitId;
+  // SessionStart-hook capture (--rc-session-hook): inject a hook (MERGED with any user --settings) that
+  // writes the EXACT transcript_path/session_id to a per-session sentinel on start + every rotation. When
+  // on, discovery reads the sentinel (exact, no scan) and follows rotations; the pin/id lookup is the
+  // fallback if the hook never fires (e.g. --bare disables hooks).
+  let sentinelPath = deps.injectSessionHook
+    ? (deps.sentinelPath ?? join(tmpdir(), `rc-sessionhook-${session.id}.ndjson`))
+    : null;
+  let harnessArgs: readonly string[] = ctx.harnessArgs;
+  if (sentinelPath !== null) {
+    const { value, rest } = extractSettingsArg(ctx.harnessArgs);
+    const merged = await mergeSessionHookSettings(value, sentinelPath);
+    if (merged === null) {
+      // The user passed a --settings we can't parse/merge — pass their args through UNCHANGED and skip
+      // the hook (discovery falls back to the --session-id pin), so claude behaves natively (incl. its
+      // own error on a bad settings file) rather than us silently masking it.
+      tracer.warn("session-hook disabled — user --settings not parseable; args passed through");
+      sentinelPath = null;
+    } else {
+      // Insert BEFORE any `--` so claude parses our --settings as an OPTION; after `--` it's a literal —
+      // the hook wouldn't register and the JSON would leak into the prompt.
+      harnessArgs = insertSettingsArg(rest, merged);
+      tracer.debug("session-hook injected", {
+        sentinel: sentinelPath,
+        mergedUserSettings: value !== null,
+      });
+    }
+  }
   const command = shellQuoteCommand([
     "env",
     ...envUnset,
     bin,
     "--dangerously-skip-permissions",
     ...(sessionUuid !== null ? ["--session-id", sessionUuid] : []),
-    ...ctx.harnessArgs,
+    ...harnessArgs,
   ]);
   // Snapshot pre-existing transcript inodes BEFORE spawn so capture can never attach to a concurrent
   // pre-existing session's file (codex review #2). Taken before newSession so claude's fresh file is
@@ -335,6 +383,28 @@ export async function runTmuxDriver(
   // only once its `.meta.json` link is readable, so every surfaced sub-agent line is guaranteed to nest.
   let subDir: string | null = null;
   const subTailers = new Map<string, { tailer: TranscriptTailer; taskId: string }>();
+  let currentPath: string | null = null; // the main transcript we're tailing (changes on a rotation)
+
+  // (Re)bind the tailer to `path`. A rotation (the hook sentinel reporting a NEW transcript after /clear,
+  // /branch, /compact, or resume) clears the sub-agent tailers (a new session = a fresh subagents/ dir)
+  // but KEEPS seenUuids so nothing re-emits. The sentinel is an unambiguous rotation signal, so following
+  // it is safe (no concurrent-sibling guesswork). A no-op if already on `path`.
+  const attach = (path: string): void => {
+    if (path === currentPath) return;
+    tailer = new TranscriptTailer(path);
+    subDir = subagentDir(path);
+    subTailers.clear();
+    currentPath = path;
+    deps.onTranscript?.(path);
+    tracer.debug("transcript attached", { path, subDir });
+  };
+
+  // The latest SessionStart-hook event from the sentinel (exact transcript_path/session_id), or null when
+  // the hook is off / hasn't fired yet. Reading a small NDJSON file is cheap; tolerant of a torn append.
+  const readSentinelEvent = async (): Promise<SessionHookEvent | null> =>
+    sentinelPath === null
+      ? null
+      : parseSentinel(await readFile(sentinelPath, "utf8").catch(() => ""));
 
   // Reshape → (overlay nesting) → dedup → status → pushUpstream for one line. `parentTaskId`, when given
   // (a sub-agent file), overrides parent_tool_use_id so the line nests under its Agent. seenUuids dedups
@@ -400,27 +470,37 @@ export async function runTmuxDriver(
     let discoverTick = 0;
     while (!stop.aborted) {
       if (tailer === null) {
-        // When we know the tracked id (our PIN, or the user's explicit --resume/--session-id id), wait for
-        // THAT EXACT transcript — authoritative and unambiguous, so a concurrent same-cwd sibling can NEVER
-        // be mis-attached. Only an unknown id (a --continue/picker session) falls back to the newest-file
-        // heuristic. claude creates the file lazily on the first turn, so a null just means "poll again".
+        // Prefer the SessionStart-hook sentinel (the EXACT transcript_path — no scan, no long-cwd-hash
+        // problem) when enabled. Else, when we know the tracked id (our PIN, or the user's explicit
+        // --resume/--session-id id), wait for THAT EXACT transcript — authoritative, so a concurrent
+        // same-cwd sibling can NEVER be mis-attached. Only an unknown id (a --continue/picker session)
+        // falls back to the newest-file heuristic. claude creates the file lazily, so null = poll again.
+        // When the hook is ON but the id is unknown, give the sentinel a HEAD START (HOOK_GRACE_MS) before
+        // guessing newest — the hook will report the exact path shortly, so we avoid mis-attaching a
+        // concurrent sibling in that window; after the grace we still fall back (e.g. --bare = no hook).
+        const hookEv = await readSentinelEvent();
         const path =
-          trackedId !== null
+          hookEv?.transcriptPath ??
+          (trackedId !== null
             ? await findTranscriptById(ctx.cwd, trackedId, deps.home, {
                 scanOtherDirs: discoverTick++ % scanEvery === 0,
               })
-            : await findNewestTranscript(dir, spawnedAt, {
-                exclude: preexisting,
-                onAmbiguity: (paths) =>
-                  tracer.warn("multiple fresh transcripts — picking newest", {
-                    paths: paths.join(", "),
-                  }),
-              });
+            : sentinelPath !== null && Date.now() - spawnedAt < HOOK_GRACE_MS
+              ? null
+              : await findNewestTranscript(dir, spawnedAt, {
+                  exclude: preexisting,
+                  onAmbiguity: (paths) =>
+                    tracer.warn("multiple fresh transcripts — picking newest", {
+                      paths: paths.join(", "),
+                    }),
+                }));
         if (path !== null) {
-          tailer = new TranscriptTailer(path);
-          subDir = subagentDir(path); // sibling subagents/ dir — tailed for sub-agent (Agent) output
-          deps.onTranscript?.(path);
-          tracer.debug("transcript discovered", { path, subDir, byId: trackedId !== null });
+          attach(path);
+          tracer.debug("transcript discovered", {
+            path,
+            byHook: hookEv !== null,
+            byId: trackedId !== null,
+          });
         } else if (!warnedNoTranscript && Date.now() - spawnedAt > discoveryWarnMs) {
           warnedNoTranscript = true;
           tracer.warn("no transcript discovered yet — claude may not have started a turn", {
@@ -433,6 +513,20 @@ export async function runTmuxDriver(
       // Pane-liveness probe on a cadence. Only a CONFIRMED gone (≥N consecutive REAL "session missing"
       // exits — sessionGone ignores a transient "couldn't run tmux", review wf#3) tears down.
       if (++tick % paneCheckEvery === 0) {
+        // Hook rotation-follow: the sentinel reporting a NEW transcript_path means the session rotated
+        // (/clear, /branch, /compact, resume) — flush the old file, then follow the new one. This is the
+        // clean, unambiguous rotation signal the scan/pin path can't safely provide.
+        if (sentinelPath !== null && tailer !== null) {
+          const ev = await readSentinelEvent();
+          if (ev !== null && ev.transcriptPath !== currentPath) {
+            await drainTailer();
+            tracer.info("session rotated (hook) — following new transcript", {
+              from: currentPath,
+              to: ev.transcriptPath,
+            });
+            attach(ev.transcriptPath);
+          }
+        }
         if (await tmux.sessionGone(tmuxName)) {
           goneStreak += 1;
           if (goneStreak >= PANE_GONE_CONFIRMATIONS) {
@@ -484,6 +578,7 @@ export async function runTmuxDriver(
     // idle timer) so we don't clear a timer the producer immediately re-arms (review wf#12).
     status.dispose();
     await tmux.killSession(tmuxName);
+    if (sentinelPath !== null) await rm(sentinelPath, { force: true }).catch(() => {});
     tracer.info("tmux driver torn down", { name: tmuxName, pumpCrashed });
   }
   return pumpCrashed ? 1 : 0;
