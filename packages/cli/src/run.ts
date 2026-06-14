@@ -15,6 +15,7 @@ import type { DriverContext } from "./host/rc/driver.js";
 import { gitInfo } from "./host/rc/gitinfo.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
 import { DEFAULT_OPENCODE_MODEL, runOpencodeDriver } from "./host/rc/opencode/driver.js";
+import { runTmuxDriver } from "./host/rc/tmux/driver.js";
 import { runRcTrace } from "./host/rc/trace-run.js";
 import { runIdentity } from "./identity.js";
 import { runPass } from "./pass.js";
@@ -170,9 +171,10 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // claude's help — fall through to a plain spawn.
   const rcApp = (typeof rc["rc-app"] === "string" ? rc["rc-app"] : "") || process.env.RC_APP || "";
   if (rcApp !== "" && !helpWanted) {
-    // Which capture/inject driver runs the harness: --rc-driver / RC_DRIVER, default "mitm" (today's
-    // behavior, byte-for-byte). tmux/opencode bridge to the SAME broker via the pluggable seam
-    // (driver.ts) and land in follow-up PRs; until then they validate-and-explain rather than misbehave.
+    // Which capture/inject driver runs the harness: --rc-driver / RC_DRIVER, default "mitm" (the real
+    // claude behind our MITM). tmux runs a PLAIN claude in a tmux pane and bridges via the transcript
+    // (provider-agnostic, Bedrock-capable — no MITM); opencode peer-attaches to an opencode server. All
+    // three bridge to the SAME broker via the pluggable seam (driver.ts).
     const driver = (
       (typeof rc["rc-driver"] === "string" ? rc["rc-driver"] : "").trim() ||
       (process.env.RC_DRIVER ?? "").trim() ||
@@ -185,11 +187,7 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       return runOpencodeDriverPath(rcApp, rc, claudeArgs, warn);
     }
     if (driver === "tmux") {
-      warn(
-        `remote-claw: --rc-driver=tmux is not wired yet (mitm/opencode are the live drivers); ` +
-          `the seam + design are ready — see docs/tmux-driver.md\n`,
-      );
-      return 2;
+      return runTmuxDriverPath(rcApp, rc, claudeArgs, bin, warn);
     }
     warn(`remote-claw: unknown --rc-driver=${driver} (expected mitm | tmux | opencode)\n`);
     return 2;
@@ -356,6 +354,80 @@ async function runOpencodeDriverPath(
     }
   } catch (e) {
     warn(`remote-claw: could not start opencode driver: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
+}
+
+/**
+ * Track B: resolve the identity and drive a PLAIN claude in a tmux pane bridged to the broker — no
+ * MITM, no certs (provider-agnostic, Bedrock-capable). Builds the same DriverContext shape as the
+ * launch path (identity / brokerUrl / backend / newClient with the Vercel bypass / title / cwd / git),
+ * minus the MITM-only certsDir, and runs runTmuxDriver under a SIGINT/SIGTERM-coupled AbortController
+ * (the tmux pane runs detached, so Ctrl-C the wrapper tears the bridge down + kills the pane).
+ */
+async function runTmuxDriverPath(
+  brokerUrl: string,
+  rc: Record<string, unknown>,
+  claudeArgs: string[],
+  bin: string,
+  warn: (line: string) => void,
+): Promise<number> {
+  const secretPath = resolveSecretPath({
+    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
+  }).path;
+  const backend =
+    (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
+    (process.env.RC_BACKEND ?? "").trim() ||
+    undefined;
+  try {
+    await ensureIdentity(secretPath); // local, idempotent — create on first run, no network
+    const { secret } = await loadSecret(secretPath);
+    const identity = await deriveIdentity(secret);
+    const provider = securityProvider("sealed", identity);
+    // The Vercel deployment-protection bypass (SSO) for the host's own broker calls; scrubbed from the
+    // child claude's env by the driver. An unprotected broker (local dev) leaves it unset → no header.
+    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const newClient = () =>
+      new BrokerClient({
+        baseUrl: brokerUrl,
+        provider,
+        ...(bypass ? { protectionBypass: bypass } : {}),
+        ...(backend !== undefined ? { backend } : {}),
+      });
+    const cwd = process.cwd();
+    const ctx: DriverContext = {
+      harnessArgs: claudeArgs,
+      harnessBin: bin, // spawn the SAME binary the MITM path resolves (RC_CLAUDE_BIN-aware) — codex #6
+      identity,
+      brokerUrl,
+      title: "remote-claw",
+      cwd,
+      git: await gitInfo(cwd),
+      newClient,
+      tracer: tracerFromEnv("rc.tmux"),
+      ...(backend !== undefined ? { backend } : {}),
+    };
+    // Couple Ctrl-C / SIGTERM to the driver's abort so teardown (flush + kill-session) runs. Record
+    // which signal fired so we return the shell-standard 128+N code (codex review #9) instead of 0.
+    const ac = new AbortController();
+    let firedSignal: NodeJS.Signals | null = null;
+    const onSignal = (sig: NodeJS.Signals) => {
+      firedSignal = sig;
+      ac.abort();
+    };
+    const onInt = () => onSignal("SIGINT");
+    const onTerm = () => onSignal("SIGTERM");
+    process.once("SIGINT", onInt);
+    process.once("SIGTERM", onTerm);
+    try {
+      const code = await runTmuxDriver(ctx, ac.signal);
+      return firedSignal !== null ? signalExitCode(firedSignal) : code;
+    } finally {
+      process.removeListener("SIGINT", onInt);
+      process.removeListener("SIGTERM", onTerm);
+    }
+  } catch (e) {
+    warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);
     return 1;
   }
 }

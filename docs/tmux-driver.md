@@ -296,15 +296,46 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
    `parentToolUseID`); resolve in B2. *Biggest fidelity gap vs MITM.*
 2. **Silent shape drift** — `mapUpstreamItems` drops off-shape frames; guarded by real-line contract
    tests.
-3. **Status is heuristic** (append timing, not claude's `worker_status`); debounced; refine with
-   `turn_duration` system lines later.
+3. **Status is heuristic** (append timing, not claude's `worker_status`); debounced. An orphaned
+   `tool_use` (interrupt / crash / sub-agent nesting) is recovered by clearing open tools on a new-turn
+   boundary **and** a hard idle fallback, so the viewer can't hang on "thinking" forever.
 4. **Auto-approve permissions** (`structuredPermissions:false`); single-user-trusted; mirroring is B2.
-5. **send-keys timing** — strictly serialized inject; only `interrupt` mapped in v1.
-6. **Transcript discovery/rotation** — mtime-gated discovery + truncation-reset tail; resume hardening
-   is B2.
+5. **send-keys timing** — strictly serialized inject; the paste phase (set-buffer+paste-buffer) and the
+   submit (Enter) retry **separately** so a transient post-paste failure never double-pastes; retries
+   until the prompt lands or the pane dies. Only `interrupt` is mapped in v1.
+6. **Transcript discovery/rotation** — discovery excludes pre-spawn inodes and gates on creation time;
+   the tailer keys on `dev:ino:birthtime` (rotation-safe even under inode reuse) and opens-then-fstats
+   (no stat/open race). Two residual limits remain (see below).
 7. **No history backfill** unless the backend is durable (inherited relay boundary, #36).
 8. **tmux dependency** — clear error if absent; unit tests need no tmux.
-9. **One driver per wrapper process** (RelayCore is per-launch).
+9. **One driver per wrapper process** (RelayCore is per-launch); pane-liveness ends the bridge when
+   claude exits / the pane closes.
+
+### 7.1 Known v1 discovery limitations (definitive fix: pin the child session id)
+
+Because the driver scrubs `CLAUDE_CODE_SESSION_ID`, the spawned claude mints its **own** session id that
+the driver doesn't know up front, so capture finds the transcript heuristically (newest fresh file in
+the shared `~/.claude/projects/<slug(cwd)>/`). Two cases the heuristic can't resolve:
+
+- **A concurrent sibling claude in the same cwd**, racing its first turn against ours, can be
+  mis-attached (its transcript streamed into this session's bridge). `onAmbiguity` warns when more than
+  one fresh file qualifies, but a single wrong-but-fresh file is silently picked.
+- **`/clear` (or anything that mints a new session id) mid-pane** starts a new transcript file the bound
+  tailer doesn't follow; consistent with the 1:1 wrapper=session model, the bridge tracks the
+  originally-spawned session.
+
+The **definitive fix** for both is to *pin* the child's session id (a fresh ULID we generate, not the
+parent's) so the transcript path is known exactly — `findNewestTranscript` and the whole heuristic go
+away. Deferred because it needs **live validation** that claude accepts a fresh `CLAUDE_CODE_SESSION_ID`
+without resume-error. The same change re-enables a stable id across `/clear`.
+
+### 7.2 Local-prompt visibility (follow-up)
+
+A prompt typed into the **local** tmux TUI is upstream `user` text the relay drops, so it won't appear
+in the web transcript. The fix is the **`local_prompt` ledger** already shipped for the opencode driver
+(now on `main` via #97): the driver records the texts it injected; an upstream `user` line that doesn't
+match a recorded injection is tagged `local_prompt:true` and the relay renders it. tmux can adopt the
+same ledger now that the relay support is on `main`.
 
 ---
 

@@ -186,4 +186,29 @@ describe("runWrapper (functional)", () => {
       }
     },
   );
+
+  it("exits 2 on an unknown --rc-driver (with the valid list) without spawning claude", async () => {
+    const { fn, calls } = recordingSpawn();
+    const lines: string[] = [];
+    const code = await runWrapper(["--rc-app", "http://b", "--rc-driver", "bogus"], {
+      spawnFn: fn,
+      stderr: (l) => lines.push(l),
+    });
+    expect(code).toBe(2);
+    expect(calls).toHaveLength(0);
+    expect(lines.join("")).toMatch(/unknown --rc-driver=bogus/);
+    expect(lines.join("")).toMatch(/mitm \| tmux \| opencode/);
+  });
+
+  it("--rc-driver=tmux without --rc-app warns and runs plain claude (no broker)", async () => {
+    const { fn, calls } = recordingSpawn(0);
+    const lines: string[] = [];
+    const code = await runWrapper(["chat", "--rc-driver", "tmux"], {
+      spawnFn: fn,
+      stderr: (l) => lines.push(l),
+    });
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ bin: "claude", args: ["chat"] }]); // plain spawn, rc flag consumed
+    expect(lines.join("")).toMatch(/needs --rc-app/);
+  });
 });
