@@ -30,8 +30,8 @@ describe("backendSelector blank handling (Sel-400)", () => {
   it("returns the trimmed value for a real selector (param wins over header)", () => {
     expect(sel("?backend=sqlite")).toBe("sqlite");
     expect(sel("?backend=%20sqlite%20")).toBe("sqlite");
-    expect(sel("?backend=sqlite", "temporal")).toBe("sqlite");
-    expect(sel("", "temporal")).toBe("temporal");
+    expect(sel("?backend=sqlite", "vercel")).toBe("sqlite");
+    expect(sel("", "vercel")).toBe("vercel");
   });
 
   it("an explicit empty ?backend= shadows the header (param wins) → null → default", () => {
@@ -44,11 +44,12 @@ describe("backendSelector blank handling (Sel-400)", () => {
 describe("isRequestableBackend (the route guard a real invalid value still hits)", () => {
   it("rejects unknown names so a bad selector still 400s (Sel-400 didn't widen this)", () => {
     expect(isRequestableBackend("bogus")).toBe(false);
+    // temporal was removed as a backend — a stale `?backend=temporal` must now 400, not resolve.
+    expect(isRequestableBackend("temporal")).toBe(false);
   });
 
   it("accepts the requestable durable/shared backends", () => {
     expect(isRequestableBackend("sqlite")).toBe(true);
-    expect(isRequestableBackend("temporal")).toBe(true);
     expect(isRequestableBackend("vercel")).toBe(true);
   });
 });

@@ -2,7 +2,7 @@ import type { WireFrame } from "@remote-claw/clawsec";
 import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } from "./backend";
 
 // The in-process "fake" broker: a durable pub/sub backend that lives entirely in this Node process's
-// memory — no Vercel Workflows runtime, no Temporal server. It makes the whole broker runnable inside
+// memory — no Vercel Workflows runtime, no external service. It makes the whole broker runnable inside
 // `next dev` (and inside a plain test process), which is what lets a real browser drive the real app
 // end-to-end against a real spine. Selected with BROKER_BACKEND=local.
 //
@@ -18,7 +18,7 @@ import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } fr
 // fan-out in publish() never interleave — there is no missed-or-duplicated frame window.
 //
 // The frame log is unbounded (no cap-roll): fine for dev/test sessions, which are short-lived. A
-// long-lived deployment uses the Vercel or Temporal backend, which page/cap the durable history.
+// long-lived deployment uses the Vercel or per-session sqlite backend, which page/cap the durable history.
 
 interface Subscriber {
   controller: ReadableStreamDefaultController<WireFrame>;

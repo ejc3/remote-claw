@@ -7,8 +7,9 @@ import type { WireFrame } from "@remote-claw/clawsec";
 // decrypts, so every adapter moves opaque WireFrames and forges nothing.
 //
 // This interface is the seam that lets the broker run on different durable runtimes — Vercel
-// Workflows in production, an in-process LocalBackend for `next dev` / tests, or Temporal — without
-// the routes (or any client, which only ever speaks plain HTTP/SSE) knowing which is underneath.
+// Workflows in production, per-session libSQL (local file or Turso Cloud), or an in-process
+// LocalBackend for `next dev` / tests — without the routes (or any client, which only ever speaks
+// plain HTTP/SSE) knowing which is underneath.
 
 /** What a publisher may put on a channel: a wire frame, or the teardown sentinel (cap-roll/§6B). */
 export type RelayPayload = WireFrame | { __close: true };
@@ -38,7 +39,7 @@ export class PublishConflictError extends Error {
 }
 
 /** The result of a publish: whether this call brought the channel into existence, and the adapter's
- *  id for it (a Vercel run id, a LocalBackend channel id, a Temporal workflow id). Both are surfaced
+ *  id for it (a Vercel run id, a LocalBackend channel id, a per-session sqlite db id). Both are surfaced
  *  on the relay route's JSON reply (`created`, `runId`) — preserving the client's RelayResult shape. */
 export interface PublishResult {
   created: boolean;

@@ -8,15 +8,6 @@ const nextConfig: NextConfig = {
   // Turbopack rejects the `.ts` entry in node_modules), and extensionAlias maps its `.js` specifiers
   // back to the `.ts` sources (else `./wire.js` etc. don't resolve).
   transpilePackages: ["@remote-claw/clawsec", "@remote-claw/cli"],
-  // @temporalio/* wrap a gRPC/protobuf core (and, for the worker, a native Rust addon) that webpack
-  // mangles (the "Critical dependency" warning) — bundling breaks the connection (getSystemInfo fails
-  // with undefined status) and can't bundle the .node binary. Keep them external so the Node runtime
-  // loads them from node_modules. @temporalio/client → the TemporalBackend (lib/broker/temporal.ts);
-  // @temporalio/worker → the keep-warm drain route (app/api/temporal/drain). The route runs the
-  // worker from a PRE-BUILT workflow bundle (temporal/workflow-bundle.generated.ts), so the function
-  // needs no @temporalio/workflow at runtime and no in-function bundler. Each is loaded only when its
-  // code path runs.
-  serverExternalPackages: ["@temporalio/client", "@temporalio/worker"],
   experimental: {
     extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
   },

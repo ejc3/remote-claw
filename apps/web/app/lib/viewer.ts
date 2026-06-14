@@ -158,7 +158,7 @@ export class Viewer {
   /**
    * Build a viewer from a pasted/fragment pass (`rcp1_…`). Throws PassError on a bad pass. `baseUrl`
    * defaults to same-origin (""); `fetchFn` is for tests; `backend` selects the broker backend
-   * ("temporal" etc.) for this viewer's calls (sent as the x-broker-backend header).
+   * ("sqlite" etc.) for this viewer's calls (sent as the x-broker-backend header).
    */
   static async fromPass(
     pass: string,

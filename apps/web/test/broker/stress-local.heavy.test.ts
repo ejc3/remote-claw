@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { brokerFetch } from "../e2e/harness";
 
 // HEAVY local encryption stress — the LocalBackend is in-process, so we crank the volume far past what
-// the Vercel/Temporal runtimes could absorb in a unit test: thousands of sealed round-trips, hundreds
+// the Vercel runtime could absorb in a unit test: thousands of sealed round-trips, hundreds
 // of concurrent publishers, and a multi-hundred-part chunked message. Proves the AEAD round-trip + the
 // LocalBackend hold under real load. Gated by STRESS_HEAVY so the normal gate stays fast; the CI
 // web-e2e job sets it (`pnpm --filter @remote-claw/web test:stress:heavy`). Scale via STRESS_N/STRESS_K.

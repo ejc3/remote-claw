@@ -1,6 +1,5 @@
 node_modules/
 test-results/
-test-results-temporal/
+test-results-sqlite/
 test-results-turso/
-test-results-drain/
 playwright-report/

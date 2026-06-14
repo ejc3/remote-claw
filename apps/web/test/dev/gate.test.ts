@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { gate } from "../../app/api/dev/seed/gate";
+import { gate } from "../../app/api/dev/_gate";
 
+// The shared dev-route gate (apps/web/app/api/dev/_gate.ts), used by /api/dev/sweep. Moved here from the
+// removed /api/dev/seed route, so these are the SAME prod-gating + loopback-SSRF cases that lived in the
+// deleted seed-gate.test.ts — kept so that auth coverage didn't disappear with the seed route.
 const env = process.env as Record<string, string | undefined>;
 const KEYS = ["DEV_SEED_TOKEN", "VERCEL", "VERCEL_ENV", "VERCEL_URL", "BROKER_BACKEND"] as const;
 
@@ -24,14 +27,14 @@ function req(url: string, token?: string): Request {
   return new Request(url, headers ? { headers } : undefined);
 }
 
-describe("dev seed gate", () => {
+describe("dev route gate", () => {
   it("404s in Vercel production even with the matching DEV_SEED_TOKEN", () => {
     env.VERCEL = "1";
     env.VERCEL_ENV = "production";
     env.VERCEL_URL = "prod.example.com";
     env.DEV_SEED_TOKEN = "seed-secret";
 
-    const got = gate(req("https://prod.example.com/api/dev/seed", "seed-secret"));
+    const got = gate(req("https://prod.example.com/api/dev/sweep", "seed-secret"));
     expect(got).toBeInstanceOf(Response);
     expect((got as Response).status).toBe(404);
   });
@@ -42,23 +45,26 @@ describe("dev seed gate", () => {
     env.VERCEL_URL = "preview-123.example.com";
     env.DEV_SEED_TOKEN = "seed-secret";
 
-    expect(gate(req("https://attacker-controlled-host.test/api/dev/seed", "seed-secret"))).toEqual({
-      origin: "https://preview-123.example.com",
-    });
+    // The trusted origin is the deployment's OWN URL (not the spoofable Host header) — no SSRF.
+    expect(gate(req("https://attacker-controlled-host.test/api/dev/sweep", "seed-secret"))).toEqual(
+      {
+        origin: "https://preview-123.example.com",
+      },
+    );
   });
 
-  it("allows local backend seeding off-Vercel when the request origin is loopback", () => {
+  it("allows local-backend dev off-Vercel when the request origin is loopback", () => {
     env.BROKER_BACKEND = "local";
 
-    expect(gate(req("http://127.0.0.1:3000/api/dev/seed"))).toEqual({
+    expect(gate(req("http://127.0.0.1:3000/api/dev/sweep"))).toEqual({
       origin: "http://127.0.0.1:3000",
     });
   });
 
-  it("rejects local backend seeding from a non-loopback request origin", () => {
+  it("rejects local-backend dev from a non-loopback request origin (SSRF guard)", () => {
     env.BROKER_BACKEND = "local";
 
-    const got = gate(req("http://example.com/api/dev/seed"));
+    const got = gate(req("http://example.com/api/dev/sweep"));
     expect(got).toBeInstanceOf(Response);
     expect((got as Response).status).toBe(400);
   });

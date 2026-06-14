@@ -1,6 +1,5 @@
-// The scripted RC turn the e2e host replays — moved verbatim out of the old /api/dev/seed route so the
-// published frames are byte-identical to what that route produced. It exercises every transcript row the
-// UI renders (#47 + prior features): prose, a top-level Bash tool_use + its Output, a Task sub-agent with
+// The scripted RC turn the e2e host replays. It exercises every transcript row the UI renders
+// (#47 + prior features): prose, a top-level Bash tool_use + its Output, a Task sub-agent with
 // nested output (incl. a null content block the relay must survive), an error tool_result, and a final
 // result. `withPerm` injects a can_use_tool gate (the UI renders a permission card, #56); `withAskq`
 // injects an AskUserQuestion gate (#42).

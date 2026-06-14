@@ -80,7 +80,7 @@ export default function Home() {
     setError(null);
     setConnecting(true);
     try {
-      // `?backend=` (e.g. temporal) opts this session onto a non-default broker backend; the Viewer
+      // `?backend=` (e.g. sqlite) opts this session onto a non-default broker backend; the Viewer
       // forwards it as the x-broker-backend header on every broker call. Same-origin, default fetch.
       const backend = new URLSearchParams(window.location.search).get("backend") ?? undefined;
       setViewer(await Viewer.fromPass(pass, "", undefined, backend));

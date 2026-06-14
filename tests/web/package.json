@@ -6,9 +6,7 @@
     "test": "playwright test",
     "typecheck": "tsc --noEmit",
     "test:app": "playwright test -c app-e2e.config.ts",
-    "test:app:temporal": "bash ../../scripts/with-temporal.sh env E2E_BACKEND=temporal pnpm exec playwright test -c app-e2e.temporal.config.ts",
-    "test:app:sqlite": "env E2E_BACKEND=sqlite pnpm exec playwright test -c app-e2e.sqlite.config.ts",
-    "test:app:drain": "TEMPORAL_NO_WORKER=1 bash ../../scripts/with-temporal.sh pnpm exec playwright test -c app-e2e.drain.config.ts"
+    "test:app:sqlite": "env E2E_BACKEND=sqlite pnpm exec playwright test -c app-e2e.sqlite.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

@@ -1062,14 +1062,16 @@ wanted, a small durable store could be added then. We investigated the options (
 Redis / Vercel Blob / Neon; Edge Config doesn't fit) and they're viable, but adding any
 of them now would pollute a deliberately lean design — **explicitly deferred.**
 
-## 6D. Broker backends — execution-model comparison (why Vercel Workflows, vs Temporal, vs per-session SQLite)
+## 6D. Broker backends — execution-model comparison (why Vercel Workflows, vs per-session SQLite — and why not Temporal)
 
 The broker is a **pluggable port** (`BrokerBackend` in `apps/web/lib/broker/backend.ts`):
 `publish(token, frame)` and `subscribe(token, {startIndex})`, selected per-request via the
-`x-broker-backend` header / `?backend=`. Four implementations ship — `vercel` (live default),
-`temporal`, `sqlite` (per-session libSQL — local file or Turso Cloud), `local` (dev/test). They divide
-on **one axis: who runs the execution, and whether reads are push or poll.** This section captures the
-verified design of each so the choice of default is auditable.
+`x-broker-backend` header / `?backend=`. Three implementations ship — `vercel` (live default),
+`sqlite` (per-session libSQL — local file or Turso Cloud), `local` (dev/test). They divide on **one
+axis: who runs the execution, and whether reads are push or poll.** Temporal was evaluated as a fourth
+backend and **deliberately not adopted** (it doesn't fit a live relay's shape — the analysis below);
+the implementation has been removed. This section captures the verified design of each so the choice of
+default is auditable.
 
 ### Vercel Workflows — the live default (per-event materialization, push reads)
 
@@ -1125,14 +1127,14 @@ There is **no `continueAsNew`**; the documented remedy for long histories is **c
 sidestep it entirely: the host `#log` is the history source-of-record and the channel is a bounded
 live buffer (§6).
 
-### Temporal — durable orchestration, but a poll-read pub/sub anti-pattern
+### Temporal — durable orchestration, but a poll-read pub/sub anti-pattern (evaluated, not adopted)
 
-Temporal is the opposite substrate: a **standing worker fleet long-polls task queues**, orchestrated
-by a separate server. Web research (Temporal docs + forum, May 2026) confirms the mismatch for a live
-relay:
+Temporal was prototyped as a backend and rejected; it is the opposite substrate to the two we kept: a
+**standing worker fleet long-polls task queues**, orchestrated by a separate server. Web research
+(Temporal docs + forum, May 2026) confirmed the mismatch for a live relay:
 
 - **No server→client push exists.** A subscriber reads workflow state by **polling a query**; that's
-  what our `temporal.ts` `subscribe()` does (poll `STATE_QUERY` every `pollMs`). `Update` lowers write
+  what the prototype's `subscribe()` did (poll a `state` query every `pollMs`). `Update` lowers write
   latency but writes to Event History; the `workflow-streams` contrib long-polls and is scoped to
   "tens, not thousands" of subscribers.
 - **In-workflow pub/sub is an explicit anti-pattern**, bounded by a **51,200-event / 50 MB history**
@@ -1144,14 +1146,14 @@ relay:
 
 The supported scalable Temporal design is therefore the **split**: Temporal for durable orchestration
 + an **external pub/sub** (Redis Streams / NATS / Kafka) for the fan-out — i.e. an admission that
-Temporal alone is not a broker. That's strictly more infrastructure than either shipped backend for no
-gain on this workload, which is why Temporal stays an opt-in backend, not the default.
+Temporal alone is not a broker. That is strictly more infrastructure than either shipped backend for no
+gain on this workload — so Temporal was dropped rather than kept as an opt-in backend.
 
 ### Per-session SQLite — the no-worker durable log (the durability answer)
 
 The `sqlite` backend sidesteps the push/poll question: an **ordered libSQL log per session** with **no
 worker at all** — the DB itself serves catch-up. Reads are a poll (`SELECT … WHERE id > cursor`), but
-replay and live are the *same* query (no gap/dupe boundary), and unlike Vercel/Temporal it is **flagged
+replay and live are the *same* query (no gap/dupe boundary), and unlike Vercel it is **flagged
 durable**, so the broker serves catch-up and the host can retire its `#log` replay. The defining choice
 is **one database PER channel token** (not one shared log): physical isolation, retention = drop the db,
 a per-session write lock, and no cross-session at-rest exposure. The **only** deployment variable is
@@ -1190,13 +1192,14 @@ instead of Vercel's managed platform; the relay doesn't need that model.
 | | reads | writes | who runs compute | standing process | durability | infra pieces |
 | --- | --- | --- | --- | --- | --- | --- |
 | **Vercel** (default) | **push** (`getReadable` cursor/viewer) | `resumeHook` (event-driven) | **Vercel**, per-event | **none** | capped stream + host `#log` | 1 |
-| **Temporal** | poll a query | signal (2k pending cap) | your worker | standing worker | history (capped → terminates) | 1 (wrong-shaped) / 2 with Redis |
 | **Sqlite** | poll (`id > cursor`) | `INSERT … ON CONFLICT` | nobody (DB serves reads) | **none** | **ordered log per session** (file or Turso Cloud) | 1 |
+| *Temporal (evaluated, not adopted)* | poll a query | signal (2k pending cap) | your worker | standing worker | history (capped → terminates) | 1 (wrong-shaped) / 2 with Redis |
 
 Vercel Workflows is the one managed system giving **event-driven execution + push fan-out + zero hosted
 infra** in a single piece (hence the live default); per-session **SQLite** is the clean **durable-log**
-backend (local file in dev, one Turso Cloud db per session in prod); Temporal is durable orchestration
-that needs an external pub/sub bolted on to be a broker, so it stays opt-in.
+backend (local file in dev, one Turso Cloud db per session in prod). Temporal is durable orchestration
+that would need an external pub/sub bolted on to be a broker — strictly more infra for no gain here, so
+it was evaluated and dropped, not shipped.
 
 ### Worked example — a no-viewer fleet (the roll cycle, and the viewer-gating gap)
 

@@ -5,9 +5,9 @@ import { defineConfig, devices } from "@playwright/test";
 // this is how the **vercel** and **sqlite/Turso-Cloud** backend UI e2e run.
 // No webServer: the app is already deployed; `baseURL` is the preview URL (WEB_E2E_URL). The HOST runs as
 // a persistent test process (the seedHost fixture spawns host-runner.ts), talking to the deployed broker
-// via identity auth + the SSO bypass — not /api/dev/seed. E2E_BACKEND selects the backend to flip to via
-// ?backend=: unset ⇒ the deployment default (vercel); `sqlite` ⇒ the per-session backend on real Turso
-// Cloud. Driven by .github/workflows/web-preview.yml on a successful preview.
+// via identity auth + the SSO bypass. E2E_BACKEND selects the backend to flip to via ?backend=: unset ⇒
+// the deployment default (vercel); `sqlite` ⇒ the per-session backend on real Turso Cloud. Driven by
+// .github/workflows/web-preview.yml on a successful preview.
 
 const BASE = process.env.WEB_E2E_URL;
 
@@ -19,7 +19,7 @@ const extraHTTPHeaders = bypassSecret ? { "x-vercel-protection-bypass": bypassSe
 
 export default defineConfig({
   testDir: "./app-e2e",
-  testMatch: "transcript.spec.ts", // the drain spec runs under app-e2e.drain.config.ts only
+  testMatch: "transcript.spec.ts",
   timeout: 120_000,
   expect: { timeout: 30_000 }, // remote round-trips over the public internet
   workers: 1,

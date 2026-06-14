@@ -1,11 +1,10 @@
 // Playwright fixture that stands up the e2e HOST as a real, persistent process (tsx host-runner.ts),
 // pointed at the broker the browser uses (use.baseURL — the local webServer or the deployed preview).
 // `seedHost(opts)` spawns one host, waits for it to publish the scripted turn + report its viewer pass,
-// and returns { pass }. All hosts a test spawns are SIGTERM'd on teardown. This replaces the /api/dev/seed
-// serverless route FOR transcript.spec: the host now runs the right way — a persistent process that
-// PUBLISHES the seeded turn AND ECHOES the browser's live prompts — so the preview e2e is reliable AND
-// full-featured. (The seed route still exists for drain.spec.ts, which runs against a persistent local
-// server where serve()-under-after() never froze; its full removal rides with the Temporal teardown.)
+// and returns { pass }. All hosts a test spawns are SIGTERM'd on teardown. The host runs the right way —
+// a persistent process that PUBLISHES the seeded turn AND ECHOES the browser's live prompts — so the
+// preview e2e is reliable AND full-featured. (This replaced the old /api/dev/seed serverless route,
+// whose serve()-under-after() publish could freeze before landing; that route has now been removed.)
 import { type ChildProcess, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join } from "node:path";

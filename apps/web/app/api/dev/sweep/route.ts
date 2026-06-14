@@ -1,6 +1,6 @@
 import { getBackend } from "../../../../lib/broker";
 import { selectLocatorFromEnv } from "../../../../lib/broker/turso-cloud-locator";
-import { gate } from "../seed/gate";
+import { gate } from "../_gate";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -9,13 +9,13 @@ export const maxDuration = 300;
 // preview/CI run CLEANS UP AFTER ITSELF instead of leaking session dbs.
 //
 // It deletes EVERY db in THIS deployment's scope (`rc-<scope>-*`) by name via the Platform API
-// (locator.dropScope) — NOT the cold-index sweep — because a seeded relay can create a db (via ensure)
-// but crash/freeze before publishing, leaving a 0-frame db the index never catalogued; only a by-name
-// delete reclaims those. One call = one delete pass; it returns `remaining` (re-listed after the
-// deletes), and the CI step loops until `remaining` is 0 — i.e. until the seed relays (which live for
-// SESSION_TTL_MS, re-announcing to the bus) have aged out and stop recreating dbs.
+// (locator.dropScope) — NOT the cold-index sweep — because an e2e host relay can create a db (via
+// ensure) but crash/freeze before publishing, leaving a 0-frame db the index never catalogued; only a
+// by-name delete reclaims those. One call = one delete pass; it returns `remaining` (re-listed after the
+// deletes), and the CI step loops until `remaining` is 0 — i.e. until the still-live e2e host relays
+// (re-announcing to the bus until they exit) have aged out and stop recreating dbs.
 //
-// PROD-SAFE on two independent levels: (1) the SAME dev-seed gate as /api/dev/seed — a matching
+// PROD-SAFE on two independent levels: (1) the dev gate (apps/web/app/api/dev/_gate.ts) — a matching
 // DEV_SEED_TOKEN on a NON-production deploy only; it can NEVER run on production. (2) scope — a preview's
 // scope is `pr-<commit sha>`, so dropScope only ever names `rc-pr-<sha>-…`, never a `rc-prod-` session.
 // (Local/file dev has no scope ⇒ falls back to the cold-index sweep.)

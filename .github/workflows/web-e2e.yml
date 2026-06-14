@@ -1,17 +1,17 @@
 name: web-e2e
 
-# Self-contained end-to-end + stress tests for the broker, covering the Local, Temporal (an in-memory
-# `temporal server start-dev` — no Docker, no account), and per-session SQLite (local libSQL file)
-# backends. The Vercel backend's durable runtime only exists on a Vercel deployment, so its e2e lives in
-# web-preview.yml; the sqlite backend's Turso Cloud storage mode is likewise exercised on a real deploy.
+# Self-contained end-to-end + stress tests for the broker, covering the Local and per-session SQLite
+# (local libSQL file) backends. The Vercel backend's durable runtime only exists on a Vercel deployment,
+# so its e2e lives in web-preview.yml; the sqlite backend's Turso Cloud storage mode is likewise
+# exercised on a real deploy.
 on:
   push:
     branches: [main]
     paths:
-      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "scripts/with-temporal.sh", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
   pull_request:
     paths:
-      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "scripts/with-temporal.sh", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
 
 jobs:
   e2e:
@@ -31,7 +31,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Typecheck the e2e harness (configs + specs + the tsx host-runner) under the same strict TS the rest
-      # of the workspace uses — fail fast here, before the slow Chromium/Temporal installs below.
+      # of the workspace uses — fail fast here, before the slow Chromium install below.
       - name: Typecheck the e2e harness
         run: pnpm --filter remote-claw-web-tests run typecheck
 
@@ -44,34 +44,13 @@ jobs:
       - name: Install Chromium
         run: pnpm --filter remote-claw-web-tests exec playwright install --with-deps chromium
 
-      # Temporal CLI — its `server start-dev` is an in-memory single binary (no Docker). Cached (~500 MB).
-      - name: Cache Temporal CLI
-        id: temporal-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.temporalio
-          key: temporal-cli-${{ runner.os }}-v1
-      - name: Install Temporal CLI
-        if: steps.temporal-cache.outputs.cache-hit != 'true'
-        run: curl -sSf https://temporal.download/cli.sh | sh
-      - name: Temporal CLI on PATH
-        run: echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
-
       - name: App e2e — LocalBackend
         run: pnpm --filter remote-claw-web-tests run test:app
-      - name: App e2e — Temporal (in-memory server + worker, flipped via ?backend=)
-        run: pnpm --filter remote-claw-web-tests run test:app:temporal
       - name: App e2e — Sqlite (per-session libSQL file, flipped via ?backend=)
         run: pnpm --filter remote-claw-web-tests run test:app:sqlite
-      - name: App e2e — drain route on a REAL build (no standalone worker)
-        run: pnpm --filter remote-claw-web-tests run test:app:drain
-      - name: Unit + drift tests (incl. the pre-built workflow bundle is current)
+      - name: Unit tests
         run: pnpm --filter @remote-claw/web run test:run
-      - name: Temporal backend contract (real server)
-        run: pnpm --filter @remote-claw/web run test:temporal
-      - name: Keep-warm drain worker (boots its own worker, no standalone poller)
-        run: pnpm --filter @remote-claw/web run test:drain
-      - name: Encryption stress — local + vercel(in-process) + temporal
+      - name: Encryption stress — local + vercel (in-process)
         run: pnpm --filter @remote-claw/web run test:stress
       - name: Encryption stress — HEAVY local (thousands of sealed round-trips)
         run: pnpm --filter @remote-claw/web run test:stress:heavy
@@ -83,6 +62,5 @@ jobs:
           name: playwright-results
           path: |
             tests/web/test-results/
-            tests/web/test-results-temporal/
             tests/web/test-results-sqlite/
           retention-days: 7

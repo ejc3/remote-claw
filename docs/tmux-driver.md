@@ -230,7 +230,7 @@ covers the inbound (viewer) path, not the local-paste outbound path. Surfacing l
 - `host/rc/launch.ts` — `runRcLaunch` keeps its exact signature; it IS the mitm driver. `launch.test.ts`
   is green by construction.
 - `host/rc/mitm.ts`, `certs.ts` — MITM-only; the tmux driver never imports them.
-- `broker/client.ts`, and all of `apps/web` (router + vercel/temporal/local/sqlite backends + the web
+- `broker/client.ts`, and all of `apps/web` (router + vercel/local/sqlite backends + the web
   viewer) — they consume sealed frames keyed by `(identity, session)`; the frame stream is a pure
   function of the canonical `UpstreamPayload`, so nothing downstream can tell which driver produced
   the session.

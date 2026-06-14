@@ -1,6 +1,5 @@
 import { getBackend } from "../../../../lib/broker";
-import { authorized } from "../../temporal/drain/gate";
-import { retentionMs, sqliteConfigured } from "./gate";
+import { authorized, retentionMs, sqliteConfigured } from "./gate";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
