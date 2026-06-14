@@ -119,8 +119,10 @@ export interface UpstreamPayload {
    *  spawning Task's tool_use_id; the viewer nests it under the Task. */
   parent_tool_use_id?: string | null;
 
-  /** For "assistant" / "user": the message envelope holding the content blocks. */
-  message?: { role?: "assistant" | "user" | string; content: ContentBlock[] };
+  /** For "assistant" / "user": the message envelope holding the content. Usually `ContentBlock[]`, but a
+   *  STRING is also valid — a non-MITM driver sends a plain string for a local prompt, and real claude's
+   *  user content is sometimes a bare string too. The relay's userPromptText (relay.ts) accepts both. */
+  message?: { role?: "assistant" | "user" | string; content: ContentBlock[] | string };
 
   /** For "result": the turn's result (string preferred; non-string is JSON-stringified by relay). */
   result?: string | Record<string, unknown>;
