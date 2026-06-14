@@ -142,6 +142,21 @@ importers:
       '@playwright/test':
         specifier: ^1.49.0
         version: 1.60.0
+      '@remote-claw/clawsec':
+        specifier: workspace:*
+        version: link:../../packages/clawsec
+      '@remote-claw/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
+      '@types/node':
+        specifier: ^25.9.2
+        version: 25.9.2
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
 
 packages:
 

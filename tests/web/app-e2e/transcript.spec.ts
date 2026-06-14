@@ -1,30 +1,26 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
-// Proves the web UI works end to end against the WHOLE real spine (only the model is scripted):
+// Proves the web UI works end to end against the WHOLE real spine (only the worker/model is scripted):
 //   real Chromium → real Next client (page.tsx) → real broker routes → real HostRcRelay event mapping
 //   → a Session fed a scripted RC turn.
-// The /api/dev/seed route stands up the host side and returns a viewer pass; the browser drives the
-// rest exactly as a phone would. Assertions target the actual rendered DOM, so a regression in the
-// relay's frame mapping OR the transcript components fails the test.
+// `seedHost(opts)` (fixtures.ts) stands up the host as a REAL persistent process (tsx host-runner) pointed
+// at the broker the browser uses, returns a viewer pass, and the browser drives the rest exactly as a
+// phone would — including LIVE round-trips (typed prompt, permission grant, AskUserQuestion answer,
+// attachment), which the persistent host echoes back. Assertions target the actual rendered DOM, so a
+// regression in the relay's frame mapping OR the transcript components fails the test.
 //
-// E2E_BACKEND (set by app-e2e.temporal.config.ts) flips the broker via the ?backend= switch so the
-// IDENTICAL assertions run against both the in-process LocalBackend (default) and Temporal — proving
-// the abstraction is swappable per-request on one deployment.
+// E2E_BACKEND (set by app-e2e.temporal/sqlite.config.ts) flips the broker via the ?backend= switch for the
+// browser AND the host (the fixture forwards it), so the IDENTICAL assertions run against LocalBackend
+// (default), Temporal, or per-session SQLite/Turso — proving the abstraction is swappable per-request.
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
-// On a Vercel preview the seed route is reached with the DEV_SEED_TOKEN secret (locally it's loopback-
-// gated and needs no token).
-const SEED_TOKEN = process.env.E2E_SEED_TOKEN;
-const seedOpts = SEED_TOKEN ? { headers: { "x-dev-seed-token": SEED_TOKEN } } : {};
 
 test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and prose", async ({
   page,
-  request,
+  seedHost,
 }) => {
   // Seed the host side (real HostRcRelay + scripted turn) through the selected broker backend.
-  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
-  expect(res.ok()).toBeTruthy();
-  const { pass } = (await res.json()) as { pass: string };
+  const { pass } = await seedHost();
 
   // Open the app with the pass in the URL fragment (never sent to the server), then connect.
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
@@ -66,9 +62,9 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   await page.locator("section.chat").screenshot({ path: "test-results/transcript-e2e.png" });
 
   // On the Temporal run, PROVE the frames really went through Temporal (not a silent fall-back to the
-  // server's default local backend): a relayChannel workflow must exist on the cluster. Use the
-  // Temporal CLI (the same binary with-temporal.sh located, passed as TEMPORAL_CLI) so the test needs
-  // no @temporalio/client dependency of its own.
+  // host's default local backend): a relayChannel workflow must exist on the cluster. Use the Temporal
+  // CLI (the same binary with-temporal.sh located, passed as TEMPORAL_CLI) so the test needs no
+  // @temporalio/client dependency of its own.
   if (BACKEND === "temporal") {
     const { execFileSync } = await import("node:child_process");
     const cli = process.env.TEMPORAL_CLI ?? "temporal";
@@ -83,24 +79,20 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   }
 });
 
-test("a typed prompt appears as a user turn (the inbound echo path)", async ({ page, request }) => {
-  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
-  expect(res.ok()).toBeTruthy(); // a 404 (server not in local mode) would otherwise fail confusingly
-  const { pass } = (await res.json()) as { pass: string };
+test("a typed prompt appears as a user turn (the inbound echo path)", async ({ page, seedHost }) => {
+  const { pass } = await seedHost();
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
 
-  // Type into the composer and send; the relay acks + echoes it back as a user pill on every device.
+  // Type into the composer and send; the host acks + echoes it back as a user pill on every device.
   await page.getByPlaceholder(/Send a prompt/).fill("ship it");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.locator(".row-user .pill", { hasText: "ship it" })).toBeVisible();
 });
 
-test("a slash command renders as a command chip, not a chat pill (#41)", async ({ page, request }) => {
-  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
-  expect(res.ok()).toBeTruthy();
-  const { pass } = (await res.json()) as { pass: string };
+test("a slash command renders as a command chip, not a chat pill (#41)", async ({ page, seedHost }) => {
+  const { pass } = await seedHost();
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
@@ -114,11 +106,9 @@ test("a slash command renders as a command chip, not a chat pill (#41)", async (
 
 test("the pass survives a browser refresh (it's restored from sessionStorage, not lost)", async ({
   page,
-  request,
+  seedHost,
 }) => {
-  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
-  expect(res.ok()).toBeTruthy();
-  const { pass } = (await res.json()) as { pass: string };
+  const { pass } = await seedHost();
   // Open via the #fragment and connect — page.tsx strips the fragment from the URL after reading it.
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
@@ -132,13 +122,10 @@ test("the pass survives a browser refresh (it's restored from sessionStorage, no
 
 test("a granted permission stays resolved after a reload — no re-prompt (#56/#57)", async ({
   page,
-  request,
+  seedHost,
 }) => {
-  // Seed WITH a permission card (perm=1). The optional backend switch coexists on the query string.
-  const permQp = `?perm=1${BACKEND ? `&backend=${BACKEND}` : ""}`;
-  const res = await request.post(`/api/dev/seed${permQp}`, seedOpts);
-  expect(res.ok()).toBeTruthy();
-  const { pass } = (await res.json()) as { pass: string };
+  // Seed WITH a permission card (perm), driven through the selected backend.
+  const { pass } = await seedHost({ perm: true });
 
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
@@ -167,12 +154,9 @@ test("a granted permission stays resolved after a reload — no re-prompt (#56/#
 
 test("an AskUserQuestion renders a question UI and submits answers (#42)", async ({
   page,
-  request,
+  seedHost,
 }) => {
-  const askqQp = `?askq=1${BACKEND ? `&backend=${BACKEND}` : ""}`;
-  const res = await request.post(`/api/dev/seed${askqQp}`, seedOpts);
-  expect(res.ok()).toBeTruthy();
-  const { pass } = (await res.json()) as { pass: string };
+  const { pass } = await seedHost({ askq: true });
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
@@ -189,10 +173,8 @@ test("an AskUserQuestion renders a question UI and submits answers (#42)", async
   await page.locator("section.chat").screenshot({ path: "test-results/askuserquestion-e2e.png" });
 });
 
-test("attaching a photo sends it and echoes in the transcript (#44)", async ({ page, request }) => {
-  const res = await request.post(`/api/dev/seed${qp}`, seedOpts);
-  expect(res.ok()).toBeTruthy();
-  const { pass } = (await res.json()) as { pass: string };
+test("attaching a photo sends it and echoes in the transcript (#44)", async ({ page, seedHost }) => {
+  const { pass } = await seedHost();
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
