@@ -255,16 +255,59 @@ export async function POST(req: Request): Promise<Response> {
   const withPerm = url.searchParams.get("perm") === "1"; // opt-in: inject a permission card (#56 e2e)
   const withAskq = url.searchParams.get("askq") === "1"; // opt-in: inject an AskUserQuestion (#42 e2e)
   for (const payload of scenario(withPerm, withAskq)) session.pushUpstream(payload);
-  // Run the pump under after(): on a serverless deployment (the vercel backend) the function FREEZES
-  // once the Response is returned, so a fire-and-forget serve() would never publish the turn — the
-  // session would announce but its transcript would be empty. after() keeps the function alive to
-  // drain the queue to the (durable) broker; locally it's equivalent. The catch surfaces a non-abort
-  // failure (dev-only) instead of a silently-empty transcript.
-  after(() =>
-    relay.serve(ac.signal).catch((e) => {
-      if (!ac.signal.aborted) console.error(`[dev/seed] serve(${sessionId}) failed:`, e);
-    }),
-  );
+  // Start the relay's pump NOW, while the request is still alive — it drains the queued scripted turn and
+  // publishes the content frames to the broker. serve() is a forever-loop (it also serves LIVE inbound
+  // afterwards), so we don't await it; we hand it to after() so it keeps running once the Response returns
+  // (a serverless deployment FREEZES the function after the Response — without after() the queue would
+  // never drain and the transcript would be empty). The catch surfaces a non-abort failure (dev-only).
+  const serving = relay.serve(ac.signal).catch((e) => {
+    if (!ac.signal.aborted) console.error(`[dev/seed] serve(${sessionId}) failed:`, e);
+  });
+  after(() => serving);
+  // …and WAIT (bounded) for the scripted frames to be durably published BEFORE returning the pass. The
+  // browser navigates the instant we return; on a cold preview + real Turso Cloud DB the async publish
+  // can lag the viewer's read, so it would render an EMPTY transcript (the web-preview-e2e flake). This is
+  // a DETERMINISTIC fix, not a timeout bump: we return only once the publish has quiesced. A non-durable
+  // backend (local) reports no frameCount → its publish is synchronous-fast → this no-ops.
+  await waitForSeededFrames(client, sessionId);
 
   return Response.json({ pass, sessionId, origin });
+}
+
+/** Poll the broker until the seeded turn's content frames are durably published — count > 0 and stable
+ *  across a few polls (the drain has quiesced) — or a bounded timeout. Gates on the cursor's `durable`
+ *  flag, NOT on a null count: a durable backend (sqlite/Turso) returns `frameCount: null` for a channel
+ *  that doesn't exist YET (no frame published), so on a COLD path the first poll is null and we MUST keep
+ *  waiting (returning there would preserve the very race we're fixing — codex). Only a NON-durable backend
+ *  (local, no maxSeq) skips the wait, where the publish is synchronous-fast. NEVER throws and never fails
+ *  the seed: on timeout it falls through to the browser's own assertion window. */
+async function waitForSeededFrames(client: BrokerClient, sessionId: string): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  const pollMs = 200;
+  // Count unchanged across this many polls (~800ms) ⇒ the publish has settled. The window is wider than
+  // the relay's inter-frame publish gap (sequential awaited posts, ~100-500ms on Turso) so it can't read
+  // a mid-drain pause as "done"; a single pathologically-slow post is the residual, caught by the
+  // browser's own 30s assertion window.
+  const stableTarget = 4;
+  let last = -1;
+  let stable = 0;
+  while (Date.now() < deadline) {
+    let cursor: { frameCount: number | null; durable: boolean } | null = null;
+    try {
+      cursor = await client.frameCountCursor(sessionId);
+    } catch {
+      // a transient broker error mid-publish — keep polling until the deadline
+    }
+    if (cursor !== null) {
+      if (!cursor.durable) return; // non-durable backend (local) — publish is synchronous, no wait needed
+      const count = cursor.frameCount ?? 0; // durable: null/0 = channel not populated YET → keep waiting
+      if (count > 0 && count === last) {
+        if (++stable >= stableTarget) return;
+      } else {
+        stable = 0;
+        last = count;
+      }
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
 }
