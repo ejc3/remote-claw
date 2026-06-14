@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { deriveIdentity, type Frame, type FrameHeader, type Identity } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
-import { runTmuxDriver } from "./driver.js";
+import { parseUserSession, runTmuxDriver } from "./driver.js";
 import type { TmuxExec, TmuxExecResult } from "./tmuxctl.js";
 import { projectSlug, subagentDir } from "./transcript.js";
 
@@ -189,7 +189,9 @@ describe("runTmuxDriver wiring", () => {
     const home = tmp("rc-driver-home-");
     const projDir = join(home, ".claude", "projects", projectSlug(cwd));
     await mkdir(projDir, { recursive: true });
-    const transcript = join(projDir, "sess.jsonl");
+    // The driver PINS --session-id, so the transcript is named by that id. Inject a deterministic id.
+    const PINNED = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const transcript = join(projDir, `${PINNED}.jsonl`);
 
     const spy = tmuxSpy();
     const ac = new AbortController();
@@ -212,6 +214,7 @@ describe("runTmuxDriver wiring", () => {
       {
         tmuxExec: spy.exec,
         home,
+        sessionId: PINNED,
         pollMs: 10,
         // A real (clamped) timer, NOT Promise.resolve: the capture + pane-watch loops await this, and a
         // pure-microtask resolve would busy-spin and starve the test's timers / fs I/O / inbound pump.
@@ -247,6 +250,9 @@ describe("runTmuxDriver wiring", () => {
     expect(spy.command()).toContain("--model");
     expect(spy.command()).toContain("env");
     expect(spy.command()).toContain("CLAUDE_CODE_CHILD_SESSION");
+    // The pinned id is passed as --session-id, so the transcript path is deterministic.
+    expect(spy.command()).toContain("--session-id");
+    expect(spy.command()).toContain(PINNED);
 
     // Child env: stub-gotcha ids + host secrets are SCRUBBED; an unrelated var survives; and the user's
     // proxy/CA vars PASS THROUGH (the driver never sets a proxy, so it must not strip the user's).
@@ -344,7 +350,8 @@ describe("runTmuxDriver wiring", () => {
     const home = tmp("rc-driver-sub-home-");
     const projDir = join(home, ".claude", "projects", projectSlug(cwd));
     await mkdir(projDir, { recursive: true });
-    const transcript = join(projDir, "subsess.jsonl");
+    const PINNED = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const transcript = join(projDir, `${PINNED}.jsonl`);
     const spy = tmuxSpy();
     const ac = new AbortController();
     let discovered: string | null = null;
@@ -362,6 +369,7 @@ describe("runTmuxDriver wiring", () => {
       {
         tmuxExec: spy.exec,
         home,
+        sessionId: PINNED,
         pollMs: 10,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
         paneWatchMs: 5,
@@ -421,7 +429,8 @@ describe("runTmuxDriver wiring", () => {
     const home = tmp("rc-driver-race-home-");
     const projDir = join(home, ".claude", "projects", projectSlug(cwd));
     await mkdir(projDir, { recursive: true });
-    const transcript = join(projDir, "racesess.jsonl");
+    const PINNED = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const transcript = join(projDir, `${PINNED}.jsonl`);
     const spy = tmuxSpy();
     const ac = new AbortController();
     let discovered: string | null = null;
@@ -439,6 +448,7 @@ describe("runTmuxDriver wiring", () => {
       {
         tmuxExec: spy.exec,
         home,
+        sessionId: PINNED,
         pollMs: 10,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
         paneWatchMs: 5,
@@ -483,6 +493,60 @@ describe("runTmuxDriver wiring", () => {
     }
   });
 
+  it("pins --session-id <uuid> and attaches to THAT exact transcript, ignoring a newer sibling", async () => {
+    // The driver mints a fresh v4 UUID and spawns `claude --session-id <uuid>`. Discovery then waits
+    // for OUR exact `<uuid>.jsonl` (authoritative) — a concurrent same-cwd sibling (a different, even
+    // NEWER, transcript) must NOT be mis-attached.
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-pin-cwd-");
+    const home = tmp("rc-pin-home-");
+    const projDir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(projDir, { recursive: true });
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    let discovered: string | null = null;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        onTranscript: (p) => {
+          discovered = p;
+        },
+      },
+    );
+    try {
+      await waitFor(() => spy.command().includes("--session-id"));
+      const uuid = spy.command().match(/--session-id'?\s+'?([0-9a-f-]{36})/)?.[1];
+      expect(uuid).toBeDefined();
+      // A NEWER sibling (different id) appears first — the pin must make us ignore it.
+      await writeFile(join(projDir, "99999999-9999-4999-8999-999999999999.jsonl"), "sibling\n");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(discovered).toBeNull(); // NOT attached to the sibling
+      // Now OUR pinned transcript appears → we attach to exactly it.
+      const pinnedPath = join(projDir, `${uuid}.jsonl`);
+      await writeFile(pinnedPath, "");
+      await waitFor(() => discovered !== null);
+      expect(discovered).toBe(pinnedPath);
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
   it("throws a clear error when tmux is absent", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();
@@ -503,5 +567,31 @@ describe("runTmuxDriver wiring", () => {
         { tmuxExec: failExec, sleep: () => Promise.resolve() },
       ),
     ).rejects.toThrow(/tmux not found/);
+  });
+});
+
+describe("parseUserSession — does the user already drive the session, and what id", () => {
+  const p = parseUserSession;
+  it("no session flags → not owned, no id (we pin)", () => {
+    expect(p([])).toEqual({ ownsSession: false, explicitId: null });
+    expect(p(["--model", "sonnet"])).toEqual({ ownsSession: false, explicitId: null });
+  });
+  it("explicit --resume / --session-id (space and = forms) → owned + the id", () => {
+    expect(p(["--resume", "abc"])).toEqual({ ownsSession: true, explicitId: "abc" });
+    expect(p(["--resume=abc"])).toEqual({ ownsSession: true, explicitId: "abc" });
+    expect(p(["--session-id", "xyz"])).toEqual({ ownsSession: true, explicitId: "xyz" });
+    expect(p(["--session-id=xyz"])).toEqual({ ownsSession: true, explicitId: "xyz" });
+    expect(p(["-r", "abc"])).toEqual({ ownsSession: true, explicitId: "abc" });
+  });
+  it("a picker (--continue / -c / bare --resume) → owned, id unknown", () => {
+    expect(p(["--continue"])).toEqual({ ownsSession: true, explicitId: null });
+    expect(p(["-c"])).toEqual({ ownsSession: true, explicitId: null });
+    expect(p(["--resume"])).toEqual({ ownsSession: true, explicitId: null }); // no following id
+  });
+  it("does NOT false-trigger on a flag VALUE that looks like a flag", () => {
+    // `--model=-r` is a single token, not the resume flag → not owned.
+    expect(p(["--model=-r"])).toEqual({ ownsSession: false, explicitId: null });
+    // tokens after `--` are literals, not options → ignored.
+    expect(p(["--", "-r", "--resume", "x"])).toEqual({ ownsSession: false, explicitId: null });
   });
 });

@@ -10,6 +10,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { assistantText } from "../session.js";
 import {
   findNewestTranscript,
+  findTranscriptById,
   inodeKey,
   lineTimestamp,
   listSubagentFiles,
@@ -48,6 +49,59 @@ describe("projectSlug / projectDir / transcriptPath", () => {
     expect(projectDir("/home/u/proj", "/HOME")).toBe("/HOME/.claude/projects/-home-u-proj");
     expect(transcriptPath("/home/u/proj", "cse_abc", "/HOME")).toBe(
       "/HOME/.claude/projects/-home-u-proj/cse_abc.jsonl",
+    );
+  });
+});
+
+describe("findTranscriptById — locate a pinned-id transcript", () => {
+  const ID = "11111111-1111-4111-8111-111111111111";
+
+  it("returns the direct computed path when the pinned file is at projectSlug(cwd)", async () => {
+    const home = tmp();
+    const cwd = "/work/proj";
+    const dir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${ID}.jsonl`), "");
+    expect(await findTranscriptById(cwd, ID, home)).toBe(join(dir, `${ID}.jsonl`));
+  });
+
+  it("SCANS other project dirs when the computed path differs (long-cwd hash) — finds it by id", async () => {
+    const home = tmp();
+    const cwd = "/a/very/long/path/that/claude/would/hash";
+    // The file lives under a DIFFERENT (hashed-suffix) project dir, NOT projectSlug(cwd).
+    const hashed = join(home, ".claude", "projects", "-a-very-long-path-…-9f8e7d6c");
+    await mkdir(hashed, { recursive: true });
+    await writeFile(join(hashed, `${ID}.jsonl`), "");
+    expect(await findTranscriptById(cwd, ID, home)).toBe(join(hashed, `${ID}.jsonl`));
+  });
+
+  it("returns null when the id is nowhere (not created yet / absent root)", async () => {
+    const home = tmp();
+    await mkdir(join(home, ".claude", "projects"), { recursive: true });
+    expect(await findTranscriptById("/x", ID, home)).toBeNull();
+    // missing projects root → null, never throws
+    expect(await findTranscriptById("/x", ID, join(home, "nonexistent"))).toBeNull();
+  });
+
+  it("ignores a NON-regular file (a directory named like a transcript)", async () => {
+    const home = tmp();
+    const cwd = "/work/proj";
+    const dir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(join(dir, `${ID}.jsonl`), { recursive: true }); // a DIRECTORY, not a file
+    expect(await findTranscriptById(cwd, ID, home)).toBeNull(); // isFile() rejects it
+  });
+
+  it("scanOtherDirs:false checks ONLY the direct path (the throttled poll)", async () => {
+    const home = tmp();
+    const cwd = "/a/long/path";
+    const hashed = join(home, ".claude", "projects", "-a-long-path-deadbeef"); // not projectSlug(cwd)
+    await mkdir(hashed, { recursive: true });
+    await writeFile(join(hashed, `${ID}.jsonl`), "");
+    // throttled poll: direct path misses, scan suppressed → null
+    expect(await findTranscriptById(cwd, ID, home, { scanOtherDirs: false })).toBeNull();
+    // un-throttled: the scan finds it
+    expect(await findTranscriptById(cwd, ID, home, { scanOtherDirs: true })).toBe(
+      join(hashed, `${ID}.jsonl`),
     );
   });
 });
