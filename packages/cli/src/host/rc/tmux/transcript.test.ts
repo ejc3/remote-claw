@@ -234,7 +234,46 @@ describe("mergeBatchByTimestamp — interleave main + sub-agent lines chronologi
     expect(merged.map((m) => JSON.parse(m.line).uuid)).toEqual(["main-a", "sub-b"]);
   });
 
-  it("a missing-timestamp line sorts to the front (it's a dropped non-message type downstream anyway)", () => {
+  it("interleaves TWO sub-agent streams + main, keyed per parentTaskId", () => {
+    // Two concurrent sub-agents (parentTaskId A, B) plus the main stream — every line carries a timestamp;
+    // the merge must interleave all three chronologically and preserve each sub line's nesting key.
+    const merged = mergeBatchByTimestamp(
+      [
+        line("2026-06-07T00:00:00.000Z", "agent-uses"),
+        line("2026-06-07T00:00:09.000Z", "parent-answer"),
+      ],
+      [
+        { line: line("2026-06-07T00:00:02.000Z", "alpha-1"), parentTaskId: "A" },
+        { line: line("2026-06-07T00:00:06.000Z", "alpha-2"), parentTaskId: "A" },
+        { line: line("2026-06-07T00:00:04.000Z", "beta-1"), parentTaskId: "B" },
+      ],
+    );
+    expect(merged.map((m) => JSON.parse(m.line).uuid)).toEqual([
+      "agent-uses",
+      "alpha-1",
+      "beta-1",
+      "alpha-2",
+      "parent-answer",
+    ]);
+    expect(merged.find((m) => JSON.parse(m.line).uuid === "beta-1")?.parentTaskId).toBe("B");
+  });
+
+  it("carries a missing-timestamp MESSAGE line forward to its stream predecessor (no front-jump, not dropped)", () => {
+    // A real assistant line that lacks a `timestamp` must NOT jump to the batch front and must NOT be
+    // lost — it inherits the previous MAIN-stream timestamp (carry-forward) and stays right after it.
+    const noTs = JSON.stringify({
+      type: "assistant",
+      uuid: "main-b-no-ts",
+      message: { role: "assistant", content: [] },
+    });
+    const merged = mergeBatchByTimestamp(
+      [line("2026-06-07T00:00:00.000Z", "main-a"), noTs], // main: a@t0, b@(missing → carries t0)
+      [{ line: line("2026-06-07T00:00:05.000Z", "sub-c"), parentTaskId: "X" }], // sub: c@t5
+    );
+    expect(merged.map((m) => JSON.parse(m.line).uuid)).toEqual(["main-a", "main-b-no-ts", "sub-c"]);
+  });
+
+  it("a LEADING missing-timestamp line (nothing to carry) sorts to the front; it's a dropped non-message type", () => {
     const merged = mergeBatchByTimestamp(
       [JSON.stringify({ type: "file-history-snapshot" }), line("2026-06-07T00:00:01.000Z", "real")],
       [],

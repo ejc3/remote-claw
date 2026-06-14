@@ -224,8 +224,10 @@ export function transcriptToPayload(line: string): UpstreamPayload | null {
 
 /** A transcript line's ISO-8601 `timestamp` (e.g. `2026-06-07T18:18:59.563Z`), used to MERGE the main
  *  transcript with the separate sub-agent files into one chronological stream. Returns "" when the field
- *  is absent or the line is unparseable — those are non-message lines the reshape drops anyway, so where
- *  they sort is moot. ISO-8601 UTC (`…Z`) compares correctly as a plain string. Never throws. */
+ *  is absent or the line is unparseable. ISO-8601 UTC (`…Z`) compares correctly as a plain string. In
+ *  real claude transcripts only non-message lines (which `transcriptToPayload` drops) omit it — but the
+ *  merge does NOT rely on that: it carries a timestamp-less line forward to its stream predecessor's time
+ *  (see `mergeBatchByTimestamp`), so even a message line that somehow lacked one stays in place. Never throws. */
 export function lineTimestamp(line: string): string {
   try {
     const ts = (JSON.parse(line) as { timestamp?: unknown }).timestamp;
@@ -241,8 +243,14 @@ export function lineTimestamp(line: string): string {
  *  (in the main file) BEFORE the sub-agent output that must nest inside that Agent turn. Re-interleaving
  *  by timestamp fixes the backfill/attach drain (a whole history read at once) and a sub-agent that
  *  finishes within one poll. Stable on equal timestamps — main lines (listed first) keep priority,
- *  matching the prior main-before-sub tiebreak. A line with no parseable timestamp ("") sorts to the
- *  front, but such non-message lines are dropped by transcriptToPayload, so their slot is moot. Pure. */
+ *  matching the prior main-before-sub tiebreak.
+ *
+ *  Robust to a missing timestamp: each stream (main, and each sub-agent file keyed by parentTaskId) is
+ *  internally chronological, so a line that lacks a parseable `timestamp` CARRIES FORWARD the last one
+ *  seen earlier in its OWN stream — it stays adjacent to its predecessor instead of jumping to the batch
+ *  front. (In real claude only dropped non-message lines lack a timestamp, but we don't depend on that:
+ *  a corrupt/torn line, or a future claude that omitted one on a message line, still sequences correctly.)
+ *  A stream whose very first line has no timestamp has nothing to inherit and falls back to "". Pure. */
 export function mergeBatchByTimestamp(
   mainLines: readonly string[],
   subLines: readonly { line: string; parentTaskId: string }[],
@@ -251,8 +259,17 @@ export function mergeBatchByTimestamp(
     ...mainLines.map((line) => ({ line, parentTaskId: undefined })),
     ...subLines,
   ];
+  // Per-stream carry-forward. Key "" is the main stream; sub streams key on their parentTaskId (always a
+  // non-empty toolUseId, so it never collides with main). items are in stream order (main then each sub
+  // file contiguously), so processing in array order makes the carry correct within each stream.
+  const lastTs = new Map<string, string>();
   return items
-    .map((item, idx) => ({ ...item, idx, ts: lineTimestamp(item.line) }))
+    .map((item, idx) => {
+      const streamKey = item.parentTaskId ?? "";
+      const own = lineTimestamp(item.line);
+      if (own !== "") lastTs.set(streamKey, own);
+      return { ...item, idx, ts: own !== "" ? own : (lastTs.get(streamKey) ?? "") };
+    })
     .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.idx - b.idx))
     .map(({ line, parentTaskId }) => ({ line, parentTaskId }));
 }
