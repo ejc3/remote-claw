@@ -25,3 +25,37 @@ export {
   Session,
   type SessionOptions,
 } from "./session.js";
+// The tmux driver (Track B): drive a plain claude in a tmux pane, bridge via the transcript JSONL.
+export {
+  buildChildEnv,
+  runTmuxDriver,
+  shellQuoteCommand,
+  TMUX_CAPABILITIES,
+  type TmuxDriverDeps,
+  tmuxDriver,
+} from "./tmux/driver.js";
+export {
+  downstreamUserText,
+  INJECT_BUFFER,
+  injectUserText,
+  isInterrupt,
+  PASTE_SETTLE_MS,
+  runInjectPump,
+} from "./tmux/inject.js";
+export { IDLE_DEBOUNCE_MS, nodeTimer, StatusTracker, type Timer } from "./tmux/status.js";
+export {
+  realTmuxExec,
+  TmuxCtl,
+  TmuxError,
+  type TmuxExec,
+  type TmuxExecResult,
+} from "./tmux/tmuxctl.js";
+export {
+  findNewestTranscript,
+  projectDir,
+  projectSlug,
+  splitLines,
+  TranscriptTailer,
+  transcriptPath,
+  transcriptToPayload,
+} from "./tmux/transcript.js";

@@ -38,6 +38,9 @@ export interface DriverCapabilities {
 export interface DriverContext {
   /** Args forwarded verbatim to the harness binary. */
   harnessArgs: string[];
+  /** The harness binary to spawn (resolved from --rc claudeBin / RC_CLAUDE_BIN / "claude"). Drivers
+   *  that spawn a child (tmux) use this; the MITM driver carries its own spawn via `extra`. */
+  harnessBin?: string;
   /** This machine's identity (its bus + session keys). identity.identityId feeds HostRcRelay. */
   identity: Identity;
   /** The broker origin (`--rc-app` / RC_APP); its /api is the relay broker. */
