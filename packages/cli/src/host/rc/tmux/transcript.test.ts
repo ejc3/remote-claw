@@ -11,10 +11,15 @@ import { assistantText } from "../session.js";
 import {
   findNewestTranscript,
   inodeKey,
+  lineTimestamp,
+  listSubagentFiles,
+  mergeBatchByTimestamp,
   projectDir,
   projectSlug,
+  readAgentTaskId,
   snapshotTranscriptInodes,
   splitLines,
+  subagentDir,
   TranscriptTailer,
   transcriptPath,
   transcriptToPayload,
@@ -159,6 +164,122 @@ describe("transcriptToPayload — the one reshape", () => {
     expect(transcriptToPayload("42")).toBeNull(); // valid JSON, not an object
     expect(transcriptToPayload("null")).toBeNull();
   });
+
+  it("reshapes a real SUB-AGENT file line (assistant, isSidechain) like a normal assistant line", () => {
+    // A sub-agent file line carries agentId/isSidechain but the SAME message envelope; the driver
+    // overlays parent_tool_use_id from the .meta.json (not present on the line itself).
+    const line = JSON.stringify({
+      type: "assistant",
+      uuid: "sub-asst-1",
+      agentId: "acca154f08974f322",
+      isSidechain: true,
+      message: { role: "assistant", content: [{ type: "text", text: "sub-agent says hi" }] },
+    });
+    const p = transcriptToPayload(line);
+    expect(p?.type).toBe("assistant");
+    expect(p?.uuid).toBe("sub-asst-1");
+    expect((p?.message?.content as Array<{ text?: string }>)[0]?.text).toBe("sub-agent says hi");
+  });
+});
+
+describe("lineTimestamp", () => {
+  it("reads the ISO-8601 timestamp; '' when absent/unparseable", () => {
+    expect(
+      lineTimestamp(JSON.stringify({ type: "assistant", timestamp: "2026-06-07T18:18:59.563Z" })),
+    ).toBe("2026-06-07T18:18:59.563Z");
+    expect(lineTimestamp(JSON.stringify({ type: "assistant" }))).toBe(""); // no timestamp field
+    expect(lineTimestamp(JSON.stringify({ timestamp: 123 }))).toBe(""); // non-string
+    expect(lineTimestamp("{not json")).toBe(""); // unparseable
+  });
+});
+
+describe("mergeBatchByTimestamp — interleave main + sub-agent lines chronologically", () => {
+  const line = (ts: string, uuid: string) =>
+    JSON.stringify({
+      type: "assistant",
+      uuid,
+      timestamp: ts,
+      message: { role: "assistant", content: [] },
+    });
+
+  it("sequences a sub-agent line BETWEEN the parent Agent's tool_use and its later completion (the bug fix)", () => {
+    // The mixed-batch case: the MAIN file already holds the whole Agent turn (tool_use @ t0 → final
+    // answer @ t5) and the SUB file holds the sub-agent's work @ t2. Draining "all main then all sub"
+    // would put the answer (t5) before the sub line (t2); merging by timestamp restores nesting order.
+    const mainLines = [
+      line("2026-06-07T00:00:00.000Z", "agent-tooluse"),
+      line("2026-06-07T00:00:05.000Z", "parent-answer"),
+    ];
+    const subLines = [
+      { line: line("2026-06-07T00:00:02.000Z", "sub-work"), parentTaskId: "toolu_AGENT" },
+    ];
+    const merged = mergeBatchByTimestamp(mainLines, subLines);
+    const uuids = merged.map((m) => JSON.parse(m.line).uuid);
+    expect(uuids).toEqual(["agent-tooluse", "sub-work", "parent-answer"]); // chronological, sub nested mid-turn
+    // The sub line keeps its nesting key; the main lines carry none.
+    expect(merged.find((m) => JSON.parse(m.line).uuid === "sub-work")?.parentTaskId).toBe(
+      "toolu_AGENT",
+    );
+    expect(
+      merged.find((m) => JSON.parse(m.line).uuid === "parent-answer")?.parentTaskId,
+    ).toBeUndefined();
+  });
+
+  it("is stable on an equal timestamp — main (listed first) keeps priority", () => {
+    const ts = "2026-06-07T00:00:01.000Z";
+    const merged = mergeBatchByTimestamp(
+      [line(ts, "main-a")],
+      [{ line: line(ts, "sub-b"), parentTaskId: "X" }],
+    );
+    expect(merged.map((m) => JSON.parse(m.line).uuid)).toEqual(["main-a", "sub-b"]);
+  });
+
+  it("interleaves TWO sub-agent streams + main, keyed per parentTaskId", () => {
+    // Two concurrent sub-agents (parentTaskId A, B) plus the main stream — every line carries a timestamp;
+    // the merge must interleave all three chronologically and preserve each sub line's nesting key.
+    const merged = mergeBatchByTimestamp(
+      [
+        line("2026-06-07T00:00:00.000Z", "agent-uses"),
+        line("2026-06-07T00:00:09.000Z", "parent-answer"),
+      ],
+      [
+        { line: line("2026-06-07T00:00:02.000Z", "alpha-1"), parentTaskId: "A" },
+        { line: line("2026-06-07T00:00:06.000Z", "alpha-2"), parentTaskId: "A" },
+        { line: line("2026-06-07T00:00:04.000Z", "beta-1"), parentTaskId: "B" },
+      ],
+    );
+    expect(merged.map((m) => JSON.parse(m.line).uuid)).toEqual([
+      "agent-uses",
+      "alpha-1",
+      "beta-1",
+      "alpha-2",
+      "parent-answer",
+    ]);
+    expect(merged.find((m) => JSON.parse(m.line).uuid === "beta-1")?.parentTaskId).toBe("B");
+  });
+
+  it("carries a missing-timestamp MESSAGE line forward to its stream predecessor (no front-jump, not dropped)", () => {
+    // A real assistant line that lacks a `timestamp` must NOT jump to the batch front and must NOT be
+    // lost — it inherits the previous MAIN-stream timestamp (carry-forward) and stays right after it.
+    const noTs = JSON.stringify({
+      type: "assistant",
+      uuid: "main-b-no-ts",
+      message: { role: "assistant", content: [] },
+    });
+    const merged = mergeBatchByTimestamp(
+      [line("2026-06-07T00:00:00.000Z", "main-a"), noTs], // main: a@t0, b@(missing → carries t0)
+      [{ line: line("2026-06-07T00:00:05.000Z", "sub-c"), parentTaskId: "X" }], // sub: c@t5
+    );
+    expect(merged.map((m) => JSON.parse(m.line).uuid)).toEqual(["main-a", "main-b-no-ts", "sub-c"]);
+  });
+
+  it("a LEADING missing-timestamp line (nothing to carry) sorts to the front; it's a dropped non-message type", () => {
+    const merged = mergeBatchByTimestamp(
+      [JSON.stringify({ type: "file-history-snapshot" }), line("2026-06-07T00:00:01.000Z", "real")],
+      [],
+    );
+    expect(JSON.parse(merged[1]?.line ?? "{}").uuid).toBe("real"); // the timestamped real line stays last
+  });
 });
 
 describe("splitLines — partial-line buffering", () => {
@@ -294,6 +415,41 @@ describe("findNewestTranscript", () => {
     const base = Date.now(); // spawn happens AFTER the stale file was created
     await appendFile(stale, "still being written\n"); // mtime is fresh, but birthtime predates spawn
     expect(await findNewestTranscript(dir, base, { slackMs: 5 })).toBeNull();
+  });
+});
+
+describe("subagents/: subagentDir / listSubagentFiles / readAgentTaskId", () => {
+  it("derives the sibling subagents/ dir from a transcript path", () => {
+    expect(subagentDir("/home/u/.claude/projects/-p/abc123.jsonl")).toBe(
+      "/home/u/.claude/projects/-p/abc123/subagents",
+    );
+  });
+
+  it("lists only agent-*.jsonl (not .meta.json) as full paths; [] when the dir is absent", async () => {
+    const dir = join(tmp(), "sub");
+    expect(await listSubagentFiles(dir)).toEqual([]); // dir doesn't exist yet (no sub-agent spawned)
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "agent-aaa.jsonl"), "");
+    await writeFile(join(dir, "agent-aaa.meta.json"), "{}");
+    await writeFile(join(dir, "agent-bbb.jsonl"), "");
+    await writeFile(join(dir, "notes.jsonl"), ""); // not an agent file
+    const found = await listSubagentFiles(dir);
+    expect(found.sort()).toEqual([join(dir, "agent-aaa.jsonl"), join(dir, "agent-bbb.jsonl")]);
+  });
+
+  it("reads the spawning Agent's toolUseId from the sibling .meta.json (null if absent/bad)", async () => {
+    const dir = join(tmp(), "meta");
+    await mkdir(dir, { recursive: true });
+    const agent = join(dir, "agent-acca.jsonl");
+    expect(await readAgentTaskId(agent)).toBeNull(); // no sidecar yet
+    await writeFile(
+      join(dir, "agent-acca.meta.json"),
+      JSON.stringify({ agentType: "general-purpose", description: "x", toolUseId: "toolu_TASK" }),
+    );
+    expect(await readAgentTaskId(agent)).toBe("toolu_TASK");
+    // a sidecar lacking toolUseId → null (we won't surface a sub-agent line we can't nest)
+    await writeFile(join(dir, "agent-acca.meta.json"), JSON.stringify({ description: "no link" }));
+    expect(await readAgentTaskId(agent)).toBeNull();
   });
 });
 

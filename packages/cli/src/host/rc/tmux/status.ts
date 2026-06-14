@@ -84,8 +84,13 @@ export class StatusTracker {
   }
 
   /** Observe one captured transcript payload (already reshaped). Updates the open-tool set, flips to
-   *  running, and (re)arms the idle debounce. Pass the SAME shape `transcriptToPayload` returns. */
-  onLine(payload: { type?: string; message?: { content?: unknown } }): void {
+   *  running, and (re)arms the idle debounce. Pass the SAME shape `transcriptToPayload` returns
+   *  (including `parent_tool_use_id` for a nested sub-agent line). */
+  onLine(payload: {
+    type?: string;
+    message?: { content?: unknown };
+    parent_tool_use_id?: string | null;
+  }): void {
     this.#lastLineAt = this.#now();
     this.#trackTools(payload);
     this.#setStatus("running");
@@ -93,10 +98,17 @@ export class StatusTracker {
   }
 
   /** Update the open-tool set from a payload's content blocks: an assistant `tool_use` opens an id; a
-   *  user `tool_result` closes the id it answers. ALSO: a user message carrying TEXT (a fresh prompt or
-   *  an interrupt marker like "[Request interrupted]") is a turn boundary — any tool_use still open from
-   *  a prior turn was abandoned, so clear them rather than suppressing idle forever (review wf#2). */
-  #trackTools(payload: { type?: string; message?: { content?: unknown } }): void {
+   *  user `tool_result` closes the id it answers. ALSO: a TOP-LEVEL user message carrying TEXT (a fresh
+   *  prompt or an interrupt marker like "[Request interrupted]") is a turn boundary — any tool_use still
+   *  open from a prior turn was abandoned, so clear them rather than suppressing idle forever (review
+   *  wf#2). A NESTED sub-agent user message (`parent_tool_use_id` set) is NOT a turn boundary — clearing
+   *  on it would wipe the parent's still-open Agent/Task tool and flip the host to idle mid-turn while the
+   *  sub-agent runs (codex/code-review finding). */
+  #trackTools(payload: {
+    type?: string;
+    message?: { content?: unknown };
+    parent_tool_use_id?: string | null;
+  }): void {
     const content = payload.message?.content;
     if (!Array.isArray(content)) return;
     let userText = false;
@@ -115,7 +127,10 @@ export class StatusTracker {
         userText = true;
       }
     }
-    if (payload.type === "user" && userText) this.#openTools.clear(); // new turn → drop orphaned tools
+    // Only a TOP-LEVEL user prompt is a turn boundary (a nested sub-agent prompt must not wipe the
+    // parent's open Agent/Task tool — that would idle the host mid-turn).
+    const topLevel = payload.parent_tool_use_id == null;
+    if (payload.type === "user" && userText && topLevel) this.#openTools.clear();
   }
 
   /** (Re)arm the idle debounce. On fire: go idle if no tool is open; if a tool IS open but the

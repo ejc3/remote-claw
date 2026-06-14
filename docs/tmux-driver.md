@@ -111,12 +111,26 @@ Then `s.pushUpstream(payload)` — and the relay's outbound pump does the rest, 
 > `file-history-snapshot`, `queue-operation`, `agent-name`). The relay renders none of them, so the
 > driver drops them at the source rather than handing the relay frames it would silently discard.
 
-> **Sub-agent nesting caveat (grounded).** In the *local transcript*, `parentToolUseID` rides
-> `progress` lines (dropped), **not** assistant/user lines — sub-agent output is marked with
-> `isSidechain`/`parentUuid` instead. So the `parentToolUseID → parent_tool_use_id` rename is a
-> *defensive* pass-through that rarely fires today: in v1, Task sub-agent output relays **flat**
-> (un-nested), which is correct but not nested under the Task. Resolving `isSidechain` → the spawning
-> Task's `tool_use_id` is deferred to B2.
+> **Sub-agents (Agent/Task) — captured + NESTED (grounded, live-verified on claude 2.1.177).** A
+> sub-agent's transcript is written to a SEPARATE file `<dir>/<id>/subagents/agent-<agentId>.jsonl` (+ a
+> `.meta.json` sidecar), NOT the main transcript. The driver **tails those files**; each line reshapes
+> through the same `transcriptToPayload`, and the driver overlays `parent_tool_use_id` = the spawning
+> Agent's `tool_use_id` (read from the sidecar's `toolUseId` via `readAgentTaskId`). The relay tags those
+> `*_sub` and the viewer indents them under the Agent — exactly how native Remote Control relays
+> sub-agent frames, so sub-agent work does NOT flood the main transcript. A file is tailed only once its
+> `.meta.json` link is readable, so every surfaced sub-agent line is guaranteed to nest (never flat).
+> Because the main transcript and each sub-agent file are SEPARATE append streams, a drain that picks up
+> both at once (the backfill/attach read of a whole history, or a sub-agent that finishes inside one
+> poll) **interleaves them by each line's `timestamp`** (`mergeBatchByTimestamp`) before emitting — else
+> the parent Agent's completion (in the main file) would be sequenced before the sub-agent output it
+> nests, and the viewer (which renders by sequence) would show the sub-agent work *after* the parent's
+> answer. Steady-state (sub output trickles in across polls while the parent blocks on the Task) never
+> co-batches a completion with its sub lines, so it stays on the zero-overhead fast path.
+> The sidecar `toolUseId` matches the Agent tool_use in the main transcript (verified live). NOTE a
+> version difference: claude 2.1.63 instead streamed sub-agent messages as `agent_progress` `progress`
+> lines in the MAIN transcript; 2.1.177 (current) uses the separate `subagents/` files + `.meta.json`,
+> which is what the driver targets. The plain `parentToolUseID` on a top-level assistant/user line is
+> still renamed defensively.
 
 ### 2.3 Inject — downstream `user`/verbs → the pane
 
@@ -292,8 +306,11 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
 
 ## 7. Risks (summary)
 
-1. **Sub-agent nesting** relays flat in v1 (local transcript marks sub-agents with `isSidechain`, not
-   `parentToolUseID`); resolve in B2. *Biggest fidelity gap vs MITM.*
+1. **Sub-agents (Agent/Task) — captured + nested** by tailing the `subagents/agent-*.jsonl` files and
+   reading each `.meta.json` for the spawning Agent's `tool_use_id` (§2.2): sub-agent output is relayed
+   `parent_tool_use_id`-tagged so the viewer indents it under the Agent, matching native RC (no longer
+   dropped, and not flooding the main transcript). Live-verified on claude 2.1.177. Residual: a sub-agent
+   whose `.meta.json` never becomes readable would not be surfaced (none observed).
 2. **Silent shape drift** — `mapUpstreamItems` drops off-shape frames; guarded by real-line contract
    tests.
 3. **Status is heuristic** (append timing, not claude's `worker_status`); debounced. An orphaned

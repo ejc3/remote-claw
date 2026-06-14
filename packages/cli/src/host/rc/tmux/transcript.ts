@@ -2,15 +2,22 @@
 // `UpstreamPayload`s the relay already understands. The decisive fact (verified against real
 // transcripts, claude 2.1.63–2.1.177): the `message.content` blocks in
 // `~/.claude/projects/<slug(cwd)>/<sessionId>.jsonl` are BYTE-IDENTICAL to what `mapUpstreamItems`
-// destructures. So the ONLY reshape is `parentToolUseID → parent_tool_use_id`; everything else passes
-// through, and the relay/broker/viewer are unchanged.
+// destructures. So a top-level assistant/user/system line passes through with the sole rename
+// `parentToolUseID → parent_tool_use_id`, and the relay/broker/viewer are unchanged.
+//
+// SUB-AGENTS (Agent/Task): claude writes a sub-agent's transcript to a SEPARATE file
+// `<dir>/<id>/subagents/agent-<agentId>.jsonl` (+ a `.meta.json` sidecar) — NOT the main transcript
+// (verified live, claude 2.1.177). The driver tails those files; each line reshapes through the SAME
+// `transcriptToPayload`, and the driver overlays `parent_tool_use_id` = the spawning Agent's tool_use_id
+// (read from the sidecar's `toolUseId` via `readAgentTaskId`) so the viewer NESTS sub-agent work under
+// the Agent — like native Remote Control — instead of dropping it or flooding the main view.
 //
 // The pure parts (slug, reshape, line-splitting) are unit-tested with no fs; the tailer is a thin
-// byte-offset reader over them. claude writes COMPLETE messages one-per-line (not a growing message),
-// so per-line `pushUpstream` is correct — but a re-read after a watch/poll race can re-emit a line, so
-// the caller dedups by `uuid` (review #2: re-pushing the same uuid does NOT dedup at the relay).
+// byte-offset reader over them. claude writes COMPLETE messages one-per-line (not a growing message), so
+// per-line `pushUpstream` is correct — but a re-read after a watch/poll race can re-emit a line, so the
+// caller dedups by `uuid` (review #2: re-pushing the same uuid does NOT dedup at the relay).
 
-import { open, readdir, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { UpstreamPayload } from "../driver.js";
@@ -130,12 +137,57 @@ export async function findNewestTranscript(
 }
 
 /**
- * The ONE reshape (review-grounded): parse a transcript line and project it onto an `UpstreamPayload`.
+ * Claude writes a sub-agent (Agent/Task) transcript to a SEPARATE file under
+ * `<dir>/<sessionId>/subagents/agent-<agentId>.jsonl` (+ a sibling `.meta.json`) — NOT the main
+ * `<sessionId>.jsonl`. Given the MAIN transcript path, this returns its sibling `subagents/` dir. The
+ * driver tails the `agent-*.jsonl` files here so sub-agent output is captured (a tailer following only
+ * the main file misses it — verified live against claude 2.1.177). The dir doesn't exist until a
+ * sub-agent spawns. Pure.
+ */
+export function subagentDir(transcriptPath: string): string {
+  return join(transcriptPath.replace(/\.jsonl$/, ""), "subagents");
+}
+
+/** List the sub-agent transcript files (`agent-*.jsonl`, NOT the `.meta.json` sidecars) in `subDir`, as
+ *  FULL paths. Returns [] when the dir doesn't exist yet (no sub-agent spawned). Never throws. */
+export async function listSubagentFiles(subDir: string): Promise<string[]> {
+  try {
+    return (await readdir(subDir))
+      .filter((n) => n.startsWith("agent-") && n.endsWith(".jsonl"))
+      .map((n) => join(subDir, n));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Read the spawning Agent/Task's `tool_use_id` for a sub-agent file from its sibling `.meta.json`
+ * (`agent-<id>.jsonl` → `agent-<id>.meta.json`, e.g. `{"agentType","description","toolUseId"}`). This is
+ * the DETERMINISTIC, spawn-time link that lets us nest the sub-agent's output under its Agent row in the
+ * viewer (verified: the meta's `toolUseId` matches the Agent tool_use in the main transcript). Returns
+ * null if the sidecar is absent/unreadable/lacks `toolUseId` (the caller then waits — don't surface a
+ * sub-agent line we can't nest). Never throws.
+ */
+export async function readAgentTaskId(agentJsonlPath: string): Promise<string | null> {
+  const metaPath = agentJsonlPath.replace(/\.jsonl$/, ".meta.json");
+  try {
+    const parsed: unknown = JSON.parse(await readFile(metaPath, "utf8"));
+    const id = (parsed as { toolUseId?: unknown })?.toolUseId;
+    return typeof id === "string" && id !== "" ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The reshape (review-grounded): parse a transcript line and project it onto an `UpstreamPayload`.
  * Keeps only `type ∈ {assistant, user, system}` (the relay renders nothing else — real transcripts also
  * carry `progress`, `pr-link`, `bridge-session`, `ai-title`, `mode`, `permission-mode`, `attachment`,
- * `file-history-snapshot`, `queue-operation`, `agent-name`, …, all dropped here). `message.content`
- * blocks pass through UNCHANGED; the sole rename is `parentToolUseID → parent_tool_use_id`. Returns
- * null for a dropped type, a blank line, or unparseable JSON — so the tailer can ignore it.
+ * `file-history-snapshot`, `queue-operation`, `agent-name`, `last-prompt`, …, all dropped here).
+ * `message.content` blocks pass through UNCHANGED; the sole rename is `parentToolUseID →
+ * parent_tool_use_id`. (Sub-agent files run through this SAME reshape; the driver overlays the nesting
+ * `parent_tool_use_id` from the file's `.meta.json` — see readAgentTaskId.) Returns null for a dropped
+ * type, a blank line, or unparseable JSON — so the tailer can ignore it.
  */
 export function transcriptToPayload(line: string): UpstreamPayload | null {
   const trimmed = line.trim();
@@ -168,6 +220,58 @@ export function transcriptToPayload(line: string): UpstreamPayload | null {
     if (typeof o.tool_use_id === "string") payload.tool_use_id = o.tool_use_id;
   }
   return payload;
+}
+
+/** A transcript line's ISO-8601 `timestamp` (e.g. `2026-06-07T18:18:59.563Z`), used to MERGE the main
+ *  transcript with the separate sub-agent files into one chronological stream. Returns "" when the field
+ *  is absent or the line is unparseable. ISO-8601 UTC (`…Z`) compares correctly as a plain string. In
+ *  real claude transcripts only non-message lines (which `transcriptToPayload` drops) omit it — but the
+ *  merge does NOT rely on that: it carries a timestamp-less line forward to its stream predecessor's time
+ *  (see `mergeBatchByTimestamp`), so even a message line that somehow lacked one stays in place. Never throws. */
+export function lineTimestamp(line: string): string {
+  try {
+    const ts = (JSON.parse(line) as { timestamp?: unknown }).timestamp;
+    return typeof ts === "string" ? ts : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Merge a drain batch's main-transcript lines with its sub-agent lines into ONE chronological stream,
+ *  ordered by each line's `timestamp`. The main transcript and every sub-agent file are SEPARATE
+ *  append-only streams, so emitting "all main, then all sub" can sequence a parent Agent's completion
+ *  (in the main file) BEFORE the sub-agent output that must nest inside that Agent turn. Re-interleaving
+ *  by timestamp fixes the backfill/attach drain (a whole history read at once) and a sub-agent that
+ *  finishes within one poll. Stable on equal timestamps — main lines (listed first) keep priority,
+ *  matching the prior main-before-sub tiebreak.
+ *
+ *  Robust to a missing timestamp: each stream (main, and each sub-agent file keyed by parentTaskId) is
+ *  internally chronological, so a line that lacks a parseable `timestamp` CARRIES FORWARD the last one
+ *  seen earlier in its OWN stream — it stays adjacent to its predecessor instead of jumping to the batch
+ *  front. (In real claude only dropped non-message lines lack a timestamp, but we don't depend on that:
+ *  a corrupt/torn line, or a future claude that omitted one on a message line, still sequences correctly.)
+ *  A stream whose very first line has no timestamp has nothing to inherit and falls back to "". Pure. */
+export function mergeBatchByTimestamp(
+  mainLines: readonly string[],
+  subLines: readonly { line: string; parentTaskId: string }[],
+): { line: string; parentTaskId: string | undefined }[] {
+  const items: { line: string; parentTaskId: string | undefined }[] = [
+    ...mainLines.map((line) => ({ line, parentTaskId: undefined })),
+    ...subLines,
+  ];
+  // Per-stream carry-forward. Key "" is the main stream; sub streams key on their parentTaskId (always a
+  // non-empty toolUseId, so it never collides with main). items are in stream order (main then each sub
+  // file contiguously), so processing in array order makes the carry correct within each stream.
+  const lastTs = new Map<string, string>();
+  return items
+    .map((item, idx) => {
+      const streamKey = item.parentTaskId ?? "";
+      const own = lineTimestamp(item.line);
+      if (own !== "") lastTs.set(streamKey, own);
+      return { ...item, idx, ts: own !== "" ? own : (lastTs.get(streamKey) ?? "") };
+    })
+    .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.idx - b.idx))
+    .map(({ line, parentTaskId }) => ({ line, parentTaskId }));
 }
 
 /** Split a freshly-read chunk into complete lines + a trailing partial. Pure, so the partial-line
