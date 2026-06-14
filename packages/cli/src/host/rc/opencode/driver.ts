@@ -642,10 +642,17 @@ export class OpencodeDriver implements Driver {
       // Slash-command routing (documented): `/compact` runs OpenCode's native summarize endpoint rather
       // than feeding the literal string to the model. Other slash commands pass through as a prompt.
       if (text.trim() === "/compact") {
-        await this.#client.summarize(ocSessionId, this.#activeModel);
+        // Dispatch summarize WITHOUT awaiting it (codex review): OpenCode's summarize endpoint runs the
+        // whole compaction turn server-side before returning, so awaiting it here would BLOCK the serial
+        // inject pump — a queued `interrupt` couldn't fire until compaction finished — and delay the ack,
+        // so a reconnect could replay `/compact` and start a SECOND compaction. Fire-and-forget (errors
+        // logged); the compaction's output arrives over the SSE like any turn, and the pump stays free.
         session.workerStatus = "running";
         session.wake();
-        this.#tracer.debug("routed /compact → summarize");
+        this.#client
+          .summarize(ocSessionId, this.#activeModel)
+          .catch((e) => this.#tracer.warn("summarize failed", { error: String(e) }));
+        this.#tracer.debug("routed /compact → summarize (dispatched)");
         return;
       }
       // Record the text BEFORE the POST so its OpenCode user-message echo (which can arrive on the SSE

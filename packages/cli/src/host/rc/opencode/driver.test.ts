@@ -688,6 +688,32 @@ describe("OpencodeDriver — documented behavior (session.error / /compact / bla
     expect(client.prompts).toHaveLength(0); // and it was NOT sent to the model as a prompt
   });
 
+  it("dispatches /compact WITHOUT blocking the inject pump (a hung summarize still lets interrupt fire)", async () => {
+    // OpenCode's summarize endpoint runs the WHOLE compaction turn server-side before returning. The
+    // earlier code `await`ed it inside the serial inject pump, so a later queued `interrupt` could not
+    // fire until compaction finished (and the slow ack risked a reconnect replaying /compact → a SECOND
+    // compaction). The fix dispatches summarize fire-and-forget. Model that with a summarize that NEVER
+    // resolves: the interrupt that follows /compact must still reach client.abort().
+    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
+    client.summarize = () => new Promise<void>(() => {}); // hangs forever — would wedge an awaiting pump
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ctx.onSession = (s: Session) => {
+      s.pushUserInput("/compact"); // dispatched, must NOT block the pump
+      s.pushControlRequest("interrupt"); // queued right behind it — must still be processed
+    };
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    const fired = await waitFor(() => client.aborts >= 1);
+    ac.abort();
+    await run;
+    // `fired` flipped true via the interrupt BEFORE we aborted → the pump processed it while summarize
+    // was still hung. (Teardown also aborts the OpenCode run — review #10 — so the final count is ≥1.)
+    expect(fired).toBe(true);
+    expect(client.aborts).toBeGreaterThanOrEqual(1);
+    expect(client.prompts).toHaveLength(0); // /compact was not fed to the model as a prompt
+  });
+
   it("treats a whitespace-only prompt as a no-op (no burned model turn)", async () => {
     const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
     const broker = new FakeBroker();

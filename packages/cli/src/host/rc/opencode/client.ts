@@ -244,8 +244,15 @@ export class OpencodeClient {
           const obj = parseSseFrame(block);
           if (obj === null) continue; // empty/malformed/non-typed frame — skip, don't kill the stream
           const evSession = obj.properties?.sessionID;
-          // Pass through session-less server events (connected/heartbeat); filter the rest to ours.
-          if (evSession !== undefined && evSession !== sessionId) continue;
+          if (evSession === undefined) {
+            // Session-less events: ONLY `server.*` (connected/heartbeat) are global. A session-less
+            // event of any other type (e.g. a `session.error` the server emitted without a sessionID)
+            // must NOT be delivered — otherwise it would fan out to EVERY bridged session/driver on this
+            // server-wide stream (codex review). Drop it.
+            if (!obj.type.startsWith("server.")) continue;
+          } else if (evSession !== sessionId) {
+            continue; // a different session's event
+          }
           yield obj;
         }
       }
