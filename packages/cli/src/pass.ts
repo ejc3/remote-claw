@@ -66,9 +66,13 @@ export async function runPass(
   const json = rc["rc-json"] === true;
   const quiet = rc["rc-quiet"] === true;
   const wantQr = rc["rc-qr"] === true;
-  // The viewer origin for the deep link: --rc-app, else RC_APP (same source the launcher uses). Absent ⇒
-  // the QR holds the bare pass for manual entry.
-  const appOrigin = strFlag(rc, "rc-app") ?? opts.env?.env?.RC_APP ?? process.env.RC_APP;
+  // The viewer origin for the deep link: --rc-app (trimmed; empty/whitespace ⇒ absent, matching the
+  // launcher), else RC_APP. Absent ⇒ the QR holds the bare pass for manual entry.
+  const appFlag = strFlag(rc, "rc-app")?.trim();
+  const appOrigin =
+    appFlag !== undefined && appFlag !== ""
+      ? appFlag
+      : (opts.env?.env?.RC_APP ?? process.env.RC_APP);
   const qrPayload = wantQr ? passQrPayload(pass, appOrigin) : undefined;
 
   if (json) {

@@ -48,6 +48,13 @@ describe("passQrPayload — what the pass QR encodes", () => {
     expect(passQrPayload(PASS, "not a url")).toBe(PASS);
     expect(passQrPayload(PASS, "://nope")).toBe(PASS);
   });
+
+  it("an opaque/non-web origin → bare pass (never a `null…#pass` payload)", () => {
+    expect(passQrPayload(PASS, "localhost:3000")).toBe(PASS); // no scheme → opaque, origin "null"
+    expect(passQrPayload(PASS, "javascript:alert(1)")).toBe(PASS);
+    expect(passQrPayload(PASS, "mailto:x@y.z")).toBe(PASS);
+    expect(passQrPayload(PASS, "file:///etc/passwd")).toBe(PASS);
+  });
 });
 
 describe("renderQr — terminal QR rendering", () => {

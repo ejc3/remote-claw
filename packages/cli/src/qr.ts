@@ -19,6 +19,10 @@ export function passQrPayload(pass: string, appOrigin?: string): string {
   } catch {
     return pass; // malformed origin → bare pass, never emit a broken URL
   }
+  // Only build a deep link for a real WEB origin. Opaque/non-web inputs still parse — `localhost:3000`
+  // (no scheme), `javascript:…`, `mailto:…`, `file:///…` — but yield protocol≠http(s) / origin "null",
+  // which would produce a broken payload like `null3000#<pass>`; fall back to the bare pass instead.
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin === "null") return pass;
   url.hash = "";
   url.search = "";
   const path = url.pathname.replace(/\/+$/, ""); // drop trailing slash(es); root → ""
