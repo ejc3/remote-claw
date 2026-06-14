@@ -123,6 +123,13 @@ describe("wire box encode / decode", () => {
   it("rejects a truncated wire box", () => {
     expect(() => decodeHandoffBox(new Uint8Array(10))).toThrow(HandoffError);
   });
+
+  it("encodeHandoffBox is fail-closed (bad version / ct shorter than the GCM tag)", async () => {
+    const otk = generateOtk();
+    const box = await sealHandoff(otk, CRED);
+    expect(() => encodeHandoffBox({ ...box, v: 1.5 })).toThrow(HandoffError);
+    expect(() => encodeHandoffBox({ ...box, ct: new Uint8Array(8) })).toThrow(HandoffError);
+  });
 });
 
 describe("otk1_ codec", () => {

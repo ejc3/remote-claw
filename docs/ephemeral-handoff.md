@@ -51,14 +51,17 @@ Frame `seal()` (that binds a `FrameHeader` AAD incl. `identityId`, which would l
 **three domain-separated values** (`prk = HKDF-Extract("remote-claw/v1", OTK)`):
 
 - **`id = SHA256(OTK)`** — the public lookup key.
-- **`wrapKey = HKDF-Expand(prk, "remote-claw/v1/handoff-wrap", 32)`** — the AES-256-GCM key.
+- **`wrapKey = HKDF-Expand(prk, "remote-claw/v1/handoff-wrap", 32)`** — the per-OTK **plane key** (not the
+  AES key directly; the AES key is a per-box subkey derived from it below, mirroring `aead.ts`).
 - **`claimProof = HKDF-Expand(prk, "remote-claw/v1/handoff-claim", 32)`** — the consume capability (§3.3).
 
 `id` is a **bare unkeyed SHA-256** while `wrapKey`/`claimProof` are **HMAC-keyed HKDF** outputs — *distinct
 PRFs of OTK*, so the public `id` is computationally independent of the key/proof (review fix: the prior
-"different info label" justification was the wrong mechanism). Ciphertext = AES-256-GCM (fresh random 32 B
-HKDF salt + 12 B nonce, 128-bit tag) over the credential, **AAD = `"rc-handoff/v1" ‖ id`** (binds version +
-id ⇒ no cross-id substitution; one wrap/OTK ⇒ NIST SP 800-38D nonce ceiling is moot). The on-wire box is
+"different info label" justification was the wrong mechanism). Each box derives a fresh **per-box AES key**
+exactly as `aead.ts` does: `K_box = HKDF-Expand(HKDF-Extract(boxSalt, wrapKey), "remote-claw/v1/handoff-msg"
+‖ AAD, 32)` with a fresh random 32 B `boxSalt` + 12 B nonce. Ciphertext = AES-256-GCM (128-bit tag) under
+`K_box`, **AAD = `"rc-handoff/v1" ‖ id`** (binds version + id ⇒ no cross-id substitution; one wrap/OTK ⇒
+NIST SP 800-38D nonce ceiling is moot). The on-wire box is
 **versioned** (`v` field) for format evolution. Codec: `otk1_` + base64url(OTK) (43 chars) + Crockford
 checksum (mirrors `pass.ts`). Reuse `hkdf.ts`/`bytes.ts`/`base64url.ts`/`checksum.ts` verbatim; one new file
 to review, with round-trip / wrong-OTK / tamper / wrong-version tests.

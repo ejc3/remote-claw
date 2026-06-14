@@ -173,9 +173,14 @@ export async function openHandoff(otk: Uint8Array, box: HandoffBox): Promise<Uin
 
 /** Wire-encode a box for transport/storage: `v(1) ‖ salt(32) ‖ nonce(12) ‖ ct`. */
 export function encodeHandoffBox(box: HandoffBox): Uint8Array {
-  if (box.v < 0 || box.v > 255) throw new HandoffError("bad-version", "box version out of range");
+  if (!Number.isInteger(box.v) || box.v < 0 || box.v > 255) {
+    throw new HandoffError("bad-version", "box version must be an integer in [0,255]");
+  }
   if (box.salt.length !== SALT_LEN || box.nonce.length !== NONCE_LEN) {
     throw new HandoffError("bad-length", "salt/nonce wrong size");
+  }
+  if (box.ct.length < TAG_BITS / 8) {
+    throw new HandoffError("bad-length", "ciphertext shorter than the GCM tag");
   }
   return concatBytes(new Uint8Array([box.v]), box.salt, box.nonce, box.ct);
 }
