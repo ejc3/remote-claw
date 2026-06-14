@@ -19,7 +19,7 @@ Three parties, one of which (the broker) is untrusted and sees only ciphertext.
   behind a MITM proxy (`MitmProxy`, `mitm.ts`) pointed at by `HTTPS_PROXY`. The instant a session hits
   `/remote-control`, its worker traffic lands on `RelayCore`/`Session` (`session.ts`) instead of
   Anthropic. One `HostRcRelay` (`relay.ts`) per RC session bridges that session to the broker.
-- **Broker** — the pluggable backend (Vercel Workflows, per-session SQLite/libSQL, Temporal, or local)
+- **Broker** — the pluggable backend (Vercel Workflows, per-session SQLite/libSQL, or local)
   behind `POST /api/relay` and `GET /api/stream`. It is a dumb, append-only, **at-least-once, non-FIFO**
   pipe (§12). It never holds a key; it routes by a cleartext header and stores ciphertext.
 - **Viewer** — the browser client (`apps/web/app/lib/viewer.ts` + `page.tsx`). It reuses the **same**

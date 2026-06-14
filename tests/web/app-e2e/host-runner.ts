@@ -87,8 +87,8 @@ const serving = relay.serve(ac.signal).catch((e) => {
 
 // Wait until the scripted frames are durably published before signalling readiness — but ONLY the
 // per-session SQLite/Turso backend reports durable (it's the only one with a slow, lazy per-session DB
-// create where the browser could momentarily see "no such channel"). For local/temporal/vercel this is a
-// no-op: there's no frameCount to poll, and none is needed — the persistent host pump publishes the turn
+// create where the browser could momentarily see "no such channel"). For local/vercel this is a no-op:
+// there's no frameCount to poll, and none is needed — the persistent host pump publishes the turn
 // immediately and keeps serving, and the browser subscribes to the LIVE transcript stream, so it receives
 // every frame within its expect window regardless. (This is categorically unlike the old seed route, whose
 // after()-deferred publish could never land at all.)
@@ -106,7 +106,7 @@ await serving; // keep the host alive (serving LIVE inbound) until SIGTERM/SIGIN
  *  polls — or a bounded timeout. Gates on the cursor's `durable` flag, not a null count: a durable backend
  *  returns frameCount:null for a channel that doesn't exist yet, so on a cold path the first poll is null
  *  and we MUST keep waiting. Only the per-session SQLite/Turso backend implements frameCount/maxSeq, so it
- *  is the only one that reports durable:true; local/temporal/vercel report durable:false and expose NO
+ *  is the only one that reports durable:true; local/vercel report durable:false and expose NO
  *  frameCount to poll, so we don't wait — the persistent host pump publishes the turn immediately and the
  *  browser streams it live (any sub-second gap is absorbed by its expect window). Never throws. Returns
  *  true when settled (durable-stable, or non-durable so no wait is possible/needed), false on a timeout. */

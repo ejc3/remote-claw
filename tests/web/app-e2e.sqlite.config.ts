@@ -4,13 +4,13 @@ import { defineConfig, devices } from "@playwright/test";
 // the per-session SQLITE backend via the ?backend= switch (E2E_BACKEND=sqlite, set by the test:app:sqlite
 // script) — so the IDENTICAL UI assertions run against the durable per-session libSQL backend too,
 // proving the BrokerBackend abstraction is swappable per-request AND that a real prompt→reply round-trips
-// through one-db-per-session SQLite (browser → /api/relay+/api/stream → SqliteMultiBackend → the seeded
-// HostRcRelay). The Next server's DEFAULT stays local (which also enables the dev /api/dev/seed route);
-// only the ?backend=sqlite requests hit the sqlite backend.
+// through one-db-per-session SQLite (browser → /api/relay+/api/stream → SqliteMultiBackend → the e2e
+// HostRcRelay). The Next server's DEFAULT stays local; only the ?backend=sqlite requests hit the sqlite
+// backend.
 //
 // No external service: file storage (one libSQL db per session under RC_SQLITE_DIR) runs anywhere; the
 // Turso Cloud storage mode is exercised on a real deploy (like the vercel backend). A separate port
-// (3103) so it never collides with the local/temporal/drain runs.
+// (3103) so it never collides with the local-backend run.
 
 export default defineConfig({
   testDir: "./app-e2e",
@@ -27,7 +27,7 @@ export default defineConfig({
     cwd: "../../apps/web",
     port: 3103,
     env: {
-      BROKER_BACKEND: "local", // default backend + enables /api/dev/seed; ?backend=sqlite overrides
+      BROKER_BACKEND: "local", // default backend; ?backend=sqlite overrides per request
       RC_SQLITE_DIR: process.env.RC_SQLITE_DIR ?? "/tmp/rc-sqlite-e2e",
     },
     reuseExistingServer: !process.env.CI,

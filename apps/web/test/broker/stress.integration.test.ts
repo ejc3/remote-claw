@@ -14,10 +14,9 @@ import { brokerFetch } from "../e2e/harness";
 // the selected backend → openFrame/openMessage) against EACH backend, asserting the AEAD round-trip
 // holds under volume + boundary conditions, and that the broker only ever moves ciphertext.
 //
-// Backends: local + vercel always; temporal when TEMPORAL_ADDRESS is set (a server + the relayChannel
-// worker must be up — `pnpm --filter @remote-claw/web test:stress` provisions them). The backend is
-// picked per-request via the x-broker-backend header; we set BROKER_BACKEND=local so all three are
-// selectable in this process (local is only requestable when it's the default).
+// Backends: local + vercel (both in-process). The backend is picked per-request via the
+// x-broker-backend header; we set BROKER_BACKEND=local so both are selectable in this process (local is
+// only requestable when it's the default).
 
 const PRIOR_BACKEND = process.env.BROKER_BACKEND;
 beforeAll(() => {
@@ -29,7 +28,7 @@ afterAll(async () => {
   await teardownWorkflowTests();
 });
 
-const BACKENDS = ["local", "vercel", ...(process.env.TEMPORAL_ADDRESS ? ["temporal"] : [])];
+const BACKENDS = ["local", "vercel"];
 
 let seed = 1;
 function freshIdentity(): Promise<Identity> {

@@ -5,21 +5,20 @@ import { VercelBackend } from "./vercel";
 
 // The broker's durable backend is selected PER REQUEST: a `?backend=` query param (forwarded by the
 // client) wins, else the BROKER_BACKEND env default, else "vercel". So one deployment defaults to
-// Vercel Workflows but a client can opt a session into another backend with `?backend=temporal`
+// Vercel Workflows but a client can opt a session into another backend with `?backend=sqlite`
 // without a redeploy. The publish (relay) and subscribe (stream) for a given channel MUST name the
 // same backend — the client sends the param on both.
 //
 //   (unset) | "vercel"  → Vercel Workflows (production; the default)
 //   "local"            → in-process fake broker (tests / Playwright e2e)
-//   "temporal"         → Temporal durable workflows (needs a server + the relayChannel worker)
 //   "sqlite"           → per-session libSQL: ONE database per channel token; storage = local file
 //                        (RC_SQLITE_DIR, the `pnpm dev` default) or Turso Cloud (one db per session)
 //
-// Each backend is cached per-name (process-wide), so the LocalBackend's in-memory channel map and the
-// Temporal connection persist across requests. getBackend() is async only so the Temporal adapter can
-// be DYNAMICALLY imported — keeping the heavy @temporalio/client out of the bundle unless selected.
+// Each backend is cached per-name (process-wide), so the LocalBackend's in-memory channel map persists
+// across requests. getBackend() is async only so the sqlite adapter can be DYNAMICALLY imported —
+// keeping @libsql/client + node:fs out of the bundle unless selected.
 
-const KNOWN = new Set(["vercel", "local", "temporal", "sqlite"]);
+const KNOWN = new Set(["vercel", "local", "sqlite"]);
 
 // The cache lives on globalThis, NOT a module-level binding: Next can give the relay route and the
 // stream route SEPARATE instances of this module (per-route bundles) and re-import it on HMR — either
@@ -41,8 +40,8 @@ export function isKnownBackend(name: string): boolean {
 // instances — it's honoured only as the deployment's OWN default (dev / `next start`). `sqlite` IS
 // requestable: its storage is either a single local process's disk (dev / `next start` / e2e) or a
 // SHARED remote Turso db (multi-instance / Vercel), and file-mode on Vercel is guarded off — so a
-// selected `sqlite` request always reaches a CONSISTENT store, the way `vercel`/`temporal` do.
-const REQUESTABLE = new Set(["vercel", "temporal", "sqlite"]);
+// selected `sqlite` request always reaches a CONSISTENT store, the way `vercel` does.
+const REQUESTABLE = new Set(["vercel", "sqlite"]);
 
 /** True if `name` may be chosen by an incoming request's selector (header / ?backend=). Only `local` is
  *  deliberately NOT in REQUESTABLE — it is process memory, honoured solely as the deployment's own
@@ -77,11 +76,6 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
     case "local":
       backend = new LocalBackend();
       break;
-    case "temporal": {
-      const { TemporalBackend } = await import("./temporal");
-      backend = new TemporalBackend();
-      break;
-    }
     case "sqlite": {
       // Per-session libSQL — ONE database per channel token (BROKER_BACKEND=sqlite, or ?backend=sqlite).
       // The ONLY thing that varies is the storage locator, chosen from env: Turso Cloud (one remote db
@@ -93,7 +87,7 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
       break;
     }
     default:
-      throw new Error(`unknown backend "${name}" (expected: vercel | local | temporal | sqlite)`);
+      throw new Error(`unknown backend "${name}" (expected: vercel | local | sqlite)`);
   }
   cache.set(name, backend);
   return backend;

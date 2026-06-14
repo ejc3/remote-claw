@@ -40,10 +40,10 @@ export interface BrokerClientOptions {
   provider: SecurityProvider;
   /** Injectable fetch (tests / a custom agent). Defaults to the global fetch. */
   fetchFn?: typeof fetch;
-  /** Pick the broker backend for this client's calls ("vercel" | "local" | "temporal" |
-   *  "sqlite"). Sent as the `x-broker-backend` header on every /api/relay + /api/stream request; omitted
-   *  ⇒ the broker's default. Publish and subscribe for one channel MUST agree, so it's set per client.
-   *  The host learns whether the effective server backend is durable from /api/seq, not from this flag. */
+  /** Pick the broker backend for this client's calls ("vercel" | "local" | "sqlite"). Sent as the
+   *  `x-broker-backend` header on every /api/relay + /api/stream request; omitted ⇒ the broker's
+   *  default. Publish and subscribe for one channel MUST agree, so it's set per client. The host learns
+   *  whether the effective server backend is durable from /api/seq, not from this flag. */
   backend?: string;
   /** Vercel "Protection Bypass for Automation" secret. When the broker is deployed behind Vercel
    *  Deployment Protection (SSO), an unauthenticated request is bounced with a 401 auth wall before

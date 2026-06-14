@@ -4,7 +4,7 @@ import { LocalBackend } from "../../lib/broker/local";
 
 // The LocalBackend is the in-process fake broker. These tests pin the durable-channel CONTRACT every
 // backend must honour (ordering, resumable replay, recent-window, create-or-resume, subscribe-or-null,
-// close-frees-token, multi-subscriber fan-out) — no Vercel/Temporal runtime, just the class.
+// close-frees-token, multi-subscriber fan-out) — no Vercel runtime, just the class.
 
 // The backend treats a frame as opaque, so a minimal WireFrame carrying a `seq` marker is enough to
 // assert order/identity.

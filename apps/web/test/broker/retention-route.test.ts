@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  authorized,
   DEFAULT_RETENTION_MS,
   retentionMs,
   sqliteConfigured,
@@ -94,6 +95,30 @@ describe("retentionMs", () => {
     env.BROKER_BACKEND = "vercel";
     Object.assign(env, CLOUD_CREDS);
     expect(sqliteConfigured()).toBe(true);
+  });
+});
+
+describe("authorized (the cron-secret gate)", () => {
+  it("requires an exact Bearer match when CRON_SECRET is set", () => {
+    env.CRON_SECRET = "s3cret";
+    expect(authorized(req("Bearer s3cret"))).toBe(true);
+    expect(authorized(req("Bearer wrong"))).toBe(false);
+    expect(authorized(req("s3cret"))).toBe(false); // missing the "Bearer " prefix
+    expect(authorized(req())).toBe(false); // no header
+  });
+
+  it("rejects an unauthenticated request on Vercel when no secret is set (fails closed)", () => {
+    env.VERCEL = "1";
+    expect(authorized(req())).toBe(false);
+  });
+
+  it("fails closed in production off-Vercel when no secret is set", () => {
+    env.NODE_ENV = "production"; // self-hosted prod must not open without a secret
+    expect(authorized(req())).toBe(false);
+  });
+
+  it("allows off-Vercel, non-production dev when no secret is set", () => {
+    expect(authorized(req())).toBe(true);
   });
 });
 

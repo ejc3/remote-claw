@@ -13,11 +13,13 @@ auditable, and tracks the fixes that close them.
   salt+nonce plus a per-message subkey means no GCM nonce reuse, HKDF key separation is clean (bus/auth
   vs content vs control vs meta), auth-token compare is constant-time, and a Sealed client refuses Open
   frames (no silent downgrade). The master secret is suppressed from `--rc-json`/`--rc-quiet`, the web
-  pass lives only in the URL fragment + sessionStorage, and `/api/dev/seed` is prod-gated (404).
+  pass lives only in the URL fragment + sessionStorage, and the dev-only `/api/dev/sweep` route is
+  prod-gated (404).
 - **The real bugs are operational, not cryptographic** — session identity, host-restart / reconnect
   ordering, and retention / teardown / Turso-resilience edges. None of them weaken E2E encryption.
-- **Baseline: all green** — 25 Playwright e2e across three backends (Local, **Turso**, Temporal) + drain,
-  and 509 unit tests (clawsec, cli, web).
+- **Baseline: all green** — Playwright e2e across the backends (Local, **Turso**) and the unit suites
+  (clawsec, cli, web). (This report predates removing the Temporal backend; its Temporal/drain rows are
+  historical.)
 
 ## Methodology
 
@@ -35,8 +37,8 @@ auditable, and tracks the fixes that close them.
 |-------|-----------------|--------|
 | Playwright app-e2e | LocalBackend | 8/8 |
 | Playwright app-e2e | **Turso (libSQL)** | 8/8 — real sealed-frame round-trip (118 KB libSQL written) |
-| Playwright app-e2e | Temporal | 8/8 — asserts a real `relayChannel` workflow exists |
-| Playwright app-e2e | drain (real build) | 1/1 |
+| Playwright app-e2e | Temporal *(historical — backend since removed)* | 8/8 — asserted a `relayChannel` workflow existed |
+| Playwright app-e2e | drain (real build) *(historical — removed)* | 1/1 |
 | vitest | @remote-claw/clawsec | 109/109 |
 | vitest | @remote-claw/cli | 271/271 |
 | vitest | @remote-claw/web | 136 passed / 12 skipped |
@@ -103,8 +105,9 @@ pipe: it validates the §8 envelope shape and routes opaque ciphertext, and neve
   onto another channel/plane/seq; per-frame CSPRNG salt+nonce + per-message subkey ⇒ no nonce reuse;
   auth-token comparison is constant-time; a Sealed client refuses Open frames (no silent downgrade).
 - **AuthN/AuthZ.** Every data route requires a Bearer and scopes the channel token to the authenticated
-  identity (no cross-identity access); cron routes require `CRON_SECRET`; `/api/dev/seed` is 404 in
-  production (now gate-tested). Hex bearers are decoded to bytes before hashing (canonical, case-insensitive).
+  identity (no cross-identity access); the retention cron requires `CRON_SECRET`; the dev-only
+  `/api/dev/sweep` route is 404 in production (gate-tested). Hex bearers are decoded to bytes before
+  hashing (canonical, case-insensitive).
 - **Input validation.** Wire routing strings are length- and charset-bounded; numeric header fields are
   range-checked; a viewer attachment filename is sanitized to a safe basename and capped (~12 MB); the
   broker publish path caps the sealed frame body (17 MiB → 413).
@@ -143,7 +146,8 @@ doc's open decisions).
 
 ## Reproducing
 
-- Baseline: `pnpm --filter remote-claw-web-tests run test:app` (and `:app:turso`, `:app:temporal`,
-  `:app:drain`); `pnpm --filter @remote-claw/{clawsec,cli,web} test:run`.
+- Baseline: `pnpm --filter remote-claw-web-tests run test:app` (and `:app:sqlite`);
+  `pnpm --filter @remote-claw/{clawsec,cli,web} test:run`. (The `:app:temporal` / `:app:drain` legs
+  named here existed only before the Temporal backend was removed.)
 - The adversarial briefs, raw codex output, and the full 37-finding workflow inventory are preserved
   under `~/rc-traces/qa/` on the build host.

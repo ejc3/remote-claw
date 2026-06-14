@@ -31,7 +31,7 @@ primary source of truth for remote-claw relay mode.
   Anthropic history re-fetch behavior.
 - Current code on `main`: `packages/cli/src/host/rc/{mitm,session,relay,launch}.ts`,
   `packages/cli/src/broker/{client,protocol,order}.ts`,
-  `apps/web/lib/broker/{backend,local,temporal,vercel}.ts`.
+  `apps/web/lib/broker/{backend,local,vercel}.ts`.
 - Branch evidence inspected with `git show`: `feat-turso-broker-catchup`
   for A1 Turso frames and `feat-turso-seq-continuity` for A2 durable
   broker catch-up/sequence continuity.

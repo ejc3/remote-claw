@@ -1,7 +1,12 @@
 import { timingSafeEqual, utf8 } from "@remote-claw/clawsec";
 
-/** Only loopback origins may seed locally: the host side loops authenticated requests back to THIS
- *  server, so a spoofed Host header must not be able to point them at another origin (SSRF). */
+// Shared gate for the dev-only routes under /api/dev (today just the per-session sqlite cleanup sweep).
+// NEVER opens in production: local dev requires a loopback origin; a Vercel preview requires the
+// DEV_SEED_TOKEN, and the token is ignored when VERCEL_ENV=production. (Moved here from the now-removed
+// /api/dev/seed route so the sweep keeps the IDENTICAL `x-dev-seed-token` auth + loopback SSRF guard.)
+
+/** Only loopback origins may run a dev route locally: the caller may loop authenticated requests back
+ *  to THIS server, so a spoofed Host header must not be able to point them at another origin (SSRF). */
 function isLoopback(hostname: string): boolean {
   return (
     hostname === "localhost" ||
@@ -20,7 +25,7 @@ function tokenMatches(got: string | null): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Whether THIS request may seed (and the trusted self-origin to loop the host relay back to), or a
+/** Whether THIS request may run a dev route (and the trusted self-origin to loop back to), or a
  *  Response to return (404/400). Local dev requires loopback; a Vercel preview requires the token. */
 export function gate(req: Request): { origin: string } | Response {
   const onVercel = process.env.VERCEL === "1";
@@ -35,7 +40,7 @@ export function gate(req: Request): { origin: string } | Response {
   if (process.env.VERCEL_URL) return { origin: `https://${process.env.VERCEL_URL}` };
   const url = new URL(req.url);
   if (!isLoopback(url.hostname)) {
-    return new Response(JSON.stringify({ error: "seed is loopback-only" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "dev route is loopback-only" }), { status: 400 });
   }
   return { origin: url.origin };
 }

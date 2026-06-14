@@ -430,7 +430,7 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 - `packages/cli/src/host/rc/certs.ts`, `gitinfo.ts` — MITM/announce helpers, unaffected.
 - `packages/cli/src/broker/client.ts` — the transport contract is fixed; drivers go *through* the
   relay, never around it.
-- `apps/web/lib/broker/**` (router, backends: vercel/temporal/local/sqlite), and **all of the web
+- `apps/web/lib/broker/**` (router, backends: vercel/local/sqlite), and **all of the web
   viewer** — they consume sealed frames keyed by `(identity, session)`. Since the frame stream is a
   pure function of the canonical `UpstreamPayload` (which every driver matches), nothing downstream
   can tell which driver produced the session.

@@ -30,7 +30,7 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      wraps it in the MITM and bridges each session to the broker; without it, claude runs
                      transparently.
   --rc-backend <n>   pick the broker backend this host targets (or set RC_BACKEND): vercel | local |
-                     temporal | sqlite. Omitted ⇒ the broker's default. Must match what your viewers use.
+                     sqlite. Omitted ⇒ the broker's default. Must match what your viewers use.
                      When the server reports a durable log, the host serves history from it instead of
                      keeping (and replaying) an in-memory transcript.
 
