@@ -9,7 +9,7 @@ import {
   type OpencodeEvent,
   parseSseFrame,
 } from "./client.js";
-import { OpencodeDriver } from "./driver.js";
+import { errText, OpencodeDriver } from "./driver.js";
 
 // Driver-level CAPTURE test. We drive the REAL OpencodeDriver + a REAL HostRcRelay (via bridgeSession),
 // replacing only the two transports with controllable fakes:
@@ -102,6 +102,10 @@ class FakeOpencodeClient extends OpencodeClient {
   override async abort(): Promise<void> {
     this.aborts++;
   }
+  summarizes: string[] = [];
+  override async summarize(sessionId: string): Promise<void> {
+    this.summarizes.push(sessionId);
+  }
   override async replyPermission(
     _sessionId: string,
     permissionId: string,
@@ -155,6 +159,12 @@ function msgUpdated(info: Record<string, unknown>): OpencodeEvent {
 }
 function idle(): OpencodeEvent {
   return { type: "session.idle", properties: { sessionID: SES } };
+}
+function sessionError(error: unknown): OpencodeEvent {
+  return {
+    type: "session.error",
+    properties: { sessionID: SES, error },
+  } as unknown as OpencodeEvent;
 }
 
 // The captured live sequence for "Reply with exactly: OK": the user prompt echo part (synthetic-free
@@ -653,5 +663,152 @@ describe("OpencodeDriver hardening", () => {
     // become \n. Prove the normalization the parser depends on: a CRLF block normalizes to the LF block.
     const crlfBlock = lfBlock.replace(/\n/g, "\r\n");
     expect(parseSseFrame(crlfBlock.replace(/\r\n?/g, "\n"))?.type).toBe("session.idle");
+  });
+});
+
+// Behaviors the driver doc PROMISES that a live human-style verification found unimplemented (now honored):
+//   • /compact routes to the native summarize endpoint (not fed to the model as literal text);
+//   • session.error surfaces a result frame so the viewer isn't stuck "working" on a failed turn;
+//   • a whitespace-only prompt is a no-op, not a burned model turn.
+describe("OpencodeDriver — documented behavior (session.error / /compact / blank prompts)", () => {
+  let ac: AbortController | null = null;
+  afterEach(() => ac?.abort());
+
+  it("routes /compact to the native summarize endpoint, NOT a model prompt", async () => {
+    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ctx.onSession = (s: Session) => s.pushUserInput("/compact");
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => client.summarizes.length >= 1);
+    ac.abort();
+    await run;
+    expect(client.summarizes).toEqual([SES]); // summarize hit the attached session
+    expect(client.prompts).toHaveLength(0); // and it was NOT sent to the model as a prompt
+  });
+
+  it("dispatches /compact WITHOUT blocking the inject pump (a hung summarize still lets interrupt fire)", async () => {
+    // OpenCode's summarize endpoint runs the WHOLE compaction turn server-side before returning. The
+    // earlier code `await`ed it inside the serial inject pump, so a later queued `interrupt` could not
+    // fire until compaction finished (and the slow ack risked a reconnect replaying /compact → a SECOND
+    // compaction). The fix dispatches summarize fire-and-forget. Model that with a summarize that NEVER
+    // resolves: the interrupt that follows /compact must still reach client.abort().
+    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
+    client.summarize = () => new Promise<void>(() => {}); // hangs forever — would wedge an awaiting pump
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ctx.onSession = (s: Session) => {
+      s.pushUserInput("/compact"); // dispatched, must NOT block the pump
+      s.pushControlRequest("interrupt"); // queued right behind it — must still be processed
+    };
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    const fired = await waitFor(() => client.aborts >= 1);
+    ac.abort();
+    await run;
+    // `fired` flipped true via the interrupt BEFORE we aborted → the pump processed it while summarize
+    // was still hung. (Teardown also aborts the OpenCode run — review #10 — so the final count is ≥1.)
+    expect(fired).toBe(true);
+    expect(client.aborts).toBeGreaterThanOrEqual(1);
+    expect(client.prompts).toHaveLength(0); // /compact was not fed to the model as a prompt
+  });
+
+  it("a FAILED /compact dispatch surfaces an error result and returns to idle (not stuck 'running')", async () => {
+    // Fire-and-forget /compact sets workerStatus="running" then dispatches summarize. If summarize
+    // REJECTS, no server-side turn ever starts, so no session.status/session.error will clear the
+    // "running" — the .catch must surface the error AND drop to idle itself (codex review). The script
+    // has NO session.idle, so the ONLY route back to idle is that .catch.
+    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }]);
+    client.summarize = () => Promise.reject(new Error("summarize boom"));
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+      s.pushUserInput("/compact");
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => broker.content.some((p) => p.text.includes("summarize boom")));
+    ac.abort();
+    await run;
+    // The failure reached the viewer as a result frame (impossible without the .catch surfacing it)…
+    expect(broker.content.some((p) => p.text.includes("⚠ OpenCode error: summarize boom"))).toBe(
+      true,
+    );
+    // …and the session left "running" rather than hanging on a turn that never began.
+    expect((captured as unknown as Session).workerStatus).toBe("idle");
+    expect(client.prompts).toHaveLength(0); // still not sent to the model as a prompt
+  });
+
+  it("treats a whitespace-only prompt as a no-op (no burned model turn)", async () => {
+    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
+    const broker = new FakeBroker();
+    let s0: Session | null = null;
+    const ctx = await makeCtx(client, broker, () => {});
+    ctx.onSession = (s: Session) => {
+      s0 = s;
+      s.pushUserInput("   \n  "); // spaces + a stray newline — non-empty but blank
+    };
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => s0 !== null);
+    await sleep(150); // let the inject pump process (and, correctly, skip) the blank prompt
+    ac.abort();
+    await run;
+    expect(client.prompts).toHaveLength(0); // no model turn burned
+    expect(client.summarizes).toHaveLength(0);
+  });
+
+  it("surfaces session.error as a result frame the viewer renders, then goes idle", async () => {
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      { type: "session.status", properties: { sessionID: SES, status: { type: "busy" } } },
+      sessionError({ name: "ProviderError", data: { message: "model not found: zzz" } }),
+    ]);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    // End-to-end: the error reaches the BROKER as a content frame (what the viewer renders).
+    await waitFor(() => broker.content.some((p) => p.text.includes("model not found: zzz")));
+    ac.abort();
+    await run;
+    expect(
+      broker.content.some((p) => p.text.includes("⚠ OpenCode error: model not found: zzz")),
+    ).toBe(true);
+    // …and the session left the "working" state rather than hanging.
+    expect((captured as unknown as Session).workerStatus).toBe("idle");
+  });
+});
+
+// errText backs BOTH error result frames (session.error and a failed /compact). It must NEVER throw and
+// must ALWAYS yield non-empty text for any error shape a provider might send (verification-review gap).
+describe("errText — robust error-text extraction", () => {
+  it("prefers data.message → message → name, in that order", () => {
+    expect(errText({ name: "E", message: "m", data: { message: "d" } })).toBe("d");
+    expect(errText({ name: "E", message: "m" })).toBe("m");
+    expect(errText({ name: "ProviderError" })).toBe("ProviderError");
+  });
+  it("handles primitives: string passes through, number/boolean stringify", () => {
+    expect(errText("plain failure")).toBe("plain failure");
+    expect(errText(42)).toBe("42");
+    expect(errText(true)).toBe("true");
+  });
+  it("falls back to JSON for an unkeyed object, and to 'unknown error' for null/unstringifiable", () => {
+    expect(errText({ code: 7 })).toBe('{"code":7}'); // no message/name/data → JSON of the object
+    // All recognized keys present but EMPTY → they don't satisfy the !== "" guards, so it JSON-stringifies
+    // the whole object (still SOMETHING for the viewer, never empty).
+    expect(errText({ name: "", message: "", data: { message: "" } })).toBe(
+      '{"name":"","message":"","data":{"message":""}}',
+    );
+    expect(errText(null)).toBe("unknown error");
+    expect(errText(undefined)).toBe("unknown error");
+    const circular: Record<string, unknown> = {};
+    circular.self = circular; // JSON.stringify throws → caught → "unknown error"
+    expect(errText(circular)).toBe("unknown error");
   });
 });

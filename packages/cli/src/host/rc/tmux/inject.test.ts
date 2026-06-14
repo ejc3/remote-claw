@@ -75,6 +75,27 @@ describe("runInjectPump", () => {
     expect(await replayedEventIds(s, ev.eventId)).toBe(false);
   });
 
+  it("treats a whitespace-only prompt as a no-op (acked, never pasted)", async () => {
+    const s = new Session("cse_1", "t", null);
+    const { tmux, verbs } = spyTmux();
+    const ac = new AbortController();
+    const ev = s.pushUserInput("   \n  "); // spaces + a stray newline — non-empty but blank
+    const pump = runInjectPump({
+      session: s,
+      tmux,
+      target: "rc-cse_1",
+      signal: ac.signal,
+      sleep: noSleep,
+    });
+    // Let the pump consume + ack the blank event (nothing should be typed).
+    await new Promise((r) => setTimeout(r, 60));
+    ac.abort();
+    s.wake();
+    await pump;
+    expect(verbs).toEqual([]); // no set-buffer / paste-buffer / send-keys — the box is untouched
+    expect(await replayedEventIds(s, ev.eventId)).toBe(false); // acked, so not replayed
+  });
+
   it("maps interrupt → Escape and acks it", async () => {
     const s = new Session("cse_1", "t", null);
     const { tmux, calls } = spyTmux();

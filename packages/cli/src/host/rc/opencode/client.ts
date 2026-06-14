@@ -177,6 +177,22 @@ export class OpencodeClient {
     if (!res.ok) throw new OpencodeError(res.status, `abort failed: ${res.status}`);
   }
 
+  /** Compact/summarize the session — POST /session/{id}/summarize { providerID, modelID }. This is the
+   *  native equivalent of the `/compact` slash command (verified against the live OpenAPI: the route +
+   *  the SummarizePayload {providerID, modelID, auto?}). The server kicks off a compaction turn whose
+   *  output arrives over events(), so we just check the 200 boolean ack here. */
+  async summarize(sessionId: string, model: OpencodeModel): Promise<void> {
+    const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}/summarize`, {
+      method: "POST",
+      headers: this.#headers(true),
+      body: JSON.stringify({ providerID: model.providerID, modelID: model.modelID, auto: false }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new OpencodeError(res.status, `summarize failed: ${res.status} ${detail}`.trim());
+    }
+  }
+
   /** Answer a permission gate: POST /session/{id}/permissions/{permID} { response }. */
   async replyPermission(
     sessionId: string,
@@ -227,9 +243,24 @@ export class OpencodeClient {
           buf = buf.slice(sep + 2);
           const obj = parseSseFrame(block);
           if (obj === null) continue; // empty/malformed/non-typed frame — skip, don't kill the stream
-          const evSession = obj.properties?.sessionID;
-          // Pass through session-less server events (connected/heartbeat); filter the rest to ours.
-          if (evSession !== undefined && evSession !== sessionId) continue;
+          // Derive the event's session id from wherever the server puts it: most events carry a top-level
+          // `properties.sessionID`, but session-scoped sub-shapes carry it ONLY nested — `message.part.*`
+          // on `properties.part.sessionID`, `message.updated` on `properties.info.sessionID`. Checking
+          // only the top level would drop our OWN assistant/tool content for those shapes (codex review).
+          const props = obj.properties;
+          const evSession =
+            props?.sessionID ??
+            props?.part?.sessionID ??
+            (props?.info as { sessionID?: string } | undefined)?.sessionID;
+          if (evSession === undefined) {
+            // Truly session-less events: ONLY `server.*` (connected/heartbeat) are global. A session-less
+            // event of any other type (e.g. a `session.error` the server emitted without a sessionID)
+            // must NOT be delivered — otherwise it would fan out to EVERY bridged session/driver on this
+            // server-wide stream (codex review). Drop it.
+            if (!obj.type.startsWith("server.")) continue;
+          } else if (evSession !== sessionId) {
+            continue; // a different session's event
+          }
           yield obj;
         }
       }
