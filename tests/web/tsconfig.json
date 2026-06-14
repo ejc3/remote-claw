@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // DOM provides the WebCrypto types (crypto.getRandomValues / SubtleCrypto) the host-runner and the
+    // imported @remote-claw/clawsec source use; Node 22 provides these globals at runtime. Matches the CLI.
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    // tsx imports the workspace TS sources by `.js` specifier (NodeNext-style) — allow it under bundler.
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  },
+  // ALL of tests/web: the app-e2e harness (specs/fixtures/host-runner), every *.config.ts, AND the
+  // top-level docs.spec.ts — so the whole Playwright surface gets the same strict typecheck the rest of the
+  // workspace gets (it was previously ungated; CI only ran it). node_modules is excluded by tsc's default.
+  "include": ["**/*.ts"]
+}

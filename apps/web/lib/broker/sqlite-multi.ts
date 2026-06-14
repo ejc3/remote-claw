@@ -196,6 +196,12 @@ export interface DbLocator {
    *  semantics match a remote single-writer libSQL). Optional; omit when the store needs no per-client
    *  setup (remote Turso serializes writes server-side). */
   prepare?(client: Client): Promise<void>;
+  /** Block until a freshly-provisioned database is actually serving queries. Turso Cloud has a
+   *  create→serve propagation gap — the Platform API POST returns before the new db's libSQL endpoint
+   *  resolves, so the first query transiently 404s — so the cloud locator probes the just-opened client
+   *  with bounded backoff until it answers. Optional; omit ⇒ no wait (a file: db serves the moment it's
+   *  opened). Called once per client open (cache miss), BEFORE the client is cached or used. */
+  awaitReady?(client: Client, token: string): Promise<void>;
   /** Whether the token's database already exists. Read paths must NOT create one (subscribe-or-null). */
   exists(token: string): Promise<boolean>;
   /** Delete a stored database by its `id` (from idFor / the session index), reclaiming its space. */
@@ -384,7 +390,21 @@ class SessionDbCache {
       }
       const cfg = this.#locator.config(token);
       const client = this.#newClient(cfg);
-      await this.#locator.prepare?.(client); // file: WAL; cloud: server serializes writes
+      try {
+        // Cloud: wait out the create→serve propagation window (a brand-new db's endpoint briefly 404s)
+        // BEFORE caching the client, so every downstream query (the schema batch, the channel SELECTs)
+        // hits a serving endpoint. No-op for file:. Close the client on failure so we never cache (or
+        // leak) a half-open one.
+        await this.#locator.awaitReady?.(client, token);
+        await this.#locator.prepare?.(client); // file: WAL; cloud: server serializes writes
+      } catch (e) {
+        try {
+          client.close();
+        } catch {
+          /* ignore */
+        }
+        throw e;
+      }
       const entry: CacheEntry = { client, refs: 0, url: cfg.url };
       this.#entries.set(token, entry);
       return this.#lease(token, entry);

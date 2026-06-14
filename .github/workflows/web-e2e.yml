@@ -30,6 +30,11 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
 
+      # Typecheck the e2e harness (configs + specs + the tsx host-runner) under the same strict TS the rest
+      # of the workspace uses — fail fast here, before the slow Chromium/Temporal installs below.
+      - name: Typecheck the e2e harness
+        run: pnpm --filter remote-claw-web-tests run typecheck
+
       # Playwright Chromium + its OS libraries (cached by the lockfile, which pins @playwright/test).
       - name: Cache Playwright browsers
         uses: actions/cache@v4

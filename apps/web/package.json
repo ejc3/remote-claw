@@ -17,6 +17,7 @@
     "test:stress:heavy": "STRESS_HEAVY=1 vitest run test/broker/stress-local.heavy.test.ts",
     "temporal:worker": "tsx temporal/worker.ts",
     "gen:workflow-bundle": "node scripts/gen-workflow-bundle.mjs",
+    "verify:turso-404": "tsx scripts/verify-turso-404.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",
     "format": "biome format --write .",

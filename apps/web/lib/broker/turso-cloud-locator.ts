@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Client } from "@libsql/client";
 import { type DbLocator, FileDbLocator } from "./sqlite-multi";
 
 // Cloud storage for the per-session libSQL backend: ONE Turso Cloud database per channel token. This is
@@ -35,6 +36,53 @@ const APP = "rc";
 const DEFAULT_SCOPE = "dev";
 const SCOPE_MAX = 14;
 const HASH_LEN = 16;
+
+// awaitReady backoff: a brand-new Turso db's libSQL endpoint can briefly 404 (or its host not resolve)
+// after the Platform-API create returns, until it propagates. Probe with jittered exponential backoff
+// up to a deadline (bounded well under the routes' maxDuration). Deadline is env-tunable for the e2e.
+const READY_BASE_MS = 100;
+const READY_CEIL_MS = 1500;
+const READY_DEADLINE_MS = 15_000;
+
+function readyDeadlineMs(): number {
+  const n = Number.parseInt(process.env.RC_TURSO_READY_DEADLINE_MS ?? "", 10);
+  return Number.isFinite(n) && n >= 0 ? n : READY_DEADLINE_MS;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function jittered(ms: number): number {
+  const j = ms * 0.25;
+  return ms - j + Math.random() * 2 * j;
+}
+
+/** The first HTTP status found walking an error's `cause` chain (libSQL wraps an HttpServerError whose
+ *  `.status` is the server's code) — undefined if none. */
+function statusInCause(e: unknown): number | undefined {
+  let cur: unknown = e;
+  const seen = new Set<unknown>();
+  while (cur !== null && typeof cur === "object" && !seen.has(cur)) {
+    seen.add(cur);
+    const s = (cur as { status?: unknown }).status;
+    if (typeof s === "number") return s;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/** A create→serve transient worth retrying: the new db's libSQL endpoint 404s (HttpServerError 404 —
+ *  the db record exists but isn't serving yet) or its host isn't resolving yet (a DNS/connection error
+ *  with no HTTP status). NOT an auth failure (401/403) or any other HTTP status — those must fail fast,
+ *  not be masked by the readiness wait. */
+function isEndpointNotReady(e: unknown): boolean {
+  if (statusInCause(e) === 404) return true;
+  const msg = e instanceof Error ? e.message : String(e);
+  return /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|fetch failed|failed to lookup|InvalidUri/i.test(
+    msg,
+  );
+}
 
 export interface TursoCloudOptions {
   /** Platform API token (org-scoped) — creates/lists/deletes databases. */
@@ -160,6 +208,37 @@ export class TursoCloudDbLocator implements DbLocator {
 
   async ensure(token: string): Promise<void> {
     await this.#createIfAbsent(this.#dbName(token));
+  }
+
+  /** Wait out the create→serve propagation window: after the Platform-API create returns, the db's libSQL
+   *  endpoint can briefly 404 (or its host not resolve) until it propagates, and Turso exposes no readiness
+   *  signal — so probe `SELECT 1` on the just-opened client with bounded backoff, retrying ONLY the
+   *  not-ready transients (HTTP 404 / unresolved host) and failing fast on anything else (auth, real 5xx).
+   *  Each libSQL query is a stateless HTTP request, so the same client re-probes the endpoint each time. */
+  async awaitReady(client: Client, _token: string): Promise<void> {
+    const deadline = Date.now() + readyDeadlineMs();
+    let delay = READY_BASE_MS;
+    let attempts = 0;
+    for (;;) {
+      try {
+        await client.execute("SELECT 1");
+        if (attempts > 0) console.warn(`[turso] db endpoint ready after ${attempts} probe(s)`);
+        return;
+      } catch (e) {
+        attempts++;
+        const retryable = isEndpointNotReady(e);
+        if (!retryable || Date.now() + delay >= deadline) {
+          if (retryable) {
+            console.error(
+              `[turso] db endpoint not serving after ${attempts} probe(s) / ${readyDeadlineMs()}ms`,
+            );
+          }
+          throw e;
+        }
+        await sleep(jittered(delay));
+        delay = Math.min(delay * 2, READY_CEIL_MS);
+      }
+    }
   }
 
   /** The catalog db connection for the cold session index (retention strategy B). Per-SCOPE, so a
