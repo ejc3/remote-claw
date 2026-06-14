@@ -337,6 +337,31 @@ describe("FileDbLocator lock semantics", () => {
     }
   });
 
+  it("awaits the locator's awaitReady before use — a failure rejects acquire and is NOT cached (next open is fresh)", async () => {
+    // The cloud locator's awaitReady waits out the create→serve 404 window; acquire must await it before
+    // caching/using the client, and on failure must close + NOT cache the half-open client so a retry opens
+    // a fresh one. Model that with a FileDbLocator whose awaitReady fails once, then succeeds.
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-ready-"));
+    dirs.push(dir);
+    class FlakyReadyLocator extends FileDbLocator {
+      fails = 1;
+      async awaitReady(_client: Client, _token: string): Promise<void> {
+        if (this.fails > 0) {
+          this.fails--;
+          throw new Error("endpoint not ready (test)");
+        }
+      }
+    }
+    const be = new SqliteMultiBackend(new FlakyReadyLocator(dir));
+    // First publish: awaitReady throws → acquire rejects and caches nothing.
+    await expect(be.publish(A, frame(1))).rejects.toThrow(/not ready/);
+    // Second publish: a FRESH client is opened (the broken one wasn't cached), awaitReady now passes, lands.
+    await expect(be.publish(A, frame(1))).resolves.toBeDefined();
+    const sub = await be.subscribe(A, undefined);
+    expect(sub).not.toBeNull();
+    expect(seqs(await take(sub as ReadableStream<WireFrame>, 1))).toEqual([1]);
+  });
+
   it("a reader sees the last committed snapshot while a writer holds an open transaction (no SQLITE_BUSY)", async () => {
     const { dir } = mkBackend();
     const loc = new FileDbLocator(dir);

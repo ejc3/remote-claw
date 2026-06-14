@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Client } from "@libsql/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { FileDbLocator } from "../../lib/broker/sqlite-multi";
 import { selectLocatorFromEnv, TursoCloudDbLocator } from "../../lib/broker/turso-cloud-locator";
@@ -150,6 +151,67 @@ describe("TursoCloudDbLocator", () => {
       if (prev === undefined) delete process.env.RC_TURSO_KNOWN_TTL_MS;
       else process.env.RC_TURSO_KNOWN_TTL_MS = prev;
     }
+  });
+
+  // awaitReady — the create→serve propagation guard. After the Platform-API create returns, the new db's
+  // libSQL endpoint can briefly 404 (or its host not resolve) until it propagates; awaitReady probes the
+  // just-opened client until it serves. (This is the fix for the production "SERVER_ERROR: HTTP 404" on a
+  // fresh per-session db — verified here with a fake client, like the rest of the cloud locator.)
+  const fakeClient = (execute: () => Promise<unknown>): Client =>
+    ({ execute, close: () => {} }) as unknown as Client;
+  // The exact @libsql/client shape: LibsqlError(code SERVER_ERROR) wrapping HttpServerError(status 404).
+  const notReady404 = (): Error =>
+    Object.assign(new Error("SERVER_ERROR: Server returned HTTP status 404"), {
+      code: "SERVER_ERROR",
+      cause: Object.assign(new Error("Server returned HTTP status 404"), { status: 404 }),
+    });
+
+  it("awaitReady retries the create→serve 404 window, then resolves once the endpoint serves", async () => {
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+    let n = 0;
+    const client = fakeClient(async () => {
+      if (n++ < 3) throw notReady404(); // endpoint 404s for the first 3 probes, then propagates
+      return { rows: [] };
+    });
+    await expect(loc.awaitReady(client, TOKEN_A)).resolves.toBeUndefined();
+    expect(n).toBe(4); // 3 not-ready probes + 1 success
+  });
+
+  it("awaitReady fails fast on a non-404 error (e.g. auth 401) — never masks a real failure", async () => {
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+    let n = 0;
+    const client = fakeClient(async () => {
+      n++;
+      throw Object.assign(new Error("AUTH_FAILED"), { code: "AUTH", cause: { status: 401 } });
+    });
+    await expect(loc.awaitReady(client, TOKEN_A)).rejects.toThrow(/AUTH_FAILED/);
+    expect(n).toBe(1); // a 401 is not a readiness transient — no retry, fail immediately
+  });
+
+  it("awaitReady gives up (throws the 404) once the deadline elapses without the endpoint serving", async () => {
+    const prev = process.env.RC_TURSO_READY_DEADLINE_MS;
+    process.env.RC_TURSO_READY_DEADLINE_MS = "250"; // tiny budget so the test is fast
+    try {
+      const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+      const client = fakeClient(async () => {
+        throw notReady404(); // never becomes ready
+      });
+      await expect(loc.awaitReady(client, TOKEN_A)).rejects.toThrow(/404/);
+    } finally {
+      if (prev === undefined) delete process.env.RC_TURSO_READY_DEADLINE_MS;
+      else process.env.RC_TURSO_READY_DEADLINE_MS = prev;
+    }
+  });
+
+  it("awaitReady also retries an unresolved-host/connection error during propagation", async () => {
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+    let n = 0;
+    const client = fakeClient(async () => {
+      if (n++ < 2) throw new Error("getaddrinfo ENOTFOUND rc-prod-s-deadbeef-myorg.turso.io");
+      return { rows: [] };
+    });
+    await expect(loc.awaitReady(client, TOKEN_A)).resolves.toBeUndefined();
+    expect(n).toBe(3); // 2 DNS-not-resolving probes + 1 success
   });
 
   it("idFor + probeAuthToken expose the db name + group token for the retention sweep", () => {
