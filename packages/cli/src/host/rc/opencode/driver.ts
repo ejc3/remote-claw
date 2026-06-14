@@ -105,8 +105,9 @@ const DEFAULT_EMITTED_CAP = 4096;
 
 /** Best-effort human-readable text from a `session.error` payload (OpenCode sends `error.toObject()`,
  *  typically `{ name, data: { message } }`, but shapes vary by provider). Falls back through message →
- *  name → JSON so the viewer always gets SOMETHING rather than a silent failure. */
-function errText(error: unknown): string {
+ *  name → JSON so the viewer always gets SOMETHING rather than a silent failure. Exported for unit tests
+ *  (it backs BOTH the session.error result frame and the failed-/compact result frame). */
+export function errText(error: unknown): string {
   if (error == null) return "unknown error";
   if (typeof error === "string") return error;
   if (typeof error === "object") {

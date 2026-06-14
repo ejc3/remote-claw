@@ -9,7 +9,7 @@ import {
   type OpencodeEvent,
   parseSseFrame,
 } from "./client.js";
-import { OpencodeDriver } from "./driver.js";
+import { errText, OpencodeDriver } from "./driver.js";
 
 // Driver-level CAPTURE test. We drive the REAL OpencodeDriver + a REAL HostRcRelay (via bridgeSession),
 // replacing only the two transports with controllable fakes:
@@ -782,5 +782,33 @@ describe("OpencodeDriver — documented behavior (session.error / /compact / bla
     ).toBe(true);
     // …and the session left the "working" state rather than hanging.
     expect((captured as unknown as Session).workerStatus).toBe("idle");
+  });
+});
+
+// errText backs BOTH error result frames (session.error and a failed /compact). It must NEVER throw and
+// must ALWAYS yield non-empty text for any error shape a provider might send (verification-review gap).
+describe("errText — robust error-text extraction", () => {
+  it("prefers data.message → message → name, in that order", () => {
+    expect(errText({ name: "E", message: "m", data: { message: "d" } })).toBe("d");
+    expect(errText({ name: "E", message: "m" })).toBe("m");
+    expect(errText({ name: "ProviderError" })).toBe("ProviderError");
+  });
+  it("handles primitives: string passes through, number/boolean stringify", () => {
+    expect(errText("plain failure")).toBe("plain failure");
+    expect(errText(42)).toBe("42");
+    expect(errText(true)).toBe("true");
+  });
+  it("falls back to JSON for an unkeyed object, and to 'unknown error' for null/unstringifiable", () => {
+    expect(errText({ code: 7 })).toBe('{"code":7}'); // no message/name/data → JSON of the object
+    // All recognized keys present but EMPTY → they don't satisfy the !== "" guards, so it JSON-stringifies
+    // the whole object (still SOMETHING for the viewer, never empty).
+    expect(errText({ name: "", message: "", data: { message: "" } })).toBe(
+      '{"name":"","message":"","data":{"message":""}}',
+    );
+    expect(errText(null)).toBe("unknown error");
+    expect(errText(undefined)).toBe("unknown error");
+    const circular: Record<string, unknown> = {};
+    circular.self = circular; // JSON.stringify throws → caught → "unknown error"
+    expect(errText(circular)).toBe("unknown error");
   });
 });

@@ -106,4 +106,20 @@ describe("OpencodeClient.events (server-wide stream → per-session filter)", ()
     for await (const ev of c.events("ses_1", new AbortController().signal)) got.push(ev.type);
     expect(got).toEqual(["message.part.updated", "message.updated"]);
   });
+
+  it("derivation precedence: the TOP-LEVEL sessionID is authoritative over a conflicting nested one", async () => {
+    // The derivation is sessionID ?? part.sessionID ?? info.sessionID — top-level wins. A (malformed)
+    // event with OUR id at top level but a different id nested is KEPT for us; a foreign top-level id is
+    // DROPPED even if a nested id matches us. Tests the real events() filter via a streamed frame.
+    const c = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: streamingFetch([
+        frame({ type: "a", properties: { sessionID: "ses_1", part: { sessionID: "ses_OTHER" } } }), // top=ours → KEEP
+        frame({ type: "b", properties: { sessionID: "ses_OTHER", info: { sessionID: "ses_1" } } }), // top=foreign → DROP
+      ]),
+    });
+    const got: string[] = [];
+    for await (const ev of c.events("ses_1", new AbortController().signal)) got.push(ev.type);
+    expect(got).toEqual(["a"]); // only the top-level-ours event survives
+  });
 });
