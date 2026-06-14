@@ -300,6 +300,73 @@ describe("runTmuxDriver wiring", () => {
     expect(spy.killed()).toBe(true);
   });
 
+  it("local-prompt ledger: suppresses OUR injected prompt's transcript echo, surfaces a LOCALLY-typed one", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-ledger-cwd-");
+    const home = tmp("rc-ledger-home-");
+    const projDir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(projDir, { recursive: true });
+    const PINNED = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const transcript = join(projDir, `${PINNED}.jsonl`);
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const userFrame = (uuid: string, text: string) =>
+      `${JSON.stringify({ type: "user", uuid, message: { role: "user", content: [{ type: "text", text }] } })}\n`;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: PINNED,
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      await writeFile(transcript, ""); // create the pinned file so capture attaches
+      // 1) A VIEWER prompt drives the pane → the inject pump records "say hi" in the ledger (onInjected).
+      client.pushInbound(inFrame(identity, "user", "msg-1", "say hi"));
+      await waitFor(() => spy.calls.some((c) => c[0] === "send-keys" && c.includes("Enter")));
+      // The relay echoes the viewer prompt ONCE (its own inbound echo) so every device sees it.
+      await waitFor(
+        () =>
+          client.content.filter((p) => p.recordKind === "user" && p.text.includes("say hi"))
+            .length >= 1,
+      );
+      // 2) claude writes the ECHO of our injected prompt → must be SUPPRESSED (matched in the ledger).
+      // 3) A LOCAL prompt typed at the pane (never injected) → SURFACED via local_prompt.
+      await appendFile(transcript, userFrame("u-echo", "say hi"));
+      await appendFile(transcript, userFrame("u-local", "typed locally"));
+      await waitFor(() =>
+        client.content.some((p) => p.recordKind === "user" && p.text.includes("typed locally")),
+      );
+      await new Promise((r) => setTimeout(r, 60)); // give the echo a chance to (wrongly) double
+      const sayHi = client.content.filter(
+        (p) => p.recordKind === "user" && p.text.includes("say hi"),
+      );
+      expect(sayHi).toHaveLength(1); // ONLY the relay inbound echo — the transcript echo was suppressed
+      const local = client.content.filter(
+        (p) => p.recordKind === "user" && p.text.includes("typed locally"),
+      );
+      expect(local).toHaveLength(1); // the locally-typed prompt surfaced (local_prompt)
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
   it("ends the bridge on pane death (sessionGone) with NO external abort, and kills the session", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();

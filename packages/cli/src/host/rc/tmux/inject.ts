@@ -135,6 +135,11 @@ export interface InjectPumpOptions {
     error: unknown,
     info?: { attempt: number; phase: "paste" | "submit" | "interrupt" },
   ) => void;
+  /** Called with a prompt's text right after it is SUCCESSFULLY submitted, so the driver can record it in
+   *  its local-prompt ledger — claude echoes the prompt as a `user` transcript line, which must be
+   *  recognized as OURS (suppressed) and not re-rendered as a locally-typed prompt. Fired synchronously
+   *  after the Enter lands and BEFORE the next capture poll could read the echo. */
+  onInjected?: (text: string) => void;
 }
 
 /**
@@ -190,7 +195,12 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
         sleep,
         (attempt, error) => opts.onError?.(ev.eventType, error, { attempt, phase: "submit" }),
       );
-      if (submitted) session.ack(ev.eventId);
+      if (submitted) {
+        // Record BEFORE acking so the ledger entry is in place before the echo can be captured (the
+        // capture loop only reads the transcript on its next timer poll, after claude writes the line).
+        opts.onInjected?.(text);
+        session.ack(ev.eventId);
+      }
     } else if (isInterrupt(ev)) {
       const sent = await retryUntil(
         () => tmux.sendKeys(target, "Escape"),

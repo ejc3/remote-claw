@@ -268,6 +268,22 @@ export function transcriptToPayload(line: string): UpstreamPayload | null {
   return payload;
 }
 
+/** The concatenated TEXT of a `user` payload's message — a string `content`, or the text blocks of an
+ *  array `content` joined. "" when there is no text (e.g. a tool_result-only user turn). The driver's
+ *  local-prompt ledger uses this to tell a locally-typed prompt from the echo of one WE injected. */
+export function userMessageText(message: { content?: unknown } | undefined): string {
+  const c = message?.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  return c
+    .filter((b): b is { type: string; text: string } => {
+      const bb = b as { type?: unknown; text?: unknown };
+      return bb.type === "text" && typeof bb.text === "string";
+    })
+    .map((b) => b.text)
+    .join("");
+}
+
 /** A transcript line's ISO-8601 `timestamp` (e.g. `2026-06-07T18:18:59.563Z`), used to MERGE the main
  *  transcript with the separate sub-agent files into one chronological stream. Returns "" when the field
  *  is absent or the line is unparseable. ISO-8601 UTC (`…Z`) compares correctly as a plain string. In

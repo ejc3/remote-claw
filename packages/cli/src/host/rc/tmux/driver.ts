@@ -9,8 +9,9 @@
 // router/backends, and the web viewer are unchanged.
 //
 // Review findings handled here: #2 dedup (uuid set before pushUpstream), #5 ack (in the inject pump),
-// #6 local-prompt visibility (documented limitation — a prompt typed into the LOCAL tmux TUI is
-// upstream `user` text the relay drops, so it won't show in the web transcript), #9 strict inject queue.
+// #6 local-prompt visibility (a prompt typed into the LOCAL tmux TUI is surfaced via the local-prompt
+// LEDGER — parity with the opencode driver: an upstream `user` text line that doesn't match a prompt WE
+// injected is tagged `local_prompt` so the relay renders it), #9 strict inject queue.
 
 import { randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
@@ -41,6 +42,7 @@ import {
   subagentDir,
   TranscriptTailer,
   transcriptToPayload,
+  userMessageText,
 } from "./transcript.js";
 
 /** v1 capabilities: auto-approve permissions (no structured can_use_tool), real status from the
@@ -372,6 +374,29 @@ export async function runTmuxDriver(
   // claude's final lines reach the viewer before abort (the relay stops consuming once aborted, review
   // codex#2). seenUuids makes the extra drain idempotent.
   const seenUuids = new Set<string>(); // review #2: re-pushing a uuid does NOT dedup at the relay
+  // LOCAL-PROMPT LEDGER (parity with the opencode driver): a multiset of the prompt texts WE injected via
+  // the pane. claude echoes every prompt as a `user` transcript line; one that matches a recorded inject
+  // is OUR echo (the relay already showed the viewer's prompt → suppress it), while an unmatched user-text
+  // line was typed at the LOCAL tmux TUI → tag `local_prompt` so the relay surfaces it for viewers.
+  // FIFO-capped so a never-matching echo (e.g. claude reshaping the text) can't grow it unbounded.
+  const injectedTexts = new Map<string, number>();
+  const INJECTED_LEDGER_CAP = 256;
+  const recordInjected = (text: string): void => {
+    injectedTexts.set(text, (injectedTexts.get(text) ?? 0) + 1);
+    while (injectedTexts.size > INJECTED_LEDGER_CAP) {
+      const oldest = injectedTexts.keys().next().value; // Map preserves insertion order → FIFO eviction
+      if (oldest === undefined) break;
+      injectedTexts.delete(oldest);
+    }
+  };
+  /** Consume one matching entry; true ⇒ this user line is OUR injected echo (caller suppresses it). */
+  const consumeInjected = (text: string): boolean => {
+    const n = injectedTexts.get(text) ?? 0;
+    if (n <= 0) return false;
+    if (n === 1) injectedTexts.delete(text);
+    else injectedTexts.set(text, n - 1);
+    return true;
+  };
   const discoveryWarnMs = deps.discoveryWarnMs ?? DISCOVERY_WARN_MS;
   const paneWatchMs = deps.paneWatchMs ?? PANE_WATCH_MS;
   const paneCheckEvery = Math.max(1, Math.round(paneWatchMs / pollMs)); // ≈paneWatchMs between probes
@@ -417,6 +442,15 @@ export async function runTmuxDriver(
     if (uuid !== null) {
       if (seenUuids.has(uuid)) return; // dedup BEFORE pushUpstream (review #2)
       seenUuids.add(uuid);
+    }
+    // Local-prompt ledger — only TOP-LEVEL user TEXT turns (a sub-agent's user lines are tool_results, no
+    // text; tool_result-only turns have no text either → pass through for the relay's tool_result branch).
+    if (payload.type === "user" && parentTaskId === undefined) {
+      const text = userMessageText(payload.message);
+      if (text !== "") {
+        if (consumeInjected(text)) return; // OUR injected prompt's echo — drop (the relay already showed it)
+        payload.local_prompt = true; // typed at the local pane → surface it for viewers
+      }
     }
     status.onLine(payload);
     session.pushUpstream(payload);
@@ -555,6 +589,7 @@ export async function runTmuxDriver(
     sleep,
     onError: (event, error, info) =>
       tracer.warn("inject failed", { event, error: String(error), ...info }),
+    onInjected: recordInjected, // ledger: claude's echo of this prompt is OUR own → suppressed in capture
   }).catch((e) => onPumpCrash("inject", e));
 
   try {
