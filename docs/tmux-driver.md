@@ -376,6 +376,14 @@ tailer (an **unambiguous** rotation signal, unlike newest-in-cwd). If the hook n
 disables hooks — verified: the sentinel stays empty but the pinned `<uuid>.jsonl` is still written), the
 driver **falls back** to the `--session-id` pin discovery above. Tracked in issue #101.
 
+**Merging with the user's `--settings` (edge cases).** The merged `--settings` is inserted **before** any
+`--` separator in the user's args (a token after `--` is a literal positional, which would silently drop
+the hook and pollute the prompt). If the user's own `--settings` can't be parsed into an object (missing
+file / invalid JSON / non-object), the driver **passes the user's args through unchanged and skips the
+hook** (falling back to the pin) rather than masking claude's own settings error. Note: when the user
+passes a `--settings` **file**, the merge inlines the resolved JSON into the spawned argv (visible to
+`ps`); on a shared box with secrets in that file, prefer `--rc-no-session-hook`.
+
 ### 7.2 Local-prompt visibility (follow-up)
 
 A prompt typed into the **local** tmux TUI is upstream `user` text the relay drops, so it won't appear

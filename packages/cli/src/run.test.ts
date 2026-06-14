@@ -211,4 +211,25 @@ describe("runWrapper (functional)", () => {
     expect(calls).toEqual([{ bin: "claude", args: ["chat"] }]); // plain spawn, rc flag consumed
     expect(lines.join("")).toMatch(/needs --rc-app/);
   });
+
+  it.skipIf(!haveOpenssl())(
+    "warns that --rc-session-hook is a no-op for a non-tmux driver (here: mitm)",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "rc-run-hookwarn-"));
+      const secret = join(dir, "secret");
+      const lines: string[] = [];
+      try {
+        const code = await runWrapper(
+          ["chat", "--rc-file", secret, "--rc-app", "http://broker.example", "--rc-session-hook"],
+          { spawnRcEnv: async () => 0, stderr: (l) => lines.push(l) },
+        );
+        expect(code).toBe(0); // the flag is a harmless no-op here — we warn, we do NOT fail
+        expect(lines.join("")).toMatch(
+          /--rc-session-hook \/ --rc-no-session-hook only apply to --rc-driver=tmux; ignored for mitm/,
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

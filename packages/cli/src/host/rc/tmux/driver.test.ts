@@ -564,6 +564,97 @@ describe("runTmuxDriver wiring", () => {
     }
   });
 
+  it("--rc-session-hook: inserts the merged --settings BEFORE a `--` separator (claude parses it as an option)", async () => {
+    // Regression (codex): appending --settings AFTER the user's `--` makes claude treat it as a literal
+    // prompt token — the hook never registers AND the JSON pollutes the prompt. It must land in OPTIONS.
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-hookdd-cwd-");
+    const home = tmp("rc-hookdd-home-");
+    const sentinel = join(tmp("rc-hookdd-sent-"), "hook.ndjson");
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: ["--", "helloprompt"], // a `--` separator with a positional after it
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        injectSessionHook: true,
+        sentinelPath: sentinel,
+        sessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      const cmd = spy.command();
+      expect(cmd).toContain("--settings");
+      expect(cmd).toContain("SessionStart");
+      expect(cmd).toContain("helloprompt");
+      // --settings lands in the OPTIONS region — BEFORE the `--`-separated positional (the buggy version
+      // appended it AFTER, making claude treat it as a literal prompt token and drop the hook).
+      expect(cmd.indexOf("--settings")).toBeLessThan(cmd.indexOf("helloprompt"));
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("--rc-session-hook: a user --settings we can't parse DISABLES the hook (args passed through, claude errors natively)", async () => {
+    // Regression (codex): don't mask claude's own bad-settings error — pass the user's --settings through
+    // verbatim and skip hook injection (discovery falls back to the pin).
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-hookbad-cwd-");
+    const home = tmp("rc-hookbad-home-");
+    const sentinel = join(tmp("rc-hookbad-sent-"), "hook.ndjson");
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: ["--settings", "/no/such/settings/file.json"], // unparseable (missing file)
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        injectSessionHook: true,
+        sentinelPath: sentinel,
+        sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      const cmd = spy.command();
+      expect(cmd).toContain("/no/such/settings/file.json"); // user's --settings passed through unchanged
+      expect(cmd).not.toContain("SessionStart"); // no hook injected
+      expect(cmd).not.toContain("hook.ndjson"); // no sentinel-based merge
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
   it("--rc-session-hook: FALLS BACK to the pinned transcript when the hook never fires (e.g. --bare)", async () => {
     // Verified live: claude --bare skips the hook (sentinel never written) but STILL writes the pinned
     // <uuid>.jsonl. So with the hook enabled, if the sentinel never appears, discovery must fall back to

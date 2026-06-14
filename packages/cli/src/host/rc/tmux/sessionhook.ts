@@ -25,21 +25,33 @@ function shq(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
-/** The settings fragment registering our SessionStart hook. The command appends the hook stdin payload
- *  (one JSON object) followed by a newline to `sentinelPath`, so the driver reads it as NDJSON across
- *  startup + rotations. */
+/** The settings fragment registering our SessionStart hook. The command writes the hook stdin payload
+ *  (one compact JSON object claude emits) + a trailing newline to `sentinelPath` in ONE append:
+ *  `printf '%s\n' "$(cat)" >> p` is a single O_APPEND write(2), so overlapping hook fires (concurrent
+ *  rotations) can't interleave a half-written line — vs `cat >> p; printf '\n' >> p`, two separate
+ *  appends another fire could split. The data goes through printf's `%s` ARGUMENT, so a `%` in the
+ *  payload is never interpreted as a format. The driver reads the file as NDJSON across startup +
+ *  rotations. */
 export function sessionHookFragment(sentinelPath: string): {
   hooks: { SessionStart: Array<{ hooks: Array<{ type: "command"; command: string }> }> };
 } {
   const p = shq(sentinelPath);
-  const command = `cat >> ${p}; printf '\\n' >> ${p}`;
+  const command = `printf '%s\\n' "$(cat)" >> ${p}`;
   return { hooks: { SessionStart: [{ hooks: [{ type: "command", command }] }] } };
 }
 
-/** Parse a `--settings` value the user passed: inline JSON if it parses as an object, else a file path to
- *  read+parse (claude's own `<file-or-json>` rule). Returns `{}` when absent/unreadable/non-object — the
- *  merge still injects our hook. Never throws. */
-export async function parseUserSettings(value: string | null): Promise<Record<string, unknown>> {
+/** Parse a `--settings` value the user passed: inline JSON object, else a file path to read+parse
+ *  (claude's own `<file-or-json>` rule). Returns:
+ *   - `{}` when ABSENT/blank (no user settings → we inject our hook fresh),
+ *   - the parsed OBJECT when usable,
+ *   - `null` when the user passed a NON-EMPTY value we can't parse into an object (missing file / invalid
+ *     JSON / non-object). On `null` the caller passes the user's args through UNCHANGED and skips hook
+ *     injection, so claude behaves natively (incl. its own error on a bad settings file) rather than us
+ *     silently masking it.
+ *  Never throws. */
+export async function parseUserSettings(
+  value: string | null,
+): Promise<Record<string, unknown> | null> {
   if (value === null || value.trim() === "") return {};
   const asObj = (s: string): Record<string, unknown> | null => {
     try {
@@ -57,19 +69,24 @@ export async function parseUserSettings(value: string | null): Promise<Record<st
     const fromFile = asObj(await readFile(value, "utf8"));
     if (fromFile !== null) return fromFile;
   } catch {
-    /* not a readable file either — fall through to {} */
+    /* not a readable file either — fall through to the unparseable signal */
   }
-  return {};
+  return null; // non-empty but unparseable → caller falls back (no hook injection)
 }
 
-/** Deep-merge our SessionStart hook into the user's settings → a single `--settings` JSON string. Our
- *  hook is APPENDED to any existing `hooks.SessionStart` (the user's hooks run too), and every other
- *  settings key — including other hook events — is preserved untouched. */
+/** Deep-merge our SessionStart hook into the user's settings → a single `--settings` JSON string, or
+ *  `null` when the user passed a NON-EMPTY `--settings` we can't parse (the caller then SKIPS injection
+ *  and passes the user's args through unchanged — see parseUserSettings). Our hook is APPENDED to any
+ *  existing `hooks.SessionStart` array; other settings keys + other hook events are preserved untouched.
+ *  A user `hooks` that is a NON-object, or a `hooks.SessionStart` that is a NON-array, is REPLACED rather
+ *  than merged — but claude's schema requires those to be an object / an array, so such input is invalid
+ *  to claude anyway (we still emit valid, claude-acceptable settings). */
 export async function mergeSessionHookSettings(
   userSettings: string | null,
   sentinelPath: string,
-): Promise<string> {
+): Promise<string | null> {
   const base = await parseUserSettings(userSettings);
+  if (base === null) return null; // user passed an unparseable --settings → caller falls back, no hook
   const ours = sessionHookFragment(sentinelPath);
   const baseHooks =
     base.hooks !== null && typeof base.hooks === "object" && !Array.isArray(base.hooks)
@@ -83,9 +100,34 @@ export async function mergeSessionHookSettings(
   return JSON.stringify(merged);
 }
 
+/** Re-insert a single merged `--settings <value>` into argv BEFORE any `--` separator, so claude parses
+ *  it as an OPTION. A token placed AFTER `--` is a literal positional (it would silently DROP our hook
+ *  AND pollute the prompt with the JSON), so appending blindly is wrong whenever the user used `--`.
+ *  `rest` is argv with the user's own `--settings` already stripped (see extractSettingsArg). Pure. */
+export function insertSettingsArg(rest: readonly string[], value: string): string[] {
+  const sep = rest.indexOf("--");
+  const at = sep === -1 ? rest.length : sep;
+  return [...rest.slice(0, at), "--settings", value, ...rest.slice(at)];
+}
+
+/** Resolve whether to inject the SessionStart hook (DEFAULT ON). Precedence, highest first:
+ *  `--rc-no-session-hook` → off; `--rc-session-hook` → on; `RC_SESSION_HOOK` in the falsey set → off;
+ *  else on. Pure + unit-tested so the precedence AND the disable-value set (incl. "off") can't drift. */
+export function resolveInjectSessionHook(o: {
+  noFlag: boolean;
+  yesFlag: boolean;
+  env: string | undefined;
+}): boolean {
+  if (o.noFlag) return false;
+  if (o.yesFlag) return true;
+  return !["0", "false", "no", "off"].includes((o.env ?? "").trim().toLowerCase());
+}
+
 /** Extract the user's `--settings <val>` / `--settings=<val>` (before any `--` separator) from argv,
- *  returning the value (or null) and the args with that flag+value REMOVED — we re-add a single MERGED
- *  `--settings`. Only the first `--settings` is taken (claude uses one). Pure. */
+ *  returning the value (or null) and the args with ALL such flags+values REMOVED — we re-add a single
+ *  MERGED `--settings`. When the user passes more than one, the LAST value wins (matches claude, which
+ *  takes the last `--settings`); critically we must strip EVERY occurrence, else a later user
+ *  `--settings` would override our merged one downstream and DROP our hook. Pure. */
 export function extractSettingsArg(args: readonly string[]): {
   value: string | null;
   rest: string[];
@@ -96,19 +138,19 @@ export function extractSettingsArg(args: readonly string[]): {
   let value: string | null = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i] ?? "";
-    if (i < optEnd && value === null) {
+    if (i < optEnd) {
       const eq = a.match(/^--settings=(.*)$/);
       if (eq) {
-        value = eq[1] ?? "";
+        value = eq[1] ?? ""; // keep overwriting → LAST --settings wins; strip this flag from rest
         continue;
       }
       if (a === "--settings") {
         const v = args[i + 1];
-        if (v !== undefined) {
-          value = v;
-          i++; // consume the value token too
+        if (v !== undefined && i + 1 < optEnd) {
+          value = v; // value token is a real option value (not the `--` separator)
+          i++; // consume it too
         }
-        continue; // drop a dangling --settings with no value
+        continue; // drop the flag (and a dangling/`--`-adjacent one with no usable value)
       }
     }
     rest.push(a);

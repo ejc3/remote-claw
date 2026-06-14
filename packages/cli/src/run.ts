@@ -16,6 +16,7 @@ import { gitInfo } from "./host/rc/gitinfo.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
 import { DEFAULT_OPENCODE_MODEL, runOpencodeDriver } from "./host/rc/opencode/driver.js";
 import { runTmuxDriver } from "./host/rc/tmux/driver.js";
+import { resolveInjectSessionHook } from "./host/rc/tmux/sessionhook.js";
 import { runRcTrace } from "./host/rc/trace-run.js";
 import { runIdentity } from "./identity.js";
 import { runPass } from "./pass.js";
@@ -182,6 +183,17 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       (process.env.RC_DRIVER ?? "").trim() ||
       "mitm"
     ).toLowerCase();
+    // The SessionStart-hook flags only apply to the tmux driver (transcript discovery); warn if they
+    // were EXPLICITLY passed with another KNOWN driver so the no-op isn't silent. (An unknown driver
+    // gets its own error below — no need to also nag about the hook flag there.)
+    if (
+      (driver === "mitm" || driver === "opencode") &&
+      (rc["rc-session-hook"] === true || rc["rc-no-session-hook"] === true)
+    ) {
+      warn(
+        `remote-claw: --rc-session-hook / --rc-no-session-hook only apply to --rc-driver=tmux; ignored for ${driver}\n`,
+      );
+    }
     if (driver === "mitm") {
       return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
     }
@@ -410,17 +422,13 @@ async function runTmuxDriverPath(
       ...(backend !== undefined ? { backend } : {}),
     };
     // SessionStart hook (merged with any --settings) for exact transcript discovery + rotation-follow,
-    // no scan. DEFAULT ON; disable with `--rc-no-session-hook` or RC_SESSION_HOOK=0. Precedence:
-    // --rc-no-session-hook > --rc-session-hook > RC_SESSION_HOOK env > default(on).
-    const envHook = (process.env.RC_SESSION_HOOK ?? "").trim().toLowerCase();
-    const injectSessionHook =
-      rc["rc-no-session-hook"] === true
-        ? false
-        : rc["rc-session-hook"] === true
-          ? true
-          : ["0", "false", "no"].includes(envHook)
-            ? false
-            : true;
+    // no scan. DEFAULT ON; precedence (pure + unit-tested in sessionhook.ts):
+    // --rc-no-session-hook > --rc-session-hook > RC_SESSION_HOOK (0/false/no/off) > default(on).
+    const injectSessionHook = resolveInjectSessionHook({
+      noFlag: rc["rc-no-session-hook"] === true,
+      yesFlag: rc["rc-session-hook"] === true,
+      env: process.env.RC_SESSION_HOOK,
+    });
     // Couple Ctrl-C / SIGTERM to the driver's abort so teardown (flush + kill-session) runs. Record
     // which signal fired so we return the shell-standard 128+N code (codex review #9) instead of 0.
     const ac = new AbortController();

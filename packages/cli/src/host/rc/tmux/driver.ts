@@ -23,6 +23,7 @@ import { RelayCore, type Session } from "../session.js";
 import { INJECT_BUFFER, runInjectPump } from "./inject.js";
 import {
   extractSettingsArg,
+  insertSettingsArg,
   mergeSessionHookSettings,
   parseSentinel,
   type SessionHookEvent,
@@ -174,6 +175,11 @@ export const PANE_WATCH_MS = 1000;
 export const PANE_GONE_CONFIRMATIONS = 2;
 /** How long after spawn to wait for claude's transcript before warning it may not be writing one. */
 export const DISCOVERY_WARN_MS = 15_000;
+/** With the SessionStart hook ON but the session id UNKNOWN (a `--continue`/picker run, no pin), how long
+ *  to let the hook sentinel report the EXACT transcript before falling back to the newest-file guess — so
+ *  a concurrent same-cwd sibling isn't mis-attached in the window before the hook fires. After this we
+ *  still fall back (covers `--bare`, where the hook can't fire at all). */
+export const HOOK_GRACE_MS = 4000;
 /** Bounded wait for the relay's final flush + the pumps to settle on teardown, so a hung `serve()` or a
  *  hung tmux exec can't block `kill-session` (codex review #3/#7) — mirrors launch.ts's bounded wait. */
 export const TEARDOWN_FLUSH_MS = 2000;
@@ -289,18 +295,28 @@ export async function runTmuxDriver(
   // writes the EXACT transcript_path/session_id to a per-session sentinel on start + every rotation. When
   // on, discovery reads the sentinel (exact, no scan) and follows rotations; the pin/id lookup is the
   // fallback if the hook never fires (e.g. --bare disables hooks).
-  const sentinelPath = deps.injectSessionHook
+  let sentinelPath = deps.injectSessionHook
     ? (deps.sentinelPath ?? join(tmpdir(), `rc-sessionhook-${session.id}.ndjson`))
     : null;
   let harnessArgs: readonly string[] = ctx.harnessArgs;
   if (sentinelPath !== null) {
     const { value, rest } = extractSettingsArg(ctx.harnessArgs);
     const merged = await mergeSessionHookSettings(value, sentinelPath);
-    harnessArgs = [...rest, "--settings", merged]; // single merged --settings (preserves user's)
-    tracer.debug("session-hook injected", {
-      sentinel: sentinelPath,
-      mergedUserSettings: value !== null,
-    });
+    if (merged === null) {
+      // The user passed a --settings we can't parse/merge — pass their args through UNCHANGED and skip
+      // the hook (discovery falls back to the --session-id pin), so claude behaves natively (incl. its
+      // own error on a bad settings file) rather than us silently masking it.
+      tracer.warn("session-hook disabled — user --settings not parseable; args passed through");
+      sentinelPath = null;
+    } else {
+      // Insert BEFORE any `--` so claude parses our --settings as an OPTION; after `--` it's a literal —
+      // the hook wouldn't register and the JSON would leak into the prompt.
+      harnessArgs = insertSettingsArg(rest, merged);
+      tracer.debug("session-hook injected", {
+        sentinel: sentinelPath,
+        mergedUserSettings: value !== null,
+      });
+    }
   }
   const command = shellQuoteCommand([
     "env",
@@ -459,6 +475,9 @@ export async function runTmuxDriver(
         // --resume/--session-id id), wait for THAT EXACT transcript — authoritative, so a concurrent
         // same-cwd sibling can NEVER be mis-attached. Only an unknown id (a --continue/picker session)
         // falls back to the newest-file heuristic. claude creates the file lazily, so null = poll again.
+        // When the hook is ON but the id is unknown, give the sentinel a HEAD START (HOOK_GRACE_MS) before
+        // guessing newest — the hook will report the exact path shortly, so we avoid mis-attaching a
+        // concurrent sibling in that window; after the grace we still fall back (e.g. --bare = no hook).
         const hookEv = await readSentinelEvent();
         const path =
           hookEv?.transcriptPath ??
@@ -466,13 +485,15 @@ export async function runTmuxDriver(
             ? await findTranscriptById(ctx.cwd, trackedId, deps.home, {
                 scanOtherDirs: discoverTick++ % scanEvery === 0,
               })
-            : await findNewestTranscript(dir, spawnedAt, {
-                exclude: preexisting,
-                onAmbiguity: (paths) =>
-                  tracer.warn("multiple fresh transcripts — picking newest", {
-                    paths: paths.join(", "),
-                  }),
-              }));
+            : sentinelPath !== null && Date.now() - spawnedAt < HOOK_GRACE_MS
+              ? null
+              : await findNewestTranscript(dir, spawnedAt, {
+                  exclude: preexisting,
+                  onAmbiguity: (paths) =>
+                    tracer.warn("multiple fresh transcripts — picking newest", {
+                      paths: paths.join(", "),
+                    }),
+                }));
         if (path !== null) {
           attach(path);
           tracer.debug("transcript discovered", {
