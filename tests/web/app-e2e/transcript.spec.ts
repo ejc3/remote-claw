@@ -87,7 +87,7 @@ test("a slash command renders as a command chip, not a chat pill (#41)", async (
   await expect(page.locator(".row-user .pill", { hasText: "/compact" })).toHaveCount(0);
 });
 
-test("the pass survives a browser refresh (it's restored from sessionStorage, not lost)", async ({
+test("the session AUTO-reconnects after a browser refresh (credential restored, no re-paste)", async ({
   page,
   seedHost,
 }) => {
@@ -97,10 +97,11 @@ test("the pass survives a browser refresh (it's restored from sessionStorage, no
   await page.getByRole("button", { name: "Connect" }).click();
   await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
 
-  // Reload: the fragment is already gone, so before the fix the pass was lost and the input was empty.
-  // Now it must be restored from sessionStorage so the user can reconnect without re-pasting.
+  // Reload: the fragment is gone, so the app restores the stored credential (§3.6) and AUTO-reconnects
+  // — it must land back on the session list, NOT the pass/token form (#110).
   await page.reload();
-  await expect(page.getByPlaceholder(/rcp1_/)).toHaveValue(pass);
+  await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
+  await expect(page.getByPlaceholder(/rcp1_/)).toHaveCount(0); // never re-shows the token form on reload
 });
 
 test("a granted permission stays resolved after a reload — no re-prompt (#56/#57)", async ({
@@ -123,9 +124,8 @@ test("a granted permission stays resolved after a reload — no re-prompt (#56/#
     .locator("section.chat")
     .screenshot({ path: "test-results/permission-resolved-e2e.png" });
 
-  // Reload → reconnect (pass restored from sessionStorage) → reopen the session.
+  // Reload → the stored credential AUTO-reconnects (no re-paste, #110) → reopen the session.
   await page.reload();
-  await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
 
   // The host replayed the LOGGED permission_resolved on catch_up, so the card renders resolved with

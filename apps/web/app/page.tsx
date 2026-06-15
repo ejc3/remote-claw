@@ -67,26 +67,10 @@ export default function Home() {
   const [handoffOtk, setHandoffOtk] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
-
-  // A credential may arrive in the URL fragment (never sent to the server): `#rcp1_…` is a (legacy, still
-  // accepted) bare pass — prefill it; `#otk1_…` is a ONE-TIME handoff token — defer it to a gesture-gated
-  // claim (NOT auto-claimed, so a prefetch/unfurler that runs JS can't burn it). Strip the fragment from
-  // the address bar in both cases. On a plain reload the fragment is gone, so fall back to the stored pass.
-  useEffect(() => {
-    const frag = window.location.hash.replace(/^#/, "");
-    if (frag.startsWith("rcp1_")) {
-      setPassInput(frag);
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    } else if (frag.startsWith("otk1_")) {
-      setHandoffOtk(frag);
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    } else {
-      // Restore a tab-scoped credential persisted under a NON-EXTRACTABLE device key (§3.6).
-      void loadCredential().then((saved) => {
-        if (saved !== null) setPassInput(saved);
-      });
-    }
-  }, []);
+  // True until we've checked storage on mount (and, if a credential is found, attempted to reconnect).
+  // Initial `true` so a RETURNING user sees a brief "reconnecting" splash instead of a flash of the pass
+  // form; SSR renders the splash too, so the first client render matches (no hydration mismatch).
+  const [restoring, setRestoring] = useState(true);
 
   const connect = useCallback(async (pass: string) => {
     setError(null);
@@ -107,40 +91,102 @@ export default function Home() {
     }
   }, []);
 
-  if (viewer === null) {
-    if (handoffOtk !== null) {
-      return (
-        <Pairing
-          otk={handoffOtk}
-          onConnect={(pass) => {
-            // Prefill the manual field too: the OTK is now burned, so if connect() fails (transient broker)
-            // the resolved pass must remain usable on the Connect screen rather than being lost.
-            setPassInput(pass);
-            setHandoffOtk(null);
-            connect(pass);
-          }}
-          onCancel={() => setHandoffOtk(null)}
-        />
-      );
+  // A credential may arrive in the URL fragment (never sent to the server): `#rcp1_…` is a (legacy, still
+  // accepted) bare pass — prefill it; `#otk1_…` is a ONE-TIME handoff token — defer it to a gesture-gated
+  // claim (NOT auto-claimed, so a prefetch/unfurler that runs JS can't burn it). Strip the fragment in both
+  // cases. On a PLAIN RELOAD the fragment is gone, so restore the stored credential (§3.6) and RECONNECT
+  // automatically — a reload should return to the console, not the pass form. `restoring` stays up through
+  // the connect attempt; a failure falls through to the Connect screen (pass prefilled + error shown) so
+  // the user can retry without re-pairing.
+  const restoredOnce = useRef(false);
+  useEffect(() => {
+    if (restoredOnce.current) return; // once-guard: React StrictMode double-invokes effects in dev
+    restoredOnce.current = true;
+    const entry = entryFromFragment(window.location.hash.replace(/^#/, ""));
+    if (entry.kind === "pass") {
+      setPassInput(entry.value);
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      setRestoring(false);
+    } else if (entry.kind === "handoff") {
+      setHandoffOtk(entry.value);
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      setRestoring(false);
+    } else {
+      void loadCredential()
+        .then(async (saved) => {
+          if (saved !== null) {
+            setPassInput(saved);
+            await connect(saved);
+          }
+        })
+        .catch(() => {}) // loadCredential's sessionStorage read can throw (blocked/partitioned) — fall to Connect
+        .finally(() => setRestoring(false));
     }
+  }, [connect]);
+
+  if (viewer !== null) {
     return (
-      <Connect
-        pass={passInput}
-        setPass={setPassInput}
-        connect={connect}
-        connecting={connecting}
-        error={error}
+      <Console
+        viewer={viewer}
+        onForget={() => {
+          clearCredential(); // "Forget" must actually forget — drop the tab-scoped encrypted blob
+          setViewer(null);
+        }}
+      />
+    );
+  }
+  // Restoring (mount, or an in-flight auto-reconnect from a stored credential): show a splash, not the
+  // pass form — a reload should land back in the console, never make the user re-enter the token.
+  if (restoring) {
+    return <Reconnecting />;
+  }
+  if (handoffOtk !== null) {
+    return (
+      <Pairing
+        otk={handoffOtk}
+        onConnect={(pass) => {
+          // Prefill the manual field too: the OTK is now burned, so if connect() fails (transient broker)
+          // the resolved pass must remain usable on the Connect screen rather than being lost.
+          setPassInput(pass);
+          setHandoffOtk(null);
+          connect(pass);
+        }}
+        onCancel={() => setHandoffOtk(null)}
       />
     );
   }
   return (
-    <Console
-      viewer={viewer}
-      onForget={() => {
-        clearCredential(); // "Forget" must actually forget — drop the tab-scoped encrypted blob
-        setViewer(null);
-      }}
+    <Connect
+      pass={passInput}
+      setPass={setPassInput}
+      connect={connect}
+      connecting={connecting}
+      error={error}
     />
+  );
+}
+
+/** Classify what's in the URL fragment on load: a legacy bare pass (`rcp1_`), a one-time handoff token
+ *  (`otk1_`), or nothing — in which case we restore + reconnect from the stored credential. Pure so the
+ *  load-time routing is unit-testable without a DOM. */
+export function entryFromFragment(
+  frag: string,
+): { kind: "pass"; value: string } | { kind: "handoff"; value: string } | { kind: "restore" } {
+  if (frag.startsWith("rcp1_")) return { kind: "pass", value: frag };
+  if (frag.startsWith("otk1_")) return { kind: "handoff", value: frag };
+  return { kind: "restore" };
+}
+
+/** A minimal splash shown while we check storage + auto-reconnect on load, so a returning user never
+ *  sees the pass form flash on reload. */
+export function Reconnecting() {
+  return (
+    <main className="connect">
+      <div className="connect-card">
+        <Brand />
+        <p className="muted">Connecting…</p>
+      </div>
+    </main>
   );
 }
 
@@ -153,7 +199,7 @@ function Brand() {
   );
 }
 
-function Connect(props: {
+export function Connect(props: {
   pass: string;
   setPass: (s: string) => void;
   connect: (s: string) => void;
@@ -167,8 +213,8 @@ function Connect(props: {
         <Brand />
         <h1>Drive your claude, remotely.</h1>
         <p className="muted">
-          Paste a machine <strong>pass</strong> to read and steer its claude sessions, end-to-end
-          encrypted. The broker never sees your keys or your messages.
+          Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
+          encrypted.
         </p>
         <textarea
           className="field"
@@ -176,7 +222,7 @@ function Connect(props: {
           onChange={(e) => props.setPass(e.target.value)}
           placeholder="rcp1_…"
           spellCheck={false}
-          rows={3}
+          rows={2}
         />
         <button
           type="button"
@@ -188,8 +234,7 @@ function Connect(props: {
         </button>
         {props.error !== null && <p className="error">Couldn’t load that pass: {props.error}</p>}
         <p className="hint">
-          Get a pass on the machine with <code>remote-claw --rc-pass</code>. A pass can read and
-          steer that machine’s sessions but is not the master secret.
+          Get one with <code>remote-claw --rc-pass</code> on the machine.
         </p>
       </div>
     </main>
