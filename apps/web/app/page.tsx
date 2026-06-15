@@ -67,26 +67,10 @@ export default function Home() {
   const [handoffOtk, setHandoffOtk] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
-
-  // A credential may arrive in the URL fragment (never sent to the server): `#rcp1_…` is a (legacy, still
-  // accepted) bare pass — prefill it; `#otk1_…` is a ONE-TIME handoff token — defer it to a gesture-gated
-  // claim (NOT auto-claimed, so a prefetch/unfurler that runs JS can't burn it). Strip the fragment from
-  // the address bar in both cases. On a plain reload the fragment is gone, so fall back to the stored pass.
-  useEffect(() => {
-    const frag = window.location.hash.replace(/^#/, "");
-    if (frag.startsWith("rcp1_")) {
-      setPassInput(frag);
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    } else if (frag.startsWith("otk1_")) {
-      setHandoffOtk(frag);
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    } else {
-      // Restore a tab-scoped credential persisted under a NON-EXTRACTABLE device key (§3.6).
-      void loadCredential().then((saved) => {
-        if (saved !== null) setPassInput(saved);
-      });
-    }
-  }, []);
+  // True until we've checked storage on mount (and, if a credential is found, attempted to reconnect).
+  // Initial `true` so a RETURNING user sees a brief "reconnecting" splash instead of a flash of the pass
+  // form; SSR renders the splash too, so the first client render matches (no hydration mismatch).
+  const [restoring, setRestoring] = useState(true);
 
   const connect = useCallback(async (pass: string) => {
     setError(null);
@@ -107,40 +91,98 @@ export default function Home() {
     }
   }, []);
 
-  if (viewer === null) {
-    if (handoffOtk !== null) {
-      return (
-        <Pairing
-          otk={handoffOtk}
-          onConnect={(pass) => {
-            // Prefill the manual field too: the OTK is now burned, so if connect() fails (transient broker)
-            // the resolved pass must remain usable on the Connect screen rather than being lost.
-            setPassInput(pass);
-            setHandoffOtk(null);
-            connect(pass);
-          }}
-          onCancel={() => setHandoffOtk(null)}
-        />
-      );
+  // A credential may arrive in the URL fragment (never sent to the server): `#rcp1_…` is a (legacy, still
+  // accepted) bare pass — prefill it; `#otk1_…` is a ONE-TIME handoff token — defer it to a gesture-gated
+  // claim (NOT auto-claimed, so a prefetch/unfurler that runs JS can't burn it). Strip the fragment in both
+  // cases. On a PLAIN RELOAD the fragment is gone, so restore the stored credential (§3.6) and RECONNECT
+  // automatically — a reload should return to the console, not the pass form. `restoring` stays up through
+  // the connect attempt; a failure falls through to the Connect screen (pass prefilled + error shown) so
+  // the user can retry without re-pairing.
+  useEffect(() => {
+    const entry = entryFromFragment(window.location.hash.replace(/^#/, ""));
+    if (entry.kind === "pass") {
+      setPassInput(entry.value);
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      setRestoring(false);
+    } else if (entry.kind === "handoff") {
+      setHandoffOtk(entry.value);
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      setRestoring(false);
+    } else {
+      void loadCredential()
+        .then(async (saved) => {
+          if (saved !== null) {
+            setPassInput(saved);
+            await connect(saved);
+          }
+        })
+        .finally(() => setRestoring(false));
     }
+  }, [connect]);
+
+  if (viewer !== null) {
     return (
-      <Connect
-        pass={passInput}
-        setPass={setPassInput}
-        connect={connect}
-        connecting={connecting}
-        error={error}
+      <Console
+        viewer={viewer}
+        onForget={() => {
+          clearCredential(); // "Forget" must actually forget — drop the tab-scoped encrypted blob
+          setViewer(null);
+        }}
+      />
+    );
+  }
+  // Restoring (mount, or an in-flight auto-reconnect from a stored credential): show a splash, not the
+  // pass form — a reload should land back in the console, never make the user re-enter the token.
+  if (restoring) {
+    return <Reconnecting />;
+  }
+  if (handoffOtk !== null) {
+    return (
+      <Pairing
+        otk={handoffOtk}
+        onConnect={(pass) => {
+          // Prefill the manual field too: the OTK is now burned, so if connect() fails (transient broker)
+          // the resolved pass must remain usable on the Connect screen rather than being lost.
+          setPassInput(pass);
+          setHandoffOtk(null);
+          connect(pass);
+        }}
+        onCancel={() => setHandoffOtk(null)}
       />
     );
   }
   return (
-    <Console
-      viewer={viewer}
-      onForget={() => {
-        clearCredential(); // "Forget" must actually forget — drop the tab-scoped encrypted blob
-        setViewer(null);
-      }}
+    <Connect
+      pass={passInput}
+      setPass={setPassInput}
+      connect={connect}
+      connecting={connecting}
+      error={error}
     />
+  );
+}
+
+/** Classify what's in the URL fragment on load: a legacy bare pass (`rcp1_`), a one-time handoff token
+ *  (`otk1_`), or nothing — in which case we restore + reconnect from the stored credential. Pure so the
+ *  load-time routing is unit-testable without a DOM. */
+export function entryFromFragment(
+  frag: string,
+): { kind: "pass"; value: string } | { kind: "handoff"; value: string } | { kind: "restore" } {
+  if (frag.startsWith("rcp1_")) return { kind: "pass", value: frag };
+  if (frag.startsWith("otk1_")) return { kind: "handoff", value: frag };
+  return { kind: "restore" };
+}
+
+/** A minimal splash shown while we check storage + auto-reconnect on load, so a returning user never
+ *  sees the pass form flash on reload. */
+function Reconnecting() {
+  return (
+    <main className="connect">
+      <div className="connect-card">
+        <Brand />
+        <p className="muted">Connecting…</p>
+      </div>
+    </main>
   );
 }
 
