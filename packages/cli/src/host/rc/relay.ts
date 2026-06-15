@@ -69,9 +69,11 @@ export const MAX_ATTACHMENT_B64 = 16 * 1024 * 1024;
 /** A grouped attachment message (#114) is sent as a chunked frame set (`postMessage`, one msgId, N AEAD
  *  parts), reassembled here. Bound the in-flight reassembly buffer so a hostile/buggy client streaming
  *  endless never-completing parts can't grow host memory unbounded: cap concurrent groups and per-group
- *  parts, and drop a stale/oversized group cleanly (it just burns no seq, like any rejected attachment). */
-const MAX_ATTACHMENT_PARTS = 64; // 64 × 3 MB chunk ≈ 192 MB upper bound on one grouped message
-const MAX_INFLIGHT_ATTACHMENT_GROUPS = 8;
+ *  parts, and drop a stale/oversized group cleanly (it just burns no seq, like any rejected attachment).
+ *  A legitimate send caps at MAX_ATTACHMENT_TOTAL_BYTES (48 MB ⇒ ≤16 chunks), so 32 leaves headroom; the
+ *  worst-case aggregate held at once is MAX_INFLIGHT × MAX_PARTS × ~3 MB chunk ≈ 384 MB. */
+const MAX_ATTACHMENT_PARTS = 32;
+const MAX_INFLIGHT_ATTACHMENT_GROUPS = 4;
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
@@ -915,7 +917,19 @@ export class HostRcRelay {
           await this.#maybeAnnounce();
         }
       } else if (frame.recordKind === "attachment") {
-        await this.#handleAttachmentPayload(await this.#client.openFrame(frame));
+        // Open the (single-part) attachment in its OWN try so a forged/garbage frame (the untrusted
+        // broker can inject one) is dropped cleanly — NOT propagated (which could tear the session down)
+        // and NOT left poisoning #seen: deleting the msgId on failure means a broker can't pre-inject a
+        // bad frame reusing a legit CHUNKED attachment's (cleartext) msgId to permanently suppress it.
+        // #handleAttachmentPayload runs OUTSIDE this catch so its own fatal echo-failure still propagates.
+        let attBytes: Uint8Array | null = null;
+        try {
+          attBytes = await this.#client.openFrame(frame);
+        } catch (e) {
+          this.#seen.delete(frame.msgId);
+          this.#trace.warn("attachment open failed", { error: (e as Error)?.message ?? String(e) });
+        }
+        if (attBytes !== null) await this.#handleAttachmentPayload(attBytes);
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
         // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
         // to the worker as a `control_request` with the mapped subtype + params.
