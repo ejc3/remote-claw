@@ -50,6 +50,19 @@ describe("reconcileAccepted", () => {
     expect(reconcileAccepted(others, "cm-999", 3)).toEqual(others);
   });
 
+  it("is IDEMPOTENT — a re-delivered ack must NOT delete the already-reconciled message (#127 review)", () => {
+    // The data-loss bug: at-least-once + #seen eviction (long session) or a fresh orderer (revive)
+    // re-yields the seq-null `accepted`. The first reconcile re-keys; a second must be a no-op, NOT a
+    // deletion (the echo, below the seq cursor, would never be re-yielded to re-add it).
+    let msgs = [opt("cm-5")];
+    msgs = reconcileAccepted(msgs, "cm-5", 9); // first: re-key pending → user-9
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]?.msgId).toBe("user-9");
+    msgs = reconcileAccepted(msgs, "cm-5", 9); // duplicate ack
+    expect(msgs).toHaveLength(1); // still there — not deleted
+    expect(msgs[0]?.msgId).toBe("user-9");
+  });
+
   it("end-to-end: optimistic → accepted re-key → echo dedups by msgId (one bubble either order)", () => {
     // Order A: accepted before echo
     let msgs = [opt("cm-9")];

@@ -126,15 +126,22 @@ export function optimisticMessage(
 }
 
 /** Reconcile an optimistic echo against the host's `accepted` ack (#113): if the real `user-<seq>` echo
- *  has already arrived, drop the optimistic twin; otherwise re-key the optimistic to `user-<seq>` so the
- *  upcoming echo dedups by msgId. Either order → exactly one bubble, no flash. Pure for testing. */
+ *  has already arrived, drop the still-pending optimistic twin; otherwise re-key the optimistic to
+ *  `user-<seq>` so the upcoming echo dedups by msgId. Either order → exactly one bubble, no flash.
+ *
+ *  IDEMPOTENT under a re-delivered ack (at-least-once; a #seen eviction on a long session, or a fresh
+ *  orderer on revive, re-yields the seq-null `accepted`): the optimistic twin is identified ONLY by its
+ *  `pending-<clientMsgId>` msgId, never by clientMsgId — once re-keyed to `user-<seq>` it no longer
+ *  matches, so a second ack is a no-op instead of DELETING the already-reconciled message (whose echo,
+ *  being below the orderer's seq cursor, would never be re-yielded to re-add it). Pure for testing. */
 export function reconcileAccepted(prev: Message[], clientMsgId: string, seq: number): Message[] {
   const realMsgId = `user-${seq}`;
+  const pendingId = `pending-${clientMsgId}`;
   if (prev.some((m) => m.msgId === realMsgId)) {
-    return prev.filter((m) => m.clientMsgId !== clientMsgId);
+    return prev.filter((m) => m.msgId !== pendingId);
   }
   return prev.map((m) =>
-    m.clientMsgId === clientMsgId ? { ...m, msgId: realMsgId, optimistic: false } : m,
+    m.msgId === pendingId ? { ...m, msgId: realMsgId, optimistic: false } : m,
   );
 }
 
