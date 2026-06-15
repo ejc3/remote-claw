@@ -600,6 +600,7 @@ function Transcript(props: {
   // optimistic override; the next mode-bearing announce wins, including when another device changed it.
   const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
   const [modeSheet, setModeSheet] = useState(false);
+  const [sessionSheet, setSessionSheet] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const announceMode = announce?.mode;
   const announceSentAt = announce?.sentAt;
@@ -740,6 +741,35 @@ function Transcript(props: {
     [optimisticMode, sessionId, viewer],
   );
 
+  // Session ⋯ actions. set_model (the model switcher) sends Claude Code's documented `/model` alias to
+  // the worker; interrupt stops the current turn; copy-branch is client-side (the announce's git chip).
+  const chooseModel = useCallback(
+    async (id: string) => {
+      setSessionSheet(false);
+      setSendError(null);
+      try {
+        await viewer.setModel(sessionId, id);
+      } catch (e) {
+        setSendError(friendlySendError(e));
+      }
+    },
+    [sessionId, viewer],
+  );
+  const interruptSession = useCallback(async () => {
+    setSessionSheet(false);
+    setSendError(null);
+    try {
+      await viewer.interrupt(sessionId);
+    } catch (e) {
+      setSendError(friendlySendError(e));
+    }
+  }, [sessionId, viewer]);
+  const copyBranch = useCallback(() => {
+    setSessionSheet(false);
+    const b = announce?.git?.branch;
+    if (b) void navigator.clipboard?.writeText(b).catch(() => {});
+  }, [announce?.git?.branch]);
+
   // Answer a worker permission_request (§17.4): seal a `permission` frame the host turns into the
   // control_response. Bound to this session; PermissionRow owns the per-request pending/resolved state.
   // `extra` carries an AskUserQuestion's {answers, toolUseId} (#42); absent for a plain allow/deny.
@@ -756,6 +786,17 @@ function Transcript(props: {
         </button>
         <span className="row-title">{props.title}</span>
         {announce?.git && <GitChip git={announce.git} />}
+        <button
+          type="button"
+          className="chat-menu"
+          aria-haspopup="dialog"
+          aria-expanded={sessionSheet}
+          aria-label="Session actions"
+          title="Session actions"
+          onClick={() => setSessionSheet(true)}
+        >
+          ⋯
+        </button>
       </div>
 
       <div className="transcript">
@@ -865,6 +906,15 @@ function Transcript(props: {
           onClose={() => setModeSheet(false)}
         />
       )}
+      {sessionSheet && (
+        <SessionSheet
+          branch={announce?.git?.branch ?? null}
+          onModel={(id) => void chooseModel(id)}
+          onInterrupt={() => void interruptSession()}
+          onCopyBranch={copyBranch}
+          onClose={() => setSessionSheet(false)}
+        />
+      )}
     </section>
   );
 }
@@ -966,32 +1016,30 @@ export function displayedPermissionMode(
 }
 
 /** Bottom sheet to pick the session's permission mode — mirrors Claude Code's "Select mode" sheet. */
-function ModeSheet({
-  current,
-  onPick,
+/** A bottom-sheet shell: scrim + role=dialog + focus-trap + scroll-lock + Escape-to-close. The caller
+ *  supplies the rows as children. Shared by the mode picker and the session ⋯ sheet. */
+function Sheet({
+  label,
   onClose,
+  children,
 }: {
-  current: string | null;
-  onPick: (id: string) => void;
+  label: string;
   onClose: () => void;
+  children: ReactNode;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  // onClose is a fresh arrow each parent render; read it through a ref so the focus/scroll-lock
-  // effect can run exactly once (on open) without re-stealing focus or re-saving the trigger.
+  // onClose is a fresh arrow each parent render; read it through a ref so the focus/scroll-lock effect
+  // runs exactly once (on open) without re-stealing focus or re-saving the trigger.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-
-  // Open-once: focus into the sheet + trap Tab + lock scroll; restore on close. onClose is read via
-  // a ref, so this effect has no reactive deps and must not re-run on parent re-renders.
   useEffect(() => {
-    const trigger = document.activeElement as HTMLElement | null; // the composer mode button
+    const trigger = document.activeElement as HTMLElement | null; // the button that opened the sheet
     const focusables = () =>
       Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? []);
     // Move focus into the sheet (the active row, else the first) so keyboard users land on the choices.
     (
       dialogRef.current?.querySelector<HTMLElement>('[data-active="true"]') ?? focusables()[0]
     )?.focus();
-
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         onCloseRef.current();
@@ -1017,54 +1065,121 @@ function ModeSheet({
     return () => {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
-      trigger?.focus?.(); // restore focus to the mode button
+      trigger?.focus?.(); // restore focus to the opener
     };
   }, []);
-
-  // Scrim and sheet are siblings (not nested): the sheet's own buttons aren't illegally nested inside
-  // another button. The scrim is mouse-only (tabIndex -1) — keyboard dismiss is Escape; role=dialog
-  // sits on the content (.sheet), not the overlay.
+  // Scrim and sheet are siblings (not nested) so the sheet's own buttons aren't inside another button.
+  // The scrim is mouse-only (tabIndex -1) — keyboard dismiss is Escape; role=dialog sits on the content.
   return (
     <div className="sheet-layer">
       <button
         type="button"
         className="sheet-scrim"
-        aria-label="Close mode picker"
+        aria-label={`Close ${label}`}
         tabIndex={-1}
         onClick={onClose}
       />
-      <div
-        className="sheet"
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Select mode"
-      >
+      <div className="sheet" ref={dialogRef} role="dialog" aria-modal="true" aria-label={label}>
         <div className="sheet-handle" />
-        <div className="sheet-title">Select mode</div>
-        {MODES.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            className="mode-row"
-            data-active={m.id === current}
-            aria-pressed={m.id === current}
-            onClick={() => onPick(m.id)}
-          >
-            <span className="mode-row-glyph">{m.glyph}</span>
-            <span className="mode-row-main">
-              <span className="mode-row-label">{m.label}</span>
-              <span className="mode-row-desc">{m.desc}</span>
-            </span>
-            {m.id === current && (
-              <span className="mode-check" aria-hidden>
-                ✓
-              </span>
-            )}
-          </button>
-        ))}
+        {children}
       </div>
     </div>
+  );
+}
+
+/** Bottom sheet to pick the session's permission mode — mirrors Claude Code's "Select mode" sheet. */
+function ModeSheet({
+  current,
+  onPick,
+  onClose,
+}: {
+  current: string | null;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Sheet label="Select mode" onClose={onClose}>
+      <div className="sheet-title">Select mode</div>
+      {MODES.map((m) => (
+        <button
+          key={m.id}
+          type="button"
+          className="mode-row"
+          data-active={m.id === current}
+          aria-pressed={m.id === current}
+          onClick={() => onPick(m.id)}
+        >
+          <span className="mode-row-glyph">{m.glyph}</span>
+          <span className="mode-row-main">
+            <span className="mode-row-label">{m.label}</span>
+            <span className="mode-row-desc">{m.desc}</span>
+          </span>
+          {m.id === current && (
+            <span className="mode-check" aria-hidden>
+              ✓
+            </span>
+          )}
+        </button>
+      ))}
+    </Sheet>
+  );
+}
+
+// Models the session can switch to via the RC `set_model` verb (§3.7). `id` is the value sent to the
+// worker — Claude Code's documented `/model` selector aliases (the interface the official app's "Change
+// model" uses). A mid-session switch is acknowledged by the worker but isn't observable via the model's
+// self-report (it answers its launch identity), so the sheet shows no live "current model" tick.
+const MODELS = [
+  { id: "default", label: "Default", glyph: "⌘", desc: "The machine's configured model" },
+  { id: "opus", label: "Opus", glyph: "◆", desc: "Most capable — complex work" },
+  { id: "sonnet", label: "Sonnet", glyph: "◇", desc: "Balanced — everyday tasks" },
+  { id: "haiku", label: "Haiku", glyph: "▪", desc: "Fastest — quick answers" },
+] as const;
+
+/** The session ⋯ sheet: switch model (set_model), interrupt the current turn, copy the git branch. */
+export function SessionSheet({
+  branch,
+  onModel,
+  onInterrupt,
+  onCopyBranch,
+  onClose,
+}: {
+  branch: string | null;
+  onModel: (id: string) => void;
+  onInterrupt: () => void;
+  onCopyBranch: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Sheet label="Session actions" onClose={onClose}>
+      <div className="sheet-title">Change model</div>
+      {MODELS.map((m) => (
+        <button key={m.id} type="button" className="mode-row" onClick={() => onModel(m.id)}>
+          <span className="mode-row-glyph">{m.glyph}</span>
+          <span className="mode-row-main">
+            <span className="mode-row-label">{m.label}</span>
+            <span className="mode-row-desc">{m.desc}</span>
+          </span>
+        </button>
+      ))}
+      <div className="sheet-title">Session</div>
+      <button type="button" className="mode-row" onClick={onInterrupt}>
+        <span className="mode-row-glyph">⏹</span>
+        <span className="mode-row-main">
+          <span className="mode-row-label">Interrupt</span>
+          <span className="mode-row-desc">Stop the current turn</span>
+        </span>
+      </button>
+      {branch !== null && (
+        <button type="button" className="mode-row" onClick={onCopyBranch}>
+          <span className="mode-row-glyph">⎇</span>
+          <span className="mode-row-main">
+            <span className="mode-row-label">Copy branch</span>
+            <span className="mode-row-desc">{branch}</span>
+          </span>
+        </button>
+      )}
+    </Sheet>
   );
 }
 

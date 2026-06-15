@@ -378,6 +378,20 @@ code {
   font-size: 15px;
   padding: 6px 8px;
 }
+/* The session ⋯ menu trigger — sits at the right of the mobile chat header (.row-title takes the slack). */
+.chat-menu {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  padding: 6px 10px;
+  transition: color 0.15s;
+}
+.chat-menu:hover {
+  color: var(--text);
+}
 
 /* transcript */
 .transcript {
