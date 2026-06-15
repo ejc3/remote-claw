@@ -14,16 +14,32 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // Use a local file: handoff store (no Turso env). selectLocatorFromEnv() reads env at call time, so set
-// RC_SQLITE_DIR before the first request; clear any Turso vars so FileDbLocator is chosen.
+// RC_SQLITE_DIR + clear any Turso vars before the first request — and RESTORE them after so this file can't
+// leak env into sibling suites if vitest isolation is ever relaxed.
+const TURSO_KEYS = [
+  "TURSO_API_TOKEN",
+  "TURSO_ORG",
+  "TURSO_GROUP",
+  "TURSO_GROUP_AUTH_TOKEN",
+] as const;
 let dir: string;
-for (const k of ["TURSO_API_TOKEN", "TURSO_ORG", "TURSO_GROUP", "TURSO_GROUP_AUTH_TOKEN"]) {
-  delete process.env[k];
-}
+const saved: Record<string, string | undefined> = {};
 beforeAll(() => {
+  for (const k of TURSO_KEYS) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
+  saved.RC_SQLITE_DIR = process.env.RC_SQLITE_DIR;
   dir = mkdtempSync(join(tmpdir(), "rc-handoff-route-"));
   process.env.RC_SQLITE_DIR = dir;
 });
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => {
+  for (const [k, v] of Object.entries(saved)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
 
 const req = (method: string, body: unknown): Request =>
   new Request("https://x/api/handoff", {
@@ -87,5 +103,28 @@ describe("/api/handoff route", () => {
       req("PUT", { id: "a".repeat(64), proof_hash: "b".repeat(64), ct: "f".repeat(9000) }),
     );
     expect(huge.status).toBe(413);
+  });
+
+  it("rejects ct that is too short / odd-length (not a real box)", async () => {
+    const { PUT } = await import("../../app/api/handoff/route");
+    const short = await PUT(
+      req("PUT", { id: "a".repeat(64), proof_hash: "b".repeat(64), ct: "abcd" }),
+    );
+    expect(short.status).toBe(400);
+    const odd = await PUT(
+      req("PUT", { id: "a".repeat(64), proof_hash: "b".repeat(64), ct: "f".repeat(201) }),
+    );
+    expect(odd.status).toBe(400);
+  });
+
+  it("every response is Cache-Control: no-store", async () => {
+    const { PUT, POST } = await import("../../app/api/handoff/route");
+    const m = await mint();
+    const put = await PUT(req("PUT", { id: m.id, proof_hash: m.proof_hash, ct: m.ct }));
+    expect(put.headers.get("cache-control")).toBe("no-store");
+    const claim = await POST(req("POST", { id: m.id, proof: m.proof }));
+    expect(claim.headers.get("cache-control")).toBe("no-store");
+    const miss = await POST(req("POST", { id: m.id, proof: m.proof })); // 404 path
+    expect(miss.headers.get("cache-control")).toBe("no-store");
   });
 });

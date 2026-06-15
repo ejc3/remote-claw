@@ -11,15 +11,15 @@ export const maxDuration = 60;
 export async function GET(req: Request): Promise<Response> {
   if (!authorized(req)) {
     // 404 (not 401/403) so the route is indistinguishable from "doesn't exist" to an unauthorized caller.
-    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    return Response.json({ error: "not found" }, { status: 404 });
   }
   if (!handoffConfigured()) return Response.json({ swept: 0 });
   try {
     const store = await getHandoffStore();
     return Response.json({ swept: await store.sweepExpired(Date.now()) });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    console.error("[handoff-sweep] sweep failed:", message);
-    return Response.json({ error: message }, { status: 500 });
+    // Log the real cause; return an OPAQUE body so the db url/scope never leaks in the response.
+    console.error("[handoff-sweep] sweep failed:", e instanceof Error ? e.message : String(e));
+    return Response.json({ error: "sweep failed" }, { status: 500 });
   }
 }

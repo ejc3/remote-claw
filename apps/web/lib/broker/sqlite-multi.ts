@@ -296,9 +296,17 @@ export class FileDbLocator implements DbLocator {
   }
 
   // The handoff store lives alongside the session dbs (`_handoff.db`). createClient auto-creates the file,
-  // so there is no ensureHandoff. (Local/dev only — single-instance; the Vercel guard above means cloud
-  // deployments use TursoCloudDbLocator's shared `rc-<scope>-hx` db instead.)
+  // so there is no ensureHandoff. Local/dev only — single-instance.
   handoffConfig(): { url: string } {
+    // HARD-FAIL on Vercel regardless of RC_SQLITE_DIR: a `file:` handoff store is per-instance, so a PUT
+    // and its claim would land on different instances and never match. The handoff REQUIRES a shared cloud
+    // db (TursoCloudDbLocator's `rc-<scope>-hx`); fail closed rather than silently break cross-instance.
+    if (process.env.VERCEL === "1") {
+      throw new Error(
+        "FileDbLocator: the one-time-handoff store needs a cloud (Turso) backend on Vercel — a file: db is " +
+          "per-instance, so a PUT and its claim would miss. Configure TURSO_API_TOKEN/ORG/GROUP/GROUP_AUTH_TOKEN.",
+      );
+    }
     return { url: `file:${join(this.#dir, "_handoff.db")}` };
   }
 

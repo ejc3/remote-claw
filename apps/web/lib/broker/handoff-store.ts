@@ -99,21 +99,31 @@ let cached: Promise<HandoffStore> | undefined;
 
 export function getHandoffStore(): Promise<HandoffStore> {
   if (cached === undefined) {
-    cached = build().catch((e) => {
-      cached = undefined;
+    const p: Promise<HandoffStore> = build().catch((e) => {
+      if (cached === p) cached = undefined; // only clear if still ours — don't clobber a newer build
       throw e;
     });
+    cached = p;
   }
   return cached;
 }
 
-/** True if the configured environment supports the handoff store (a cloud locator on Vercel, or a local
- *  file store off Vercel). Mirrors the broker's own cloud-vs-file decision. */
+/** Drop the cached store so the next getHandoffStore() rebuilds. Call after a query failure so a dead
+ *  cached client (rotated token, dead endpoint, network partition) self-heals instead of 500ing for the
+ *  whole instance lifetime. */
+export function resetHandoffStore(): void {
+  cached = undefined;
+}
+
+/** True if the configured environment supports the handoff store. Calls handoffConfig() (not just checks
+ *  it exists) so a FileDbLocator on Vercel — which fails closed — correctly reports unavailable, and a
+ *  misconfigured locator (e.g. invalid scope) surfaces as not-configured rather than throwing. */
 export function handoffConfigured(): boolean {
   try {
-    return selectLocatorFromEnv().handoffConfig !== undefined;
+    selectLocatorFromEnv().handoffConfig?.();
+    return true;
   } catch {
-    return false; // FileDbLocator throws on Vercel without RC_SQLITE_DIR — handoff is then unavailable
+    return false;
   }
 }
 
@@ -122,20 +132,26 @@ async function build(): Promise<HandoffStore> {
   if (locator.handoffConfig === undefined) {
     throw new Error("handoff store unavailable: the configured locator has no handoffConfig()");
   }
-  await locator.ensureHandoff?.();
-  const client = createClient(locator.handoffConfig());
   try {
-    await locator.prepare?.(client); // file: WAL; cloud: no-op
-    await locator.awaitReady?.(client, "handoff"); // cloud create→serve gate (tursodatabase/libsql-client-ts#346)
-  } catch (e) {
+    await locator.ensureHandoff?.();
+    const client = createClient(locator.handoffConfig());
     try {
-      client.close();
-    } catch {
-      /* ignore */
+      await locator.prepare?.(client); // file: WAL; cloud: no-op
+      await locator.awaitReady?.(client, "handoff"); // cloud create→serve gate (tursodatabase/libsql-client-ts#346)
+    } catch (e) {
+      try {
+        client.close();
+      } catch {
+        /* ignore */
+      }
+      throw e;
     }
+    return new HandoffStore(client);
+  } catch (e) {
+    // Surface the real cause to logs (the route returns an opaque 500) so a misconfig is diagnosable.
+    console.error("[handoff] store build failed:", e instanceof Error ? e.message : String(e));
     throw e;
   }
-  return new HandoffStore(client);
 }
 
 /** Test seam: build a store over an explicit locator (e.g. a tmp-dir FileDbLocator), bypassing the env
