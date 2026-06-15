@@ -13,12 +13,16 @@ export const maxDuration = 60;
 // Vercel serverless functions reject a request body over ~4.5 MB at the platform EDGE
 // (FUNCTION_PAYLOAD_TOO_LARGE) before the function ever runs — and on the client that platform
 // rejection surfaces as a generic fetch failure ("Load failed" on WebKit), not a readable 413. So a
-// 17 MiB app-level cap was a fiction on Vercel: oversize frames died confusingly upstream of us. Cap
-// the ciphertext BELOW the platform limit so an oversize frame gets a deterministic 413 from THIS
-// route (a real, mappable error) instead. 4.4 MB still admits every legitimate frame: the host chunks
-// large outbound messages to ≤3 MB plaintext (postMessage) ⇒ ≤4.0 MB base64url ct, and a single
-// inbound viewer attachment is bounded client-side (viewer.ts MAX_ATTACHMENT_BYTES) to fit here too.
-export const MAX_RELAY_CIPHERTEXT_BYTES = 4_400_000;
+// 17 MiB app-level cap was a fiction on Vercel: oversize frames died confusingly upstream of us. Cap so
+// the SERIALIZED body stays under the platform limit, making an oversize frame a deterministic 413 from
+// THIS route (a real, mappable error) instead. The cap is on `frame.ct` DECODED bytes, but the wire
+// body carries ct as base64url (≈ 4/3×) plus a small JSON envelope, so the body ≈ ct.length × 4/3. At
+// 3.3 MB decoded that's a ~4.4 MB body — under the platform limit — while still admitting every
+// legitimate frame: the host chunks large outbound messages to ≤3 MB plaintext (postMessage) ⇒
+// 3,000,016-byte ct, and a single inbound viewer attachment is bounded client-side (viewer.ts
+// MAX_ATTACHMENT_BYTES) below this. (A higher cap like 4.4 MB decoded would be a ~5.9 MB body — over
+// the edge limit — so the 413 would never fire for the very range it targets.)
+export const MAX_RELAY_CIPHERTEXT_BYTES = 3_300_000;
 
 export async function POST(req: Request): Promise<Response> {
   let identityId: Uint8Array;

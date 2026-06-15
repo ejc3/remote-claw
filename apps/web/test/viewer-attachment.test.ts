@@ -1,5 +1,6 @@
 import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
 import { describe, expect, it } from "vitest";
+import { MAX_RELAY_CIPHERTEXT_BYTES } from "../app/api/relay/route";
 import { AttachmentTooLargeError, MAX_ATTACHMENT_BYTES, Viewer } from "../app/lib/viewer";
 
 // The viewer's file/photo upload path (#44). The live failure was "Load failed" — Vercel rejecting an
@@ -22,7 +23,7 @@ async function viewerWithMockFetch() {
 }
 
 describe("viewer attachment upload (#44)", () => {
-  it("seals + posts ONE attachment frame to the session channel (bytes never in cleartext)", async () => {
+  it("seals + posts ONE attachment frame to the session channel (ct is real ciphertext, not the plaintext)", async () => {
     const { viewer, calls } = await viewerWithMockFetch();
     const msgId = await viewer.sendAttachment("cse_x", {
       name: "photo.jpg",
@@ -39,28 +40,59 @@ describe("viewer attachment upload (#44)", () => {
       record_kind: string;
       session_id: string;
       parts: number;
+      ct: string;
     };
     expect(frame.record_kind).toBe("attachment");
     expect(frame.session_id).toBe("cse_x");
     expect(frame.parts).toBe(1); // the host's inbound path is single-frame by design
-    // E2E: the cleartext name/data/caption must NOT appear in the wire body (sealed under the session key).
-    expect(call.body).not.toContain("photo.jpg");
-    expect(call.body).not.toContain("QUJDRA==");
-    expect(call.body).not.toContain("what is this");
+    // E2E: prove the bytes are ACTUALLY encrypted, not merely base64-mangled. base64-decode the ct and
+    // assert the recovered plaintext does NOT contain the attachment fields — this catches a Sealed→Open
+    // (no-encryption) regression that a substring check on the base64 wire body would silently pass.
+    const decoded = Buffer.from(frame.ct, "base64url").toString("latin1");
+    expect(decoded).not.toContain("photo.jpg");
+    expect(decoded).not.toContain("image/jpeg");
+    expect(decoded).not.toContain("what is this");
+    expect(decoded).not.toContain("ABCD"); // the raw image bytes the data field base64-encodes
   });
 
-  it("rejects an oversized attachment BEFORE any network call (clear error, not 'Load failed')", async () => {
+  it("accepts an attachment just under the cap, rejects just over it (clear typed error, no POST)", async () => {
     const { viewer, calls } = await viewerWithMockFetch();
-    const huge = "A".repeat(MAX_ATTACHMENT_BYTES + 1);
+    // The guard measures the WHOLE JSON payload (data + name/mime/caption + keys), so size by the data
+    // field minus a wrapper allowance keeps the just-under case honestly under the limit.
+    const WRAPPER = 200; // JSON keys + name/mime/caption — generous headroom
+    await viewer.sendAttachment("cse_x", {
+      name: "ok.jpg",
+      mime: "image/jpeg",
+      data: "A".repeat(MAX_ATTACHMENT_BYTES - WRAPPER),
+    });
+    expect(calls).toHaveLength(1); // under the cap → posted
+
     await expect(
-      viewer.sendAttachment("cse_x", { name: "big.jpg", mime: "image/jpeg", data: huge }),
+      viewer.sendAttachment("cse_x", {
+        name: "big.jpg",
+        mime: "image/jpeg",
+        data: "A".repeat(MAX_ATTACHMENT_BYTES + 1),
+      }),
     ).rejects.toBeInstanceOf(AttachmentTooLargeError);
-    expect(calls).toHaveLength(0); // never fired a doomed POST
+    expect(calls).toHaveLength(1); // still 1 — the oversize one never fired a POST
   });
 
-  it("the attachment cap keeps the sealed POST under Vercel's serverless body limit", () => {
-    // base64url ct ≈ 1.34× plaintext; the whole frame body must clear the ~4.5 MiB platform edge cap.
+  it("a near-max attachment's REAL sealed wire body stays under Vercel's serverless limit", async () => {
+    // Empirical, not arithmetic: send the largest attachment the guard allows and measure the actual
+    // POST body length (sealed ct as base64url + the full JSON envelope: identity_id, salt, nonce,
+    // session_id, record_kind, keys). This bounds what Vercel's edge actually receives.
+    const { viewer, calls } = await viewerWithMockFetch();
+    await viewer.sendAttachment("cse_x", {
+      name: "max.jpg",
+      mime: "image/jpeg",
+      data: "A".repeat(MAX_ATTACHMENT_BYTES - 200),
+    });
+    const body = calls[0]?.body;
+    if (body === undefined) throw new Error("no POST body");
     const VERCEL_BODY_LIMIT = 4.5 * 1024 * 1024;
-    expect(Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3)).toBeLessThan(VERCEL_BODY_LIMIT);
+    expect(body.length).toBeLessThan(VERCEL_BODY_LIMIT);
+    // ...and the sealed ct must clear the relay route's own decoded-ciphertext cap.
+    const ct = (JSON.parse(body) as { ct: string }).ct;
+    expect(Buffer.from(ct, "base64url").length).toBeLessThan(MAX_RELAY_CIPHERTEXT_BYTES);
   });
 });
