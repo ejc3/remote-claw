@@ -20,7 +20,7 @@
 // decoupled into the event-driven shape RC needs (a turn's response is async, tool turns interleave).
 
 import { mkdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError, type SeqCursor } from "../../broker/client.js";
@@ -107,9 +107,19 @@ export interface HostRcRelayOptions {
   /** Optional structured tracer (target "rc.relay"; defaults to no-op). Local-only sink; content
    *  rides at debug+, never the key material. */
   tracer?: Tracer;
-  /** Where a viewer-sent attachment (#44) is written on the host before claude `Read`s it. Defaults to
-   *  an OS-temp subdir; the wrapper points it at the session workspace so paths are familiar to claude. */
+  /** Where a viewer-sent attachment (#44) is written on the host before claude reads it. Defaults to
+   *  `defaultAttachmentsDir(sessionId)` — claude's own uploads dir, which it reads without a permission
+   *  prompt (see that helper); override to redirect. */
   attachmentsDir?: string;
+}
+
+/** Default on-disk location for a viewer-sent attachment (#44): `~/.claude/uploads/<sessionId>/`. This
+ *  is the SAME tree the real Anthropic app drops uploaded images into, and claude treats reads there as
+ *  trusted — so referencing the written file with `@"<path>"` attaches it natively WITHOUT triggering a
+ *  Read-permission prompt (writing to an arbitrary temp dir did prompt). One subdir per session keeps a
+ *  later upload from colliding with another session's files. */
+export function defaultAttachmentsDir(sessionId: string): string {
+  return join(homedir(), ".claude", "uploads", sessionId);
 }
 
 /** One content frame to relay out of a worker upstream event. */
@@ -401,8 +411,7 @@ export class HostRcRelay {
     this.#identityId = opts.identityId;
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
-    this.#attachmentsDir =
-      opts.attachmentsDir ?? join(tmpdir(), "remote-claw-attachments", opts.sessionId);
+    this.#attachmentsDir = opts.attachmentsDir ?? defaultAttachmentsDir(opts.sessionId);
     // Bind the session id onto every line (span-like) so interleaved sessions are distinguishable.
     this.#trace = (opts.tracer ?? NOOP_TRACER).child({ session: opts.sessionId });
   }
