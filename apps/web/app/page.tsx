@@ -390,8 +390,8 @@ function relativeTime(ms: number, now: number): string {
 
 /** The session row's sub-line word, combining connection state + activity (#48/#58): a connected
  *  session reads its phase/needs; a lapsing one reads its link state; a gone one reads "N ago". */
-function presenceWord(s: Announce, now: number): string {
-  const cs = connState(s.sentAt, now);
+function presenceWord(s: Announce, now: number, focusedAt: number): string {
+  const cs = connState(s.sentAt, now, focusedAt);
   if (cs === "disconnected") return relativeTime(s.sentAt, now);
   if (cs === "reconnecting") return "reconnecting…";
   if (s.needs) return "needs you";
@@ -490,10 +490,19 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   const { viewer } = props;
   const [sessions, setSessions] = useState<Map<string, Announce>>(new Map());
   const [now, setNow] = useState(() => Date.now());
+  // The last time the page became visible. The disconnect countdown restarts from here so a tab returning
+  // from the background shows "reconnecting" (not instant "disconnected") while the announce stream
+  // re-subscribes — see connState. Initial value = mount time.
+  const [focusedAt, setFocusedAt] = useState(() => Date.now());
+  // Bumps to force the announce (bus) stream to RE-SUBSCRIBE — the presence twin of the transcript's
+  // reviveKey (#121). iOS Safari suspends the in-flight fetch when the page is backgrounded, so without
+  // this the announce stream stays dead on return and the session would read as disconnected forever.
+  const [announceRevive, setAnnounceRevive] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
 
   // Tail the bus → live session list (keep the freshest sent_at per session: replay-safe presence).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: announceRevive is a re-subscribe TRIGGER.
   useEffect(() => {
     const ac = new AbortController();
     (async () => {
@@ -511,12 +520,27 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
       }
     })();
     return () => ac.abort();
-  }, [viewer]);
+  }, [viewer, announceRevive]);
 
   // Re-evaluate presence on a timer so rows grey out as announces lapse.
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(t);
+  }, []);
+
+  // On return-to-foreground: restart the disconnect countdown (focusedAt), advance the clock, and
+  // re-subscribe the announce stream — so a backgrounded tab recovers presence without a reload and
+  // never flashes "disconnected" while the fresh announce is still in flight.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        setFocusedAt(Date.now());
+        setNow(Date.now());
+        setAnnounceRevive((k) => k + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
   const list = [...sessions.values()].sort((a, b) => b.sentAt - a.sentAt);
@@ -543,7 +567,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             </p>
           )}
           {list.map((s) => {
-            const cs = connState(s.sentAt, now);
+            const cs = connState(s.sentAt, now, focusedAt);
             const connected = cs === "connected";
             return (
               <button
@@ -565,7 +589,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                 </span>
                 <span className="row-sub">
                   {s.git && <GitChip git={s.git} />}
-                  {presenceWord(s, now)}
+                  {presenceWord(s, now, focusedAt)}
                   {s.cwd !== null ? ` · ${s.cwd}` : ""}
                 </span>
               </button>
@@ -586,6 +610,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             title={current?.title ?? selected}
             announce={current}
             now={now}
+            focusedAt={focusedAt}
             onBack={() => setSelected(null)}
           />
         )}
@@ -600,9 +625,10 @@ function Transcript(props: {
   title: string;
   announce: Announce | undefined;
   now: number;
+  focusedAt: number;
   onBack: () => void;
 }) {
-  const { viewer, sessionId, announce, now } = props;
+  const { viewer, sessionId, announce, now, focusedAt } = props;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [staged, setStaged] = useState<StagedImage[]>([]);
@@ -614,7 +640,7 @@ function Transcript(props: {
 
   // Live connection state from the freshest announce (null until one arrives — then never scary).
   // Thinking/needs are only meaningful while connected; a stale announce's phase says nothing.
-  const cs = announce ? connState(announce.sentAt, now) : null;
+  const cs = announce ? connState(announce.sentAt, now, focusedAt) : null;
   const connected = cs === "connected";
   const phase = connected ? (announce?.phase ?? "idle") : "idle";
   const needs = connected ? (announce?.needs ?? false) : false;

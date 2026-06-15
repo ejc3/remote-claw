@@ -7,15 +7,18 @@ import {
   emptyTranscriptHint,
   FRESH_WINDOW_MS,
   parseGit,
+  RECONNECTING_WINDOW_MS,
   shouldAcceptAnnounce,
 } from "../app/lib/viewer.js";
 import { displayedPermissionMode } from "../app/page.js";
 
-// The connection-state ladder (#58): connected (fresh) → reconnecting (a keepalive or two missed) →
-// disconnected (gone). Pure + clock-injected, so pin every boundary deterministically — the host
-// re-announces every ~20s, so a healthy session sits well inside CONNECTED_WINDOW_MS.
+// The connection-state ladder (#58): connected (fresh) → reconnecting (full grace window) →
+// disconnected (gone). The transition ALWAYS passes through reconnecting for RECONNECTING_WINDOW_MS, and
+// that countdown RESTARTS on focus (focusedAt). Pure + clock-injected, so pin every boundary
+// deterministically — the host re-announces every ~20s, so a healthy session sits inside CONNECTED_WINDOW_MS.
 describe("connState", () => {
   const now = 1_000_000;
+  const DISCONNECT_AT = CONNECTED_WINDOW_MS + RECONNECTING_WINDOW_MS; // stale→disconnected boundary (focusedAt=0)
 
   it("is connected for a fresh announce", () => {
     expect(connState(now, now)).toBe("connected"); // age 0
@@ -23,30 +26,51 @@ describe("connState", () => {
     expect(connState(now - (CONNECTED_WINDOW_MS - 1), now)).toBe("connected");
   });
 
-  it("is reconnecting once past the connected window but before the fresh window", () => {
-    expect(connState(now - CONNECTED_WINDOW_MS, now)).toBe("reconnecting"); // exactly at the edge
-    expect(connState(now - (FRESH_WINDOW_MS - 1), now)).toBe("reconnecting");
+  it("is reconnecting for the full window once the announce goes stale (focusedAt unset)", () => {
+    expect(connState(now - CONNECTED_WINDOW_MS, now)).toBe("reconnecting"); // exactly at the stale edge
+    expect(connState(now - (DISCONNECT_AT - 1), now)).toBe("reconnecting"); // last ms before gone
   });
 
-  it("is disconnected at or past the fresh window", () => {
-    expect(connState(now - FRESH_WINDOW_MS, now)).toBe("disconnected"); // exactly at the edge
-    expect(connState(now - (FRESH_WINDOW_MS + 5_000), now)).toBe("disconnected");
+  it("is disconnected only at or past CONNECTED_WINDOW + RECONNECTING_WINDOW (focusedAt unset)", () => {
+    expect(connState(now - DISCONNECT_AT, now)).toBe("disconnected"); // exactly at the edge
+    expect(connState(now - (DISCONNECT_AT + 5_000), now)).toBe("disconnected");
     expect(connState(0, now)).toBe("disconnected");
+  });
+
+  it("restarts the disconnect countdown on focus: a long-stale announce reads reconnecting, not disconnected", () => {
+    const staleAnnounce = now - 5 * 60_000; // 5 min old — would be 'disconnected' without focus
+    // Just focused (we returned to the foreground this instant): show reconnecting for the full window
+    // while the announce stream re-subscribes and a fresh announce lands.
+    expect(connState(staleAnnounce, now, now)).toBe("reconnecting");
+    // Still reconnecting at the last ms of the post-focus grace…
+    expect(connState(staleAnnounce, now, now - (RECONNECTING_WINDOW_MS - 1))).toBe("reconnecting");
+    // …then disconnected once the post-focus grace elapses with no fresh announce.
+    expect(connState(staleAnnounce, now, now - RECONNECTING_WINDOW_MS)).toBe("disconnected");
+  });
+
+  it("always passes through reconnecting — never jumps connected→disconnected", () => {
+    // Sweep the age across the whole ladder; assert no age yields 'disconnected' without 'reconnecting'
+    // existing for the ages just before it.
+    const ladder = Array.from({ length: 200 }, (_, i) => connState(now - i * 1_000, now));
+    const firstDisc = ladder.indexOf("disconnected");
+    expect(firstDisc).toBeGreaterThan(0);
+    expect(ladder[firstDisc - 1]).toBe("reconnecting"); // the state immediately before gone is reconnecting
   });
 
   it("treats a future-stamped announce (clock skew) as connected, never negative", () => {
     expect(connState(now + 10_000, now)).toBe("connected"); // age < 0 → still inside the window
   });
 
-  it("accepts bounded host-behind clock skew but still degrades on the freshness ladder", () => {
-    // The accepted skew bound is the same freshness budget the UI already uses: a host clock behind by
-    // CONNECTED_WINDOW_MS+5s reads as reconnecting, and behind by FRESH_WINDOW_MS+5s reads gone.
-    expect(connState(now - (CONNECTED_WINDOW_MS + 5_000), now)).toBe("reconnecting");
-    expect(connState(now - (FRESH_WINDOW_MS + 5_000), now)).toBe("disconnected");
+  it("decouples the disconnect threshold from FRESH_WINDOW_MS (the control-verb replay bound)", () => {
+    // At exactly FRESH_WINDOW_MS old the OLD model declared the host gone; the new ladder keeps it
+    // reconnecting (FRESH_WINDOW_MS no longer gates the UI), so loosening disconnect can't widen replay.
+    expect(connState(now - FRESH_WINDOW_MS, now)).toBe("reconnecting");
+    expect(FRESH_WINDOW_MS).toBeLessThan(DISCONNECT_AT);
   });
 
   it("orders the windows so the ladder is monotone", () => {
-    expect(CONNECTED_WINDOW_MS).toBeLessThan(FRESH_WINDOW_MS);
+    expect(CONNECTED_WINDOW_MS).toBeLessThan(DISCONNECT_AT);
+    expect(RECONNECTING_WINDOW_MS).toBeGreaterThan(0);
   });
 });
 

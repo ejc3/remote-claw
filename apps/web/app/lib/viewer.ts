@@ -13,31 +13,48 @@ import {
 
 const td = new TextDecoder();
 
-/** Presence: a session is "online" iff its latest announce's sent_at is within this window (§4.3).
- *  Also the freshness bound for control verbs (§3.7) — a verb the broker withholds past it is a
- *  no-op, so it can't replay a stale interrupt/set_mode/end. Doubles as the DISCONNECTED threshold for
- *  the connection-state machine (#58): past it, no recent announce means the host is gone. */
+/** Freshness bound for control verbs (§3.7) — a verb the broker withholds past it is a no-op, so it
+ *  can't replay a stale interrupt/set_mode/end. NOTE: this is deliberately NOT the disconnect threshold
+ *  anymore (that's the connState ladder below) — widening "disconnected" must not widen the replay
+ *  window for control verbs, so the two are decoupled. */
 export const FRESH_WINDOW_MS = 60_000;
 
 /** A still-CONNECTED announce is at most this old. The host re-announces every ~20s + immediately on
  *  any phase/needs change (relay's ANNOUNCE_KEEPALIVE_MS), so a healthy session stays well under this;
  *  crossing it means ≥2 keepalives were missed → we're RECONNECTING, not yet declared gone (#58). */
 export const CONNECTED_WINDOW_MS = 45_000;
+
+/** Once an announce goes stale we show RECONNECTING for this long before declaring the host gone — and
+ *  the countdown RESTARTS on focus (see connState). Sized over the keepalive (~20s) + a stream
+ *  re-subscribe so a tab returning from the background always gets a full window for a fresh announce to
+ *  land before it reads as disconnected. Decoupled from FRESH_WINDOW_MS (the control-verb bound). */
+export const RECONNECTING_WINDOW_MS = 30_000;
 export const TRANSCRIPT_GAP_STALL_MS = 10_000;
 const DURABILITY_PROBE_ATTEMPTS = 3;
 const DURABILITY_PROBE_BASE_MS = 50;
 const PARTIAL_CHUNK_STALL_MS = 250;
 
-/** The viewer's view of the host link, derived purely from announce freshness (§4.3 / #58):
- *  connected (fresh) → reconnecting (a keepalive or two missed) → disconnected (gone past the window). */
+/** The viewer's view of the host link, derived from announce freshness (§4.3 / #58):
+ *  connected (fresh) → reconnecting (stale, within grace) → disconnected (grace elapsed). */
 export type ConnState = "connected" | "reconnecting" | "disconnected";
 
-/** Classify the host link from the freshest announce's age. A monotone ladder: the older that
- *  announce, the worse the state. `now` is passed in (not read here) so the UI owns the clock/ticks. */
-export function connState(sentAt: number, now: number): ConnState {
-  const age = now - sentAt;
-  if (age < CONNECTED_WINDOW_MS) return "connected";
-  if (age < FRESH_WINDOW_MS) return "reconnecting";
+/**
+ * Classify the host link. `now` is passed in (not read here) so the UI owns the clock/ticks.
+ *
+ * The transition ALWAYS passes through "reconnecting" for a full {@link RECONNECTING_WINDOW_MS}, and that
+ * countdown restarts on focus: `focusedAt` is the last time the page became visible. The countdown to
+ * "disconnected" starts at whichever is LATER — the moment the announce went stale, or the last focus —
+ * so a tab returning from the background (its announce stream was suspended while hidden) shows
+ * "reconnecting" for the full window while the stream re-subscribes and a fresh announce arrives, instead
+ * of snapping straight to "disconnected" on an announce that's stale only because we were away.
+ * `focusedAt` defaults to 0 (always-foregrounded callers get the plain stale→reconnecting→disconnected
+ * ladder).
+ */
+export function connState(sentAt: number, now: number, focusedAt = 0): ConnState {
+  if (now - sentAt < CONNECTED_WINDOW_MS) return "connected";
+  const staleAt = sentAt + CONNECTED_WINDOW_MS;
+  const countdownStart = Math.max(staleAt, focusedAt);
+  if (now - countdownStart < RECONNECTING_WINDOW_MS) return "reconnecting";
   return "disconnected";
 }
 
