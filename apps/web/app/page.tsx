@@ -1,6 +1,8 @@
 "use client";
 
+import { parsePass, toHex } from "@remote-claw/clawsec";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { claimHandoff } from "./lib/handoff-claim";
 import {
   basename,
   diffOf,
@@ -58,17 +60,21 @@ function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
 export default function Home() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [passInput, setPassInput] = useState("");
+  const [handoffOtk, setHandoffOtk] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
-  // A pass may arrive in the URL fragment (#rcp1_…) — never sent to the server. Prefill it, strip it
-  // from the address bar so it doesn't linger in history, but KEEP it in sessionStorage so a refresh
-  // restores it (tab-scoped: survives reload, cleared when the tab closes, never back in the URL).
-  // On a refresh the fragment is already gone, so fall back to the stored pass.
+  // A credential may arrive in the URL fragment (never sent to the server): `#rcp1_…` is a (legacy, still
+  // accepted) bare pass — prefill it; `#otk1_…` is a ONE-TIME handoff token — defer it to a gesture-gated
+  // claim (NOT auto-claimed, so a prefetch/unfurler that runs JS can't burn it). Strip the fragment from
+  // the address bar in both cases. On a plain reload the fragment is gone, so fall back to the stored pass.
   useEffect(() => {
     const frag = window.location.hash.replace(/^#/, "");
     if (frag.startsWith("rcp1_")) {
       setPassInput(frag);
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    } else if (frag.startsWith("otk1_")) {
+      setHandoffOtk(frag);
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     } else {
       const saved = sessionStorage.getItem("rc-pass");
@@ -95,6 +101,18 @@ export default function Home() {
   }, []);
 
   if (viewer === null) {
+    if (handoffOtk !== null) {
+      return (
+        <Pairing
+          otk={handoffOtk}
+          onConnect={(pass) => {
+            setHandoffOtk(null);
+            connect(pass);
+          }}
+          onCancel={() => setHandoffOtk(null)}
+        />
+      );
+    }
     return (
       <Connect
         pass={passInput}
@@ -163,6 +181,72 @@ function Connect(props: {
           Get a pass on the machine with <code>remote-claw --rc-pass</code>. A pass can read and
           steer that machine’s sessions but is not the master secret.
         </p>
+      </div>
+    </main>
+  );
+}
+
+/** One-time handoff pairing (docs/ephemeral-handoff.md): a SCANNED `#otk1_…` link. The claim is gated on
+ *  an explicit tap ("Pair this device") so a prefetch/unfurler that runs JS can't auto-burn the one-time
+ *  token; after claiming we show the resolved machine's identity_id for the user to confirm against the
+ *  host's `--rc-pass` output (binding) before connecting. */
+function Pairing(props: { otk: string; onConnect: (pass: string) => void; onCancel: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<{ pass: string; idHex: string } | null>(null);
+
+  const reveal = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const pass = await claimHandoff(props.otk);
+      const identity = await parsePass(pass);
+      setRevealed({ pass, idHex: toHex(identity.identityId) });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [props.otk]);
+
+  return (
+    <main className="connect">
+      <div className="connect-card">
+        <Brand />
+        <h1>Pair this device</h1>
+        {revealed === null ? (
+          <>
+            <p className="muted">
+              You scanned a <strong>one-time</strong> pairing link. It can be claimed once and
+              expires shortly. Tap to claim it on this device — the key never leaves your browser.
+            </p>
+            <button type="button" className="btn btn-block" disabled={busy} onClick={reveal}>
+              {busy ? "Pairing…" : "Pair this device"}
+            </button>
+            {error !== null && <p className="error">{error}</p>}
+            <button type="button" className="btn-link" onClick={props.onCancel}>
+              Enter a pass manually instead
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="muted">
+              Pairing with machine{" "}
+              <code>
+                {revealed.idHex.slice(0, 8)}…{revealed.idHex.slice(-4)}
+              </code>
+              . Confirm this matches the <code>identity_id</code> printed by{" "}
+              <code>remote-claw --rc-pass</code> on that machine before connecting.
+            </p>
+            <button
+              type="button"
+              className="btn btn-block"
+              onClick={() => props.onConnect(revealed.pass)}
+            >
+              Connect
+            </button>
+          </>
+        )}
       </div>
     </main>
   );
