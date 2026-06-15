@@ -157,6 +157,11 @@ export interface Message {
   seq: number | null;
   text: string;
   msgId: string;
+  /** Set on a locally-rendered OPTIMISTIC echo (#113): the user's own just-sent message, shown instantly
+   *  (msgId `pending-<clientMsgId>`) before the host echoes it back. The `accepted` ack (matching
+   *  clientMsgId) re-keys it to the real `user-<seq>` so the host's content echo dedups — no flash, no dup. */
+  clientMsgId?: string;
+  optimistic?: boolean;
   /** Present only on kind:"gap": the first seq the orderer is still waiting for. */
   nextSeq?: number;
   /** Present only on kind:"gap": buffered content entries blocked behind that missing seq. */
@@ -562,9 +567,14 @@ export class Viewer {
     return this.sendPrompt(sessionId, text);
   }
 
-  /** Send a prompt to the session (a `user` content frame, dir:in). Returns its client_msg_id. */
-  async sendPrompt(sessionId: string, text: string): Promise<string> {
-    const clientMsgId = `c-${randomId()}`;
+  /** Send a prompt to the session (a `user` content frame, dir:in). Returns its client_msg_id. An
+   *  explicit `clientMsgId` lets the caller render an optimistic echo first and reconcile on the host's
+   *  `accepted` ack (#113); omitted ⇒ a fresh one. */
+  async sendPrompt(
+    sessionId: string,
+    text: string,
+    clientMsgId = `c-${randomId()}`,
+  ): Promise<string> {
     await this.#client.postFrame(
       this.#header({ recordKind: "user", sessionId, msgId: clientMsgId, clientMsgId }),
       utf8(text),
@@ -583,8 +593,9 @@ export class Viewer {
   async sendAttachment(
     sessionId: string,
     att: { images: { name: string; mime: string; data: string }[]; caption?: string },
+    clientMsgId = `att-${randomId()}`,
   ): Promise<string> {
-    const msgId = `att-${randomId()}`;
+    const msgId = clientMsgId;
     const payload = utf8(JSON.stringify({ images: att.images, caption: att.caption ?? "" }));
     // Chunking handles the per-frame ~4.5 MB body cap, but still bound the TOTAL so a pathological send
     // can't stream unbounded bytes at the host (it caps reassembly at MAX_ATTACHMENT_PARTS too). Surfaced

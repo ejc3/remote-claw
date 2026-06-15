@@ -788,6 +788,7 @@ describe("HostRcRelay attachments (#44)", () => {
           ],
           caption: "Tell me what these images say",
         }),
+        "att-grp", // clientMsgId → the host echoes it on the `accepted` ack for the viewer's optimistic echo (#113)
       ),
     );
     const ac = new AbortController();
@@ -813,6 +814,11 @@ describe("HostRcRelay attachments (#44)", () => {
     expect(injected.match(/@"/g)).toHaveLength(2);
     expect(injected).toContain("Tell me what these images say");
     expect(pushUser).toHaveBeenCalledTimes(1);
+    // The attachment path emits an `accepted` ack carrying the clientMsgId + the echo's seq, so the
+    // viewer can reconcile its optimistic echo (#113).
+    const ack = client.posts.find((p) => p.recordKind === "accepted");
+    expect(ack).toBeDefined();
+    expect(JSON.parse(ack?.text ?? "{}")).toMatchObject({ client_msg_id: "att-grp", seq: 0 });
   });
 
   it("reassembles a CHUNKED attachment (parts > 1) and handles it as one message (#114)", async () => {

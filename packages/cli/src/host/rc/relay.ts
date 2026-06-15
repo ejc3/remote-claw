@@ -833,7 +833,7 @@ export class HostRcRelay {
         const payload = await this.#collectAttachmentChunk(frame);
         if (payload === null) continue; // group not complete (or rejected) yet
         this.#seen.add(frame.msgId);
-        await this.#handleAttachmentPayload(payload);
+        await this.#handleAttachmentPayload(payload, frame.clientMsgId ?? null);
         continue;
       }
       this.#trace.trace("inbound frame", { kind: frame.recordKind, msg: frame.msgId });
@@ -929,7 +929,8 @@ export class HostRcRelay {
           this.#seen.delete(frame.msgId);
           this.#trace.warn("attachment open failed", { error: (e as Error)?.message ?? String(e) });
         }
-        if (attBytes !== null) await this.#handleAttachmentPayload(attBytes);
+        if (attBytes !== null)
+          await this.#handleAttachmentPayload(attBytes, frame.clientMsgId ?? null);
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
         // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
         // to the worker as a `control_request` with the mapped subtype + params.
@@ -983,7 +984,7 @@ export class HostRcRelay {
    * single `{ name, mime, data, caption }` shape. A parse/write failure is logged, not fatal — but the
    * echo is ordered before the inject (and fatal-on-throw) so claude never reads an image no viewer saw.
    */
-  async #handleAttachmentPayload(plaintext: Uint8Array): Promise<void> {
+  async #handleAttachmentPayload(plaintext: Uint8Array, clientMsgId: string | null): Promise<void> {
     const written: { name: string; path: string }[] = [];
     let caption = "";
     try {
@@ -1000,13 +1001,20 @@ export class HostRcRelay {
       return; // bad payload / unwritable — drop (non-fatal: no seq was allocated)
     }
     if (written.length === 0) return; // nothing valid decoded → drop (no seq burned)
-    // Echo FIRST (durably — a failed post is fatal), THEN inject: same invariant as the `user` path, so a
+    // Ack FIRST (carries clientMsgId+seq so the viewer can reconcile its optimistic echo, #113), then the
+    // content echo (durably — a failed post is fatal), THEN inject: same ordering as the `user` path, so a
     // torn-down relay can't have driven claude to Read images that never reached any transcript.
     const seq = this.#seq++;
     const chips = written.map((w) => `📎 ${w.name}`).join(", ");
-    await this.#fatalOnThrow(() =>
-      this.#emit("user", seq, `user-${seq}`, `${chips}${caption ? `\n${caption}` : ""}`),
-    );
+    await this.#fatalOnThrow(async () => {
+      await this.#post(
+        "accepted",
+        null,
+        `accepted-${this.#sessionId}-${seq}`,
+        JSON.stringify({ client_msg_id: clientMsgId, seq }),
+      );
+      await this.#emit("user", seq, `user-${seq}`, `${chips}${caption ? `\n${caption}` : ""}`);
+    });
     // Reference every written file with the SAME `@"<abs-path>"` syntax real Anthropic uses for an
     // app-uploaded image (captured via --rc-trace), so claude attaches them NATIVELY as image blocks. The
     // caption (or a default) follows ALL the refs ONCE — claude treats it as one user turn with N images.
