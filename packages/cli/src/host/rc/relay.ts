@@ -62,9 +62,18 @@ export function isLikelyBase64(s: string): boolean {
   return s.length > 0 && s.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(s);
 }
 
-/** Defensive cap on a viewer attachment's base64 length (~12 MB of bytes). The viewer downscales far
- *  below this; the cap just stops a buggy/hostile client from writing an arbitrarily large file. (#44) */
+/** Defensive cap on ONE image's base64 length (~12 MB of bytes). The viewer downscales far below this;
+ *  the cap just stops a buggy/hostile client from writing an arbitrarily large file. (#44) */
 export const MAX_ATTACHMENT_B64 = 16 * 1024 * 1024;
+
+/** A grouped attachment message (#114) is sent as a chunked frame set (`postMessage`, one msgId, N AEAD
+ *  parts), reassembled here. Bound the in-flight reassembly buffer so a hostile/buggy client streaming
+ *  endless never-completing parts can't grow host memory unbounded: cap concurrent groups and per-group
+ *  parts, and drop a stale/oversized group cleanly (it just burns no seq, like any rejected attachment).
+ *  A legitimate send caps at MAX_ATTACHMENT_TOTAL_BYTES (48 MB ⇒ ≤16 chunks), so 32 leaves headroom; the
+ *  worst-case aggregate held at once is MAX_INFLIGHT × MAX_PARTS × ~3 MB chunk ≈ 384 MB. */
+const MAX_ATTACHMENT_PARTS = 32;
+const MAX_INFLIGHT_ATTACHMENT_GROUPS = 4;
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
@@ -405,6 +414,12 @@ export class HostRcRelay {
   /** Monotonic prefix making each on-disk attachment name unique (so a later upload can't overwrite a
    *  file an earlier still-queued prompt will Read). (#44) */
   #attachmentSeq = 0;
+  /** In-flight reassembly buffer for CHUNKED attachment messages (#114): msgId → (part → frame). A
+   *  grouped/large attachment arrives as N AEAD chunks sharing one msgId; we collect them here until all
+   *  `parts` are present, then `openMessage` reassembles. Bounded by MAX_INFLIGHT_ATTACHMENT_GROUPS /
+   *  MAX_ATTACHMENT_PARTS. (Only `attachment` frames are ever buffered — every other multi-part inbound
+   *  kind is still dropped, since acting on a truncated prompt/permission would be unsafe.) */
+  readonly #attachmentChunks = new Map<string, Map<number, Frame>>();
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
@@ -801,17 +816,24 @@ export class HostRcRelay {
       signal,
     })) {
       if (frame.dir !== "in") continue; // ignore our own out-frames on the shared stream
-      // Inbound is single-frame by design (the viewer chunks nothing — viewer.ts). `openFrame` returns
-      // only THIS frame's plaintext, so a frame claiming `parts > 1` would be opened to just its first
-      // part — a silently truncated prompt / permission answer / attachment, acted on as if whole. Drop
-      // it loudly instead. (Dedup keys on `msgId`, not `(msgId, part)`, which is fine precisely because
-      // we never process a multi-part inbound frame.)
+      // Multi-part inbound: ONLY an `attachment` may be reassembled (#114) — collect its chunks and act
+      // only on the complete, AEAD-verified message. Every OTHER kind is still dropped loudly: `openFrame`
+      // returns only THIS frame's plaintext, so acting on a `parts > 1` user/permission/control frame
+      // would act on a silently truncated prompt/answer.
       if (frame.parts !== 1) {
-        this.#trace.warn("dropped multi-part inbound frame", {
-          kind: frame.recordKind,
-          parts: frame.parts,
-          msg: frame.msgId,
-        });
+        if (frame.recordKind !== "attachment") {
+          this.#trace.warn("dropped multi-part inbound frame", {
+            kind: frame.recordKind,
+            parts: frame.parts,
+            msg: frame.msgId,
+          });
+          continue;
+        }
+        if (this.#seen.has(frame.msgId)) continue; // message already reassembled + handled
+        const payload = await this.#collectAttachmentChunk(frame);
+        if (payload === null) continue; // group not complete (or rejected) yet
+        this.#seen.add(frame.msgId);
+        await this.#handleAttachmentPayload(payload);
         continue;
       }
       this.#trace.trace("inbound frame", { kind: frame.recordKind, msg: frame.msgId });
@@ -895,7 +917,19 @@ export class HostRcRelay {
           await this.#maybeAnnounce();
         }
       } else if (frame.recordKind === "attachment") {
-        await this.#handleAttachment(frame);
+        // Open the (single-part) attachment in its OWN try so a forged/garbage frame (the untrusted
+        // broker can inject one) is dropped cleanly — NOT propagated (which could tear the session down)
+        // and NOT left poisoning #seen: deleting the msgId on failure means a broker can't pre-inject a
+        // bad frame reusing a legit CHUNKED attachment's (cleartext) msgId to permanently suppress it.
+        // #handleAttachmentPayload runs OUTSIDE this catch so its own fatal echo-failure still propagates.
+        let attBytes: Uint8Array | null = null;
+        try {
+          attBytes = await this.#client.openFrame(frame);
+        } catch (e) {
+          this.#seen.delete(frame.msgId);
+          this.#trace.warn("attachment open failed", { error: (e as Error)?.message ?? String(e) });
+        }
+        if (attBytes !== null) await this.#handleAttachmentPayload(attBytes);
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
         // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
         // to the worker as a `control_request` with the mapped subtype + params.
@@ -905,63 +939,109 @@ export class HostRcRelay {
   }
 
   /**
-   * Handle a viewer attachment (#44): write the (E2E-decrypted) bytes into the host's attachments dir,
-   * then drive claude to `Read` the file — claude's image Read gives real vision, so this needs NO
-   * unverified worker-protocol write (the image rides our own `attachment` frame, the rest is a normal
-   * prompt + the standard Read tool). Also echoes a `user` content frame so every device's transcript
-   * shows the attachment. A write/parse failure is logged, not fatal (it didn't burn a seq).
+   * Collect one chunk of a CHUNKED attachment message (#114) and, once all `parts` have arrived,
+   * reassemble + AEAD-verify them into the full plaintext (`openMessage`). Returns null while the group
+   * is incomplete (or on a rejected/oversized group — dropped cleanly, no seq burned). Bounded by
+   * MAX_INFLIGHT_ATTACHMENT_GROUPS / MAX_ATTACHMENT_PARTS so endless never-completing parts can't grow
+   * host memory. `(msgId, part)` is the dedup key here (the final `msgId` join lives in #seen).
    */
-  async #handleAttachment(frame: Frame): Promise<void> {
-    let name: string;
-    let path: string;
-    let caption: string;
-    try {
-      const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame))) as {
-        name?: unknown;
-        mime?: unknown;
-        data?: unknown;
-        caption?: unknown;
-      };
-      // Reject anything not well-formed base64 (Buffer.from would otherwise silently truncate it) or
-      // over the size cap — drop cleanly, before any seq/file/prompt side effect.
-      if (typeof body.data !== "string" || !isLikelyBase64(body.data)) return;
-      if (body.data.length > MAX_ATTACHMENT_B64) {
-        this.#trace.warn("attachment too large", { b64: body.data.length });
-        return;
+  async #collectAttachmentChunk(frame: Frame): Promise<Uint8Array | null> {
+    if (frame.parts > MAX_ATTACHMENT_PARTS) {
+      this.#trace.warn("attachment too many parts", { parts: frame.parts, msg: frame.msgId });
+      return null;
+    }
+    let group = this.#attachmentChunks.get(frame.msgId);
+    if (group === undefined) {
+      if (this.#attachmentChunks.size >= MAX_INFLIGHT_ATTACHMENT_GROUPS) {
+        // Evict the OLDEST in-flight group (Map preserves insertion order) to bound memory.
+        const oldest = this.#attachmentChunks.keys().next().value;
+        if (oldest !== undefined) this.#attachmentChunks.delete(oldest);
+        this.#trace.warn("attachment groups overflow — dropped oldest", { dropped: oldest });
       }
-      const bytes = Buffer.from(body.data, "base64");
-      if (bytes.length === 0) return; // decoded to nothing
-      name = safeAttachmentName(typeof body.name === "string" ? body.name : ""); // display name (chip)
+      group = new Map();
+      this.#attachmentChunks.set(frame.msgId, group);
+    }
+    group.set(frame.part, frame); // idempotent on a re-delivered part
+    if (group.size < frame.parts) return null; // not all parts yet
+    this.#attachmentChunks.delete(frame.msgId);
+    try {
+      return await this.#client.openMessage([...group.values()]);
+    } catch (e) {
+      this.#trace.warn("attachment reassembly failed", {
+        error: (e as Error)?.message ?? String(e),
+      });
+      return null; // a forged/inconsistent chunk fails openMessage — drop the group
+    }
+  }
+
+  /**
+   * Handle a (possibly multi-image) viewer attachment payload (#44/#114): write each E2E-decrypted image
+   * into the host's uploads dir, then drive claude with ONE prompt referencing them all — `@"p1" @"p2"
+   * <caption>` — so claude attaches them natively and the caption rides ONCE (not repeated per image).
+   * Echoes a SINGLE `user` content frame (`📎 a.jpg, b.jpg\n<caption>`) so every device's transcript
+   * shows the group as one message. Accepts the new `{ images: [...] , caption }` shape and the legacy
+   * single `{ name, mime, data, caption }` shape. A parse/write failure is logged, not fatal — but the
+   * echo is ordered before the inject (and fatal-on-throw) so claude never reads an image no viewer saw.
+   */
+  async #handleAttachmentPayload(plaintext: Uint8Array): Promise<void> {
+    const written: { name: string; path: string }[] = [];
+    let caption = "";
+    try {
+      const body = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
       caption = typeof body.caption === "string" ? body.caption : "";
-      // On-disk name: a unique prefix (no overwrite of a still-referenced file) + the extension that
-      // matches the ACTUAL bytes (the viewer always re-encodes), so claude's image Read detects it right.
-      const mime = typeof body.mime === "string" ? body.mime : "";
-      const ext = extForMime(mime);
-      const stem = name.replace(/\.[A-Za-z0-9]+$/, "") || "attachment";
-      const diskName = `${(this.#attachmentSeq++).toString(36)}-${ext ? `${stem}.${ext}` : name}`;
-      await mkdir(this.#attachmentsDir, { recursive: true });
-      path = join(this.#attachmentsDir, diskName);
-      await writeFile(path, bytes);
-      this.#trace.debug("attachment written", { name, diskName, bytes: bytes.length });
+      // New grouped shape: { images: [{name,mime,data}], caption }. Legacy: { name,mime,data,caption }.
+      const images = Array.isArray(body.images) ? body.images : [body];
+      for (const img of images) {
+        const w = await this.#writeOneImage(img as Record<string, unknown>);
+        if (w !== null) written.push(w);
+      }
     } catch (e) {
       this.#trace.warn("attachment rejected", { error: (e as Error)?.message ?? String(e) });
-      return; // bad frame / unwritable — drop (non-fatal: no seq was allocated)
+      return; // bad payload / unwritable — drop (non-fatal: no seq was allocated)
     }
-    // Echo the user frame FIRST (durably — a failed post is fatal), THEN inject into claude: the same
-    // invariant as the `user` path (never feed claude a prompt no viewer can see), here ordered so a
-    // torn-down relay can't have driven claude to Read an image that never reached any transcript.
+    if (written.length === 0) return; // nothing valid decoded → drop (no seq burned)
+    // Echo FIRST (durably — a failed post is fatal), THEN inject: same invariant as the `user` path, so a
+    // torn-down relay can't have driven claude to Read images that never reached any transcript.
     const seq = this.#seq++;
+    const chips = written.map((w) => `📎 ${w.name}`).join(", ");
     await this.#fatalOnThrow(() =>
-      this.#emit("user", seq, `user-${seq}`, `📎 ${name}${caption ? `\n${caption}` : ""}`),
+      this.#emit("user", seq, `user-${seq}`, `${chips}${caption ? `\n${caption}` : ""}`),
     );
-    // Hand claude the file the SAME way real Anthropic hands an app-uploaded image to the worker: it
-    // resolves the upload to a local file and rewrites the user message to `@"<abs-path>" <text>`
-    // (captured live via --rc-trace — the worker received `@"/…/uploads/…/IMG.jpeg" …What do you see?`),
-    // which claude attaches NATIVELY as an image block. We do the equivalent end-to-end ourselves: the
-    // decoded bytes are already on disk above, so we reference that path with the same `@"…"` syntax
-    // (quoted → tolerates spaces) instead of asking claude to call the Read tool.
-    const prompt = `@"${path}" ${caption || "What do you see in this image?"}`;
-    this.#session.pushUserInput(prompt);
+    // Reference every written file with the SAME `@"<abs-path>"` syntax real Anthropic uses for an
+    // app-uploaded image (captured via --rc-trace), so claude attaches them NATIVELY as image blocks. The
+    // caption (or a default) follows ALL the refs ONCE — claude treats it as one user turn with N images.
+    const refs = written.map((w) => `@"${w.path}"`).join(" ");
+    const fallback =
+      written.length > 1 ? "What do you see in these images?" : "What do you see in this image?";
+    this.#session.pushUserInput(`${refs} ${caption || fallback}`);
+  }
+
+  /**
+   * Write ONE image of an attachment to the uploads dir; returns {name (chip), path (abs)} or null if the
+   * image is malformed base64 / oversized / empty (the caller skips it). The on-disk name carries a unique
+   * prefix (no overwrite of a still-referenced file) + the extension matching the ACTUAL bytes (the viewer
+   * re-encodes), so claude's image Read detects the type right.
+   */
+  async #writeOneImage(
+    img: Record<string, unknown>,
+  ): Promise<{ name: string; path: string } | null> {
+    if (typeof img.data !== "string" || !isLikelyBase64(img.data)) return null;
+    if (img.data.length > MAX_ATTACHMENT_B64) {
+      this.#trace.warn("attachment image too large", { b64: img.data.length });
+      return null;
+    }
+    const bytes = Buffer.from(img.data, "base64");
+    if (bytes.length === 0) return null;
+    const name = safeAttachmentName(typeof img.name === "string" ? img.name : "");
+    const mime = typeof img.mime === "string" ? img.mime : "";
+    const ext = extForMime(mime);
+    const stem = name.replace(/\.[A-Za-z0-9]+$/, "") || "attachment";
+    const diskName = `${(this.#attachmentSeq++).toString(36)}-${ext ? `${stem}.${ext}` : name}`;
+    await mkdir(this.#attachmentsDir, { recursive: true });
+    const path = join(this.#attachmentsDir, diskName);
+    await writeFile(path, bytes);
+    this.#trace.debug("attachment written", { name, diskName, bytes: bytes.length });
+    return { name, path };
   }
 
   /** Map a client control-verb frame → the worker control_request the spec uses (§3.7). */

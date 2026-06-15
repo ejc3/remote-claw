@@ -209,8 +209,41 @@ class FakeClient {
 
   openFrame(frame: Frame): Promise<Uint8Array> {
     this.opened.push(frame.msgId);
-    if (this.failOpen.has(frame.msgId)) return Promise.reject(new Error("AEAD open failed"));
+    // Reject by msgId OR by a per-frame "FORGED" ct sentinel (models a broker-injected garbage frame that
+    // fails AEAD — used to prove a forged frame reusing a real msgId can't poison #seen).
+    if (this.failOpen.has(frame.msgId) || new TextDecoder().decode(frame.ct) === "FORGED")
+      return Promise.reject(new Error("AEAD open failed"));
     return Promise.resolve(frame.ct); // inbound test frames stash plaintext in `ct`
+  }
+
+  /** Reassemble chunk frames (the relay's #collectAttachmentChunk uses this for grouped/large
+   *  attachments). Mirrors the real BrokerClient.openMessage's part-coverage check; here each chunk's
+   *  plaintext is its `ct`, so the message is the parts concatenated in order. */
+  async openMessage(frames: Frame[]): Promise<Uint8Array> {
+    const parts = frames[0]?.parts ?? 0;
+    if (frames.length !== parts)
+      throw new Error(`openMessage: expected ${parts}, got ${frames.length}`);
+    const slots = new Array<Uint8Array | undefined>(parts);
+    for (const f of frames) {
+      if (this.failOpen.has(f.msgId)) throw new Error("AEAD open failed");
+      if (f.part < 0 || f.part >= parts || slots[f.part] !== undefined)
+        throw new Error(`openMessage: bad part ${f.part}`);
+      slots[f.part] = f.ct;
+    }
+    const ordered: Uint8Array[] = [];
+    for (let i = 0; i < parts; i++) {
+      const s = slots[i];
+      if (s === undefined) throw new Error(`openMessage: missing part ${i}`);
+      ordered.push(s);
+    }
+    const total = ordered.reduce((n, p) => n + p.length, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const p of ordered) {
+      out.set(p, off);
+      off += p.length;
+    }
+    return out;
   }
 }
 
@@ -232,6 +265,17 @@ function inFrame(recordKind: string, msgId: string, text: string, clientMsgId?: 
     nonce: new Uint8Array(12),
     ct: enc(text),
   } as Frame;
+}
+
+/** One chunk of a multi-part inbound message (the plaintext piece stashed in `ct`), for #114 reassembly. */
+function inChunk(
+  recordKind: string,
+  msgId: string,
+  part: number,
+  parts: number,
+  piece: string,
+): Frame {
+  return { ...inFrame(recordKind, msgId, piece), part, parts };
 }
 
 function relayOf(session: Session, client: FakeClient): HostRcRelay {
@@ -716,6 +760,183 @@ describe("HostRcRelay attachments (#44)", () => {
     const users = client.content.filter((p) => p.recordKind === "user");
     expect(users).toHaveLength(1); // only the real user frame echoed
     expect(users[0]?.seq).toBe(0); // the dropped attachment burned no seq
+  });
+
+  it("groups MULTIPLE images into ONE echo + one turn, caption sent ONCE (#114)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    dirs.push(dir);
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const a = Buffer.from("AAAA-img-one");
+    const b = Buffer.from("BBBB-img-two");
+    client.queueInbound(
+      inFrame(
+        "attachment",
+        "att-grp",
+        JSON.stringify({
+          images: [
+            { name: "IMG_2159.jpeg", mime: "image/jpeg", data: a.toString("base64") },
+            { name: "IMG_2158.jpeg", mime: "image/jpeg", data: b.toString("base64") },
+          ],
+          caption: "Tell me what these images say",
+        }),
+      ),
+    );
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    // BOTH images written.
+    const files = readdirSync(dir).sort();
+    expect(files).toHaveLength(2);
+    // EXACTLY ONE echo, listing both chips, with the caption ONCE (not repeated per image).
+    const users = client.content.filter((p) => p.recordKind === "user");
+    expect(users).toHaveLength(1);
+    expect(users[0]?.text).toContain("📎 IMG_2159.jpeg");
+    expect(users[0]?.text).toContain("📎 IMG_2158.jpeg");
+    expect(users[0]?.text.match(/Tell me what these images say/g)).toHaveLength(1);
+    // ONE injected turn referencing BOTH files + the caption once.
+    const injected = (pushUser.mock.calls.at(-1)?.[0] as string | undefined) ?? "";
+    expect(injected.match(/@"/g)).toHaveLength(2);
+    expect(injected).toContain("Tell me what these images say");
+    expect(pushUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("reassembles a CHUNKED attachment (parts > 1) and handles it as one message (#114)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    dirs.push(dir);
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    const payload = JSON.stringify({
+      images: [
+        {
+          name: "big.jpg",
+          mime: "image/jpeg",
+          data: Buffer.from("CHUNKED-BYTES").toString("base64"),
+        },
+      ],
+      caption: "describe it",
+    });
+    const mid = Math.floor(payload.length / 2);
+    // Two chunks sharing msgId "att-big"; the FakeClient.openMessage concats the ct pieces in part order.
+    client.queueInbound(inChunk("attachment", "att-big", 0, 2, payload.slice(0, mid)));
+    client.queueInbound(inChunk("attachment", "att-big", 1, 2, payload.slice(mid)));
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    expect(readdirSync(dir)).toHaveLength(1); // the reassembled image was written
+    const users = client.content.filter((p) => p.recordKind === "user");
+    expect(users).toHaveLength(1); // one echo for the reassembled message
+    expect(users[0]?.text).toContain("📎 big.jpg");
+    expect(users[0]?.text).toContain("describe it");
+  });
+
+  it("a forged attachment frame is dropped non-fatally and does NOT poison a later same-msgId send (#114 review)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    dirs.push(dir);
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    // A forged attachment (openFrame throws) reusing the msgId of the REAL send that follows — the
+    // untrusted-broker poisoning attack. Then the genuine attachment with the same msgId. Then a user
+    // frame to prove the relay never tore down.
+    client.queueInbound(inFrame("attachment", "att-reuse", "FORGED")); // ct sentinel → openFrame rejects
+    client.queueInbound(
+      inFrame(
+        "attachment",
+        "att-reuse",
+        JSON.stringify({
+          images: [
+            { name: "real.jpg", mime: "image/jpeg", data: Buffer.from("REAL").toString("base64") },
+          ],
+          caption: "the real one",
+        }),
+      ),
+    );
+    client.queueInbound(inFrame("user", "u-after", "still alive"));
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() =>
+      client.content.some((p) => p.recordKind === "user" && p.text === "still alive"),
+    );
+    ac.abort();
+    await served;
+
+    // The relay survived the forged frame (the trailing user prompt echoed), AND the genuine attachment —
+    // same msgId — was NOT suppressed: it wrote its file and echoed its chip.
+    expect(readdirSync(dir)).toHaveLength(1);
+    const users = client.content.filter((p) => p.recordKind === "user");
+    expect(
+      users.some((p) => p.text.includes("📎 real.jpg") && p.text.includes("the real one")),
+    ).toBe(true);
+    expect(users.some((p) => p.text === "still alive")).toBe(true);
+  });
+
+  it("STILL drops a multi-part NON-attachment frame (a truncated prompt is never acted on)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-att-"));
+    dirs.push(dir);
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      attachmentsDir: dir,
+    });
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    // A multi-part USER frame (must be dropped), then a normal user frame (proves the relay kept running).
+    client.queueInbound(inChunk("user", "u-multi", 0, 2, "truncated half of a prompt"));
+    client.queueInbound(inFrame("user", "u-ok", "a whole prompt"));
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).then(
+      () => {},
+      () => {},
+    );
+    await waitFor(() => client.content.some((p) => p.recordKind === "user"));
+    ac.abort();
+    await served;
+
+    // Only the whole prompt was injected/echoed; the truncated multi-part user frame was dropped.
+    expect(pushUser).toHaveBeenCalledTimes(1);
+    expect(pushUser.mock.calls[0]?.[0]).toBe("a whole prompt");
+    const users = client.content.filter((p) => p.recordKind === "user");
+    expect(users).toHaveLength(1);
   });
 });
 
