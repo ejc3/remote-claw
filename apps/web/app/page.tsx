@@ -1,7 +1,7 @@
 "use client";
 
 import { parsePass, toHex } from "@remote-claw/clawsec";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { clearCredential, loadCredential, saveCredential } from "./lib/credential-store";
@@ -1415,8 +1415,11 @@ function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
  * out as raw `| … |` pipes). CSP-safe: react-markdown emits React ELEMENTS, never raw HTML — there is no
  * `dangerouslySetInnerHTML` and `rehype-raw` is NOT enabled, so a model can't inject markup. Links open
  * in a new tab with `noopener` so a transcript link can't navigate the viewer away or reach `window.opener`.
+ *
+ * memo'd: a transcript message is immutable once appended (deduped by msgId), but the Console re-renders
+ * every 5s to age presence — without memo that would re-parse EVERY message's markdown on each tick.
  */
-export function Prose({ text, className }: { text: string; className: string }) {
+export const Prose = memo(function Prose({ text, className }: { text: string; className: string }) {
   return (
     <div className={`prose ${className}`}>
       <ReactMarkdown
@@ -1431,4 +1434,4 @@ export function Prose({ text, className }: { text: string; className: string }) 
       </ReactMarkdown>
     </div>
   );
-}
+});
