@@ -1,7 +1,9 @@
 "use client";
 
 import { parsePass, toHex } from "@remote-claw/clawsec";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { clearCredential, loadCredential, saveCredential } from "./lib/credential-store";
 import { claimHandoff } from "./lib/handoff-claim";
 import { friendlySendError } from "./lib/send-error";
@@ -1407,33 +1409,29 @@ function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
   });
 }
 
-/** Render assistant prose with minimal markdown: **bold** and `inline code` (everything escaped). */
-function Prose({ text, className }: { text: string; className: string }) {
-  return <div className={`prose ${className}`}>{renderInline(text)}</div>;
-}
-
-function renderInline(text: string): ReactNode[] {
-  // Split on `code` spans and **bold** runs; everything else is plain (auto-escaped) text.
-  const out: ReactNode[] = [];
-  const re = /`([^`]+)`|\*\*([^*]+)\*\*/g;
-  let last = 0;
-  let m: RegExpExecArray | null = re.exec(text);
-  let k = 0;
-  while (m !== null) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    if (m[1] !== undefined) {
-      out.push(
-        <code key={`c${k}`} className="inline-code">
-          {m[1]}
-        </code>,
-      );
-    } else if (m[2] !== undefined) {
-      out.push(<strong key={`b${k}`}>{m[2]}</strong>);
-    }
-    last = re.lastIndex;
-    k += 1;
-    m = re.exec(text);
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
+/**
+ * Render assistant prose as GitHub-Flavored Markdown — tables, lists, headings, fenced code, bold,
+ * inline code, links (the old hand-rolled renderer only did **bold** + `code`, so a model's table came
+ * out as raw `| … |` pipes). CSP-safe: react-markdown emits React ELEMENTS, never raw HTML — there is no
+ * `dangerouslySetInnerHTML` and `rehype-raw` is NOT enabled, so a model can't inject markup. Links open
+ * in a new tab with `noopener` so a transcript link can't navigate the viewer away or reach `window.opener`.
+ *
+ * memo'd: a transcript message is immutable once appended (deduped by msgId), but the Console re-renders
+ * every 5s to age presence — without memo that would re-parse EVERY message's markdown on each tick.
+ */
+export const Prose = memo(function Prose({ text, className }: { text: string; className: string }) {
+  return (
+    <div className={`prose ${className}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a({ node: _node, ...props }) {
+            return <a {...props} target="_blank" rel="noopener noreferrer" />;
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+});
