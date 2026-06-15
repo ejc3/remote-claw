@@ -549,18 +549,38 @@ export class Viewer {
     att: { name: string; mime: string; data: string; caption?: string },
   ): Promise<string> {
     const msgId = `att-${randomId()}`;
+    const payload = utf8(
+      JSON.stringify({
+        name: att.name,
+        mime: att.mime,
+        data: att.data,
+        caption: att.caption ?? "",
+      }),
+    );
+    // Vercel rejects a request body over ~4.5 MB at the platform edge (FUNCTION_PAYLOAD_TOO_LARGE),
+    // which WebKit surfaces as a bare "Load failed" with no usable status. The sealed wire frame is
+    // ~1.34× this plaintext (base64url ct), so reject an oversized attachment HERE — a clear, typed,
+    // mappable error — instead of firing a doomed POST. The composer downscales images far below this;
+    // this guard catches a pathological image (or a future raw-file path) before the network.
+    if (payload.length > MAX_ATTACHMENT_BYTES) throw new AttachmentTooLargeError(payload.length);
     await this.#client.postFrame(
       this.#header({ recordKind: "attachment", sessionId, msgId }),
-      utf8(
-        JSON.stringify({
-          name: att.name,
-          mime: att.mime,
-          data: att.data,
-          caption: att.caption ?? "",
-        }),
-      ),
+      payload,
     );
     return msgId;
+  }
+}
+
+/** Plaintext cap for one attachment frame: kept so the sealed POST body stays under Vercel's ~4.5 MB
+ *  serverless request-body limit (sealed ct ≈ 1.34× plaintext; cf. the relay route's ciphertext cap). */
+export const MAX_ATTACHMENT_BYTES = 3_000_000;
+
+/** Thrown by sendAttachment when an attachment would exceed {@link MAX_ATTACHMENT_BYTES} — surfaced to
+ *  the user as a clear "image too large" rather than the platform's opaque "Load failed". */
+export class AttachmentTooLargeError extends Error {
+  constructor(readonly size: number) {
+    super(`attachment too large (${size} bytes; max ${MAX_ATTACHMENT_BYTES})`);
+    this.name = "AttachmentTooLargeError";
   }
 }
 

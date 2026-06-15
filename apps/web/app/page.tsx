@@ -4,6 +4,7 @@ import { parsePass, toHex } from "@remote-claw/clawsec";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearCredential, loadCredential, saveCredential } from "./lib/credential-store";
 import { claimHandoff } from "./lib/handoff-claim";
+import { friendlySendError } from "./lib/send-error";
 import {
   basename,
   diffOf,
@@ -562,7 +563,7 @@ function Transcript(props: {
     try {
       await viewer.requestHistory(sessionId, gap.nextSeq);
     } catch (e) {
-      setSendError(e instanceof Error ? e.message : String(e));
+      setSendError(friendlySendError(e));
     } finally {
       setGapRetrying(false);
     }
@@ -586,7 +587,7 @@ function Transcript(props: {
       await viewer.sendPrompt(sessionId, text);
       setInput("");
     } catch (e) {
-      setSendError(e instanceof Error ? e.message : String(e));
+      setSendError(friendlySendError(e));
     } finally {
       setSending(false);
     }
@@ -609,7 +610,7 @@ function Transcript(props: {
         });
         setInput("");
       } catch (e) {
-        setSendError(e instanceof Error ? e.message : String(e));
+        setSendError(friendlySendError(e));
       } finally {
         setSending(false);
       }
@@ -628,7 +629,7 @@ function Transcript(props: {
       } catch (e) {
         // Only revert if no newer choice landed while we were awaiting — else we'd clobber it.
         setOptimisticMode((cur) => (cur === id ? prev : cur));
-        setSendError(e instanceof Error ? e.message : String(e));
+        setSendError(friendlySendError(e));
       }
     },
     [optimisticMode, sessionId, viewer],

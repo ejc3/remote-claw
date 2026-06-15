@@ -97,6 +97,25 @@ node -e '
 Also keep ```` ``` ```` fences balanced (even count) and avoid splitting an inline `` `code` `` span
 across a line wrap (some renderers mishandle it).
 
+## Running Playwright (browser repro) — the gotchas that cost time
+
+Playwright lives **only in the `tests/web` workspace** (`@playwright/test`), NOT `apps/web` or the repo
+root. Two things bite an ad-hoc browser script every time:
+
+- **Import name:** `import { chromium, webkit } from "@playwright/test"` (it re-exports the engines).
+  Bare `import … from "playwright"` is NOT resolvable — `playwright` isn't a direct dep, only
+  `@playwright/test` is.
+- **Script location:** an ESM file resolves bare specifiers from the FILE's directory, not cwd. So an
+  ad-hoc `.mjs` MUST live inside `tests/web/` (e.g. `tests/web/scratch.mjs`) — a script in `/tmp` or
+  `apps/web` throws `ERR_MODULE_NOT_FOUND` even when run with cwd=`tests/web`. Delete the scratch file
+  after. The real suites run via the `tests/web/*.config.ts` configs (`pnpm --filter … test:app`).
+
+Browsers: **Chromium is installed and works headless** (`chromium.launch()`). **WebKit needs system
+libs** (GTK4/graphene/gstreamer/flite) — install once from `tests/web` with `sudo pnpm exec playwright
+install-deps webkit && pnpm exec playwright install webkit`. WebKit is the only faithful **iOS-Safari**
+repro (e.g. a fetch failing as "Load failed"); Chromium with `devices['iPhone 15']` emulation
+reproduces mobile *layout* but not WebKit-specific transport behavior.
+
 ## CLI / clawsec workflow
 
 - Each change lands as its own reviewed PR (stacked when dependent). Per-PR gate: `pnpm exec biome
