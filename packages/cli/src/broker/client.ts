@@ -335,13 +335,34 @@ async function safeErr(res: Response): Promise<string> {
  * like `: open` / `: empty`) are skipped; a multi-line data field is joined per the SSE spec. An
  * `event: error` record throws so the caller sees a terminal broker error rather than a silent stop.
  */
-async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+/** Idle-watchdog window. The server emits a `: ping` keepalive every ~15s (`SSE_KEEPALIVE_MS`), so a
+ *  live stream — even one with no frames — sends bytes well inside this. No bytes at all for this long
+ *  means the stream is stalled (a suspended iOS fetch that never resolves/throws, a silently-dropped
+ *  connection): end it so the caller's re-subscribe loop reconnects from its cursor (dedup/FrameOrderer
+ *  absorb any re-read). Sized > 2× the server keepalive so a single lost ping can't trip a false stall. */
+export const SSE_IDLE_MS = 40_000;
+const SSE_IDLE = Symbol("sse-idle");
+
+export async function* sseData(
+  body: ReadableStream<Uint8Array>,
+  idleMs = SSE_IDLE_MS,
+): AsyncGenerator<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   try {
-    while (true) {
-      const { done, value } = await reader.read();
+    for (;;) {
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<typeof SSE_IDLE>((resolve) => {
+        idleTimer = setTimeout(() => resolve(SSE_IDLE), idleMs);
+        // Don't keep a Node process alive just for the watchdog (no-op in the browser).
+        if (typeof idleTimer === "object" && typeof idleTimer.unref === "function")
+          idleTimer.unref();
+      });
+      const winner = await Promise.race([reader.read(), idle]);
+      clearTimeout(idleTimer);
+      if (winner === SSE_IDLE) break; // stalled — end the stream so the caller re-subscribes
+      const { done, value } = winner;
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       let idx = buf.indexOf("\n\n");
