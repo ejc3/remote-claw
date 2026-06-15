@@ -1,8 +1,9 @@
 # Ephemeral one-time credential handoff (OTK)
 
-**Status:** living design doc. Research-grounded (8-angle workflow) **and adversarially reviewed** (codex +
-7-dimension red-team; verdict + resolutions in §8). The §1 invariant and several claims below were
-**rewritten after review** — the first draft overclaimed.
+**Status:** **SHIPPED** — PR1 (clawsec `handoff.ts`), PR2 (zero-knowledge `HandoffStore` + `/api/handoff`),
+PR3 (QR `otk1_` + web client + §3.6 non-extractable storage). Research-grounded (8-angle workflow) **and
+adversarially reviewed** (codex + 7-dimension red-team on the design; codex + `/code-review` per PR; all
+resolutions in §8). The §1 invariant was honestly scoped after review.
 **Goal:** replace the *forever pass embedded in the QR* with a **one-time, short-TTL bootstrap token**, so the
 handoff store is — to an *honest-but-curious* broker, a DB dump, or a passive log/edge observer — a store it
 **cannot read**, that yields a blob to **one** caller **once**.
@@ -152,7 +153,9 @@ After claim, the viewer must **not** keep the pass as bytes. Two levels, both su
   then holds only a wrapped blob and the unwrap key materializes briefly, only on a hardware-gated touch.
 
 Neither makes a *server-delivered* viewer ZK against its own server (that's the §3.5(b) follow-up) — but both
-materially shrink the §3.5(a) post-claim residual, so the baseline (non-extractable + IndexedDB) ships in v1.
+materially shrink the §3.5(a) post-claim residual, so the baseline **shipped** in v1
+(`apps/web/app/lib/credential-store.ts`): a non-extractable AES-256-GCM device key in IndexedDB wraps the
+tab-scoped (sessionStorage) ciphertext, so `exportKey()` throws and a storage dump can't recover the pass.
 
 ## 4. Threat model (vs. today's forever-pass-in-fragment)
 
@@ -240,4 +243,11 @@ written" — it overclaimed.* This revision applies the survivors. Key resolutio
 
 Residual (accepted, documented): malicious-app-delivery-server (needs native client), backup non-erasure,
 post-claim credential authority (mitigated-not-removed by §3.6), and a QR photographed at scan time (bounded
-by TTL + one-time). Re-review the implementation PRs against this §8 before merge.
+by TTL + one-time).
+
+**Implementation review (PR1–PR3), all applied:** codex + `/code-review` per PR. PR2 — `file:` handoff
+hard-fails on Vercel (cloud-primary); streaming pre-buffer body cap; absolute code-baked `TTL_MAX_S`;
+dead-client self-heal; opaque sweep error; `no-store` on every response; full cause-chain 404 detect.
+PR3 — `--rc-qr --rc-app` **fails closed** (never a forever-pass QR); https-only bypass; origin
+validate/normalize; **full** identity_id binding; claim re-entry guard + JSON-parse hardening; §3.6
+non-extractable post-claim storage. **Signed off.**
