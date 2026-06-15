@@ -981,26 +981,74 @@ code {
 /* composer */
 .composer {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   padding: 12px;
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line-soft);
   background: var(--bg);
 }
-.composer input {
+/* The controls row: mode · attach · textarea · send. flex-end keeps the buttons bottom-aligned as the
+   textarea grows upward. */
+.composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.composer-input {
   flex: 1;
   min-width: 0;
-  padding: 11px 13px;
+  padding: 9px 13px;
+  font-family: inherit;
   font-size: 15px;
+  line-height: 1.4;
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--line);
   border-radius: 11px;
   outline: none;
+  resize: none;
+  min-height: 40px;
+  max-height: 140px;
   transition: border-color 0.15s;
 }
-.composer input:focus {
+.composer-input:focus {
   border-color: var(--accent);
+}
+/* Staged image previews above the row — wrap; each removable via the ×. */
+.staged {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.staged-item {
+  position: relative;
+  width: 56px;
+  height: 56px;
+}
+.staged-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  display: block;
+}
+.staged-remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  font-size: 14px;
+  line-height: 1;
 }
 .send-err {
   color: var(--danger);

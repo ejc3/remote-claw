@@ -61,6 +61,39 @@ function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
   return [...prev, msg];
 }
 
+/** A staged (queued, not-yet-sent) image in the composer: the File plus an object-URL preview. */
+interface StagedImage {
+  id: string;
+  name: string;
+  file: File;
+  url: string;
+}
+
+/** The composer's send action, extracted pure for testing. Staged images each go as their own E2E
+ *  attachment frame (the host injects one `@"path" caption` per image, so the composer text rides as the
+ *  caption on each); with no images, a non-empty text goes as a single prompt. */
+export async function sendComposer(
+  viewer: Pick<Viewer, "sendAttachment" | "sendPrompt">,
+  sessionId: string,
+  text: string,
+  staged: readonly StagedImage[],
+  downscale: (file: File) => Promise<string>,
+): Promise<void> {
+  if (staged.length > 0) {
+    for (const item of staged) {
+      const data = await downscale(item.file);
+      await viewer.sendAttachment(sessionId, {
+        name: item.name,
+        mime: "image/jpeg",
+        data,
+        caption: text,
+      });
+    }
+  } else if (text !== "") {
+    await viewer.sendPrompt(sessionId, text);
+  }
+}
+
 export default function Home() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [passInput, setPassInput] = useState("");
@@ -537,6 +570,7 @@ function Transcript(props: {
   const { viewer, sessionId, announce, now } = props;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [staged, setStaged] = useState<StagedImage[]>([]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [gap, setGap] = useState<TranscriptGap | null>(null);
@@ -625,45 +659,69 @@ function Transcript(props: {
     void retryGap();
   }, [gap, retryGap, showGapRecovery]);
 
+  // Attachments are STAGED, not auto-sent (#44): the paperclip queues image(s) as thumbnails; they go on
+  // Submit with the composer text. Each holds a File + an object-URL preview (revoked on remove/clear/unmount).
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const addStaged = useCallback((files: FileList | null) => {
+    if (files === null) return;
+    const items = Array.from(files)
+      .filter((f) => f.type.startsWith("image/"))
+      .map((f) => ({
+        id: crypto.randomUUID(),
+        name: f.name,
+        file: f,
+        url: URL.createObjectURL(f),
+      }));
+    if (items.length > 0) setStaged((prev) => [...prev, ...items]);
+  }, []);
+  const removeStaged = useCallback((id: string) => {
+    setStaged((prev) => {
+      const hit = prev.find((s) => s.id === id);
+      if (hit) URL.revokeObjectURL(hit.url);
+      return prev.filter((s) => s.id !== id);
+    });
+  }, []);
+  const clearStaged = useCallback(() => {
+    setStaged((prev) => {
+      for (const s of prev) URL.revokeObjectURL(s.url);
+      return [];
+    });
+  }, []);
+  // Revoke any still-staged object URLs if the transcript unmounts (session switch / back) with a draft.
+  const stagedRef = useRef(staged);
+  stagedRef.current = staged;
+  useEffect(
+    () => () => {
+      for (const s of stagedRef.current) URL.revokeObjectURL(s.url);
+    },
+    [],
+  );
+
   const send = useCallback(async () => {
     const text = input.trim();
-    if (text === "") return;
+    if (text === "" && staged.length === 0) return;
     setSending(true);
     setSendError(null);
     try {
-      await viewer.sendPrompt(sessionId, text);
+      await sendComposer(viewer, sessionId, text, staged, downscaleToBase64);
+      if (staged.length > 0) clearStaged();
       setInput("");
     } catch (e) {
       setSendError(friendlySendError(e));
     } finally {
       setSending(false);
     }
-  }, [input, sessionId, viewer]);
+  }, [input, staged, sessionId, viewer, clearStaged]);
 
-  // Attach a photo/image (#44): downscale to fit one E2E frame, send it (the composer text rides as the
-  // caption), and the host writes it + has claude Read it. The bytes never reach the broker in cleartext.
-  const fileRef = useRef<HTMLInputElement | null>(null);
-  const attach = useCallback(
-    async (file: File) => {
-      setSending(true);
-      setSendError(null);
-      try {
-        const data = await downscaleToBase64(file);
-        await viewer.sendAttachment(sessionId, {
-          name: file.name,
-          mime: "image/jpeg",
-          data,
-          caption: input.trim(),
-        });
-        setInput("");
-      } catch (e) {
-        setSendError(friendlySendError(e));
-      } finally {
-        setSending(false);
-      }
-    },
-    [input, sessionId, viewer],
-  );
+  // Auto-grow the composer textarea up to a cap; recompute whenever the text changes (incl. on clear).
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `input` is the resize TRIGGER, not read here.
+  useEffect(() => {
+    const el = taRef.current;
+    if (el === null) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [input]);
 
   const chooseMode = useCallback(
     async (id: string) => {
@@ -723,47 +781,81 @@ function Transcript(props: {
           void send();
         }}
       >
-        <button
-          type="button"
-          className="mode-btn"
-          aria-haspopup="dialog"
-          aria-expanded={modeSheet}
-          onClick={() => setModeSheet(true)}
-          title="Permission mode"
-        >
-          <span className="mode-glyph">{modeGlyph(displayedMode)}</span>
-          {modeLabel(displayedMode)}
-        </button>
-        <button
-          type="button"
-          className="attach-btn"
-          title="Attach a photo"
-          aria-label="Attach a photo"
-          disabled={sending}
-          onClick={() => fileRef.current?.click()}
-        >
-          📎
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          hidden
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void attach(f);
-            e.target.value = ""; // allow re-picking the same file
-          }}
-        />
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Send a prompt…"
-          enterKeyHint="send"
-        />
-        <button type="submit" className="btn" disabled={sending || input.trim() === ""}>
-          Send
-        </button>
+        {staged.length > 0 && (
+          <div className="staged">
+            {staged.map((s) => (
+              <div className="staged-item" key={s.id}>
+                {/* biome-ignore lint/performance/noImgElement: a local object-URL blob preview — next/image can't optimize a blob: URL */}
+                <img src={s.url} alt={s.name} />
+                <button
+                  type="button"
+                  className="staged-remove"
+                  aria-label={`Remove ${s.name}`}
+                  onClick={() => removeStaged(s.id)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="composer-row">
+          <button
+            type="button"
+            className="mode-btn"
+            aria-haspopup="dialog"
+            aria-expanded={modeSheet}
+            onClick={() => setModeSheet(true)}
+            title="Permission mode"
+          >
+            <span className="mode-glyph">{modeGlyph(displayedMode)}</span>
+            {modeLabel(displayedMode)}
+          </button>
+          <button
+            type="button"
+            className="attach-btn"
+            title="Attach photos"
+            aria-label="Attach photos"
+            disabled={sending}
+            onClick={() => fileRef.current?.click()}
+          >
+            📎
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              addStaged(e.target.files);
+              e.target.value = ""; // allow re-picking the same file(s)
+            }}
+          />
+          <textarea
+            ref={taRef}
+            className="composer-input"
+            value={input}
+            rows={1}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter sends; Shift+Enter (or the mobile newline key) inserts a line break.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            placeholder="Send a prompt…"
+            enterKeyHint="send"
+          />
+          <button
+            type="submit"
+            className="btn"
+            disabled={sending || (input.trim() === "" && staged.length === 0)}
+          >
+            Send
+          </button>
+        </div>
       </form>
 
       {modeSheet && (

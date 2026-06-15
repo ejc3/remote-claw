@@ -156,7 +156,10 @@ test("an AskUserQuestion renders a question UI and submits answers (#42)", async
   await page.locator("section.chat").screenshot({ path: "test-results/askuserquestion-e2e.png" });
 });
 
-test("attaching a photo sends it and echoes in the transcript (#44)", async ({ page, seedHost }) => {
+test("a photo STAGES, then is sent on submit and echoes in the transcript (#44/#112)", async ({
+  page,
+  seedHost,
+}) => {
   const { pass } = await seedHost();
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
@@ -171,8 +174,13 @@ test("attaching a photo sends it and echoes in the transcript (#44)", async ({ p
     .locator('input[type="file"]')
     .setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: png });
 
-  // The host wrote the file + echoed a user frame with the attachment chip (proves the full inbound
-  // attachment path: viewer downscale → E2E frame → relay write + inject + echo → transcript).
+  // Attaching STAGES the image (a removable thumbnail) — it is NOT sent yet (#112).
+  await expect(page.locator(".staged-item img")).toBeVisible();
+  await expect(page.locator(".row-user .pill", { hasText: "📎 photo.png" })).toHaveCount(0);
+
+  // Submit → the staged image is sent; the host writes it + echoes the attachment chip (proves the full
+  // inbound path: viewer downscale → E2E frame → relay write + inject + echo → transcript).
+  await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.locator(".row-user .pill", { hasText: "📎 photo.png" })).toBeVisible();
   await page.locator("section.chat").screenshot({ path: "test-results/attachment-e2e.png" });
 });
