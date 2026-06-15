@@ -126,6 +126,7 @@ export class TursoCloudDbLocator implements DbLocator {
   // db-naming comment above.
   readonly #scope: string;
   readonly #indexName: string;
+  readonly #handoffName: string;
 
   constructor(o: TursoCloudOptions) {
     this.#o = {
@@ -150,6 +151,10 @@ export class TursoCloudDbLocator implements DbLocator {
     }
     this.#scope = scope;
     this.#indexName = `${APP}-${scope}-index`;
+    // `-hx` (handoff) is a fixed suffix distinct from the session kinds (s/b/x), parallel to `-index`.
+    // It shares the `rc-<scope>-` prefix, so the dev/CI dropScope() sweep reclaims it too (desirable —
+    // dropScope is dev-gated and never runs against prod).
+    this.#handoffName = `${APP}-${scope}-hx`;
   }
 
   #isKnown(name: string): boolean {
@@ -250,6 +255,17 @@ export class TursoCloudDbLocator implements DbLocator {
   /** Provision the catalog db (idempotent), so a fresh deployment's first index write can connect. */
   async ensureIndex(): Promise<void> {
     await this.#createIfAbsent(this.#indexName);
+  }
+
+  /** The dedicated ephemeral-handoff store db for this scope (`rc-<scope>-hx`), separate from session dbs
+   *  and the cold index so its one-time/short-TTL lifecycle never entangles the frame log or retention. */
+  handoffConfig(): { url: string; authToken: string } {
+    return this.#connect(this.#handoffName);
+  }
+
+  /** Provision the handoff db (idempotent), so the first PUT can connect. */
+  async ensureHandoff(): Promise<void> {
+    await this.#createIfAbsent(this.#handoffName);
   }
 
   /** Create a database if absent (idempotent). A conflict — 409, or a 400/422 confirmed via GET — means

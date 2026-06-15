@@ -213,6 +213,14 @@ export interface DbLocator {
   indexConfig?(): { url: string; authToken?: string };
   /** Provision the catalog db if needed (cloud: Platform-API create the `rc-<scope>-index` db; file: no-op). */
   ensureIndex?(): Promise<void>;
+
+  // --- Ephemeral one-time-handoff store (one small table, SEPARATE from session frames; see
+  //     docs/ephemeral-handoff.md). Omit ⇒ the handoff feature is unavailable on this locator. ---
+  /** Connection config for the dedicated handoff store db (cloud: `rc-<scope>-hx`; file: `_handoff.db`). */
+  handoffConfig?(): { url: string; authToken?: string };
+  /** Provision the handoff db if needed (cloud: Platform-API create `rc-<scope>-hx`; file: no-op). */
+  ensureHandoff?(): Promise<void>;
+
   /** The auth token a retention probe uses to connect a catalogued db by its url (cloud: the group token). */
   probeAuthToken?(): string | undefined;
   /** Drop the cold-index catalog db ITSELF (after its sessions are reclaimed), so a short-lived scope
@@ -285,6 +293,21 @@ export class FileDbLocator implements DbLocator {
   // index walks only real sessions. createClient auto-creates the file, so there's no ensureIndex.
   indexConfig(): { url: string } {
     return { url: `file:${join(this.#dir, "_index.db")}` };
+  }
+
+  // The handoff store lives alongside the session dbs (`_handoff.db`). createClient auto-creates the file,
+  // so there is no ensureHandoff. Local/dev only — single-instance.
+  handoffConfig(): { url: string } {
+    // HARD-FAIL on Vercel regardless of RC_SQLITE_DIR: a `file:` handoff store is per-instance, so a PUT
+    // and its claim would land on different instances and never match. The handoff REQUIRES a shared cloud
+    // db (TursoCloudDbLocator's `rc-<scope>-hx`); fail closed rather than silently break cross-instance.
+    if (process.env.VERCEL === "1") {
+      throw new Error(
+        "FileDbLocator: the one-time-handoff store needs a cloud (Turso) backend on Vercel — a file: db is " +
+          "per-instance, so a PUT and its claim would miss. Configure TURSO_API_TOKEN/ORG/GROUP/GROUP_AUTH_TOKEN.",
+      );
+    }
+    return { url: `file:${join(this.#dir, "_handoff.db")}` };
   }
 
   async dropStored(path: string): Promise<void> {

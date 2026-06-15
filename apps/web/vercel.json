@@ -1,7 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "fluid": true,
-  "crons": [{ "path": "/api/cron/retention", "schedule": "0 3 * * *" }],
+  "crons": [
+    { "path": "/api/cron/retention", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/handoff-sweep", "schedule": "*/5 * * * *" }
+  ],
   "functions": {
     "app/api/cron/retention/route.ts": { "maxDuration": 300 }
   }
