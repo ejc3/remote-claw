@@ -26,6 +26,23 @@ Three parties, one of which (the broker) is untrusted and sees only ciphertext.
   `BrokerClient` / `FrameOrderer` / `SecurityProvider` as the host, so there is exactly one protocol
   implementation, not two that can drift (`viewer.ts` header comment).
 
+**Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the only
+driver. Every harness produces a `Session`; `bridgeSession` (the one place that turns a `Session` into a
+live broker bridge — `HostRcRelay` + `announce` + `serve`) is the single seam. **The broker, the relay
+(`HostRcRelay`), and the viewer are identical across drivers** — so everything in this document (frames,
+the two pumps, `seq`/ordering, `catch_up`, presence, permissions, the attachment lifecycle in §10a) is the
+same regardless of driver. Only **how the `Session` reaches `claude`** differs:
+
+| Driver | Inject (downstream → claude) | Capture (claude → upstream) | Permissions | Provider |
+|---|---|---|---|---|
+| **MITM** (`--rc-app`, `launch.ts`) | intercept claude's RC endpoints → worker downstream | worker upstream POSTs (`followUpstream`) | structured `can_use_tool` gates (§10) | Anthropic API only |
+| **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | `set-buffer`/`paste-buffer` + `send-keys` into the pane (`runInjectPump`) | tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | auto-approve (`--dangerously-skip-permissions`) | any, incl. Bedrock/Vertex |
+
+Because the relay owns the attachment write+inject and presence, attachments and the connection-state
+ladder work in **both** modes unchanged — the tmux driver never even sees an `attachment` frame
+(`TMUX_CAPABILITIES.attachments = true`); the relay writes the file and injects the `@"path"` reference,
+which the pane's `claude` attaches natively just as the MITM-driven worker does.
+
 ```
  claude --remote-control
         │  (HTTPS_PROXY → CONNECT → leaf cert)
@@ -216,12 +233,21 @@ Cadence (`relay.ts` `#maybeAnnounce`): re-announce **immediately** when the pres
 `followUpstream`'s null tick). Each announce gets a unique `msgId` from `#annCount++` so no two reuse one
 id.
 
-The viewer derives a connection state purely from announce freshness (`viewer.ts` `connState`):
-**connected** (`age < 45_000`), **reconnecting** (`age < 60_000`), **disconnected** (else). The host's
-20 s keepalive sits ~2× under the 45 s connected bound, so a single missed announce + jitter does not read
-as a disconnect, and the state ladder is monotone. The console keeps only the **freshest** announce per
-session (`max sent_at`, `page.tsx` Console), so an out-of-order older announce is ignored — presence
-converges to the latest `sent_at`.
+The viewer derives a connection state from announce freshness (`viewer.ts` `connState`): **connected**
+while `age < CONNECTED_WINDOW_MS` (45 s). Once stale it shows **reconnecting** for a full
+`RECONNECTING_WINDOW_MS` (30 s) before **disconnected** — the ladder always passes through reconnecting,
+never connected→disconnected. The disconnect countdown is anchored per session at `reconnectingSince`
+(`nextReconnectAnchor`, `page.tsx` Console): set **once** when the announce first reads stale, held until
+connected again, and **not** re-reset while it stays stale. After a backgrounded tab returns — iOS Safari
+suspends the bus SSE while hidden, so the announce goes stale only because we were away — that anchor is
+the **return instant**, and the page bumps `announceRevive` to re-subscribe the bus; the returning tab
+therefore shows *reconnecting* for a full window while the re-subscribe pulls a fresh announce, never an
+instant *disconnected* (#123). Because the anchor is not re-reset by focus, a genuinely-dead host still
+reaches *disconnected* and stays there even on a phone, where unlocking/app-switching back is the normal
+sub-`window` interaction. `FRESH_WINDOW_MS` (60 s) is the **separate** control-verb / `catch_up` replay
+bound (§11), **not** the disconnect threshold — decoupled so widening disconnect can't widen replay. The
+console keeps only the **freshest** announce per session (`max sent_at`, `page.tsx` Console), so an
+out-of-order older announce is ignored — presence converges to the latest `sent_at`.
 
 ---
 
@@ -244,6 +270,51 @@ A worker `can_use_tool` control_request is surfaced as a `permission_request` co
 The viewer's `PermissionRow` renders `effective = confirmed ?? decision`: the host-logged resolution
 (`confirmed`, folded from the transcript's `permission_resolved` frames) **wins** over the local optimistic
 `decision`, so a granted permission survives a reload (`page.tsx`).
+
+---
+
+## 10a. Attachment lifecycle (#44)
+
+An image the viewer sends rides our **own** `attachment` frame, never the worker protocol — claude reads
+the file natively, so no unverified write is needed. The full round trip (`viewer.sendAttachment` →
+`relay.ts` `#handleAttachment`):
+
+1. **Viewer** seals an `attachment` frame (`dir:"in"`, plane = content's key) carrying `{name, mime, data
+   (base64), caption}` and POSTs it. The broker never sees the bytes. The viewer rejects a payload over
+   `MAX_ATTACHMENT_BYTES` (3 MB) up front — the sealed body is ~1.34× that, and Vercel rejects a request
+   body over ~4.5 MB at the edge as a bare `"Load failed"` (§12). The composer **downscales** every image
+   to JPEG first, so a normal photo lands far under the cap.
+2. **Host** `#handleAttachment` decrypts, then **drops cleanly** (no `seq`, no side effect) if the data is
+   not well-formed base64, is over `MAX_ATTACHMENT_B64` (16 MB), or decodes empty.
+3. It writes the bytes to `~/.claude/uploads/<sessionId>/<unique>.<ext>` (the extension matched to the
+   actual mime). This is the **same tree the real Anthropic app uses**, so claude reads it with **no
+   permission prompt** (an arbitrary temp path *did* prompt — #122). The unique prefix stops a later
+   upload overwriting a file an earlier still-queued prompt will read.
+4. It **echoes a `user` content frame** `📎 <name>\n<caption>` (`dir:"out"`, with a real `seq`) — and only
+   **then** `pushUserInput('@"<abs-path>" <caption | "What do you see in this image?">')`. The echo is
+   published **before** the inject (and a failed echo is **fatal** → teardown) so a torn-down relay can
+   never have driven claude to read an image that reached no transcript.
+
+**There is NO optimistic local echo.** The viewer renders only `dir:"out"` frames (`viewer.ts`:
+`if (frame.dir !== "out") continue`), so the sent image/text bubble materialises **only** when the host's
+echo round-trips back over the broker — there is a window (from when the composer clears the staged
+thumbnail until the echo arrives) where the image is in neither the composer nor the transcript. On a
+healthy stream that is ~tens of ms; on a **suspended iOS stream** it lasts until a revive (§9 /
+`reviveKey`), which is the "my image vanished then came back" report. (#113 will add an optimistic pending
+bubble, reconciled with the echo.)
+
+**Echo identity / why reconciliation isn't possible yet.** The host echo's `msgId` is `${kind}-${seq}` =
+`user-${seq}` for **both** prompts and attachments. The viewer's own send ids are `c-${id}`
+(`sendPrompt`) / `att-${id}` (`sendAttachment`), and `appendUniqueMessage` dedups by `msgId` alone — so no
+optimistic pill can match the echo today. The partial hook that *does* exist: the `user` text frame
+carries a `clientMsgId` in its header and the host's `accepted` ack echoes it back, but the **attachment**
+frame carries none and the rendered `dir:"out"` echo carries none (only the un-rendered meta ack does).
+Threading `clientMsgId` end-to-end (or reconciling on the `accepted` ack) is the prerequisite for #113.
+
+**Known wart.** After an image send the viewer bumps a transcript `reviveKey` (#121) to recover an
+iOS-suspended stream, which aborts and re-subscribes the live generator just as the echo is arriving —
+adding latency on the common (non-suspended) path. It overlaps the `visibilitychange` revive and is a
+candidate for removal once a transport-level stall-watchdog (one auto-reattach for *all* streams) lands.
 
 ---
 
