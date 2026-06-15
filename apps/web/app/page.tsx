@@ -98,7 +98,10 @@ export default function Home() {
   // automatically — a reload should return to the console, not the pass form. `restoring` stays up through
   // the connect attempt; a failure falls through to the Connect screen (pass prefilled + error shown) so
   // the user can retry without re-pairing.
+  const restoredOnce = useRef(false);
   useEffect(() => {
+    if (restoredOnce.current) return; // once-guard: React StrictMode double-invokes effects in dev
+    restoredOnce.current = true;
     const entry = entryFromFragment(window.location.hash.replace(/^#/, ""));
     if (entry.kind === "pass") {
       setPassInput(entry.value);
@@ -116,6 +119,7 @@ export default function Home() {
             await connect(saved);
           }
         })
+        .catch(() => {}) // loadCredential's sessionStorage read can throw (blocked/partitioned) — fall to Connect
         .finally(() => setRestoring(false));
     }
   }, [connect]);
@@ -175,7 +179,7 @@ export function entryFromFragment(
 
 /** A minimal splash shown while we check storage + auto-reconnect on load, so a returning user never
  *  sees the pass form flash on reload. */
-function Reconnecting() {
+export function Reconnecting() {
   return (
     <main className="connect">
       <div className="connect-card">
@@ -195,7 +199,7 @@ function Brand() {
   );
 }
 
-function Connect(props: {
+export function Connect(props: {
   pass: string;
   setPass: (s: string) => void;
   connect: (s: string) => void;
@@ -209,8 +213,8 @@ function Connect(props: {
         <Brand />
         <h1>Drive your claude, remotely.</h1>
         <p className="muted">
-          Paste a machine <strong>pass</strong> to read and steer its claude sessions, end-to-end
-          encrypted. The broker never sees your keys or your messages.
+          Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
+          encrypted.
         </p>
         <textarea
           className="field"
@@ -218,7 +222,7 @@ function Connect(props: {
           onChange={(e) => props.setPass(e.target.value)}
           placeholder="rcp1_…"
           spellCheck={false}
-          rows={3}
+          rows={2}
         />
         <button
           type="button"
@@ -230,8 +234,7 @@ function Connect(props: {
         </button>
         {props.error !== null && <p className="error">Couldn’t load that pass: {props.error}</p>}
         <p className="hint">
-          Get a pass on the machine with <code>remote-claw --rc-pass</code>. A pass can read and
-          steer that machine’s sessions but is not the master secret.
+          Get one with <code>remote-claw --rc-pass</code> on the machine.
         </p>
       </div>
     </main>

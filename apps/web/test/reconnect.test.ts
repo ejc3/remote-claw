@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import Home, { entryFromFragment } from "../app/page.js";
+import Home, { Connect, entryFromFragment } from "../app/page.js";
 
 // Auto-reconnect on reload (#110): a plain reload should restore the stored credential and reconnect,
 // landing back in the console — NOT flash the pass/token form. These cover the pure load-time routing
@@ -27,5 +27,23 @@ describe("Home initial render", () => {
     expect(html).toContain("Connecting…");
     expect(html).not.toContain("rcp1_…"); // the Connect form's placeholder must NOT be shown
     expect(html).not.toContain("Drive your claude"); // nor the Connect headline
+  });
+});
+
+describe("Connect screen (decluttered)", () => {
+  it("keeps the essentials but drops the verbose reassurance paragraphs", () => {
+    const html = renderToStaticMarkup(
+      createElement(Connect, {
+        pass: "",
+        setPass: () => {},
+        connect: () => {},
+        connecting: false,
+        error: null,
+      }),
+    );
+    expect(html).toContain("end-to-end encrypted");
+    expect(html).toContain("--rc-pass");
+    expect(html).not.toContain("The broker never sees"); // trimmed for a less crowded entry screen
+    expect(html).not.toContain("not the master secret"); // trimmed
   });
 });
