@@ -89,13 +89,14 @@ expires_at INTEGER NOT NULL)` + index on `expires_at`.
 
 ### 3.3 Endpoints — `apps/web/app/api/handoff/route.ts` (an unauthenticated high-entropy *capability* endpoint)
 
-- **`PUT`** (host upload): a **route-level body cap (≤4 KiB) before JSON parse**; body `{id: 64-hex, proof_hash:
-  base64url, ct: base64url, ttl?: int}`. Validate `ttl` like `retentionMs` (non-negative **safe integer**, else
-  default 600 s) then clamp to a **code-baked `[MIN, MAX]`** (default 600 s). `INSERT … ON CONFLICT(id) DO
-  NOTHING RETURNING id` → **return 409 on conflict** so the host **re-mints OTK** rather than publishing a QR
-  for a poisoned row.
-- **`POST` (claim):** body `{id: 64-hex, proof: base64url}` → atomic burn (§3.2) gated on a constant-time
-  `SHA256(proof) == proof_hash` match → `{box}` or a **uniform `404`**. Claim is **POST, never GET**. The
+- **`PUT`** (host upload): a **route-level body cap before JSON parse**; body `{id: 64-hex, proof_hash: 64-hex,
+  ct: hex, ttl?: int}` (all wire values are hex — the OTK itself stays base64url in the `#fragment`). Validate
+  `ttl` like `retentionMs` (non-negative **safe integer**, else default 600 s) then clamp to a **code-baked
+  `[MIN, MAX]`** (default 600 s). `INSERT … ON CONFLICT(id) DO NOTHING` → **return 409 on conflict** so the
+  host **re-mints OTK** rather than publishing a QR for a poisoned row.
+- **`POST` (claim):** body `{id: 64-hex, proof: 64-hex}` (`proof = hex(claimProof)`) → atomic burn (§3.2)
+  gated on `SHA256(proof) == proof_hash` matched **inside the single `DELETE … WHERE id=? AND proof_hash=?`**
+  (a 256-bit hash key, so the equality is not a usable timing oracle) → `{box}` or a **uniform `404`**. Claim is **POST, never GET**. The
   **full non-success contract is fail-closed and uniform**: absent / expired / already-claimed / **bad proof**
   → identical opaque `404`; malformed `{id}`/over-size → `400`; backend fault (SQLITE_BUSY, create→serve race
   #346, etc.) → `500` with **no body detail**. `Cache-Control: no-store`. Constant-time id+proof handling
