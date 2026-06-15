@@ -128,3 +128,45 @@ describe("/api/handoff route", () => {
     expect(miss.headers.get("cache-control")).toBe("no-store");
   });
 });
+
+// The TTL clamp is the leaked-QR-window bound (§5): a requested ttl is clamped into the code-baked
+// [30s, 600s] range, and an absent/invalid ttl defaults to the 600s ceiling. This was previously
+// unprobed and unit-untested (caught by the adversarial completeness critic).
+describe("/api/handoff TTL clamp", () => {
+  // Returns the granted window (seconds), rounded — expires_at uses the server clock inside the route.
+  async function windowS(ttl?: number): Promise<number> {
+    const { PUT } = await import("../../app/api/handoff/route");
+    const m = await mint();
+    const body: Record<string, unknown> = { id: m.id, proof_hash: m.proof_hash, ct: m.ct };
+    if (ttl !== undefined) body.ttl = ttl;
+    const before = Date.now();
+    const res = await PUT(req("PUT", body));
+    expect(res.status).toBe(200);
+    const { expires_at } = (await res.json()) as { expires_at: number };
+    return Math.round((expires_at - before) / 1000);
+  }
+
+  it("clamps a huge ttl DOWN to the 600s ceiling (the window can never be widened)", async () => {
+    const w = await windowS(1_000_000_000);
+    expect(w).toBeGreaterThanOrEqual(599);
+    expect(w).toBeLessThanOrEqual(601);
+  });
+
+  it("clamps a tiny ttl UP to the 30s floor", async () => {
+    const w = await windowS(5);
+    expect(w).toBeGreaterThanOrEqual(30);
+    expect(w).toBeLessThanOrEqual(31);
+  });
+
+  it("honors an in-range ttl", async () => {
+    const w = await windowS(120);
+    expect(w).toBeGreaterThanOrEqual(119);
+    expect(w).toBeLessThanOrEqual(121);
+  });
+
+  it("defaults to the 600s ceiling when ttl is absent, negative, or non-integer", async () => {
+    expect(await windowS(undefined)).toBeGreaterThanOrEqual(599);
+    expect(await windowS(-5)).toBeGreaterThanOrEqual(599);
+    expect(await windowS(3.5)).toBeGreaterThanOrEqual(599);
+  });
+});
