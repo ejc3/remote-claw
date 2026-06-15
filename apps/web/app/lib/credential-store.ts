@@ -116,8 +116,24 @@ export async function loadCredential(): Promise<string | null> {
   }
 }
 
-/** Forget the credential — drop the tab-scoped blob. (The non-extractable device key may remain in IDB; it
- *  is useless without the blob and cannot be exported.) */
+/** Forget the credential — drop the tab-scoped blob AND the non-extractable device key. The blob removal
+ *  alone already makes the stored pass unrecoverable (the key can't be exported and has nothing to
+ *  decrypt), but a "forget device" should leave nothing behind, so also delete the IDB key (best-effort,
+ *  fire-and-forget — a storage failure must not throw out of a UI click handler). */
 export function clearCredential(): void {
   sessionStorage.removeItem(BLOB_KEY);
+  void (async () => {
+    try {
+      const db = await idb();
+      try {
+        await idbReq(
+          db.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).delete(DEVICE_KEY_ID),
+        );
+      } finally {
+        db.close();
+      }
+    } catch {
+      /* storage blocked/unavailable — nothing to clean up */
+    }
+  })();
 }
