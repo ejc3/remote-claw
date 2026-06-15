@@ -2,6 +2,7 @@
 
 import { parsePass, toHex } from "@remote-claw/clawsec";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { clearCredential, loadCredential, saveCredential } from "./lib/credential-store";
 import { claimHandoff } from "./lib/handoff-claim";
 import {
   basename,
@@ -77,8 +78,10 @@ export default function Home() {
       setHandoffOtk(frag);
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     } else {
-      const saved = sessionStorage.getItem("rc-pass");
-      if (saved?.startsWith("rcp1_")) setPassInput(saved);
+      // Restore a tab-scoped credential persisted under a NON-EXTRACTABLE device key (§3.6).
+      void loadCredential().then((saved) => {
+        if (saved !== null) setPassInput(saved);
+      });
     }
   }, []);
 
@@ -90,9 +93,10 @@ export default function Home() {
       // forwards it as the x-broker-backend header on every broker call. Same-origin, default fetch.
       const backend = new URLSearchParams(window.location.search).get("backend") ?? undefined;
       setViewer(await Viewer.fromPass(pass, "", undefined, backend));
-      // Persist only AFTER a successful connect (covers a pasted pass too) so a refresh reconnects
-      // without re-pasting. It's a live credential, so sessionStorage (tab-scoped), not localStorage.
-      sessionStorage.setItem("rc-pass", pass);
+      // Persist only AFTER a successful connect (covers a pasted pass too) so a refresh reconnects without
+      // re-pasting. Tab-scoped blob encrypted under a non-extractable device key (§3.6) — never the raw pass
+      // in storage; best-effort, so a storage failure can't break a live connect.
+      await saveCredential(pass).catch(() => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -130,7 +134,7 @@ export default function Home() {
     <Console
       viewer={viewer}
       onForget={() => {
-        sessionStorage.removeItem("rc-pass"); // "Forget" must actually forget — drop the stored pass
+        clearCredential(); // "Forget" must actually forget — drop the tab-scoped encrypted blob
         setViewer(null);
       }}
     />
