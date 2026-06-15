@@ -15,37 +15,41 @@ const mockViewer = () =>
   };
 
 describe("sendComposer", () => {
-  it("text only → one prompt, no attachments", async () => {
+  it("text only → one prompt threaded with the clientMsgId, no attachments", async () => {
     const v = mockViewer();
-    await sendComposer(v, "cse_x", "hello", [], async () => "DATA");
-    expect(v.sendPrompt).toHaveBeenCalledWith("cse_x", "hello");
+    await sendComposer(v, "cse_x", "hello", [], async () => "DATA", "cm-1");
+    expect(v.sendPrompt).toHaveBeenCalledWith("cse_x", "hello", "cm-1"); // clientMsgId threaded (#113)
     expect(v.sendAttachment).not.toHaveBeenCalled();
   });
 
-  it("staged images → ONE grouped attachment (all images + caption once), and NO separate prompt (#114)", async () => {
+  it("staged images → ONE grouped attachment (all images + caption once), threaded clientMsgId (#113/#114)", async () => {
     const v = mockViewer();
     const staged = [
       { id: "1", name: "a.jpg", file: img("a.jpg"), url: "blob:a" },
       { id: "2", name: "b.jpg", file: img("b.jpg"), url: "blob:b" },
     ];
     const downscale = vi.fn(async () => "DOWNSCALED");
-    await sendComposer(v, "cse_x", "what is this", staged, downscale);
+    await sendComposer(v, "cse_x", "what is this", staged, downscale, "cm-2");
     expect(downscale).toHaveBeenCalledTimes(2);
     // One grouped call carrying BOTH images and the caption ONCE — not one frame per image.
     expect(v.sendAttachment).toHaveBeenCalledTimes(1);
-    expect(v.sendAttachment).toHaveBeenCalledWith("cse_x", {
-      images: [
-        { name: "a.jpg", mime: "image/jpeg", data: "DOWNSCALED" },
-        { name: "b.jpg", mime: "image/jpeg", data: "DOWNSCALED" },
-      ],
-      caption: "what is this",
-    });
+    expect(v.sendAttachment).toHaveBeenCalledWith(
+      "cse_x",
+      {
+        images: [
+          { name: "a.jpg", mime: "image/jpeg", data: "DOWNSCALED" },
+          { name: "b.jpg", mime: "image/jpeg", data: "DOWNSCALED" },
+        ],
+        caption: "what is this",
+      },
+      "cm-2", // clientMsgId threaded so the optimistic echo reconciles on the accepted ack
+    );
     expect(v.sendPrompt).not.toHaveBeenCalled();
   });
 
   it("empty (no text, no staged) → no network calls", async () => {
     const v = mockViewer();
-    await sendComposer(v, "cse_x", "", [], async () => "D");
+    await sendComposer(v, "cse_x", "", [], async () => "D", "cm-3");
     expect(v.sendPrompt).not.toHaveBeenCalled();
     expect(v.sendAttachment).not.toHaveBeenCalled();
   });

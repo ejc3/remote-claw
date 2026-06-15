@@ -463,6 +463,10 @@ code {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* An optimistic echo (#113): shown instantly on send, dimmed until the host's `accepted` ack confirms it. */
+.pill-pending {
+  opacity: 0.55;
+}
 
 /* Slash-command chip (#41): a centered, muted instruction marker — not a chat pill. */
 .row-command {

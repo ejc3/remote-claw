@@ -255,3 +255,17 @@ export function parsePermissionResolved(text: string): PermissionResolution {
     return { requestId: "", behavior: "allow" };
   }
 }
+
+/** Parse an `accepted` ack body `{ client_msg_id, seq }` (#113). The host emits it for every inbound
+ *  `user`/`attachment` send; the viewer uses it to reconcile its optimistic echo (match clientMsgId →
+ *  re-key to `user-<seq>`). Returns null for a malformed/foreign ack the viewer should ignore. */
+export function parseAccepted(text: string): { clientMsgId: string; seq: number } | null {
+  try {
+    const a = JSON.parse(text) as { client_msg_id?: unknown; seq?: unknown };
+    if (typeof a.client_msg_id === "string" && typeof a.seq === "number")
+      return { clientMsgId: a.client_msg_id, seq: a.seq };
+  } catch {
+    /* malformed → ignore */
+  }
+  return null;
+}

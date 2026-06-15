@@ -13,6 +13,7 @@ import {
   dirname,
   editStat,
   isSlashCommand,
+  parseAccepted,
   parsePermissionResolved,
   parseQuestions,
   parseTask,
@@ -85,6 +86,7 @@ export async function sendComposer(
   text: string,
   staged: readonly StagedImage[],
   downscale: (file: File) => Promise<string>,
+  clientMsgId: string,
 ): Promise<void> {
   if (staged.length > 0) {
     const images = await Promise.all(
@@ -94,10 +96,53 @@ export async function sendComposer(
         data: await downscale(item.file),
       })),
     );
-    await viewer.sendAttachment(sessionId, { images, caption: text });
+    await viewer.sendAttachment(sessionId, { images, caption: text }, clientMsgId);
   } else if (text !== "") {
-    await viewer.sendPrompt(sessionId, text);
+    await viewer.sendPrompt(sessionId, text, clientMsgId);
   }
+}
+
+/** The OPTIMISTIC echo (#113) of a just-sent message — rendered instantly so the user's image/text
+ *  appears without waiting for the host's round-trip echo (which on a suspended iOS stream is delayed).
+ *  Mirrors the host's echo text (📎 chips + caption, or the prompt) and carries `clientMsgId` so the
+ *  `accepted` ack can re-key it to the real `user-<seq>` (then the host echo dedups by msgId). */
+export function optimisticMessage(
+  clientMsgId: string,
+  text: string,
+  staged: readonly StagedImage[],
+): Message {
+  const body =
+    staged.length > 0
+      ? `${staged.map((s) => `📎 ${s.name}`).join(", ")}${text ? `\n${text}` : ""}`
+      : text;
+  return {
+    kind: "user",
+    seq: null,
+    text: body,
+    msgId: `pending-${clientMsgId}`,
+    clientMsgId,
+    optimistic: true,
+  };
+}
+
+/** Reconcile an optimistic echo against the host's `accepted` ack (#113): if the real `user-<seq>` echo
+ *  has already arrived, drop the still-pending optimistic twin; otherwise re-key the optimistic to
+ *  `user-<seq>` so the upcoming echo dedups by msgId. Either order → exactly one bubble, no flash.
+ *
+ *  IDEMPOTENT under a re-delivered ack (at-least-once; a #seen eviction on a long session, or a fresh
+ *  orderer on revive, re-yields the seq-null `accepted`): the optimistic twin is identified ONLY by its
+ *  `pending-<clientMsgId>` msgId, never by clientMsgId — once re-keyed to `user-<seq>` it no longer
+ *  matches, so a second ack is a no-op instead of DELETING the already-reconciled message (whose echo,
+ *  being below the orderer's seq cursor, would never be re-yielded to re-add it). Pure for testing. */
+export function reconcileAccepted(prev: Message[], clientMsgId: string, seq: number): Message[] {
+  const realMsgId = `user-${seq}`;
+  const pendingId = `pending-${clientMsgId}`;
+  if (prev.some((m) => m.msgId === realMsgId)) {
+    return prev.filter((m) => m.msgId !== pendingId);
+  }
+  return prev.map((m) =>
+    m.msgId === pendingId ? { ...m, msgId: realMsgId, optimistic: false } : m,
+  );
 }
 
 export default function Home() {
@@ -715,6 +760,11 @@ function Transcript(props: {
         for await (const m of viewer.transcript(sessionId, ac.signal)) {
           if (isGapMessage(m)) {
             setGap({ nextSeq: m.nextSeq, pending: m.pending, since: m.since });
+          } else if (m.kind === "accepted") {
+            // Reconcile the optimistic echo (#113) — don't render the ack itself.
+            const ack = parseAccepted(m.text);
+            if (ack !== null)
+              setMessages((prev) => reconcileAccepted(prev, ack.clientMsgId, ack.seq));
           } else {
             setGap(null);
             setMessages((prev) => appendUniqueMessage(prev, m));
@@ -805,20 +855,28 @@ function Transcript(props: {
   const send = useCallback(async () => {
     const text = input.trim();
     if (text === "" && staged.length === 0) return;
+    const clientMsgId = `cm-${crypto.randomUUID()}`;
+    const toSend = staged; // capture before clearStaged resets it (downscale reads item.file, not the URL)
     setSending(true);
     setSendError(null);
+    // Optimistic echo (#113): render the message INSTANTLY and clear the composer, so the image/text is
+    // never in neither place during the host round-trip (or an iOS-suspended stream). The host's `accepted`
+    // ack reconciles it; the transport watchdog (#125) recovers the stream — so no post-send reviveKey bump.
+    setMessages((prev) => appendUniqueMessage(prev, optimisticMessage(clientMsgId, text, toSend)));
+    if (toSend.length > 0) clearStaged();
+    setInput("");
     try {
-      const hadStaged = staged.length > 0;
-      await sendComposer(viewer, sessionId, text, staged, downscaleToBase64);
-      if (hadStaged) {
-        clearStaged();
-        // Attaching opened the iOS photo picker, which may have suspended the transcript stream; force a
-        // re-subscribe so the echo + reply land without a reload (belt-and-suspenders to the visibility one).
-        setReviveKey((k) => k + 1);
-      }
-      setInput("");
+      await sendComposer(viewer, sessionId, text, toSend, downscaleToBase64, clientMsgId);
     } catch (e) {
       setSendError(friendlySendError(e));
+      // The send failed → no `accepted` will come; flag the optimistic bubble so it isn't a silent loss.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.clientMsgId === clientMsgId
+            ? { ...m, optimistic: false, text: `${m.text}\n⚠️ failed to send` }
+            : m,
+        ),
+      );
     } finally {
       setSending(false);
     }
@@ -1325,7 +1383,9 @@ export function Bubble({
         </div>
       ) : (
         <div className="row-user">
-          <div className="pill">{message.text}</div>
+          {/* Dim the pill while it's an unconfirmed optimistic echo (#113); solid once the `accepted`
+              ack reconciles it (optimistic→false). */}
+          <div className={message.optimistic ? "pill pill-pending" : "pill"}>{message.text}</div>
         </div>
       );
     case "assistant":
