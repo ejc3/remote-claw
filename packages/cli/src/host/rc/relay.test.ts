@@ -1,11 +1,12 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import type { Tracer } from "../../trace.js";
 import {
+  defaultAttachmentsDir,
   extForMime,
   HostRcRelay,
   isLikelyBase64,
@@ -573,6 +574,15 @@ describe("HostRcRelay permission mode presence", () => {
 
     expect(session.permissionMode).toBe("plan");
     expect(pushControl).toHaveBeenCalledWith("set_permission_mode", { mode: "plan" });
+  });
+});
+
+describe("defaultAttachmentsDir (#44)", () => {
+  it("is a per-session subdir of claude's own uploads tree (read without a permission prompt)", () => {
+    expect(defaultAttachmentsDir("cse_abc")).toBe(join(homedir(), ".claude", "uploads", "cse_abc"));
+  });
+  it("isolates sessions so a later upload can't collide with another session's files", () => {
+    expect(defaultAttachmentsDir("a")).not.toBe(defaultAttachmentsDir("b"));
   });
 });
 
