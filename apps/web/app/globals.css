@@ -461,12 +461,13 @@ code {
   font-size: 12px;
 }
 
-/* ASSISTANT prose — full width, no bubble; serif body to read as a document. */
+/* ASSISTANT prose — full width, no bubble; serif body to read as a document. Rendered as GitHub-
+ * Flavored Markdown (react-markdown), so block elements carry their own spacing — no `white-space:
+ * pre-wrap` (which would double the markdown's own line breaks). */
 .prose {
   font-family: Georgia, "Times New Roman", ui-serif, serif;
   font-size: 16.5px;
   line-height: 1.62;
-  white-space: pre-wrap;
   word-break: break-word;
   margin: 6px 0 12px;
   color: var(--text);
@@ -474,12 +475,99 @@ code {
 .prose.assistant-sub {
   font-size: 15px;
 }
-.inline-code {
+/* Collapse the outer margins of the first/last block so the prose block keeps its own 6/12px frame. */
+.prose > :first-child {
+  margin-top: 0;
+}
+.prose > :last-child {
+  margin-bottom: 0;
+}
+.prose p {
+  margin: 0 0 12px;
+}
+.prose ul,
+.prose ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.prose li {
+  margin: 2px 0;
+}
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 16px 0 8px;
+}
+.prose h1 {
+  font-size: 1.35em;
+}
+.prose h2 {
+  font-size: 1.2em;
+}
+.prose h3 {
+  font-size: 1.06em;
+}
+.prose blockquote {
+  margin: 0 0 12px;
+  padding-left: 12px;
+  border-left: 3px solid var(--line-soft);
+  color: var(--text-dim);
+}
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  margin: 14px 0;
+}
+.prose a {
+  color: var(--accent, #4f7cff);
+  text-decoration: underline;
+}
+/* GFM tables — bordered, and horizontally scrollable on a narrow phone (the live trigger for this). */
+.prose table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 4px 0 14px;
+  font-family: system-ui, sans-serif;
+  font-size: 0.9em;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--line-soft);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.prose th {
+  background: var(--code-bg);
+  font-weight: 600;
+}
+/* Inline code (markdown `code`) — but NOT inside a fenced block, where the <pre> owns the styling. */
+.inline-code,
+.prose :not(pre) > code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.88em;
   padding: 1px 4px;
   border-radius: 4px;
   background: var(--code-bg);
+  word-break: break-word;
+}
+.prose pre {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  overflow-x: auto;
+}
+.prose pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84em;
+  line-height: 1.5;
 }
 
 /* Sub-agent thread — indent + a left thread-line so nested agent work reads as nested. */
