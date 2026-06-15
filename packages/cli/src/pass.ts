@@ -1,15 +1,19 @@
 // `--rc-pass` (§4.2a): issue a viewer PASS for this machine. A pass is a credential carrying the
 // derived keys (read + steer this machine's sessions) but NOT the master secret S — so it cannot
 // reveal the secret or reset the machine. You hand it to a phone/browser (paste it, or `--rc-qr` to
-// render a scannable terminal QR — with `--rc-app`/RC_APP the QR is the viewer deep link
-// `<origin>/#<pass>`). It IS a live credential (anyone who holds it can drive this machine until you
-// reset it), but it is the deliverable of this command, so — unlike the secret in
+// render a scannable terminal QR). It IS a live credential (anyone who holds it can drive this machine
+// until you reset it), but it is the deliverable of this command, so — unlike the secret in
 // --rc-identity/--rc-json — the pass is emitted in every mode (default / --rc-json / --rc-quiet), so
-// you can get it WHENEVER. Local-only (reads the stored identity); never launches claude. Revoke a
-// pass by resetting the machine (`--rc-identity --rc-confirm`).
+// you can get it WHENEVER. Reads the stored identity; never launches claude. Revoke a pass by resetting
+// the machine (`--rc-identity --rc-confirm`).
+//
+// `--rc-qr` WITH `--rc-app`/RC_APP uploads the pass as a ONE-TIME, TTL-bounded handoff and the QR carries
+// only `<origin>/#otk1_<OTK>` — a single-use bootstrap token, not a forever credential (the only mode that
+// touches the network; see docs/ephemeral-handoff.md). Without an origin the QR holds the bare pass.
 
 import { deriveIdentity, formatPass, toHex } from "@remote-claw/clawsec";
 import { type RcValue, rcActionArgError, strFlag } from "./args.js";
+import { uploadHandoff } from "./handoff-upload.js";
 import { passQrPayload, renderQr } from "./qr.js";
 import { loadSecret, resolveSecretPath, type StoreEnv, StoreError } from "./store.js";
 
@@ -24,6 +28,8 @@ export interface PassOptions {
   stderr?: (s: string) => void;
   /** Injected env for path resolution (tests). */
   env?: StoreEnv;
+  /** Injected fetch for the one-time-handoff upload (tests). Defaults to the global fetch. */
+  fetchFn?: typeof fetch;
 }
 
 export async function runPass(
@@ -73,7 +79,35 @@ export async function runPass(
     appFlag !== undefined && appFlag !== ""
       ? appFlag
       : (opts.env?.env?.RC_APP ?? process.env.RC_APP);
-  const qrPayload = wantQr ? passQrPayload(pass, appOrigin) : undefined;
+  // The QR payload (skipped in quiet — quiet emits only the bare pass on stdout). With an app origin, upload
+  // a ONE-TIME handoff and carry `<origin>/#otk1_<OTK>`; on upload failure fall back to the bare pass (never
+  // the old forever `#rcp1_` deep link). Without an origin, the QR is the bare pass.
+  let qrPayload: string | undefined;
+  if (wantQr && !quiet) {
+    if (appOrigin) {
+      // Only forward the Vercel SSO bypass to an https origin — it is meaningless elsewhere and must not
+      // leak to a non-https/unintended target.
+      const rawBypass =
+        opts.env?.env?.VERCEL_AUTOMATION_BYPASS_SECRET ??
+        process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      const bypass = rawBypass && /^https:\/\//i.test(appOrigin) ? rawBypass : undefined;
+      try {
+        qrPayload = await uploadHandoff(appOrigin, pass, {
+          ...(bypass ? { bypass } : {}),
+          ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
+        });
+      } catch (e) {
+        // FAIL CLOSED: never fall back to a forever-pass QR (the whole point of the handoff). The pass is
+        // still on stdout to paste manually; just don't render a QR.
+        err(
+          `remote-claw: one-time handoff upload to ${appOrigin} failed (${e instanceof Error ? e.message : String(e)}); not rendering a QR — paste the pass above, or re-run when the broker is reachable.\n`,
+        );
+      }
+    } else {
+      // No origin: the QR is the bare pass for MANUAL entry (the original --rc-qr behavior, not a deep link).
+      qrPayload = passQrPayload(pass);
+    }
+  }
 
   if (json) {
     // Machine mode: emit the QR PAYLOAD (the deep link or bare pass) as a field, not terminal art.
@@ -103,8 +137,8 @@ export async function runPass(
     // opens the viewer already loaded; otherwise the bare pass to paste.
     err(`\n${await renderQr(qrPayload)}\n`);
     err(
-      appOrigin !== undefined && passQrPayload(pass, appOrigin) !== pass
-        ? "  scan to open the viewer (the pass rides in the URL #fragment — never sent to a server)\n"
+      qrPayload !== pass
+        ? "  scan to open the viewer (one-time pairing link — single-use, expires shortly)\n"
         : "  scan to load the pass (no --rc-app/RC_APP origin, so the QR holds the bare pass)\n",
     );
   }

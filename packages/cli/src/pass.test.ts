@@ -108,35 +108,55 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
     assertNoSecretLeak(out.text() + e.text(), { token, secret }); // the master secret never appears
   });
 
-  it("--rc-qr --rc-app: stderr QR + 'open the viewer' deep-link note; stdout still just the pass", async () => {
+  it("--rc-qr --rc-app: stderr QR + one-time pairing note; stdout still just the pass", async () => {
     await seed();
     const out = capture();
     const e = capture();
+    const okFetch = (async () =>
+      new Response(JSON.stringify({ ok: true }))) as unknown as typeof fetch;
     const code = await runPass(rc({ "rc-qr": true, "rc-app": "https://app.example.com" }), [], {
       stdout: out.write,
       stderr: e.write,
+      fetchFn: okFetch,
     });
     expect(code).toBe(0);
-    expect(out.text().trim()).toMatch(PASS_RE);
+    expect(out.text().trim()).toMatch(PASS_RE); // stdout is STILL exactly the pass (pipe-safe)
     expect(e.text()).toMatch(/[▀▄█]/u);
-    expect(e.text()).toMatch(/scan to open the viewer/);
+    expect(e.text()).toMatch(/one-time pairing link/);
   });
 
-  it("--rc-json --rc-qr --rc-app: JSON gains a `qr` deep-link field; no terminal art", async () => {
+  it("--rc-qr --rc-app FAILS CLOSED on upload error — no QR, no forever-pass deep link", async () => {
     await seed();
     const out = capture();
+    const e = capture();
+    const failFetch = (async () => new Response("", { status: 503 })) as unknown as typeof fetch;
+    const code = await runPass(rc({ "rc-qr": true, "rc-app": "https://app.example.com" }), [], {
+      stdout: out.write,
+      stderr: e.write,
+      fetchFn: failFetch,
+    });
+    expect(code).toBe(0);
+    expect(out.text().trim()).toMatch(PASS_RE); // the pass is still on stdout to paste manually
+    expect(e.text()).not.toMatch(/[▀▄█]/u); // NO QR rendered (never a forever-pass QR)
+    expect(e.text()).toMatch(/not rendering a QR/);
+    expect(e.text()).not.toContain("#rcp1_");
+  });
+
+  it("--rc-json --rc-qr --rc-app: JSON `qr` is the one-time otk1_ deep link; no terminal art", async () => {
+    await seed();
+    const out = capture();
+    const okFetch = (async () =>
+      new Response(JSON.stringify({ ok: true }))) as unknown as typeof fetch;
     const code = await runPass(
       rc({ "rc-json": true, "rc-qr": true, "rc-app": "https://app.example.com" }),
       [],
-      {
-        stdout: out.write,
-        stderr: () => {},
-      },
+      { stdout: out.write, stderr: () => {}, fetchFn: okFetch },
     );
     expect(code).toBe(0);
     const j = JSON.parse(out.text());
     expect(j.pass).toMatch(PASS_RE);
-    expect(j.qr).toBe(`https://app.example.com/#${j.pass}`);
+    expect(j.qr).toMatch(/^https:\/\/app\.example\.com\/#otk1_/); // one-time handoff, not the bare pass
+    expect(j.qr).not.toContain(j.pass); // the forever pass is NOT in the QR anymore
     expect(out.text()).not.toMatch(/[▀▄█]/u); // JSON mode = payload field, not art
   });
 
@@ -167,14 +187,17 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
   it("--rc-qr reads RC_APP from the injected env when --rc-app is absent", async () => {
     await seed();
     const out = capture();
+    const okFetch = (async () =>
+      new Response(JSON.stringify({ ok: true }))) as unknown as typeof fetch;
     const code = await runPass(rc({ "rc-json": true, "rc-qr": true }), [], {
       stdout: out.write,
       stderr: () => {},
       env: { env: { RC_APP: "https://env.example.com" } as NodeJS.ProcessEnv, homedir: () => dir },
+      fetchFn: okFetch,
     });
     expect(code).toBe(0);
     const j = JSON.parse(out.text());
-    expect(j.qr).toBe(`https://env.example.com/#${j.pass}`);
+    expect(j.qr).toMatch(/^https:\/\/env\.example\.com\/#otk1_/);
   });
 
   it("no identity present: exit 1 with a 'run --rc-identity first' hint, nothing on stdout", async () => {

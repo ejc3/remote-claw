@@ -76,8 +76,9 @@ The whole design serves this human flow. Two roles (often the same person): the
    launched once, this is a quiet status re-run). The raw master secret is the **operator's**
    and is shown only to the operator — `--rc-identity` prints the `rc1_…` master at create, and
    `--rc-show-secret` re-reveals it. The artifact you hand a **viewer** (phone/browser) is a
-   **pass**, not the master: with `--rc-app` set it also prints a **QR / `#fragment` deep link**
-   carrying the pass for phone onboarding (treat it like a credential; it's not screen-share-safe).
+   **pass**, not the master: with `--rc-app` set, `--rc-qr` uploads the pass as a **one-time, TTL-bounded
+   handoff** so the QR carries only `<app>/#otk1_<OTK>` — a single-use bootstrap token, not the pass
+   (see [ephemeral-handoff.md](ephemeral-handoff.md)). Still treat the QR as sensitive (single-use; expires).
    Need a *different* machine identity for one run? Point `--rc-file <path>` at a different secret
    file for that run.
 3. **Share a session:** in any `remote-claw` TUI, hit `/remote-control` → it flips
@@ -269,11 +270,12 @@ security review — §14A.)
     `~/.local/state/remote-claw/secret`; reads refuse symlinks (`O_NOFOLLOW`) and
     group/other-readable modes; a `0600` sidecar holds `created_at`). Print a
     summary (**public** `identity_id`, created-at, path) and **the `rc1_…` on its own bare line** (the
-    onboarding step). *(Later, with the broker phase:* if the app origin is configured
-    (`--rc-app`), also print the `https://<app>/#<pass>` deep link + a terminal **QR** of it
-    for phone onboarding — the artifact you hand a **viewer** carries the **pass** (§4.2a), not
-    `S`. ⚠️ The QR/deep-link **encode the pass verbatim** — treat it like a credential
-    (shoulder-surf/recording risk); a QR is **not** "safe to screen-share." (A raw-`S` deep
+    onboarding step). *(With the broker phase:* if the app origin is configured (`--rc-app`), `--rc-qr`
+    uploads the pass as a **one-time, TTL-bounded handoff** and prints `https://<app>/#otk1_<OTK>` + a
+    terminal **QR** of it — a single-use bootstrap token, **not the pass verbatim** (the broker stores only
+    a hash + an opaque blob; see [ephemeral-handoff.md](ephemeral-handoff.md)). ⚠️ Still treat the QR as a
+    credential (single-use, short-TTL; shoulder-surf/recording risk) — **not** "safe to screen-share." It
+    **fails closed**: if the upload fails, no QR is printed (never a forever-pass QR). (A raw-`S` deep
     link exists only on the **operator** path, under `--rc-show-secret` for re-onboarding your
     own device.)*) The
     create itself is local-only; `--rc-identity` accepts `--rc-file`/`--rc-json`/`--rc-quiet` plus
@@ -309,9 +311,9 @@ security review — §14A.)
   Enter pause (skip with `--rc-yes`); non-TTY: bare token to STDOUT, warning to STDERR.
   Never regenerates.
 - **`--rc-app <url>`** — the **single app origin** (else `REMOTE_CLAW_APP` env / config): its
-  `/api/*` is the Vercel broker the wrapper POSTs ciphertext to, and its web UI is what the
-  viewer-facing `https://<app>/#<pass>` deep-link/QR points at (the UI reads the `#fragment`
-  client-side; the fragment carries the **pass**, not `S`). One deployment serves both, so
+  `/api/*` is the Vercel broker the wrapper POSTs ciphertext to (incl. the one-time `/api/handoff`), and
+  its web UI is what the viewer-facing `https://<app>/#otk1_<OTK>` deep-link/QR points at (the UI reads the
+  `#fragment` client-side, claims the one-time handoff, and recovers the **pass**, never `S`). One deployment serves both, so
   there is **one** URL — read as an opaque local string (no probe). Unset ⇒ print the bare
   pass for manual onboarding, or omit the link.
   The CLI presents its per-identity `auth_token` to the broker (no app-wide key — §4.5).
