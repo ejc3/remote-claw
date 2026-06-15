@@ -6,6 +6,7 @@ import {
   connState,
   emptyTranscriptHint,
   FRESH_WINDOW_MS,
+  nextReconnectAnchor,
   parseGit,
   RECONNECTING_WINDOW_MS,
   shouldAcceptAnnounce,
@@ -13,12 +14,13 @@ import {
 import { displayedPermissionMode } from "../app/page.js";
 
 // The connection-state ladder (#58): connected (fresh) → reconnecting (full grace window) →
-// disconnected (gone). The transition ALWAYS passes through reconnecting for RECONNECTING_WINDOW_MS, and
-// that countdown RESTARTS on focus (focusedAt). Pure + clock-injected, so pin every boundary
-// deterministically — the host re-announces every ~20s, so a healthy session sits inside CONNECTED_WINDOW_MS.
+// disconnected (gone). The transition ALWAYS passes through reconnecting for RECONNECTING_WINDOW_MS. The
+// countdown is anchored at `reconnectingSince` — set ONCE when an announce first reads stale (after a
+// returning tab, the return instant) via nextReconnectAnchor, NOT re-reset by focus, so a dead host still
+// reaches disconnected. Pure + clock-injected, so pin every boundary deterministically.
 describe("connState", () => {
   const now = 1_000_000;
-  const DISCONNECT_AT = CONNECTED_WINDOW_MS + RECONNECTING_WINDOW_MS; // stale→disconnected boundary (focusedAt=0)
+  const DISCONNECT_AT = CONNECTED_WINDOW_MS + RECONNECTING_WINDOW_MS; // stale→disconnected boundary (anchor unset)
 
   it("is connected for a fresh announce", () => {
     expect(connState(now, now)).toBe("connected"); // age 0
@@ -26,31 +28,46 @@ describe("connState", () => {
     expect(connState(now - (CONNECTED_WINDOW_MS - 1), now)).toBe("connected");
   });
 
-  it("is reconnecting for the full window once the announce goes stale (focusedAt unset)", () => {
+  it("is reconnecting for the full window once the announce goes stale (anchor unset → staleAt)", () => {
     expect(connState(now - CONNECTED_WINDOW_MS, now)).toBe("reconnecting"); // exactly at the stale edge
     expect(connState(now - (DISCONNECT_AT - 1), now)).toBe("reconnecting"); // last ms before gone
   });
 
-  it("is disconnected only at or past CONNECTED_WINDOW + RECONNECTING_WINDOW (focusedAt unset)", () => {
+  it("is disconnected only at or past CONNECTED_WINDOW + RECONNECTING_WINDOW (anchor unset)", () => {
     expect(connState(now - DISCONNECT_AT, now)).toBe("disconnected"); // exactly at the edge
     expect(connState(now - (DISCONNECT_AT + 5_000), now)).toBe("disconnected");
     expect(connState(0, now)).toBe("disconnected");
   });
 
-  it("restarts the disconnect countdown on focus: a long-stale announce reads reconnecting, not disconnected", () => {
-    const staleAnnounce = now - 5 * 60_000; // 5 min old — would be 'disconnected' without focus
-    // Just focused (we returned to the foreground this instant): show reconnecting for the full window
-    // while the announce stream re-subscribes and a fresh announce lands.
+  it("anchors the countdown at the reconnect attempt: a long-stale announce reads reconnecting right after the anchor is set", () => {
+    const staleAnnounce = now - 5 * 60_000; // 5 min old — 'disconnected' on the bare ladder
+    // Anchor just set (a tab returned this instant): reconnecting for the full window while the
+    // re-subscribe pulls a fresh announce.
     expect(connState(staleAnnounce, now, now)).toBe("reconnecting");
-    // Still reconnecting at the last ms of the post-focus grace…
     expect(connState(staleAnnounce, now, now - (RECONNECTING_WINDOW_MS - 1))).toBe("reconnecting");
-    // …then disconnected once the post-focus grace elapses with no fresh announce.
+    // …then disconnected once the window elapses with no fresh announce.
     expect(connState(staleAnnounce, now, now - RECONNECTING_WINDOW_MS)).toBe("disconnected");
   });
 
+  it("a DEAD host reaches disconnected despite repeated focus — the anchor is set once, never re-reset", () => {
+    // Regression guard for the audit's blocking finding: refocusing every 25s (< window) must NOT hold a
+    // dead host at 'reconnecting' forever. Model the UI: the anchor is fixed at first staleness; focus only
+    // advances `now` (it does NOT move the anchor — that's nextReconnectAnchor's contract, asserted below).
+    const staleAnnounce = now - 5 * 60_000;
+    const anchor = nextReconnectAnchor(undefined, true, now); // first stale observation (e.g. on return)
+    expect(anchor).toBe(now);
+    // Repeated focus at +25s, +50s, +75s … each only advances the clock; the anchor stays put.
+    for (const dt of [25_000, 50_000, 75_000, 120_000]) {
+      const t = now + dt;
+      // The UI re-applies nextReconnectAnchor on each render; while stale it must keep the SAME anchor.
+      expect(nextReconnectAnchor(anchor, true, t)).toBe(anchor);
+      const cs = connState(staleAnnounce, t, anchor as number);
+      if (dt < RECONNECTING_WINDOW_MS) expect(cs).toBe("reconnecting");
+      else expect(cs).toBe("disconnected"); // dead host DOES surface, despite the refocuses
+    }
+  });
+
   it("always passes through reconnecting — never jumps connected→disconnected", () => {
-    // Sweep the age across the whole ladder; assert no age yields 'disconnected' without 'reconnecting'
-    // existing for the ages just before it.
     const ladder = Array.from({ length: 200 }, (_, i) => connState(now - i * 1_000, now));
     const firstDisc = ladder.indexOf("disconnected");
     expect(firstDisc).toBeGreaterThan(0);
@@ -71,6 +88,24 @@ describe("connState", () => {
   it("orders the windows so the ladder is monotone", () => {
     expect(CONNECTED_WINDOW_MS).toBeLessThan(DISCONNECT_AT);
     expect(RECONNECTING_WINDOW_MS).toBeGreaterThan(0);
+  });
+});
+
+// nextReconnectAnchor: set the per-session reconnect anchor ONCE while stale, clear when connected, and
+// NEVER re-reset while it stays stale (the audit's blocking fix — repeated focus must not mask a dead host).
+describe("nextReconnectAnchor", () => {
+  const now = 1_000_000;
+  it("sets the anchor to `now` when first stale (no prior anchor)", () => {
+    expect(nextReconnectAnchor(undefined, true, now)).toBe(now);
+  });
+  it("holds the existing anchor while it stays stale — focus/ticks never move it", () => {
+    expect(nextReconnectAnchor(now, true, now + 25_000)).toBe(now);
+    expect(nextReconnectAnchor(now, true, now + 999_999)).toBe(now);
+  });
+  it("clears the anchor once connected (not stale), so the next stale period re-anchors fresh", () => {
+    expect(nextReconnectAnchor(now, false, now + 10_000)).toBeUndefined();
+    // …and a subsequent staleness gets a new anchor at that later time
+    expect(nextReconnectAnchor(undefined, true, now + 50_000)).toBe(now + 50_000);
   });
 });
 

@@ -41,21 +41,38 @@ export type ConnState = "connected" | "reconnecting" | "disconnected";
 /**
  * Classify the host link. `now` is passed in (not read here) so the UI owns the clock/ticks.
  *
- * The transition ALWAYS passes through "reconnecting" for a full {@link RECONNECTING_WINDOW_MS}, and that
- * countdown restarts on focus: `focusedAt` is the last time the page became visible. The countdown to
- * "disconnected" starts at whichever is LATER — the moment the announce went stale, or the last focus —
- * so a tab returning from the background (its announce stream was suspended while hidden) shows
- * "reconnecting" for the full window while the stream re-subscribes and a fresh announce arrives, instead
- * of snapping straight to "disconnected" on an announce that's stale only because we were away.
- * `focusedAt` defaults to 0 (always-foregrounded callers get the plain stale→reconnecting→disconnected
- * ladder).
+ * The transition ALWAYS passes through "reconnecting" for a full {@link RECONNECTING_WINDOW_MS} before
+ * "disconnected". `reconnectingSince` is when the CURRENT reconnect attempt began — tracked per session
+ * by the UI via {@link nextReconnectAnchor}: it is set ONCE when an announce first reads stale (after a
+ * backgrounded tab returns, that's the moment of return) and is NOT reset by repeated focus. So a tab
+ * returning from the background shows "reconnecting" for a full window (while the re-subscribed stream
+ * pulls a fresh announce) instead of snapping to "disconnected" — yet a genuinely-dead host still reaches
+ * "disconnected" after one window and STAYS there even if the user keeps unlocking/app-switching back
+ * (sub-window focus must not hold a dead session alive forever). `reconnectingSince` defaults to 0:
+ * callers that don't track it get the plain stale→reconnecting→disconnected ladder anchored at staleAt.
  */
-export function connState(sentAt: number, now: number, focusedAt = 0): ConnState {
+export function connState(sentAt: number, now: number, reconnectingSince = 0): ConnState {
   if (now - sentAt < CONNECTED_WINDOW_MS) return "connected";
-  const staleAt = sentAt + CONNECTED_WINDOW_MS;
-  const countdownStart = Math.max(staleAt, focusedAt);
-  if (now - countdownStart < RECONNECTING_WINDOW_MS) return "reconnecting";
+  const anchor = reconnectingSince > 0 ? reconnectingSince : sentAt + CONNECTED_WINDOW_MS;
+  if (now - anchor < RECONNECTING_WINDOW_MS) return "reconnecting";
   return "disconnected";
+}
+
+/**
+ * Advance a session's reconnect-attempt anchor. Set ONCE when an announce first reads stale, held until
+ * the session is connected again (then cleared). Crucially it is NOT reset while it stays stale, so
+ * repeated focus can't hold a dead host at "reconnecting" forever — on a phone, unlocking/app-switching
+ * back is the normal sub-window interaction, and re-anchoring on each would make "disconnected"
+ * unreachable. `now` is the anchor when newly stale (after a return-from-background, that's the return
+ * instant, giving a full grace window for the re-subscribe to pull a fresh announce).
+ */
+export function nextReconnectAnchor(
+  prev: number | undefined,
+  stale: boolean,
+  now: number,
+): number | undefined {
+  if (!stale) return undefined;
+  return prev ?? now;
 }
 
 /** What to show in an EMPTY transcript, distinguished by the host link (`cs`) so a live-but-idle session
