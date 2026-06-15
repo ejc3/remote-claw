@@ -35,8 +35,22 @@ export async function uploadHandoff(
 ): Promise<string> {
   const fetchFn = opts.fetchFn ?? globalThis.fetch;
   if (fetchFn === undefined) throw new Error("uploadHandoff: global fetch is unavailable");
-  const base = origin.replace(/\/+$/, "");
-  const url = `${base}/api/handoff`;
+  // Validate + normalize the origin (mirrors qr.ts passQrPayload): a real http(s) origin only; strip any
+  // query/fragment so a malformed `--rc-app` can't produce a wrong PUT URL or a broken deep link.
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    throw new Error(`uploadHandoff: invalid app origin "${origin}"`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`uploadHandoff: app origin must be http(s), got "${origin}"`);
+  }
+  parsed.hash = "";
+  parsed.search = "";
+  const path = parsed.pathname.replace(/\/+$/, ""); // drop trailing slash(es); root → ""
+  const apiUrl = `${parsed.origin}/api/handoff`; // the broker route is at the origin ROOT
+  const deepLinkBase = `${parsed.origin}${path === "" ? "/" : path}`; // viewer page (mirrors passQrPayload)
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (opts.bypass) headers["x-vercel-protection-bypass"] = opts.bypass;
 
@@ -49,10 +63,10 @@ export async function uploadHandoff(
       ct: toHex(encodeHandoffBox(await sealHandoff(otk, utf8(pass)))),
     };
     if (opts.ttlS !== undefined) body.ttl = opts.ttlS;
-    const res = await fetchFn(url, { method: "PUT", headers, body: JSON.stringify(body) });
+    const res = await fetchFn(apiUrl, { method: "PUT", headers, body: JSON.stringify(body) });
     if (res.status === 409) continue; // id already taken → re-mint a fresh OTK
     if (!res.ok) throw new Error(`handoff upload failed: HTTP ${res.status}`);
-    return `${base}/#${await formatOtk(otk)}`;
+    return `${deepLinkBase}#${await formatOtk(otk)}`;
   }
   throw new Error("handoff upload failed: repeated id conflicts");
 }

@@ -67,4 +67,22 @@ describe("uploadHandoff", () => {
       "bypass-secret",
     );
   });
+
+  it("rejects an invalid / non-http origin (so the caller fails closed, no PUT)", async () => {
+    const { fetchFn, calls } = mockFetch([200]);
+    await expect(uploadHandoff("not a url", "rcp1_X", { fetchFn })).rejects.toThrow(
+      /invalid app origin/,
+    );
+    await expect(uploadHandoff("ftp://x.example.com", "rcp1_X", { fetchFn })).rejects.toThrow(
+      /must be http/,
+    );
+    expect(calls).toHaveLength(0); // never attempted a PUT to a bad origin
+  });
+
+  it("strips a query/fragment and posts to the origin-root /api/handoff", async () => {
+    const { fetchFn, calls } = mockFetch([200]);
+    const link = await uploadHandoff("https://app.example.com/?x=1#frag", "rcp1_X", { fetchFn });
+    expect(calls[0]?.url).toBe("https://app.example.com/api/handoff");
+    expect(link).toMatch(/^https:\/\/app\.example\.com\/#otk1_/);
+  });
 });

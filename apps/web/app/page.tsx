@@ -106,6 +106,9 @@ export default function Home() {
         <Pairing
           otk={handoffOtk}
           onConnect={(pass) => {
+            // Prefill the manual field too: the OTK is now burned, so if connect() fails (transient broker)
+            // the resolved pass must remain usable on the Connect screen rather than being lost.
+            setPassInput(pass);
             setHandoffOtk(null);
             connect(pass);
           }}
@@ -194,8 +197,11 @@ function Pairing(props: { otk: string; onConnect: (pass: string) => void; onCanc
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<{ pass: string; idHex: string } | null>(null);
+  const claiming = useRef(false); // synchronous re-entry guard (a fast double-tap must not claim twice)
 
   const reveal = useCallback(async () => {
+    if (claiming.current) return; // the one-time token must be claimed by exactly one in-flight request
+    claiming.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -205,6 +211,7 @@ function Pairing(props: { otk: string; onConnect: (pass: string) => void; onCanc
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      claiming.current = false;
       setBusy(false);
     }
   }, [props.otk]);
@@ -231,13 +238,12 @@ function Pairing(props: { otk: string; onConnect: (pass: string) => void; onCanc
         ) : (
           <>
             <p className="muted">
-              Pairing with machine{" "}
-              <code>
-                {revealed.idHex.slice(0, 8)}…{revealed.idHex.slice(-4)}
-              </code>
-              . Confirm this matches the <code>identity_id</code> printed by{" "}
-              <code>remote-claw --rc-pass</code> on that machine before connecting.
+              Pairing with machine identity — confirm it matches the <code>identity_id</code>{" "}
+              printed by <code>remote-claw --rc-pass</code> on that machine before connecting:
             </p>
+            <code className="field" style={{ wordBreak: "break-all", display: "block" }}>
+              {revealed.idHex}
+            </code>
             <button
               type="button"
               className="btn btn-block"

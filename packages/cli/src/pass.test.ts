@@ -125,6 +125,23 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
     expect(e.text()).toMatch(/one-time pairing link/);
   });
 
+  it("--rc-qr --rc-app FAILS CLOSED on upload error — no QR, no forever-pass deep link", async () => {
+    await seed();
+    const out = capture();
+    const e = capture();
+    const failFetch = (async () => new Response("", { status: 503 })) as unknown as typeof fetch;
+    const code = await runPass(rc({ "rc-qr": true, "rc-app": "https://app.example.com" }), [], {
+      stdout: out.write,
+      stderr: e.write,
+      fetchFn: failFetch,
+    });
+    expect(code).toBe(0);
+    expect(out.text().trim()).toMatch(PASS_RE); // the pass is still on stdout to paste manually
+    expect(e.text()).not.toMatch(/[▀▄█]/u); // NO QR rendered (never a forever-pass QR)
+    expect(e.text()).toMatch(/not rendering a QR/);
+    expect(e.text()).not.toContain("#rcp1_");
+  });
+
   it("--rc-json --rc-qr --rc-app: JSON `qr` is the one-time otk1_ deep link; no terminal art", async () => {
     await seed();
     const out = capture();

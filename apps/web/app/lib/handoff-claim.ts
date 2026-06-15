@@ -26,7 +26,12 @@ export async function claimHandoff(
   });
   if (res.status === 404) throw new Error("This pairing link was already used or has expired.");
   if (!res.ok) throw new Error("Pairing failed — please try again.");
-  const { box } = (await res.json()) as { box?: unknown };
+  let box: unknown;
+  try {
+    ({ box } = (await res.json()) as { box?: unknown });
+  } catch {
+    throw new Error("Pairing failed — malformed response."); // non-JSON 200 body shouldn't leak a raw parse error
+  }
   if (typeof box !== "string") throw new Error("Pairing failed — malformed response.");
   const plaintext = await openHandoff(otk, decodeHandoffBox(fromHex(box)));
   return new TextDecoder().decode(plaintext);

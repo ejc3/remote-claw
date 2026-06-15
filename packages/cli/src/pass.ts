@@ -85,21 +85,26 @@ export async function runPass(
   let qrPayload: string | undefined;
   if (wantQr && !quiet) {
     if (appOrigin) {
-      const bypass =
+      // Only forward the Vercel SSO bypass to an https origin — it is meaningless elsewhere and must not
+      // leak to a non-https/unintended target.
+      const rawBypass =
         opts.env?.env?.VERCEL_AUTOMATION_BYPASS_SECRET ??
         process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      const bypass = rawBypass && /^https:\/\//i.test(appOrigin) ? rawBypass : undefined;
       try {
         qrPayload = await uploadHandoff(appOrigin, pass, {
           ...(bypass ? { bypass } : {}),
           ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
         });
       } catch (e) {
+        // FAIL CLOSED: never fall back to a forever-pass QR (the whole point of the handoff). The pass is
+        // still on stdout to paste manually; just don't render a QR.
         err(
-          `remote-claw: one-time handoff upload failed (${e instanceof Error ? e.message : String(e)}); the QR holds the bare pass instead\n`,
+          `remote-claw: one-time handoff upload to ${appOrigin} failed (${e instanceof Error ? e.message : String(e)}); not rendering a QR — paste the pass above, or re-run when the broker is reachable.\n`,
         );
-        qrPayload = passQrPayload(pass); // bare pass fallback (no origin form)
       }
     } else {
+      // No origin: the QR is the bare pass for MANUAL entry (the original --rc-qr behavior, not a deep link).
       qrPayload = passQrPayload(pass);
     }
   }
