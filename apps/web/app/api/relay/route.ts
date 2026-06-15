@@ -10,10 +10,15 @@ import { json } from "../../../lib/http";
 // auth_token; ciphertext only — the broker validates the §8 envelope SHAPE but never decrypts it.
 export const maxDuration = 60;
 
-// Largest valid viewer attachment is a 16 MiB base64 string (~12 MiB decoded bytes) inside a small
-// JSON envelope plus the 16-byte GCM tag. 17 MiB leaves room for that legitimate sealed frame while
-// rejecting unbounded ciphertext bodies before they hit the broker backend.
-export const MAX_RELAY_CIPHERTEXT_BYTES = 17 * 1024 * 1024;
+// Vercel serverless functions reject a request body over ~4.5 MB at the platform EDGE
+// (FUNCTION_PAYLOAD_TOO_LARGE) before the function ever runs — and on the client that platform
+// rejection surfaces as a generic fetch failure ("Load failed" on WebKit), not a readable 413. So a
+// 17 MiB app-level cap was a fiction on Vercel: oversize frames died confusingly upstream of us. Cap
+// the ciphertext BELOW the platform limit so an oversize frame gets a deterministic 413 from THIS
+// route (a real, mappable error) instead. 4.4 MB still admits every legitimate frame: the host chunks
+// large outbound messages to ≤3 MB plaintext (postMessage) ⇒ ≤4.0 MB base64url ct, and a single
+// inbound viewer attachment is bounded client-side (viewer.ts MAX_ATTACHMENT_BYTES) to fit here too.
+export const MAX_RELAY_CIPHERTEXT_BYTES = 4_400_000;
 
 export async function POST(req: Request): Promise<Response> {
   let identityId: Uint8Array;
