@@ -41,6 +41,10 @@ export interface TranscriptGap {
   since: number;
 }
 
+/** Max grown height of the composer textarea, in px. Mirrors `.composer-input { max-height }` in
+ *  globals.css — the JS auto-grow clamp and the CSS cap must agree or the field stops short of the cap. */
+const COMPOSER_MAX_H = 160;
+
 export function shouldShowGapRecovery(gap: TranscriptGap | null, now: number): boolean {
   return gap !== null && now - gap.since >= TRANSCRIPT_GAP_STALL_MS;
 }
@@ -157,13 +161,40 @@ export default function Home() {
     }
   }, [connect]);
 
+  // The mount effect only reads the fragment ONCE. If a NEW `#otk1_`/`#rcp1_` link is opened into an
+  // already-loaded tab (e.g. pasting/scanning into the open viewer), the browser does a hash navigation —
+  // not a remount — so without this the new link is silently ignored (it only worked after a reload).
+  // Route it: a new handoff supersedes the current session (drop the viewer → show Pairing).
+  useEffect(() => {
+    const onHashChange = () => {
+      const entry = entryFromFragment(window.location.hash.replace(/^#/, ""));
+      if (entry.kind === "restore") return; // a cleared hash shouldn't tear down a live session
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      setViewer(null);
+      setRestoring(false);
+      if (entry.kind === "handoff") {
+        setHandoffOtk(entry.value);
+      } else {
+        setHandoffOtk(null);
+        setPassInput(entry.value);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
   if (viewer !== null) {
     return (
       <Console
         viewer={viewer}
         onForget={() => {
-          clearCredential(); // "Forget" must actually forget — drop the tab-scoped encrypted blob
+          clearCredential(); // drop the tab-scoped blob AND the non-extractable device key
+          // Reset ALL entry state so Forget lands on a clean Connect screen — not a stale Pairing screen
+          // or a prefilled pass left behind.
           setViewer(null);
+          setHandoffOtk(null);
+          setPassInput("");
+          setError(null);
         }}
       />
     );
@@ -278,7 +309,11 @@ export function Connect(props: {
  *  an explicit tap ("Pair this device") so a prefetch/unfurler that runs JS can't auto-burn the one-time
  *  token; after claiming we show the resolved machine's identity_id for the user to confirm against the
  *  host's `--rc-pass` output (binding) before connecting. */
-function Pairing(props: { otk: string; onConnect: (pass: string) => void; onCancel: () => void }) {
+export function Pairing(props: {
+  otk: string;
+  onConnect: (pass: string) => void;
+  onCancel: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<{ pass: string; idHex: string } | null>(null);
@@ -309,8 +344,8 @@ function Pairing(props: { otk: string; onConnect: (pass: string) => void; onCanc
         {revealed === null ? (
           <>
             <p className="muted">
-              You scanned a <strong>one-time</strong> pairing link. It can be claimed once and
-              expires shortly. Tap to claim it on this device — the key never leaves your browser.
+              A <strong>one-time</strong> pairing link — claim it on this device. The key never
+              leaves your browser.
             </p>
             <button type="button" className="btn btn-block" disabled={busy} onClick={reveal}>
               {busy ? "Pairing…" : "Pair this device"}
@@ -323,8 +358,8 @@ function Pairing(props: { otk: string; onConnect: (pass: string) => void; onCanc
         ) : (
           <>
             <p className="muted">
-              Pairing with machine identity — confirm it matches the <code>identity_id</code>{" "}
-              printed by <code>remote-claw --rc-pass</code> on that machine before connecting:
+              Confirm this matches the <code>identity_id</code> from{" "}
+              <code>remote-claw --rc-pass</code>:
             </p>
             <code className="field" style={{ wordBreak: "break-all", display: "block" }}>
               {revealed.idHex}
@@ -610,11 +645,30 @@ function Transcript(props: {
     if (announceMode !== undefined && announceSentAt !== undefined) setOptimisticMode(null);
   }, [announceMode, announceSentAt]);
 
+  // `reviveKey` bumps to force a transcript RE-SUBSCRIBE without losing what's shown — the recovery for
+  // iOS Safari SUSPENDING a fetch stream when the page is backgrounded (the photo picker opening, an app
+  // switch): the suspended stream never delivers `done`/error, so transcript()'s own re-subscribe loop
+  // can't fire; aborting + recreating the generator is the only way to reattach. After attaching, the
+  // transcript would otherwise stall until reload.
+  const [reviveKey, setReviveKey] = useState(0);
+  // The (viewer, sessionId) the currently-shown messages belong to. A revive keeps them; a switch to a
+  // different session OR a different viewer (new credential) must start from a blank transcript.
+  const streamKey = useRef<{ viewer: Viewer; sessionId: string } | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reviveKey is a re-subscribe TRIGGER, not read here.
   useEffect(() => {
-    setMessages([]);
-    setGap(null);
-    autoGapRetry.current = null;
+    // Clear ONLY on a real session/viewer switch; a revive keeps the messages and just re-attaches the
+    // stream (msgId dedup absorbs any re-delivered frames, so there's no blank flash).
+    if (streamKey.current?.viewer !== viewer || streamKey.current.sessionId !== sessionId) {
+      setMessages([]);
+      setGap(null);
+      autoGapRetry.current = null;
+      streamKey.current = { viewer, sessionId };
+    }
     const ac = new AbortController();
+    // Always request the FULL replay: transcript() opens a fresh FrameOrderer (expects seq 0) reading the
+    // run from the start, so on a revive a partial `since` would leave it permanently gapped on a backend
+    // whose live window has rolled past seq 0. The host's #log is the source of truth; msgId dedup makes
+    // the full re-read flash-free.
     void viewer.requestHistory(sessionId, 0).catch(() => {});
     (async () => {
       try {
@@ -627,11 +681,21 @@ function Transcript(props: {
           }
         }
       } catch {
-        /* aborted on unmount / session switch */
+        /* aborted on unmount / session switch / revive */
       }
     })();
     return () => ac.abort();
-  }, [viewer, sessionId]);
+  }, [viewer, sessionId, reviveKey]);
+
+  // Recover from iOS backgrounding: when the tab/app returns to the foreground (photo picker closing, app
+  // switch), re-subscribe so frames that arrived while the stream was suspended appear without a reload.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") setReviveKey((k) => k + 1);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll to the latest on every message.
   useEffect(() => {
@@ -704,8 +768,14 @@ function Transcript(props: {
     setSending(true);
     setSendError(null);
     try {
+      const hadStaged = staged.length > 0;
       await sendComposer(viewer, sessionId, text, staged, downscaleToBase64);
-      if (staged.length > 0) clearStaged();
+      if (hadStaged) {
+        clearStaged();
+        // Attaching opened the iOS photo picker, which may have suspended the transcript stream; force a
+        // re-subscribe so the echo + reply land without a reload (belt-and-suspenders to the visibility one).
+        setReviveKey((k) => k + 1);
+      }
       setInput("");
     } catch (e) {
       setSendError(friendlySendError(e));
@@ -721,7 +791,7 @@ function Transcript(props: {
     const el = taRef.current;
     if (el === null) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_H)}px`; // keep in sync with .composer-input max-height
   }, [input]);
 
   const chooseMode = useCallback(
@@ -840,6 +910,23 @@ function Transcript(props: {
             ))}
           </div>
         )}
+        {/* Prompt field on top, controls below (mirrors the native app composer). */}
+        <textarea
+          ref={taRef}
+          className="composer-input"
+          value={input}
+          rows={1}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter sends; Shift+Enter (or the mobile newline key) inserts a line break.
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          placeholder="Send a prompt…"
+          enterKeyHint="send"
+        />
         <div className="composer-row">
           <button
             type="button"
@@ -873,25 +960,9 @@ function Transcript(props: {
               e.target.value = ""; // allow re-picking the same file(s)
             }}
           />
-          <textarea
-            ref={taRef}
-            className="composer-input"
-            value={input}
-            rows={1}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter sends; Shift+Enter (or the mobile newline key) inserts a line break.
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            placeholder="Send a prompt…"
-            enterKeyHint="send"
-          />
           <button
             type="submit"
-            className="btn"
+            className="btn composer-send"
             disabled={sending || (input.trim() === "" && staged.length === 0)}
           >
             Send

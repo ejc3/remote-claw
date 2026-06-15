@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import Home, { Connect, entryFromFragment } from "../app/page.js";
+import Home, { Connect, entryFromFragment, Pairing } from "../app/page.js";
 
 // Auto-reconnect on reload (#110): a plain reload should restore the stored credential and reconnect,
 // landing back in the console — NOT flash the pass/token form. These cover the pure load-time routing
@@ -27,6 +27,19 @@ describe("Home initial render", () => {
     expect(html).toContain("Connecting…");
     expect(html).not.toContain("rcp1_…"); // the Connect form's placeholder must NOT be shown
     expect(html).not.toContain("Drive your claude"); // nor the Connect headline
+  });
+});
+
+describe("Pairing screen (decluttered)", () => {
+  it("renders a trimmed one-time-link note + a quiet manual-entry link (not a white button)", () => {
+    const html = renderToStaticMarkup(
+      createElement(Pairing, { otk: "otk1_x", onConnect: () => {}, onCancel: () => {} }),
+    );
+    expect(html).toContain("Pair this device");
+    expect(html).toContain("one-time");
+    expect(html).toContain('class="btn-link"'); // the manual-entry is the quiet link, not a primary .btn
+    expect(html).toContain("Enter a pass manually instead");
+    expect(html).not.toContain("It can be claimed once and expires shortly"); // verbose copy trimmed
   });
 });
 
