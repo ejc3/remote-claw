@@ -45,8 +45,15 @@ export function sseResponse(
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       reader = source.getReader();
+      // Enqueue only while the controller is open. A client disconnect closes the controller, but a
+      // keepalive timer can still fire and try to enqueue afterwards — on a closed controller that throws
+      // "Invalid state"; `desiredSize === null` once errored/closed, so skip then. (Without the timer this
+      // window wasn't reachable: every enqueue used to follow immediately from a resolved read.)
+      const emit = (s: string): void => {
+        if (controller.desiredSize !== null) controller.enqueue(encoder.encode(s));
+      };
       try {
-        controller.enqueue(encoder.encode(": open\n\n"));
+        emit(": open\n\n");
         // Race each read against a keepalive timer, holding the SAME read promise across pings so a
         // ping never drops a frame. An idle stream still emits `: ping` every SSE_KEEPALIVE_MS.
         let readPromise = reader.read();
@@ -58,23 +65,27 @@ export function sseResponse(
           const winner = await Promise.race([readPromise, ping]);
           clearTimeout(pingTimer);
           if (winner === SSE_PING) {
-            controller.enqueue(encoder.encode(": ping\n\n")); // readPromise is still pending
+            emit(": ping\n\n"); // readPromise is still pending
             continue;
           }
           if (winner.done) break;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(winner.value)}\n\n`));
+          emit(`data: ${JSON.stringify(winner.value)}\n\n`);
           readPromise = reader.read();
         }
       } catch (e) {
         const msg = String((e as Error)?.message ?? e);
-        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify(msg)}\n\n`));
+        emit(`event: error\ndata: ${JSON.stringify(msg)}\n\n`);
       } finally {
         try {
           await reader.cancel();
         } catch {
           /* already closed */
         }
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          /* already closed (client disconnected) */
+        }
       }
     },
     async cancel() {
