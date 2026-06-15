@@ -75,9 +75,10 @@ interface StagedImage {
   url: string;
 }
 
-/** The composer's send action, extracted pure for testing. Staged images each go as their own E2E
- *  attachment frame (the host injects one `@"path" caption` per image, so the composer text rides as the
- *  caption on each); with no images, a non-empty text goes as a single prompt. */
+/** The composer's send action, extracted pure for testing. All staged images of one send go as a SINGLE
+ *  grouped attachment message (#114) — the host writes them all and injects ONE `@"p1" @"p2" caption`
+ *  turn, so the composer text rides ONCE (not repeated per image), and `postMessage` chunks a large/many
+ *  payload under the body cap. With no images, a non-empty text goes as a single prompt. */
 export async function sendComposer(
   viewer: Pick<Viewer, "sendAttachment" | "sendPrompt">,
   sessionId: string,
@@ -86,15 +87,14 @@ export async function sendComposer(
   downscale: (file: File) => Promise<string>,
 ): Promise<void> {
   if (staged.length > 0) {
-    for (const item of staged) {
-      const data = await downscale(item.file);
-      await viewer.sendAttachment(sessionId, {
+    const images = await Promise.all(
+      staged.map(async (item) => ({
         name: item.name,
         mime: "image/jpeg",
-        data,
-        caption: text,
-      });
-    }
+        data: await downscale(item.file),
+      })),
+    );
+    await viewer.sendAttachment(sessionId, { images, caption: text });
   } else if (text !== "") {
     await viewer.sendPrompt(sessionId, text);
   }

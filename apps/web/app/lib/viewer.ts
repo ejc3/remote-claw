@@ -573,47 +573,42 @@ export class Viewer {
   }
 
   /**
-   * Send a file/photo attachment (#44): an `attachment` control frame (dir:in), E2E-sealed so the
-   * broker never sees the bytes. The host writes it into the session workspace and has claude `Read`
-   * it (vision) alongside `caption`. The image should be downscaled to fit one frame (the host's
-   * inbound path is single-frame); `data` is base64 (no data-URI prefix). Returns the frame's msg_id.
+   * Send a grouped file/photo attachment (#44/#114): ONE `attachment` message (dir:in) carrying all the
+   * images of a single send + one caption, E2E-sealed so the broker never sees the bytes. Sent via
+   * `postMessage`, which splits a large payload into ≤3 MB AEAD chunk frames sharing one `msgId` — so a
+   * big or multi-image send is NOT blocked by Vercel's ~4.5 MB body cap (the host reassembles them). The
+   * host writes every image and drives claude with ONE prompt (`@"p1" @"p2" caption`), so the caption
+   * rides once. `data` is base64 (no data-URI prefix). Returns the message's `msgId`.
    */
   async sendAttachment(
     sessionId: string,
-    att: { name: string; mime: string; data: string; caption?: string },
+    att: { images: { name: string; mime: string; data: string }[]; caption?: string },
   ): Promise<string> {
     const msgId = `att-${randomId()}`;
-    const payload = utf8(
-      JSON.stringify({
-        name: att.name,
-        mime: att.mime,
-        data: att.data,
-        caption: att.caption ?? "",
-      }),
-    );
-    // Vercel rejects a request body over ~4.5 MB at the platform edge (FUNCTION_PAYLOAD_TOO_LARGE),
-    // which WebKit surfaces as a bare "Load failed" with no usable status. The sealed wire frame is
-    // ~1.34× this plaintext (base64url ct), so reject an oversized attachment HERE — a clear, typed,
-    // mappable error — instead of firing a doomed POST. The composer downscales images far below this;
-    // this guard catches a pathological image (or a future raw-file path) before the network.
-    if (payload.length > MAX_ATTACHMENT_BYTES) throw new AttachmentTooLargeError(payload.length);
-    await this.#client.postFrame(
-      this.#header({ recordKind: "attachment", sessionId, msgId }),
+    const payload = utf8(JSON.stringify({ images: att.images, caption: att.caption ?? "" }));
+    // Chunking handles the per-frame ~4.5 MB body cap, but still bound the TOTAL so a pathological send
+    // can't stream unbounded bytes at the host (it caps reassembly at MAX_ATTACHMENT_PARTS too). Surfaced
+    // as a clear, typed error rather than the platform's opaque "Load failed".
+    if (payload.length > MAX_ATTACHMENT_TOTAL_BYTES)
+      throw new AttachmentTooLargeError(payload.length);
+    await this.#client.postMessage(
+      this.#header({ recordKind: "attachment", sessionId, msgId, clientMsgId: msgId }),
       payload,
     );
     return msgId;
   }
 }
 
-/** Plaintext cap for one attachment frame: kept so the sealed POST body stays under Vercel's ~4.5 MB
- *  serverless request-body limit (sealed ct ≈ 1.34× plaintext; cf. the relay route's ciphertext cap). */
-export const MAX_ATTACHMENT_BYTES = 3_000_000;
+/** Plaintext cap for a whole grouped attachment message (#114). Generous because `postMessage` chunks it
+ *  across ≤3 MB frames under Vercel's body cap; this only bounds total bytes per send (the host also caps
+ *  reassembly at MAX_ATTACHMENT_PARTS × chunk size). */
+export const MAX_ATTACHMENT_TOTAL_BYTES = 48 * 1024 * 1024;
 
-/** Thrown by sendAttachment when an attachment would exceed {@link MAX_ATTACHMENT_BYTES} — surfaced to
- *  the user as a clear "image too large" rather than the platform's opaque "Load failed". */
+/** Thrown by sendAttachment when a send would exceed {@link MAX_ATTACHMENT_TOTAL_BYTES} — surfaced to
+ *  the user as a clear "too large" rather than the platform's opaque "Load failed". */
 export class AttachmentTooLargeError extends Error {
   constructor(readonly size: number) {
-    super(`attachment too large (${size} bytes; max ${MAX_ATTACHMENT_BYTES})`);
+    super(`attachment too large (${size} bytes; max ${MAX_ATTACHMENT_TOTAL_BYTES})`);
     this.name = "AttachmentTooLargeError";
   }
 }

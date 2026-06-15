@@ -18,10 +18,10 @@ export const maxDuration = 60;
 // THIS route (a real, mappable error) instead. The cap is on `frame.ct` DECODED bytes, but the wire
 // body carries ct as base64url (≈ 4/3×) plus a small JSON envelope, so the body ≈ ct.length × 4/3. At
 // 3.3 MB decoded that's a ~4.4 MB body — under the platform limit — while still admitting every
-// legitimate frame: the host chunks large outbound messages to ≤3 MB plaintext (postMessage) ⇒
-// 3,000,016-byte ct, and a single inbound viewer attachment is bounded client-side (viewer.ts
-// MAX_ATTACHMENT_BYTES) below this. (A higher cap like 4.4 MB decoded would be a ~5.9 MB body — over
-// the edge limit — so the 413 would never fire for the very range it targets.)
+// legitimate frame: both the host's outbound messages AND the viewer's inbound attachments are chunked
+// to ≤3 MB plaintext per frame (postMessage) ⇒ ~3,000,016-byte ct, under this cap. (A higher cap like
+// 4.4 MB decoded would be a ~5.9 MB body — over the edge limit — so the 413 would never fire for the very
+// range it targets.)
 export const MAX_RELAY_CIPHERTEXT_BYTES = 3_300_000;
 
 export async function POST(req: Request): Promise<Response> {

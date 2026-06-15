@@ -22,7 +22,7 @@ describe("sendComposer", () => {
     expect(v.sendAttachment).not.toHaveBeenCalled();
   });
 
-  it("staged images → one attachment per image (text as caption), and NO separate prompt", async () => {
+  it("staged images → ONE grouped attachment (all images + caption once), and NO separate prompt (#114)", async () => {
     const v = mockViewer();
     const staged = [
       { id: "1", name: "a.jpg", file: img("a.jpg"), url: "blob:a" },
@@ -31,11 +31,13 @@ describe("sendComposer", () => {
     const downscale = vi.fn(async () => "DOWNSCALED");
     await sendComposer(v, "cse_x", "what is this", staged, downscale);
     expect(downscale).toHaveBeenCalledTimes(2);
-    expect(v.sendAttachment).toHaveBeenCalledTimes(2);
-    expect(v.sendAttachment).toHaveBeenNthCalledWith(1, "cse_x", {
-      name: "a.jpg",
-      mime: "image/jpeg",
-      data: "DOWNSCALED",
+    // One grouped call carrying BOTH images and the caption ONCE — not one frame per image.
+    expect(v.sendAttachment).toHaveBeenCalledTimes(1);
+    expect(v.sendAttachment).toHaveBeenCalledWith("cse_x", {
+      images: [
+        { name: "a.jpg", mime: "image/jpeg", data: "DOWNSCALED" },
+        { name: "b.jpg", mime: "image/jpeg", data: "DOWNSCALED" },
+      ],
       caption: "what is this",
     });
     expect(v.sendPrompt).not.toHaveBeenCalled();
