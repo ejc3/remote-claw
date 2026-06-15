@@ -25,11 +25,13 @@ import {
 } from "./lib/transcript";
 import {
   type Announce,
+  CONNECTED_WINDOW_MS,
   type ConnState,
   connState,
   emptyTranscriptHint,
   type GitInfo,
   type Message,
+  nextReconnectAnchor,
   shouldAcceptAnnounce,
   TRANSCRIPT_GAP_STALL_MS,
   Viewer,
@@ -390,8 +392,8 @@ function relativeTime(ms: number, now: number): string {
 
 /** The session row's sub-line word, combining connection state + activity (#48/#58): a connected
  *  session reads its phase/needs; a lapsing one reads its link state; a gone one reads "N ago". */
-function presenceWord(s: Announce, now: number): string {
-  const cs = connState(s.sentAt, now);
+function presenceWord(s: Announce, now: number, reconnectingSince: number): string {
+  const cs = connState(s.sentAt, now, reconnectingSince);
   if (cs === "disconnected") return relativeTime(s.sentAt, now);
   if (cs === "reconnecting") return "reconnecting…";
   if (s.needs) return "needs you";
@@ -490,10 +492,19 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   const { viewer } = props;
   const [sessions, setSessions] = useState<Map<string, Announce>>(new Map());
   const [now, setNow] = useState(() => Date.now());
+  // Per-session reconnect-attempt anchor (sessionId → when the current stale period began). Set ONCE when
+  // a session first reads stale and held until it's connected again; NOT reset by focus (see
+  // nextReconnectAnchor) so a dead host still reaches "disconnected". Computed during render from `now`.
+  const reconnectAnchors = useRef<Map<string, number>>(new Map());
+  // Bumps to force the announce (bus) stream to RE-SUBSCRIBE — the presence twin of the transcript's
+  // reviveKey (#121). iOS Safari suspends the in-flight fetch when the page is backgrounded, so without
+  // this the announce stream stays dead on return and the session would read as disconnected forever.
+  const [announceRevive, setAnnounceRevive] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
 
   // Tail the bus → live session list (keep the freshest sent_at per session: replay-safe presence).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: announceRevive is a re-subscribe TRIGGER.
   useEffect(() => {
     const ac = new AbortController();
     (async () => {
@@ -511,7 +522,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
       }
     })();
     return () => ac.abort();
-  }, [viewer]);
+  }, [viewer, announceRevive]);
 
   // Re-evaluate presence on a timer so rows grey out as announces lapse.
   useEffect(() => {
@@ -519,8 +530,34 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
     return () => clearInterval(t);
   }, []);
 
+  // On return-to-foreground: advance the clock and re-subscribe the announce stream (iOS suspends the bus
+  // SSE while hidden). The post-return render then anchors each still-stale session's reconnect attempt at
+  // `now` (see anchorFor), so a returning tab shows "reconnecting" for a full window while the re-subscribe
+  // pulls a fresh announce — and a dead host still reaches "disconnected" since the anchor isn't re-reset.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        setNow(Date.now());
+        setAnnounceRevive((k) => k + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
   const list = [...sessions.values()].sort((a, b) => b.sentAt - a.sentAt);
   const current = selected !== null ? sessions.get(selected) : undefined;
+
+  // The reconnect-attempt anchor for a session at the current `now` (set-once-while-stale, cleared when
+  // connected). Mutates the ref cache in place — idempotent for a given (sentAt, now), and prunes the
+  // anchor once reconnected so the map can't grow unbounded.
+  const anchorFor = (s: Announce): number => {
+    const stale = now - s.sentAt >= CONNECTED_WINDOW_MS;
+    const next = nextReconnectAnchor(reconnectAnchors.current.get(s.sessionId), stale, now);
+    if (next === undefined) reconnectAnchors.current.delete(s.sessionId);
+    else reconnectAnchors.current.set(s.sessionId, next);
+    return next ?? 0;
+  };
 
   return (
     <div className="app">
@@ -543,7 +580,8 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             </p>
           )}
           {list.map((s) => {
-            const cs = connState(s.sentAt, now);
+            const since = anchorFor(s);
+            const cs = connState(s.sentAt, now, since);
             const connected = cs === "connected";
             return (
               <button
@@ -565,7 +603,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                 </span>
                 <span className="row-sub">
                   {s.git && <GitChip git={s.git} />}
-                  {presenceWord(s, now)}
+                  {presenceWord(s, now, since)}
                   {s.cwd !== null ? ` · ${s.cwd}` : ""}
                 </span>
               </button>
@@ -586,6 +624,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             title={current?.title ?? selected}
             announce={current}
             now={now}
+            reconnectingSince={current ? anchorFor(current) : 0}
             onBack={() => setSelected(null)}
           />
         )}
@@ -600,9 +639,10 @@ function Transcript(props: {
   title: string;
   announce: Announce | undefined;
   now: number;
+  reconnectingSince: number;
   onBack: () => void;
 }) {
-  const { viewer, sessionId, announce, now } = props;
+  const { viewer, sessionId, announce, now, reconnectingSince } = props;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [staged, setStaged] = useState<StagedImage[]>([]);
@@ -614,7 +654,7 @@ function Transcript(props: {
 
   // Live connection state from the freshest announce (null until one arrives — then never scary).
   // Thinking/needs are only meaningful while connected; a stale announce's phase says nothing.
-  const cs = announce ? connState(announce.sentAt, now) : null;
+  const cs = announce ? connState(announce.sentAt, now, reconnectingSince) : null;
   const connected = cs === "connected";
   const phase = connected ? (announce?.phase ?? "idle") : "idle";
   const needs = connected ? (announce?.needs ?? false) : false;
