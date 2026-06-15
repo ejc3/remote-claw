@@ -41,6 +41,10 @@ export interface TranscriptGap {
   since: number;
 }
 
+/** Max grown height of the composer textarea, in px. Mirrors `.composer-input { max-height }` in
+ *  globals.css — the JS auto-grow clamp and the CSS cap must agree or the field stops short of the cap. */
+const COMPOSER_MAX_H = 160;
+
 export function shouldShowGapRecovery(gap: TranscriptGap | null, now: number): boolean {
   return gap !== null && now - gap.since >= TRANSCRIPT_GAP_STALL_MS;
 }
@@ -643,23 +647,29 @@ function Transcript(props: {
 
   // `reviveKey` bumps to force a transcript RE-SUBSCRIBE without losing what's shown — the recovery for
   // iOS Safari SUSPENDING a fetch stream when the page is backgrounded (the photo picker opening, an app
-  // switch): the live stream never resumes, so after attaching, the transcript stalls until reload.
+  // switch): the suspended stream never delivers `done`/error, so transcript()'s own re-subscribe loop
+  // can't fire; aborting + recreating the generator is the only way to reattach. After attaching, the
+  // transcript would otherwise stall until reload.
   const [reviveKey, setReviveKey] = useState(0);
-  const streamSession = useRef<string | null>(null);
-  const maxSeqRef = useRef(0);
+  // The (viewer, sessionId) the currently-shown messages belong to. A revive keeps them; a switch to a
+  // different session OR a different viewer (new credential) must start from a blank transcript.
+  const streamKey = useRef<{ viewer: Viewer; sessionId: string } | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reviveKey is a re-subscribe TRIGGER, not read here.
   useEffect(() => {
     // Clear ONLY on a real session/viewer switch; a revive keeps the messages and just re-attaches the
     // stream (msgId dedup absorbs any re-delivered frames, so there's no blank flash).
-    if (streamSession.current !== sessionId) {
+    if (streamKey.current?.viewer !== viewer || streamKey.current.sessionId !== sessionId) {
       setMessages([]);
       setGap(null);
       autoGapRetry.current = null;
-      maxSeqRef.current = 0;
-      streamSession.current = sessionId;
+      streamKey.current = { viewer, sessionId };
     }
     const ac = new AbortController();
-    void viewer.requestHistory(sessionId, maxSeqRef.current).catch(() => {}); // 0 = full; else only the missed tail
+    // Always request the FULL replay: transcript() opens a fresh FrameOrderer (expects seq 0) reading the
+    // run from the start, so on a revive a partial `since` would leave it permanently gapped on a backend
+    // whose live window has rolled past seq 0. The host's #log is the source of truth; msgId dedup makes
+    // the full re-read flash-free.
+    void viewer.requestHistory(sessionId, 0).catch(() => {});
     (async () => {
       try {
         for await (const m of viewer.transcript(sessionId, ac.signal)) {
@@ -667,7 +677,6 @@ function Transcript(props: {
             setGap({ nextSeq: m.nextSeq, pending: m.pending, since: m.since });
           } else {
             setGap(null);
-            if (typeof m.seq === "number" && m.seq > maxSeqRef.current) maxSeqRef.current = m.seq;
             setMessages((prev) => appendUniqueMessage(prev, m));
           }
         }
@@ -782,7 +791,7 @@ function Transcript(props: {
     const el = taRef.current;
     if (el === null) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_H)}px`; // keep in sync with .composer-input max-height
   }, [input]);
 
   const chooseMode = useCallback(
