@@ -15,6 +15,7 @@ import {
   lineTimestamp,
   listSubagentFiles,
   mergeBatchByTimestamp,
+  messageHasToolResult,
   projectDir,
   projectSlug,
   readAgentTaskId,
@@ -24,6 +25,7 @@ import {
   TranscriptTailer,
   transcriptPath,
   transcriptToPayload,
+  userMessageText,
 } from "./transcript.js";
 
 const dirs: string[] = [];
@@ -233,6 +235,64 @@ describe("transcriptToPayload — the one reshape", () => {
     expect(p?.type).toBe("assistant");
     expect(p?.uuid).toBe("sub-asst-1");
     expect((p?.message?.content as Array<{ text?: string }>)[0]?.text).toBe("sub-agent says hi");
+  });
+});
+
+describe("userMessageText — extract a user turn's text for the local-prompt ledger", () => {
+  it("reads a string content", () => {
+    expect(userMessageText({ content: "hello there" })).toBe("hello there");
+  });
+  it("joins the text blocks of an array content", () => {
+    expect(
+      userMessageText({
+        content: [
+          { type: "text", text: "a" },
+          { type: "text", text: "b" },
+        ],
+      }),
+    ).toBe("ab");
+  });
+  it('returns "" for a tool_result-only user turn (no typed text)', () => {
+    expect(
+      userMessageText({
+        content: [{ type: "tool_result", tool_use_id: "t1", content: "out" }],
+      }),
+    ).toBe("");
+  });
+  it('returns "" for undefined / non-array / non-string content', () => {
+    expect(userMessageText(undefined)).toBe("");
+    expect(userMessageText({})).toBe("");
+    expect(userMessageText({ content: 42 as unknown as string })).toBe("");
+  });
+  it("tolerates null / non-object array elements without throwing (malformed line must not crash the pump)", () => {
+    expect(
+      userMessageText({
+        content: [null, 7, { type: "text", text: "ok" }] as unknown[],
+      }),
+    ).toBe("ok");
+  });
+});
+
+describe("messageHasToolResult — guard the ledger off tool-output turns", () => {
+  it("true when content has a tool_result block", () => {
+    expect(
+      messageHasToolResult({
+        content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }],
+      }),
+    ).toBe(true);
+  });
+  it("false for a text-only turn, a string content, or undefined", () => {
+    expect(messageHasToolResult({ content: [{ type: "text", text: "hi" }] })).toBe(false);
+    expect(messageHasToolResult({ content: "hi" })).toBe(false);
+    expect(messageHasToolResult(undefined)).toBe(false);
+  });
+  it("tolerates null / non-object array elements without throwing", () => {
+    expect(messageHasToolResult({ content: [null, 7] as unknown[] })).toBe(false);
+    expect(
+      messageHasToolResult({
+        content: [null, { type: "tool_result", tool_use_id: "t", content: "x" }] as unknown[],
+      }),
+    ).toBe(true);
   });
 });
 

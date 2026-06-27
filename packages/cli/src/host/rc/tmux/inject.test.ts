@@ -75,6 +75,28 @@ describe("runInjectPump", () => {
     expect(await replayedEventIds(s, ev.eventId)).toBe(false);
   });
 
+  it("calls onInjected with the prompt text after a successful submit (not for a blank prompt)", async () => {
+    const s = new Session("cse_1", "t", null);
+    const { tmux } = spyTmux();
+    const ac = new AbortController();
+    const recorded: string[] = [];
+    s.pushUserInput("   \n "); // blank → no-op → must NOT be recorded
+    s.pushUserInput("real prompt"); // recorded ONLY after its Enter lands
+    const pump = runInjectPump({
+      session: s,
+      tmux,
+      target: "rc-cse_1",
+      signal: ac.signal,
+      sleep: noSleep,
+      onInjected: (t) => recorded.push(t),
+    });
+    await waitFor(() => recorded.length > 0);
+    ac.abort();
+    s.wake();
+    await pump;
+    expect(recorded).toEqual(["real prompt"]); // the blank prompt was never recorded
+  });
+
   it("treats a whitespace-only prompt as a no-op (acked, never pasted)", async () => {
     const s = new Session("cse_1", "t", null);
     const { tmux, verbs } = spyTmux();

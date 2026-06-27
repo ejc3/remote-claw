@@ -300,6 +300,149 @@ describe("runTmuxDriver wiring", () => {
     expect(spy.killed()).toBe(true);
   });
 
+  it("local-prompt ledger: suppresses OUR injected prompt's transcript echo, surfaces a LOCALLY-typed one", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-ledger-cwd-");
+    const home = tmp("rc-ledger-home-");
+    const projDir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(projDir, { recursive: true });
+    const PINNED = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const transcript = join(projDir, `${PINNED}.jsonl`);
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const userFrame = (uuid: string, text: string) =>
+      `${JSON.stringify({ type: "user", uuid, message: { role: "user", content: [{ type: "text", text }] } })}\n`;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: PINNED,
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      await writeFile(transcript, ""); // create the pinned file so capture attaches
+      // 1) A VIEWER prompt drives the pane → the inject pump records "say hi" in the ledger (onInjected).
+      client.pushInbound(inFrame(identity, "user", "msg-1", "say hi"));
+      await waitFor(() => spy.calls.some((c) => c[0] === "send-keys" && c.includes("Enter")));
+      // The relay echoes the viewer prompt ONCE (its own inbound echo) so every device sees it.
+      await waitFor(
+        () =>
+          client.content.filter((p) => p.recordKind === "user" && p.text.includes("say hi"))
+            .length >= 1,
+      );
+      // 2) claude writes the ECHO of our injected prompt → must be SUPPRESSED (matched in the ledger).
+      // 3) A LOCAL prompt typed at the pane (never injected) → SURFACED via local_prompt.
+      await appendFile(transcript, userFrame("u-echo", "say hi"));
+      await appendFile(transcript, userFrame("u-local", "typed locally"));
+      await waitFor(() =>
+        client.content.some((p) => p.recordKind === "user" && p.text.includes("typed locally")),
+      );
+      await new Promise((r) => setTimeout(r, 60)); // give the echo a chance to (wrongly) double
+      const sayHi = client.content.filter(
+        (p) => p.recordKind === "user" && p.text.includes("say hi"),
+      );
+      expect(sayHi).toHaveLength(1); // ONLY the relay inbound echo — the transcript echo was suppressed
+      const local = client.content.filter(
+        (p) => p.recordKind === "user" && p.text.includes("typed locally"),
+      );
+      expect(local).toHaveLength(1); // the locally-typed prompt surfaced (local_prompt)
+
+      // 4) TRIM robustness: an injected prompt whose transcript echo has trailing whitespace still matches
+      // (ledger keys are trimmed) → suppressed, not double-shown.
+      client.pushInbound(inFrame(identity, "user", "msg-2", "trim me"));
+      await waitFor(
+        () => spy.calls.filter((c) => c[0] === "send-keys" && c.includes("Enter")).length >= 2,
+      );
+      await waitFor(() =>
+        client.content.some((p) => p.recordKind === "user" && p.text.includes("trim me")),
+      );
+      await appendFile(transcript, userFrame("u-trim", "trim me  \n")); // echo with trailing whitespace
+      await new Promise((r) => setTimeout(r, 60));
+      const trimmed = client.content.filter(
+        (p) => p.recordKind === "user" && p.text.includes("trim me"),
+      );
+      expect(trimmed).toHaveLength(1); // trailing-whitespace echo trim-matched → suppressed (no double)
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("local-prompt ledger: a nested (parent_tool_use_id) user line and a whitespace-only line are NOT surfaced", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-ledger2-cwd-");
+    const home = tmp("rc-ledger2-home-");
+    const projDir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(projDir, { recursive: true });
+    const PINNED = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const transcript = join(projDir, `${PINNED}.jsonl`);
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const line = (extra: Record<string, unknown>): string =>
+      `${JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: String(extra.text ?? "") }] }, ...extra })}\n`;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: PINNED,
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      await writeFile(transcript, "");
+      // A MAIN-file user line already carrying parentToolUseID (renamed → parent_tool_use_id) is a nested
+      // turn, NOT a typed prompt — it must be excluded from the ledger (gated on the payload field, not the
+      // tailer arg). A whitespace-only line trims to "" and must be skipped (no empty bubble). A normal
+      // local prompt is the positive control: it MUST surface.
+      await appendFile(
+        transcript,
+        line({ uuid: "u-nested", text: "nested turn", parentToolUseID: "task_77" }),
+      );
+      await appendFile(transcript, line({ uuid: "u-blank", text: "   " }));
+      await appendFile(transcript, line({ uuid: "u-real", text: "real local prompt" }));
+      await waitFor(() =>
+        client.content.some((p) => p.recordKind === "user" && p.text.includes("real local prompt")),
+      );
+      await new Promise((r) => setTimeout(r, 60)); // let any (wrongly) surfaced lines flush
+      const surfaced = client.content.filter((p) => p.recordKind === "user");
+      expect(surfaced.some((p) => p.text.includes("real local prompt"))).toBe(true); // control surfaced
+      expect(surfaced.some((p) => p.text.includes("nested turn"))).toBe(false); // nested → not local_prompt
+      expect(surfaced.some((p) => p.text.trim() === "")).toBe(false); // whitespace-only → no empty bubble
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
   it("ends the bridge on pane death (sessionGone) with NO external abort, and kills the session", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();

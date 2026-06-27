@@ -268,6 +268,41 @@ export function transcriptToPayload(line: string): UpstreamPayload | null {
   return payload;
 }
 
+/** The concatenated TEXT of a `user` payload's message — a string `content`, or the text blocks of an
+ *  array `content` joined. "" when there is no text (e.g. a tool_result-only user turn). The driver's
+ *  local-prompt ledger uses this to tell a locally-typed prompt from the echo of one WE injected. */
+export function userMessageText(message: { content?: unknown } | undefined): string {
+  const c = message?.content;
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return "";
+  return c
+    .filter((b): b is { type: string; text: string } => {
+      // Guard non-object/null elements before deref — a malformed `content:[null]` line must not throw
+      // (the throw would propagate through the capture pump to onPumpCrash and tear down the session;
+      // the sibling status.ts #trackTools is defensive the same way).
+      if (typeof b !== "object" || b === null) return false;
+      const bb = b as { type?: unknown; text?: unknown };
+      return bb.type === "text" && typeof bb.text === "string";
+    })
+    .map((b) => b.text)
+    .join("");
+}
+
+/** True if a user payload's message carries any `tool_result` block — i.e. it's a tool-OUTPUT turn, not a
+ *  typed prompt. The local-prompt ledger skips these so a (theoretical) text+tool_result turn never has
+ *  its tool_result dropped by echo-suppression; real claude writes tool_results as their own user turns. */
+export function messageHasToolResult(message: { content?: unknown } | undefined): boolean {
+  const c = message?.content;
+  return (
+    Array.isArray(c) &&
+    // Guard non-object/null elements before deref (see userMessageText) so a malformed line can't throw.
+    c.some(
+      (b) =>
+        typeof b === "object" && b !== null && (b as { type?: unknown }).type === "tool_result",
+    )
+  );
+}
+
 /** A transcript line's ISO-8601 `timestamp` (e.g. `2026-06-07T18:18:59.563Z`), used to MERGE the main
  *  transcript with the separate sub-agent files into one chronological stream. Returns "" when the field
  *  is absent or the line is unparseable. ISO-8601 UTC (`…Z`) compares correctly as a plain string. In
