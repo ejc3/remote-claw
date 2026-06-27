@@ -168,7 +168,7 @@ export class MitmProxy {
     } else if (this.#bedrock !== null) {
       // Bedrock inference mode: serve /v1/messages* from Bedrock; synthesize every other
       // api.anthropic.com path locally. NOTHING reaches the real upstream (zero Anthropic).
-      await this.#serveBedrock(req, path, body, res);
+      await this.#serveBedrock(this.#bedrock, req, path, body, res);
     } else {
       // Pass the FULL request-target (query string included) upstream — stripping `?…` would drop
       // params the real API needs (e.g. /api/claude_cli/bootstrap?entrypoint=…&model=…, ?limit=…). In
@@ -181,13 +181,12 @@ export class MitmProxy {
   /** Serve a request in Bedrock inference mode: inference → Bedrock; everything else → a synthesized
    *  control-plane response. RC endpoints are handled by `#intercept` before this (caller-guarded). */
   async #serveBedrock(
+    bedrock: BedrockInference,
     req: IncomingMessage,
     path: string,
     body: Buffer,
     res: ServerResponse,
   ): Promise<void> {
-    const bedrock = this.#bedrock;
-    if (bedrock === null) return; // unreachable: caller guards on #bedrock !== null
     if (isInferencePath(path)) {
       await bedrock.serve(path, normalizeHeaders(req.headers), body, res);
       return;
