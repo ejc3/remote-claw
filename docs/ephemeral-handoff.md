@@ -109,10 +109,17 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
 
 ### 3.3 Endpoints — `apps/web/app/api/handoff/route.ts` (an unauthenticated high-entropy *capability* endpoint)
 
-- **`PUT`** (host upload): a **route-level body cap before JSON parse**; body `{id: 64-hex, proof_hash: 64-hex,
-  ct: hex, ttl?: int}` (all wire values are hex — the OTK itself stays base64url in the `#fragment`). Validate
-  `ttl` like `retentionMs` (non-negative **safe integer**, else default 600 s) then clamp to a **code-baked
-  `[MIN, MAX]`** (default 600 s). `INSERT … ON CONFLICT(id) DO NOTHING` → **return 409 on conflict** so the
+- **`PUT`** (host upload): a **route-level body cap before JSON parse** — `MAX_BODY = 8192` bytes, enforced
+  *while streaming* so a chunked / missing-`content-length` body can't force an unbounded buffer; an over-cap
+  body → **`413`**. Body `{id: 64-hex, proof_hash: 64-hex, ct: hex, ttl?: int}` (all wire values are hex — the
+  OTK itself stays base64url in the `#fragment`); `ct` must be **even-length hex bounded to `[MIN_CT_HEX,
+  MAX_CT_HEX] = [122, 6144]`** chars — `122` is the floor of a real sealed box (version + 32 B salt + 12 B
+  nonce + 16 B GCM tag = 61 B), `6144` ≈ a 3 KiB box — and a `ct` outside that range (or any other malformed
+  field) → **`400`** (distinct from the `413` whole-body cap). **TTL clamp:** `ttl` is accepted only as a
+  non-negative **safe integer** (else the default is used), then clamped into `[TTL_MIN_S, TTL_MAX_S] =
+  [30 s, 600 s]`; **omitted or invalid ⇒ the default 600 s (10 min)**. `TTL_MAX_S` is a code-baked absolute
+  ceiling — the optional `RC_HANDOFF_TTL_MAX_S` env can only *lower* it (within `[30, 600]`), never raise it.
+  `INSERT … ON CONFLICT(id) DO NOTHING` → **return 409 on conflict** so the
   host **re-mints OTK** rather than publishing a QR for a poisoned row.
 - **`POST` (claim):** body `{id: 64-hex, proof: 64-hex}` (`proof = hex(claimProof)`) → atomic burn (§3.2)
   gated on `SHA256(proof) == proof_hash` matched **inside the single `DELETE … WHERE id=? AND proof_hash=?`**
@@ -127,9 +134,13 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   claim (it lacks `claimProof`, which needs OTK). This is **mandatory in v1** (no longer deferred).
 - **No Bearer auth** (it would re-introduce handoff↔identity correlation); the **256-bit `id` + proof** are the
   gate. Abuse bounded by: the pre-parse size cap, a **mandatory Vercel WAF rate-limit rule** on
-  `path=/api/handoff` keyed on the platform-trusted client IP (per-IP token bucket + a low global ceiling —
-  *enumerated as a v1 must-have, not prose*), the short TTL, single-read, and the dedicated Turso DB so PUT
-  write-contention can't touch session frames. **Abuse telemetry lives at the edge, not the app:** the WAF
+  `path=/api/handoff` (PUT + POST) keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a
+  per-IP token bucket, the *primary* control) plus a **global ceiling of 600 requests / 60 s** as a backstop.
+  The per-IP bucket is the primary control; the global ceiling is only a backstop and itself carries a DoS
+  tradeoff — an attacker who trips the global cap could deny legitimate pairings — which is why per-IP is
+  primary and the global ceiling is set generously. This rate-limit is an **out-of-band infra deploy gate**
+  (provisioned in the Vercel Firewall, not in `vercel.json`/CI — §5 #5), atop the short TTL, single-read, and
+  the dedicated Turso DB so PUT write-contention can't touch session frames. **Abuse telemetry lives at the edge, not the app:** the WAF
   dashboard (claim-rate, per-IP throttle hits, brute-force volume) is where §4's online-attack guarantees are
   observed. The serverless route deliberately does **not** log per-claim outcomes (the `id` is public and a
   per-instance function has no actionable signal); a backend fault returns an opaque `500` and self-heals the
