@@ -163,6 +163,11 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     // moot — the MITM synthesizes the OAuth/refresh endpoints, so it can't reach the real upstream.)
     env.ANTHROPIC_API_KEY = "sk-ant-remote-claw-bedrock-no-account-needed";
     delete env.ANTHROPIC_AUTH_TOKEN;
+    // Drop ANTHROPIC_BASE_URL so the child resolves to api.anthropic.com (the host OUR MITM intercepts).
+    // Left set (from the launching env), it would point claude's first-party calls at some OTHER host —
+    // which the MITM doesn't intercept, so they'd blind-tunnel straight past Bedrock AND past the
+    // zero-Anthropic guarantee. The MITM is the only endpoint the child should ever reach.
+    delete env.ANTHROPIC_BASE_URL;
     // Scrub EVERY AWS_* var so the child can't reach ANY host credential source — not just static keys
     // (AWS_ACCESS_KEY_ID/…), but the container + web-identity channels the AWS SDK chain also honors
     // (AWS_CONTAINER_CREDENTIALS_*, AWS_WEB_IDENTITY_TOKEN_FILE, AWS_ROLE_ARN, AWS_PROFILE, …). On

@@ -114,10 +114,11 @@ export class MitmProxy {
   // ---- CONNECT handling ----
   #onConnect(req: IncomingMessage, clientSocket: Socket, head: Buffer): void {
     const { host, port } = splitAuthority(req.url ?? "");
-    // Normalize before matching: a CONNECT authority may be upper/mixed-case or carry a FQDN trailing
-    // dot ("api.anthropic.com."). Without this, such a request would miss MITM_HOST and get
-    // blind-tunnelled to the real host — a zero-Anthropic LEAK in bedrock mode.
-    if (host.toLowerCase().replace(/\.$/, "") === MITM_HOST) {
+    // Normalize before matching: a CONNECT authority may be upper/mixed-case or carry one-or-more FQDN
+    // trailing dots ("api.anthropic.com." / "api.anthropic.com.."). Without stripping ALL of them, such
+    // a request would miss MITM_HOST and get blind-tunnelled to the real host — a zero-Anthropic LEAK in
+    // bedrock mode.
+    if (host.toLowerCase().replace(/\.+$/, "") === MITM_HOST) {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       // Any bytes the client pipelined after the CONNECT line are the START of its TLS ClientHello —
       // push them back onto the RAW socket so the TLS engine consumes them as handshake input.
@@ -191,9 +192,11 @@ export class MitmProxy {
       await bedrock.serve(path, normalizeHeaders(req.headers), body, res);
       return;
     }
-    const synth = synthControlPlane(req.method ?? "GET", path);
-    // synthControlPlane returns null only for inference paths, already handled above.
-    if (synth !== null) sendJson(res, synth.json, synth.status);
+    // synthControlPlane returns null ONLY for inference paths, which `isInferencePath` already routed
+    // above — so it's non-null here. Fall back to an empty 200 anyway rather than EVER leaving the
+    // child's request hanging with no response (a silent stall if that invariant ever drifts).
+    const synth = synthControlPlane(req.method ?? "GET", path) ?? { status: 200, json: {} };
+    sendJson(res, synth.json, synth.status);
   }
 
   /** Trace one client→Anthropic RC request: the verb/path always; the worker event types it carries

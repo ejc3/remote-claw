@@ -92,6 +92,31 @@ describe("translateMessagesBody", () => {
     expect(out.messages[0].content[0].cache_control).toEqual({ type: "ephemeral" });
   });
 
+  it("does NOT touch a non-Anthropic cache_control (no type:ephemeral) buried in tool/user data", () => {
+    // A tool_use input that legitimately carries its own `cache_control: { scope: … }` must survive —
+    // we only strip Anthropic's prompt-cache breakpoint (type:"ephemeral"), not arbitrary user data.
+    const raw = JSON.stringify({
+      model: "claude-opus-4-8",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              name: "configure",
+              input: { cache_control: { scope: "workspace", mode: "read_only" } },
+            },
+          ],
+        },
+      ],
+    });
+    const out = JSON.parse(translateMessagesBody(raw).body);
+    expect(out.messages[0].content[0].input.cache_control).toEqual({
+      scope: "workspace",
+      mode: "read_only",
+    });
+  });
+
   it("applies a model override", () => {
     const { model } = translateMessagesBody(JSON.stringify({ model: "claude-opus-4-8" }), {
       modelOverride: "us.anthropic.claude-opus-4-8-v1:0",
