@@ -155,10 +155,15 @@ See Appendix A for the cited request/response facts for both paths.
   to `bedrock-mantle` with `Authorization: Bearer`/`x-api-key`, **no AWS SDK, no SigV4**. One env var on
   the host. This is the recommended default for the wrapper.
 - **Or the standard AWS chain** (for SigV4 / IAM shops): `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
-  (+`AWS_SESSION_TOKEN`), `AWS_REGION`, `~/.aws` profile, SSO, or IMDS role. This box has
-  `~/.aws/config` (region `us-west-1`) but **no access keys / bearer token**, so a *live* Bedrock
-  round-trip needs the user to supply one + enable model access for the target Claude models in that
-  region. The translation logic is testable offline regardless.
+  (+`AWS_SESSION_TOKEN`), `AWS_REGION`, `~/.aws` profile, SSO, or IMDS role — `@anthropic-ai/bedrock-sdk`
+  and `aws4` both resolve these. **Proven against the live endpoint** (`spikes/bedrock-rc/try-mantle.mjs`,
+  2026-06-27): SigV4-signing `bedrock-mantle/anthropic/v1/messages` with this box's IMDS instance-role
+  creds authenticates and reaches Bedrock, which replies in **native Anthropic error format** — so the
+  MITM→mantle transport works. The remaining gap is **one IAM action**: the role lacks
+  `bedrock-mantle:CreateInference` on `arn:aws:bedrock-mantle:<region>:<acct>:project/default` in every
+  Claude region (and `bedrock:InvokeModel` is allowed only in us-west-1, which hosts no Claude models).
+  Granting that action (+ `CountTokens`) in us-east-1/us-west-2 with model access enabled — or a Bedrock
+  API key — unblocks live inference; the translation logic is testable offline regardless.
 - The host already holds these and **never exposes them to the child claude** — same trust boundary as
   the broker bypass secret (`launch.ts` scrubs host-only secrets from the child env). claude only ever
   talks to the local MITM.
