@@ -52,6 +52,46 @@ describe("translateMessagesBody", () => {
     expect(out.messages).toEqual([{ role: "user", content: "hi" }]);
   });
 
+  it("drops the top-level fields mantle 400s on (live-confirmed) but keeps the ones it accepts", () => {
+    // From the real claude 2.1.x → mantle e2e: context_management/diagnostics are rejected;
+    // thinking/output_config/tools are accepted and must survive.
+    const raw = JSON.stringify({
+      model: "claude-opus-4-8",
+      max_tokens: 8,
+      context_management: { edits: [] },
+      diagnostics: { foo: 1 },
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      output_config: { effort: "high" },
+      tools: [{ name: "Bash" }],
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const out = JSON.parse(translateMessagesBody(raw).body);
+    expect(out.context_management).toBeUndefined();
+    expect(out.diagnostics).toBeUndefined();
+    expect(out.thinking).toEqual({ type: "enabled", budget_tokens: 1024 });
+    expect(out.output_config).toEqual({ effort: "high" });
+    expect(out.tools).toEqual([{ name: "Bash" }]);
+  });
+
+  it("deep-strips cache_control.scope (nested) but keeps the cache_control block", () => {
+    // mantle rejects system.N.cache_control.ephemeral.scope; it accepts {type:"ephemeral"} alone.
+    const raw = JSON.stringify({
+      model: "claude-opus-4-8",
+      system: [{ type: "text", text: "sys", cache_control: { type: "ephemeral", scope: "1h" } }],
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "hi", cache_control: { type: "ephemeral", scope: "5m" } },
+          ],
+        },
+      ],
+    });
+    const out = JSON.parse(translateMessagesBody(raw).body);
+    expect(out.system[0].cache_control).toEqual({ type: "ephemeral" }); // scope gone, block kept
+    expect(out.messages[0].content[0].cache_control).toEqual({ type: "ephemeral" });
+  });
+
   it("applies a model override", () => {
     const { model } = translateMessagesBody(JSON.stringify({ model: "claude-opus-4-8" }), {
       modelOverride: "us.anthropic.claude-opus-4-8-v1:0",

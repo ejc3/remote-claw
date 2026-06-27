@@ -28,10 +28,16 @@ export const BEDROCK_ALLOWED_BETAS: ReadonlySet<string> = new Set([
 ]);
 
 /** Body top-level keys Bedrock's native validator does not accept on a Messages request → strip them
- *  ("Extra inputs are not permitted" is a hard 400). `metadata` (user-id telemetry) is the one we have
- *  evidence for; the exact reject-set per model is live-tunable (see `extraStripKeys` / the doc), so a
- *  user who hits a 400 on e.g. `output_config`/`effort` can extend it via env without a code change. */
-const STRIP_BODY_KEYS: ReadonlySet<string> = new Set(["metadata"]);
+ *  ("Extra inputs are not permitted" is a hard 400). Live-confirmed against `claude` 2.1.x → mantle
+ *  (claude-opus-4-8, us-east-1, 2026-06-27): the real client sends `metadata` (user-id telemetry),
+ *  `context_management`, and `diagnostics`, all of which mantle rejects; `output_config`/`thinking`/
+ *  `tools` it ACCEPTS, so those stay. The reject-set can still drift per model, so it's env-extensible
+ *  (see `extraStripKeys` / `RC_BEDROCK_STRIP_KEYS`) without a code change. */
+const STRIP_BODY_KEYS: ReadonlySet<string> = new Set([
+  "metadata",
+  "context_management",
+  "diagnostics",
+]);
 
 export interface TranslateOptions {
   /** Optional explicit Bedrock model id (overrides the mapped one). */
@@ -60,9 +66,31 @@ export interface TranslatedRequest {
   model: string;
 }
 
+/** Deep-strip nested fields the mantle validator rejects but that claude embeds throughout the body
+ *  (so a flat top-level `STRIP_BODY_KEYS` can't reach them). Known case: a `cache_control` block
+ *  carrying the prompt-caching `scope` sub-field — a beta we drop from the `anthropic-beta` header but
+ *  which ALSO rides inside every cached `system`/content/tool block, so mantle 400s with
+ *  "system.N.cache_control.ephemeral.scope: Extra inputs are not permitted". We delete only `scope`,
+ *  keeping `cache_control: {type:"ephemeral"}` itself (mantle accepts that), so prompt caching survives.
+ *  Mutates in place — `obj` is a throwaway parse owned by translateMessagesBody. */
+function stripMantleRejectedNested(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) stripMantleRejectedNested(item);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  const obj = value as Record<string, unknown>;
+  const cc = obj.cache_control;
+  if (cc !== null && typeof cc === "object" && !Array.isArray(cc)) {
+    delete (cc as Record<string, unknown>).scope;
+  }
+  for (const v of Object.values(obj)) stripMantleRejectedNested(v);
+}
+
 /** Reshape a claude `/v1/messages` JSON body for the native Bedrock endpoint: rewrite `model`, drop
- *  the keys Bedrock rejects. `stream`/`anthropic_version` stay as claude sent them (native path keeps
- *  top-level `stream`; `anthropic_version` is a header). Throws on non-JSON / non-object input. */
+ *  the keys Bedrock rejects (top-level + the nested `cache_control.scope`). `stream`/`anthropic_version`
+ *  stay as claude sent them (native path keeps top-level `stream`; `anthropic_version` is a header).
+ *  Throws on non-JSON / non-object input. */
 export function translateMessagesBody(raw: string, opts: TranslateOptions = {}): TranslatedRequest {
   const parsed: unknown = JSON.parse(raw);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -77,6 +105,7 @@ export function translateMessagesBody(raw: string, opts: TranslateOptions = {}):
     out[k] = v;
   }
   out.model = model;
+  stripMantleRejectedNested(out);
   return { body: JSON.stringify(out), model };
 }
 

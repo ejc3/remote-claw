@@ -1,15 +1,17 @@
 # Bedrock-backed Remote Control — drive the real claude TUI with **zero Anthropic API**, all inference on Bedrock
 
-**Status:** **implemented** as `--rc-inference=bedrock` and proven end-to-end against the real `claude`
-+ live Bedrock (2026-06-27). The native `bedrock-mantle` path, the SigV4/bearer auth, the control-plane
-synthesis, and the launch wiring are built and unit-tested (CLI suite green). A real `claude --print`
-through `--rc-inference=bedrock` translated `/v1/messages` (model `claude-opus-4-8` →
-`anthropic.claude-opus-4-8`), SigV4-signed it, reached the live mantle endpoint, and claude surfaced
-the Bedrock reply as an Anthropic API response — with **zero api.anthropic.com traffic**. The only
-remaining gate for a *successful* completion (not a 403) is **account-level model access** — see
-Credentials for the live-probe ladder (the `bedrock-mantle:CreateInference` IAM action has since been
-granted on this box; the request now reaches model resolution and stops at `aws-marketplace:Subscribe`,
-i.e. the Anthropic model is simply not yet enabled in the account).
+**Status:** **DONE — proven end-to-end with a real `claude`, a real Bedrock completion, zero
+api.anthropic.com** (2026-06-27). `remote-claw --rc-inference=bedrock --rc-bedrock-region us-east-1
+--print "…PINEAPPLE"` ran the real `claude` binary, which translated `/v1/messages` (model
+`claude-opus-4-8` → `anthropic.claude-opus-4-8`), SigV4-signed it, streamed the SSE back from the live
+`bedrock-mantle` endpoint (`status=200 ct=text/event-stream`), and **printed `PINEAPPLE`** — with the
+MITM log showing **zero** passthrough / `api.anthropic.com` contact. The native `bedrock-mantle` path,
+SigV4/bearer auth, control-plane synthesis, body translation, and launch wiring are built, unit-tested
+(CLI suite green), and live-verified. Getting here required (a) the `bedrock-mantle:CreateInference` +
+`CountTokens` IAM actions and account model access (see Credentials for the live IAM ladder), and (b)
+stripping the body fields mantle rejects that the real client sends — `metadata`, `context_management`,
+`diagnostics`, and the nested `cache_control.scope` (the unit tests didn't surface these; the live e2e
+did).
 
 ## The goal (verbatim ask)
 
