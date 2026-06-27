@@ -35,8 +35,8 @@ export async function uploadHandoff(
 ): Promise<string> {
   const fetchFn = opts.fetchFn ?? globalThis.fetch;
   if (fetchFn === undefined) throw new Error("uploadHandoff: global fetch is unavailable");
-  // Validate + normalize the origin (mirrors qr.ts passQrPayload): a real http(s) origin only; strip any
-  // query/fragment so a malformed `--rc-app` can't produce a wrong PUT URL or a broken deep link.
+  // Validate + normalize the origin: a real http(s) origin only; strip any query/fragment so a malformed
+  // `--rc-app` can't produce a wrong PUT URL or a broken deep link.
   let parsed: URL;
   try {
     parsed = new URL(origin);
@@ -50,7 +50,7 @@ export async function uploadHandoff(
   parsed.search = "";
   const path = parsed.pathname.replace(/\/+$/, ""); // drop trailing slash(es); root → ""
   const apiUrl = `${parsed.origin}/api/handoff`; // the broker route is at the origin ROOT
-  const deepLinkBase = `${parsed.origin}${path === "" ? "/" : path}`; // viewer page (mirrors passQrPayload)
+  const deepLinkBase = `${parsed.origin}${path === "" ? "/" : path}`; // viewer page for the #otk1_ deep link
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (opts.bypass) headers["x-vercel-protection-bypass"] = opts.bypass;
 

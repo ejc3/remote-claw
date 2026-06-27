@@ -1,33 +1,12 @@
 // QR rendering for `--rc-pass --rc-qr` — a presentation helper, NOT crypto (the pass it encodes is
 // already the clawsec viewer credential). The pass was designed to be "QR/file-sized" (pass.ts §4.2a);
 // this renders it as a compact terminal QR so a phone can scan it.
+//
+// NOTE: there is no `<origin>/#<pass>` deep-link builder here anymore. That forever-credential-in-URL
+// shape was replaced by the one-time OTK handoff (docs/ephemeral-handoff.md): with `--rc-app`, pass.ts
+// uploads a one-time box and the QR carries `<origin>/#otk1_<OTK>`; without it, the QR is the bare pass
+// for manual entry. Re-introducing a `#<pass>` deep link would resurrect the dropped anti-pattern.
 import qrcodeTerminal from "qrcode-terminal";
-
-/**
- * The payload to encode in the pass QR. With an app origin (the `--rc-app`/RC_APP web origin), build the
- * viewer DEEP LINK `<origin>/#<pass>` — the web app reads the pass from the URL fragment (never sent to a
- * server), so scanning opens the viewer already loaded. Without an origin (or a malformed one), encode the
- * BARE pass for manual entry. The pass is base64url + an `rcp1_` prefix — all URL-fragment-safe, so it
- * needs no percent-encoding.
- */
-export function passQrPayload(pass: string, appOrigin?: string): string {
-  const origin = appOrigin?.trim();
-  if (!origin) return pass;
-  let url: URL;
-  try {
-    url = new URL(origin);
-  } catch {
-    return pass; // malformed origin → bare pass, never emit a broken URL
-  }
-  // Only build a deep link for a real WEB origin. Opaque/non-web inputs still parse — `localhost:3000`
-  // (no scheme), `javascript:…`, `mailto:…`, `file:///…` — but yield protocol≠http(s) / origin "null",
-  // which would produce a broken payload like `null3000#<pass>`; fall back to the bare pass instead.
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin === "null") return pass;
-  url.hash = "";
-  url.search = "";
-  const path = url.pathname.replace(/\/+$/, ""); // drop trailing slash(es); root → ""
-  return `${url.origin}${path === "" ? "/" : path}#${pass}`;
-}
 
 /** Render `text` as a compact (half-block) terminal QR string. Resolves the rendered art (never prints
  *  it directly), so the caller routes it to its own sink. */

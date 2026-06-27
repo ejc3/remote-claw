@@ -14,11 +14,11 @@
 import { deriveIdentity, formatPass, toHex } from "@remote-claw/clawsec";
 import { type RcValue, rcActionArgError, strFlag } from "./args.js";
 import { uploadHandoff } from "./handoff-upload.js";
-import { passQrPayload, renderQr } from "./qr.js";
+import { renderQr } from "./qr.js";
 import { loadSecret, resolveSecretPath, type StoreEnv, StoreError } from "./store.js";
 
 /** The reserved flags --rc-pass understands. `--rc-qr` also renders the pass as a terminal QR; `--rc-app`
- *  (or RC_APP) supplies the viewer origin so the QR can hold the deep link `<origin>/#<pass>`. */
+ *  (or RC_APP) supplies the viewer origin so the QR carries the one-time link `<origin>/#otk1_<OTK>`. */
 const PASS_FLAGS = new Set(["rc-pass", "rc-file", "rc-json", "rc-quiet", "rc-qr", "rc-app"]);
 
 export interface PassOptions {
@@ -104,8 +104,10 @@ export async function runPass(
         );
       }
     } else {
-      // No origin: the QR is the bare pass for MANUAL entry (the original --rc-qr behavior, not a deep link).
-      qrPayload = passQrPayload(pass);
+      // No origin: the QR is the bare pass for MANUAL entry (the original --rc-qr behavior, not a deep
+      // link). There is deliberately NO `<origin>/#<pass>` deep-link path — that forever-credential shape
+      // was replaced by the one-time OTK handoff above (docs/ephemeral-handoff.md §3.4).
+      qrPayload = pass;
     }
   }
 
