@@ -162,10 +162,14 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     if (!env.ANTHROPIC_API_KEY) {
       env.ANTHROPIC_API_KEY = "sk-ant-remote-claw-bedrock-no-account-needed";
     }
-    delete env.AWS_BEARER_TOKEN_BEDROCK;
-    delete env.AWS_ACCESS_KEY_ID;
-    delete env.AWS_SECRET_ACCESS_KEY;
-    delete env.AWS_SESSION_TOKEN;
+    // Scrub EVERY AWS_* var so the child can't reach ANY host credential source — not just static keys
+    // (AWS_ACCESS_KEY_ID/…), but the container + web-identity channels the AWS SDK chain also honors
+    // (AWS_CONTAINER_CREDENTIALS_*, AWS_WEB_IDENTITY_TOKEN_FILE, AWS_ROLE_ARN, AWS_PROFILE, …). On
+    // ECS/EKS those ARE the host's live role-creds path, so deleting only static keys would be a no-op
+    // and let a hostile MCP mint the host's role. The wrapper signs Bedrock itself; the child needs none.
+    for (const k of Object.keys(env)) {
+      if (k.startsWith("AWS_")) delete env[k];
+    }
     delete env.CLAUDE_CODE_USE_BEDROCK;
     delete env.CLAUDE_CODE_USE_VERTEX;
   }

@@ -3,6 +3,7 @@ import {
   BEDROCK_ALLOWED_BETAS,
   filterBetaHeader,
   mantleModelId,
+  parseStripKeys,
   translateMessagesBody,
 } from "./translate.js";
 
@@ -58,6 +59,21 @@ describe("translateMessagesBody", () => {
     expect(model).toBe("us.anthropic.claude-opus-4-8-v1:0");
   });
 
+  it("strips extra configured keys on top of the built-in set", () => {
+    const raw = JSON.stringify({
+      model: "claude-opus-4-8",
+      metadata: { user_id: "x" },
+      output_config: { effort: "high" },
+      max_tokens: 8,
+    });
+    const out = JSON.parse(
+      translateMessagesBody(raw, { extraStripKeys: new Set(["output_config"]) }).body,
+    );
+    expect(out.metadata).toBeUndefined(); // built-in
+    expect(out.output_config).toBeUndefined(); // configured extra
+    expect(out.max_tokens).toBe(8);
+  });
+
   it("throws on non-object JSON", () => {
     expect(() => translateMessagesBody("[]")).toThrow(/not a JSON object/);
     expect(() => translateMessagesBody("null")).toThrow(/not a JSON object/);
@@ -80,5 +96,17 @@ describe("filterBetaHeader", () => {
   it("respects an allowlist override", () => {
     expect(filterBetaHeader("foo,bar", new Set(["bar"]))).toBe("bar");
     expect(BEDROCK_ALLOWED_BETAS.has("interleaved-thinking-2025-05-14")).toBe(true);
+  });
+});
+
+describe("parseStripKeys", () => {
+  it("parses a comma list, trims, ignores blanks; undefined/empty → undefined", () => {
+    expect(parseStripKeys(undefined)).toBeUndefined();
+    expect(parseStripKeys("  ")).toBeUndefined();
+    expect(parseStripKeys(",,")).toBeUndefined();
+    expect([...(parseStripKeys(" output_config , effort ,") ?? [])]).toEqual([
+      "output_config",
+      "effort",
+    ]);
   });
 });

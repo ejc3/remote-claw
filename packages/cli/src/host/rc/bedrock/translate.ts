@@ -28,7 +28,9 @@ export const BEDROCK_ALLOWED_BETAS: ReadonlySet<string> = new Set([
 ]);
 
 /** Body top-level keys Bedrock's native validator does not accept on a Messages request → strip them
- *  ("Extra inputs are not permitted" is a hard 400). `metadata` (user-id telemetry) is the main one. */
+ *  ("Extra inputs are not permitted" is a hard 400). `metadata` (user-id telemetry) is the one we have
+ *  evidence for; the exact reject-set per model is live-tunable (see `extraStripKeys` / the doc), so a
+ *  user who hits a 400 on e.g. `output_config`/`effort` can extend it via env without a code change. */
 const STRIP_BODY_KEYS: ReadonlySet<string> = new Set(["metadata"]);
 
 export interface TranslateOptions {
@@ -36,6 +38,19 @@ export interface TranslateOptions {
   modelOverride?: string;
   /** Allowlist of `anthropic-beta` tokens to keep (default `BEDROCK_ALLOWED_BETAS`). */
   allowedBetas?: ReadonlySet<string>;
+  /** Additional top-level body keys to strip, on top of `STRIP_BODY_KEYS` (e.g. from
+   *  `RC_BEDROCK_STRIP_KEYS` when a specific model rejects a field). */
+  extraStripKeys?: ReadonlySet<string>;
+}
+
+/** Parse a comma-separated env value (e.g. RC_BEDROCK_STRIP_KEYS) into a key set, or undefined. */
+export function parseStripKeys(raw: string | undefined): ReadonlySet<string> | undefined {
+  if (raw === undefined) return undefined;
+  const keys = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+  return keys.length > 0 ? new Set(keys) : undefined;
 }
 
 export interface TranslatedRequest {
@@ -58,7 +73,7 @@ export function translateMessagesBody(raw: string, opts: TranslateOptions = {}):
   const model = mantleModelId(claudeModel, opts.modelOverride);
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (STRIP_BODY_KEYS.has(k)) continue;
+    if (STRIP_BODY_KEYS.has(k) || opts.extraStripKeys?.has(k)) continue;
     out[k] = v;
   }
   out["model"] = model;

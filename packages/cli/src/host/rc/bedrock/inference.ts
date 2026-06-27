@@ -10,12 +10,17 @@ import { type BedrockAuth, bedrockRegion, resolveBedrockAuth } from "./creds.js"
 import { signRequest } from "./sigv4.js";
 import { filterBetaHeader, translateMessagesBody } from "./translate.js";
 
-/** The subset of `http.ServerResponse` the handler needs (keeps it unit-testable). */
+/** The subset of `http.ServerResponse` the handler needs (keeps it unit-testable). `write` returns the
+ *  node backpressure signal (false ⇒ buffer full) and invokes its callback once the chunk is flushed —
+ *  OR when the stream errors/closes — which we await for backpressure without leaking event listeners. */
 export interface Responder {
   writeHead(status: number, headers: Record<string, string>): unknown;
-  write(chunk: string | Uint8Array): unknown;
+  write(chunk: string | Uint8Array, cb?: (err?: Error | null) => void): boolean;
   end(chunk?: string | Uint8Array): unknown;
+  /** Subscribe to `close` so we can abort the Bedrock call when the child disconnects. */
+  on?(event: "close", listener: () => void): unknown;
   readonly writableEnded?: boolean;
+  readonly destroyed?: boolean;
 }
 
 export interface BedrockConfig {
@@ -25,6 +30,8 @@ export interface BedrockConfig {
   modelOverride?: string;
   /** `anthropic-beta` allowlist override. */
   allowedBetas?: ReadonlySet<string>;
+  /** Extra body keys to strip (on top of the built-in set) — e.g. from RC_BEDROCK_STRIP_KEYS. */
+  stripKeys?: ReadonlySet<string>;
   /** Injected fetch (tests). */
   fetchFn?: typeof fetch;
   /** Injected auth resolver (tests). */
@@ -42,6 +49,9 @@ export class BedrockInference {
   readonly #fetch: typeof fetch;
   readonly #trace: Tracer;
   #authPromise: Promise<BedrockAuth> | null = null;
+  #cachedAuth: BedrockAuth | null = null;
+  /** Epoch ms when the cached (temporary) credentials expire; 0 ⇒ non-expiring (bearer / static env). */
+  #authExpiresAt = 0;
 
   constructor(cfg: BedrockConfig = {}) {
     this.#cfg = cfg;
@@ -57,8 +67,30 @@ export class BedrockInference {
   }
 
   #auth(): Promise<BedrockAuth> {
+    // Reuse cached auth until it's within 60s of expiry (instance-role creds rotate ~hourly). A
+    // non-expiring auth (bearer / static env) has expiresAt 0 and is reused forever.
+    if (
+      this.#cachedAuth !== null &&
+      (this.#authExpiresAt === 0 || Date.now() < this.#authExpiresAt - 60_000)
+    ) {
+      return Promise.resolve(this.#cachedAuth);
+    }
     if (this.#authPromise === null) {
-      this.#authPromise = (this.#cfg.resolveAuth ?? resolveBedrockAuth)();
+      const p = (this.#cfg.resolveAuth ?? resolveBedrockAuth)();
+      this.#authPromise = p;
+      p.then((a) => {
+        this.#cachedAuth = a;
+        this.#authExpiresAt =
+          a.kind === "sigv4" && a.credentials.expiration !== undefined
+            ? a.credentials.expiration
+            : 0;
+      })
+        // Drop a REJECTED promise so a transient creds/IMDS failure retries on the next request instead
+        // of poisoning the session; the `finally` also clears it after success so expiry can re-resolve.
+        .catch(() => undefined)
+        .finally(() => {
+          if (this.#authPromise === p) this.#authPromise = null;
+        });
     }
     return this.#authPromise;
   }
@@ -71,17 +103,23 @@ export class BedrockInference {
     body: Buffer,
     res: Responder,
   ): Promise<void> {
+    let headWritten = false;
+    // Abort the Bedrock call when the child claude disconnects. A remote abort closes/destroys the
+    // response WITHOUT setting `writableEnded` (mirrors mitm.ts #streamWorker), so watch `close` — else
+    // Bedrock keeps generating (and billing) a response nobody is reading.
+    const ac = new AbortController();
+    if (typeof res.on === "function") res.on("close", () => ac.abort());
     try {
       const mantlePath =
         path === "/v1/messages/count_tokens"
           ? "/anthropic/v1/messages/count_tokens"
           : "/anthropic/v1/messages";
-      const opts = this.#cfg.allowedBetas ? { allowedBetas: this.#cfg.allowedBetas } : {};
       const translated = translateMessagesBody(body.toString("utf8"), {
         ...(this.#cfg.modelOverride !== undefined
           ? { modelOverride: this.#cfg.modelOverride }
           : {}),
-        ...opts,
+        ...(this.#cfg.allowedBetas ? { allowedBetas: this.#cfg.allowedBetas } : {}),
+        ...(this.#cfg.stripKeys ? { extraStripKeys: this.#cfg.stripKeys } : {}),
       });
 
       const sendHeaders: Record<string, string> = {
@@ -120,26 +158,49 @@ export class BedrockInference {
         method: "POST",
         headers: finalHeaders,
         body: translated.body,
+        signal: ac.signal,
       });
 
       const ct = upstream.headers.get("content-type") ?? "application/json";
       res.writeHead(upstream.status, { "content-type": ct, "cache-control": "no-cache" });
+      headWritten = true;
       this.#trace.debug("bedrock ←", { status: upstream.status, ct });
       if (upstream.body === null) {
         res.end();
         return;
       }
       const reader = upstream.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value && !res.writableEnded) res.write(value);
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          // client (child claude) went away mid-stream — `destroyed` catches a remote abort that
+          // `writableEnded` (only set when WE end) does not.
+          if (res.writableEnded === true || res.destroyed === true) break;
+          if (value) {
+            // Respect backpressure: if the child's socket buffer is full, wait for the chunk to flush
+            // before pulling more from Bedrock — else a slow consumer makes us buffer the stream
+            // unbounded. The write callback fires on flush OR on close/error, so a disconnect mid-write
+            // never hangs us (and there are no lingering event listeners to leak).
+            await new Promise<void>((resolve) => {
+              if (res.write(value, () => resolve()) !== false) resolve();
+            });
+          }
+        }
+      } finally {
+        // Release the Bedrock socket on ANY exit (client gone, upstream error, normal end).
+        await reader.cancel().catch(() => undefined);
       }
       res.end();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.#trace.warn("bedrock error", { error: msg });
-      if (res.writableEnded !== true) {
+      if (res.writableEnded === true) return;
+      if (headWritten) {
+        // Headers (and maybe SSE bytes) already went out — can't send a fresh 502 without
+        // ERR_HTTP_HEADERS_SENT / corrupting the stream; just close it.
+        res.end();
+      } else {
         // Anthropic-format error so claude renders a real message instead of a dead stream.
         res.writeHead(502, { "content-type": "application/json" });
         res.end(

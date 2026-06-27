@@ -12,6 +12,8 @@ export interface AwsCredentials {
   secretAccessKey: string;
   /** Present for temporary credentials (STS / instance role); adds x-amz-security-token. */
   sessionToken?: string;
+  /** Epoch ms when temporary credentials expire (from IMDS); used by callers to refresh in time. */
+  expiration?: number;
 }
 
 export interface SignParams {

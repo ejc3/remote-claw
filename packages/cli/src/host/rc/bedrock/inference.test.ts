@@ -11,8 +11,17 @@ class MockRes implements Responder {
     this.status = status;
     this.headers = headers;
   }
-  write(chunk: string | Uint8Array): void {
+  // `backpressure` makes write return false and fire its flush callback on a microtask — exercising the
+  // handler's await-until-flushed path the way a full socket buffer would.
+  backpressure = false;
+  write(chunk: string | Uint8Array, cb?: (err?: Error | null) => void): boolean {
     this.chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    if (this.backpressure) {
+      queueMicrotask(() => cb?.());
+      return false;
+    }
+    cb?.();
+    return true;
   }
   end(chunk?: string | Uint8Array): void {
     if (chunk !== undefined) this.write(chunk);
@@ -76,6 +85,18 @@ describe("BedrockInference.serve", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toBe("text/event-stream");
+    expect(res.body()).toBe(SSE);
+    expect(res.writableEnded).toBe(true);
+  });
+
+  it("streams the full SSE through under backpressure (awaits each flush)", async () => {
+    const { fetchFn } = recordingFetch(
+      new Response(SSE, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    );
+    const inf = new BedrockInference({ region: "us-east-1", fetchFn, resolveAuth: bearerAuth });
+    const res = new MockRes();
+    res.backpressure = true; // every write returns false + flushes on a microtask
+    await inf.serve("/v1/messages", {}, Buffer.from(JSON.stringify({ model: "x" })), res);
     expect(res.body()).toBe(SSE);
     expect(res.writableEnded).toBe(true);
   });

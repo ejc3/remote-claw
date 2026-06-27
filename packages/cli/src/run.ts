@@ -11,6 +11,7 @@ import { deriveIdentity } from "@remote-claw/clawsec";
 import { classifyArgs } from "./args.js";
 import { BrokerClient } from "./broker/client.js";
 import { RC_HELP } from "./help.js";
+import { parseStripKeys } from "./host/rc/bedrock/translate.js";
 import type { DriverContext } from "./host/rc/driver.js";
 import { gitInfo } from "./host/rc/gitinfo.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
@@ -280,11 +281,15 @@ async function runRcLaunchPath(
     undefined;
   const model =
     (typeof rc["rc-bedrock-model"] === "string" ? rc["rc-bedrock-model"] : "").trim() || undefined;
+  // Extra body keys to strip before forwarding to Bedrock (RC_BEDROCK_STRIP_KEYS), for when a specific
+  // model rejects a field claude sends (e.g. output_config/effort) with a hard 400.
+  const stripKeys = parseStripKeys(process.env.RC_BEDROCK_STRIP_KEYS);
   const bedrock =
     inference === "bedrock"
       ? {
           ...(region !== undefined ? { region } : {}),
           ...(model !== undefined ? { modelOverride: model } : {}),
+          ...(stripKeys !== undefined ? { stripKeys } : {}),
         }
       : undefined;
   try {

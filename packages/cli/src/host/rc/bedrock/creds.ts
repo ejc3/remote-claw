@@ -60,12 +60,15 @@ export async function imdsCredentials(timeoutMs = 3000): Promise<AwsCredentials 
       AccessKeyId?: string;
       SecretAccessKey?: string;
       Token?: string;
+      Expiration?: string;
     };
     if (!c.AccessKeyId || !c.SecretAccessKey) return null;
+    const expiration = c.Expiration ? Date.parse(c.Expiration) : Number.NaN;
     return {
       accessKeyId: c.AccessKeyId,
       secretAccessKey: c.SecretAccessKey,
       ...(c.Token ? { sessionToken: c.Token } : {}),
+      ...(Number.isFinite(expiration) ? { expiration } : {}),
     };
   } catch {
     return null; // IMDS not present (not on EC2) / timed out

@@ -114,7 +114,10 @@ export class MitmProxy {
   // ---- CONNECT handling ----
   #onConnect(req: IncomingMessage, clientSocket: Socket, head: Buffer): void {
     const { host, port } = splitAuthority(req.url ?? "");
-    if (host === MITM_HOST) {
+    // Normalize before matching: a CONNECT authority may be upper/mixed-case or carry a FQDN trailing
+    // dot ("api.anthropic.com."). Without this, such a request would miss MITM_HOST and get
+    // blind-tunnelled to the real host — a zero-Anthropic LEAK in bedrock mode.
+    if (host.toLowerCase().replace(/\.$/, "") === MITM_HOST) {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       // Any bytes the client pipelined after the CONNECT line are the START of its TLS ClientHello —
       // push them back onto the RAW socket so the TLS engine consumes them as handshake input.
