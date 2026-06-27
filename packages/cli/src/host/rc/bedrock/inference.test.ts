@@ -77,7 +77,7 @@ describe("BedrockInference.serve", () => {
     const call = calls[0];
     expect(call?.url).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages");
     const headers = call?.init.headers as Record<string, string>;
-    expect(headers["authorization"]).toBe("Bearer btok");
+    expect(headers.authorization).toBe("Bearer btok");
     expect(headers["anthropic-version"]).toBe("2023-06-01");
     expect(headers["anthropic-beta"]).toBe("interleaved-thinking-2025-05-14"); // unsupported beta dropped
     const sentBody = JSON.parse(String(call?.init.body));
@@ -111,7 +111,7 @@ describe("BedrockInference.serve", () => {
       new MockRes(),
     );
     const headers = calls[0]?.init.headers as Record<string, string>;
-    expect(headers["authorization"]).toMatch(/^AWS4-HMAC-SHA256 Credential=id\//);
+    expect(headers.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=id\//);
     expect(headers["x-amz-security-token"]).toBe("stok");
   });
 

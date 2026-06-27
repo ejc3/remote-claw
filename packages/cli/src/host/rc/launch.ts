@@ -156,12 +156,13 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   if (opts.inference === "bedrock") {
     // The child must run as a normal FIRST-PARTY Anthropic claude so /remote-control stays enabled —
     // CLAUDE_CODE_USE_BEDROCK would put it in Bedrock-transport mode, which DISABLES RC. We never set it.
-    // Give it a pretend API key when it has none of its own, so a box with NO Anthropic account still
-    // starts (the MITM validates nothing; inference is served from Bedrock). A real login, if present,
-    // is left untouched. AWS creds are HOST-only — scrub them from the child (it speaks only to our MITM).
-    if (!env.ANTHROPIC_API_KEY) {
-      env.ANTHROPIC_API_KEY = "sk-ant-remote-claw-bedrock-no-account-needed";
-    }
+    // The MITM validates nothing and serves ALL inference from Bedrock, so the child needs no real
+    // Anthropic credential — and in zero-Anthropic mode it must not HOLD one: a hostile MCP that dodged
+    // the proxy could otherwise make a direct, authenticated api.anthropic.com call. So unconditionally
+    // replace any real key with a pretend one and drop the bearer token form. (A login in ~/.claude is
+    // moot — the MITM synthesizes the OAuth/refresh endpoints, so it can't reach the real upstream.)
+    env.ANTHROPIC_API_KEY = "sk-ant-remote-claw-bedrock-no-account-needed";
+    delete env.ANTHROPIC_AUTH_TOKEN;
     // Scrub EVERY AWS_* var so the child can't reach ANY host credential source — not just static keys
     // (AWS_ACCESS_KEY_ID/…), but the container + web-identity channels the AWS SDK chain also honors
     // (AWS_CONTAINER_CREDENTIALS_*, AWS_WEB_IDENTITY_TOKEN_FILE, AWS_ROLE_ARN, AWS_PROFILE, …). On
@@ -170,6 +171,10 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     for (const k of Object.keys(env)) {
       if (k.startsWith("AWS_")) delete env[k];
     }
+    // The scrub above also DELETED any inherited AWS_EC2_METADATA_DISABLED, which would re-open IMDS to
+    // the child. Set it back so a child AWS SDK can't fetch the host's EC2 instance role from
+    // 169.254.169.254 (the static-key/container scrub alone wouldn't stop the IMDS channel).
+    env.AWS_EC2_METADATA_DISABLED = "true";
     delete env.CLAUDE_CODE_USE_BEDROCK;
     delete env.CLAUDE_CODE_USE_VERTEX;
   }

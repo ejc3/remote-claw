@@ -93,6 +93,6 @@ export function signRequest(params: SignParams): Record<string, string> {
   out["x-amz-content-sha256"] = payloadHash;
   if (credentials.sessionToken !== undefined)
     out["x-amz-security-token"] = credentials.sessionToken;
-  out["authorization"] = authorization;
+  out.authorization = authorization;
   return out;
 }

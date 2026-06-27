@@ -6,8 +6,10 @@ synthesis, and the launch wiring are built and unit-tested (CLI suite green). A 
 through `--rc-inference=bedrock` translated `/v1/messages` (model `claude-opus-4-8` →
 `anthropic.claude-opus-4-8`), SigV4-signed it, reached the live mantle endpoint, and claude surfaced
 the Bedrock reply as an Anthropic API response — with **zero api.anthropic.com traffic**. The only
-remaining gate for a *successful* completion (not a 403) is the `bedrock-mantle:CreateInference` IAM
-grant (see Credentials).
+remaining gate for a *successful* completion (not a 403) is **account-level model access** — see
+Credentials for the live-probe ladder (the `bedrock-mantle:CreateInference` IAM action has since been
+granted on this box; the request now reaches model resolution and stops at `aws-marketplace:Subscribe`,
+i.e. the Anthropic model is simply not yet enabled in the account).
 
 ## The goal (verbatim ask)
 
@@ -161,19 +163,30 @@ See Appendix A for the cited request/response facts for both paths.
 - **Simplest: a Bedrock API key.** `AWS_BEARER_TOKEN_BEDROCK=<key>` → the MITM forwards `/v1/messages`
   to `bedrock-mantle` with `Authorization: Bearer`/`x-api-key`, **no AWS SDK, no SigV4**. One env var on
   the host. This is the recommended default for the wrapper.
-- **Or the standard AWS chain** (for SigV4 / IAM shops): `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
-  (+`AWS_SESSION_TOKEN`), `AWS_REGION`, `~/.aws` profile, SSO, or IMDS role — `@anthropic-ai/bedrock-sdk`
-  and `aws4` both resolve these. **Proven against the live endpoint** (`spikes/bedrock-rc/try-mantle.mjs`,
-  2026-06-27): SigV4-signing `bedrock-mantle/anthropic/v1/messages` with this box's IMDS instance-role
-  creds authenticates and reaches Bedrock, which replies in **native Anthropic error format** — so the
-  MITM→mantle transport works. The remaining gap is **one IAM action**: the role lacks
-  `bedrock-mantle:CreateInference` on `arn:aws:bedrock-mantle:<region>:<acct>:project/default` in every
-  Claude region (and `bedrock:InvokeModel` is allowed only in us-west-1, which hosts no Claude models).
-  Granting that action (+ `CountTokens`) in us-east-1/us-west-2 with model access enabled — or a Bedrock
-  API key — unblocks live inference; the translation logic is testable offline regardless.
-- The host already holds these and **never exposes them to the child claude** — same trust boundary as
-  the broker bypass secret (`launch.ts` scrubs host-only secrets from the child env). claude only ever
-  talks to the local MITM.
+- **Or the SigV4 chain** the host resolves itself (no AWS SDK dep): static env creds
+  (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` `+AWS_SESSION_TOKEN`) → the **ECS/EKS container-credentials
+  endpoint** (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`/`_FULL_URI` `+` an optional auth token/file) → the
+  **EC2 instance role via IMDSv2**. `AWS_PROFILE`/SSO/web-identity assume-role are **not** resolved (they
+  need the SDK's full provider chain) — hand such a box an `AWS_BEARER_TOKEN_BEDROCK` or static keys.
+- **The live-probe ladder (this box, `dev-server-role`, updated 2026-06-27)** — each rung is the *next*
+  thing that has to be true, proven by SigV4-signing `bedrock-mantle/anthropic/v1/messages` with the
+  IMDS instance-role creds:
+  1. **Transport/auth** — the request authenticates and reaches Bedrock, which replies in **native
+     Anthropic error format** (not a signature failure). ✅
+  2. **`bedrock-mantle:CreateInference`** on `arn:aws:bedrock-mantle:<region>:<acct>:project/default` —
+     initially denied; **now granted**, so the request gets past inference creation. ✅
+  3. **Account model access** — the *current* wall: every recognized model (us-east-1 resolves
+     `anthropic.claude-opus-4-8`, `…-4-7`, `anthropic.claude-haiku-4-5`; other regions/ids 404) returns
+     `403 … aws-marketplace:Subscribe … is not authorized` — the Anthropic model is **not yet enabled in
+     the account**. Fix: enable model access for an Anthropic model in the Bedrock console (us-east-1),
+     **or** grant the role `aws-marketplace:Subscribe` so first-use auto-subscribes. ⛔
+  4. **A successful completion** — unblocked once rung 3 is satisfied (or via a Bedrock API key tied to a
+     principal with model access). The translation/sign/transport logic is proven; only enablement remains.
+- The host holds these and **never exposes them to the child claude**. In `--rc-inference=bedrock` the
+  child env is hardened beyond the usual scrub: any real `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` is
+  replaced with a pretend key, **every** `AWS_*` var is dropped, and `AWS_EC2_METADATA_DISABLED=true` is
+  set so a hostile child/MCP can reach neither api.anthropic.com nor the host's IMDS role. claude only
+  ever talks to the local MITM.
 
 ## Wiring into the CLI (proposed)
 

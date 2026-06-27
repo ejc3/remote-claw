@@ -69,14 +69,14 @@ export function translateMessagesBody(raw: string, opts: TranslateOptions = {}):
     throw new Error("messages body is not a JSON object");
   }
   const obj = parsed as Record<string, unknown>;
-  const claudeModel = typeof obj["model"] === "string" ? obj["model"] : "";
+  const claudeModel = typeof obj.model === "string" ? obj.model : "";
   const model = mantleModelId(claudeModel, opts.modelOverride);
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
     if (STRIP_BODY_KEYS.has(k) || opts.extraStripKeys?.has(k)) continue;
     out[k] = v;
   }
-  out["model"] = model;
+  out.model = model;
   return { body: JSON.stringify(out), model };
 }
 
