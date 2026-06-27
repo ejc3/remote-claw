@@ -81,7 +81,15 @@ function stripMantleRejectedNested(value: unknown): void {
   if (value === null || typeof value !== "object") return;
   const obj = value as Record<string, unknown>;
   const cc = obj.cache_control;
-  if (cc !== null && typeof cc === "object" && !Array.isArray(cc)) {
+  // Only Anthropic's prompt-cache breakpoint — `{type:"ephemeral", …}` — carries the rejected `scope`.
+  // Gate on `type==="ephemeral"` so we never touch an arbitrary `cache_control` a tool/user payload
+  // happens to carry (which could legitimately have its own `scope`), corrupting their data.
+  if (
+    cc !== null &&
+    typeof cc === "object" &&
+    !Array.isArray(cc) &&
+    (cc as Record<string, unknown>).type === "ephemeral"
+  ) {
     delete (cc as Record<string, unknown>).scope;
   }
   for (const v of Object.values(obj)) stripMantleRejectedNested(v);

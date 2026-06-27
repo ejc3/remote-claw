@@ -66,6 +66,12 @@ describe("bedrockRegion", () => {
     expect(bedrockRegion()).toBe("us-west-2");
     expect(bedrockRegion("ap-south-1")).toBe("ap-south-1");
   });
+
+  it("lowercases the region (AWS requires it in the host + SigV4 scope)", () => {
+    expect(bedrockRegion("US-EAST-1")).toBe("us-east-1");
+    env.AWS_REGION = "EU-West-1";
+    expect(bedrockRegion()).toBe("eu-west-1");
+  });
 });
 
 describe("containerCredentials", () => {
