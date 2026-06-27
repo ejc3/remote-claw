@@ -9,6 +9,7 @@ import type { Identity } from "@remote-claw/clawsec";
 import { BrokerClient } from "../../broker/client.js";
 import { securityProvider } from "../../security/provider.js";
 import { tracerFromEnv } from "../../trace.js";
+import type { BedrockConfig } from "./bedrock/inference.js";
 import { ensureCerts } from "./certs.js";
 import { bridgeSession } from "./drivers/bridge.js";
 import { type GitInfo, gitInfo } from "./gitinfo.js";
@@ -49,6 +50,12 @@ export interface RcLaunchOptions {
   fetchFn?: typeof fetch;
   /** Notified when a session registers (tests/observability). */
   onSession?: (s: Session) => void;
+  /** Where inference goes: "anthropic" (default — pass `/v1/messages` through to the real upstream) or
+   *  "bedrock" (translate to Amazon Bedrock + synthesize the rest of the Anthropic control plane, so the
+   *  child reaches NO real api.anthropic.com). */
+  inference?: "anthropic" | "bedrock";
+  /** Bedrock config (region/model/auth), used only when `inference==="bedrock"`. */
+  bedrock?: BedrockConfig;
 }
 
 /**
@@ -91,6 +98,8 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     leafKey: certs.leafKey,
     core,
     tracer: mitmTracer,
+    ...(opts.inference !== undefined ? { inference: opts.inference } : {}),
+    ...(opts.bedrock !== undefined ? { bedrock: opts.bedrock } : {}),
     onSession: (s) => {
       opts.onSession?.(s);
       // Each RC session the child opens gets its own relay, bridged to the broker until the wrapper
@@ -143,6 +152,23 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   // session id when it enables /remote-control.
   delete env.CLAUDE_CODE_CHILD_SESSION;
   delete env.CLAUDE_CODE_SESSION_ID;
+
+  if (opts.inference === "bedrock") {
+    // The child must run as a normal FIRST-PARTY Anthropic claude so /remote-control stays enabled —
+    // CLAUDE_CODE_USE_BEDROCK would put it in Bedrock-transport mode, which DISABLES RC. We never set it.
+    // Give it a pretend API key when it has none of its own, so a box with NO Anthropic account still
+    // starts (the MITM validates nothing; inference is served from Bedrock). A real login, if present,
+    // is left untouched. AWS creds are HOST-only — scrub them from the child (it speaks only to our MITM).
+    if (!env.ANTHROPIC_API_KEY) {
+      env.ANTHROPIC_API_KEY = "sk-ant-remote-claw-bedrock-no-account-needed";
+    }
+    delete env.AWS_BEARER_TOKEN_BEDROCK;
+    delete env.AWS_ACCESS_KEY_ID;
+    delete env.AWS_SECRET_ACCESS_KEY;
+    delete env.AWS_SESSION_TOKEN;
+    delete env.CLAUDE_CODE_USE_BEDROCK;
+    delete env.CLAUDE_CODE_USE_VERTEX;
+  }
 
   try {
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);

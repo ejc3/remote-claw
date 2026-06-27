@@ -30,6 +30,13 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // call). Omitted ⇒ the broker's default; the host learns effective durability from the server.
   // Must match what viewers subscribe with — publish + subscribe for one channel address the same store.
   "rc-backend": "value",
+  // Where inference goes (mitm driver only): "anthropic" (default — pass /v1/messages through to the
+  // real upstream) or "bedrock" (translate to Amazon Bedrock + synthesize the rest of the Anthropic
+  // control plane, so the child reaches NO api.anthropic.com — native RC stays on, all inference on
+  // Bedrock). Env RC_INFERENCE. Bedrock region/model via --rc-bedrock-region / --rc-bedrock-model.
+  "rc-inference": "value",
+  "rc-bedrock-region": "value",
+  "rc-bedrock-model": "value",
   // Which capture/inject driver runs the harness: mitm (default — real claude behind our MITM),
   // tmux (plain claude in a tmux pane; provider-agnostic, Bedrock-capable), or opencode (drive
   // `opencode serve`). Same broker/client/viewer for all (§ pluggable-harness).

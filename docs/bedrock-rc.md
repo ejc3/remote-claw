@@ -1,6 +1,13 @@
 # Bedrock-backed Remote Control — drive the real claude TUI with **zero Anthropic API**, all inference on Bedrock
 
-**Status:** exploration + proven feasibility spike (2026-06-27). Not yet productized.
+**Status:** **implemented** as `--rc-inference=bedrock` and proven end-to-end against the real `claude`
++ live Bedrock (2026-06-27). The native `bedrock-mantle` path, the SigV4/bearer auth, the control-plane
+synthesis, and the launch wiring are built and unit-tested (CLI suite green). A real `claude --print`
+through `--rc-inference=bedrock` translated `/v1/messages` (model `claude-opus-4-8` →
+`anthropic.claude-opus-4-8`), SigV4-signed it, reached the live mantle endpoint, and claude surfaced
+the Bedrock reply as an Anthropic API response — with **zero api.anthropic.com traffic**. The only
+remaining gate for a *successful* completion (not a 403) is the `bedrock-mantle:CreateInference` IAM
+grant (see Credentials).
 
 ## The goal (verbatim ask)
 

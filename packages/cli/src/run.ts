@@ -140,6 +140,9 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-app" &&
       n !== "rc-backend" &&
       n !== "rc-driver" &&
+      n !== "rc-inference" &&
+      n !== "rc-bedrock-region" &&
+      n !== "rc-bedrock-model" &&
       n !== "rc-oc-url" &&
       n !== "rc-oc-model" &&
       n !== "rc-oc-session" &&
@@ -261,6 +264,29 @@ async function runRcLaunchPath(
     (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
     (process.env.RC_BACKEND ?? "").trim() ||
     undefined;
+  // Inference target: --rc-inference / RC_INFERENCE, default "anthropic" (pass through). "bedrock"
+  // routes /v1/messages to Amazon Bedrock and synthesizes the rest — zero api.anthropic.com.
+  const inferenceRaw =
+    (typeof rc["rc-inference"] === "string" ? rc["rc-inference"] : "").trim() ||
+    (process.env.RC_INFERENCE ?? "").trim() ||
+    "anthropic";
+  const inference = inferenceRaw.toLowerCase();
+  if (inference !== "anthropic" && inference !== "bedrock") {
+    warn(`remote-claw: unknown --rc-inference=${inferenceRaw} (expected anthropic | bedrock)\n`);
+    return 2;
+  }
+  const region =
+    (typeof rc["rc-bedrock-region"] === "string" ? rc["rc-bedrock-region"] : "").trim() ||
+    undefined;
+  const model =
+    (typeof rc["rc-bedrock-model"] === "string" ? rc["rc-bedrock-model"] : "").trim() || undefined;
+  const bedrock =
+    inference === "bedrock"
+      ? {
+          ...(region !== undefined ? { region } : {}),
+          ...(model !== undefined ? { modelOverride: model } : {}),
+        }
+      : undefined;
   try {
     await ensureIdentity(secretPath); // local, idempotent — create on first run, no network
     const { secret } = await loadSecret(secretPath);
@@ -273,6 +299,8 @@ async function runRcLaunchPath(
       claudeBin: bin,
       spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
       ...(backend !== undefined ? { backend } : {}),
+      inference,
+      ...(bedrock !== undefined ? { bedrock } : {}),
     });
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);
