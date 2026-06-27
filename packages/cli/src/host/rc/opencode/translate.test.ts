@@ -86,7 +86,7 @@ describe("partToBlocks", () => {
     });
   });
 
-  it("drops step/snapshot/patch/agent/retry/compaction/file/subtask/unknown parts", () => {
+  it("drops step/snapshot/patch/agent/retry/compaction/file/unknown parts", () => {
     for (const t of [
       "step-start",
       "step-finish",
@@ -96,11 +96,46 @@ describe("partToBlocks", () => {
       "retry",
       "compaction",
       "file",
-      "subtask",
       "totally-new",
     ]) {
       expect(partToBlocks({ type: t, id: "prt_x" })).toEqual({ assistant: [], toolResults: [] });
     }
+  });
+
+  it("maps a subtask part → a Task tool_use anchor (id = the part id; no tool_result)", () => {
+    // Shape verified against the live server's GET /doc SubtaskPart schema.
+    const out = partToBlocks({
+      type: "subtask",
+      id: "prt_sub1",
+      agent: "explore",
+      description: "scout the auth flow",
+      prompt: "find every call site of login()",
+    });
+    expect(out.toolResults).toEqual([]); // the child session's nested output is the "result", not a block
+    expect(out.assistant).toEqual([
+      {
+        type: "tool_use",
+        name: "Task",
+        id: "prt_sub1",
+        input: {
+          subagent_type: "explore",
+          description: "scout the auth flow",
+          prompt: "find every call site of login()",
+        },
+      },
+    ]);
+  });
+
+  it("tolerates a subtask part missing optional fields (agent/description/prompt → empty strings)", () => {
+    const out = partToBlocks({ type: "subtask", id: "prt_sub2" });
+    expect(out.assistant).toEqual([
+      {
+        type: "tool_use",
+        name: "Task",
+        id: "prt_sub2",
+        input: { subagent_type: "", description: "", prompt: "" },
+      },
+    ]);
   });
 });
 

@@ -219,7 +219,16 @@ export class OpencodeClient {
    * framing; non-JSON / comment (`:keepalive`) lines are skipped. CRLF-safe (review #4): a frame may be
    * separated by `\r\n\r\n` OR `\n\n`, and individual lines by `\r\n`/`\n`/`\r`.
    */
-  async *events(sessionId: string, signal: AbortSignal): AsyncGenerator<OpencodeEvent> {
+  async *events(
+    want: string | ((id: string | undefined) => boolean),
+    signal: AbortSignal,
+  ): AsyncGenerator<OpencodeEvent> {
+    // `want` selects which session(s) this connection delivers: a single id (the common case) OR a
+    // predicate (the driver passes one so it can FOLLOW child sub-agent sessions discovered live — #102).
+    const isPredicate = typeof want === "function";
+    const wantSession = isPredicate
+      ? (want as (id: string | undefined) => boolean)
+      : (id: string | undefined) => id === want;
     const res = await this.#fetch(`${this.#baseUrl}/event`, {
       headers: this.#headers(false),
       signal,
@@ -258,8 +267,15 @@ export class OpencodeClient {
             // must NOT be delivered — otherwise it would fan out to EVERY bridged session/driver on this
             // server-wide stream (codex review). Drop it.
             if (!obj.type.startsWith("server.")) continue;
-          } else if (evSession !== sessionId) {
-            continue; // a different session's event
+          } else if (!wantSession(evSession)) {
+            // A session this connection doesn't (yet) follow. EXCEPTION: `session.created` is a DISCOVERY
+            // event — a predicate consumer (the driver FOLLOWS child sub-agent sessions, #102) can only
+            // learn a child exists FROM its own session.created, whose `sessionID` is the not-yet-followed
+            // child. Gating that by the very follow-set it would update is circular, so always deliver
+            // session.created to a predicate consumer; a fixed single-session (string) subscription stays
+            // strictly scoped (it never wants foreign sessions). The driver's handler still ignores a
+            // session.created whose parentID isn't one it follows, so this can't over-follow.
+            if (!(isPredicate && obj.type === "session.created")) continue;
           }
           yield obj;
         }

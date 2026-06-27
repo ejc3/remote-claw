@@ -107,6 +107,55 @@ describe("OpencodeClient.events (server-wide stream → per-session filter)", ()
     expect(got).toEqual(["message.part.updated", "message.updated"]);
   });
 
+  it("a PREDICATE subscription receives session.created for a NOT-yet-followed session (discovery), but still gates other events", async () => {
+    // The sub-agent follow path (#102): the driver passes a predicate over its live follow-set. A child
+    // session's `session.created` carries the CHILD's own id at properties.sessionID — which the driver
+    // does NOT yet follow (it learns to follow FROM this very event). Gating it by the follow-set would be
+    // circular, so the client delivers session.created to a predicate consumer regardless; every OTHER
+    // event stays gated. Prove: child session.created passes, child message.updated drops, main passes.
+    const followed = new Set<string>(["ses_main"]);
+    const c = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: streamingFetch([
+        frame({
+          type: "session.created",
+          properties: {
+            sessionID: "ses_child",
+            info: { id: "ses_child", parentID: "ses_main", agent: "explore" },
+          },
+        }), // not followed → KEEP (discovery)
+        frame({ type: "message.updated", properties: { sessionID: "ses_child", info: {} } }), // not followed → DROP
+        frame({ type: "message.updated", properties: { sessionID: "ses_main", info: {} } }), // followed → KEEP
+      ]),
+    });
+    const got: string[] = [];
+    for await (const ev of c.events(
+      (id) => id !== undefined && followed.has(id),
+      new AbortController().signal,
+    )) {
+      got.push(`${ev.type}:${ev.properties?.sessionID}`);
+    }
+    expect(got).toEqual(["session.created:ses_child", "message.updated:ses_main"]);
+  });
+
+  it("a STRING (single-session) subscription stays strictly scoped — no foreign session.created leaks in", async () => {
+    // The discovery exception is scoped to PREDICATE consumers; a fixed single-session subscription never
+    // wants foreign sessions, so a session.created for another session must NOT leak to it.
+    const c = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: streamingFetch([
+        frame({
+          type: "session.created",
+          properties: { sessionID: "ses_OTHER", info: { id: "ses_OTHER" } },
+        }), // foreign → DROP
+        frame({ type: "message.updated", properties: { sessionID: "ses_1", info: {} } }), // ours → KEEP
+      ]),
+    });
+    const got: string[] = [];
+    for await (const ev of c.events("ses_1", new AbortController().signal)) got.push(ev.type);
+    expect(got).toEqual(["message.updated"]);
+  });
+
   it("derivation precedence: the TOP-LEVEL sessionID is authoritative over a conflicting nested one", async () => {
     // The derivation is sessionID ?? part.sessionID ?? info.sessionID — top-level wins. A (malformed)
     // event with OUR id at top level but a different id nested is KEPT for us; a foreign top-level id is
