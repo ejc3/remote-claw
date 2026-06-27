@@ -1,9 +1,12 @@
 # Ephemeral one-time credential handoff (OTK)
 
-**Status:** **SHIPPED** — PR1 (clawsec `handoff.ts`), PR2 (zero-knowledge `HandoffStore` + `/api/handoff`),
-PR3 (QR `otk1_` + web client + §3.6 non-extractable storage). Research-grounded (8-angle workflow) **and
-adversarially reviewed** (codex + 7-dimension red-team on the design; codex + `/code-review` per PR; all
-resolutions in §8). The §1 invariant was honestly scoped after review.
+**Status:** **SHIPPED (code)** — PR1 (clawsec `handoff.ts`), PR2 (zero-knowledge `HandoffStore` +
+`/api/handoff`), PR3 (QR `otk1_` + web client + §3.6 non-extractable storage). Research-grounded (8-angle
+workflow) **and adversarially reviewed** (codex + 7-dimension red-team on the design; codex + `/code-review`
+per PR; all resolutions in §8). The §1 invariant was honestly scoped after review. **One v1 must-have is NOT a
+repo artifact:** the WAF rate-limit rule (§3.3, must-have #5) is an infra deploy-gate provisioned out-of-band
+via the Vercel Firewall — no test/CI can assert it exists — so the route is not deploy-safe until it is
+provisioned and verified by hand.
 **Goal:** replace the *forever pass embedded in the QR* with a **one-time, short-TTL bootstrap token**, so the
 handoff store is — to an *honest-but-curious* broker, a DB dump, or a passive log/edge observer — a store it
 **cannot read**, that yields a blob to **one** caller **once**.
@@ -71,22 +74,38 @@ to review, with round-trip / wrong-OTK / tamper / wrong-version tests.
 
 `HandoffStore` (`apps/web/lib/broker/handoff-store.ts`), **separate** from the per-session frames DBs and the
 per-identity bus DB (coupling to the bus DB would force the broker to learn the identity; the frames log
-never partial-deletes). Schema: `handoff(id TEXT PRIMARY KEY, proof_hash BLOB NOT NULL, ct BLOB NOT NULL,
-expires_at INTEGER NOT NULL)` + index on `expires_at`.
+never partial-deletes). Schema: `handoff(id TEXT PRIMARY KEY, proof_hash TEXT NOT NULL, ct TEXT NOT NULL,
+expires_at INTEGER NOT NULL)` + index on `expires_at` (`id`/`proof_hash`/`ct` are stored as **hex TEXT** — the
+OTK never reaches the server, so the bytes it does store are hex-encoded one-way hashes + an opaque box).
 
 - **Cloud primary only.** Selected by the broker's env switch via `DbLocator.handoffConfig()` → a dedicated
-  Turso DB **`rc-<scope>-hx`** (note: a **non-`rc-<scope>-` -session-shaped name** so the dev/CI `dropScope`
-  prefix sweep does not nuke it — review fix; give it its own cleanup). The atomic guarantee holds only on a
-  single remote primary write path, so **fail closed on Vercel / file mode** (no `file:` handoff store on
-  serverless — it's per-instance ephemeral). Add a two-client concurrent-Turso test proving exactly-one-winner.
-- **Atomic burn = one statement, burn-on-touch:** `DELETE FROM handoff WHERE id=?1 AND proof_match RETURNING
-  ct, expires_at` — delete unconditionally on a valid `id`+proof, then the app **discards `ct` if
+  Turso DB **`rc-<scope>-hx`**. The `-hx` suffix is distinct from the per-session *kinds* (`s`/`b`/`x`), so it
+  is **not** a per-session db — but it deliberately **shares the `rc-<scope>-` prefix**, so the dev/CI
+  `dropScope` sweep reclaims it alongside the scope's session dbs. That is desirable and **prod-safe**:
+  `dropScope` runs only behind the dev gate (`api/dev/sweep`, which refuses to run on a production deploy) and
+  only ever names dbs in the deploy's **own** scope — and a preview/dev/CI deploy's scope is `pr-<sha>`/`dev`,
+  never `prod` (which takes an explicit `RC_TURSO_DB_SCOPE=prod` opt-in), so it doesn't touch the prod handoff
+  db. No separate handoff cleanup is needed. The atomic
+  guarantee holds only on a single remote primary write path, so **fail closed on Vercel / file mode** (no
+  `file:` handoff store on serverless — it's per-instance ephemeral). A two-client concurrent test (file
+  libSQL — the same atomic `DELETE…RETURNING` engine as Turso) proves exactly-one-winner.
+- **Atomic burn = one statement, burn-on-touch:** `DELETE FROM handoff WHERE id=? AND proof_hash=? RETURNING
+  ct, expires_at` — delete unconditionally on a matching `id`+`proof_hash`, then the app **discards `ct` if
   `expires_at ≤ now`** (so an expired row is burned even before the sweep). Exactly one of two concurrent
-  claims wins. **Never** SELECT-then-DELETE. `proof_match` = constant-time compare of `SHA256(claimProof)`
-  against the stored `proof_hash` (§3.3). Reuse `sqlite-multi.ts` `withWriteLock`/`runWriteTransaction`.
-- **Frequent dedicated sweep** (review fix): a **separate cron** (e.g. `*/5 * * * *`) running
-  `DELETE FROM handoff WHERE expires_at<=now` — NOT the once-daily, sqlite-gated session-retention cron — plus
-  opportunistic delete on each PUT. Document that backups/WAL/PITR are non-erasing (only undecryptable bytes).
+  claims wins. **Never** SELECT-then-DELETE — which is *why* the proof match is a plain SQL equality on
+  `proof_hash` rather than a JS `timingSafeEqual`: the match lives inside the single `DELETE`, and the
+  comparand is a 256-bit SHA-256 the attacker cannot iteratively approach, so the equality is not a usable
+  timing oracle (a constant-time primitive would buy nothing and would force the forbidden read-then-compare).
+  No app-level lock is needed: `claim` is one `client.execute()` and `put` is one `client.batch(…, "write")`
+  (libSQL `"write"` opens a `BEGIN IMMEDIATE` transaction), and the dedicated handoff DB has its own client, so
+  libSQL serializes the writes on the single primary.
+- **Frequent dedicated sweep** (review fix): a **separate cron** (`*/5 * * * *` in `apps/web/vercel.json`)
+  running `DELETE FROM handoff WHERE expires_at<=now` — NOT the once-daily, sqlite-gated session-retention
+  cron — plus an **opportunistic delete batched into every PUT** (`HandoffStore.put` runs the expiry-delete in
+  the same write transaction as the insert), so writes reap expired rows even if the cron is degraded. ⚠️ the
+  `*/5` cron needs Vercel **Pro** — Hobby silently downgrades sub-daily crons to daily, which is exactly the
+  "vercel-default" 24h-persistence failure this guards against, so the PUT-time reaper is the floor on Hobby.
+  Document that backups/WAL/PITR are non-erasing (only undecryptable bytes).
 
 ### 3.3 Endpoints — `apps/web/app/api/handoff/route.ts` (an unauthenticated high-entropy *capability* endpoint)
 
@@ -99,9 +118,10 @@ expires_at INTEGER NOT NULL)` + index on `expires_at`.
   gated on `SHA256(proof) == proof_hash` matched **inside the single `DELETE … WHERE id=? AND proof_hash=?`**
   (a 256-bit hash key, so the equality is not a usable timing oracle) → `{box}` or a **uniform `404`**. Claim is **POST, never GET**. The
   **full non-success contract is fail-closed and uniform**: absent / expired / already-claimed / **bad proof**
-  → identical opaque `404`; malformed `{id}`/over-size → `400`; backend fault (SQLITE_BUSY, create→serve race
-  #346, etc.) → `500` with **no body detail**. `Cache-Control: no-store`. Constant-time id+proof handling
-  (`timingSafeEqual`).
+  → identical opaque `404`; malformed `{id}` → `400`; **over-cap body → `413`** (PUT and POST alike); backend
+  fault (SQLITE_BUSY, create→serve race #346, etc.) → `500` with **no body detail**. `Cache-Control:
+  no-store`. The id+proof match is the in-`DELETE` SQL equality from §3.2 (no JS `timingSafeEqual`, and none
+  is needed — it compares 256-bit SHA-256 values, not a usable timing oracle).
 - **The proof closes the edge-pre-burn (review CONFIRMED):** the claim presents `claimProof`; the server stores
   only `SHA256(claimProof)`. A TLS-terminating edge/log that sees only `id = SHA256(OTK)` **cannot** burn or
   claim (it lacks `claimProof`, which needs OTK). This is **mandatory in v1** (no longer deferred).
@@ -109,24 +129,37 @@ expires_at INTEGER NOT NULL)` + index on `expires_at`.
   gate. Abuse bounded by: the pre-parse size cap, a **mandatory Vercel WAF rate-limit rule** on
   `path=/api/handoff` keyed on the platform-trusted client IP (per-IP token bucket + a low global ceiling —
   *enumerated as a v1 must-have, not prose*), the short TTL, single-read, and the dedicated Turso DB so PUT
-  write-contention can't touch session frames.
+  write-contention can't touch session frames. **Abuse telemetry lives at the edge, not the app:** the WAF
+  dashboard (claim-rate, per-IP throttle hits, brute-force volume) is where §4's online-attack guarantees are
+  observed. The serverless route deliberately does **not** log per-claim outcomes (the `id` is public and a
+  per-instance function has no actionable signal); a backend fault returns an opaque `500` and self-heals the
+  cached client, and store-build failures are logged server-side (`handoff-store.ts`).
 
 ### 3.4 QR + web client (with a user gesture and binding)
 
-- `qr.ts`/`pass.ts`: with `--rc-app <origin>`, `runPass` mints OTK, seals the pass (+ a short **host
-  fingerprint/title** for binding), `PUT`s `{id, proof_hash, ct}`, and the QR carries `<origin>/#otk1_<OTK>`.
-  On a `409` it **re-mints and retries**. **Raw-pass output becomes an explicit legacy/export mode** and the
-  `rcp1_` **QR/deep-link path is dropped** (keeps "replace" real; a bare pass still prints for piping with a
-  hard warning). Optional host-side **interception detection**: a non-consuming `lookup` poll of its own `id`;
-  if the row is gone before the phone confirms → alarm + re-mint (delivers §4's "detectable").
+- `qr.ts`/`pass.ts`: with `--rc-app <origin>`, `runPass` mints OTK, seals the **bare pass** (no separate
+  fingerprint field — the pass *determines* the host's `identity_id`, recomputed from its `authToken` on
+  parse, which **is** the binding value; see the web client below), `PUT`s `{id, proof_hash, ct}`, and the QR
+  carries `<origin>/#otk1_<OTK>`.
+  On a `409` it **re-mints and retries**. **Raw-pass output becomes an explicit legacy/export mode:** the
+  forever `#rcp1_` **deep-link** QR is dropped (fail closed — a failed handoff upload renders *no* QR, never an
+  `#rcp1_` fallback), though `--rc-qr` **without** `--rc-app` still renders the **bare pass** as a QR for
+  manual entry (the original behavior, not a deep link), and the bare pass still prints (default mode under a
+  hard live-credential warning; `--rc-quiet` prints only the pass, for piping). Host-side **interception
+  detection** (a non-consuming `lookup` poll of its own `id` →
+  alarm + re-mint if the row vanishes before the phone confirms) is a **deferred follow-up**, not in v1: the
+  route exposes no lookup verb. In v1, §4's "detectable" is delivered **viewer-side** (next bullet).
 - Web client (`app/page.tsx`): on an `otk1_` fragment, **strip it immediately** (`history.replaceState`), then
   **require an explicit user gesture** ("Pair this device") **before** the destructive POST claim — so a
-  webview/prefetch/unfurler that runs JS can't auto-burn it. Show the **host fingerprint/title (binding) for
-  the user to confirm** before trusting the resolved pass (anti-QR-swap; RFC 8628/CIBA `binding_message`).
-  After a successful claim, **decrypt, then store the credential as non-extractable WebCrypto `CryptoKey`s in
-  IndexedDB** (see §3.6) — never the raw pass; never the OTK. Serve the route with `Referrer-Policy:
-  no-referrer` + the existing strict exfil-blocking CSP. Back-compat: still *accept* a pasted `#rcp1_` for one
-  release (with a deprecation warning), but do not *emit* it.
+  webview/prefetch/unfurler that runs JS can't auto-burn it. After the claim, **reveal the resolved pass's
+  `identity_id`** for the user to confirm against the host's `--rc-pass` output **before the credential is
+  trusted/used** (the binding — anti-QR-swap; RFC 8628/CIBA `binding_message`). The confirm is necessarily
+  *after* the claim (the binding value lives inside the sealed box) but *before* connect; if it fails to match,
+  the user re-pairs (this is v1's viewer-side "detectable"). After a successful claim+confirm, **decrypt, then
+  store the credential as non-extractable WebCrypto `CryptoKey`s in IndexedDB** (see §3.6) — never the raw
+  pass; never the OTK. Serve the route with `Referrer-Policy: no-referrer` + the existing strict
+  exfil-blocking CSP. Back-compat: still *accept* a pasted/opened `#rcp1_` for one release (the viewer
+  classifies it as a pass and prefills the manual-entry field), but do not *emit* it.
 
 ### 3.5 What the OTK delivers (scope) — explicit decision
 
@@ -167,8 +200,8 @@ tab-scoped (sessionStorage) ciphertext, so `exportKey()` throws and a storage du
 | Honest-but-curious broker / DB+backup dump | holds only routed ciphertext | holds only `id` + `proof_hash` + an **undecryptable** blob (≥2¹²⁸ to invert) |
 | **Compromised code/edge broker** | serves the app | **NOT defended** — can ship malicious JS to read the fragment + decrypt (§1 limit; needs native client) |
 | Edge/logs **correlation** | n/a | broker learns a handoff *exists* and can **correlate it to an identity** via claim **IP/timing** + the subsequent Bearer relay request (the *row* has no identity; the *traffic* does) |
-| Pre-emptive claim / unfurler / prefetch | n/a | needs `claimProof` (⇒ OTK) to burn ⇒ edge-only observer can't; POST + user-gesture stop bots; re-mint on lockout |
-| Online brute-force of `id` | n/a | 256-bit + WAF rate-limit + uniform 404 ⇒ infeasible |
+| Pre-emptive claim / unfurler / prefetch | n/a | needs `claimProof` (⇒ OTK) to burn ⇒ edge-only observer can't; POST + user-gesture stop bots; a failed legit claim is **detectable** viewer-side ("already used" → re-pair) and the host re-mints on lockout |
+| Online brute-force of `id` | n/a | 256-bit `id` + uniform 404 ⇒ **structurally** infeasible (these ship in-repo); the WAF rate-limit (infra deploy-gate, §3.3) is DoS/abuse defense-in-depth on top |
 | Malicious/compromised **viewer** post-claim | full forever credential | exfiltration blocked by §3.6 non-extractable storage; *use-while-resident* unchanged (→ §3.5(a)) |
 
 **Net:** a clear win for the leaked-QR / history / shoulder-surf / lost-phone threats and it removes the
@@ -182,9 +215,16 @@ guarantees move from *structural* (secret never sent) to *operational* (atomicit
 **v1 must-haves (the net-security claim is conditional on ALL of these):** (1) atomic burn-on-touch on the
 **cloud primary** (fail closed on Vercel/file); (2) **256-bit OTK**, distinct-PRF `id`/`wrapKey`/`claimProof`;
 (3) **mandatory claim proof-of-OTK**; (4) **dedicated frequent sweep** + read-time expiry; (5) **mandatory
-WAF rate-limit** + uniform fail-closed responses + pre-parse size cap; (6) **user gesture before claim** +
-**binding fingerprint** confirmation; (7) **non-extractable CryptoKey + IndexedDB** for the resolved
-credential; (8) PUT `409`-on-conflict with host re-mint.
+WAF rate-limit** (uniform fail-closed responses + pre-parse size cap are in-repo, but the **rate-limit rule
+itself is an out-of-band infra deploy-gate** — see below); (6) **user gesture before claim** +
+**`identity_id` binding** confirmation (the host's identity, recomputed from the pass's `authToken`); (7)
+**non-extractable CryptoKey + IndexedDB** for the resolved credential; (8) PUT `409`-on-conflict with host
+re-mint.
+
+> **#5 is the one must-have not in the repo.** A per-IP/global rate-limit can't live in `vercel.json` and no
+> test/CI can assert it exists; it is provisioned via the Vercel Firewall (dashboard/API) and must be verified
+> by hand. So "the net-security claim is conditional on ALL must-haves" includes a step the codebase cannot
+> self-check: treat the WAF rule as a release gate, not a shipped artifact (mirrors `route.ts`'s deploy-gate note).
 
 - **No PAKE** (high-entropy OTK ⇒ SPAKE2 adds EC-correctness surface for zero gain; NIST SP 800-63B).
 - **TTL = 10 min, configurable**, hard-capped; shorter is safer (it's the leaked-QR window).
@@ -209,13 +249,16 @@ PrivateBin (#174), Snappass; anti-patterns: OneTimeSecret/Password Pusher (serve
    `sealHandoff`/`openHandoff` (versioned box, AAD), `formatOtk`/`parseOtk`; round-trip / wrong-OTK / tamper /
    wrong-version tests.
 2. **PR2 — store + locator + route** (dormant): cloud-primary `HandoffStore` (fail-closed on Vercel/file) +
-   `DbLocator.handoffConfig()` (the `rc-<scope>-hx` non-session name) + `PUT`/`POST /api/handoff` (proof-gated
-   atomic burn, uniform fail-closed contract, pre-parse cap, 409); dedicated handoff sweep cron + WAF rule;
-   concurrent-Turso atomic test; contract tests.
-3. **PR3 — QR + web client** (flips default): `--rc-app` emits `#otk1_…` (re-mint on 409); legacy raw-pass
-   export mode (drop `rcp1_` QR/deep-link emission, accept-only one release); web client = strip-fragment →
-   user-gesture → binding-confirm → claim → **non-extractable CryptoKey + IndexedDB**; `no-referrer` + CSP.
-   Live e2e: scan → confirm → claim → viewer loads; second scan → "already used"; edge-only `id` can't burn.
+   `DbLocator.handoffConfig()` (the dedicated, non-per-session `rc-<scope>-hx` name) + `PUT`/`POST /api/handoff`
+   (proof-gated atomic burn, uniform fail-closed contract, pre-parse cap, 409); dedicated handoff sweep cron
+   (`vercel.json`) + PUT-time opportunistic reaper; two-client concurrent atomic test; contract tests. (The
+   **WAF rate-limit rule is out-of-band infra**, provisioned in the Vercel Firewall — not code in this PR.)
+3. **PR3 — QR + web client** (flips default): `--rc-app` emits `#otk1_…` (re-mint on 409); the forever
+   `#rcp1_` **deep-link** QR is dropped (fail-closed; a bare-pass QR for manual entry still renders when no
+   `--rc-app` origin is given, and the legacy `#rcp1_` fragment is accepted for one release); web client =
+   strip-fragment → user-gesture → binding-confirm → claim → **non-extractable CryptoKey + IndexedDB**;
+   `no-referrer` + CSP. Live e2e: scan → confirm → claim → viewer loads; second scan → "already used";
+   edge-only `id` can't burn.
 
 ## 8. Adversarial review (recorded)
 
@@ -230,14 +273,20 @@ written" — it overclaimed.* This revision applies the survivors. Key resolutio
 - **[HIGH/CONFIRMED] edge sees `SHA256(OTK)` ⇒ pre-burn/substitute** → claim proof-of-OTK **mandatory v1**
   (§3.1/§3.3).
 - **[HIGH/CONFIRMED] TTL not physically enforced (daily cron)** → burn-on-touch `DELETE…RETURNING` + discard
-  expired + **dedicated frequent sweep** (§3.2).
+  expired + **dedicated frequent sweep** + a **PUT-time opportunistic reaper** (the floor when the `*/5` cron
+  is unavailable, e.g. Vercel Hobby) (§3.2).
 - **[HIGH/CONFIRMED] handoff↔identity correlation via IP/timing** → §1/§4 scoped honestly (row has no
   identity; traffic does).
-- **[MEDIUM] atomic burn only on cloud primary** → fail-closed on Vercel/file + concurrent-Turso test (§3.2);
-  **dropScope prefix would nuke the handoff DB** → renamed `rc-<scope>-hx` + own cleanup.
+- **[MEDIUM] atomic burn only on cloud primary** → fail-closed on Vercel/file + a two-client concurrent test
+  (§3.2); **dropScope prefix-matches the handoff DB** → kept under the `rc-<scope>-` prefix on purpose (named
+  `rc-<scope>-hx`, distinct from the session kinds) so the dev/CI sweep reclaims it; prod-safe because
+  `dropScope` is dev-gated (refuses production deploys) and bounded to the deploy's own scope (`pr-<sha>`/`dev`,
+  never `prod` without an explicit opt-in), so no separate handoff cleanup is needed.
 - **[MEDIUM] unauth PUT dead-drop / clobber** → pre-parse cap + WAF + 409-on-conflict + re-mint (§3.3/§3.4).
-- **[MEDIUM] prefetch/unfurler auto-burn; QR-swap** → user gesture before claim + binding fingerprint (§3.4).
-- **[MEDIUM] back-compat keeps the anti-pattern** → drop `rcp1_` QR emission; raw pass = legacy export (§3.4).
+- **[MEDIUM] prefetch/unfurler auto-burn; QR-swap** → user gesture before claim + `identity_id` binding
+  confirmation (§3.4).
+- **[MEDIUM] back-compat keeps the anti-pattern** → drop the forever `#rcp1_` **deep-link** QR; raw pass =
+  legacy export (a bare-pass QR for manual entry still renders without `--rc-app`) (§3.4).
 - **[LOW] id↔key "independence" / "gated like identity_id" wording** → corrected to distinct-PRFs +
   "unauthenticated capability endpoint" (§3.1/§5).
 

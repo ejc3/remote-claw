@@ -96,11 +96,13 @@ export async function PUT(req: Request): Promise<Response> {
   const ttlReq =
     typeof rawTtl === "number" && Number.isSafeInteger(rawTtl) && rawTtl >= 0 ? rawTtl : ttlMaxS();
   const ttlS = Math.min(Math.max(ttlReq, TTL_MIN_S), ttlMaxS());
-  const expiresAt = Date.now() + ttlS * 1000;
+  const now = Date.now();
+  const expiresAt = now + ttlS * 1000;
 
   try {
     const store = await getHandoffStore();
-    const stored = await store.put(id, proofHash, ct, expiresAt);
+    // put() also reaps expired rows in the same write (opportunistic GC); pass the same clock read.
+    const stored = await store.put(id, proofHash, ct, expiresAt, now);
     if (!stored) return json({ error: "id exists" }, 409);
     return json({ ok: true, expires_at: expiresAt });
   } catch {
