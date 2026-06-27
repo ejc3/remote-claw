@@ -119,4 +119,18 @@ describe("HandoffStore (file: libSQL)", () => {
     expect(await store.sweepExpired(Date.now())).toBe(1);
     expect(await store.claim(live.id, live.serverProofHash, Date.now())).toBe(live.ct);
   });
+
+  it("PUT opportunistically reaps expired rows in the same write (GC on every write)", async () => {
+    const dead = await mint();
+    const fresh = await mint();
+    const t0 = 1_000_000_000_000;
+    // Store an already-expired row (its own PUT's opportunistic DELETE runs before its INSERT, so it lands).
+    await store.put(dead.id, dead.proofHash, dead.ct, t0 - 1, t0 - 1000);
+    // A later PUT of a DIFFERENT row reaps the expired one in the same write transaction — not via claim/cron.
+    expect(await store.put(fresh.id, fresh.proofHash, fresh.ct, t0 + 60_000, t0)).toBe(true);
+    // Observe the PHYSICAL reap via sweepExpired (claim() can't: it burns-on-touch-expired itself, so it
+    // returns null whether or not the PUT already reaped). If the PUT didn't reap, sweepExpired finds 1.
+    expect(await store.sweepExpired(t0)).toBe(0); // dead already gone; fresh (expires t0+60s) untouched
+    expect(await store.claim(fresh.id, fresh.serverProofHash, t0)).toBe(fresh.ct); // fresh intact
+  });
 });

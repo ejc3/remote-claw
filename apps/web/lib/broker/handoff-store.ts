@@ -16,6 +16,9 @@ import { selectLocatorFromEnv } from "./turso-cloud-locator";
 // one of two concurrent claims wins, (b) a wrong/absent proof deletes nothing (an `id`-only edge/log observer
 // cannot burn it), and (c) the row is burned-on-touch even when expired (then the ct is discarded). This is
 // the per-session-SQLite single-writer/atomic discipline (sqlite-multi.ts) applied to a one-time row.
+//
+// Expiry has THREE reapers (so an unclaimed row's at-rest lifetime tracks its TTL): claim-time burn-on-touch,
+// a dedicated frequent cron (sweepExpired), and an opportunistic DELETE batched into every PUT (put()).
 
 const HANDOFF_DDL = [
   `CREATE TABLE IF NOT EXISTS handoff (
@@ -57,14 +60,30 @@ export class HandoffStore {
   }
 
   /** Store a sealed handoff. Returns true if inserted, false on an `id` collision (the caller returns 409
-   *  so the host re-mints a fresh OTK rather than publishing a QR for a row it doesn't own). */
-  async put(id: string, proofHash: string, ct: string, expiresAt: number): Promise<boolean> {
+   *  so the host re-mints a fresh OTK rather than publishing a QR for a row it doesn't own).
+   *
+   *  Opportunistic GC: the insert is batched (ONE write transaction) AFTER a `DELETE … WHERE expires_at <= now`,
+   *  so every PUT reaps expired rows — belt-and-suspenders alongside the dedicated cron and the claim-time
+   *  burn, so an unclaimed row's at-rest lifetime tracks its TTL even if the cron is degraded. */
+  async put(
+    id: string,
+    proofHash: string,
+    ct: string,
+    expiresAt: number,
+    now: number = Date.now(),
+  ): Promise<boolean> {
     await this.#ensure();
-    const r = await this.#client.execute({
-      sql: "INSERT INTO handoff (id, proof_hash, ct, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
-      args: [id, proofHash, ct, expiresAt],
-    });
-    return r.rowsAffected > 0;
+    const results = await this.#client.batch(
+      [
+        { sql: "DELETE FROM handoff WHERE expires_at <= ?", args: [now] },
+        {
+          sql: "INSERT INTO handoff (id, proof_hash, ct, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+          args: [id, proofHash, ct, expiresAt],
+        },
+      ],
+      "write",
+    );
+    return (results[1]?.rowsAffected ?? 0) > 0;
   }
 
   /** Atomically burn-and-return the row for `id` IFF `proofHash` matches. One statement ⇒ exactly one
@@ -82,7 +101,8 @@ export class HandoffStore {
     return String(row.ct);
   }
 
-  /** Delete every expired row (the dedicated sweep + opportunistic cleanup). Returns the count removed. */
+  /** Delete every expired row — the dedicated cron sweep (PUT also reaps expired rows inline; see put()).
+   *  Returns the count removed. */
   async sweepExpired(now: number): Promise<number> {
     await this.#ensure();
     const r = await this.#client.execute({
