@@ -332,11 +332,13 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     const prev = {
       key: process.env.ANTHROPIC_API_KEY,
       authTok: process.env.ANTHROPIC_AUTH_TOKEN,
+      baseUrl: process.env.ANTHROPIC_BASE_URL,
       akid: process.env.AWS_ACCESS_KEY_ID,
       meta: process.env.AWS_EC2_METADATA_DISABLED,
     };
     process.env.ANTHROPIC_API_KEY = "sk-ant-REAL-user-key-should-not-reach-child";
     process.env.ANTHROPIC_AUTH_TOKEN = "real-oauth-token-should-not-reach-child";
+    process.env.ANTHROPIC_BASE_URL = "https://other-host.example/should-not-reach-child";
     process.env.AWS_ACCESS_KEY_ID = "AKIAHOSTONLYSHOULDNOTLEAK";
     delete process.env.AWS_EC2_METADATA_DISABLED; // prove we SET it (not merely inherit a prior value)
     let seenEnv: NodeJS.ProcessEnv | null = null;
@@ -357,6 +359,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       for (const [k, v] of [
         ["ANTHROPIC_API_KEY", prev.key],
         ["ANTHROPIC_AUTH_TOKEN", prev.authTok],
+        ["ANTHROPIC_BASE_URL", prev.baseUrl],
         ["AWS_ACCESS_KEY_ID", prev.akid],
         ["AWS_EC2_METADATA_DISABLED", prev.meta],
       ] as const) {
@@ -365,9 +368,10 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       }
     }
     const env = seenEnv as unknown as NodeJS.ProcessEnv;
-    // The real Anthropic key/token never reach the child — only the pretend key.
+    // The real Anthropic key/token/base-url never reach the child — only the pretend key.
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-remote-claw-bedrock-no-account-needed");
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined(); // can't redirect the child off our MITM
     // Host AWS creds are scrubbed AND IMDS is explicitly disabled for the child.
     expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
     expect(env.AWS_EC2_METADATA_DISABLED).toBe("true");

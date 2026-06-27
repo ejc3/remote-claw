@@ -130,12 +130,14 @@ export async function resolveBedrockAuth(): Promise<BedrockAuth> {
   );
 }
 
-/** The AWS region for Bedrock calls: explicit override, else AWS_REGION / AWS_DEFAULT_REGION. */
+/** The AWS region for Bedrock calls: explicit override, else AWS_REGION / AWS_DEFAULT_REGION.
+ *  Lowercased — the region feeds both the endpoint host and the SigV4 credential scope, which AWS
+ *  requires lowercase (a stray `US-EAST-1` would yield an invalid host / signature mismatch). */
 export function bedrockRegion(override?: string): string {
   return (
     override?.trim() ||
     process.env.AWS_REGION?.trim() ||
     process.env.AWS_DEFAULT_REGION?.trim() ||
     "us-east-1"
-  );
+  ).toLowerCase();
 }
