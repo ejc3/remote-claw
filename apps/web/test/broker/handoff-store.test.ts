@@ -76,11 +76,14 @@ describe("HandoffStore (file: libSQL)", () => {
     expect(await store.claim(m.id, m.serverProofHash, Date.now())).toBe(m.ct);
   });
 
-  it("an EXPIRED row is not served, and is burned on the touch", async () => {
+  it("an EXPIRED row is not served, and is PHYSICALLY burned on the touch", async () => {
     const m = await mint();
     await store.put(m.id, m.proofHash, m.ct, Date.now() - 1); // already expired
     expect(await store.claim(m.id, m.serverProofHash, Date.now())).toBeNull();
-    // it was deleted by that claim → even a second attempt is gone (not a re-serve)
+    // Prove the claim DELETED the row, not merely refused-and-left it: a sweep now finds nothing to reap.
+    // (A regression that returns null for expired rows without deleting them would fail here.)
+    expect(await store.sweepExpired(Date.now())).toBe(0);
+    // and a second attempt is still gone (not a re-serve)
     expect(await store.claim(m.id, m.serverProofHash, Date.now())).toBeNull();
   });
 
@@ -88,6 +91,29 @@ describe("HandoffStore (file: libSQL)", () => {
     const m = await mint();
     expect(await store.put(m.id, m.proofHash, m.ct, Date.now() + 60_000)).toBe(true);
     expect(await store.put(m.id, m.proofHash, "deadbeef", Date.now() + 60_000)).toBe(false);
+  });
+
+  it("CONCURRENT puts of the same id yield exactly one winner (parallel race, not just sequential)", async () => {
+    const m = await mint();
+    // Two SEPARATE clients to the same file db racing the same id → ON CONFLICT DO NOTHING means exactly one
+    // INSERT lands; the loser gets false (→ 409) without overwriting the winner's row.
+    const a = await handoffStoreForTest(locator);
+    const b = await handoffStoreForTest(locator);
+    try {
+      const exp = Date.now() + 60_000;
+      // Both race the SAME ct so the surviving row is deterministic no matter which connection wins.
+      const [ra, rb] = await Promise.all([
+        a.put(m.id, m.proofHash, m.ct, exp),
+        b.put(m.id, m.proofHash, m.ct, exp),
+      ]);
+      expect([ra, rb].filter(Boolean).length).toBe(1); // exactly one writer wins; the other is a 409 no-op
+      // The single surviving row is a valid, fully-written, claimable row (both raced the same ct, so this
+      // is deterministic regardless of which connection won).
+      expect(await store.claim(m.id, m.serverProofHash, Date.now())).toBe(m.ct);
+    } finally {
+      a.close();
+      b.close();
+    }
   });
 
   it("CONCURRENT claims across two connections yield exactly one winner", async () => {
