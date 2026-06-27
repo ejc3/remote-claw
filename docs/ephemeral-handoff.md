@@ -136,7 +136,7 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   claim (it lacks `claimProof`, which needs OTK). This is **mandatory in v1** (no longer deferred).
 - **No Bearer auth** (it would re-introduce handoff↔identity correlation); the **256-bit `id` + proof** are the
   gate. Abuse bounded by: the pre-parse size cap, a **deployed Vercel WAF rate-limit rule** on
-  `path=/api/handoff` keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a token bucket;
+  `/api/handoff` (matched by `path` prefix) keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a token bucket;
   excess is denied), the *primary* abuse control. The **global volumetric backstop is Vercel's always-on
   System Mitigations** (platform-managed automatic DDoS protection) — not a custom rule, so there is no custom
   global counter an attacker could deliberately trip to deny pairings. The honest residual tradeoff runs the
@@ -236,10 +236,12 @@ itself is an out-of-band infra deploy-gate** — see below); (6) **user gesture 
 **non-extractable CryptoKey + IndexedDB** for the resolved credential; (8) PUT `409`-on-conflict with host
 re-mint.
 
-> **#5 is the one must-have not in the repo.** A per-IP/global rate-limit can't live in `vercel.json` and no
-> test/CI can assert it exists; it is provisioned via the Vercel Firewall (dashboard/API) and must be verified
-> by hand. So "the net-security claim is conditional on ALL must-haves" includes a step the codebase cannot
-> self-check: treat the WAF rule as a release gate, not a shipped artifact (mirrors `route.ts`'s deploy-gate note).
+> **#5 is the one must-have that lives outside the repo.** The per-IP rate-limit rule can't live in `vercel.json`
+> and no test/CI can assert it exists; it is provisioned via the Vercel Firewall (dashboard/API) — now **deployed**
+> as `handoff-per-ip-rate-limit` (20 req / 60 s per IP, token bucket; excess denied), with Vercel's always-on
+> System Mitigations as the global volumetric backstop (no custom global rule). So "the net-security claim is
+> conditional on ALL must-haves" includes a control the codebase cannot self-check: treat the WAF rule as an
+> infra release gate verified out-of-band, not a shipped artifact (mirrors `route.ts`'s deploy-gate note).
 
 - **No PAKE** (high-entropy OTK ⇒ SPAKE2 adds EC-correctness surface for zero gain; NIST SP 800-63B).
 - **TTL = 10 min, configurable**, hard-capped; shorter is safer (it's the leaked-QR window).
