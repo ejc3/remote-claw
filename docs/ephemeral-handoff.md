@@ -109,10 +109,19 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
 
 ### 3.3 Endpoints — `apps/web/app/api/handoff/route.ts` (an unauthenticated high-entropy *capability* endpoint)
 
-- **`PUT`** (host upload): a **route-level body cap before JSON parse**; body `{id: 64-hex, proof_hash: 64-hex,
-  ct: hex, ttl?: int}` (all wire values are hex — the OTK itself stays base64url in the `#fragment`). Validate
-  `ttl` like `retentionMs` (non-negative **safe integer**, else default 600 s) then clamp to a **code-baked
-  `[MIN, MAX]`** (default 600 s). `INSERT … ON CONFLICT(id) DO NOTHING` → **return 409 on conflict** so the
+- **`PUT`** (host upload): a **route-level body cap before JSON parse** — `MAX_BODY = 8192` bytes, enforced
+  *while streaming* so a chunked / missing-`content-length` body can't force an unbounded buffer; an over-cap
+  body → **`413`**. Body `{id: 64-hex, proof_hash: 64-hex, ct: hex, ttl?: int}` (all wire values are hex — the
+  OTK itself stays base64url in the `#fragment`); `ct` must be **even-length hex bounded to `[MIN_CT_HEX,
+  MAX_CT_HEX] = [122, 6144]`** chars — `122` is the floor of a real sealed box (version + 32 B salt + 12 B
+  nonce + 16 B GCM tag = 61 B), `6144` ≈ a 3 KiB box — and a `ct` outside that range (or any other malformed
+  field) → **`400`** (distinct from the `413` whole-body cap). **TTL clamp:** `ttl` is accepted only as a
+  non-negative **safe integer** (else the default is used), then clamped into `[TTL_MIN_S, TTL_MAX_S] =
+  [30 s, 600 s]`; **omitted or invalid ⇒ the default, which is the effective ceiling** — `TTL_MAX_S`
+  (600 s / 10 min), or the lower `RC_HANDOFF_TTL_MAX_S` when that env is set (the default is `ttlMaxS()`,
+  not a hard-coded 600). `TTL_MAX_S` is a code-baked absolute ceiling; the optional `RC_HANDOFF_TTL_MAX_S`
+  env can only *lower* it (within `[30, 600]`), never raise it.
+  `INSERT … ON CONFLICT(id) DO NOTHING` → **return 409 on conflict** so the
   host **re-mints OTK** rather than publishing a QR for a poisoned row.
 - **`POST` (claim):** body `{id: 64-hex, proof: 64-hex}` (`proof = hex(claimProof)`) → atomic burn (§3.2)
   gated on `SHA256(proof) == proof_hash` matched **inside the single `DELETE … WHERE id=? AND proof_hash=?`**
@@ -126,10 +135,16 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   only `SHA256(claimProof)`. A TLS-terminating edge/log that sees only `id = SHA256(OTK)` **cannot** burn or
   claim (it lacks `claimProof`, which needs OTK). This is **mandatory in v1** (no longer deferred).
 - **No Bearer auth** (it would re-introduce handoff↔identity correlation); the **256-bit `id` + proof** are the
-  gate. Abuse bounded by: the pre-parse size cap, a **mandatory Vercel WAF rate-limit rule** on
-  `path=/api/handoff` keyed on the platform-trusted client IP (per-IP token bucket + a low global ceiling —
-  *enumerated as a v1 must-have, not prose*), the short TTL, single-read, and the dedicated Turso DB so PUT
-  write-contention can't touch session frames. **Abuse telemetry lives at the edge, not the app:** the WAF
+  gate. Abuse bounded by: the pre-parse size cap, a **deployed Vercel WAF rate-limit rule** on
+  `/api/handoff` (matched by `path` prefix) keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a token bucket;
+  excess is denied), the *primary* abuse control. The **global volumetric backstop is Vercel's always-on
+  System Mitigations** (platform-managed automatic DDoS protection) — not a custom rule, so there is no custom
+  global counter an attacker could deliberately trip to deny pairings. The honest residual tradeoff runs the
+  other way: a coarse per-IP key can throttle legitimate clients behind one shared egress IP (carrier-grade
+  NAT), so the per-IP limit is set generously — 20 / 60 s ≫ the ~2 requests a real pairing needs. This
+  rate-limit is an **out-of-band infra deploy gate**
+  (provisioned in the Vercel Firewall, not in `vercel.json`/CI — §5 #5), atop the short TTL, single-read, and
+  the dedicated Turso DB so PUT write-contention can't touch session frames. **Abuse telemetry lives at the edge, not the app:** the WAF
   dashboard (claim-rate, per-IP throttle hits, brute-force volume) is where §4's online-attack guarantees are
   observed. The serverless route deliberately does **not** log per-claim outcomes (the `id` is public and a
   per-instance function has no actionable signal); a backend fault returns an opaque `500` and self-heals the
@@ -221,10 +236,12 @@ itself is an out-of-band infra deploy-gate** — see below); (6) **user gesture 
 **non-extractable CryptoKey + IndexedDB** for the resolved credential; (8) PUT `409`-on-conflict with host
 re-mint.
 
-> **#5 is the one must-have not in the repo.** A per-IP/global rate-limit can't live in `vercel.json` and no
-> test/CI can assert it exists; it is provisioned via the Vercel Firewall (dashboard/API) and must be verified
-> by hand. So "the net-security claim is conditional on ALL must-haves" includes a step the codebase cannot
-> self-check: treat the WAF rule as a release gate, not a shipped artifact (mirrors `route.ts`'s deploy-gate note).
+> **#5 is the one must-have that lives outside the repo.** The per-IP rate-limit rule can't live in `vercel.json`
+> and no test/CI can assert it exists; it is provisioned via the Vercel Firewall (dashboard/API) — now **deployed**
+> as `handoff-per-ip-rate-limit` (20 req / 60 s per IP, token bucket; excess denied), with Vercel's always-on
+> System Mitigations as the global volumetric backstop (no custom global rule). So "the net-security claim is
+> conditional on ALL must-haves" includes a control the codebase cannot self-check: treat the WAF rule as an
+> infra release gate verified out-of-band, not a shipped artifact (mirrors `route.ts`'s deploy-gate note).
 
 - **No PAKE** (high-entropy OTK ⇒ SPAKE2 adds EC-correctness surface for zero gain; NIST SP 800-63B).
 - **TTL = 10 min, configurable**, hard-capped; shorter is safer (it's the leaked-QR window).

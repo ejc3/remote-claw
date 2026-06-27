@@ -80,6 +80,10 @@ and claude routes inference via the AWS SDK while remote-claw relays it, never t
 📐 **Design:** [`docs/v2-architecture.md`](docs/v2-architecture.md) — the full v2 design,
 threat model, key hierarchy, broker, and phased plan.
 
+🔑 **Credential handoff:** [`docs/ephemeral-handoff.md`](docs/ephemeral-handoff.md) — the one-time-key
+(OTK) ephemeral handoff that replaces the forever pass-in-QR with a single-use, short-TTL bootstrap
+token sealed in a zero-knowledge broker store.
+
 📄 **[`phase0/README.md`](phase0/README.md)** — how to run it ·
 **[`docs/phase0-findings.md`](docs/phase0-findings.md)** — the full reverse-engineered
 protocol, the de-minified `--sdk-url` validator, and the build writeup (§4a–4c) ·
