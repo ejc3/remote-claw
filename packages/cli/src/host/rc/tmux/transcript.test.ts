@@ -264,6 +264,13 @@ describe("userMessageText — extract a user turn's text for the local-prompt le
     expect(userMessageText({})).toBe("");
     expect(userMessageText({ content: 42 as unknown as string })).toBe("");
   });
+  it("tolerates null / non-object array elements without throwing (malformed line must not crash the pump)", () => {
+    expect(
+      userMessageText({
+        content: [null, 7, { type: "text", text: "ok" }] as unknown[],
+      }),
+    ).toBe("ok");
+  });
 });
 
 describe("messageHasToolResult — guard the ledger off tool-output turns", () => {
@@ -278,6 +285,14 @@ describe("messageHasToolResult — guard the ledger off tool-output turns", () =
     expect(messageHasToolResult({ content: [{ type: "text", text: "hi" }] })).toBe(false);
     expect(messageHasToolResult({ content: "hi" })).toBe(false);
     expect(messageHasToolResult(undefined)).toBe(false);
+  });
+  it("tolerates null / non-object array elements without throwing", () => {
+    expect(messageHasToolResult({ content: [null, 7] as unknown[] })).toBe(false);
+    expect(
+      messageHasToolResult({
+        content: [null, { type: "tool_result", tool_use_id: "t", content: "x" }] as unknown[],
+      }),
+    ).toBe(true);
   });
 });
 

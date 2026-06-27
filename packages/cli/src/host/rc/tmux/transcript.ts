@@ -277,6 +277,10 @@ export function userMessageText(message: { content?: unknown } | undefined): str
   if (!Array.isArray(c)) return "";
   return c
     .filter((b): b is { type: string; text: string } => {
+      // Guard non-object/null elements before deref — a malformed `content:[null]` line must not throw
+      // (the throw would propagate through the capture pump to onPumpCrash and tear down the session;
+      // the sibling status.ts #trackTools is defensive the same way).
+      if (typeof b !== "object" || b === null) return false;
       const bb = b as { type?: unknown; text?: unknown };
       return bb.type === "text" && typeof bb.text === "string";
     })
@@ -289,7 +293,14 @@ export function userMessageText(message: { content?: unknown } | undefined): str
  *  its tool_result dropped by echo-suppression; real claude writes tool_results as their own user turns. */
 export function messageHasToolResult(message: { content?: unknown } | undefined): boolean {
   const c = message?.content;
-  return Array.isArray(c) && c.some((b) => (b as { type?: unknown }).type === "tool_result");
+  return (
+    Array.isArray(c) &&
+    // Guard non-object/null elements before deref (see userMessageText) so a malformed line can't throw.
+    c.some(
+      (b) =>
+        typeof b === "object" && b !== null && (b as { type?: unknown }).type === "tool_result",
+    )
+  );
 }
 
 /** A transcript line's ISO-8601 `timestamp` (e.g. `2026-06-07T18:18:59.563Z`), used to MERGE the main

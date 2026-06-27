@@ -456,18 +456,23 @@ export async function runTmuxDriver(
       if (seenUuids.has(uuid)) return; // dedup BEFORE pushUpstream (review #2)
       seenUuids.add(uuid);
     }
-    // Local-prompt ledger — only TOP-LEVEL user TEXT turns (a sub-agent's user lines carry parentTaskId;
-    // a tool_result turn is handled by the relay's tool_result branch and must NOT be suppressed). A match
-    // means it's OUR injected prompt's echo → drop the FRAME (the relay already showed the viewer's
+    // Local-prompt ledger — only TOP-LEVEL user TEXT turns (a sub-agent's user lines carry a
+    // parent_tool_use_id — set above from `parentTaskId` for sub-files, or by the transcript rename for a
+    // main-file nested line — and must NOT be ledgered; a tool_result turn is handled by the relay's
+    // tool_result branch and must NOT be suppressed). Gate on the PAYLOAD field (not just the tailer's
+    // parentTaskId arg) so a main-file line that already carries parent_tool_use_id is excluded too. A
+    // match means it's OUR injected prompt's echo → drop the FRAME (the relay already showed the viewer's
     // prompt), but STILL feed status.onLine below so the turn boundary clears any abandoned open tool.
     let suppressFrame = false;
     if (
       payload.type === "user" &&
-      parentTaskId === undefined &&
+      payload.parent_tool_use_id == null &&
       !messageHasToolResult(payload.message)
     ) {
       const text = userMessageText(payload.message);
-      if (text !== "") {
+      // Trim to match the trimmed ledger keys: a whitespace-only line trims to "" (never a key), so skip
+      // it rather than surfacing an empty local_prompt bubble.
+      if (text.trim() !== "") {
         if (consumeInjected(text))
           suppressFrame = true; // our echo — drop the display frame only
         else payload.local_prompt = true; // typed at the local pane → surface it for viewers

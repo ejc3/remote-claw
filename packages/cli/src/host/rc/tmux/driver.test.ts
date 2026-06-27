@@ -383,6 +383,66 @@ describe("runTmuxDriver wiring", () => {
     }
   });
 
+  it("local-prompt ledger: a nested (parent_tool_use_id) user line and a whitespace-only line are NOT surfaced", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-ledger2-cwd-");
+    const home = tmp("rc-ledger2-home-");
+    const projDir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(projDir, { recursive: true });
+    const PINNED = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const transcript = join(projDir, `${PINNED}.jsonl`);
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const line = (extra: Record<string, unknown>): string =>
+      `${JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: String(extra.text ?? "") }] }, ...extra })}\n`;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: PINNED,
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      await writeFile(transcript, "");
+      // A MAIN-file user line already carrying parentToolUseID (renamed → parent_tool_use_id) is a nested
+      // turn, NOT a typed prompt — it must be excluded from the ledger (gated on the payload field, not the
+      // tailer arg). A whitespace-only line trims to "" and must be skipped (no empty bubble). A normal
+      // local prompt is the positive control: it MUST surface.
+      await appendFile(
+        transcript,
+        line({ uuid: "u-nested", text: "nested turn", parentToolUseID: "task_77" }),
+      );
+      await appendFile(transcript, line({ uuid: "u-blank", text: "   " }));
+      await appendFile(transcript, line({ uuid: "u-real", text: "real local prompt" }));
+      await waitFor(() =>
+        client.content.some((p) => p.recordKind === "user" && p.text.includes("real local prompt")),
+      );
+      await new Promise((r) => setTimeout(r, 60)); // let any (wrongly) surfaced lines flush
+      const surfaced = client.content.filter((p) => p.recordKind === "user");
+      expect(surfaced.some((p) => p.text.includes("real local prompt"))).toBe(true); // control surfaced
+      expect(surfaced.some((p) => p.text.includes("nested turn"))).toBe(false); // nested → not local_prompt
+      expect(surfaced.some((p) => p.text.trim() === "")).toBe(false); // whitespace-only → no empty bubble
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
   it("ends the bridge on pane death (sessionGone) with NO external abort, and kills the session", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();
