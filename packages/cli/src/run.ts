@@ -11,6 +11,7 @@ import { deriveIdentity } from "@remote-claw/clawsec";
 import { classifyArgs } from "./args.js";
 import { BrokerClient } from "./broker/client.js";
 import { RC_HELP } from "./help.js";
+import { parseStripKeys } from "./host/rc/bedrock/translate.js";
 import type { DriverContext } from "./host/rc/driver.js";
 import { gitInfo } from "./host/rc/gitinfo.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
@@ -140,6 +141,9 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-app" &&
       n !== "rc-backend" &&
       n !== "rc-driver" &&
+      n !== "rc-inference" &&
+      n !== "rc-bedrock-region" &&
+      n !== "rc-bedrock-model" &&
       n !== "rc-oc-url" &&
       n !== "rc-oc-model" &&
       n !== "rc-oc-session" &&
@@ -261,6 +265,33 @@ async function runRcLaunchPath(
     (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
     (process.env.RC_BACKEND ?? "").trim() ||
     undefined;
+  // Inference target: --rc-inference / RC_INFERENCE, default "anthropic" (pass through). "bedrock"
+  // routes /v1/messages to Amazon Bedrock and synthesizes the rest — zero api.anthropic.com.
+  const inferenceRaw =
+    (typeof rc["rc-inference"] === "string" ? rc["rc-inference"] : "").trim() ||
+    (process.env.RC_INFERENCE ?? "").trim() ||
+    "anthropic";
+  const inference = inferenceRaw.toLowerCase();
+  if (inference !== "anthropic" && inference !== "bedrock") {
+    warn(`remote-claw: unknown --rc-inference=${inferenceRaw} (expected anthropic | bedrock)\n`);
+    return 2;
+  }
+  const region =
+    (typeof rc["rc-bedrock-region"] === "string" ? rc["rc-bedrock-region"] : "").trim() ||
+    undefined;
+  const model =
+    (typeof rc["rc-bedrock-model"] === "string" ? rc["rc-bedrock-model"] : "").trim() || undefined;
+  // Extra body keys to strip before forwarding to Bedrock (RC_BEDROCK_STRIP_KEYS), for when a specific
+  // model rejects a field claude sends (e.g. output_config/effort) with a hard 400.
+  const stripKeys = parseStripKeys(process.env.RC_BEDROCK_STRIP_KEYS);
+  const bedrock =
+    inference === "bedrock"
+      ? {
+          ...(region !== undefined ? { region } : {}),
+          ...(model !== undefined ? { modelOverride: model } : {}),
+          ...(stripKeys !== undefined ? { stripKeys } : {}),
+        }
+      : undefined;
   try {
     await ensureIdentity(secretPath); // local, idempotent — create on first run, no network
     const { secret } = await loadSecret(secretPath);
@@ -273,6 +304,8 @@ async function runRcLaunchPath(
       claudeBin: bin,
       spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
       ...(backend !== undefined ? { backend } : {}),
+      inference,
+      ...(bedrock !== undefined ? { bedrock } : {}),
     });
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);

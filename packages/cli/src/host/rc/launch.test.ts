@@ -323,6 +323,61 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   }, 20_000);
 
+  it("bedrock mode: swaps any real Anthropic creds for a pretend key and walls the child off from AWS/IMDS", async () => {
+    // In zero-Anthropic (bedrock) mode the child must hold NO usable Anthropic credential (a hostile MCP
+    // that dodged the proxy could otherwise call api.anthropic.com directly) and NO path to the host's
+    // AWS creds (not even IMDS). Verify the launch env reflects all of that.
+    const id = await deriveIdentity(new Uint8Array(32).fill(74));
+    const certsDir = tmp();
+    const prev = {
+      key: process.env.ANTHROPIC_API_KEY,
+      authTok: process.env.ANTHROPIC_AUTH_TOKEN,
+      akid: process.env.AWS_ACCESS_KEY_ID,
+      meta: process.env.AWS_EC2_METADATA_DISABLED,
+    };
+    process.env.ANTHROPIC_API_KEY = "sk-ant-REAL-user-key-should-not-reach-child";
+    process.env.ANTHROPIC_AUTH_TOKEN = "real-oauth-token-should-not-reach-child";
+    process.env.AWS_ACCESS_KEY_ID = "AKIAHOSTONLYSHOULDNOTLEAK";
+    delete process.env.AWS_EC2_METADATA_DISABLED; // prove we SET it (not merely inherit a prior value)
+    let seenEnv: NodeJS.ProcessEnv | null = null;
+    try {
+      await runRcLaunch({
+        claudeArgs: [],
+        identity: id,
+        brokerUrl: "http://broker.example",
+        certsDir,
+        inference: "bedrock",
+        bedrock: {},
+        spawnClaude: async (_bin, _args, env) => {
+          seenEnv = env;
+          return 0;
+        },
+      });
+    } finally {
+      for (const [k, v] of [
+        ["ANTHROPIC_API_KEY", prev.key],
+        ["ANTHROPIC_AUTH_TOKEN", prev.authTok],
+        ["AWS_ACCESS_KEY_ID", prev.akid],
+        ["AWS_EC2_METADATA_DISABLED", prev.meta],
+      ] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    const env = seenEnv as unknown as NodeJS.ProcessEnv;
+    // The real Anthropic key/token never reach the child — only the pretend key.
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-remote-claw-bedrock-no-account-needed");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    // Host AWS creds are scrubbed AND IMDS is explicitly disabled for the child.
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.AWS_EC2_METADATA_DISABLED).toBe("true");
+    // CLAUDE_CODE_USE_BEDROCK must NOT be set — it would put the child in Bedrock-transport mode and
+    // DISABLE /remote-control (the whole point is to keep RC alive on a synthesized Anthropic front).
+    expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    // The proxy env the child genuinely needs still survives.
+    expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  }, 20_000);
+
   it("awaits relay pumps on teardown so a final outbound frame flushes", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(73));
     const certsDir = tmp();

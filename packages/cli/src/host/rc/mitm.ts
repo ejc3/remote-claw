@@ -15,6 +15,8 @@ import { connect as netConnect, type Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { TLSSocket } from "node:tls";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
+import { type BedrockConfig, BedrockInference } from "./bedrock/inference.js";
+import { isInferencePath, synthControlPlane } from "./bedrock/synth.js";
 import { MITM_HOST } from "./certs.js";
 import { assistantText, type RelayCore, type Session } from "./session.js";
 
@@ -49,6 +51,12 @@ export interface MitmOptions {
   /** Optional structured tracer (target "rc.mitm"; defaults to no-op). Local-only sink; in trace mode
    *  it dumps full RC bodies (no key material — auth headers are never passed to it). */
   tracer?: Tracer;
+  /** Where inference (`/v1/messages*`) goes: "anthropic" (default — pass through to the real upstream)
+   *  or "bedrock" (translate to Amazon Bedrock and synthesize the rest of the Anthropic control plane,
+   *  so NOTHING reaches api.anthropic.com). Only meaningful in "relay" mode. */
+  inference?: "anthropic" | "bedrock";
+  /** Bedrock config (region/model/auth), used only when `inference==="bedrock"`. */
+  bedrock?: BedrockConfig;
 }
 
 export class MitmProxy {
@@ -58,12 +66,18 @@ export class MitmProxy {
   readonly #inner: Server;
   readonly #leaf: { cert: Buffer; key: Buffer };
   readonly #trace: Tracer;
+  /** Non-null when inference is routed to Bedrock instead of the real Anthropic upstream. */
+  readonly #bedrock: BedrockInference | null;
   #stopped = false;
   #closePromise: Promise<void> | null = null;
 
   constructor(opts: MitmOptions) {
     this.#opts = opts;
     this.#trace = opts.tracer ?? NOOP_TRACER;
+    this.#bedrock =
+      opts.inference === "bedrock"
+        ? new BedrockInference({ ...opts.bedrock, tracer: opts.tracer ?? NOOP_TRACER })
+        : null;
     this.#leaf = { cert: readFileSync(opts.leafCert), key: readFileSync(opts.leafKey) };
     this.#inner = new Server((req, res) => this.#onRequest(req, res));
     this.#server = new Server((_req, res) => {
@@ -100,7 +114,10 @@ export class MitmProxy {
   // ---- CONNECT handling ----
   #onConnect(req: IncomingMessage, clientSocket: Socket, head: Buffer): void {
     const { host, port } = splitAuthority(req.url ?? "");
-    if (host === MITM_HOST) {
+    // Normalize before matching: a CONNECT authority may be upper/mixed-case or carry a FQDN trailing
+    // dot ("api.anthropic.com."). Without this, such a request would miss MITM_HOST and get
+    // blind-tunnelled to the real host — a zero-Anthropic LEAK in bedrock mode.
+    if (host.toLowerCase().replace(/\.$/, "") === MITM_HOST) {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       // Any bytes the client pipelined after the CONNECT line are the START of its TLS ClientHello —
       // push them back onto the RAW socket so the TLS engine consumes them as handshake input.
@@ -148,6 +165,10 @@ export class MitmProxy {
     ) {
       this.#trace.debug("intercept", { method: req.method ?? "GET", path });
       this.#intercept(req.method ?? "GET", path, body, res);
+    } else if (this.#bedrock !== null) {
+      // Bedrock inference mode: serve /v1/messages* from Bedrock; synthesize every other
+      // api.anthropic.com path locally. NOTHING reaches the real upstream (zero Anthropic).
+      await this.#serveBedrock(this.#bedrock, req, path, body, res);
     } else {
       // Pass the FULL request-target (query string included) upstream — stripping `?…` would drop
       // params the real API needs (e.g. /api/claude_cli/bootstrap?entrypoint=…&model=…, ?limit=…). In
@@ -155,6 +176,24 @@ export class MitmProxy {
       if (rc !== null) this.#traceRcRequest(req.method ?? "GET", rc, body);
       this.#passthrough(req, rawUrl, body, res, rc);
     }
+  }
+
+  /** Serve a request in Bedrock inference mode: inference → Bedrock; everything else → a synthesized
+   *  control-plane response. RC endpoints are handled by `#intercept` before this (caller-guarded). */
+  async #serveBedrock(
+    bedrock: BedrockInference,
+    req: IncomingMessage,
+    path: string,
+    body: Buffer,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (isInferencePath(path)) {
+      await bedrock.serve(path, normalizeHeaders(req.headers), body, res);
+      return;
+    }
+    const synth = synthControlPlane(req.method ?? "GET", path);
+    // synthControlPlane returns null only for inference paths, already handled above.
+    if (synth !== null) sendJson(res, synth.json, synth.status);
   }
 
   /** Trace one client→Anthropic RC request: the verb/path always; the worker event types it carries
@@ -469,6 +508,14 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", () => resolve(Buffer.concat(chunks)));
   });
+}
+
+/** Flatten node's incoming headers (a value may be string[]) to a simple string map for the Bedrock
+ *  handler — joining multi-value headers the way an HTTP forwarder would. */
+function normalizeHeaders(headers: IncomingMessage["headers"]): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(headers)) out[k] = Array.isArray(v) ? v.join(", ") : v;
+  return out;
 }
 
 /** Send a JSON response and return it (Express-style), so callers can `return sendJson(...)`. */

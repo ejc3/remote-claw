@@ -9,6 +9,7 @@ import type { Identity } from "@remote-claw/clawsec";
 import { BrokerClient } from "../../broker/client.js";
 import { securityProvider } from "../../security/provider.js";
 import { tracerFromEnv } from "../../trace.js";
+import type { BedrockConfig } from "./bedrock/inference.js";
 import { ensureCerts } from "./certs.js";
 import { bridgeSession } from "./drivers/bridge.js";
 import { type GitInfo, gitInfo } from "./gitinfo.js";
@@ -49,6 +50,12 @@ export interface RcLaunchOptions {
   fetchFn?: typeof fetch;
   /** Notified when a session registers (tests/observability). */
   onSession?: (s: Session) => void;
+  /** Where inference goes: "anthropic" (default — pass `/v1/messages` through to the real upstream) or
+   *  "bedrock" (translate to Amazon Bedrock + synthesize the rest of the Anthropic control plane, so the
+   *  child reaches NO real api.anthropic.com). */
+  inference?: "anthropic" | "bedrock";
+  /** Bedrock config (region/model/auth), used only when `inference==="bedrock"`. */
+  bedrock?: BedrockConfig;
 }
 
 /**
@@ -91,6 +98,8 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     leafKey: certs.leafKey,
     core,
     tracer: mitmTracer,
+    ...(opts.inference !== undefined ? { inference: opts.inference } : {}),
+    ...(opts.bedrock !== undefined ? { bedrock: opts.bedrock } : {}),
     onSession: (s) => {
       opts.onSession?.(s);
       // Each RC session the child opens gets its own relay, bridged to the broker until the wrapper
@@ -143,6 +152,32 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   // session id when it enables /remote-control.
   delete env.CLAUDE_CODE_CHILD_SESSION;
   delete env.CLAUDE_CODE_SESSION_ID;
+
+  if (opts.inference === "bedrock") {
+    // The child must run as a normal FIRST-PARTY Anthropic claude so /remote-control stays enabled —
+    // CLAUDE_CODE_USE_BEDROCK would put it in Bedrock-transport mode, which DISABLES RC. We never set it.
+    // The MITM validates nothing and serves ALL inference from Bedrock, so the child needs no real
+    // Anthropic credential — and in zero-Anthropic mode it must not HOLD one: a hostile MCP that dodged
+    // the proxy could otherwise make a direct, authenticated api.anthropic.com call. So unconditionally
+    // replace any real key with a pretend one and drop the bearer token form. (A login in ~/.claude is
+    // moot — the MITM synthesizes the OAuth/refresh endpoints, so it can't reach the real upstream.)
+    env.ANTHROPIC_API_KEY = "sk-ant-remote-claw-bedrock-no-account-needed";
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    // Scrub EVERY AWS_* var so the child can't reach ANY host credential source — not just static keys
+    // (AWS_ACCESS_KEY_ID/…), but the container + web-identity channels the AWS SDK chain also honors
+    // (AWS_CONTAINER_CREDENTIALS_*, AWS_WEB_IDENTITY_TOKEN_FILE, AWS_ROLE_ARN, AWS_PROFILE, …). On
+    // ECS/EKS those ARE the host's live role-creds path, so deleting only static keys would be a no-op
+    // and let a hostile MCP mint the host's role. The wrapper signs Bedrock itself; the child needs none.
+    for (const k of Object.keys(env)) {
+      if (k.startsWith("AWS_")) delete env[k];
+    }
+    // The scrub above also DELETED any inherited AWS_EC2_METADATA_DISABLED, which would re-open IMDS to
+    // the child. Set it back so a child AWS SDK can't fetch the host's EC2 instance role from
+    // 169.254.169.254 (the static-key/container scrub alone wouldn't stop the IMDS channel).
+    env.AWS_EC2_METADATA_DISABLED = "true";
+    delete env.CLAUDE_CODE_USE_BEDROCK;
+    delete env.CLAUDE_CODE_USE_VERTEX;
+  }
 
   try {
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
