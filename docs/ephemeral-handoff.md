@@ -135,12 +135,14 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   only `SHA256(claimProof)`. A TLS-terminating edge/log that sees only `id = SHA256(OTK)` **cannot** burn or
   claim (it lacks `claimProof`, which needs OTK). This is **mandatory in v1** (no longer deferred).
 - **No Bearer auth** (it would re-introduce handoff↔identity correlation); the **256-bit `id` + proof** are the
-  gate. Abuse bounded by: the pre-parse size cap, a **mandatory Vercel WAF rate-limit rule** on
-  `path=/api/handoff` (PUT + POST) keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a
-  per-IP token bucket, the *primary* control) plus a **global ceiling of 600 requests / 60 s** as a backstop.
-  The per-IP bucket is the primary control; the global ceiling is only a backstop and itself carries a DoS
-  tradeoff — an attacker who trips the global cap could deny legitimate pairings — which is why per-IP is
-  primary and the global ceiling is set generously. This rate-limit is an **out-of-band infra deploy gate**
+  gate. Abuse bounded by: the pre-parse size cap, a **deployed Vercel WAF rate-limit rule** on
+  `path=/api/handoff` keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a token bucket;
+  excess is denied), the *primary* abuse control. The **global volumetric backstop is Vercel's always-on
+  System Mitigations** (platform-managed automatic DDoS protection) — not a custom rule, so there is no custom
+  global counter an attacker could deliberately trip to deny pairings. The honest residual tradeoff runs the
+  other way: a coarse per-IP key can throttle legitimate clients behind one shared egress IP (carrier-grade
+  NAT), so the per-IP limit is set generously — 20 / 60 s ≫ the ~2 requests a real pairing needs. This
+  rate-limit is an **out-of-band infra deploy gate**
   (provisioned in the Vercel Firewall, not in `vercel.json`/CI — §5 #5), atop the short TTL, single-read, and
   the dedicated Turso DB so PUT write-contention can't touch session frames. **Abuse telemetry lives at the edge, not the app:** the WAF
   dashboard (claim-rate, per-IP throttle hits, brute-force volume) is where §4's online-attack guarantees are
