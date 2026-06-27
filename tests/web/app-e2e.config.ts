@@ -4,10 +4,15 @@ import { defineConfig, devices } from "@playwright/test";
 // on the in-process LocalBackend (BROKER_BACKEND=local). The host side is a real, persistent process: the
 // seedHost fixture (app-e2e/fixtures.ts) spawns host-runner.ts (a real HostRcRelay + serve() + a scripted
 // RC turn) per test. Separate from playwright.config.ts (the docs site) — run with `pnpm test:app`.
+//
+// Two specs run against this one local server: transcript.spec.ts (the RC turn / live round-trips) and
+// handoff.spec.ts (the ephemeral one-time-handoff PAIRING flow against the real /api/handoff route +
+// store). The sqlite variant (app-e2e.sqlite.config.ts) only re-runs transcript.spec.ts — the handoff
+// store is backend-independent (it always uses its own locator), so there's nothing to re-prove there.
 
 export default defineConfig({
   testDir: "./app-e2e",
-  testMatch: "transcript.spec.ts",
+  testMatch: ["transcript.spec.ts", "handoff.spec.ts"],
   timeout: 90_000,
   expect: { timeout: 20_000 }, // absorb cold-start latency of a freshly-built prod server
   outputDir: "./test-results",

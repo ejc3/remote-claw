@@ -20,6 +20,7 @@ export {
   META_KINDS,
   planeForKind,
 } from "./broker/protocol.js";
+export { type UploadHandoffOptions, uploadHandoff } from "./handoff-upload.js";
 export {
   type ClaudeBackend,
   type ClaudeSpawn,
