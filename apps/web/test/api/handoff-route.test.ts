@@ -11,7 +11,7 @@ import {
   toHex,
   utf8,
 } from "@remote-claw/clawsec";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 // Use a local file: handoff store (no Turso env). selectLocatorFromEnv() reads env at call time, so set
 // RC_SQLITE_DIR + clear any Turso vars before the first request — and RESTORE them after so this file can't
@@ -26,6 +26,13 @@ let dir: string;
 const saved: Record<string, string | undefined> = {};
 beforeAll(() => {
   for (const k of TURSO_KEYS) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
+  // Clear two more the route reads, so an ambient env can't break the suite: VERCEL=1 makes the file:
+  // handoff store fail closed (every PUT → 500), and RC_HANDOFF_TTL_MAX_S would lower the ceiling the
+  // top-level TTL tests assert. (The nested RC_HANDOFF_TTL_MAX_S describe re-manages it per-test.)
+  for (const k of ["VERCEL", "RC_HANDOFF_TTL_MAX_S"] as const) {
     saved[k] = process.env[k];
     delete process.env[k];
   }
@@ -165,8 +172,104 @@ describe("/api/handoff TTL clamp", () => {
   });
 
   it("defaults to the 600s ceiling when ttl is absent, negative, or non-integer", async () => {
-    expect(await windowS(undefined)).toBeGreaterThanOrEqual(599);
-    expect(await windowS(-5)).toBeGreaterThanOrEqual(599);
-    expect(await windowS(3.5)).toBeGreaterThanOrEqual(599);
+    // Bound BOTH sides: a regression that widened the default past the ceiling must also fail here.
+    for (const ttl of [undefined, -5, 3.5]) {
+      const w = await windowS(ttl);
+      expect(w, `ttl=${ttl}`).toBeGreaterThanOrEqual(599);
+      expect(w, `ttl=${ttl}`).toBeLessThanOrEqual(601);
+    }
+  });
+
+  // RC_HANDOFF_TTL_MAX_S can TIGHTEN the window (a stricter deploy) but never widen it past the code ceiling.
+  describe("RC_HANDOFF_TTL_MAX_S can only LOWER the ceiling", () => {
+    let savedMax: string | undefined;
+    beforeEach(() => {
+      savedMax = process.env.RC_HANDOFF_TTL_MAX_S;
+    });
+    afterEach(() => {
+      if (savedMax === undefined) delete process.env.RC_HANDOFF_TTL_MAX_S;
+      else process.env.RC_HANDOFF_TTL_MAX_S = savedMax;
+    });
+
+    it("lowers the ceiling: a 600s request is clamped down to the env max", async () => {
+      process.env.RC_HANDOFF_TTL_MAX_S = "120";
+      const w = await windowS(600);
+      expect(w).toBeGreaterThanOrEqual(119);
+      expect(w).toBeLessThanOrEqual(121);
+    });
+
+    it("ignores an env max below the 30s floor → stays at the 600s code ceiling", async () => {
+      process.env.RC_HANDOFF_TTL_MAX_S = "5";
+      const w = await windowS(600);
+      expect(w).toBeGreaterThanOrEqual(599); // below-floor env ignored → not clamped down to ~5s
+      expect(w).toBeLessThanOrEqual(601);
+    });
+
+    it("cannot RAISE the ceiling above the code-baked 600s", async () => {
+      process.env.RC_HANDOFF_TTL_MAX_S = "100000";
+      // REQUEST more than the code ceiling: if env could raise it, the window would exceed 600. Requesting
+      // 600 (as before) was a no-op here — min(600, anything) is always 600 — so this must ask for 5000.
+      const w = await windowS(5000);
+      expect(w).toBeGreaterThanOrEqual(599);
+      expect(w).toBeLessThanOrEqual(601);
+    });
+  });
+});
+
+// The body cap is enforced WHILE streaming (cappedBody), and the ct length bound is a separate 400 — distinct
+// from the 413 body cap. These probe the boundary between them and the no-content-length streaming path.
+describe("/api/handoff size + streaming caps", () => {
+  it("rejects ct longer than MAX_CT_HEX with 400 even when the whole body is under the byte cap", async () => {
+    const { PUT } = await import("../../app/api/handoff/route");
+    // 6146 hex chars: even + valid hex + > MAX_CT_HEX (6144), yet the full JSON body stays < MAX_BODY (8192),
+    // so this must be a 400 (ct-too-long), NOT a 413 (body cap).
+    const res = await PUT(
+      req("PUT", { id: "a".repeat(64), proof_hash: "b".repeat(64), ct: "ab".repeat(3073) }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("caps the POST (claim) body too — oversize is 413", async () => {
+    const { POST } = await import("../../app/api/handoff/route");
+    const res = await POST(
+      req("POST", { id: "a".repeat(64), proof: "b".repeat(64), junk: "x".repeat(9000) }),
+    );
+    expect(res.status).toBe(413);
+  });
+
+  it("caps a streamed body with NO content-length WHILE reading — cancels mid-stream, never buffers it all", async () => {
+    const { PUT } = await import("../../app/api/handoff/route");
+    // Many small chunks (10 × 2000 B = 20000 B, well over MAX_BODY) fed lazily via pull(), so we can observe
+    // HOW MUCH the route drained. A regression that buffered the whole body (req.text()) before checking would
+    // pull all 10 chunks; the streaming cap must bail (and cancel) after only a few.
+    const CHUNK = new Uint8Array(2000);
+    let pulled = 0;
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (pulled < 10) {
+          pulled++;
+          c.enqueue(CHUNK);
+        } else {
+          c.close();
+        }
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const r = new Request("https://x/api/handoff", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: stream,
+      duplex: "half", // required by Node/undici for a stream body; not in the lib DOM RequestInit type
+    } as RequestInit & { duplex: "half" });
+    expect(r.headers.get("content-length")).toBeNull(); // precondition: exercising the streaming path
+
+    expect((await PUT(r)).status).toBe(413);
+    // Proof the cap fired DURING the read, not after fully buffering: the route stopped well short of all
+    // 10 chunks and cancelled the stream.
+    expect(pulled).toBeLessThan(10);
+    expect(canceled).toBe(true);
   });
 });
