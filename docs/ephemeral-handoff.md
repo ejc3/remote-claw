@@ -117,8 +117,10 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   nonce + 16 B GCM tag = 61 B), `6144` ≈ a 3 KiB box — and a `ct` outside that range (or any other malformed
   field) → **`400`** (distinct from the `413` whole-body cap). **TTL clamp:** `ttl` is accepted only as a
   non-negative **safe integer** (else the default is used), then clamped into `[TTL_MIN_S, TTL_MAX_S] =
-  [30 s, 600 s]`; **omitted or invalid ⇒ the default 600 s (10 min)**. `TTL_MAX_S` is a code-baked absolute
-  ceiling — the optional `RC_HANDOFF_TTL_MAX_S` env can only *lower* it (within `[30, 600]`), never raise it.
+  [30 s, 600 s]`; **omitted or invalid ⇒ the default, which is the effective ceiling** — `TTL_MAX_S`
+  (600 s / 10 min), or the lower `RC_HANDOFF_TTL_MAX_S` when that env is set (the default is `ttlMaxS()`,
+  not a hard-coded 600). `TTL_MAX_S` is a code-baked absolute ceiling; the optional `RC_HANDOFF_TTL_MAX_S`
+  env can only *lower* it (within `[30, 600]`), never raise it.
   `INSERT … ON CONFLICT(id) DO NOTHING` → **return 409 on conflict** so the
   host **re-mints OTK** rather than publishing a QR for a poisoned row.
 - **`POST` (claim):** body `{id: 64-hex, proof: 64-hex}` (`proof = hex(claimProof)`) → atomic burn (§3.2)
