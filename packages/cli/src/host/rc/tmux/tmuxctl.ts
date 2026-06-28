@@ -137,6 +137,15 @@ export class TmuxCtl {
     await this.#must(["send-keys", "-t", target, ...keys]);
   }
 
+  /** Capture the pane's visible content as plain text. `-p` prints to stdout; `-J` joins wrapped lines so
+   *  a long pasted prompt is matchable as one logical line. Used to CONFIRM a prompt actually submitted
+   *  (the composer cleared) — a `send-keys Enter` that the in-flight bracketed paste swallowed never
+   *  errors, so without a read-back a lost Enter would silently drop the prompt. Throws on a dead pane. */
+  async capturePane(target: string): Promise<string> {
+    const r = await this.#must(["capture-pane", "-p", "-J", "-t", target]);
+    return r.stdout;
+  }
+
   /** Kill a session by name. Idempotent: a "can't find session" exit (already gone) is swallowed so
    *  teardown never throws on a session the user already closed or that never started. */
   async killSession(name: string): Promise<void> {
