@@ -6,6 +6,8 @@
 import { describe, expect, it } from "vitest";
 import { Session } from "../session.js";
 import {
+  downstreamControlResponse,
+  downstreamSetModel,
   downstreamUserText,
   injectUserText,
   isInterrupt,
@@ -42,6 +44,38 @@ describe("downstreamUserText / isInterrupt", () => {
     expect(isInterrupt(s.pushControlRequest("interrupt"))).toBe(true);
     expect(isInterrupt(s.pushControlRequest("set_model", { model: "opus" }))).toBe(false);
     expect(isInterrupt(s.pushUserInput("x"))).toBe(false);
+  });
+});
+
+describe("downstreamControlResponse / downstreamSetModel (pure)", () => {
+  it("extracts {requestId, behavior} from an explicit allow / deny", () => {
+    const s = new Session("cse_1", "t", null);
+    expect(downstreamControlResponse(s.pushControlResponse("r1", "allow"))).toEqual({
+      requestId: "r1",
+      behavior: "allow",
+    });
+    expect(downstreamControlResponse(s.pushControlResponse("r2", "deny"))).toEqual({
+      requestId: "r2",
+      behavior: "deny",
+    });
+  });
+  it("FAILS CLOSED: a malformed/non-allow behavior denies (never auto-approves)", () => {
+    const s = new Session("cse_1", "t", null);
+    const ev = s.pushControlResponse("r3", "allow");
+    // Corrupt the behavior to a non-allow value — the last-gate guard must resolve it to deny, not allow.
+    (ev.payload.response as { response: { behavior: unknown } }).response.behavior = "maybe";
+    expect(downstreamControlResponse(ev)).toEqual({ requestId: "r3", behavior: "deny" });
+  });
+  it("returns null for a non-control_response", () => {
+    const s = new Session("cse_1", "t", null);
+    expect(downstreamControlResponse(s.pushUserInput("x"))).toBeNull();
+    expect(downstreamControlResponse(s.pushControlRequest("interrupt"))).toBeNull();
+  });
+  it("downstreamSetModel reads a set_model's model, else null", () => {
+    const s = new Session("cse_1", "t", null);
+    expect(downstreamSetModel(s.pushControlRequest("set_model", { model: "opus" }))).toBe("opus");
+    expect(downstreamSetModel(s.pushControlRequest("interrupt"))).toBeNull();
+    expect(downstreamSetModel(s.pushUserInput("x"))).toBeNull();
   });
 });
 
@@ -173,6 +207,55 @@ describe("runInjectPump", () => {
     // initialize was acked (review #5) → not replayed.
     expect(init).not.toBeNull();
     if (init) expect(await replayedEventIds(s, init.eventId)).toBe(false);
+  });
+
+  it("verb fidelity (B2): set_model → types `/model <id>` and records it in the ledger", async () => {
+    const s = new Session("cse_1", "t", null);
+    const { tmux, verbs, calls } = spyTmux();
+    const ac = new AbortController();
+    const recorded: string[] = [];
+    s.pushControlRequest("set_model", { model: "opus" });
+    const pump = runInjectPump({
+      session: s,
+      tmux,
+      target: "rc-cse_1",
+      signal: ac.signal,
+      sleep: noSleep,
+      onInjected: (t) => recorded.push(t),
+    });
+    await waitFor(() => recorded.length > 0);
+    ac.abort();
+    s.wake();
+    await pump;
+    // The slash command was pasted + submitted like a prompt …
+    expect(verbs).toEqual(["set-buffer", "paste-buffer", "send-keys"]);
+    expect(calls.find((c) => c[0] === "set-buffer")?.join(" ")).toContain("/model opus");
+    // … and recorded in the local-prompt ledger so claude's transcript echo of it is suppressed.
+    expect(recorded).toEqual(["/model opus"]);
+  });
+
+  it("permission mirroring (B2): a control_response invokes onDecision with {requestId, behavior}", async () => {
+    const s = new Session("cse_1", "t", null);
+    const { tmux, verbs } = spyTmux();
+    const ac = new AbortController();
+    const decisions: Array<{ id: string; behavior: string }> = [];
+    s.pushControlResponse("tu_42", "deny");
+    s.pushUserInput("after"); // a real prompt as a deterministic drain marker (processed AFTER the response)
+    const pump = runInjectPump({
+      session: s,
+      tmux,
+      target: "rc-cse_1",
+      signal: ac.signal,
+      sleep: noSleep,
+      onDecision: (id, behavior) => {
+        decisions.push({ id, behavior });
+      },
+    });
+    await waitFor(() => verbs.includes("send-keys")); // the "after" prompt drained ⇒ the response was handled
+    ac.abort();
+    s.wake();
+    await pump;
+    expect(decisions).toEqual([{ id: "tu_42", behavior: "deny" }]); // the viewer's deny surfaced to the driver
   });
 
   it("retries the PASTE phase as a unit and acks once it lands (codex #4)", async () => {

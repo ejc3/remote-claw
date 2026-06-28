@@ -14,7 +14,7 @@
 // injected is tagged `local_prompt` so the relay renders it), #9 strict inject queue.
 
 import { randomUUID } from "node:crypto";
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
@@ -23,11 +23,20 @@ import { bridgeSession } from "../drivers/bridge.js";
 import { RelayCore, type Session } from "../session.js";
 import { INJECT_BUFFER, runInjectPump } from "./inject.js";
 import {
+  decisionFileContent,
+  isSafeToolUseId,
+  PRE_TOOL_USE_HELPER_SOURCE,
+  parsePermRequest,
+  preToolUseHookFragment,
+} from "./permhook.js";
+import {
   extractSettingsArg,
+  type HookFragment,
   insertSettingsArg,
-  mergeSessionHookSettings,
+  mergeHooksIntoSettings,
   parseSentinel,
   type SessionHookEvent,
+  sessionHookFragment,
 } from "./sessionhook.js";
 import { StatusTracker } from "./status.js";
 import { realTmuxExec, TmuxCtl, type TmuxExec } from "./tmuxctl.js";
@@ -46,15 +55,23 @@ import {
   userMessageText,
 } from "./transcript.js";
 
-/** v1 capabilities: auto-approve permissions (no structured can_use_tool), real status from the
- *  transcript debounce, no faithful control-verb analogue beyond interrupt (best-effort), and `user`
- *  injection (so relay-owned attachments work — the driver never sees an attachment frame). */
-export const TMUX_CAPABILITIES: Driver["capabilities"] = {
-  structuredPermissions: false,
-  status: true,
-  controlVerbs: false,
-  attachments: true,
-};
+/** Capabilities. With permission MIRRORING on (default, B2) the driver surfaces structured can_use_tool
+ *  gates via the injected PreToolUse hook (so structuredPermissions=true); with it off (the opt-out flag)
+ *  it runs `--dangerously-skip-permissions` and auto-approves (false). set_model is honored via a `/model`
+ *  inject and interrupt via ESC, but set_mode/end have no faithful pane analogue, so controlVerbs stays
+ *  false (the coarse flag can't say "some"). status comes from the transcript debounce; attachments arrive
+ *  as relay-owned `user` injects. */
+export function tmuxCapabilities(mirrorPermissions: boolean): Driver["capabilities"] {
+  return {
+    structuredPermissions: mirrorPermissions,
+    status: true,
+    controlVerbs: false,
+    attachments: true,
+  };
+}
+
+/** Default capabilities (mirroring on) — kept as a named export for callers/tests that want the default. */
+export const TMUX_CAPABILITIES: Driver["capabilities"] = tmuxCapabilities(true);
 
 /** Env vars scrubbed from the child claude — ONLY the stub-gotcha ids + our host-only secrets.
  *  CLAUDE_CODE_CHILD_SESSION makes the spawned claude a STUB bridged to the launcher (never a real
@@ -167,6 +184,15 @@ export interface TmuxDriverDeps {
   injectSessionHook?: boolean;
   /** Override the hook sentinel file path (tests). Production derives one under tmpdir per session. */
   sentinelPath?: string;
+  /** Mirror permissions to the viewer (B2): inject a blocking PreToolUse hook so each tool waits for a
+   *  viewer allow/deny — faithful to a real RC session — instead of `--dangerously-skip-permissions`.
+   *  DEFAULT ON; the opt-out (`--rc-tmux-skip-permissions`) sets this false to restore auto-approve. */
+  mirrorPermissions?: boolean;
+  /** Override the permission requests-sentinel / decisions-dir / helper paths (tests). Production derives
+   *  per-session paths under tmpdir. */
+  permReqPath?: string;
+  permDecDir?: string;
+  permHelperPath?: string;
 }
 
 const sleepReal = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -301,22 +327,60 @@ export async function runTmuxDriver(
   let sentinelPath = deps.injectSessionHook
     ? (deps.sentinelPath ?? join(tmpdir(), `rc-sessionhook-${session.id}.ndjson`))
     : null;
+  // Permission MIRRORING (B2, DEFAULT ON): inject a blocking PreToolUse hook so each tool waits for a
+  // viewer allow/deny — faithful to a real RC session — instead of `--dangerously-skip-permissions`. The
+  // helper (a tiny Node script) appends each tool request to `permReqPath` (the driver tails it → raises a
+  // can_use_tool gate) and blocks polling `permDecDir/<id>.json` (the inject pump writes it on the viewer's
+  // answer). Off (the `--rc-tmux-skip-permissions` opt-out) → keep today's auto-approve.
+  let mirror = deps.mirrorPermissions ?? true;
+  let permReqPath = mirror
+    ? (deps.permReqPath ?? join(tmpdir(), `rc-permreq-${session.id}.ndjson`))
+    : null;
+  const permDecDir = mirror
+    ? (deps.permDecDir ?? join(tmpdir(), `rc-permdec-${session.id}`))
+    : null;
+  const permHelperPath = mirror
+    ? (deps.permHelperPath ?? join(tmpdir(), `rc-permhook-${session.id}.mjs`))
+    : null;
+  if (mirror && permReqPath !== null && permDecDir !== null && permHelperPath !== null) {
+    await mkdir(permDecDir, { recursive: true });
+    await writeFile(permHelperPath, PRE_TOOL_USE_HELPER_SOURCE, "utf8");
+  }
+
+  // Build the combined `--settings` (SessionStart hook + PreToolUse hook), deep-merged with the user's.
+  const fragments: HookFragment[] = [];
+  if (sentinelPath !== null) fragments.push(sessionHookFragment(sentinelPath));
+  if (mirror && permReqPath !== null && permDecDir !== null && permHelperPath !== null) {
+    // Pass this process's ABSOLUTE node binary (not a bare `node`) so the PreToolUse hook spawns even when
+    // the pane shell has no `node` on PATH (a standalone/native claude install) — else the gate is silently
+    // bypassed. Local tmux ⇒ same machine/fs, so process.execPath is a valid interpreter for the pane.
+    fragments.push(
+      preToolUseHookFragment(permHelperPath, permReqPath, permDecDir, 100, process.execPath),
+    );
+  }
   let harnessArgs: readonly string[] = ctx.harnessArgs;
-  if (sentinelPath !== null) {
+  if (fragments.length > 0) {
     const { value, rest } = extractSettingsArg(ctx.harnessArgs);
-    const merged = await mergeSessionHookSettings(value, sentinelPath);
+    const merged = await mergeHooksIntoSettings(value, fragments);
     if (merged === null) {
-      // The user passed a --settings we can't parse/merge — pass their args through UNCHANGED and skip
-      // the hook (discovery falls back to the --session-id pin), so claude behaves natively (incl. its
-      // own error on a bad settings file) rather than us silently masking it.
-      tracer.warn("session-hook disabled — user --settings not parseable; args passed through");
+      // The user passed a --settings we can't parse/merge — pass their args through UNCHANGED and skip our
+      // hooks, so claude behaves natively (incl. its own error on a bad settings file) rather than us
+      // silently masking it. Without the PreToolUse hook we CAN'T mirror, so fall back to the safe
+      // auto-approve (`--dangerously-skip-permissions`) — never leave claude prompting locally with no
+      // remote answer (a hung pane).
+      tracer.warn(
+        "hooks disabled — user --settings not parseable; args passed through, mirroring off",
+      );
       sentinelPath = null;
+      mirror = false;
+      permReqPath = null;
     } else {
       // Insert BEFORE any `--` so claude parses our --settings as an OPTION; after `--` it's a literal —
       // the hook wouldn't register and the JSON would leak into the prompt.
       harnessArgs = insertSettingsArg(rest, merged);
-      tracer.debug("session-hook injected", {
-        sentinel: sentinelPath,
+      tracer.debug("hooks injected", {
+        sessionHook: sentinelPath !== null,
+        permMirror: mirror,
         mergedUserSettings: value !== null,
       });
     }
@@ -325,7 +389,16 @@ export async function runTmuxDriver(
     "env",
     ...envUnset,
     bin,
-    "--dangerously-skip-permissions",
+    // With mirroring ON the PreToolUse hook is the sole tool gate (the viewer decides), so we must NOT skip
+    // permissions; with it OFF we keep today's hands-off auto-approve.
+    //
+    // CAVEAT (mirror on): dropping `--dangerously-skip-permissions` also drops its folder-TRUST bypass, so
+    // a FRESH/untrusted cwd would show claude's "Do you trust the files in this folder?" gate in the
+    // detached pane — which the PreToolUse hook does NOT cover (it's a startup gate, not a tool) and no one
+    // can answer → a hung pane. The normal case (the user's own already-trusted project, where they run the
+    // wrapper) is unaffected; for a brand-new dir, trust it once interactively or use
+    // `--rc-tmux-skip-permissions` (which restores the full skip, trust included).
+    ...(mirror ? [] : ["--dangerously-skip-permissions"]),
     ...(sessionUuid !== null ? ["--session-id", sessionUuid] : []),
     ...harnessArgs,
   ]);
@@ -626,7 +699,81 @@ export async function runTmuxDriver(
     onError: (event, error, info) =>
       tracer.warn("inject failed", { event, error: String(error), ...info }),
     onInjected: recordInjected, // ledger: claude's echo of this prompt is OUR own → suppressed in capture
+    // Permission mirroring (B2): the viewer's allow/deny → write the decision file the blocked PreToolUse
+    // hook is polling (keyed by request_id == the can_use_tool gate id == tool_use_id). Only wired when
+    // mirroring is on; off, control_responses are just acked.
+    ...(mirror && permDecDir !== null
+      ? {
+          onDecision: async (requestId: string, behavior: "allow" | "deny") => {
+            // Defense-in-depth: never let a crafted id escape the decisions dir (the relay only forwards
+            // ids it already gated, but the path join is user-influenced data).
+            if (!isSafeToolUseId(requestId)) {
+              tracer.warn("permission decision skipped — unsafe request_id", { requestId });
+              return;
+            }
+            try {
+              // ATOMIC write: the blocked helper polls this path with existsSync→readFileSync, so a plain
+              // writeFile would briefly expose a 0-byte/partial file. Write a temp sibling then rename
+              // (atomic on the same fs) so the helper only ever observes a COMPLETE decision.
+              const finalPath = join(permDecDir, `${requestId}.json`);
+              const tmpPath = `${finalPath}.tmp`;
+              await writeFile(tmpPath, decisionFileContent(behavior));
+              await rename(tmpPath, finalPath);
+              tracer.debug("permission decision written", { requestId, behavior });
+            } catch (e) {
+              tracer.warn("permission decision write failed", { requestId, error: String(e) });
+            }
+          },
+        }
+      : {}),
   }).catch((e) => onPumpCrash("inject", e));
+
+  // PERMISSION REQUESTS pump (B2): tail the requests sentinel the PreToolUse hook appends to; each new tool
+  // request → raise a canonical can_use_tool gate (pushUpstream) so the relay + viewer render the card. The
+  // blocked hook stays parked until the inject pump's onDecision writes the matching decision file. Tracks
+  // toolUseIds so a re-read never double-raises a gate. Only runs when mirroring is on.
+  //
+  // Reuse TranscriptTailer: it reads only NEW bytes (no O(n²) full re-read each poll), HOLDS BACK a torn
+  // final line until its newline lands (so parsePermRequest only ever sees complete lines), and returns []
+  // when the sentinel doesn't exist yet (no tool has run). A pushUpstream throw is a real bug — let it
+  // propagate to onPumpCrash (which tears down) rather than be swallowed, which would mark the id `seen` and
+  // strand the blocked helper forever; for that reason we add to `seen` only AFTER the push succeeds.
+  const permPump: Promise<void> =
+    mirror && permReqPath !== null
+      ? (async () => {
+          const reqTailer = new TranscriptTailer(permReqPath);
+          const seen = new Set<string>();
+          while (!stop.aborted) {
+            for (const line of await reqTailer.poll()) {
+              const req = parsePermRequest(line);
+              if (req === null || seen.has(req.toolUseId)) continue;
+              if (!isSafeToolUseId(req.toolUseId)) {
+                tracer.warn("permission gate skipped — unsafe tool_use_id", {
+                  toolUseId: req.toolUseId,
+                });
+                continue;
+              }
+              tracer.debug("permission gate raised", {
+                toolUseId: req.toolUseId,
+                tool: req.toolName,
+              });
+              session.pushUpstream({
+                type: "control_request",
+                uuid: `perm-${req.toolUseId}`,
+                request_id: req.toolUseId,
+                request: {
+                  subtype: "can_use_tool",
+                  tool_name: req.toolName,
+                  tool_input: req.toolInput,
+                  tool_use_id: req.toolUseId,
+                },
+              });
+              seen.add(req.toolUseId); // only after a SUCCESSFUL push (a throw above propagates, not strands)
+            }
+            await sleep(pollMs);
+          }
+        })().catch((e) => onPumpCrash("perm", e))
+      : Promise.resolve();
 
   try {
     // Run until the signal fires — external abort, a confirmed pane death, or a crashed pump (each
@@ -640,7 +787,7 @@ export async function runTmuxDriver(
     signal.removeEventListener("abort", onExternalAbort);
     session.close();
     // Bounded so a hung tmux exec (in a pump) or a hung serve() can't block kill-session (codex #3/#7).
-    await boundedWait(Promise.allSettled([capture, inject]), TEARDOWN_FLUSH_MS);
+    await boundedWait(Promise.allSettled([capture, inject, permPump]), TEARDOWN_FLUSH_MS);
     await boundedWait(
       served.catch(() => {}),
       TEARDOWN_FLUSH_MS,
@@ -650,15 +797,20 @@ export async function runTmuxDriver(
     status.dispose();
     await tmux.killSession(tmuxName);
     if (sentinelPath !== null) await rm(sentinelPath, { force: true }).catch(() => {});
+    // Clean up the permission-mirroring scratch (helper script, requests sentinel, decisions dir).
+    if (permHelperPath !== null) await rm(permHelperPath, { force: true }).catch(() => {});
+    if (permReqPath !== null) await rm(permReqPath, { force: true }).catch(() => {});
+    if (permDecDir !== null) await rm(permDecDir, { force: true, recursive: true }).catch(() => {});
     tracer.info("tmux driver torn down", { name: tmuxName, pumpCrashed });
   }
   return pumpCrashed ? 1 : 0;
 }
 
-/** The Driver façade the dispatcher uses: holds the ctx + deps, exposes capabilities + run(signal). */
+/** The Driver façade the dispatcher uses: holds the ctx + deps, exposes capabilities + run(signal).
+ *  Capabilities reflect whether permission mirroring is on (default on → structuredPermissions). */
 export function tmuxDriver(ctx: DriverContext, deps: TmuxDriverDeps = {}): Driver {
   return {
-    capabilities: TMUX_CAPABILITIES,
+    capabilities: tmuxCapabilities(deps.mirrorPermissions ?? true),
     run: (signal: AbortSignal) => runTmuxDriver(ctx, signal, deps),
   };
 }

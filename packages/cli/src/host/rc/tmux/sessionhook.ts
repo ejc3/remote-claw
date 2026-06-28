@@ -74,30 +74,55 @@ export async function parseUserSettings(
   return null; // non-empty but unparseable → caller falls back (no hook injection)
 }
 
-/** Deep-merge our SessionStart hook into the user's settings → a single `--settings` JSON string, or
+/** A settings fragment that registers one or more hooks (e.g. `{ hooks: { SessionStart: [...] } }` or
+ *  `{ hooks: { PreToolUse: [...] } }`). Our hooks are APPENDED per event into the user's settings. */
+export interface HookFragment {
+  hooks: Record<string, unknown[]>;
+}
+
+/** Deep-merge our hook fragment(s) into the user's parsed settings: for each event in each fragment,
+ *  APPEND our hook entries to the user's existing array for that event; preserve every other settings key
+ *  and every other hook event untouched. A user `hooks` that is a NON-object, or a `hooks.<Event>` that is
+ *  a NON-array, is REPLACED rather than merged — but claude's schema requires those to be an object / an
+ *  array, so such input is invalid to claude anyway (we still emit valid, claude-acceptable settings).
+ *  Pure. */
+export function mergeHookFragments(
+  base: Record<string, unknown>,
+  fragments: readonly HookFragment[],
+): Record<string, unknown> {
+  const merged: Record<string, unknown> =
+    base.hooks !== null && typeof base.hooks === "object" && !Array.isArray(base.hooks)
+      ? { ...(base.hooks as Record<string, unknown>) }
+      : {};
+  for (const frag of fragments) {
+    for (const [event, entries] of Object.entries(frag.hooks)) {
+      const existing = Array.isArray(merged[event]) ? (merged[event] as unknown[]) : [];
+      merged[event] = [...existing, ...entries];
+    }
+  }
+  return { ...base, hooks: merged };
+}
+
+/** Deep-merge our hook fragment(s) into the user's `--settings` → a single `--settings` JSON string, or
  *  `null` when the user passed a NON-EMPTY `--settings` we can't parse (the caller then SKIPS injection
- *  and passes the user's args through unchanged — see parseUserSettings). Our hook is APPENDED to any
- *  existing `hooks.SessionStart` array; other settings keys + other hook events are preserved untouched.
- *  A user `hooks` that is a NON-object, or a `hooks.SessionStart` that is a NON-array, is REPLACED rather
- *  than merged — but claude's schema requires those to be an object / an array, so such input is invalid
- *  to claude anyway (we still emit valid, claude-acceptable settings). */
+ *  and passes the user's args through unchanged — see parseUserSettings). */
+export async function mergeHooksIntoSettings(
+  userSettings: string | null,
+  fragments: readonly HookFragment[],
+): Promise<string | null> {
+  const base = await parseUserSettings(userSettings);
+  if (base === null) return null; // user passed an unparseable --settings → caller falls back, no hook
+  return JSON.stringify(mergeHookFragments(base, fragments));
+}
+
+/** Deep-merge our SessionStart hook into the user's settings → a single `--settings` JSON string, or
+ *  `null` when the user passed an unparseable `--settings` (the caller falls back). Thin wrapper over
+ *  mergeHooksIntoSettings for the common single-hook case. */
 export async function mergeSessionHookSettings(
   userSettings: string | null,
   sentinelPath: string,
 ): Promise<string | null> {
-  const base = await parseUserSettings(userSettings);
-  if (base === null) return null; // user passed an unparseable --settings → caller falls back, no hook
-  const ours = sessionHookFragment(sentinelPath);
-  const baseHooks =
-    base.hooks !== null && typeof base.hooks === "object" && !Array.isArray(base.hooks)
-      ? (base.hooks as Record<string, unknown>)
-      : {};
-  const baseStart = Array.isArray(baseHooks.SessionStart) ? baseHooks.SessionStart : [];
-  const merged = {
-    ...base,
-    hooks: { ...baseHooks, SessionStart: [...baseStart, ...ours.hooks.SessionStart] },
-  };
-  return JSON.stringify(merged);
+  return mergeHooksIntoSettings(userSettings, [sessionHookFragment(sentinelPath)]);
 }
 
 /** Re-insert a single merged `--settings <value>` into argv BEFORE any `--` separator, so claude parses

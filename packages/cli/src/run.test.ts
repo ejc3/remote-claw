@@ -225,7 +225,7 @@ describe("runWrapper (functional)", () => {
         );
         expect(code).toBe(0); // the flag is a harmless no-op here — we warn, we do NOT fail
         expect(lines.join("")).toMatch(
-          /--rc-session-hook \/ --rc-no-session-hook only apply to --rc-driver=tmux; ignored for mitm/,
+          /--rc-session-hook \/ --rc-no-session-hook \/ --rc-tmux-skip-permissions only apply to --rc-driver=tmux; ignored for mitm/,
         );
       } finally {
         rmSync(dir, { recursive: true, force: true });
