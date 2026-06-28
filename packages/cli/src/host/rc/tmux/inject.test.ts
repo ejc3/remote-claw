@@ -5,7 +5,16 @@
 
 import { describe, expect, it } from "vitest";
 import { Session } from "../session.js";
-import { downstreamUserText, injectUserText, isInterrupt, runInjectPump } from "./inject.js";
+import {
+  downstreamUserText,
+  injectUserText,
+  isInterrupt,
+  PASTE_SETTLE_MAX_MS,
+  PASTE_SETTLE_MS,
+  PASTE_SETTLE_PER_CHAR_MS,
+  runInjectPump,
+  settleMs,
+} from "./inject.js";
 import { TmuxCtl, type TmuxExec, type TmuxExecResult } from "./tmuxctl.js";
 
 const noSleep = (): Promise<void> => Promise.resolve();
@@ -48,6 +57,9 @@ describe("injectUserText", () => {
       return Promise.resolve();
     };
     await injectUserText(new TmuxCtl(exec), "rc-cse_x", "hi", "rcin-cse_x", sleep);
+    // loadAndPaste (set-buffer, paste-buffer) then submitPrompt (settle, send Enter). No pane read-back:
+    // a single Enter after the length-scaled settle — the capture-confirm/resend was removed because its
+    // TUI parse had false-"submitted" reads that silently dropped prompts (codex review).
     expect(order).toEqual(["set-buffer", "paste-buffer", "sleep", "send-keys"]);
   });
 });
@@ -304,3 +316,11 @@ async function replayedEventIds(s: Session, eventId: string): Promise<boolean> {
   }
   return replayed;
 }
+
+describe("settleMs (long-prompt submit-Enter race)", () => {
+  it("scales the paste settle with length and caps it", () => {
+    expect(settleMs("hi")).toBe(PASTE_SETTLE_MS + Math.ceil(2 * PASTE_SETTLE_PER_CHAR_MS));
+    expect(settleMs("")).toBe(PASTE_SETTLE_MS);
+    expect(settleMs("x".repeat(100_000))).toBe(PASTE_SETTLE_MAX_MS);
+  });
+});

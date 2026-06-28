@@ -18,9 +18,22 @@ import type { TmuxCtl } from "./tmuxctl.js";
  *  `paste-buffer` (tmux buffers are server-global) — codex review #5. This const is the fallback. */
 export const INJECT_BUFFER = "rcin";
 
-/** ms to wait after the bracketed paste before sending Enter, so the input box has settled and the
+/** Base ms to wait after the bracketed paste before sending Enter, so the input box has settled and the
  *  Enter isn't swallowed by the in-flight paste. Validated against real claude in the design sessions. */
 export const PASTE_SETTLE_MS = 40;
+/** Extra settle per pasted character: bracketed-paste ingestion time grows with length, so a fixed 40ms
+ *  is too short for a long prompt (the Enter then lands mid-paste and is dropped — observed live). */
+export const PASTE_SETTLE_PER_CHAR_MS = 1.5;
+/** Cap on the length-scaled settle (a pathologically long paste shouldn't stall the pump for seconds). */
+export const PASTE_SETTLE_MAX_MS = 1000;
+
+/** Length-scaled settle for a paste of `text`: base + per-char, capped (see the consts above). */
+export function settleMs(text: string): number {
+  return Math.min(
+    PASTE_SETTLE_MS + Math.ceil(text.length * PASTE_SETTLE_PER_CHAR_MS),
+    PASTE_SETTLE_MAX_MS,
+  );
+}
 
 /** Initial backoff between inject retries (a transient set-buffer/paste-buffer error clears fast). */
 export const INJECT_RETRY_MS = 100;
@@ -62,14 +75,24 @@ export async function loadAndPaste(
   await tmux.pasteBuffer(target, buffer);
 }
 
-/** PHASE 2 of injection — settle, then the SEPARATE send-keys Enter that actually submits. Retried
- *  ALONE (never re-pasting) when a transient error lands after the paste already succeeded. */
+/** PHASE 2 of injection — settle, then the SEPARATE send-keys Enter that submits. A `send-keys Enter`
+ *  that the still-in-flight bracketed paste swallows never errors, so the Enter must land AFTER the paste
+ *  has been ingested; the fix is a LENGTH-SCALED settle (settleMs) — the original fixed 40ms was too
+ *  short for a long prompt, which left it unsubmitted in the box (observed live).
+ *
+ *  We deliberately do NOT read the pane back to "confirm" the submit and resend: capture-parsing claude's
+ *  TUI is unreliable (a ❯ inside the prompt text, the prompt head scrolled out of the captured region, or
+ *  a failed capture) and every ambiguous read defaults to "looks submitted" → the prompt is ACKed and
+ *  SILENTLY DROPPED (codex review found three such paths). A scaled settle + a single Enter has no such
+ *  false-negative; a genuine tmux error on the send-keys throws and is retried by the pump (which never
+ *  re-pastes), and a truly dead pane is caught by the driver's pane-liveness watcher. */
 export async function submitPrompt(
   tmux: TmuxCtl,
   target: string,
+  text: string,
   sleep: (ms: number) => Promise<void> = sleepReal,
 ): Promise<void> {
-  await sleep(PASTE_SETTLE_MS);
+  await sleep(settleMs(text));
   await tmux.sendKeys(target, "Enter");
 }
 
@@ -85,7 +108,7 @@ export async function injectUserText(
   sleep: (ms: number) => Promise<void> = sleepReal,
 ): Promise<void> {
   await loadAndPaste(tmux, target, text, buffer);
-  await submitPrompt(tmux, target, sleep);
+  await submitPrompt(tmux, target, text, sleep);
 }
 
 /**
@@ -193,7 +216,7 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
       );
       if (!pasted) continue; // aborted before the text landed — leave un-acked
       const submitted = await retryUntil(
-        () => submitPrompt(tmux, target, sleep),
+        () => submitPrompt(tmux, target, text, sleep),
         signal,
         sleep,
         (attempt, error) => opts.onError?.(ev.eventType, error, { attempt, phase: "submit" }),
