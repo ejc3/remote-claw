@@ -54,6 +54,7 @@ import {
   transcriptToPayload,
   userMessageText,
 } from "./transcript.js";
+import { ensureCwdTrusted } from "./trust.js";
 
 /** Capabilities. With permission MIRRORING on (default, B2) the driver surfaces structured can_use_tool
  *  gates via the injected PreToolUse hook (so structuredPermissions=true); with it off (the opt-out flag)
@@ -101,6 +102,14 @@ const PROXY_CA_VARS = [
   "no_proxy",
   "NODE_EXTRA_CA_CERTS",
 ] as const;
+
+/** Same stale-server defense for CLAUDE_CONFIG_DIR — but here it's also a COHERENCE requirement: claude
+ *  reads this var to locate `.claude.json`, and so does our folder-trust writer (trust.ts). If the
+ *  wrapper's env sets it, buildChildEnv passes it through (`-e`) so the pane + the writer agree; if it
+ *  does NOT, we must unset it for the child so a stale value baked into a PRE-EXISTING tmux server's env
+ *  can't make the pane read a DIFFERENT `.claude.json` than the one we seeded trust into (→ a hung pane
+ *  on the startup trust gate). The writer is fed the same `parentEnv` value (see the trust call site). */
+const CHILD_CONFIG_VARS = ["CLAUDE_CONFIG_DIR"] as const;
 
 /** Build the child env: inherit the parent env and scrub only the stub-gotcha ids + host-only secrets
  *  (proxy/CA env passes through — see SCRUB_ENV). Returns a flat string map for tmux `-e KEY=VALUE`. */
@@ -193,6 +202,9 @@ export interface TmuxDriverDeps {
   permReqPath?: string;
   permDecDir?: string;
   permHelperPath?: string;
+  /** Pre-accept claude's per-folder trust gate for the cwd before spawn (mirror on only). Injectable so
+   *  unit tests don't touch the real ~/.claude.json; production uses the real ensureCwdTrusted. */
+  ensureCwdTrusted?: (cwd: string) => { changed: boolean; path: string; bailed?: boolean };
 }
 
 const sleepReal = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -301,7 +313,9 @@ export async function runTmuxDriver(
   //     proxy (in the `-e` map) passes through, but a stale tmux-server proxy can't leak in.
   const envUnset = [
     ...[...SCRUB_ENV].flatMap((k) => ["-u", k]),
-    ...PROXY_CA_VARS.filter((k) => parentEnv[k] === undefined).flatMap((k) => ["-u", k]),
+    ...[...PROXY_CA_VARS, ...CHILD_CONFIG_VARS]
+      .filter((k) => parentEnv[k] === undefined)
+      .flatMap((k) => ["-u", k]),
   ];
   // PIN the session id (verified: `claude --session-id <uuid>` with NO --resume starts a FRESH session
   // and writes its transcript at exactly `<uuid>.jsonl`). This makes the first attach DETERMINISTIC and
@@ -385,19 +399,55 @@ export async function runTmuxDriver(
       });
     }
   }
+  // CAVEAT (mirror on): dropping `--dangerously-skip-permissions` (below) also drops its folder-TRUST
+  // bypass, so a FRESH/untrusted cwd would block at claude's startup "Do you trust the files in this
+  // folder?" gate in the detached pane — the PreToolUse hook does NOT cover it (a startup gate, not a
+  // tool) and no one is at the pane to answer → a hung pane. So pre-accept the trust bit for the cwd
+  // (exactly what claude records on "trust"), idempotently. Best-effort: a write failure just warns and
+  // a fresh cwd may still hang (the user can trust interactively or use `--rc-tmux-skip-permissions`).
+  //
+  // BUT: if the user FORWARDED `--dangerously-skip-permissions` themselves (it lands in harnessArgs, which
+  // we don't strip), the child bypasses the trust gate regardless — there's no gate to seed, so don't
+  // write the user's real config when we don't have to (keep the write surgical: only when it's needed).
+  const childSkipsTrustGate = harnessArgs.includes("--dangerously-skip-permissions");
+  if (mirror && !childSkipsTrustGate) {
+    // Resolve the SAME `.claude.json` the pane's claude will read: pass the child's effective
+    // CLAUDE_CONFIG_DIR (parentEnv's value — passed through via `-e`, or unset for the child via `env -u`,
+    // see envUnset above). An empty string means "unset" → the writer falls back to home, exactly as the
+    // pane will. Thread deps.home so unit tests (home → a temp dir) never touch the real ~/.claude.json.
+    const trust =
+      deps.ensureCwdTrusted ??
+      ((cwd: string) =>
+        ensureCwdTrusted(cwd, {
+          ...(deps.home !== undefined ? { home: deps.home } : {}),
+          configDir: parentEnv.CLAUDE_CONFIG_DIR ?? "",
+        }));
+    try {
+      const t = trust(ctx.cwd);
+      if (t.changed) {
+        tracer.info("pre-accepted folder trust for cwd (mirror on)", { path: t.path });
+      } else if (t.bailed) {
+        tracer.warn(
+          "could not pre-accept folder trust (existing config unreadable or malformed) — a fresh cwd may hang on claude's trust gate",
+          { path: t.path },
+        );
+      }
+    } catch (e) {
+      tracer.warn(
+        "could not pre-accept folder trust — a fresh cwd may hang on claude's trust gate",
+        {
+          error: String(e),
+        },
+      );
+    }
+  }
   const command = shellQuoteCommand([
     "env",
     ...envUnset,
     bin,
     // With mirroring ON the PreToolUse hook is the sole tool gate (the viewer decides), so we must NOT skip
-    // permissions; with it OFF we keep today's hands-off auto-approve.
-    //
-    // CAVEAT (mirror on): dropping `--dangerously-skip-permissions` also drops its folder-TRUST bypass, so
-    // a FRESH/untrusted cwd would show claude's "Do you trust the files in this folder?" gate in the
-    // detached pane — which the PreToolUse hook does NOT cover (it's a startup gate, not a tool) and no one
-    // can answer → a hung pane. The normal case (the user's own already-trusted project, where they run the
-    // wrapper) is unaffected; for a brand-new dir, trust it once interactively or use
-    // `--rc-tmux-skip-permissions` (which restores the full skip, trust included).
+    // permissions (and we pre-accepted folder trust above); with it OFF we keep today's hands-off
+    // auto-approve (`--dangerously-skip-permissions`, which also bypasses the trust gate).
     ...(mirror ? [] : ["--dangerously-skip-permissions"]),
     ...(sessionUuid !== null ? ["--session-id", sessionUuid] : []),
     ...harnessArgs,
