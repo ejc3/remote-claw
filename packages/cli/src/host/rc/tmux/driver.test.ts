@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { deriveIdentity, type Frame, type FrameHeader, type Identity } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
+import type { Tracer } from "../../../trace.js";
 import { parseUserSession, runTmuxDriver, tmuxCapabilities } from "./driver.js";
 import type { TmuxExec, TmuxExecResult } from "./tmuxctl.js";
 import { projectSlug, subagentDir } from "./transcript.js";
@@ -164,6 +165,22 @@ function tmuxSpy(): {
     },
     killed: () => calls.some((c) => c[0] === "kill-session"),
   };
+}
+
+/** A Tracer that records every emitted record; child() returns the same recorder so nested fields still
+ *  land in one list. Lets tests assert a warn/info actually fired (e.g. the folder-trust bail warning). */
+function recordingTracer(): { tracer: Tracer; records: { level: string; msg: string }[] } {
+  const records: { level: string; msg: string }[] = [];
+  const make = (): Tracer => ({
+    error: (msg) => records.push({ level: "error", msg }),
+    warn: (msg) => records.push({ level: "warn", msg }),
+    info: (msg) => records.push({ level: "info", msg }),
+    debug: (msg) => records.push({ level: "debug", msg }),
+    trace: (msg) => records.push({ level: "trace", msg }),
+    child: () => make(),
+    enabled: () => true,
+  });
+  return { tracer: make(), records };
 }
 
 async function makeIdentity(): Promise<Identity> {
@@ -358,6 +375,305 @@ describe("runTmuxDriver wiring", () => {
       expect(await readFile(permHelperPath, "utf8")).toContain("PreToolUse");
       // The decisions dir was created so the helper has somewhere to poll for its answer.
       expect(await readdir(permDecDir)).toEqual([]);
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("mirror ON pre-accepts folder trust for the cwd (so a fresh dir's trust gate can't hang the pane)", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-trustwire-cwd-");
+    const home = tmp("rc-trustwire-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const trustCalls: string[] = [];
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "abababab-abab-4bab-8bab-abababababab",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        // mirror defaults ON. Inject a recording trust stub so we assert the wiring without touching any
+        // real config file.
+        ensureCwdTrusted: (c) => {
+          trustCalls.push(c);
+          return { changed: true, path: "/stub/.claude.json" };
+        },
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      expect(trustCalls).toEqual([cwd]); // trust seeded for exactly the spawn cwd, before the pane runs
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("mirror OFF (--rc-tmux-skip-permissions) does NOT touch folder trust (skip-permissions bypasses it)", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-trustoff-cwd-");
+    const home = tmp("rc-trustoff-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const trustCalls: string[] = [];
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        mirrorPermissions: false, // → claude gets --dangerously-skip-permissions, which bypasses trust
+        ensureCwdTrusted: (c) => {
+          trustCalls.push(c);
+          return { changed: false, path: "" };
+        },
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      expect(spy.command()).toContain("--dangerously-skip-permissions");
+      expect(trustCalls).toEqual([]); // not called — skip-permissions already trusts the folder
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("mirror ON but user FORWARDED --dangerously-skip-permissions does NOT touch folder trust (no gate to seed)", async () => {
+    // The user can pass claude's own flag through harnessArgs; we don't strip it, so the child bypasses the
+    // trust gate regardless. Seeding would write the user's real config for nothing — so we must not call it.
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-trustfwd-cwd-");
+    const home = tmp("rc-trustfwd-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const trustCalls: string[] = [];
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: ["--dangerously-skip-permissions"], // user-forwarded; mirror stays ON (default)
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "efefefef-efef-4fef-8fef-efefefefefef",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        ensureCwdTrusted: (c) => {
+          trustCalls.push(c);
+          return { changed: true, path: "/stub/.claude.json" };
+        },
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      expect(spy.command()).toContain("--dangerously-skip-permissions"); // the user's flag survives
+      expect(trustCalls).toEqual([]); // not seeded — the forwarded flag already bypasses the gate
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("CLAUDE_CONFIG_DIR coherence: UNSET in parent → unset for the child (stale tmux-server value can't leak)", async () => {
+    // The pane's claude and our trust writer must read the SAME .claude.json. With the var unset in the
+    // wrapper env, we `env -u CLAUDE_CONFIG_DIR` so a stale value in a pre-existing tmux server can't make
+    // the pane read a different config than the one we seed.
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-cfgunset-cwd-");
+    const home = tmp("rc-cfgunset-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        parentEnv: { PATH: "/usr/bin" }, // no CLAUDE_CONFIG_DIR
+        sessionId: "10101010-1010-4010-8010-101010101010",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        ensureCwdTrusted: () => ({ changed: false, path: "/stub/.claude.json" }),
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      expect(spy.command()).toContain("CLAUDE_CONFIG_DIR"); // appears only as an `env -u` token
+      expect(spy.env().CLAUDE_CONFIG_DIR).toBeUndefined(); // not passed through to the child
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("CLAUDE_CONFIG_DIR coherence: SET in parent → passed through to the child, not unset", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-cfgset-cwd-");
+    const home = tmp("rc-cfgset-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        parentEnv: { PATH: "/usr/bin", CLAUDE_CONFIG_DIR: "/custom/cfg" },
+        sessionId: "20202020-2020-4020-8020-202020202020",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        ensureCwdTrusted: () => ({ changed: false, path: "/stub/.claude.json" }),
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      expect(spy.env().CLAUDE_CONFIG_DIR).toBe("/custom/cfg"); // passed through via -e (pane == writer)
+      expect(spy.command()).not.toContain("CLAUDE_CONFIG_DIR"); // NOT in the `env -u` unset list
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("a THROWING ensureCwdTrusted is best-effort: warns and the spawn still proceeds", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-trustthrow-cwd-");
+    const home = tmp("rc-trustthrow-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const { tracer, records } = recordingTracer();
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+        tracer,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "30303030-3030-4030-8030-303030303030",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        ensureCwdTrusted: () => {
+          throw new Error("EACCES boom");
+        },
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0); // spawn proceeded despite the throw
+      expect(spy.calls.some((c) => c[0] === "new-session")).toBe(true);
+      expect(records.some((r) => r.level === "warn" && r.msg.includes("folder trust"))).toBe(true);
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("a BAILED ensureCwdTrusted (unreadable/malformed config) WARNS — not a silent no-op — and spawns", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-trustbail-cwd-");
+    const home = tmp("rc-trustbail-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const { tracer, records } = recordingTracer();
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+        tracer,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "40404040-4040-4040-8040-404040404040",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        ensureCwdTrusted: () => ({ changed: false, bailed: true, path: "/stub/.claude.json" }),
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      expect(records.some((r) => r.level === "warn" && r.msg.includes("folder trust"))).toBe(true);
     } finally {
       ac.abort();
       await run;
