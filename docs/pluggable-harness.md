@@ -356,9 +356,13 @@ ignores it (it has no harness analogue) but must let it pass through the stream.
   in, the `permission_resolved` log frame, AskUserQuestion's `questions` echo, the `q.map` fix) is
   **entirely in the relay**. A driver participates only at the harness boundary: to *raise* a gate it
   `pushUpstream`s a `can_use_tool` control_request; to *apply* an answer it observes the
-  `control_response` in `followDownstream`. A driver that can't surface structured gates declares
-  `capabilities.structuredPermissions = false` and either auto-approves (tmux v1:
-  `--dangerously-skip-permissions`) or runs single-user trusted.
+  `control_response` in `followDownstream`. All three drivers mirror gates by default
+  (`structuredPermissions: true`): MITM via claude's native RC, **tmux** via an injected **PreToolUse
+  hook**, **opencode** via the **session permission API** (PATCH an ask-all rule ↔ SSE
+  `permission.asked`). Each opts out (flipping `structuredPermissions` to `false`), but the opt-outs are
+  NOT identical: `--rc-tmux-skip-permissions` restores hands-off auto-approve
+  (`--dangerously-skip-permissions`), while `--rc-oc-skip-permissions` only skips the ask-PATCH and leaves
+  opencode's **own** session permission config in place (auto-run unless that config already asks).
 - **Attachments.** `relay.#handleAttachment` decrypts the viewer's bytes, writes them under
   `attachmentsDir`, and **injects a normal `user` prompt** (`@"<path>" …` / a Read directive). The
   driver never sees an `attachment` frame — only the resulting downstream `user` event. So
@@ -452,10 +456,13 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
    user + control verbs; a paste+Enter has a ~40ms settle, so a burst of verbs can race. Mitigation:
    per-driver serialization of the inject loop (process one downstream event fully before the next);
    map only `interrupt` (→ ESC) and `end` (→ kill) in v1, others best-effort.
-4. **Permission fidelity on non-structured drivers.** tmux v1 auto-approves
-   (`--dangerously-skip-permissions`), so no `can_use_tool` ever surfaces; a viewer "deny" can't be
-   honored. Mitigation: declare `structuredPermissions: false`, document the single-user-trusted
-   posture, defer mirroring (via `--permission-prompt-tool`) to a later phase.
+4. **Permission fidelity on non-MITM drivers.** SHIPPED (was deferred): both non-MITM drivers now
+   mirror permissions by default. **tmux** injects a **PreToolUse hook** that blocks each tool until the
+   viewer answers (and pre-seeds claude's folder-trust bit so dropping `--dangerously-skip-permissions`
+   doesn't hang a fresh cwd on the startup trust gate); **opencode** PATCHes an ask-all rule on the
+   session and answers each SSE `permission.asked`. Opt out with `--rc-tmux-skip-permissions` (→
+   `--dangerously-skip-permissions` auto-approve) or `--rc-oc-skip-permissions` (skip the ask-PATCH;
+   opencode keeps its own session permission config) — both flip `structuredPermissions: false`.
 5. **Status accuracy.** Without ground truth (the MITM reads claude's `PUT /worker` status), tmux
    infers `running`/`idle` from a transcript-append debounce, which lags a long "think". Mitigation:
    `capabilities.status = true` only where ground truth exists; document the heuristic; refine later

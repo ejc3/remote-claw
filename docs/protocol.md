@@ -36,7 +36,8 @@ same regardless of driver. Only **how the `Session` reaches `claude`** differs:
 | Driver | Inject (downstream → claude) | Capture (claude → upstream) | Permissions | Provider |
 |---|---|---|---|---|
 | **MITM** (`--rc-app`, `launch.ts`) | intercept claude's RC endpoints → worker downstream | worker upstream POSTs (`followUpstream`) | structured `can_use_tool` gates (§10) | Anthropic API only |
-| **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | `set-buffer`/`paste-buffer` + `send-keys` into the pane (`runInjectPump`) | tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | auto-approve (`--dangerously-skip-permissions`) | any, incl. Bedrock/Vertex |
+| **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | `set-buffer`/`paste-buffer` + `send-keys` into the pane (`runInjectPump`) | tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **default:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10); folder-trust pre-seeded so a fresh cwd's pane doesn't hang. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | any, incl. Bedrock/Vertex |
+| **opencode** (`--rc-driver=opencode`, `opencode/driver.ts`) | POST the prompt to the opencode session → `followDownstream` (+`ack`) | opencode **SSE** event stream → `pushUpstream` | **default:** structured `can_use_tool` gates mirrored via the **session permission API** (PATCH an ask-all rule) ↔ SSE `permission.asked` (§10). **Opt-out** `--rc-oc-skip-permissions` → skip the ask-PATCH; opencode keeps its **own** session permission config (auto-runs unless that config already asks) | any (opencode's own provider config) |
 
 Because the relay owns the attachment write+inject and presence, attachments and the connection-state
 ladder work in **both** modes unchanged — the tmux driver never even sees an `attachment` frame
