@@ -154,4 +154,107 @@ describe("StatusTracker", () => {
     expect(phaseFor("running")).toBe("thinking");
     expect(phaseFor("idle")).toBe("idle");
   });
+
+  it("fires onTurnEnd once on a top-level assistant line with a terminal stop_reason (end_turn)", () => {
+    const s = new Session("cse_1", "t", null);
+    const t = manualTimer();
+    let ends = 0;
+    const st = new StatusTracker({ session: s, timer: t, onTurnEnd: () => ends++ });
+    expect(ends).toBe(0); // nothing on construction
+    st.onLine({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "done" }], stop_reason: "end_turn" },
+    });
+    expect(ends).toBe(1); // fires immediately on the terminal line, not on the debounce
+    // A second turn fires it again (one per real turn end).
+    st.onLine({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "again" }], stop_reason: "stop_sequence" },
+    });
+    expect(ends).toBe(2);
+  });
+
+  it("does NOT fire onTurnEnd during the inter-tool inference gap (the code-review/codex bug)", () => {
+    const s = new Session("cse_1", "t", null);
+    const t = manualTimer();
+    let ends = 0;
+    const st = new StatusTracker({ session: s, timer: t, onTurnEnd: () => ends++ });
+    // assistant calls a tool — stop_reason is "tool_use" (NOT terminal): the turn isn't over.
+    st.onLine({
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: {} }],
+        stop_reason: "tool_use",
+      },
+    });
+    // tool_result closes the tool; #openTools empties and the debounce re-arms.
+    st.onLine({
+      type: "user",
+      message: { content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }] },
+    });
+    // Inference takes >1s before claude's next step → the idle debounce fires. The OLD heuristic emitted a
+    // spurious separator here; the stop_reason-driven design must NOT (no terminal line seen yet).
+    t.fire();
+    expect(s.workerStatus).toBe("idle");
+    expect(ends).toBe(0);
+    // claude finishes for real → exactly one separator for the whole turn.
+    st.onLine({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "the answer" }], stop_reason: "end_turn" },
+    });
+    expect(ends).toBe(1);
+  });
+
+  it("does NOT leak across a fast follow-up prompt (no separator before the next answer)", () => {
+    const s = new Session("cse_1", "t", null);
+    const t = manualTimer();
+    let ends = 0;
+    const st = new StatusTracker({ session: s, timer: t, onTurnEnd: () => ends++ });
+    // Turn A ends.
+    st.onLine({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "A done" }], stop_reason: "end_turn" },
+    });
+    expect(ends).toBe(1);
+    // User sends turn B before the idle debounce fires; claude thinks >1s before B's first line.
+    st.onLine({ type: "user", message: { content: [{ type: "text", text: "now do B" }] } });
+    t.fire(); // the OLD #producedOutput gate leaked here and emitted a spurious separator
+    expect(ends).toBe(1);
+    // B answers → exactly one more separator. A/B boundary preserved, no mid-B separator.
+    st.onLine({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "B done" }], stop_reason: "end_turn" },
+    });
+    expect(ends).toBe(2);
+  });
+
+  it("does NOT fire onTurnEnd for a NESTED sub-agent's terminal line (not the parent's turn end)", () => {
+    const s = new Session("cse_1", "t", null);
+    const t = manualTimer();
+    let ends = 0;
+    const st = new StatusTracker({ session: s, timer: t, onTurnEnd: () => ends++ });
+    // A sub-agent (parent_tool_use_id set) finishes its own turn — must NOT close the parent's turn.
+    st.onLine({
+      type: "assistant",
+      parent_tool_use_id: "toolu_AGENT",
+      message: { content: [{ type: "text", text: "sub done" }], stop_reason: "end_turn" },
+    });
+    expect(ends).toBe(0);
+  });
+
+  it("does NOT fire onTurnEnd for a user prompt or a non-terminal stop_reason", () => {
+    const s = new Session("cse_1", "t", null);
+    const t = manualTimer();
+    let ends = 0;
+    const st = new StatusTracker({ session: s, timer: t, onTurnEnd: () => ends++ });
+    st.onLine({ type: "user", message: { content: [{ type: "text", text: "hi" }] } });
+    // a streaming/partial assistant line with no stop_reason yet
+    st.onLine({ type: "assistant", message: { content: [{ type: "text", text: "thinking" }] } });
+    // a pause_turn (server-tool pause claude resumes) is NOT terminal
+    st.onLine({
+      type: "assistant",
+      message: { content: [{ type: "text", text: "paused" }], stop_reason: "pause_turn" },
+    });
+    expect(ends).toBe(0);
+  });
 });

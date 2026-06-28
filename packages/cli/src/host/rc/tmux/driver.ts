@@ -359,7 +359,15 @@ export async function runTmuxDriver(
     `remote-claw: claude running in tmux — attach with: tmux attach -t ${tmuxName}\n`,
   );
 
-  const status = new StatusTracker({ session });
+  // On each real turn end (a top-level assistant line with a terminal stop_reason), emit a synthetic
+  // `result` frame. Interactive claude never sends one, so without it the viewer shows no turn separator
+  // between tmux turns (the mitm driver, on real RC, does). The relay maps `result` → a turn-sep marker;
+  // an empty `result` is exactly that. handleLine pushes the assistant frame BEFORE calling status.onLine,
+  // so this synthetic result lands immediately after the answer it closes.
+  const status = new StatusTracker({
+    session,
+    onTurnEnd: () => session.pushUpstream({ type: "result", subtype: "success", result: "" }),
+  });
 
   // A pump that crashes is a BUG, not a clean exit — record it so we return non-zero (codex review #3).
   let pumpCrashed = false;
@@ -478,8 +486,10 @@ export async function runTmuxDriver(
         else payload.local_prompt = true; // typed at the local pane → surface it for viewers
       }
     }
-    status.onLine(payload); // ALWAYS: a top-level user text turn is a turn boundary even when suppressed
+    // Push the frame BEFORE status.onLine so that when onLine sees a terminal assistant line and fires
+    // onTurnEnd (→ a synthetic `result`), the result is queued AFTER the assistant answer it closes.
     if (!suppressFrame) session.pushUpstream(payload);
+    status.onLine(payload); // ALWAYS: a top-level user text turn is a turn boundary even when suppressed
   };
 
   // Drain newly-appended lines from the main transcript AND every discovered sub-agent file. Idempotent
