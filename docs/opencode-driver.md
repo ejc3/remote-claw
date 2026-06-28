@@ -267,11 +267,35 @@ git diff --name-only origin/main..HEAD -- \
    client-side by `properties.sessionID`. One driver = one session.
 2. **No token deltas (whole-part re-send).** Matches claude's complete-message-only RC channel.
    Reassemble by `partID`, coalesce to one final frame per message. `message.part.delta` ignored.
-3. **Subagents = child sessions via `parentID`.** OpenCode spawns a sub-agent as a child `ses_…`
-   (`SubtaskPart` / `GET /session/{id}/children`), not inline `parent_tool_use_id` blocks. The driver
-   emits a `Task` `tool_use` with a synthetic `callID`, subscribes to the child (via `session.created`
-   where `parentID` is its session), and tags child frames with `parent_tool_use_id = <Task callID>`.
-   The relay nests them `*_sub` and the viewer renders them under the Task row — no viewer change.
+3. **Subagents = child sessions via `parentID` — IMPLEMENTED (#102).** OpenCode spawns a sub-agent as a
+   child `ses_…` (a `SubtaskPart` on the parent message + a child `Session` whose `parentID` is the
+   parent), not inline `parent_tool_use_id` blocks. The driver renders the `subtask` part as a `Task`
+   `tool_use` anchor whose `id` is the **subtask part's own `prt_…` id** (no synthetic callID needed),
+   FOLLOWS the child on the same server-wide SSE (added to the follow-set on its `session.created`), and
+   tags the child's messages with `parent_tool_use_id = <the subtask part id>`. The relay nests them
+   `*_sub` and the viewer renders them under the Task row — no relay/viewer change.
+
+   - **The discovery hook:** a child's `session.created` carries the *child's own* (not-yet-followed) id,
+     so the client delivers `session.created` to the follow predicate regardless of the follow-set
+     (gating it by the set it would update is circular). Every other event stays gated.
+   - **The child's internal user prompt** (the Task input) is suppressed — it's already shown via the
+     anchor's `prompt`, so it is not re-surfaced as a top-level `local_prompt`. Suppression keys on "is a
+     followed non-main child" (not on whether we tagged it), so an untagged child can't leak its prompt.
+   - **Presence isolation:** only the MAIN session's `session.status`/`idle`/`error` drive the bridge's
+     `workerStatus`; a child going idle never flips presence while the parent is mid-turn.
+   - **Lifecycle / bounds:** a child is unfollowed on its `session.idle` (after its buffers flush), so the
+     follow-set stays bounded by *in-flight* children, not lifetime children. Only LIVE `subtask` anchors
+     are enqueued for correlation (backfill is excluded — a stale historical anchor would otherwise mis-nest
+     the next same-agent child). The correlation queue is keyed by **(parent session, agent)**, so two
+     parents spawning the same agent never cross-tag. A reconnect re-backfills in-flight children too (SSE
+     has no replay), so child output isn't lost across a transient drop.
+   - **v1 correlation limit (display-only):** the `subtask` part carries no child session id (opencode
+     links the child only via `parentID`), so a child is paired to its Task by (parent, agent, FIFO order).
+     Only CONCURRENT same-agent subtasks **from the same parent** can mis-nest in the viewer; never a
+     dropped message (an unmatched child just stays top-level). Also: attaching to a session whose Tasks
+     ALREADY finished renders the Task anchors from history but does not re-fetch the past child output
+     (no children-discovery on attach yet — `GET /session/{id}/children`). Revisit both if opencode exposes
+     a part→child id link.
 4. **File upload.** v1 keeps relay.ts unchanged: the relay's existing attachment-on-disk + "use Read"
    flow runs and OpenCode's `read` tool reads the path. A later version sends a native `FilePart`.
 5. **Permission "always" + permission modes.** No exact analog; v1 maps `auto`->`always`,

@@ -55,6 +55,20 @@ export interface ToolPart {
   state: ToolState;
 }
 
+/** A `subtask` part: emitted on a PARENT message when OpenCode spawns a Task/subagent as a CHILD session
+ *  (verified against the live server's GET /doc — SubtaskPart). It carries the spawning part `id`
+ *  (`prt_…`), the `agent` name, and the `prompt`/`description`; it does NOT carry the child session id
+ *  (the child Session.parentID points back instead — see driver child-following). We render it as a `Task`
+ *  tool_use ANCHOR so the child session's bridged messages can nest under it (parent_tool_use_id = this
+ *  part's id), giving native-RC-style Task nesting in the viewer. */
+export interface SubtaskPart {
+  type: "subtask";
+  id: string;
+  prompt?: string;
+  description?: string;
+  agent?: string;
+}
+
 /** The three part types the driver actually renders — a clean discriminated union that narrows on
  *  `type`. `partToBlocks` switches over THIS, after a guard filters out everything else. */
 export type KnownPart = TextPart | ReasoningPart | ToolPart;
@@ -67,7 +81,7 @@ export interface OtherPart {
   id: string;
 }
 
-export type Part = KnownPart | OtherPart;
+export type Part = KnownPart | SubtaskPart | OtherPart;
 
 const KNOWN_PART_TYPES = new Set(["text", "reasoning", "tool"]);
 
@@ -97,7 +111,24 @@ const EMPTY: PartBlocks = { assistant: [], toolResults: [] };
  * anyway; dropping synthetic here avoids double-rendering the user prompt echo). Everything else → EMPTY.
  */
 export function partToBlocks(part: Part): PartBlocks {
-  if (!isKnownPart(part)) return EMPTY; // step/snapshot/patch/agent/retry/compaction/file/subtask/new
+  // A `subtask` part → a `Task` tool_use ANCHOR (no result here; the child session's bridged output nests
+  // under it via parent_tool_use_id = this part's id). Mirrors native RC's Task tool_use shape so the
+  // viewer renders a Task row. Handled before the KnownPart guard since it's not a rendered KnownPart.
+  if (part.type === "subtask") {
+    const sp = part as SubtaskPart;
+    const toolUse: ToolUseBlock = {
+      type: "tool_use",
+      name: "Task",
+      id: sp.id,
+      input: {
+        subagent_type: sp.agent ?? "",
+        description: sp.description ?? "",
+        prompt: sp.prompt ?? "",
+      },
+    };
+    return { assistant: [toolUse], toolResults: [] };
+  }
+  if (!isKnownPart(part)) return EMPTY; // step/snapshot/patch/agent/retry/compaction/file/new
   switch (part.type) {
     case "text": {
       const text = typeof part.text === "string" ? part.text : "";
@@ -140,12 +171,9 @@ export function partToBlocks(part: Part): PartBlocks {
       // pending / running: the call exists, no result yet.
       return { assistant: [toolUse], toolResults: [] };
     }
-    // step boundaries, snapshot, patch, agent, retry, compaction, file, subtask, unknown → dropped here.
-    // V1 LIMITATION (review #7): a `subtask` part marks a Task/SUBAGENT spawned as a CHILD OpenCode
-    // session. We drop it here and the driver never tags messages with a parentToolUseId, so a Task run
-    // shows no nested Task row / no subagent output in the viewer. coalesceMessage already accepts a
-    // parentToolUseId for when child-session bridging lands (follow whichever child sessions a parent
-    // spawns and tag their messages); that is deferred follow-up work, not a bug.
+    // step boundaries, snapshot, patch, agent, retry, compaction, file, unknown → dropped here.
+    // (`subtask` is handled above as a Task tool_use anchor; the driver follows the spawned child session
+    // and tags its messages with parent_tool_use_id = the subtask part's id so they nest under the Task.)
     default:
       return EMPTY;
   }

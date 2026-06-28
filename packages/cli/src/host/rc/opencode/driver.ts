@@ -16,14 +16,17 @@
 //                  /worker/events/delivery, so we call session.ack(ev.eventId) after EVERY successful
 //                  inject, INCLUDING the leading `initialize` control_request.
 //
-// V1 LIMITATIONS (documented, intentional — not bugs):
-//   • SUBAGENTS NOT BRIDGED (review #7). OpenCode spawns a Task/subagent as a CHILD session and emits a
-//     `subtask` part on the parent message. translate.ts drops `subtask` parts (partToBlocks → EMPTY) and
-//     the driver never passes parentToolUseId, so coalesceMessage tags nothing; the client also filters
-//     events to ONE sessionID, so child-session events are not captured. A Task run therefore shows no
-//     nested Task row / no subagent output in the web viewer. Bridging child sessions (follow whichever
-//     child sessions a parent spawns, tag their messages with the parent Task tool_use id) is follow-up
-//     work — coalesceMessage already accepts a parentToolUseId for when it lands.
+// SUB-AGENTS (Task) ARE BRIDGED (#102). OpenCode spawns a Task/subagent as a CHILD session
+// (Session.parentID → the parent) and emits a `subtask` part on the parent message. translate.ts renders
+// that part as a `Task` tool_use ANCHOR; the driver FOLLOWS the child session on the same server-wide SSE
+// (the events() predicate adds it on `session.created`) and tags the child's assistant messages with
+// parent_tool_use_id = the subtask part's id, so the viewer NESTS them under the Task — like native RC.
+//   • V1 correlation limit: the subtask part carries no child session id (opencode links the child only
+//     via parentID), so a child is matched to its Task by parent+agent+FIFO order. With CONCURRENT
+//     same-agent subtasks from one parent the pairing can swap — a display-only mis-nest, never a dropped
+//     message (an unmatched child just stays top-level). Revisit if opencode exposes a part→child id link.
+//
+// OTHER V1 LIMITATIONS (documented, intentional — not bugs):
 //   • RELAY DEATH DOES NOT END OPENCODE (review #8, intentional). bridgeSession's serve() can end (the
 //     broker dropped / the remote viewer went away); the driver KEEPS opencode running. The wrapper is
 //     thin: the local TUI stays usable and the remote view reconnects when the broker recovers. run()
@@ -43,13 +46,20 @@ import type { GitInfo } from "../gitinfo.js";
 import { RelayCore, type Session } from "../session.js";
 import {
   DEFAULT_OPENCODE_URL,
+  eventSessionId,
   type HistoryMessage,
   OpencodeClient,
   type OpencodeClientOptions,
   type OpencodeEvent,
   type OpencodeModel,
 } from "./client.js";
-import { coalesceMessage, type Part, userPartsText, userText } from "./translate.js";
+import {
+  coalesceMessage,
+  type Part,
+  type SubtaskPart,
+  userPartsText,
+  userText,
+} from "./translate.js";
 
 export const DEFAULT_OPENCODE_MODEL: OpencodeModel = {
   providerID: "ollama",
@@ -216,6 +226,33 @@ export class OpencodeDriver implements Driver {
   /** The active model to use for the next prompt_async; updated by a set_model control verb. */
   #activeModel: OpencodeModel;
 
+  // ── Sub-agent (Task) bridging (#102) ──────────────────────────────────────────────────────────────
+  // OpenCode spawns a Task/subagent as a CHILD session (Session.parentID → the parent) and emits a
+  // `subtask` part on the parent message (rendered as a Task tool_use anchor in translate.ts). We FOLLOW
+  // child sessions on the same server-wide SSE and tag their assistant messages with parent_tool_use_id =
+  // the spawning subtask part's id, so the viewer NESTS them under the Task — like native RC.
+  /** OpenCode session ids this driver captures: the main session + every followed child. The events()
+   *  predicate reads this live, so adding a child here makes the running SSE start delivering its events. */
+  readonly #followed = new Set<string>();
+  /** The MAIN bridged session id — only ITS status/idle events drive the relay's workerStatus (a child
+   *  going idle must not flip the bridge idle while the parent is still waiting on the subagent). */
+  #mainSessionId = "";
+  /** child OpenCode sessionID → the spawning subtask part's id (the Task tool_use anchor). A message from
+   *  a followed child is tagged parent_tool_use_id = this so it nests under the Task. Bounded (review #6). */
+  readonly #childTag = new BoundedMap<string>(DEFAULT_EMITTED_CAP);
+  /** messageID → the OpenCode sessionID it belongs to (from the part/info sessionID), so flush can look up
+   *  the child tag for a message buffered across sessions. Bounded (review #6). */
+  readonly #msgSession = new BoundedMap<string>(DEFAULT_EMITTED_CAP);
+  /** (parentSession, agent) key → FIFO queue of subtask part ids awaiting their child session. A
+   *  `session.created` with a matching parentID+agent pops the oldest (the subtask part carries no child id
+   *  — opencode links the child only via Session.parentID, verified vs GET /doc — so we correlate by
+   *  parent+agent+order). Keyed by parent (not agent alone) so concurrent same-agent Tasks from different
+   *  parents don't cross-tag. Only LIVE anchors are enqueued (backfill is excluded — see #onEvent). */
+  readonly #pendingSubtasks = new Map<string, string[]>();
+  /** subtask part ids already enqueued, so a re-sent `message.part.updated` (opencode resends whole parts)
+   *  doesn't enqueue the same anchor twice. Bounded (review #6). */
+  readonly #notedSubtasks = new BoundedSet(DEFAULT_EMITTED_CAP);
+
   constructor(ctx: DriverContext) {
     this.#ctx = ctx;
     this.#extra = readExtra(ctx.extra);
@@ -358,9 +395,10 @@ export class OpencodeDriver implements Driver {
       const role = typeof m.info.role === "string" ? m.info.role : undefined;
       if (role !== undefined) this.#roles.set(id, role);
       if (this.#emitted.has(id)) continue; // already emitted on a prior connection's backfill / live
-      // Seed the buffer from the history parts (shared with the live path: coalesce + later flush).
+      // Seed the buffer from the history parts (shared with the live path: coalesce + later flush). The
+      // backfilled session (ocSessionId — main OR a followed child) is the authoritative message owner.
       for (const part of m.parts) {
-        if (part && typeof part.id === "string") this.#bufferPart(id, part);
+        if (part && typeof part.id === "string") this.#bufferPart(id, part, ocSessionId);
       }
       // An INCOMPLETE assistant message (mid-turn attach) is left BUFFERED, not flushed — the live
       // completion flushes the full text. Everything else (a completed assistant, or a user message that
@@ -389,6 +427,10 @@ export class OpencodeDriver implements Driver {
    * re-seeds and completes live) — subscribe-first, lossless, no truncation/dup across reconnects.
    */
   async #capturePump(session: Session, ocSessionId: string, signal: AbortSignal): Promise<void> {
+    // Seed the followed-session set with the main session; child sub-agent sessions are added live as
+    // `session.created` events with a matching parentID arrive (#102). Children persist across reconnects.
+    this.#mainSessionId = ocSessionId;
+    this.#followed.add(ocSessionId);
     let backoffMs = RECONNECT_BACKOFF_MIN_MS;
     while (!signal.aborted) {
       try {
@@ -422,7 +464,12 @@ export class OpencodeDriver implements Driver {
     signal: AbortSignal,
   ): Promise<void> {
     let backfilled = false;
-    for await (const ev of this.#client.events(ocSessionId, signal)) {
+    // Follow the main session AND any child sub-agent sessions added to #followed live (#102). The
+    // predicate reads #followed each event, so a child added mid-stream starts being delivered at once.
+    for await (const ev of this.#client.events(
+      (id) => id !== undefined && this.#followed.has(id),
+      signal,
+    )) {
       if (signal.aborted) return;
       if (!backfilled) {
         // The SSE is now LIVE (we received the first event — OpenCode sends `server.connected` on
@@ -433,6 +480,22 @@ export class OpencodeDriver implements Driver {
         backfilled = true;
         try {
           await this.#backfillHistory(session, ocSessionId);
+          // Re-backfill any IN-FLIGHT followed child sub-agent sessions too: GET /event has no replay, so a
+          // child that produced output during the SSE drop would otherwise be lost (codex review). #emitted
+          // dedups what already landed, and finished children were unfollowed on their session.idle, so this
+          // set holds only still-running children — small. On the FIRST connect #followed is just the main
+          // (no children yet), so this is a no-op then. (#102)
+          for (const childId of [...this.#followed]) {
+            if (childId === this.#mainSessionId) continue;
+            try {
+              await this.#backfillHistory(session, childId);
+            } catch (e) {
+              this.#tracer.warn("opencode child backfill failed", {
+                childId,
+                error: String(e),
+              });
+            }
+          }
         } catch (e) {
           this.#tracer.warn("opencode history backfill failed", { error: String(e) });
         }
@@ -446,11 +509,24 @@ export class OpencodeDriver implements Driver {
 
   /** Route one OpenCode SSE event. Pure dispatch — all the buffering/coalescing lives in the helpers. */
   #onEvent(session: Session, ev: OpencodeEvent): void {
+    // Which OpenCode session this event is for (main or a followed child) — drives per-session status/idle
+    // routing so a child going idle doesn't flip the whole bridge idle while the parent waits (#102).
+    // Shared derivation with the client filter (eventSessionId) so the two never drift. (undefined for
+    // session.created — that case reads info.id/parentID directly below.)
+    const evSession = eventSessionId(ev.properties);
     switch (ev.type) {
       case "message.part.updated": {
         const part = ev.properties.part;
         if (part && typeof part.messageID === "string") {
-          this.#bufferPart(part.messageID, part);
+          // Record the message→session map from the EVENT's session (authoritative; the part's own
+          // sessionID field may be absent — codex review). For a child part this is the child session.
+          this.#bufferPart(part.messageID, part, evSession);
+          // Note a subtask anchor ONLY on the LIVE stream, keyed by the PARENT (= this event's session).
+          // Backfill must NOT enqueue historical anchors — their children already exist, so a stale anchor
+          // would be popped by the next same-agent child and mis-nest it (codex review).
+          if (part.type === "subtask" && evSession !== undefined) {
+            this.#noteSubtask(part as SubtaskPart, evSession);
+          }
         }
         break;
       }
@@ -478,30 +554,76 @@ export class OpencodeDriver implements Driver {
         }
         break;
       }
+      case "session.created": {
+        // A new session: if it's a CHILD of one we follow (Session.parentID ∈ #followed), follow it and
+        // map it to the spawning subtask part (by parent+agent+order) so its messages nest under the Task
+        // tool_use anchor in the viewer (#102). The subtask part carries no child id — opencode links the
+        // child only via parentID — so this parent+agent+FIFO correlation is the available mechanism.
+        const info = ev.properties.info as
+          | { id?: string; parentID?: string; agent?: string }
+          | undefined;
+        const childId = info?.id;
+        const parentId = info?.parentID;
+        if (
+          typeof childId === "string" &&
+          typeof parentId === "string" &&
+          this.#followed.has(parentId)
+        ) {
+          this.#followed.add(childId);
+          // Pair to the spawning subtask anchor by (PARENT session, agent) FIFO — keying by agent alone
+          // would let two parents spawning the same agent steal each other's anchors (codex review).
+          const agent = typeof info?.agent === "string" ? info.agent : "";
+          const prt = this.#takePendingSubtask(parentId, agent);
+          if (prt !== undefined) this.#childTag.set(childId, prt);
+          this.#tracer.info("following child sub-agent session", {
+            childId,
+            parentId,
+            agent: info?.agent,
+            taskAnchor: prt ?? null,
+          });
+        }
+        break;
+      }
       case "session.status": {
-        const status = ev.properties.status?.type;
-        // "busy"/"running" → thinking; anything else → idle. The relay's phaseFor reads running/busy.
-        session.workerStatus = status === "busy" || status === "running" ? "running" : "idle";
-        session.wake();
+        // Only the MAIN session's status drives the bridge's workerStatus — a child going busy/idle must
+        // not flip presence while the parent is mid-turn waiting on the subagent (#102).
+        if (evSession === this.#mainSessionId) {
+          const status = ev.properties.status?.type;
+          // "busy"/"running" → thinking; anything else → idle. The relay's phaseFor reads running/busy.
+          session.workerStatus = status === "busy" || status === "running" ? "running" : "idle";
+          session.wake();
+        }
         break;
       }
       case "session.idle": {
-        // Turn complete: flush every still-buffered message, then mark idle.
-        for (const id of [...this.#buffers.keys()]) this.#flushMessage(session, id);
-        session.workerStatus = "idle";
-        session.wake();
+        // Turn complete for THIS session: flush only ITS still-buffered messages (a child idle must not
+        // prematurely flush the parent's in-flight message). Only the main idle marks the bridge idle.
+        this.#flushSessionBuffers(session, evSession);
+        if (evSession === this.#mainSessionId) {
+          session.workerStatus = "idle";
+          session.wake();
+        } else if (evSession !== undefined && this.#followed.has(evSession)) {
+          // A followed CHILD finished: drop it from the follow-set AFTER flushing its buffers, so #followed
+          // (the one unbounded structure) stays bounded by IN-FLIGHT children, not lifetime children (codex
+          // review). Its tag in #childTag (a BoundedMap) is harmless once unfollowed and ages out.
+          this.#followed.delete(evSession);
+          this.#tracer.debug("unfollowed finished child sub-agent", { childId: evSession });
+        }
         break;
       }
       case "session.error": {
-        // A run FAILED (provider 5xx, bad model, OOM, …). Flush any partial first, then surface the
-        // error as a `result` frame so the viewer SHOWS the failure AND leaves the "working" state —
-        // otherwise it just flips idle with no explanation (the documented contract).
-        for (const id of [...this.#buffers.keys()]) this.#flushMessage(session, id);
+        // A run FAILED (provider 5xx, bad model, OOM, …). Flush THIS session's partials first, then surface
+        // the error as a `result` frame so the viewer SHOWS the failure AND leaves the "working" state —
+        // otherwise it just flips idle with no explanation (the documented contract). Only the main error
+        // flips the bridge idle; a child sub-agent error is surfaced but doesn't end the parent turn (#102).
+        this.#flushSessionBuffers(session, evSession);
         const msg = errText(ev.properties.error);
-        this.#tracer.warn("session.error", { error: msg });
+        this.#tracer.warn("session.error", { error: msg, session: evSession });
         session.pushUpstream({ type: "result", result: `⚠ OpenCode error: ${msg}` });
-        session.workerStatus = "idle";
-        session.wake();
+        if (evSession === this.#mainSessionId) {
+          session.workerStatus = "idle";
+          session.wake();
+        }
         break;
       }
       case "permission.asked":
@@ -512,7 +634,18 @@ export class OpencodeDriver implements Driver {
         session.wake(); // keep presence fresh
         break;
       default:
-        break; // session.created/updated/diff/etc. — not relayed
+        break; // session.updated/diff/next.*/etc. — not relayed
+    }
+  }
+
+  /** Flush every buffered message that belongs to `evSession` (its recorded session, defaulting to the
+   *  main session for an untagged message). Shared by session.idle and session.error so a child's
+   *  idle/error flushes ONLY its own in-flight messages — never the parent's (#102). */
+  #flushSessionBuffers(session: Session, evSession: string | undefined): void {
+    for (const id of [...this.#buffers.keys()]) {
+      if ((this.#msgSession.get(id) ?? this.#mainSessionId) === evSession) {
+        this.#flushMessage(session, id);
+      }
     }
   }
 
@@ -526,9 +659,18 @@ export class OpencodeDriver implements Driver {
   }
 
   /** Buffer (or replace) a whole part under its messageID. OpenCode re-sends the whole part, so a later
-   *  update for the same partID REPLACES the earlier one — that's the coalesce. */
-  #bufferPart(messageId: string, part: Part): void {
+   *  update for the same partID REPLACES the earlier one — that's the coalesce. `ocSession` is the EVENT's
+   *  session (the authoritative owner of this message — see #onEvent / #backfillHistory). */
+  #bufferPart(messageId: string, part: Part, ocSession?: string): void {
     if (this.#emitted.has(messageId)) return; // already flushed — ignore late/duplicate parts (#2)
+    // Record which OpenCode session this message belongs to so flush can look up its Task nesting tag. The
+    // EVENT's session (ocSession) is authoritative — the part's own `sessionID` field is absent on some
+    // shapes, which would otherwise mis-file a child message under the main session (codex review). Fall
+    // back to the part field, then leave unset (flush defaults the message to the main session). (#102)
+    const sid = ocSession ?? (part as { sessionID?: string }).sessionID;
+    if (typeof sid === "string" && sid !== "") this.#msgSession.set(messageId, sid);
+    // (subtask anchors are noted on the LIVE message.part.updated path in #onEvent, NOT here — so backfill
+    // doesn't enqueue stale historical anchors that would mis-nest the next same-agent child. #102/codex.)
     let buf = this.#buffers.get(messageId);
     if (!buf) {
       buf = { parts: new Map(), order: [] };
@@ -556,7 +698,17 @@ export class OpencodeDriver implements Driver {
       .map((id) => buf.parts.get(id))
       .filter((p): p is Part => p !== undefined);
 
+    // Is this message from a followed CHILD sub-agent session? If so, nest it under its spawning Task by
+    // tagging parent_tool_use_id = the subtask part's id (#102). undefined → a top-level (main) message.
+    const ocSession = this.#msgSession.get(messageId) ?? this.#mainSessionId;
+    const childTag = this.#childTag.get(ocSession);
+
     if (this.#roles.get(messageId) === "user") {
+      // A followed CHILD (non-main) session's user message is the subagent's INTERNAL prompt (the Task
+      // input) — already shown via the Task tool_use anchor's `prompt`. Suppress it whether or not we
+      // managed to TAG the child: an untagged child (e.g. its session.created raced ahead of the subtask
+      // part) still must not leak its internal prompt as a top-level local_prompt (codex review). (#102)
+      if (ocSession !== this.#mainSessionId && this.#followed.has(ocSession)) return;
       const text = userPartsText(parts);
       if (text !== "" && this.#consumeInjected(text)) return; // our own echo — suppress
       if (text === "") return; // an empty/synthetic-only user message — nothing to surface
@@ -572,12 +724,20 @@ export class OpencodeDriver implements Driver {
       return;
     }
 
-    const payloads = coalesceMessage(messageId, parts);
+    const payloads = coalesceMessage(
+      messageId,
+      parts,
+      childTag !== undefined ? { parentToolUseId: childTag } : {},
+    );
     for (const p of payloads) {
       session.pushUpstream(p as unknown as Record<string, unknown>); // COALESCE (#1): once per message
     }
     if (payloads.length > 0) {
-      this.#tracer.debug("flushed message", { messageId, payloads: payloads.length });
+      this.#tracer.debug("flushed message", {
+        messageId,
+        payloads: payloads.length,
+        ...(childTag !== undefined ? { nestedUnder: childTag } : {}),
+      });
     }
   }
 
@@ -593,6 +753,33 @@ export class OpencodeDriver implements Driver {
     const n = this.#injectedTexts.get(text) ?? 0;
     if (n <= 1) this.#injectedTexts.delete(text);
     else this.#injectedTexts.set(text, n - 1);
+  }
+
+  /** Note a `subtask` part seen on a PARENT message: enqueue its id under (parentSession, agent) so the
+   *  child session it spawns — correlated by parentID+agent+FIFO order — can be tagged to nest under this
+   *  Task. Keyed by the PARENT session (not agent alone) so two parents spawning the same agent can't steal
+   *  each other's anchors (codex review). Idempotent across re-sent parts (#notedSubtasks dedups by id). */
+  #noteSubtask(part: SubtaskPart, parentSession: string): void {
+    if (typeof part.id !== "string" || part.id === "" || this.#notedSubtasks.has(part.id)) return;
+    this.#notedSubtasks.add(part.id);
+    const agent = typeof part.agent === "string" ? part.agent.trim() : "";
+    const key = pendingKey(parentSession, agent);
+    const q = this.#pendingSubtasks.get(key) ?? [];
+    q.push(part.id);
+    this.#pendingSubtasks.set(key, q);
+  }
+
+  /** Pop the oldest pending subtask-part id for (parentSession, agent) FIFO — the Task anchor for a just-
+   *  created child of that agent under that parent. Returns undefined if none pending (the child nests
+   *  nothing → its messages stay top-level, the safe fallback). Agent is trimmed to match #noteSubtask so a
+   *  stray whitespace difference between the part and the session.created doesn't orphan the child (codex). */
+  #takePendingSubtask(parentSession: string, agent: string): string | undefined {
+    const key = pendingKey(parentSession, agent.trim());
+    const q = this.#pendingSubtasks.get(key);
+    if (q === undefined || q.length === 0) return undefined;
+    const prt = q.shift();
+    if (q.length === 0) this.#pendingSubtasks.delete(key);
+    return prt;
   }
 
   /** Consume one injected-text entry matching `text`. Returns true (and decrements) if this user message
@@ -747,6 +934,12 @@ export class OpencodeDriver implements Driver {
     await this.#client.replyPermission(ocSessionId, requestId, reply);
     this.#tracer.debug("permission replied", { requestId, reply });
   }
+}
+
+/** Compose the #pendingSubtasks key from a parent session id + agent name. A NUL joiner can't appear in
+ *  either field, so distinct (parent, agent) pairs never collide. */
+function pendingKey(parentSession: string, agent: string): string {
+  return `${parentSession} ${agent}`;
 }
 
 /** Resolve when `signal` aborts (the pump-coupling sentinel in run()'s Promise.race). */

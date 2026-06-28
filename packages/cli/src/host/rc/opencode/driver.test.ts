@@ -121,7 +121,10 @@ class FakeOpencodeClient extends OpencodeClient {
    *  models a transient SSE drop the driver must reconnect from (review #2). */
   connectionScripts: OpencodeEvent[][] | null = null;
 
-  override async *events(_sessionId: string, signal: AbortSignal): AsyncGenerator<OpencodeEvent> {
+  override async *events(
+    want: string | ((id: string | undefined) => boolean),
+    signal: AbortSignal,
+  ): AsyncGenerator<OpencodeEvent> {
     const idx = this.connections;
     this.connections++;
     const scripts = this.connectionScripts;
@@ -129,10 +132,30 @@ class FakeOpencodeClient extends OpencodeClient {
     // The LAST connection (or the only one) parks after its script; earlier connections EOF to model a
     // drop. A real SSE stream stays open after a turn, so parking-until-abort is the faithful default.
     const isLast = scripts ? idx >= scripts.length - 1 : true;
+    // Replicate the REAL client's server-wide filter (client.ts events()) so the driver tests exercise the
+    // genuine follow-gating: a child sub-agent's events are NOT delivered until the driver follows it, and
+    // a `session.created` (the discovery event) IS delivered to a predicate consumer even for a not-yet-
+    // followed session (#102). `want` is read at yield time so a child added to #followed mid-stream starts
+    // being delivered immediately (the predicate closes over the driver's live #followed set).
+    const isPredicate = typeof want === "function";
+    const deliver = (ev: OpencodeEvent): boolean => {
+      // Discovery: a predicate consumer gets EVERY session.created BEFORE any session filtering (its
+      // session is the not-yet-followed child, possibly carried only as info.id) — matches client.ts.
+      if (isPredicate && ev.type === "session.created") return true;
+      const props = ev.properties as
+        | { sessionID?: string; part?: { sessionID?: string }; info?: { sessionID?: string } }
+        | undefined;
+      const evSession = props?.sessionID ?? props?.part?.sessionID ?? props?.info?.sessionID;
+      if (evSession === undefined) return ev.type.startsWith("server.");
+      return isPredicate
+        ? (want as (id: string | undefined) => boolean)(evSession)
+        : evSession === want;
+    };
     for (const ev of events) {
       if (signal.aborted) return;
       // Yield to the event loop so the inject pump + relay interleave realistically.
       await new Promise((r) => setTimeout(r, 0));
+      if (!deliver(ev)) continue; // gated by the same filter the real server-wide stream applies
       yield ev;
     }
     if (!isLast) return; // EOF → the driver's #capturePump must reconnect (NOT tear down) — review #2.
@@ -165,6 +188,59 @@ function sessionError(error: unknown): OpencodeEvent {
     type: "session.error",
     properties: { sessionID: SES, error },
   } as unknown as OpencodeEvent;
+}
+
+// ── Sub-agent (child session) event builders (#102) ─────────────────────────────────────────────────
+// A child sub-agent runs as a SEPARATE OpenCode session whose events carry the CHILD's id (a part event
+// nests the id in `part.sessionID`, matching the real shape). The driver follows the child on a
+// `session.created` whose `info.parentID` is the bridged session, and tags the child's messages with the
+// spawning subtask part's id so they nest under the Task tool_use anchor.
+const CHILD = "ses_child";
+/** A `session.created` for a child session (parentID → its parent, agent → which subagent spawned it). The
+ *  event's own session is the NEW child id (`properties.sessionID = info.id`), so the real filter only
+ *  delivers it via the discovery exception — exactly the path #102 depends on. */
+function sessionCreated(info: { id: string; parentID?: string; agent?: string }): OpencodeEvent {
+  return {
+    type: "session.created",
+    properties: { sessionID: info.id, info },
+  } as unknown as OpencodeEvent;
+}
+/** A `message.part.updated` for the CHILD session — the session id rides on `part.sessionID` (the nested
+ *  shape the real server uses for part events), so the driver records it in #msgSession for tag lookup. */
+function childPart(p: Record<string, unknown>): OpencodeEvent {
+  return {
+    type: "message.part.updated",
+    properties: { part: { ...p, sessionID: CHILD } },
+  } as unknown as OpencodeEvent;
+}
+function childMsgUpdated(info: Record<string, unknown>): OpencodeEvent {
+  return {
+    type: "message.updated",
+    properties: { sessionID: CHILD, info },
+  } as unknown as OpencodeEvent;
+}
+function childIdle(): OpencodeEvent {
+  return { type: "session.idle", properties: { sessionID: CHILD } };
+}
+function statusOf(sid: string, type: string): OpencodeEvent {
+  return { type: "session.status", properties: { sessionID: sid, status: { type } } };
+}
+// Generalized variants for tests with MULTIPLE child sessions (the part's session rides on part.sessionID,
+// the nested shape the real server uses for part events).
+function partFor(sid: string, p: Record<string, unknown>): OpencodeEvent {
+  return {
+    type: "message.part.updated",
+    properties: { part: { ...p, sessionID: sid } },
+  } as unknown as OpencodeEvent;
+}
+function msgUpdatedFor(sid: string, info: Record<string, unknown>): OpencodeEvent {
+  return {
+    type: "message.updated",
+    properties: { sessionID: sid, info },
+  } as unknown as OpencodeEvent;
+}
+function idleFor(sid: string): OpencodeEvent {
+  return { type: "session.idle", properties: { sessionID: sid } };
 }
 
 // The captured live sequence for "Reply with exactly: OK": the user prompt echo part (synthetic-free
@@ -782,6 +858,278 @@ describe("OpencodeDriver — documented behavior (session.error / /compact / bla
     ).toBe(true);
     // …and the session left the "working" state rather than hanging.
     expect((captured as unknown as Session).workerStatus).toBe("idle");
+  });
+});
+
+// ── SUB-AGENT (Task) BRIDGING (#102) ─────────────────────────────────────────────────────────────
+// The driver follows a child OpenCode session spawned by a `subtask` part and nests its messages under
+// the Task tool_use anchor. These prove the END-TO-END follow path against the REAL server-wide filter
+// (the FakeOpencodeClient replicates client.ts's gating + discovery exception), so a child's events only
+// flow AFTER its session.created is processed — the exact circular-dependency the discovery exception fixes.
+describe("OpencodeDriver — sub-agent (Task) bridging", () => {
+  let ac: AbortController | null = null;
+  afterEach(() => ac?.abort());
+
+  it("subtask part → Task anchor; the child session's reply nests under it; the child's internal prompt is not surfaced", async () => {
+    const SUBAGENT_SCRIPT: OpencodeEvent[] = [
+      { type: "server.connected", properties: {} },
+      statusOf(SES, "busy"),
+      // The MAIN assistant turn carries a `subtask` part (the Task spawn) alongside some text.
+      part({ type: "text", id: "prt_m1", messageID: "msg_main", text: "I'll investigate." }),
+      part({
+        type: "subtask",
+        id: "prt_task1",
+        messageID: "msg_main",
+        agent: "explore",
+        description: "scout the auth flow",
+        prompt: "find every call site of login()",
+      }),
+      msgUpdated({ id: "msg_main", role: "assistant", time: { created: 1, completed: 2 } }),
+      // The child session is created (parent = SES, agent = explore). Its OWN id is not yet followed, so it
+      // arrives ONLY via the discovery exception — then the driver follows it and tags it to prt_task1.
+      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
+      // The child's INTERNAL user prompt (the Task input) — must NOT surface as a top-level local_prompt.
+      childPart({
+        type: "text",
+        id: "prt_cu",
+        messageID: "msg_cu",
+        text: "internal subagent prompt",
+      }),
+      childMsgUpdated({ id: "msg_cu", role: "user", time: { created: 3 } }),
+      // The child's assistant reply — must nest under the Task (parent_tool_use_id = prt_task1).
+      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "found it" }),
+      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 4, completed: 5 } }),
+      childIdle(),
+      idle(),
+    ];
+    const client = new FakeOpencodeClient(SUBAGENT_SCRIPT);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    // Wait for the CHILD's reply to flush (proves the child was discovered + followed + nested).
+    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
+    ac.abort();
+    const code = await run;
+    expect(code).toBe(0);
+
+    const upstream = up(captured);
+    // 1) The main assistant turn carries the Task tool_use anchor built from the subtask part.
+    const main = upstream.find((e) => e.payload.uuid === "msg_main");
+    expect(main).toBeDefined();
+    const mainContent = (main?.payload.message as { content: Array<Record<string, unknown>> })
+      .content;
+    const task = mainContent.find((b) => b.type === "tool_use" && b.name === "Task");
+    expect(task).toEqual({
+      type: "tool_use",
+      name: "Task",
+      id: "prt_task1",
+      input: {
+        subagent_type: "explore",
+        description: "scout the auth flow",
+        prompt: "find every call site of login()",
+      },
+    });
+    // It is NOT tagged (a top-level main message), and the text block precedes the Task anchor.
+    expect(main?.payload.parent_tool_use_id).toBeUndefined();
+    expect(mainContent[0]).toEqual({ type: "text", text: "I'll investigate." });
+
+    // 2) The child's reply nests under the Task: tagged parent_tool_use_id = prt_task1, content = "found it".
+    const child = upstream.find((e) => e.payload.uuid === "msg_child");
+    expect(child?.eventType).toBe("assistant");
+    expect(child?.payload.parent_tool_use_id).toBe("prt_task1");
+    expect((child?.payload.message as { content: unknown }).content).toEqual([
+      { type: "text", text: "found it" },
+    ]);
+
+    // 3) The child's INTERNAL prompt was NOT surfaced as a local_prompt (it's shown via the Task anchor).
+    const users = upstream.filter((e) => e.eventType === "user");
+    expect(users).toHaveLength(0);
+    expect(
+      upstream.some(
+        (e) => (e.payload.message as { content?: unknown })?.content === "internal subagent prompt",
+      ),
+    ).toBe(false);
+  });
+
+  it("a child sub-agent's idle does NOT flip the bridge to idle while the parent is still running", async () => {
+    // The child completes and idles, but the MAIN session never idles in this script. Only the main
+    // session's idle/status drives workerStatus, so the bridge must stay "running" after the child idles.
+    const SCRIPT: OpencodeEvent[] = [
+      { type: "server.connected", properties: {} },
+      statusOf(SES, "busy"), // main is working → running
+      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
+      statusOf(CHILD, "busy"),
+      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "sub done" }),
+      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 1, completed: 2 } }),
+      statusOf(CHILD, "idle"), // a child going idle must NOT flip the bridge
+      childIdle(), // nor must a child session.idle
+    ];
+    const client = new FakeOpencodeClient(SCRIPT);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
+    await sleep(40); // let the trailing child status:idle + child session.idle process
+    // The parent is still running — neither child-idle event flipped the bridge presence.
+    expect((captured as unknown as Session).workerStatus).toBe("running");
+    ac.abort();
+    await run;
+  });
+
+  it("the MAIN session's idle DOES flip the bridge to idle (control for the isolation test)", async () => {
+    const SCRIPT: OpencodeEvent[] = [
+      { type: "server.connected", properties: {} },
+      statusOf(SES, "busy"),
+      idle(), // main idle → bridge idle
+    ];
+    const client = new FakeOpencodeClient(SCRIPT);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    const wentIdle = await waitFor(
+      () => captured !== null && (captured as unknown as Session).workerStatus === "idle",
+    );
+    expect(wentIdle).toBe(true);
+    ac.abort();
+    await run;
+  });
+
+  // codex #5 — an UNTAGGED followed child (its session.created had no matching subtask anchor) must STILL
+  // suppress its internal user prompt (suppression keys on "is a followed non-main child", not on the tag).
+  it("suppresses an UNTAGGED child's internal prompt and keeps its reply top-level (no anchor matched)", async () => {
+    const SCRIPT: OpencodeEvent[] = [
+      { type: "server.connected", properties: {} },
+      statusOf(SES, "busy"),
+      // No subtask part is ever noted → the child gets NO tag when created.
+      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
+      childPart({
+        type: "text",
+        id: "prt_cu",
+        messageID: "msg_cu",
+        text: "internal subagent prompt",
+      }),
+      childMsgUpdated({ id: "msg_cu", role: "user", time: { created: 1 } }),
+      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "sub reply" }),
+      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 2, completed: 3 } }),
+      childIdle(),
+    ];
+    const client = new FakeOpencodeClient(SCRIPT);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
+    ac.abort();
+    await run;
+    const upstream = up(captured);
+    // The child's internal prompt was NOT surfaced (suppressed despite being untagged) …
+    expect(upstream.filter((e) => e.eventType === "user")).toHaveLength(0);
+    // … and its reply is top-level (untagged) rather than mis-nested.
+    const child = upstream.find((e) => e.payload.uuid === "msg_child");
+    expect(child?.eventType).toBe("assistant");
+    expect(child?.payload.parent_tool_use_id).toBeUndefined();
+  });
+
+  // codex #2 — backfill must NOT enqueue historical subtask anchors. A later live child with the same agent
+  // must NOT nest under a stale anchor from history (we can't reliably correlate a past anchor to a new child).
+  it("does NOT nest a live child under a subtask anchor that came from history backfill", async () => {
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      // a live child of the SAME agent as the historical subtask part
+      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
+      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "fresh reply" }),
+      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 9, completed: 10 } }),
+      childIdle(),
+      idle(),
+    ]);
+    // History: a completed parent assistant turn that INCLUDED a subtask (agent "explore"). Backfill renders
+    // its Task anchor but must NOT enqueue it for correlation (its real child already ran in the past).
+    client.history = [
+      histMsg({ id: "msg_hist", role: "assistant", time: { created: 1, completed: 2 } }, [
+        { type: "text", id: "prt_h", messageID: "msg_hist", text: "did some work" },
+        {
+          type: "subtask",
+          id: "prt_hist_task",
+          messageID: "msg_hist",
+          agent: "explore",
+          description: "old task",
+          prompt: "old prompt",
+        },
+      ]),
+    ];
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
+    ac.abort();
+    await run;
+    const upstream = up(captured);
+    // The historical Task anchor still rendered (history is shown) …
+    const hist = upstream.find((e) => e.payload.uuid === "msg_hist");
+    const histContent = (hist?.payload.message as { content: Array<Record<string, unknown>> })
+      .content;
+    expect(histContent.some((b) => b.type === "tool_use" && b.id === "prt_hist_task")).toBe(true);
+    // … but the LIVE child is NOT mis-nested under that stale anchor (backfill didn't enqueue it).
+    const child = upstream.find((e) => e.payload.uuid === "msg_child");
+    expect(child?.payload.parent_tool_use_id).toBeUndefined();
+  });
+
+  // codex #3 — correlation is keyed by (PARENT session, agent), not agent alone: two parents spawning the
+  // SAME agent must not steal each other's anchors. main(SES) and its followed child C1 both spawn "explore";
+  // a grandchild of C1 must nest under C1's anchor, not main's (agent-only FIFO would mis-tag it).
+  it("keys subtask correlation by (parent, agent): a grandchild nests under its own parent's anchor", async () => {
+    const C1 = "ses_c1";
+    const GC = "ses_gc";
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      statusOf(SES, "busy"),
+      // main spawns worker → C1 (so C1 becomes a followed parent in its own right)
+      part({ type: "subtask", id: "prt_c1_task", messageID: "msg_m", agent: "worker" }),
+      msgUpdated({ id: "msg_m", role: "assistant", time: { created: 1, completed: 2 } }),
+      sessionCreated({ id: C1, parentID: SES, agent: "worker" }),
+      // BOTH main and C1 now enqueue an "explore" anchor (same agent, different parents)
+      part({ type: "subtask", id: "prt_main_explore", messageID: "msg_m2", agent: "explore" }), // parent SES
+      msgUpdated({ id: "msg_m2", role: "assistant", time: { created: 3, completed: 4 } }),
+      partFor(C1, { type: "subtask", id: "prt_c1_explore", messageID: "msg_c1", agent: "explore" }), // parent C1
+      msgUpdatedFor(C1, { id: "msg_c1", role: "assistant", time: { created: 5, completed: 6 } }),
+      // a grandchild of C1 with agent "explore" — must pop C1's anchor (prt_c1_explore), NOT main's
+      sessionCreated({ id: GC, parentID: C1, agent: "explore" }),
+      partFor(GC, { type: "text", id: "prt_gc1", messageID: "msg_gc", text: "grandchild reply" }),
+      msgUpdatedFor(GC, { id: "msg_gc", role: "assistant", time: { created: 7, completed: 8 } }),
+      idleFor(GC),
+    ]);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_gc"));
+    ac.abort();
+    await run;
+    const gc = up(captured).find((e) => e.payload.uuid === "msg_gc");
+    // Parent-keyed correlation → the grandchild nests under C1's anchor; agent-only FIFO would give main's.
+    expect(gc?.payload.parent_tool_use_id).toBe("prt_c1_explore");
   });
 });
 

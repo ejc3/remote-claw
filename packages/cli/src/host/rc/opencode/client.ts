@@ -219,7 +219,16 @@ export class OpencodeClient {
    * framing; non-JSON / comment (`:keepalive`) lines are skipped. CRLF-safe (review #4): a frame may be
    * separated by `\r\n\r\n` OR `\n\n`, and individual lines by `\r\n`/`\n`/`\r`.
    */
-  async *events(sessionId: string, signal: AbortSignal): AsyncGenerator<OpencodeEvent> {
+  async *events(
+    want: string | ((id: string | undefined) => boolean),
+    signal: AbortSignal,
+  ): AsyncGenerator<OpencodeEvent> {
+    // `want` selects which session(s) this connection delivers: a single id (the common case) OR a
+    // predicate (the driver passes one so it can FOLLOW child sub-agent sessions discovered live — #102).
+    const isPredicate = typeof want === "function";
+    const wantSession = isPredicate
+      ? (want as (id: string | undefined) => boolean)
+      : (id: string | undefined) => id === want;
     const res = await this.#fetch(`${this.#baseUrl}/event`, {
       headers: this.#headers(false),
       signal,
@@ -243,23 +252,31 @@ export class OpencodeClient {
           buf = buf.slice(sep + 2);
           const obj = parseSseFrame(block);
           if (obj === null) continue; // empty/malformed/non-typed frame — skip, don't kill the stream
-          // Derive the event's session id from wherever the server puts it: most events carry a top-level
-          // `properties.sessionID`, but session-scoped sub-shapes carry it ONLY nested — `message.part.*`
-          // on `properties.part.sessionID`, `message.updated` on `properties.info.sessionID`. Checking
-          // only the top level would drop our OWN assistant/tool content for those shapes (codex review).
-          const props = obj.properties;
-          const evSession =
-            props?.sessionID ??
-            props?.part?.sessionID ??
-            (props?.info as { sessionID?: string } | undefined)?.sessionID;
+          // `session.created` is a DISCOVERY event — a predicate consumer (the driver FOLLOWS child
+          // sub-agent sessions, #102) can only learn a child exists FROM its own session.created. Its
+          // event-session is the not-yet-followed CHILD (and the shape may carry the id ONLY as
+          // `info.id`, with no `sessionID`), so gating it by the follow-set — or by the session-less drop
+          // below — would be circular and lose the child. Deliver EVERY session.created to a predicate
+          // consumer BEFORE any filtering; the driver's handler still ignores one whose parentID it
+          // doesn't follow, so this can't over-follow. A fixed single-session (string) subscription is
+          // unaffected (it never follows children) and stays strictly scoped.
+          if (isPredicate && obj.type === "session.created") {
+            yield obj;
+            continue;
+          }
+          // Otherwise derive the event's session id from wherever the server puts it: most events carry a
+          // top-level `properties.sessionID`, but session-scoped sub-shapes carry it ONLY nested —
+          // `message.part.*` on `properties.part.sessionID`, `message.updated` on `properties.info
+          // .sessionID`. Checking only the top level would drop our OWN assistant/tool content (codex).
+          const evSession = eventSessionId(obj.properties);
           if (evSession === undefined) {
             // Truly session-less events: ONLY `server.*` (connected/heartbeat) are global. A session-less
             // event of any other type (e.g. a `session.error` the server emitted without a sessionID)
             // must NOT be delivered — otherwise it would fan out to EVERY bridged session/driver on this
             // server-wide stream (codex review). Drop it.
             if (!obj.type.startsWith("server.")) continue;
-          } else if (evSession !== sessionId) {
-            continue; // a different session's event
+          } else if (!wantSession(evSession)) {
+            continue; // a session this connection doesn't follow
           }
           yield obj;
         }
@@ -273,6 +290,20 @@ export class OpencodeClient {
       }
     }
   }
+}
+
+/** The OpenCode session an event belongs to, derived from wherever the server puts the id: most events
+ *  carry a top-level `properties.sessionID`, but session-scoped sub-shapes carry it ONLY nested —
+ *  `message.part.*` on `properties.part.sessionID`, `message.updated` on `properties.info.sessionID`.
+ *  Returns undefined for genuinely session-less events (`server.*`) and for `session.created` (whose
+ *  session is `info.id`, handled specially by the follow path). Shared by the client filter AND the driver
+ *  so the two never drift (codex review). */
+export function eventSessionId(props: OpencodeEvent["properties"] | undefined): string | undefined {
+  return (
+    props?.sessionID ??
+    props?.part?.sessionID ??
+    (props?.info as { sessionID?: string } | undefined)?.sessionID
+  );
 }
 
 /** Parse ONE SSE frame block (its `\n\n`-delimited lines, already LF-normalized) into an OpencodeEvent,
