@@ -126,10 +126,15 @@ export class FakeRcWorker {
     ],
   ): void {
     this.#heartbeat = setInterval(() => {
+      // Fire-and-forget, but CATCH: a heartbeat can be IN-FLIGHT when teardown closes the proxy
+      // (stop() clears the interval, but a request already sent is still awaiting), and `#rpc` then
+      // rejects with `socket hang up`/ECONNRESET — an uncaught reject surfaces as a vitest
+      // unhandled-rejection and fails the run (the #76 flaky-teardown class; this heartbeat path was
+      // the one fire-and-forget #rpc still missing its catch).
       void this.#rpc("POST", `/v1/code/sessions/${sessionId}/worker/heartbeat`, {
         session_id: sessionId,
         worker_epoch: 1,
-      });
+      }).catch(() => {});
     }, 5000);
     if (typeof this.#heartbeat.unref === "function") this.#heartbeat.unref();
 
