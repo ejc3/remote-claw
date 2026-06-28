@@ -302,9 +302,17 @@ git diff --name-only origin/main..HEAD -- \
    `plan`->`reject` ("planning only"), `default`->pass through. Approximate.
 6. **Auth.** v1 runs unsecured on loopback (same trust boundary as the MITM); Basic auth
    (`OPENCODE_SERVER_PASSWORD`) documented for non-loopback.
-7. **Bedrock credentials.** OpenCode's Bedrock client needs static env creds (no IMDS chain in 1.17.5);
-   fetch+export temp creds from IMDS (expire ~hourly). The dev box's `dev-server-role` has zero
-   `bedrock:Invoke*` — the request path is proven to a Bedrock 403 (API verified; inference IAM-blocked).
+7. **Bedrock credentials + the Anthropic use-case-form gate.** OpenCode's Bedrock client needs static
+   env creds (no IMDS chain in 1.17.5); fetch+export temp creds from IMDS (expire ~hourly). The dev box's
+   `dev-server-role` **now has `bedrock:InvokeModel` for Anthropic models** (CLI `bedrock-runtime converse`
+   on `us.anthropic.claude-{sonnet-4-5,haiku-4-5,opus-4-1}` → real "PINEAPPLE", verified 2026-06-28) —
+   so the earlier "zero `bedrock:Invoke*`" note is obsolete. **But** OpenCode's AI-SDK streaming-invoke
+   path 400s on the **Anthropic First-Time-Use "use case details" form** (`Model use case details have
+   not been submitted for this account`) for every Anthropic model — an account-level **Bedrock console**
+   action (Model access → Anthropic → submit use case), **not** an IAM grant (the non-streaming Converse
+   path the CLI uses is NOT gated by it). Amazon Nova is `AccessDenied` (the role's invoke grant is
+   Anthropic-scoped). Net: OpenCode live inference here is blocked solely on the FTU form. The native
+   **MITM driver** (`--rc-inference=bedrock`) is unaffected — the `bedrock-mantle` endpoint needs no FTU form.
 
 ## v1 plan
 
@@ -318,10 +326,13 @@ git diff --name-only origin/main..HEAD -- \
 4. **Wiring** — `--rc-driver={mitm|tmux|opencode}` (default `mitm`) + `--rc-oc-url` / `--rc-oc-model`
    (default `us.amazon.nova-micro-v1:0`) + `RC_OC_*` envs.
 5. **client_unchanged gate** — the empty-diff grep in CI + a parity test.
-6. **e2e with the cheap Bedrock model** — once IAM grants `bedrock:Invoke*` on Nova Micro: spawn
-   `opencode serve` with Nova Micro as `model`+`small_model`, start the driver against a local broker
-   backend, drive "Reply with exactly: OK" from a headless viewer, assert the `assistant` frame arrives
-   unchanged (Nova Micro keeps loops ~free). A pre-IAM smoke test asserts the request reaches Bedrock
-   (the proven 403) so CI is green before inference is unblocked.
+6. **e2e against Bedrock** — point `opencode serve` at a Bedrock Anthropic model
+   (`RC_OPENCODE_E2E_MODEL=amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `AWS_REGION`
+   + IMDS-exported static creds), start the driver against a local broker, drive a prompt from a headless
+   viewer, assert the `assistant` frame arrives unchanged. The driver's request reaches Bedrock and the
+   model+IAM are proven (CLI Converse), but a live SUCCESS additionally needs the account's **Anthropic
+   use-case form** submitted (see Gap #7). The e2e **skips (not fails)** when the server is unreachable
+   OR the model returns an account-gate error (turnGate → ctx.skip), so CI stays green until the form is
+   submitted — then the same suite proves a real Bedrock turn end-to-end with zero api.anthropic.com.
 7. **Per-PR gate** (CLAUDE.md): `pnpm exec biome check .` + `pnpm exec tsc --noEmit` +
    `pnpm exec vitest run`, `/code-review` + codex, CI green.
