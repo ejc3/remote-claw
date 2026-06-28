@@ -24,9 +24,17 @@ mantle rejects (`metadata`, `context_management`, `diagnostics`, nested `cache_c
 > if claude shows the "Detected a custom API key" dialog, answer **No (recommended)** so it uses the
 > claude.ai login. An **accountless** Bedrock-only shop still gets remote control via the provider-
 > agnostic **`--rc-driver=tmux`** path (which uses `CLAUDE_CODE_USE_BEDROCK` and needs no claude.ai
-> account). Whether a *synthetic* OAuth credential (no real account) re-enables native RC is **untested**
-> — an open follow-up (claude may gate RC on the mere *presence* of a `claudeAiOauth` cred, which the
-> MITM could fabricate).
+> account). **Fabricated-credential finding (tested live 2026-06-28):** the OAuth **token can be 100%
+> fake** — native RC + Bedrock works end-to-end (full viewer round-trip, zero-Anthropic) with a real
+> `.claude.json` config + a **bogus** access/refresh token, because the MITM intercepts everything and
+> never validates the token. The RC client-side gate is driven by **`.claude.json` cached state** (set by
+> a real authenticated session — feature gates like `cachedStatsigGates`/`cachedGrowthBookFeatures`, not
+> just a synthetic `oauthAccount`), NOT by token validity: a from-scratch fabricated config (even with a
+> synthetic `oauthAccount: {organizationType:"claude_max"}`) boots as "Claude Max" but does **not**
+> register RC. **Practical upshot:** a Bedrock-only shop needs **one** real claude.ai login to seed
+> `.claude.json`; thereafter the token can rot / be replaced with a fake and native RC + Bedrock keeps
+> working zero-Anthropic. Fully never-logged-in accountless native RC would require reverse-engineering
+> the exact gating feature-flags (a documented follow-up, not decision-changing).
 
 **Driver matrix on Bedrock (all three proven live via the web viewer, 2026-06-28):**
 
@@ -121,7 +129,9 @@ way. `launch.ts` injects the pretend key unconditionally in bedrock mode (defens
 holds no real Anthropic credential); when an OAuth login is also present, claude prompts "Detected a
 custom API key" and the **recommended No** keeps it on the claude.ai login (→ RC stays enabled). For an
 accountless shop that needs remote control, use `--rc-driver=tmux` (provider-agnostic, no claude.ai
-account). Re-enabling accountless *native* RC via a synthetic OAuth cred is an open follow-up.
+account). Note (tested 2026-06-28): the OAuth **token** may be fully fabricated once `.claude.json` has
+been seeded by one real login (the MITM never validates it); a *from-scratch* config does not enable
+native RC — see the Status banner's fabricated-credential finding.
 
 ## Control-plane endpoints to synthesize (zero-Anthropic inventory)
 
