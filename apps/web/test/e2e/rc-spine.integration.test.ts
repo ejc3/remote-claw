@@ -455,8 +455,9 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 40_000);
 
   it("PRESENCE + PERMISSION_RESOLVED: announce carries phase/status/needs; granting a permission logs permission_resolved (unordered, replayed on catch_up)", async () => {
-    // Uses fill(67) — a fresh identity so this test doesn't share broker state with the PERMISSION
-    // test (fill(64)) or any other test. Two things are proven here with one worker lifecycle:
+    // Uses a fresh uniqueIdentity() so this test doesn't share broker state with the PERMISSION test
+    // or any other test (every test gets its own random identity). Two things are proven here with one
+    // worker lifecycle:
     //   (A) The session_announce body carries `status`, `phase`, and `needs`. The `needs` flag
     //       transitions true→false across the permission grant — the `phase` field is validated as
     //       structurally present; catching the transient "busy"→"thinking" window is not attempted here
