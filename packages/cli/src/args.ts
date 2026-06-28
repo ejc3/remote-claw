@@ -57,6 +57,11 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // (e.g. `--bare`) the driver falls back to the --session-id pin + transcript lookup.
   "rc-session-hook": "boolean",
   "rc-no-session-hook": "boolean",
+  // Accountless native RC: seed a synthetic claude.ai login + the RC feature gates into an isolated
+  // config dir so native `/remote-control` works with NO real claude.ai login. Requires
+  // `--rc-inference=bedrock` (a fabricated credential can't reach real Anthropic for inference). The
+  // user's real ~/.claude.json is never touched. Env RC_ACCOUNTLESS=1.
+  "rc-accountless": "boolean",
 };
 // Not reserved: starting already remote-controlled is just claude's own `--remote-control`,
 // which the wrapper forwards verbatim — no `--rc-share`. The web deep link is built from the

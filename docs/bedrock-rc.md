@@ -22,19 +22,25 @@ mantle rejects (`metadata`, `context_management`, `diagnostics`, nested `cache_c
 > token is never used against Anthropic and inference is 100% Bedrock — zero-Anthropic still holds).
 > **Takeaways:** for native RC + Bedrock, the host must be **logged into claude.ai** (`claude /login`);
 > if claude shows the "Detected a custom API key" dialog, answer **No (recommended)** so it uses the
-> claude.ai login. An **accountless** Bedrock-only shop still gets remote control via the provider-
-> agnostic **`--rc-driver=tmux`** path (which uses `CLAUDE_CODE_USE_BEDROCK` and needs no claude.ai
-> account). **Fabricated-credential finding (tested live 2026-06-28):** the OAuth **token can be 100%
+> claude.ai login — OR pass **`--rc-accountless`** (below) to run native RC with no login at all. An
+> **accountless** Bedrock-only shop also gets remote control via the provider-agnostic
+> **`--rc-driver=tmux`** path (which uses `CLAUDE_CODE_USE_BEDROCK` and needs no claude.ai account).
+> **Fabricated-credential finding (tested live 2026-06-28):** the OAuth **token can be 100%
 > fake** — native RC + Bedrock works end-to-end (full viewer round-trip, zero-Anthropic) with a real
 > `.claude.json` config + a **bogus** access/refresh token, because the MITM intercepts everything and
 > never validates the token. The RC client-side gate is driven by **`.claude.json` cached state** (set by
 > a real authenticated session — feature gates like `cachedStatsigGates`/`cachedGrowthBookFeatures`, not
 > just a synthetic `oauthAccount`), NOT by token validity: a from-scratch fabricated config (even with a
 > synthetic `oauthAccount: {organizationType:"claude_max"}`) boots as "Claude Max" but does **not**
-> register RC. **Practical upshot:** a Bedrock-only shop needs **one** real claude.ai login to seed
-> `.claude.json`; thereafter the token can rot / be replaced with a fake and native RC + Bedrock keeps
-> working zero-Anthropic. Fully never-logged-in accountless native RC would require reverse-engineering
-> the exact gating feature-flags (a documented follow-up, not decision-changing).
+> register RC. **Fully accountless native RC — SOLVED (`--rc-accountless`, proven live 2026-06-28):** the
+> exact gating flags were reverse-engineered — they live in `cachedGrowthBookFeatures` as the
+> **`bridge`/`ccr` family** (decisively `tengu_ccr_bridge` + `tengu_bridge_repl_v2`, with
+> `tengu_bridge_attestation_enforce:false` so no device attestation is needed). `--rc-accountless`
+> (pairs with `--rc-inference=bedrock`) seeds a synthetic claude.ai login + just those gates into an
+> **isolated, throwaway `CLAUDE_CONFIG_DIR`** (the user's real `~/.claude.json` is never touched) and
+> pre-accepts the per-folder trust dialog. Result: native `/remote-control` registers + bridges with
+> **NO real claude.ai login ever** — `cse_…` minted, worker SSE connected, zero api.anthropic.com.
+> So a Bedrock-only shop needs **no** Anthropic account at all for native RC.
 
 **Driver matrix on Bedrock (all three proven live via the web viewer, 2026-06-28):**
 
