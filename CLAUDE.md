@@ -97,6 +97,32 @@ node -e '
 Also keep ```` ``` ```` fences balanced (even count) and avoid splitting an inline `` `code` `` span
 across a line wrap (some renderers mishandle it).
 
+## Mandatory doc-sync pass
+
+Whenever a `docs/*.md` (or `CLAUDE.md`/`README.md`) lands, **or** you change the surface those docs
+describe (an `--rc-*` flag, an RC control verb, a broker endpoint, or a driver's
+permission/capability model), run a doc-sync pass before the work is "done" — no exceptions. The docs
+are the *source of truth* (rendered live by marked.js) and they describe a moving target, so they drift
+from the code and from each other; this is the doc analogue of the per-commit `/code-review` + codex
+loop. A **Stop hook** (`.claude/hooks/doc-sync-check.sh`) reminds you when any Markdown changed in a
+session — it asks once per change-state and never nags. The four lenses, each verified and root-cause
+fixed (not papered over):
+
+1. **Render.** Run every changed `docs/*.md` through marked (`gfm:true, breaks:false`) and assert **no
+   list markers stranded inside `<p>` tags** (the jumble signature) and balanced fences — the snippet in
+   "Editing the docs" above. Don't eyeball it.
+2. **Code-truth.** Every documented `--rc-*` flag matches `args.ts`/`run.ts`; every RC verb matches the
+   relay/driver; every per-driver permission/capability claim matches that driver. Read the code, don't
+   trust the prose. (Example drift this caught: the tmux driver's docs said "auto-approve
+   (`--dangerously-skip-permissions`)" long after B2 made permission **mirroring** the default.)
+3. **Cross-doc sync.** No contradictions between `docs/v2-architecture.md`, `docs/protocol.md`, and the
+   `*-driver.md` / `pluggable-harness.md` docs; a behavior change is folded into **every** doc that
+   states it, not just the one you happened to open.
+4. **Loose ends.** No stale/dangling references, no superseded section left standing.
+
+Run `codex exec -s read-only` as the independent second reviewer (fact-check each doc claim against the
+code), same as the per-commit loop. Surface genuinely open questions rather than silently resolving them.
+
 ## Running Playwright (browser repro) — the gotchas that cost time
 
 Playwright lives **only in the `tests/web` workspace** (`@playwright/test`), NOT `apps/web` or the repo

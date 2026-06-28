@@ -28,3 +28,9 @@ coverage/
 # The committed .env.example documents the keys; .env.local is never committed.
 **/.env.local
 **/.env.*.local
+
+# Claude Code: the project settings + hooks (.claude/settings.json, .claude/hooks/) ARE tracked (the
+# doc-sync Stop hook). Per-machine state under .claude/ is NOT — local overrides + runtime scratch.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/

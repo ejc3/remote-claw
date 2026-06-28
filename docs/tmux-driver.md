@@ -28,7 +28,7 @@ fills the **same** `Session` from a different source:
  plain      │ CAPTURE: tail <sessionId>.jsonl → transcriptToPayload()   │──▶ session.pushUpstream()
  `claude`   │ INJECT:  session.followDownstream() → set-buffer+paste+↵  │◀── session (downstream queue)
  in a tmux  │ STATUS:  append-debounce → session.workerStatus + wake()  │
- pane       │ PERMS:   v1 auto-approve (--dangerously-skip-permissions) │
+ pane       │ PERMS:   PreToolUse hook → viewer gate (opt-out: skip)    │
             └──────────────────────────┬───────────────────────────────┘
                                         │  Session  (THE SEAM — unchanged)
             ┌───────────────────────────▼──────────────── UNCHANGED ───┐
@@ -62,15 +62,23 @@ const served = relay.serve(ac.signal).catch(() => {});   // owns ALL broker I/O 
 ```
 tmux new-session -d -s rc-<sessionId> -x 200 -y 50 \
   -e <each non-scrubbed env var> \
-  'claude --dangerously-skip-permissions <forwarded claudeArgs…>'
+  'env -u <scrubbed vars> claude --settings <merged PreToolUse hook> --session-id <uuid> <forwarded claudeArgs…>'
 ```
 
+- **Permissions are MIRRORED by default (B2).** The spawn does NOT pass
+  `--dangerously-skip-permissions`; instead it merges a blocking **PreToolUse hook** into `--settings`
+  so every tool waits for a viewer allow/deny (§2.5). The opt-out `--rc-tmux-skip-permissions`
+  (or `RC_TMUX_SKIP_PERMISSIONS` truthy) drops the hook and restores
+  `claude --dangerously-skip-permissions` (hands-off auto-approve).
 - **No `HTTPS_PROXY` / `NODE_EXTRA_CA_CERTS`** — the whole point. claude reaches its own provider
   directly, so Bedrock/Vertex work.
 - **Same env scrub as `launch.ts`/`trace-run.ts`** (the stub gotcha): strip `CLAUDE_CODE_CHILD_SESSION`,
   `CLAUDE_CODE_SESSION_ID`, `REMOTE_CLAW_SECRET_FILE`, `VERCEL_AUTOMATION_BYPASS_SECRET` from the
-  child env. If `CLAUDE_CODE_CHILD_SESSION` leaks in, the spawned claude is a *stub* bridged to the
-  launcher and never starts a real session — and here there's no MITM to even notice.
+  child env (always, via `env -u`, so a stale tmux-server value can't leak). If
+  `CLAUDE_CODE_CHILD_SESSION` leaks in, the spawned claude is a *stub* bridged to the launcher and never
+  starts a real session — and here there's no MITM to even notice. `CLAUDE_CONFIG_DIR` is also kept
+  coherent (passed through when the wrapper sets it, else `env -u`'d) so the pane reads the **same**
+  `.claude.json` the driver pre-seeds folder-trust into (§2.5).
 - Print `tmux attach -t rc-<sessionId>` so the local user can share the live pane.
 - `tmuxctl.ts` shells out with `execFile("tmux", argv)` (the `gitinfo.ts` pattern) — **no shell, argv
   array, no injection surface, no new dependency.**
@@ -149,9 +157,10 @@ for await (const ev of s.followDownstream(gen, () => signal.aborted)) {
     await tmux.sendEnter();                       // tmux send-keys -t <pane> Enter   (what submits)
   } else if (ev.eventType === "control_request") {
     if (ev.payload.request.subtype === "interrupt") await tmux.sendKeys("Escape");
-    // set_model / set_permission_mode / end_session: best-effort / ignored in v1 (no faithful TUI analogue)
+    // set_model → a `/model <model>` inject (B2). set_permission_mode / end_session: no faithful TUI analogue.
   }
-  // control_response / initialize: ignored (auto-approve raises no gate; initialize has no pane analogue)
+  // initialize: no pane analogue. A viewer permission ANSWER is applied by the perm pump (it writes the
+  // decision file the injected PreToolUse hook is polling), not by this inject loop — see §2.5.
 }
 ```
 
@@ -169,14 +178,32 @@ There are no `result` lines in interactive mode, so presence is inferred from tr
 `phaseFor` (relay.ts) maps `running → thinking`, everything else → `idle`, so these are exactly the
 values the announce presence already understands — the viewer's thinking/idle indicator just works.
 
-### 2.5 Permissions — v1 auto-approve
+### 2.5 Permissions — mirrored to the viewer (B2, DEFAULT ON)
 
-Plain claude surfaces permission prompts as **TUI text**, not structured `can_use_tool` events, so
-there is no remote way to answer them. v1 runs `--dangerously-skip-permissions` and declares
-`capabilities.structuredPermissions = false`. This matches the trusted single-user remote-box posture
-(the owner already runs claude this way). Permission *mirroring* (B2) will add
-`--permission-prompt-tool <mcp>` and route the call through the relay's **existing**
-`permission_request` ⇄ `permission` round-trip — no relay change.
+Plain claude surfaces permission prompts as **TUI text**, not structured `can_use_tool` events. Rather
+than skip them, the driver injects a blocking **PreToolUse hook** (a tiny Node helper, written to disk
+and merged into `--settings` alongside any user settings + the SessionStart hook). On each tool the
+helper appends the request to a per-session requests sentinel (`permReqPath`, NDJSON) and **blocks**,
+polling a decisions dir (`permDecDir/<toolUseId>.json`). The driver's **perm pump** tails the sentinel,
+raises a `can_use_tool` gate through the relay's **existing** `permission_request` ⇄ `permission`
+round-trip (no relay change), and on the viewer's answer writes the decision file the helper is waiting
+on. The decision is **fail-closed**: anything but an explicit `allow` is treated as deny. With mirroring
+on, `capabilities.structuredPermissions = true`.
+
+**Folder trust (mirror on).** Dropping `--dangerously-skip-permissions` also drops the flag's bypass of
+claude's startup *"Do you trust the files in this folder?"* gate — which the PreToolUse hook does NOT
+cover (it's a startup gate, not a tool) and no one is at the detached pane to answer → a hung pane on a
+fresh cwd. So before spawn the driver pre-seeds `projects["<abs realpath cwd>"].hasTrustDialogAccepted
+= true` in `<CLAUDE_CONFIG_DIR or ~>/.claude.json` (`ensureCwdTrusted`, exactly what claude records on
+"trust"): idempotent, preserving (deep-merge), fail-safe (bails rather than clobber an
+unreadable/malformed config), atomic. The pane's `CLAUDE_CONFIG_DIR` is kept coherent with the writer
+(§2.1) so both read the same file. Skipped when the user forwarded their own
+`--dangerously-skip-permissions` (no gate to seed).
+
+**Opt-out.** `--rc-tmux-skip-permissions` (or `RC_TMUX_SKIP_PERMISSIONS` truthy) drops the hook and
+restores `claude --dangerously-skip-permissions` — hands-off auto-approve, which also bypasses the trust
+gate (so no seeding is needed) — and declares `capabilities.structuredPermissions = false`. This is the
+old v1 trusted single-user posture, now opt-in.
 
 ### 2.6 Attachments — viewer→pane is free; local-paste is NOT captured
 
@@ -209,8 +236,15 @@ covers the inbound (viewer) path, not the local-paste outbound path. Surfacing l
 - `packages/cli/src/host/rc/tmux/status.ts` — `StatusTracker` (append-debounce, open-tool suppression,
   injectable clock/timer).
 - `packages/cli/src/host/rc/tmux/driver.ts` — `runTmuxDriver(ctx)` / `tmuxDriver(ctx)`: the lifecycle
-  + three pumps + teardown. `capabilities = { structuredPermissions:false, status:true,
-  controlVerbs:false, attachments:true }`.
+  + the pumps (capture / inject / status / **perm**) + teardown.
+  `capabilities = tmuxCapabilities(mirror)` = `{ structuredPermissions: mirror, status:true,
+  controlVerbs:false, attachments:true }` — `mirror` defaults true, so structured permissions are on
+  unless `--rc-tmux-skip-permissions`.
+- `packages/cli/src/host/rc/tmux/permhook.ts` — the injected PreToolUse helper source
+  (`PRE_TOOL_USE_HELPER_SOURCE`) + the request/decision plumbing for permission mirroring (§2.5).
+- `packages/cli/src/host/rc/tmux/trust.ts` — `ensureCwdTrusted` (pre-seed claude's per-folder trust bit;
+  idempotent / preserving / fail-safe / atomic), so a mirror-on pane doesn't hang on the startup trust
+  gate (§2.5).
 - `packages/cli/src/host/rc/driver.ts` — the shared contract (`Driver`, `DriverContext`,
   `DriverCapabilities`, `DriverName`, `DriverFactory`, `UpstreamPayload`, `ContentBlock`). Pure types.
 
@@ -298,7 +332,8 @@ Belt-and-suspenders: `unset CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID`.
    /tmp/tmux-driver.log` is empty.
 3. From a viewer keyed to this identity:
    - "Reply with the single word PINEAPPLE." → pane pastes+submits, viewer shows the assistant frame.
-   - "Run `ls`…" → viewer shows tool_use + tool_result (auto-approved).
+   - "Run `ls`…" → viewer shows a `can_use_tool` gate; allow it → tool_use + tool_result
+     (with `--rc-tmux-skip-permissions`, it's auto-approved with no gate).
    - Presence flips thinking → idle ~1s after the turn.
    - Long turn + viewer interrupt → pane gets Escape and stops.
    - Multiline/backtick prompt pastes intact, no premature submit.
@@ -325,7 +360,10 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
 3. **Status is heuristic** (append timing, not claude's `worker_status`); debounced. An orphaned
    `tool_use` (interrupt / crash / sub-agent nesting) is recovered by clearing open tools on a new-turn
    boundary **and** a hard idle fallback, so the viewer can't hang on "thinking" forever.
-4. **Auto-approve permissions** (`structuredPermissions:false`); single-user-trusted; mirroring is B2.
+4. **Permissions are mirrored by default** (B2, §2.5): an injected PreToolUse hook raises a
+   `can_use_tool` gate per tool (`structuredPermissions:true`), fail-closed, with claude's folder-trust
+   bit pre-seeded so the pane doesn't hang. `--rc-tmux-skip-permissions` restores the old auto-approve
+   (`--dangerously-skip-permissions`, `structuredPermissions:false`, single-user-trusted).
 5. **send-keys timing** — strictly serialized inject; the paste phase (set-buffer+paste-buffer) and the
    submit (Enter) retry **separately** so a transient post-paste failure never double-pastes; retries
    until the prompt lands or the pane dies. Only `interrupt` is mapped in v1.
