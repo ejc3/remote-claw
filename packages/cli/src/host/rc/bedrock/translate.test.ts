@@ -16,6 +16,15 @@ describe("mantleModelId", () => {
     expect(mantleModelId("claude-opus-4-8[1m]")).toBe("anthropic.claude-opus-4-8");
   });
 
+  it("strips a trailing -YYYYMMDD date (mantle uses undated ids; verified live: dated→404, undated→200)", () => {
+    // claude's quick/"haiku" helper sends a dated id; mantle 404s it unless the date is dropped.
+    expect(mantleModelId("claude-haiku-4-5-20251001")).toBe("anthropic.claude-haiku-4-5");
+    expect(mantleModelId("claude-haiku-4-5-20251001[1m]")).toBe("anthropic.claude-haiku-4-5");
+    // An undated id is unchanged, and the model version (`-4-5`) is NOT mistaken for a date.
+    expect(mantleModelId("claude-haiku-4-5")).toBe("anthropic.claude-haiku-4-5");
+    expect(mantleModelId("claude-opus-4-8")).toBe("anthropic.claude-opus-4-8");
+  });
+
   it("passes through an already-Bedrock id (anthropic./region-profile)", () => {
     expect(mantleModelId("anthropic.claude-opus-4-8")).toBe("anthropic.claude-opus-4-8");
     expect(mantleModelId("us.anthropic.claude-opus-4-8-v1:0")).toBe(
