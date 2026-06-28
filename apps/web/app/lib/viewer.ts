@@ -91,6 +91,19 @@ export function emptyTranscriptHint(cs: ConnState | null): string {
   }
 }
 
+/** Accessible name for the connection-state dot, so the state isn't conveyed by color alone (a11y).
+ *  Lives beside connState/emptyTranscriptHint so a future ConnState is labeled here in one place. */
+export function connStateLabel(cs: ConnState): string {
+  switch (cs) {
+    case "connected":
+      return "online";
+    case "reconnecting":
+      return "reconnecting";
+    case "disconnected":
+      return "offline";
+  }
+}
+
 /** Presence replay rule: keep the newest announce per session. Equal timestamps are accepted so a
  *  same-millisecond mode/status update from the host can replace the previous body. */
 export function shouldAcceptAnnounce(existing: Announce | undefined, incoming: Announce): boolean {

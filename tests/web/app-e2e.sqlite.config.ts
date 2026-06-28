@@ -30,7 +30,9 @@ export default defineConfig({
       BROKER_BACKEND: "local", // default backend; ?backend=sqlite overrides per request
       RC_SQLITE_DIR: process.env.RC_SQLITE_DIR ?? "/tmp/rc-sqlite-e2e",
     },
-    reuseExistingServer: !process.env.CI,
+    // Never reuse a server already on the port — the command does a `next build`, so reuse would silently
+    // skip the build and test STALE code (see the app-e2e.config.ts note for the full failure mode).
+    reuseExistingServer: false,
     timeout: 300_000,
   },
   projects: [{ name: "mobile", use: { ...devices["Pixel 5"] } }],

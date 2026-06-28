@@ -29,6 +29,7 @@ import {
   CONNECTED_WINDOW_MS,
   type ConnState,
   connState,
+  connStateLabel,
   emptyTranscriptHint,
   type GitInfo,
   type Message,
@@ -327,6 +328,7 @@ export function Connect(props: {
           Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
           encrypted.
         </p>
+        {/* The page's sole input — autofocus so a pasted pass lands immediately (#design-pass). */}
         <textarea
           className="field"
           value={props.pass}
@@ -334,6 +336,8 @@ export function Connect(props: {
           placeholder="rcp1_…"
           spellCheck={false}
           rows={2}
+          // biome-ignore lint/a11y/noAutofocus: a dedicated single-field gate is the canonical autofocus case
+          autoFocus
         />
         <button
           type="button"
@@ -441,9 +445,33 @@ function presenceWord(s: Announce, now: number, reconnectingSince: number): stri
   const cs = connState(s.sentAt, now, reconnectingSince);
   if (cs === "disconnected") return relativeTime(s.sentAt, now);
   if (cs === "reconnecting") return "reconnecting…";
-  if (s.needs) return "needs you";
+  // NOT "needs you" here: the amber .needs-badge on the row-top already carries that (#design-pass) —
+  // emitting it again in the sub-line read as a duplication bug and wasted the line before cwd.
   if (s.phase === "thinking") return "working…";
   return "online";
+}
+
+/** The stick-to-bottom predicate (#design-pass): is a scroll container within `threshold`px of the
+ *  bottom? When true, new messages auto-scroll; when false the viewer is reading history, so we hold
+ *  position and show a "jump to latest" pill instead of yanking them down. Exported for unit tests. */
+export function isNearBottom(
+  m: { scrollHeight: number; scrollTop: number; clientHeight: number },
+  threshold = 64,
+): boolean {
+  return m.scrollHeight - m.scrollTop - m.clientHeight < threshold;
+}
+
+/** What the transcript should do when its content changes (#design-pass): follow the foot when the
+ *  reader is pinned there; otherwise surface the "jump to latest" pill — but ONLY when visible content
+ *  actually grew, so an in-place/zero-height frame (a resolved permission renders null; an optimistic
+ *  echo reconciles in place) changes the `messages` identity without popping a pill that has nothing to
+ *  jump to. Pure + exported for unit tests. */
+export function transcriptScrollAction(
+  atBottom: boolean,
+  contentGrew: boolean,
+): "follow" | "show-pill" | "none" {
+  if (atBottom) return "follow";
+  return contentGrew ? "show-pill" : "none";
 }
 
 /** The session's git context (#49): branch, a dot for uncommitted changes, and ahead/behind vs its
@@ -535,6 +563,13 @@ function Working() {
 
 function Console(props: { viewer: Viewer; onForget: () => void }) {
   const { viewer } = props;
+  // "Forget pass" wipes the credential and forces a re-paste — a two-step confirm guards a misclick
+  // (#design-pass). First click arms (auto-disarms after 4s); second click forgets. The disarm timer is
+  // tracked + cleared on unmount/re-arm so it can't fire setState after Console unmounts (the confirm path
+  // unmounts this component).
+  const [forgetArmed, setForgetArmed] = useState(false);
+  const forgetTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(forgetTimer.current), []);
   const [sessions, setSessions] = useState<Map<string, Announce>>(new Map());
   const [now, setNow] = useState(() => Date.now());
   // Per-session reconnect-attempt anchor (sessionId → when the current stale period began). Set ONCE when
@@ -611,8 +646,22 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
         <span className="count">
           {list.length} session{list.length === 1 ? "" : "s"}
         </span>
-        <button type="button" className="ghost" onClick={props.onForget}>
-          Forget pass
+        <button
+          type="button"
+          className={forgetArmed ? "ghost ghost-danger" : "ghost"}
+          aria-label={forgetArmed ? "Confirm forget pass" : "Forget pass"}
+          onClick={() => {
+            if (forgetArmed) {
+              props.onForget();
+              return;
+            }
+            setForgetArmed(true);
+            // Only reachable while disarmed (the armed path returns above), so no timer is outstanding;
+            // the unmount cleanup effect handles the confirm-within-4s case.
+            forgetTimer.current = window.setTimeout(() => setForgetArmed(false), 4000);
+          }}
+        >
+          {forgetArmed ? "Tap again to forget" : "Forget pass"}
         </button>
       </header>
 
@@ -635,10 +684,19 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                 className="row"
                 data-active={selected === s.sessionId}
                 data-state={cs}
+                // Full context on hover/long-press: the sub-line truncates the cwd, so reveal the whole
+                // path (+ branch) here so users can disambiguate sessions (#design-pass cwd-tooltip).
+                title={`${s.title}${s.git ? ` · ${s.git.branch}` : ""}${s.cwd ? ` · ${s.cwd}` : ""}`}
                 onClick={() => setSelected(s.sessionId)}
               >
                 <span className="row-top">
-                  <span className="dot" data-state={cs} />
+                  {/* Color-coded dot also carries an accessible name so state isn't conveyed by hue alone. */}
+                  <span
+                    className="dot"
+                    data-state={cs}
+                    role="img"
+                    aria-label={connStateLabel(cs)}
+                  />
                   <span className="row-title">{s.title}</span>
                   {connected && s.needs ? (
                     <span className="needs-badge">needs you</span>
@@ -719,9 +777,18 @@ function Transcript(props: {
   // The host announces the worker's effective permission mode. A local click is only a transient
   // optimistic override; the next mode-bearing announce wins, including when another device changed it.
   const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
+  // The model is set via set_model but the worker doesn't self-report it, so we track the last choice
+  // ourselves to tick the active row in the sheet (#design-pass model-active-tick).
+  const [optimisticModel, setOptimisticModel] = useState<string | null>(null);
   const [modeSheet, setModeSheet] = useState(false);
   const [sessionSheet, setSessionSheet] = useState(false);
-  const endRef = useRef<HTMLDivElement | null>(null);
+  // Stick-to-bottom scrolling (#design-pass): the scroll container, whether the reader is at the bottom,
+  // and the last measured scrollHeight (to tell a real content append from an in-place frame update). Refs
+  // (not state) so the message-arrival effect reads the latest values without re-subscribing.
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const atBottomRef = useRef(true);
+  const prevScrollHeightRef = useRef(0);
+  const [showJump, setShowJump] = useState(false);
   const announceMode = announce?.mode;
   const announceSentAt = announce?.sentAt;
   const displayedMode = displayedPermissionMode(announceMode, optimisticMode);
@@ -787,10 +854,37 @@ function Transcript(props: {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll to the latest on every message.
+  // Stick-to-bottom (#design-pass): replaces an unconditional smooth scrollIntoView — the worst transcript
+  // bug — with: follow the foot only when the reader is pinned there, otherwise hold position and show a
+  // "jump to latest" pill. The follow is an INSTANT scrollTop (not behavior:"smooth") on purpose: a smooth
+  // animation fires onScroll at intermediate positions, which would latch atBottomRef=false mid-turn and
+  // stop the live transcript from following; instant also means reduced-motion users get no surprise glide.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: react to new messages only.
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = scrollerRef.current;
+    if (el === null) return;
+    const grew = el.scrollHeight > prevScrollHeightRef.current;
+    prevScrollHeightRef.current = el.scrollHeight;
+    const action = transcriptScrollAction(atBottomRef.current, grew);
+    if (action === "follow") el.scrollTop = el.scrollHeight;
+    else if (action === "show-pill") setShowJump(true);
   }, [messages]);
+
+  // Track whether the viewer is pinned to the bottom (within ~64px); clears the pill once they catch up.
+  const onTranscriptScroll = useCallback(() => {
+    const el = scrollerRef.current;
+    if (el === null) return;
+    const atBottom = isNearBottom(el);
+    atBottomRef.current = atBottom;
+    if (atBottom) setShowJump(false);
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    const el = scrollerRef.current;
+    atBottomRef.current = true;
+    setShowJump(false);
+    if (el !== null) el.scrollTop = el.scrollHeight;
+  }, []);
 
   const retryGap = useCallback(async () => {
     if (gap === null) return;
@@ -863,6 +957,8 @@ function Transcript(props: {
     // never in neither place during the host round-trip (or an iOS-suspended stream). The host's `accepted`
     // ack reconciles it; the transport watchdog (#125) recovers the stream — so no post-send reviveKey bump.
     setMessages((prev) => appendUniqueMessage(prev, optimisticMessage(clientMsgId, text, toSend)));
+    atBottomRef.current = true; // your own send always snaps you to the message you just posted
+    setShowJump(false);
     if (toSend.length > 0) clearStaged();
     setInput("");
     try {
@@ -915,9 +1011,14 @@ function Transcript(props: {
     async (id: string) => {
       setSessionSheet(false);
       setSendError(null);
+      setOptimisticModel(id); // optimistic — set_model isn't self-reported, so the tick is our own record
       try {
         await viewer.setModel(sessionId, id);
       } catch (e) {
+        // The switch didn't land → clear the tick if it's still ours (a newer pick supersedes us). Revert
+        // to null, not a captured previous value: set_model has no self-report, so a previous optimistic
+        // value may itself have failed — claiming an unconfirmed model is worse than showing none.
+        setOptimisticModel((cur) => (cur === id ? null : cur));
         setSendError(friendlySendError(e));
       }
     },
@@ -967,7 +1068,7 @@ function Transcript(props: {
         </button>
       </div>
 
-      <div className="transcript">
+      <div className="transcript" ref={scrollerRef} onScroll={onTranscriptScroll}>
         {showGapRecovery && gap !== null && (
           <GapRecovery gap={gap} retrying={gapRetrying} onRetry={() => void retryGap()} />
         )}
@@ -977,9 +1078,13 @@ function Transcript(props: {
         {messages.map((m) => (
           <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} resolved={resolved} />
         ))}
-        <div ref={endRef} />
       </div>
 
+      {showJump && (
+        <button type="button" className="jump-latest" onClick={jumpToLatest}>
+          New messages ↓
+        </button>
+      )}
       <StatusStrip conn={cs} phase={phase} needs={needs} />
       {sendError !== null && <p className="send-err">Couldn’t send: {sendError}</p>}
 
@@ -1078,6 +1183,7 @@ function Transcript(props: {
       {sessionSheet && (
         <SessionSheet
           branch={announce?.git?.branch ?? null}
+          currentModel={optimisticModel}
           onModel={(id) => void chooseModel(id)}
           onInterrupt={() => void interruptSession()}
           onCopyBranch={copyBranch}
@@ -1297,7 +1403,8 @@ function ModeSheet({
 // Models the session can switch to via the RC `set_model` verb (§3.7). `id` is the value sent to the
 // worker — Claude Code's documented `/model` selector aliases (the interface the official app's "Change
 // model" uses). A mid-session switch is acknowledged by the worker but isn't observable via the model's
-// self-report (it answers its launch identity), so the sheet shows no live "current model" tick.
+// self-report (it answers its launch identity), so the tick reflects the viewer's OWN last choice
+// (optimisticModel) rather than a server-confirmed value.
 const MODELS = [
   { id: "default", label: "Default", glyph: "⌘", desc: "The machine's configured model" },
   { id: "opus", label: "Opus", glyph: "◆", desc: "Most capable — complex work" },
@@ -1308,12 +1415,15 @@ const MODELS = [
 /** The session ⋯ sheet: switch model (set_model), interrupt the current turn, copy the git branch. */
 export function SessionSheet({
   branch,
+  currentModel,
   onModel,
   onInterrupt,
   onCopyBranch,
   onClose,
 }: {
   branch: string | null;
+  /** The optimistically-selected model (set_model isn't self-reported), or null until one is chosen. */
+  currentModel: string | null;
   onModel: (id: string) => void;
   onInterrupt: () => void;
   onCopyBranch: () => void;
@@ -1323,16 +1433,28 @@ export function SessionSheet({
     <Sheet label="Session actions" onClose={onClose}>
       <div className="sheet-title">Change model</div>
       {MODELS.map((m) => (
-        <button key={m.id} type="button" className="mode-row" onClick={() => onModel(m.id)}>
+        <button
+          key={m.id}
+          type="button"
+          className="mode-row"
+          data-active={m.id === currentModel}
+          aria-pressed={m.id === currentModel}
+          onClick={() => onModel(m.id)}
+        >
           <span className="mode-row-glyph">{m.glyph}</span>
           <span className="mode-row-main">
             <span className="mode-row-label">{m.label}</span>
             <span className="mode-row-desc">{m.desc}</span>
           </span>
+          {m.id === currentModel && (
+            <span className="mode-check" aria-hidden>
+              ✓
+            </span>
+          )}
         </button>
       ))}
       <div className="sheet-title">Session</div>
-      <button type="button" className="mode-row" onClick={onInterrupt}>
+      <button type="button" className="mode-row mode-row-danger" onClick={onInterrupt}>
         <span className="mode-row-glyph">⏹</span>
         <span className="mode-row-main">
           <span className="mode-row-label">Interrupt</span>

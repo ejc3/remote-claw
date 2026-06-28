@@ -5,14 +5,16 @@ import { defineConfig, devices } from "@playwright/test";
 // seedHost fixture (app-e2e/fixtures.ts) spawns host-runner.ts (a real HostRcRelay + serve() + a scripted
 // RC turn) per test. Separate from playwright.config.ts (the docs site) — run with `pnpm test:app`.
 //
-// Two specs run against this one local server: transcript.spec.ts (the RC turn / live round-trips) and
+// Three specs run against this one local server: transcript.spec.ts (the RC turn / live round-trips),
 // handoff.spec.ts (the ephemeral one-time-handoff PAIRING flow against the real /api/handoff route +
-// store). The sqlite variant (app-e2e.sqlite.config.ts) only re-runs transcript.spec.ts — the handoff
-// store is backend-independent (it always uses its own locator), so there's nothing to re-prove there.
+// store), and viewer-ux.spec.ts (the design-pass UX regression guards). The sqlite variant
+// (app-e2e.sqlite.config.ts) only re-runs transcript.spec.ts — the handoff store is backend-independent
+// (it always uses its own locator) and the UX guards are layout/CSS, both backend-agnostic, so there's
+// nothing to re-prove there.
 
 export default defineConfig({
   testDir: "./app-e2e",
-  testMatch: ["transcript.spec.ts", "handoff.spec.ts"],
+  testMatch: ["transcript.spec.ts", "handoff.spec.ts", "viewer-ux.spec.ts"],
   timeout: 90_000,
   expect: { timeout: 20_000 }, // absorb cold-start latency of a freshly-built prod server
   outputDir: "./test-results",
@@ -30,7 +32,14 @@ export default defineConfig({
     cwd: "../../apps/web",
     port: 3100,
     env: { BROKER_BACKEND: "local" },
-    reuseExistingServer: !process.env.CI,
+    // NEVER reuse a server already on the port (was `!CI`). Our command does a `next build` — i.e. it is a
+    // one-shot ephemeral server, not a long-lived dev server. With reuse on, a LEFTOVER server (a prior run
+    // hard-killed, an orphan, a stale build from another session) silently substitutes for the
+    // build-under-test: the `next build` is skipped, so the suite runs against OLD code — either spuriously
+    // FAILING (the wedged-orphan case that cost us a debugging cycle here) or, far worse, spuriously PASSING
+    // and shipping a real regression the gate never built. `false` makes every run build + serve its own
+    // code and turns a leftover server into a loud port-in-use error instead of a silent wrong result.
+    reuseExistingServer: false,
     timeout: 300_000,
   },
   projects: [{ name: "mobile", use: { ...devices["Pixel 5"] } }],
