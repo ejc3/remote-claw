@@ -4,12 +4,13 @@
 // bits: reconnect/resume by startIndex, at-least-once dedup end to end, and the bus CAP-ROLL (the
 // "window rolling over") teardown path.
 
-import { busToken, deriveIdentity, type Frame, type Identity, utf8 } from "@remote-claw/clawsec";
+import { busToken, type Frame, type Identity, utf8 } from "@remote-claw/clawsec";
 import { BrokerClient, FrameOrderer, securityProvider } from "@remote-claw/cli/broker";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { getHookByToken, resumeHook } from "workflow/api";
 import { brokerFetch, header, takeFrames } from "./e2e/harness";
+import { uniqueIdentity } from "./helpers";
 
 afterAll(async () => {
   await teardownWorkflowTests();
@@ -36,7 +37,7 @@ async function poll(pred: () => Promise<boolean>, ms = 8000): Promise<boolean> {
 
 describe("edge cases (same transport library, real Workflow runtime)", () => {
   it("RECONNECT: resume a session stream by startIndex picks up only frames at/after the cursor", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(20));
+    const id = await uniqueIdentity();
     const c = clientFor(id);
     const sid = "reconnect";
     for (const n of [0, 1, 2]) {
@@ -63,7 +64,7 @@ describe("edge cases (same transport library, real Workflow runtime)", () => {
   });
 
   it("DEDUP: a frame replayed by the at-least-once broker is delivered once by the viewer", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(21));
+    const id = await uniqueIdentity();
     const c = clientFor(id);
     const sid = "dedup";
     const h = header(id, { recordKind: "assistant", sessionId: sid, seq: 0, msgId: "dup-1" });
@@ -83,7 +84,7 @@ describe("edge cases (same transport library, real Workflow runtime)", () => {
   });
 
   it("LARGE MESSAGE: a plaintext over the chunk limit splits, flows, and reassembles end to end", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(24));
+    const id = await uniqueIdentity();
     const c = clientFor(id);
     const sid = "big";
     // 20 KB message, 8 KB chunk limit → 3 independently-AEAD'd parts sharing one msg_id.
@@ -112,7 +113,7 @@ describe("edge cases (same transport library, real Workflow runtime)", () => {
   });
 
   it("CAP-ROLL: __close completes the bus run, frees the 1:1 token, and a fresh run re-creates it", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(22));
+    const id = await uniqueIdentity();
     const c = clientFor(id);
     const token = busToken(id.identityId);
     const announce = (n: number) =>
@@ -157,7 +158,7 @@ describe("edge cases (same transport library, real Workflow runtime)", () => {
     // Several devices hold the SAME secret and subscribe to the same session out-stream. The broker
     // fans every frame out to each subscriber independently, so both reconstruct a byte-identical
     // transcript — including a chunked (large) message that each must reassemble on its own.
-    const id = await deriveIdentity(new Uint8Array(32).fill(26));
+    const id = await uniqueIdentity();
     const phone = clientFor(id);
     const laptop = clientFor(id);
     const sid = "fanout";
@@ -213,7 +214,7 @@ describe("edge cases (same transport library, real Workflow runtime)", () => {
   });
 
   it("DROP + RECONNECT: a viewer that disconnects resumes from its cursor with no gap and no dup", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(25));
+    const id = await uniqueIdentity();
     const c = clientFor(id);
     const sid = "drop";
     const orderer = new FrameOrderer();

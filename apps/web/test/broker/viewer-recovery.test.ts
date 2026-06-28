@@ -1,10 +1,11 @@
-import { deriveIdentity, formatPass, type Identity, utf8 } from "@remote-claw/clawsec";
+import { formatPass, type Identity, utf8 } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { type Message, TRANSCRIPT_GAP_STALL_MS, Viewer } from "../../app/lib/viewer";
 import { shouldShowGapRecovery } from "../../app/page";
 import { brokerFetch, header } from "../e2e/harness";
+import { uniqueIdentity } from "../helpers";
 
 afterAll(async () => {
   await teardownWorkflowTests();
@@ -98,7 +99,7 @@ function failChunkFetch(msgId: string, part: number): typeof fetch {
 
 describe("Viewer transcript restart and gap recovery", () => {
   it("resets a live transcript across a non-durable host seq reset after a new incarnation announce", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(181));
+    const id = await uniqueIdentity();
     const host = fakeHost(id);
     const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
     const sid = "viewer-restart-orderer";
@@ -143,7 +144,7 @@ describe("Viewer transcript restart and gap recovery", () => {
   });
 
   it("keeps durable ordering across a restart when the first seqCursor probe fails", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(184));
+    const id = await uniqueIdentity();
     const host = fakeHost(id);
     const viewer = await Viewer.fromPass(
       await formatPass(id),
@@ -184,7 +185,7 @@ describe("Viewer transcript restart and gap recovery", () => {
   });
 
   it("surfaces a permanent low-seq gap and the page helper marks it recoverable after the bounded stall", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(182));
+    const id = await uniqueIdentity();
     const host = fakeHost(id);
     const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
     const sid = "viewer-gap-surfacing";
@@ -222,7 +223,7 @@ describe("Viewer transcript restart and gap recovery", () => {
   });
 
   it("surfaces an incomplete chunked cursor slot through gap recovery", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(185));
+    const id = await uniqueIdentity();
     const sid = "viewer-partial-chunk-gap";
     const msgId = "partial-big";
     const host = new BrokerClient({
@@ -264,7 +265,7 @@ describe("Viewer transcript restart and gap recovery", () => {
   });
 
   it("delivers seq-null permission_resolved while a content gap is open", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(183));
+    const id = await uniqueIdentity();
     const host = fakeHost(id);
     const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
     const sid = "viewer-permission-resolved-gap";

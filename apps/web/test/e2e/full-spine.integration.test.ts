@@ -6,7 +6,7 @@
 // proof that the whole pipe — seal → POST /api/relay → relay run → out-stream → SSE → open — carries
 // turns, history replay (catch_up), and multiple concurrent devices end to end.
 
-import { deriveIdentity, formatPass, type Identity } from "@remote-claw/clawsec";
+import { formatPass, type Identity } from "@remote-claw/clawsec";
 import {
   BrokerClient,
   type ClaudeBackend,
@@ -17,6 +17,7 @@ import {
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { type Message, Viewer } from "../../app/lib/viewer";
+import { uniqueIdentity } from "../helpers";
 import { brokerFetch } from "./harness";
 
 afterAll(async () => {
@@ -61,7 +62,7 @@ function tailInto(viewer: Viewer, sid: string, sink: Message[], signal: AbortSig
 
 describe("full-spine e2e (real serve loop, real Workflow runtime, fake backend)", () => {
   it("relays a live turn through the real serve() loop end to end", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(40));
+    const id = await uniqueIdentity();
     const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
     const sid = "spine-1";
     const relay = new HostRelay({
@@ -95,7 +96,7 @@ describe("full-spine e2e (real serve loop, real Workflow runtime, fake backend)"
   }, 30_000);
 
   it("CATCH_UP: a late viewer requests history and the live host replays the transcript", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(41));
+    const id = await uniqueIdentity();
     const driver = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
     const sid = "spine-catchup";
     const relay = new HostRelay({
@@ -138,7 +139,7 @@ describe("full-spine e2e (real serve loop, real Workflow runtime, fake backend)"
   }, 30_000);
 
   it("MULTI-CLIENT: two devices both drive turns on one identity; both see the shared timeline", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(42));
+    const id = await uniqueIdentity();
     const phone = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
     const laptop = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
     const sid = "spine-multi";

@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deriveIdentity, formatPass, type Identity } from "@remote-claw/clawsec";
+import { formatPass, type Identity } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { ensureCerts, HostRcRelay, MitmProxy, RelayCore } from "@remote-claw/cli/rc";
 import { teardownWorkflowTests } from "@workflow/vitest";
@@ -22,6 +22,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { parsePermissionResolved, parseQuestions } from "../../app/lib/transcript";
 import { type Announce, type Message, Viewer } from "../../app/lib/viewer";
 import { displayedPermissionMode } from "../../app/page";
+import { uniqueIdentity } from "../helpers";
 import { FakeRcWorker } from "./fake-rc-worker";
 import { brokerFetch } from "./harness";
 
@@ -97,7 +98,7 @@ async function startRc(id: Identity, ac: AbortController): Promise<{ worker: Fak
 
 describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real broker)", () => {
   it("drives a turn through the FULL path and the viewer discovers the session on the bus", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(60));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -129,7 +130,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 40_000);
 
   it("CATCH_UP: a late device replays the transcript from the live RC relay", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(61));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -156,7 +157,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 40_000);
 
   it("SUB-AGENTS: a Task tool_use + sub-agent output relay through as tool_use + assistant_sub frames", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(63));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -218,7 +219,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 40_000);
 
   it("TOOL_RESULT + TASK: a tool's output (user/tool_result) + a sub-agent Task lifecycle (system) relay; noise is dropped", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(64));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -314,7 +315,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 40_000);
 
   it("THINKING: an extended-thinking block relays through as an assistant_thinking frame", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(66));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -353,7 +354,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 40_000);
 
   it("PERMISSION: a worker can_use_tool surfaces to the viewer, which grants it back to the worker", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(64));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -392,7 +393,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 40_000);
 
   it("CONTROL VERBS: interrupt / set_model / set_mode reach the worker (end is local-only) + slash-command", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(65));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -426,7 +427,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 40_000);
 
   it("PERMISSION MODE: a change from one viewer converges on another viewer's chip", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(72));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -464,7 +465,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     //       `needs` is driven by the open/closed state of the permission gate.
     //   (B) Granting an inbound permission emits a LOGGED `permission_resolved` unordered frame (not
     //       just the control_response sent to the worker) so a fresh viewer's catch_up replays it.
-    const id = await deriveIdentity(new Uint8Array(32).fill(67));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -623,7 +624,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
   }, 50_000);
 
   it("MULTI-CLIENT: two devices drive turns on one RC session; both see the shared timeline", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(62));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -664,7 +665,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     //   (B) A cold second device (no local PermissionRow state) replays history and folds the LOGGED
     //       permission_resolved into the SAME {requestId→behavior} map page.tsx uses — so it renders
     //       the request resolved (allow), never re-prompting with live buttons (#56/#57).
-    const id = await deriveIdentity(new Uint8Array(32).fill(68));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);
@@ -736,7 +737,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     // AskUserQuestion can_use_tool (`input.questions` + `tool_use_id`); the viewer renders the
     // questions (parseQuestions) and answers; the relay sends a control_response whose response carries
     // {behavior:"allow", toolUseID, updatedInput:{answers:{question→label}}}.
-    const id = await deriveIdentity(new Uint8Array(32).fill(69));
+    const id = await uniqueIdentity();
     const ac = new AbortController();
     cleanup.push(() => ac.abort());
     const { worker } = await startRc(id, ac);

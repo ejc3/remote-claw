@@ -1,14 +1,9 @@
-import {
-  deriveIdentity,
-  type Frame,
-  type FrameHeader,
-  type Identity,
-  toHex,
-} from "@remote-claw/clawsec";
+import { type Frame, type FrameHeader, type Identity, toHex } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { brokerFetch } from "../e2e/harness";
+import { uniqueIdentity } from "../helpers";
 
 // ENCRYPTION STRESS TEST — drives the REAL encrypted spine (BrokerClient seal/chunk → broker routes →
 // the selected backend → openFrame/openMessage) against EACH backend, asserting the AEAD round-trip
@@ -30,10 +25,8 @@ afterAll(async () => {
 
 const BACKENDS = ["local", "vercel"];
 
-let seed = 1;
 function freshIdentity(): Promise<Identity> {
-  const secret = new Uint8Array(32).fill(seed++);
-  return deriveIdentity(secret);
+  return uniqueIdentity();
 }
 function client(id: Identity, backend: string): BrokerClient {
   return new BrokerClient({
