@@ -17,6 +17,7 @@ import { gitInfo } from "./host/rc/gitinfo.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
 import { DEFAULT_OPENCODE_MODEL, runOpencodeDriver } from "./host/rc/opencode/driver.js";
 import { runTmuxDriver } from "./host/rc/tmux/driver.js";
+import { resolveMirrorPermissions } from "./host/rc/tmux/permhook.js";
 import { resolveInjectSessionHook } from "./host/rc/tmux/sessionhook.js";
 import { runRcTrace } from "./host/rc/trace-run.js";
 import { runIdentity } from "./identity.js";
@@ -149,6 +150,7 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-oc-session" &&
       n !== "rc-session-hook" &&
       n !== "rc-no-session-hook" &&
+      n !== "rc-tmux-skip-permissions" &&
       n !== "rc-accountless",
   );
   if (stray.length > 0) {
@@ -193,10 +195,12 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     // gets its own error below — no need to also nag about the hook flag there.)
     if (
       (driver === "mitm" || driver === "opencode") &&
-      (rc["rc-session-hook"] === true || rc["rc-no-session-hook"] === true)
+      (rc["rc-session-hook"] === true ||
+        rc["rc-no-session-hook"] === true ||
+        rc["rc-tmux-skip-permissions"] === true)
     ) {
       warn(
-        `remote-claw: --rc-session-hook / --rc-no-session-hook only apply to --rc-driver=tmux; ignored for ${driver}\n`,
+        `remote-claw: --rc-session-hook / --rc-no-session-hook / --rc-tmux-skip-permissions only apply to --rc-driver=tmux; ignored for ${driver}\n`,
       );
     }
     if (driver === "mitm") {
@@ -476,6 +480,13 @@ async function runTmuxDriverPath(
       yesFlag: rc["rc-session-hook"] === true,
       env: process.env.RC_SESSION_HOOK,
     });
+    // Permission MIRRORING (B2): block each tool on a viewer allow/deny (faithful to a real RC session),
+    // DEFAULT ON. Opt out with --rc-tmux-skip-permissions (or RC_TMUX_SKIP_PERMISSIONS truthy) to restore
+    // the hands-off `--dangerously-skip-permissions` auto-approve.
+    const mirrorPermissions = resolveMirrorPermissions({
+      skipFlag: rc["rc-tmux-skip-permissions"] === true,
+      env: process.env.RC_TMUX_SKIP_PERMISSIONS,
+    });
     // Couple Ctrl-C / SIGTERM to the driver's abort so teardown (flush + kill-session) runs. Record
     // which signal fired so we return the shell-standard 128+N code (codex review #9) instead of 0.
     const ac = new AbortController();
@@ -489,7 +500,7 @@ async function runTmuxDriverPath(
     process.once("SIGINT", onInt);
     process.once("SIGTERM", onTerm);
     try {
-      const code = await runTmuxDriver(ctx, ac.signal, { injectSessionHook });
+      const code = await runTmuxDriver(ctx, ac.signal, { injectSessionHook, mirrorPermissions });
       return firedSignal !== null ? signalExitCode(firedSignal) : code;
     } finally {
       process.removeListener("SIGINT", onInt);

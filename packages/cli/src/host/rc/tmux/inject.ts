@@ -57,6 +57,35 @@ export function isInterrupt(ev: RcEvent): boolean {
   return req?.subtype === "interrupt";
 }
 
+/** Extract the model id from a downstream `set_model` control_request (the verb fidelity path, B2): the
+ *  driver injects `/model <id>` into the pane. Returns the model string, or null if this isn't a
+ *  well-formed set_model. `pushControlRequest("set_model", { model })` sets payload.request.model. */
+export function downstreamSetModel(ev: RcEvent): string | null {
+  if (ev.eventType !== "control_request") return null;
+  const req = ev.payload.request as { subtype?: unknown; model?: unknown } | undefined;
+  if (req?.subtype !== "set_model") return null;
+  return typeof req.model === "string" && req.model !== "" ? req.model : null;
+}
+
+/** Extract { requestId, behavior } from a downstream `control_response` (the permission-mirroring answer,
+ *  B2): the viewer's grant/deny rides this, and the driver writes the matching decision file the blocked
+ *  PreToolUse hook is polling. `pushControlResponse` sets payload.response.{request_id,response.behavior}.
+ *  Returns null if it isn't a well-formed control_response. */
+export function downstreamControlResponse(
+  ev: RcEvent,
+): { requestId: string; behavior: "allow" | "deny" } | null {
+  if (ev.eventType !== "control_response") return null;
+  const resp = ev.payload.response as
+    | { request_id?: unknown; response?: { behavior?: unknown } }
+    | undefined;
+  const requestId = resp?.request_id;
+  if (typeof requestId !== "string" || requestId === "") return null;
+  // Fail CLOSED: only an explicit "allow" allows; anything else — "deny", or a malformed/absent behavior —
+  // denies, so a garbled control_response can never auto-approve a tool. The relay normalizes behavior to
+  // exactly allow|deny before this, so a real viewer grant is always "allow"; this is the last-gate guard.
+  return { requestId, behavior: resp?.response?.behavior === "allow" ? "allow" : "deny" };
+}
+
 /**
  * PHASE 1 of injection — get the text into the pane's input box: load it into a named buffer, then
  * BRACKETED-paste it (so multiline / backticks / special chars don't submit early). Split out from the
@@ -166,6 +195,11 @@ export interface InjectPumpOptions {
    *  echo is briefly mis-tagged as a local prompt (a harmless double-show in the viewer), never a
    *  wrong/dropped command. */
   onInjected?: (text: string) => void;
+  /** Called on a `control_response` (a viewer permission answer) when permission MIRRORING is on (B2):
+   *  the driver writes the decision file the blocked PreToolUse hook is polling, keyed by request_id (==
+   *  the can_use_tool gate's id == the tool_use_id). When absent (mirroring off), control_responses are
+   *  just acked (today's behavior). May be async; awaited before the event is acked. */
+  onDecision?: (requestId: string, behavior: "allow" | "deny") => void | Promise<void>;
 }
 
 /**
@@ -238,9 +272,42 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
         (attempt, error) => opts.onError?.(ev.eventType, error, { attempt, phase: "interrupt" }),
       );
       if (sent) session.ack(ev.eventId);
+    } else if (downstreamSetModel(ev) !== null) {
+      // Verb fidelity (B2): a viewer `set_model` → type `/model <id>` into the pane (claude's documented
+      // one-shot model switch). Injected via the SAME paste+submit path as a prompt and recorded in the
+      // local-prompt ledger so claude's transcript echo of the slash command is suppressed (the viewer
+      // drove it from the ⋯ sheet, not as a typed message).
+      const text = `/model ${downstreamSetModel(ev)}`;
+      const pasted = await retryUntil(
+        () => loadAndPaste(tmux, target, text, buffer),
+        signal,
+        sleep,
+        (attempt, error) => opts.onError?.("set_model", error, { attempt, phase: "paste" }),
+      );
+      if (!pasted) continue;
+      const submitted = await retryUntil(
+        () => submitPrompt(tmux, target, text, sleep),
+        signal,
+        sleep,
+        (attempt, error) => opts.onError?.("set_model", error, { attempt, phase: "submit" }),
+      );
+      if (submitted) {
+        session.ack(ev.eventId);
+        opts.onInjected?.(text);
+      }
+    } else if (ev.eventType === "control_response" && opts.onDecision) {
+      // Permission mirroring (B2): the viewer's grant/deny → write the decision file the blocked PreToolUse
+      // hook polls. ACK after so a reclaimed stream doesn't replay the answer (a second, redundant write).
+      // LIMITATION: this carries only allow/deny, not structured answers. An AskUserQuestion tool gated via
+      // the PreToolUse path is therefore allow/deny-only — the viewer's chosen answers (the #42 updatedInput
+      // path) reach claude on the MITM driver but NOT here, where the hook can return only a permission
+      // decision. Allowing the tool lets claude fall back to its own in-pane question flow.
+      const dec = downstreamControlResponse(ev);
+      if (dec !== null) await opts.onDecision(dec.requestId, dec.behavior);
+      session.ack(ev.eventId);
     } else {
-      // control_request (initialize / set_model / set_mode / end) and control_response: no pane
-      // analogue in v1, but ACK so followDownstream won't replay them after a stream reclaim.
+      // control_request (initialize / set_mode / end) and an unhandled control_response (mirroring off):
+      // no pane analogue, but ACK so followDownstream won't replay them after a stream reclaim.
       session.ack(ev.eventId);
     }
   }

@@ -9,13 +9,13 @@
 // No real tmux, no real claude, no real broker — every side effect is injected.
 
 import { mkdtempSync, rmSync } from "node:fs";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deriveIdentity, type Frame, type FrameHeader, type Identity } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
-import { parseUserSession, runTmuxDriver } from "./driver.js";
+import { parseUserSession, runTmuxDriver, tmuxCapabilities } from "./driver.js";
 import type { TmuxExec, TmuxExecResult } from "./tmuxctl.js";
 import { projectSlug, subagentDir } from "./transcript.js";
 
@@ -221,6 +221,10 @@ describe("runTmuxDriver wiring", () => {
         // Honor the requested ms (clamped small) so the loops POLL rather than spin — fast but fair.
         sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
         paneWatchMs: 5,
+        // This test validates the OPT-OUT spawn shape (legacy auto-approve). Permission mirroring is the
+        // DEFAULT now (B2) — its command shape + the gate/decision round-trip are covered by dedicated
+        // tests below; here we keep mirroring OFF to assert the `--dangerously-skip-permissions` command.
+        mirrorPermissions: false,
         // Inherit an env with the stub-gotcha ids + host secrets (expect SCRUBBED) AND proxy/CA vars
         // (expect PRESERVED — this driver never sets a proxy, so it leaves the user's alone).
         parentEnv: {
@@ -298,6 +302,157 @@ describe("runTmuxDriver wiring", () => {
     const code = await run;
     expect(code).toBe(0);
     expect(spy.killed()).toBe(true);
+  });
+
+  it("permission mirroring (DEFAULT on): spawns WITHOUT --dangerously-skip-permissions, injects the PreToolUse hook, writes the helper + decisions dir", async () => {
+    // B2: with mirroring on (the default), the VIEWER is the permission gate — so claude must NOT
+    // auto-approve (`--dangerously-skip-permissions` is absent), and a PreToolUse hook is injected via a
+    // merged --settings pointing at a helper the driver writes to disk (the helper blocks each tool until
+    // the driver writes a decision file in the decisions dir).
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-mirror-cwd-");
+    const home = tmp("rc-mirror-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const scratch = tmp("rc-mirror-scratch-");
+    const permReqPath = join(scratch, "perm-req.ndjson");
+    const permDecDir = join(scratch, "perm-dec");
+    const permHelperPath = join(scratch, "perm-hook.mjs");
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        // mirrorPermissions is OMITTED → defaults to ON; we pass the scratch paths so we can assert the
+        // helper file + decisions dir the driver creates.
+        permReqPath,
+        permDecDir,
+        permHelperPath,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      const cmd = spy.command();
+      // Mirroring on → the viewer decides, so claude must NOT skip permissions.
+      expect(cmd).not.toContain("--dangerously-skip-permissions");
+      // The PreToolUse hook is injected via a merged --settings, wired to our helper.
+      expect(cmd).toContain("--settings");
+      expect(cmd).toContain("PreToolUse");
+      expect(cmd).toContain("perm-hook.mjs");
+      // The helper script was written to disk (it's the blocking PreToolUse bridge).
+      expect(await readFile(permHelperPath, "utf8")).toContain("PreToolUse");
+      // The decisions dir was created so the helper has somewhere to poll for its answer.
+      expect(await readdir(permDecDir)).toEqual([]);
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("permission mirroring round-trip: a tool request raises a can_use_tool gate; a viewer allow writes the decision file", async () => {
+    // B2 end-to-end (no live claude): the PreToolUse helper would append a tool request to the requests
+    // sentinel; here we append it directly. The driver's perm pump must raise a `can_use_tool` gate (the
+    // relay posts it as a `permission_request` frame the viewer renders), and when the viewer ALLOWS (an
+    // inbound `permission` frame), the inject pump must write `<decisionDir>/<toolUseId>.json` — the file
+    // the blocked helper is polling. This proves the full requests→gate→answer→decision-file cycle.
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-mirror2-cwd-");
+    const home = tmp("rc-mirror2-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const scratch = tmp("rc-mirror2-scratch-");
+    const permReqPath = join(scratch, "perm-req.ndjson");
+    const permDecDir = join(scratch, "perm-dec");
+    const permHelperPath = join(scratch, "perm-hook.mjs");
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        permReqPath,
+        permDecDir,
+        permHelperPath,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      // The PreToolUse hook (simulated) records ONE tool request on the sentinel the driver tails.
+      await appendFile(
+        permReqPath,
+        `${JSON.stringify({
+          toolUseId: "tu_gate",
+          toolName: "Bash",
+          toolInput: { command: "echo hi" },
+          sessionId: "s",
+          permissionMode: "default",
+        })}\n`,
+      );
+      // The driver raises a can_use_tool gate → the relay posts it as a permission_request frame.
+      await waitFor(() =>
+        client.content.some(
+          (p) => p.recordKind === "permission_request" && p.text.includes("tu_gate"),
+        ),
+      );
+      const gate = client.content.find(
+        (p) => p.recordKind === "permission_request" && p.text.includes("tu_gate"),
+      );
+      if (gate === undefined) throw new Error("permission_request gate not posted");
+      const gateBody = JSON.parse(gate.text);
+      expect(gateBody.tool_name).toBe("Bash");
+      expect(gateBody.request_id).toBe("tu_gate");
+      // The viewer ALLOWS → an inbound `permission` frame → the inject pump writes the decision file the
+      // blocked helper is polling, keyed by the toolUseId (== request_id).
+      client.pushInbound(
+        inFrame(
+          identity,
+          "permission",
+          "msg-perm-1",
+          JSON.stringify({ request_id: "tu_gate", behavior: "allow" }),
+        ),
+      );
+      const decFile = join(permDecDir, "tu_gate.json");
+      let decision: string | null = null;
+      const end = Date.now() + 4000;
+      while (decision === null && Date.now() < end) {
+        decision = await readFile(decFile, "utf8").catch(() => null);
+        if (decision === null) await new Promise((r) => setTimeout(r, 10));
+      }
+      if (decision === null) throw new Error("decision file never written");
+      expect(JSON.parse(decision)).toEqual({ behavior: "allow" });
+    } finally {
+      ac.abort();
+      await run;
+    }
   });
 
   it("local-prompt ledger: suppresses OUR injected prompt's transcript echo, surfaces a LOCALLY-typed one", async () => {
@@ -929,6 +1084,19 @@ describe("runTmuxDriver wiring", () => {
         { tmuxExec: failExec, sleep: () => Promise.resolve() },
       ),
     ).rejects.toThrow(/tmux not found/);
+  });
+});
+
+describe("tmuxCapabilities — mirroring flips structuredPermissions", () => {
+  it("mirroring ON → structuredPermissions true (the viewer is the gate)", () => {
+    expect(tmuxCapabilities(true).structuredPermissions).toBe(true);
+  });
+  it("mirroring OFF → structuredPermissions false (claude auto-approves)", () => {
+    expect(tmuxCapabilities(false).structuredPermissions).toBe(false);
+  });
+  it("controlVerbs stays false either way (no faithful set_mode/end pane analogue)", () => {
+    expect(tmuxCapabilities(true).controlVerbs).toBe(false);
+    expect(tmuxCapabilities(false).controlVerbs).toBe(false);
   });
 });
 
