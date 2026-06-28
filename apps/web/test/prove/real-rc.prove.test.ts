@@ -17,13 +17,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
+import { formatPass } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { ensureCerts, HostRcRelay, MitmProxy, RelayCore, type Session } from "@remote-claw/cli/rc";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { type Message, Viewer } from "../../app/lib/viewer";
 import { brokerFetch } from "../e2e/harness";
+import { uniqueIdentity } from "../helpers";
 
 const RUN = process.env.RC_PROVE_REAL_CLAUDE === "1";
 
@@ -62,7 +63,7 @@ describe.skipIf(!RUN)(
     });
 
     it("the real binary registers a session via the MITM, and a viewer turn round-trips", async () => {
-      const id = await deriveIdentity(new Uint8Array(32).fill(201));
+      const id = await uniqueIdentity();
       const dir = mkdtempSync(join(tmpdir(), "rc-prove-"));
       const certs = ensureCerts(dir);
       const core = new RelayCore();

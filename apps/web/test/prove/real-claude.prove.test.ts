@@ -6,12 +6,13 @@
 //   RC_PROVE_REAL_CLAUDE=1 pnpm exec vitest run test/prove/real-claude.prove.test.ts
 
 import { spawn } from "node:child_process";
-import { deriveIdentity, formatPass, utf8 } from "@remote-claw/clawsec";
+import { formatPass, utf8 } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { Viewer } from "../../app/lib/viewer";
 import { brokerFetch, header, takeFrames } from "../e2e/harness";
+import { uniqueIdentity } from "../helpers";
 
 const RUN = process.env.RC_PROVE_REAL_CLAUDE === "1";
 const td = new TextDecoder();
@@ -47,7 +48,7 @@ describe.skipIf(!RUN)("PROVE: a real claude, driven end-to-end through the broke
   });
 
   it("viewer prompt → broker → host → REAL claude → broker → viewer (encrypted throughout)", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(123));
+    const id = await uniqueIdentity();
     const pass = await formatPass(id);
     const viewer = await Viewer.fromPass(pass, "http://broker", brokerFetch);
     const host = new BrokerClient({

@@ -1,8 +1,9 @@
-import { deriveIdentity, type Frame, type Identity, utf8 } from "@remote-claw/clawsec";
+import { type Frame, type Identity, utf8 } from "@remote-claw/clawsec";
 import { BrokerClient, FrameOrderer, securityProvider } from "@remote-claw/cli";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { brokerFetch, fakeClaudeReply, header, takeFrames } from "./e2e/harness";
+import { uniqueIdentity } from "./helpers";
 
 afterAll(async () => {
   await teardownWorkflowTests();
@@ -23,7 +24,7 @@ function pair(id: Identity): { host: BrokerClient; viewer: BrokerClient } {
 
 describe("end-to-end: host ↔ broker ↔ viewer (real crypto + real Workflow runtime)", () => {
   it("discovers a session on the bus, then completes an encrypted prompt → response turn", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(42));
+    const id = await uniqueIdentity();
     const { host, viewer } = pair(id);
     const sid = "sess-1";
 
@@ -107,7 +108,7 @@ describe("end-to-end: host ↔ broker ↔ viewer (real crypto + real Workflow ru
   });
 
   it("carries a control frame (interrupt) on the session channel under control_key", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(43));
+    const id = await uniqueIdentity();
     const { host, viewer } = pair(id);
     const sid = "sess-ctl";
 

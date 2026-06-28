@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   deriveIdentity,
   encodeFrame,
@@ -9,9 +10,20 @@ import {
   type WireFrame,
 } from "@remote-claw/clawsec";
 
-/** A deterministic test identity (distinct `fill` → distinct identity). */
-export function testIdentity(fill = 7): Promise<Identity> {
-  return deriveIdentity(new Uint8Array(32).fill(fill));
+/**
+ * A UNIQUE, never-colliding test identity: 32 random bytes → a distinct `identity_id`, hence distinct
+ * bus/session channels AND distinct `bus:<hex>` workflow hook tokens.
+ *
+ * Every integration test that drives the in-process @workflow runtime MUST use this rather than a
+ * fixed `deriveIdentity(new Uint8Array(32).fill(N))` seed. vitest runs test FILES in parallel (one
+ * forked world per worker) and the suite can be launched as several concurrent invocations; two tests
+ * that share a derived identity collide on the same hook token → `HookConflictError`. A fresh random
+ * identity per test removes that whole class by construction. The identity value is pure namespacing —
+ * no assertion depends on it — so randomness costs nothing in reproducibility. Call it once per `it`
+ * and reuse the variable; call it twice when a test needs two *distinct* parties (random ⇒ distinct).
+ */
+export function uniqueIdentity(): Promise<Identity> {
+  return deriveIdentity(new Uint8Array(randomBytes(32)));
 }
 
 /** The `Authorization` header value the broker expects: Bearer <hex(auth_token)>. */

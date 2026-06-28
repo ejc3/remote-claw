@@ -1,13 +1,8 @@
-import {
-  deriveIdentity,
-  type Frame,
-  type FrameHeader,
-  type Identity,
-  toHex,
-} from "@remote-claw/clawsec";
+import { type Frame, type FrameHeader, type Identity, toHex } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { brokerFetch } from "../e2e/harness";
+import { uniqueIdentity } from "../helpers";
 
 // HEAVY local encryption stress — the LocalBackend is in-process, so we crank the volume far past what
 // the Vercel runtime could absorb in a unit test: thousands of sealed round-trips, hundreds
@@ -30,10 +25,8 @@ afterAll(() => {
   else process.env.BROKER_BACKEND = PRIOR_BACKEND;
 });
 
-let seed = 100;
 function freshIdentity(): Promise<Identity> {
-  const secret = new Uint8Array(32).fill(seed++);
-  return deriveIdentity(secret);
+  return uniqueIdentity();
 }
 function client(id: Identity): BrokerClient {
   return new BrokerClient({

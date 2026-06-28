@@ -7,12 +7,13 @@
 // Gated behind RC_PROVE_REAL_CLAUDE=1 so CI stays fast/deterministic/network-free. Run with:
 //   RC_PROVE_REAL_CLAUDE=1 pnpm exec vitest run test/prove/real-session.prove.test.ts
 
-import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
+import { formatPass } from "@remote-claw/clawsec";
 import { BrokerClient, ClaudeStreamSession, HostRelay, securityProvider } from "@remote-claw/cli";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { type Message, Viewer } from "../../app/lib/viewer";
 import { brokerFetch } from "../e2e/harness";
+import { uniqueIdentity } from "../helpers";
 
 const RUN = process.env.RC_PROVE_REAL_CLAUDE === "1";
 
@@ -34,7 +35,7 @@ describe.skipIf(!RUN)(
     });
 
     it("turn 1 teaches claude a number; turn 2 reads it back — both through the encrypted broker", async () => {
-      const id = await deriveIdentity(new Uint8Array(32).fill(200));
+      const id = await uniqueIdentity();
       const pass = await formatPass(id);
       const viewer = await Viewer.fromPass(pass, "http://broker", brokerFetch);
       const hostClient = new BrokerClient({

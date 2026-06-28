@@ -8,7 +8,7 @@ import { GET as frameCountRoute } from "../app/api/frame-count/route";
 import { MAX_RELAY_CIPHERTEXT_BYTES, POST as relay } from "../app/api/relay/route";
 import { GET as seqRoute } from "../app/api/seq/route";
 import { GET as stream } from "../app/api/stream/route";
-import { announceFrame, bearer, header, readSseData, testIdentity, wireFrame } from "./helpers";
+import { announceFrame, bearer, header, readSseData, uniqueIdentity, wireFrame } from "./helpers";
 
 afterAll(async () => {
   await teardownWorkflowTests();
@@ -63,7 +63,7 @@ function clearSqliteBackend(): void {
 
 describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
   it("returns {maxSeq: null} for a backend without a durable maxSeq", async () => {
-    const id = await testIdentity(20);
+    const id = await uniqueIdentity();
     const res = await seqReq(bearer(id.authToken), "?session=sess-seq");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ maxSeq: null, durable: false });
@@ -82,7 +82,7 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
     process.env.RC_SQLITE_DIR = dir;
     process.env.BROKER_BACKEND = "sqlite";
     try {
-      const id = await testIdentity(21);
+      const id = await uniqueIdentity();
       const auth = bearer(id.authToken);
       const sid = "sess-sqlite-seq";
       const kSession = await deriveSessionKey(id.contentRoot, sid);
@@ -118,7 +118,7 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
 
 describe("broker: GET /api/frame-count (durable stream cursor)", () => {
   it("returns {frameCount: null} for a backend without a durable frame count", async () => {
-    const id = await testIdentity(22);
+    const id = await uniqueIdentity();
     const res = await frameCountReq(bearer(id.authToken), "?session=sess-count");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ frameCount: null, durable: false });
@@ -137,7 +137,7 @@ describe("broker: GET /api/frame-count (durable stream cursor)", () => {
     process.env.RC_SQLITE_DIR = dir;
     process.env.BROKER_BACKEND = "sqlite";
     try {
-      const id = await testIdentity(23);
+      const id = await uniqueIdentity();
       const auth = bearer(id.authToken);
       const sid = "sess-sqlite-count";
       const kSession = await deriveSessionKey(id.contentRoot, sid);
@@ -173,7 +173,7 @@ describe("broker: GET /api/frame-count (durable stream cursor)", () => {
 
 describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   it("E2E: a sealed bus announce round-trips host → POST /api/relay → bus → GET /api/stream → open", async () => {
-    const id = await testIdentity(1);
+    const id = await uniqueIdentity();
     const auth = bearer(id.authToken);
     const frame = await announceFrame(id, {
       session_id: "sess-1",
@@ -194,7 +194,7 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   });
 
   it("E2E: a per-session content frame rides the session channel, not the bus", async () => {
-    const id = await testIdentity(2);
+    const id = await uniqueIdentity();
     const auth = bearer(id.authToken);
     const sid = "sess-A";
     const kSession = await deriveSessionKey(id.contentRoot, sid);
@@ -219,7 +219,7 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   });
 
   it("multiple announces accumulate on one bus run in order; the recent window surfaces the freshest", async () => {
-    const id = await testIdentity(3);
+    const id = await uniqueIdentity();
     const auth = bearer(id.authToken);
     for (const n of [1, 2, 3]) {
       const f = await announceFrame(id, { session_id: `s${n}`, n, sent_at: n }, { msgId: `a${n}` });
@@ -244,7 +244,7 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   });
 
   it("rejects an absent/malformed bearer with 401 (anti-scanning gate)", async () => {
-    const id = await testIdentity(4);
+    const id = await uniqueIdentity();
     const frame = await announceFrame(id, { session_id: "s", sent_at: 1 });
     // no Authorization
     const noAuth = await relay(
@@ -264,8 +264,8 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   });
 
   it("rejects a frame whose identity_id is not the bearer's (403) and malformed JSON (400)", async () => {
-    const mine = await testIdentity(5);
-    const theirs = await testIdentity(6);
+    const mine = await uniqueIdentity();
+    const theirs = await uniqueIdentity();
     // A frame sealed/labelled for `theirs`, posted with `mine`'s bearer.
     const foreign = await announceFrame(theirs, { session_id: "s", sent_at: 1 });
     expect((await post(foreign, bearer(mine.authToken))).status).toBe(403);
@@ -282,7 +282,7 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   });
 
   it("rejects ciphertext at the broker size cap while accepting a normal frame", async () => {
-    const id = await testIdentity(24);
+    const id = await uniqueIdentity();
     const auth = bearer(id.authToken);
     const normal = await announceFrame(id, { session_id: "s", sent_at: 1 });
     const oversized: WireFrame = {
@@ -300,12 +300,12 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   });
 
   it("rejects a non-integer startIndex with 400", async () => {
-    const id = await testIdentity(7);
+    const id = await uniqueIdentity();
     expect((await sub(bearer(id.authToken), "?startIndex=abc")).status).toBe(400);
   });
 
   it("rejects a non-announce frame on the bus channel (§6A: bus carries only session_announce)", async () => {
-    const id = await testIdentity(8);
+    const id = await uniqueIdentity();
     const auth = bearer(id.authToken);
     // A content frame with no ?session targets the bus — that must be refused (event-cap protection).
     const content = await wireFrame(
@@ -319,7 +319,7 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   });
 
   it("rejects a frame whose session_id disagrees with ?session (no cross-session smuggling)", async () => {
-    const id = await testIdentity(11);
+    const id = await uniqueIdentity();
     const auth = bearer(id.authToken);
     const kA = await deriveSessionKey(id.contentRoot, "A");
     // A frame sealed + labelled for session A, attempted onto session B's channel.
@@ -336,7 +336,7 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
   });
 
   it("isolates channels: A's content stays on A, B's on B, and neither leaks onto a (non-empty) bus", async () => {
-    const id = await testIdentity(12);
+    const id = await uniqueIdentity();
     const auth = bearer(id.authToken);
     const kA = await deriveSessionKey(id.contentRoot, "A");
     const kB = await deriveSessionKey(id.contentRoot, "B");

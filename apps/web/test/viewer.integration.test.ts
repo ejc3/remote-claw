@@ -1,9 +1,10 @@
-import { deriveIdentity, formatPass, type Identity, utf8 } from "@remote-claw/clawsec";
+import { formatPass, type Identity, utf8 } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
 import { Viewer } from "../app/lib/viewer";
 import { brokerFetch, header } from "./e2e/harness";
+import { uniqueIdentity } from "./helpers";
 
 afterAll(async () => {
   await teardownWorkflowTests();
@@ -32,7 +33,7 @@ function fakeHost(id: Identity): BrokerClient {
 
 describe("web client Viewer (browser-safe, against the real broker)", () => {
   it("loads a pass, discovers a session on the bus, sends a prompt, and renders the reply", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(77));
+    const id = await uniqueIdentity();
     const pass = await formatPass(id);
     const viewer = await Viewer.fromPass(pass, "http://broker", brokerFetch);
     const host = fakeHost(id);
@@ -84,7 +85,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
   });
 
   it("reassembles a LARGE assistant message (split into chunks) through the viewer's reorder path", async () => {
-    const id = await deriveIdentity(new Uint8Array(32).fill(99));
+    const id = await uniqueIdentity();
     const pass = await formatPass(id);
     const viewer = await Viewer.fromPass(pass, "http://broker", brokerFetch);
     const host = fakeHost(id);
