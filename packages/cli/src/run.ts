@@ -148,7 +148,8 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-oc-model" &&
       n !== "rc-oc-session" &&
       n !== "rc-session-hook" &&
-      n !== "rc-no-session-hook",
+      n !== "rc-no-session-hook" &&
+      n !== "rc-accountless",
   );
   if (stray.length > 0) {
     const named = stray.map((k) => `--${k}`).join(", ");
@@ -292,6 +293,18 @@ async function runRcLaunchPath(
           ...(stripKeys !== undefined ? { stripKeys } : {}),
         }
       : undefined;
+  // Accountless: --rc-accountless / RC_ACCOUNTLESS=1. Seeds a synthetic claude.ai login + RC gates so
+  // native /remote-control works with no real login. Requires bedrock inference — a fabricated credential
+  // can't reach real Anthropic for /v1/messages, so anthropic-passthrough would fail at the first turn.
+  const accountless =
+    rc["rc-accountless"] === true ||
+    ["1", "true", "yes"].includes((process.env.RC_ACCOUNTLESS ?? "").trim().toLowerCase());
+  if (accountless && inference !== "bedrock") {
+    warn(
+      "remote-claw: --rc-accountless requires --rc-inference=bedrock (a fabricated login can't reach real Anthropic)\n",
+    );
+    return 2;
+  }
   try {
     await ensureIdentity(secretPath); // local, idempotent — create on first run, no network
     const { secret } = await loadSecret(secretPath);
@@ -306,6 +319,7 @@ async function runRcLaunchPath(
       ...(backend !== undefined ? { backend } : {}),
       inference,
       ...(bedrock !== undefined ? { bedrock } : {}),
+      ...(accountless ? { accountless: true } : {}),
     });
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);

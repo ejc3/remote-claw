@@ -5,10 +5,14 @@
 // transparent (it passes `/v1/messages` + OAuth through), so a session that never enables RC sends
 // nothing to the broker (lazy registration). One RelayCore owns every RC session the child opens.
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Identity } from "@remote-claw/clawsec";
 import { BrokerClient } from "../../broker/client.js";
 import { securityProvider } from "../../security/provider.js";
 import { tracerFromEnv } from "../../trace.js";
+import { PRETEND_API_KEY, seedAccountlessConfigDir } from "./accountless.js";
 import type { BedrockConfig } from "./bedrock/inference.js";
 import { ensureCerts } from "./certs.js";
 import { bridgeSession } from "./drivers/bridge.js";
@@ -56,6 +60,10 @@ export interface RcLaunchOptions {
   inference?: "anthropic" | "bedrock";
   /** Bedrock config (region/model/auth), used only when `inference==="bedrock"`. */
   bedrock?: BedrockConfig;
+  /** Accountless native RC: seed an ISOLATED CLAUDE_CONFIG_DIR with a synthetic claude.ai login + the RC
+   *  feature gates so native `/remote-control` works with NO real login. Pairs with `inference:"bedrock"`
+   *  (a fake token can't reach real Anthropic). The user's real `~/.claude.json` is never touched. */
+  accountless?: boolean;
 }
 
 /**
@@ -63,6 +71,15 @@ export interface RcLaunchOptions {
  * broker. Resolves with claude's exit code; tears the MITM + relays down on exit.
  */
 export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
+  // Enforce the accountless⇒bedrock invariant at the library boundary, not just in the CLI arg layer:
+  // runRcLaunch is exported, so a programmatic caller could otherwise seed a fabricated claude.ai login
+  // while the MITM stays in Anthropic passthrough — leaking that fake account state toward real
+  // api.anthropic.com (and breaking the zero-Anthropic contract). Fail fast, before any setup.
+  if (opts.accountless && opts.inference !== "bedrock") {
+    throw new Error(
+      "runRcLaunch: accountless requires inference:'bedrock' (a fabricated login can't reach real Anthropic)",
+    );
+  }
   const provider = securityProvider("sealed", opts.identity);
   const certs = ensureCerts(opts.certsDir);
   const core = new RelayCore();
@@ -161,7 +178,9 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     // the proxy could otherwise make a direct, authenticated api.anthropic.com call. So unconditionally
     // replace any real key with a pretend one and drop the bearer token form. (A login in ~/.claude is
     // moot — the MITM synthesizes the OAuth/refresh endpoints, so it can't reach the real upstream.)
-    env.ANTHROPIC_API_KEY = "sk-ant-remote-claw-bedrock-no-account-needed";
+    // Same constant the accountless seed lists under customApiKeyResponses.rejected — keep them in sync
+    // (a mismatch would leave claude in API-key mode, disabling RC), so import it rather than re-type it.
+    env.ANTHROPIC_API_KEY = PRETEND_API_KEY;
     delete env.ANTHROPIC_AUTH_TOKEN;
     // Drop ANTHROPIC_BASE_URL so the child resolves to api.anthropic.com (the host OUR MITM intercepts).
     // Left set (from the launching env), it would point claude's first-party calls at some OTHER host —
@@ -184,12 +203,32 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     delete env.CLAUDE_CODE_USE_VERTEX;
   }
 
+  // Accountless temp dir, declared here so the finally always cleans it. mkdir + seed happen INSIDE the
+  // try so that even if they throw, the proxy/relays still tear down (they're already listening).
+  let accountlessDir: string | undefined;
   try {
+    if (opts.accountless) {
+      // Seed an ISOLATED config dir with a synthetic claude.ai login + the RC feature gates and point the
+      // child at it via CLAUDE_CONFIG_DIR — so native /remote-control works with no real login, without
+      // ever touching the user's real ~/.claude.json. Removed on teardown (the identity is ephemeral).
+      // Assign the dir BEFORE seeding so a seed failure still leaves it for the finally to remove.
+      accountlessDir = mkdtempSync(join(tmpdir(), "rc-accountless-"));
+      seedAccountlessConfigDir(accountlessDir, Date.now(), cwd);
+      env.CLAUDE_CONFIG_DIR = accountlessDir;
+    }
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
   } finally {
     ac.abort();
     await waitForRelays(relays);
     await proxy.close();
+    // force:true already swallows ENOENT; guard the rest so a cleanup error can't mask the real result.
+    if (accountlessDir !== undefined) {
+      try {
+        rmSync(accountlessDir, { recursive: true, force: true });
+      } catch {
+        /* best-effort: a leftover throwaway dir in tmpdir is harmless (creds are fake) */
+      }
+    }
   }
 }
 

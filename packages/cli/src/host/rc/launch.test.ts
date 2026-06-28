@@ -382,6 +382,63 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   }, 20_000);
 
+  it("accountless mode: points the child at an isolated seeded config dir, then removes it on teardown", async () => {
+    // Accountless seeds a synthetic claude.ai login + RC gates into a throwaway CLAUDE_CONFIG_DIR so
+    // native /remote-control works with no real login — without touching the user's real ~/.claude.json.
+    const id = await deriveIdentity(new Uint8Array(32).fill(75));
+    const certsDir = tmp();
+    let seenEnv: NodeJS.ProcessEnv | null = null;
+    let seededDir = "";
+    let cfgDuringSpawn: Record<string, unknown> | null = null;
+    await runRcLaunch({
+      claudeArgs: [],
+      identity: id,
+      brokerUrl: "http://broker.example",
+      certsDir,
+      inference: "bedrock",
+      bedrock: {},
+      accountless: true,
+      spawnClaude: async (_bin, _args, env) => {
+        seenEnv = env;
+        seededDir = env.CLAUDE_CONFIG_DIR ?? "";
+        // The seeded config exists DURING the child's life and carries the RC gates.
+        cfgDuringSpawn = JSON.parse(readFileSync(join(seededDir, ".claude.json"), "utf8"));
+        return 0;
+      },
+    });
+    const env = seenEnv as unknown as NodeJS.ProcessEnv;
+    expect(env.CLAUDE_CONFIG_DIR).toBeTruthy();
+    expect(seededDir).toContain("rc-accountless-");
+    const cfg = cfgDuringSpawn as unknown as { cachedGrowthBookFeatures: Record<string, unknown> };
+    expect(cfg.cachedGrowthBookFeatures.tengu_ccr_bridge).toBe(true);
+    // The pretend key still gets injected (bedrock), and the seeded config rejects it → claude.ai-login mode.
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-remote-claw-bedrock-no-account-needed");
+    // Ephemeral: the dir is gone after teardown.
+    expect(existsSync(seededDir)).toBe(false);
+  }, 20_000);
+
+  it("accountless without bedrock is rejected at the library boundary (not just the CLI arg layer)", async () => {
+    // runRcLaunch is exported; a programmatic caller must not be able to seed a fabricated login while
+    // the MITM passes through to real Anthropic. The guard must fire before any spawn.
+    const id = await deriveIdentity(new Uint8Array(32).fill(76));
+    let spawned = false;
+    await expect(
+      runRcLaunch({
+        claudeArgs: [],
+        identity: id,
+        brokerUrl: "http://broker.example",
+        certsDir: tmp(),
+        accountless: true,
+        // inference omitted ⇒ defaults to anthropic passthrough
+        spawnClaude: async () => {
+          spawned = true;
+          return 0;
+        },
+      }),
+    ).rejects.toThrow(/accountless requires inference:'bedrock'/);
+    expect(spawned).toBe(false);
+  }, 20_000);
+
   it("awaits relay pumps on teardown so a final outbound frame flushes", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(73));
     const certsDir = tmp();
