@@ -291,6 +291,14 @@ export class TursoCloudDbLocator implements DbLocator {
     return this.#existsName(this.#dbName(token));
   }
 
+  /** Drop the positive existence memo for the token, so the next ensure()/exists() re-checks the Platform
+   *  API. The backend calls this when a cached client hit a deleted-db (channel-gone) error: a delete by
+   *  ANOTHER instance (or this one between cache writes) leaves our #known entry stale until its TTL, which
+   *  would make the recreating ensure() no-op and the new client re-point at the deleted db (issue #111). */
+  forget(token: string): void {
+    this.#known.delete(this.#dbName(token));
+  }
+
   async #existsName(name: string): Promise<boolean> {
     if (this.#isKnown(name)) return true;
     const res = await this.#fetch(this.#api(`/databases/${name}`), { headers: this.#authHeader() });
