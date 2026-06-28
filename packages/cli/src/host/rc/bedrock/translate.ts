@@ -15,7 +15,12 @@ export function mantleModelId(claudeModel: string, override?: string): string {
   const base = claudeModel.replace(/\[[^\]]*\]$/, "").trim();
   // Already a Bedrock id (anthropic.*, or a region-profile prefix like us./eu./global.) → pass through.
   if (/^(global\.|[a-z]{2}\.)?anthropic\./.test(base)) return base;
-  return `anthropic.${base}`;
+  // mantle uses the NEW, UNDATED model ids. The main model is already undated (`claude-opus-4-8`),
+  // but claude's quick/"haiku" helper sends a DATED id (`claude-haiku-4-5-20251001`) which mantle
+  // 404s — so strip a trailing `-YYYYMMDD` date before prefixing. Verified live against mantle:
+  // `anthropic.claude-haiku-4-5-20251001` → 404, `anthropic.claude-haiku-4-5` → 200.
+  const undated = base.replace(/-\d{8}$/, "");
+  return `anthropic.${undated}`;
 }
 
 /** `anthropic-beta` features the native Bedrock path is known to accept. claude sends a long list

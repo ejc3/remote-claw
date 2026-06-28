@@ -1,17 +1,40 @@
 # Bedrock-backed Remote Control — drive the real claude TUI with **zero Anthropic API**, all inference on Bedrock
 
-**Status:** **DONE — proven end-to-end with a real `claude`, a real Bedrock completion, zero
-api.anthropic.com** (2026-06-27). `remote-claw --rc-inference=bedrock --rc-bedrock-region us-east-1
---print "…PINEAPPLE"` ran the real `claude` binary, which translated `/v1/messages` (model
-`claude-opus-4-8` → `anthropic.claude-opus-4-8`), SigV4-signed it, streamed the SSE back from the live
-`bedrock-mantle` endpoint (`status=200 ct=text/event-stream`), and **printed `PINEAPPLE`** — with the
-MITM log showing **zero** passthrough / `api.anthropic.com` contact. The native `bedrock-mantle` path,
+**Status:** **DONE — full native-RC round-trip proven end-to-end through the real web viewer, zero
+api.anthropic.com** (2026-06-28; first proven via `--print "…PINEAPPLE"` on 2026-06-27). A real
+`claude --remote-control` behind the MITM with `--rc-inference=bedrock --rc-bedrock-region us-east-1`,
+bridged through a real broker to the real web viewer (headless Chromium): a prompt typed in the viewer
+reached claude, was answered by **Amazon Bedrock** (`claude-opus-4-8[1m]` → `anthropic.claude-opus-4-8`,
+`bedrock ← status=200 text/event-stream`, SigV4), and the reply round-tripped back into the viewer — with
+the MITM log showing **zero** `api.anthropic.com` / passthrough. The native `bedrock-mantle` path,
 SigV4/bearer auth, control-plane synthesis, body translation, and launch wiring are built, unit-tested
 (CLI suite green), and live-verified. Getting here required (a) the `bedrock-mantle:CreateInference` +
-`CountTokens` IAM actions and account model access (see Credentials for the live IAM ladder), and (b)
-stripping the body fields mantle rejects that the real client sends — `metadata`, `context_management`,
-`diagnostics`, and the nested `cache_control.scope` (the unit tests didn't surface these; the live e2e
-did).
+`CountTokens` IAM actions and account model access (see Credentials), and (b) stripping the body fields
+mantle rejects (`metadata`, `context_management`, `diagnostics`, nested `cache_control.scope`).
+
+> **Native RC needs a claude.ai login (OAuth), NOT the pretend-API-key path.** This is the single most
+> important operational fact, found in the 2026-06-28 live run: native `/remote-control` is a claude.ai
+> account feature. With an `ANTHROPIC_API_KEY` set (the "accountless" pretend-key path, mode 1 below)
+> claude runs in **API-key mode**, which **disables claude.ai features including remote-control** — it
+> never registers an RC session, so nothing bridges to the broker (claude prints `claude.ai connectors
+> are disabled because ANTHROPIC_API_KEY … takes precedence`). The full RC round-trip was proven only in
+> **OAuth mode** (a real claude.ai login present; the MITM still synthesizes the OAuth/bootstrap so the
+> token is never used against Anthropic and inference is 100% Bedrock — zero-Anthropic still holds).
+> **Takeaways:** for native RC + Bedrock, the host must be **logged into claude.ai** (`claude /login`);
+> if claude shows the "Detected a custom API key" dialog, answer **No (recommended)** so it uses the
+> claude.ai login. An **accountless** Bedrock-only shop still gets remote control via the provider-
+> agnostic **`--rc-driver=tmux`** path (which uses `CLAUDE_CODE_USE_BEDROCK` and needs no claude.ai
+> account). Whether a *synthetic* OAuth credential (no real account) re-enables native RC is **untested**
+> — an open follow-up (claude may gate RC on the mere *presence* of a `claudeAiOauth` cred, which the
+> MITM could fabricate).
+
+**Driver matrix on Bedrock (all three proven live via the web viewer, 2026-06-28):**
+
+| driver | Bedrock surface | how | proof |
+|---|---|---|---|
+| **mitm** (`--rc-inference=bedrock`) | `bedrock-mantle` | MITM translates `/v1/messages`, synthesizes the control plane; native RC (OAuth) | `KUMQUAT`, `anthropic.claude-opus-4-8`, mantle 200, zero anthropic |
+| **tmux** (`--rc-driver=tmux`) | `bedrock-runtime` | plain `claude` w/ `CLAUDE_CODE_USE_BEDROCK=1`, `ANTHROPIC_MODEL=us.anthropic.claude-opus-4-8`; capture by transcript, inject by send-keys | `BLUEBERRY`, claude "Amazon Bedrock" |
+| **opencode** (`--rc-driver=opencode`) | `bedrock-runtime` | `opencode serve` with the `amazon-bedrock` provider; driver bridges HTTP+SSE | `CRANBERRY`, `providerID=amazon-bedrock modelID=us.anthropic.claude-opus-4-8` |
 
 ## The goal (verbatim ask)
 
@@ -90,8 +113,15 @@ claude only needs to *believe* it is authenticated; the MITM validates nothing.
    serves bootstrap/inference locally). The wrapper can also write a **synthetic** far-future
    `.credentials.json` so claude never attempts an OAuth token refresh. *Proven (Trial A).*
 
-Recommended default for the wrapper: **synthesize a pretend API key** (mode 1) so the feature needs
-no Anthropic account whatsoever, and `unset`/override any inherited real creds for the child.
+**Caveat (live-corrected 2026-06-28):** mode 1 was proven only with `--print` (no RC). For the **native
+RC TUI**, the pretend-API-key path **disables remote-control** (claude.ai features off in API-key mode) —
+see the Status banner. So mode 1 is the right default for `--print`/headless inference, but **native RC +
+Bedrock requires mode 2 (a claude.ai OAuth login present)**; inference still goes 100% to Bedrock either
+way. `launch.ts` injects the pretend key unconditionally in bedrock mode (defense-in-depth: the child
+holds no real Anthropic credential); when an OAuth login is also present, claude prompts "Detected a
+custom API key" and the **recommended No** keeps it on the claude.ai login (→ RC stays enabled). For an
+accountless shop that needs remote control, use `--rc-driver=tmux` (provider-agnostic, no claude.ai
+account). Re-enabling accountless *native* RC via a synthetic OAuth cred is an open follow-up.
 
 ## Control-plane endpoints to synthesize (zero-Anthropic inventory)
 
@@ -133,6 +163,11 @@ this box runs)**, opus-4-7, haiku-4-5, fable-5 — are on this path. So the MITM
 
 1. Rewrite host→`bedrock-mantle.<region>.api.aws`, path→`/anthropic/v1/messages`.
 2. Rewrite the body's `model` → the Bedrock id (e.g. `claude-opus-4-8` → `anthropic.claude-opus-4-8`).
+   mantle uses **undated** new-format ids, so a trailing `-YYYYMMDD` date is **stripped**: claude's
+   quick/"haiku" helper sends `claude-haiku-4-5-20251001`, which mantle 404s as
+   `anthropic.claude-haiku-4-5-20251001` but accepts as `anthropic.claude-haiku-4-5` (verified live;
+   `mantleModelId` in `translate.ts`). Before this strip the main opus turn worked but the haiku helper
+   silently 404'd (degraded title-gen etc.).
 3. Swap auth: drop claude's `Authorization`/`x-api-key`; add `x-api-key: $AWS_BEARER_TOKEN_BEDROCK`
    (Bedrock API key — **zero AWS SDK, zero SigV4**) *or* SigV4-sign for service **`bedrock-mantle`**.
 4. **Scrub body fields Bedrock rejects** — Bedrock validates strictly and 400s on unknown keys
@@ -177,13 +212,21 @@ See Appendix A for the cited request/response facts for both paths.
      Anthropic error format** (not a signature failure). ✅
   2. **`bedrock-mantle:CreateInference`** on `arn:aws:bedrock-mantle:<region>:<acct>:project/default` —
      initially denied; **now granted**, so the request gets past inference creation. ✅
-  3. **Account model access** — the *current* wall: every recognized model (us-east-1 resolves
-     `anthropic.claude-opus-4-8`, `…-4-7`, `anthropic.claude-haiku-4-5`; other regions/ids 404) returns
-     `403 … aws-marketplace:Subscribe … is not authorized` — the Anthropic model is **not yet enabled in
-     the account**. Fix: enable model access for an Anthropic model in the Bedrock console (us-east-1),
-     **or** grant the role `aws-marketplace:Subscribe` so first-use auto-subscribes. ⛔
-  4. **A successful completion** — unblocked once rung 3 is satisfied (or via a Bedrock API key tied to a
-     principal with model access). The translation/sign/transport logic is proven; only enablement remains.
+  3. **Account model access** — initially the wall (`403 … aws-marketplace:Subscribe … is not
+     authorized`); **now cleared** (2026-06-28): the Anthropic **use-case form** was submitted
+     (account-level, owner-only) and the role granted `aws-marketplace:Subscribe`/`ViewSubscriptions`
+     for first-use auto-subscribe, so foundation-model **entitlement is AVAILABLE account-wide**. ✅
+  4. **A successful completion** — **proven** (2026-06-28): `bedrock ← status=200 text/event-stream`,
+     real reply, through both the `--print` and the full native-RC round-trip. ✅
+- **bedrock-runtime is ALSO live now** (the surface opencode / plain-`claude` / the tmux driver use):
+  `bedrock:InvokeModel`/`InvokeModelWithResponseStream`/`Converse`/`ConverseStream` on `anthropic.*`
+  foundation models + account inference profiles is granted, so the **tmux** and **opencode** drivers
+  reach Bedrock directly via cross-region inference profiles (`us.anthropic.claude-opus-4-8`, etc.).
+  Use a **profile** id, not the bare foundation id (`anthropic.…-v1:0` → `ValidationException`, "on-demand
+  throughput isn't supported"). The two surfaces gate differently: **mantle** (`CreateInference` on
+  `project/default`) does **not** enforce the per-model Marketplace subscription, which is why the
+  `--rc-inference=bedrock` mantle path worked before bedrock-runtime did. Full ladder + verified model
+  ids: the `Amazon Bedrock on the dev servers` ops note (`/tmp/bedrock.md` on the dev box).
 - The host holds these and **never exposes them to the child claude**. In `--rc-inference=bedrock` the
   child env is hardened beyond the usual scrub: any real `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` is
   replaced with a pretend key, **every** `AWS_*` var is dropped, and `AWS_EC2_METADATA_DISABLED=true` is
