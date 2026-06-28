@@ -51,7 +51,9 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // (env RC_OC_SESSION). Set a `ses_…` id to pin a specific session.
   "rc-oc-session": "value",
   // opencode driver only: opt OUT of native permission mirroring (the driver PATCHes the session to
-  // "ask" so every tool raises a viewer gate). DEFAULT ON; this restores opencode's auto-run behavior.
+  // "ask" so every tool raises a viewer gate). DEFAULT ON; the opt-out SKIPS that ask-PATCH and leaves
+  // the session's own permission config untouched — so opencode behaves exactly as it would unbridged
+  // (auto-run, UNLESS the session already carries its own ask rules, which the driver does not override).
   // Env RC_OC_SKIP_PERMISSIONS truthy ("1"/"true"/"yes"/"on").
   "rc-oc-skip-permissions": "boolean",
   // tmux driver only: inject a Claude Code SessionStart HOOK (via merged `--settings`) so the spawned

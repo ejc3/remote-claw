@@ -10,7 +10,7 @@ import {
   type PermissionRule,
   parseSseFrame,
 } from "./client.js";
-import { errText, OpencodeDriver } from "./driver.js";
+import { errText, mergeAskRules, OpencodeDriver } from "./driver.js";
 
 // Driver-level CAPTURE test. We drive the REAL OpencodeDriver + a REAL HostRcRelay (via bridgeSession),
 // replacing only the two transports with controllable fakes:
@@ -115,9 +115,21 @@ class FakeOpencodeClient extends OpencodeClient {
     this.replies.push({ permissionId, response });
   }
   /** Records each setSessionPermission (the ask-mode PATCH) so tests can assert mirroring on/off. */
-  permissionSets: Array<{ sessionId: string; rules: PermissionRule[] }> = [];
-  override async setSessionPermission(sessionId: string, rules: PermissionRule[]): Promise<void> {
+  permissionSets: Array<{ sessionId: string; rules: readonly PermissionRule[] }> = [];
+  override async setSessionPermission(
+    sessionId: string,
+    rules: readonly PermissionRule[],
+  ): Promise<void> {
     this.permissionSets.push({ sessionId, rules });
+  }
+  /** Existing per-session rules getSessionPermission returns (keyed by sessionId; default []). Lets a
+   *  test seed a pre-existing policy and assert the mirroring PATCH PRESERVES it. */
+  existingPermissions = new Map<string, PermissionRule[]>();
+  /** When true, getSessionPermission throws — to prove the fail-safe (no PATCH when rules can't be read). */
+  failGetPermission = false;
+  override async getSessionPermission(sessionId: string): Promise<PermissionRule[]> {
+    if (this.failGetPermission) throw new Error("getSessionPermission boom");
+    return this.existingPermissions.get(sessionId) ?? [];
   }
   /** How many times events() has been (re)subscribed — the reconnect test asserts this grows. */
   connections = 0;
@@ -591,6 +603,66 @@ describe("OpencodeDriver permission mirroring (B2: flip the session to ask mode)
     const broker = new FakeBroker();
     const ctx = await makeCtx(client, broker, () => {});
     expect(new OpencodeDriver(ctx).capabilities.structuredPermissions).toBe(true);
+  });
+
+  it("PRESERVES an existing per-session deny — merges it AFTER the catch-all ask (last-match-wins)", async () => {
+    const client = new FakeOpencodeClient([]);
+    // The session already forbids bash. Mirroring must NOT clobber that to ask — it stays deny.
+    client.existingPermissions.set("ses_fake", [
+      { permission: "bash", pattern: "*", action: "deny" },
+    ]);
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => client.permissionSets.length > 0)).toBe(true);
+    // opencode is last-match-wins: catch-all ask FIRST, the preserved deny LAST so bash stays denied.
+    expect(client.permissionSets).toEqual([
+      {
+        sessionId: "ses_fake",
+        rules: [
+          { permission: "*", pattern: "*", action: "ask" },
+          { permission: "bash", pattern: "*", action: "deny" },
+        ],
+      },
+    ]);
+    ac.abort();
+    await run;
+  });
+
+  it("FAIL-SAFE: if the session rules can't be READ, does NOT PATCH (never blind-replaces a policy)", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.failGetPermission = true; // GET throws → we must not replace rules we couldn't read
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    // Wait until attach finished (capture pump subscribed) — a PATCH would have happened by now if it were going to.
+    expect(await waitFor(() => client.connections > 0)).toBe(true);
+    expect(client.permissionSets).toEqual([]); // nothing PATCHed — the session's own policy is untouched
+    ac.abort();
+    await run;
+  });
+});
+
+describe("mergeAskRules (preserve existing policy + idempotent)", () => {
+  const ASK = { permission: "*", pattern: "*", action: "ask" } as const;
+  it("a fresh session (no rules) yields just the catch-all ask", () => {
+    expect(mergeAskRules([])).toEqual([ASK]);
+  });
+  it("keeps existing rules AFTER the catch-all (last-match-wins → specific rule still decides its tool)", () => {
+    const deny = { permission: "bash", pattern: "*", action: "deny" } as const;
+    const allow = { permission: "edit", pattern: "*", action: "allow" } as const;
+    expect(mergeAskRules([deny, allow])).toEqual([ASK, deny, allow]);
+  });
+  it("is idempotent: re-running drops the prior copy of OUR catch-all (no unbounded growth)", () => {
+    const deny = { permission: "bash", pattern: "*", action: "deny" } as const;
+    const once = mergeAskRules([deny]);
+    expect(mergeAskRules(once)).toEqual(once); // applying twice == applying once
+  });
+  it("does not drop a user's OWN narrower ask (only our exact */*/ask catch-all is de-duped)", () => {
+    const userAsk = { permission: "bash", pattern: "*", action: "ask" } as const;
+    expect(mergeAskRules([userAsk])).toEqual([ASK, userAsk]);
   });
 });
 

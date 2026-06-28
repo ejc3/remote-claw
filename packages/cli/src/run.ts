@@ -204,8 +204,10 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
         `remote-claw: --rc-session-hook / --rc-no-session-hook / --rc-tmux-skip-permissions only apply to --rc-driver=tmux; ignored for ${driver}\n`,
       );
     }
-    // `--rc-oc-skip-permissions` is the opencode permission-mirroring opt-out; warn if used elsewhere.
-    if (driver !== "opencode" && rc["rc-oc-skip-permissions"] === true) {
+    // `--rc-oc-skip-permissions` is the opencode permission-mirroring opt-out; warn if EXPLICITLY passed
+    // with another KNOWN driver. Allowlist-gated (like the tmux block above) so an UNKNOWN driver gets
+    // only its own error below — we don't also nag about the misapplied flag there.
+    if ((driver === "mitm" || driver === "tmux") && rc["rc-oc-skip-permissions"] === true) {
       warn(
         `remote-claw: --rc-oc-skip-permissions only applies to --rc-driver=opencode; ignored for ${driver}\n`,
       );

@@ -260,4 +260,19 @@ describe("runWrapper (functional)", () => {
       }
     },
   );
+
+  it("an UNKNOWN driver with --rc-oc-skip-permissions gets ONLY the unknown-driver error (no double warn)", async () => {
+    const { fn, calls } = recordingSpawn();
+    const lines: string[] = [];
+    // Allowlist-gated warn: the oc-skip-permissions nag must NOT fire for an unknown driver — that path
+    // already errors on its own. Otherwise the user sees two messages for one mistake.
+    const code = await runWrapper(
+      ["--rc-app", "http://b", "--rc-driver", "bogus", "--rc-oc-skip-permissions"],
+      { spawnFn: fn, stderr: (l) => lines.push(l) },
+    );
+    expect(code).toBe(2);
+    expect(calls).toHaveLength(0);
+    expect(lines.join("")).toMatch(/unknown --rc-driver=bogus/);
+    expect(lines.join("")).not.toMatch(/--rc-oc-skip-permissions only applies/); // no second message
+  });
 });

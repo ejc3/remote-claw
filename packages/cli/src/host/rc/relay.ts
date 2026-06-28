@@ -877,7 +877,10 @@ export class HostRcRelay {
         // reconnect), so gating on it makes the answer idempotent — no second pushControlResponse to
         // the worker and no duplicate permission_resolved frame in the log. (codex HIGH #2)
         if (typeof body.request_id === "string" && this.#openPerms.delete(body.request_id)) {
-          const behavior = body.behavior === "deny" ? "deny" : "allow";
+          // FAIL CLOSED: only an explicit "allow" grants; anything else (deny, or a malformed/absent
+          // behavior) → deny, so a garbled answer frame can never auto-approve a tool. A real viewer
+          // always sends an explicit "allow"/"deny", so this only changes malformed-frame handling.
+          const behavior = body.behavior === "allow" ? "allow" : "deny";
           this.#trace.debug("permission response", { behavior });
           // An AskUserQuestion answer (#42) carries `answers` (+ the request's `tool_use_id`) — forward
           // them so pushControlResponse builds the real `updatedInput.answers` + `toolUseID` shape.

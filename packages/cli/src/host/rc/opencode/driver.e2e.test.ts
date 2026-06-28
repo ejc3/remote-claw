@@ -16,9 +16,9 @@
 //   (g) permissions → DETERMINISTIC: the driver PATCHes the bridged session to "ask" (mirroring on,
 //       default) and the live server accepts it — proven by spying the real client's setSessionPermission
 //       (model-independent). BEST-EFFORT round-trip (k): with a tool-capable model (RC_OPENCODE_E2E_MODEL,
-//       e.g. amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0) a real tool raises a
-//       `permission_request`, a viewer ALLOW round-trips, and the tool RUNS; SKIPPED (not failed) when the
-//       cheap default model declines to call a tool — the gate→reply mapping itself is unit-proven.
+//       e.g. amazon-bedrock/us.anthropic.claude-sonnet-4-6) a real tool raises a `permission_request`, a
+//       viewer ALLOW round-trips, and the tool RUNS; SKIPPED (not failed) when the cheap default model
+//       declines to call a tool — the gate→reply mapping itself is unit-proven.
 //   (h) session.error (bad model) → a `result` error frame reaches the viewer (not a silent idle).
 //   (i) /compact → routes to the native summarize endpoint, NOT a model prompt.
 //   (j) two drivers on the SAME server stay isolated (the server-wide /event filter — no cross-talk).
@@ -527,7 +527,8 @@ describe("OpenCode driver — LIVE e2e (opencode serve)", { timeout: SUITE_TIMEO
     // Spy the REAL client's setSessionPermission so we PROVE the driver PATCHed the LIVE session to "ask"
     // AND the live server accepted it (the client throws on a non-2xx). This half is MODEL-INDEPENDENT:
     // it holds even for the cheap default model that never calls a tool.
-    const permSets: Array<{ sessionId: string; rules: PermissionRule[]; ok: boolean }> = [];
+    const permSets: Array<{ sessionId: string; rules: readonly PermissionRule[]; ok: boolean }> =
+      [];
     const spy = new OpencodeClient({ baseUrl: BASE });
     const origPatch = spy.setSessionPermission.bind(spy);
     spy.setSessionPermission = async (s, rules) => {
@@ -543,15 +544,14 @@ describe("OpenCode driver — LIVE e2e (opencode serve)", { timeout: SUITE_TIMEO
     await withDriver(
       { client: spy, sessionId: ses, model: MODEL }, // mirrorPermissions defaults ON
       async ({ session, broker }) => {
-        // DETERMINISTIC: on attach the driver sets the bridged session to ask and the server accepts it.
-        await turnGate(
-          ctx,
-          () => permSets.some((p) => p.sessionId === ses && p.ok),
-          "k:patched",
-          15000,
-        );
+        // DETERMINISTIC (model-independent): on attach the driver READs the session rules then PATCHes
+        // it to ask. No model is involved, so on a reachable server it MUST happen — FAIL, don't skip,
+        // if the PATCH never lands or the server REJECTS it (a rejection is a real regression).
+        const patched = await waitFor(() => permSets.some((p) => p.sessionId === ses), 30000);
+        expect(patched).toBe(true); // the driver attempted the mirroring PATCH
         const set = permSets.find((p) => p.sessionId === ses);
-        // A single wildcard ask rule gates EVERY tool (the one rule we PATCH).
+        expect(set?.ok).toBe(true); // and the live server ACCEPTED it — a non-2xx must fail, not skip
+        // A fresh session carries no prior rules, so the merge is exactly the catch-all ask.
         expect(set?.rules).toEqual([{ permission: "*", pattern: "*", action: "ask" }]);
 
         // BEST-EFFORT round-trip — needs a tool-capable model. Drive a tool call; if no gate surfaces in

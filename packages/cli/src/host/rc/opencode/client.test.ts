@@ -2,7 +2,7 @@
 // summarize() — the /compact native equivalent added for the documented slash-command routing.
 
 import { describe, expect, it } from "vitest";
-import { OpencodeClient } from "./client.js";
+import { isPermissionRule, OpencodeClient } from "./client.js";
 
 interface Captured {
   url: string;
@@ -68,6 +68,68 @@ describe("OpencodeClient.setSessionPermission (flip a session to ask mode)", () 
     await expect(
       c.setSessionPermission("ses_9", [{ permission: "*", pattern: "*", action: "ask" }]),
     ).rejects.toThrow(/setSessionPermission failed: 404/);
+  });
+});
+
+/** A fetch double returning a JSON body (for GET endpoints that the client parses). */
+function fakeFetchBody(body: unknown, ok = true, status = 200): typeof fetch {
+  return (async () =>
+    ({
+      ok,
+      status,
+      text: async () => "",
+      json: async () => body,
+    }) as unknown as Response) as unknown as typeof fetch;
+}
+
+describe("OpencodeClient.getSessionPermission (read existing rules so mirroring can preserve them)", () => {
+  it("GETs /session/{id} and returns its permission rules", async () => {
+    const rules = [{ permission: "bash", pattern: "*", action: "deny" }];
+    const c = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetchBody({ id: "ses_9", permission: rules }),
+    });
+    expect(await c.getSessionPermission("ses_9")).toEqual(rules);
+  });
+
+  it("returns [] when the permission field is absent (a fresh session)", async () => {
+    const c = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetchBody({ id: "ses_9" }),
+    });
+    expect(await c.getSessionPermission("ses_9")).toEqual([]);
+  });
+
+  it("filters MALFORMED rules out of the server response (never re-PATCH garbage)", async () => {
+    const good = { permission: "edit", pattern: "*", action: "allow" };
+    const c = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetchBody({
+        permission: [good, { permission: "x" }, { action: "nope" }, null, "str"],
+      }),
+    });
+    expect(await c.getSessionPermission("ses_9")).toEqual([good]);
+  });
+
+  it("throws OpencodeError on a non-ok response", async () => {
+    const c = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetchBody(null, false, 404),
+    });
+    await expect(c.getSessionPermission("ses_9")).rejects.toThrow(
+      /getSessionPermission failed: 404/,
+    );
+  });
+});
+
+describe("isPermissionRule (runtime guard)", () => {
+  it("accepts a well-formed rule and rejects malformed shapes", () => {
+    expect(isPermissionRule({ permission: "*", pattern: "*", action: "ask" })).toBe(true);
+    expect(isPermissionRule({ permission: "bash", pattern: "rm *", action: "deny" })).toBe(true);
+    expect(isPermissionRule({ permission: "x", pattern: "y", action: "maybe" })).toBe(false); // bad action
+    expect(isPermissionRule({ permission: "x", action: "ask" })).toBe(false); // missing pattern
+    expect(isPermissionRule(null)).toBe(false);
+    expect(isPermissionRule("str")).toBe(false);
   });
 });
 
