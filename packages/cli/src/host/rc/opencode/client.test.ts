@@ -50,6 +50,27 @@ describe("OpencodeClient.summarize (/compact native equivalent)", () => {
   });
 });
 
+describe("OpencodeClient.setSessionPermission (flip a session to ask mode)", () => {
+  it("PATCHes /session/{id} with { permission: rules }", async () => {
+    const calls: Captured[] = [];
+    const c = new OpencodeClient({ baseUrl: "http://oc.test", fetchFn: fakeFetch(calls) });
+    await c.setSessionPermission("ses_9", [{ permission: "*", pattern: "*", action: "ask" }]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://oc.test/session/ses_9");
+    expect(calls[0]?.method).toBe("PATCH");
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual({
+      permission: [{ permission: "*", pattern: "*", action: "ask" }],
+    });
+  });
+
+  it("throws OpencodeError on a non-ok response", async () => {
+    const c = new OpencodeClient({ baseUrl: "http://oc.test", fetchFn: fakeFetch([], false, 404) });
+    await expect(
+      c.setSessionPermission("ses_9", [{ permission: "*", pattern: "*", action: "ask" }]),
+    ).rejects.toThrow(/setSessionPermission failed: 404/);
+  });
+});
+
 /** A fetch double whose response body STREAMS the given SSE blocks (each already `\n\n`-terminated),
  *  then EOFs — exercising the real reader/decoder/frame-split path of events(). */
 function streamingFetch(blocks: string[]): typeof fetch {

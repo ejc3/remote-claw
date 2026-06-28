@@ -23,3 +23,8 @@ coverage/
 
 # Per-session SQLite backend (BROKER_BACKEND=sqlite): one local libSQL database per channel token.
 **/.rc-sqlite/
+
+# Local secrets / per-machine test config (e.g. packages/cli/.env.local for the live opencode e2e).
+# The committed .env.example documents the keys; .env.local is never committed.
+**/.env.local
+**/.env.*.local

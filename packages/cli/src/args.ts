@@ -50,6 +50,10 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // (active) session, else creates one — so the wrapper joins whatever OpenCode session is in use
   // (env RC_OC_SESSION). Set a `ses_…` id to pin a specific session.
   "rc-oc-session": "value",
+  // opencode driver only: opt OUT of native permission mirroring (the driver PATCHes the session to
+  // "ask" so every tool raises a viewer gate). DEFAULT ON; this restores opencode's auto-run behavior.
+  // Env RC_OC_SKIP_PERMISSIONS truthy ("1"/"true"/"yes"/"on").
+  "rc-oc-skip-permissions": "boolean",
   // tmux driver only: inject a Claude Code SessionStart HOOK (via merged `--settings`) so the spawned
   // claude reports its EXACT transcript_path + session_id on startup and every rotation (/clear,/compact)
   // — exact discovery with no scan, and rotation-follow for free. Merges with any user `--settings`.
@@ -57,6 +61,9 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // (e.g. `--bare`) the driver falls back to the --session-id pin + transcript lookup.
   "rc-session-hook": "boolean",
   "rc-no-session-hook": "boolean",
+  // tmux driver only: opt OUT of permission mirroring (mirror the picker to the viewer), restoring the
+  // legacy auto-approve-everything behavior. DEFAULT ON; env RC_TMUX_SKIP_PERMISSIONS truthy.
+  "rc-tmux-skip-permissions": "boolean",
   // Accountless native RC: seed a synthetic claude.ai login + the RC feature gates into an isolated
   // config dir so native `/remote-control` works with NO real claude.ai login. Requires
   // `--rc-inference=bedrock` (a fabricated credential can't reach real Anthropic for inference). The

@@ -64,6 +64,19 @@ describe("classifyArgs (unit)", () => {
     expect(classifyArgs(["--rc-identity=x"]).errors).toEqual(["--rc-identity takes no value"]);
   });
 
+  it("registers both driver permission opt-out flags as booleans (else the parser rejects them)", () => {
+    // Regression: these were referenced in run.ts but absent from RC_FLAGS, so the parser emitted
+    // `unknown flag` (exit 2) before the driver could read them — the documented opt-out was dead,
+    // reachable only via the RC_*_SKIP_PERMISSIONS env var. They must parse as plain booleans.
+    for (const flag of ["rc-tmux-skip-permissions", "rc-oc-skip-permissions"]) {
+      const c = classifyArgs(["chat", `--${flag}`]);
+      expect(c.errors).toEqual([]);
+      expect(c.rc[flag]).toBe(true);
+      expect(c.claudeArgs).toEqual(["chat"]); // consumed, not leaked to claude
+      expect(classifyArgs([`--${flag}=1`]).errors).toEqual([`--${flag} takes no value`]);
+    }
+  });
+
   it("errors when a value flag is missing its value or followed by a flag (never swallows it)", () => {
     expect(classifyArgs(["--rc-file"]).errors).toHaveLength(1);
     expect(classifyArgs(["--rc-file"]).errors[0]).toMatch(/--rc-file requires a value/);

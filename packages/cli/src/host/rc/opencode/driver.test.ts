@@ -7,6 +7,7 @@ import {
   type HistoryMessage,
   OpencodeClient,
   type OpencodeEvent,
+  type PermissionRule,
   parseSseFrame,
 } from "./client.js";
 import { errText, OpencodeDriver } from "./driver.js";
@@ -112,6 +113,11 @@ class FakeOpencodeClient extends OpencodeClient {
     response: "once" | "always" | "reject",
   ): Promise<void> {
     this.replies.push({ permissionId, response });
+  }
+  /** Records each setSessionPermission (the ask-mode PATCH) so tests can assert mirroring on/off. */
+  permissionSets: Array<{ sessionId: string; rules: PermissionRule[] }> = [];
+  override async setSessionPermission(sessionId: string, rules: PermissionRule[]): Promise<void> {
+    this.permissionSets.push({ sessionId, rules });
   }
   /** How many times events() has been (re)subscribed — the reconnect test asserts this grows. */
   connections = 0;
@@ -540,6 +546,51 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     expect(tr.output).toContain("hello");
     // Ordering: the tool_use frame precedes its tool_result frame.
     expect((toolUses[0]?.seq as number) < (toolResults[0]?.seq as number)).toBe(true);
+  });
+});
+
+describe("OpencodeDriver permission mirroring (B2: flip the session to ask mode)", () => {
+  let ac: AbortController | null = null;
+  afterEach(() => ac?.abort());
+
+  it("DEFAULT ON: PATCHes the attached session to a wildcard ask rule", async () => {
+    const client = new FakeOpencodeClient([]); // no events; createSession → ses_fake; pump parks
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => client.permissionSets.length > 0)).toBe(true);
+    expect(client.permissionSets).toEqual([
+      { sessionId: "ses_fake", rules: [{ permission: "*", pattern: "*", action: "ask" }] },
+    ]);
+    ac.abort();
+    await run;
+  });
+
+  it("OPT-OUT (mirrorPermissions:false): does NOT PATCH the session, and structuredPermissions is false", async () => {
+    const client = new FakeOpencodeClient([]);
+    const broker = new FakeBroker();
+    const ctx = {
+      ...(await makeCtx(client, broker, () => {})),
+      extra: { client, mirrorPermissions: false },
+    };
+    // capability reflects the opt-out without even running.
+    expect(new OpencodeDriver(ctx).capabilities.structuredPermissions).toBe(false);
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    // Wait until the capture pump has subscribed (attach finished) → if a PATCH were going to happen it
+    // would have by now.
+    expect(await waitFor(() => client.connections > 0)).toBe(true);
+    expect(client.permissionSets).toEqual([]);
+    ac.abort();
+    await run;
+  });
+
+  it("DEFAULT ON: capabilities.structuredPermissions is true", async () => {
+    const client = new FakeOpencodeClient([]);
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    expect(new OpencodeDriver(ctx).capabilities.structuredPermissions).toBe(true);
   });
 });
 

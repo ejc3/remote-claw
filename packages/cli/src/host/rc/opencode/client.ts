@@ -41,6 +41,16 @@ export interface OpencodeModel {
   modelID: string;
 }
 
+/** One OpenCode permission rule (PermissionRule in the OpenAPI). `permission` is a tool/category glob
+ *  ("*" = every tool, "bash", "edit", …), `pattern` matches the tool's argument ("*" = any), and `action`
+ *  is ask|allow|deny. Used to flip a session into "ask" mode so each tool raises a `permission.asked`
+ *  gate (verified live: a single {permission:"*",pattern:"*",action:"ask"} rule gates ALL tools). */
+export interface PermissionRule {
+  permission: string;
+  pattern: string;
+  action: "ask" | "allow" | "deny";
+}
+
 /** One entry of GET /session/{id}/message — a message's `info` (id/role/time) + its `parts`. The
  *  driver replays these on attach (history backfill) through the SAME coalesce path as live events, so
  *  `info`/`parts` mirror what `message.updated`/`message.part.updated` carry on the SSE stream. */
@@ -190,6 +200,25 @@ export class OpencodeClient {
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new OpencodeError(res.status, `summarize failed: ${res.status} ${detail}`.trim());
+    }
+  }
+
+  /** Flip a session into permission "ask" mode: PATCH /session/{id} { permission: rules }. opencode
+   *  auto-runs every tool by default, so the driver's mirroring gate never fires unless a session carries
+   *  ask rules. Verified live against opencode 1.17.5: a per-session `permission` override (PATCH or at
+   *  create) makes each tool emit `permission.asked`. 200 on success; we don't read the body. */
+  async setSessionPermission(sessionId: string, rules: PermissionRule[]): Promise<void> {
+    const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}`, {
+      method: "PATCH",
+      headers: this.#headers(true),
+      body: JSON.stringify({ permission: rules }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new OpencodeError(
+        res.status,
+        `setSessionPermission failed: ${res.status} ${detail}`.trim(),
+      );
     }
   }
 

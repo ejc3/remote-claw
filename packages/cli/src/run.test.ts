@@ -232,4 +232,32 @@ describe("runWrapper (functional)", () => {
       }
     },
   );
+
+  it.skipIf(!haveOpenssl())(
+    "warns that --rc-oc-skip-permissions is a no-op for a non-opencode driver (here: mitm)",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "rc-run-ocwarn-"));
+      const secret = join(dir, "secret");
+      const lines: string[] = [];
+      try {
+        const code = await runWrapper(
+          [
+            "chat",
+            "--rc-file",
+            secret,
+            "--rc-app",
+            "http://broker.example",
+            "--rc-oc-skip-permissions",
+          ],
+          { spawnRcEnv: async () => 0, stderr: (l) => lines.push(l) },
+        );
+        expect(code).toBe(0); // a harmless no-op on mitm — we warn, we do NOT fail
+        expect(lines.join("")).toMatch(
+          /--rc-oc-skip-permissions only applies to --rc-driver=opencode; ignored for mitm/,
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

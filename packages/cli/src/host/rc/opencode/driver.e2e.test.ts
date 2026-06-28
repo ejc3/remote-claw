@@ -13,8 +13,12 @@
 //   (e) history/resume → pre-seeded messages are backfilled in order; a fresh driver on the same
 //       session re-backfills with NO duplicates beyond the first.
 //   (f) interrupt → an abort reaches the live server.
-//   (g) permissions → unit-proven translate path (the cheap model/tools don't reliably surface a gate;
-//       documented + asserted on the driver's own gate→reply mapping).
+//   (g) permissions → DETERMINISTIC: the driver PATCHes the bridged session to "ask" (mirroring on,
+//       default) and the live server accepts it — proven by spying the real client's setSessionPermission
+//       (model-independent). BEST-EFFORT round-trip (k): with a tool-capable model (RC_OPENCODE_E2E_MODEL,
+//       e.g. amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0) a real tool raises a
+//       `permission_request`, a viewer ALLOW round-trips, and the tool RUNS; SKIPPED (not failed) when the
+//       cheap default model declines to call a tool — the gate→reply mapping itself is unit-proven.
 //   (h) session.error (bad model) → a `result` error frame reaches the viewer (not a silent idle).
 //   (i) /compact → routes to the native summarize endpoint, NOT a model prompt.
 //   (j) two drivers on the SAME server stay isolated (the server-wide /event filter — no cross-talk).
@@ -27,7 +31,7 @@ import { deriveIdentity } from "@remote-claw/clawsec";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import type { Session } from "../session.js";
-import { OpencodeClient } from "./client.js";
+import { OpencodeClient, type PermissionRule } from "./client.js";
 import { OpencodeDriver, type OpencodeExtra } from "./driver.js";
 
 const BASE = process.env.OPENCODE_URL ?? "http://127.0.0.1:4096";
@@ -62,6 +66,15 @@ async function probe(): Promise<boolean> {
  *  renders). Mirrors the FakeClient/FakeBroker pattern from relay.test.ts. */
 class FakeBroker {
   posts: Array<{ recordKind: string; seq: number | null; text: string }> = [];
+  // Inbound (viewer→host) frames the relay consumes via streamFrames — empty by default, so a broker
+  // nobody pushes to parks exactly like before. The permission scenario pushes an `allow` frame here.
+  #inbound: Frame[] = [];
+  #wakes = new Set<() => void>();
+  pushInbound(f: Frame): void {
+    this.#inbound.push(f);
+    for (const w of this.#wakes) w();
+    this.#wakes.clear();
+  }
   get content() {
     return this.posts.filter((p) => p.seq !== null);
   }
@@ -94,14 +107,48 @@ class FakeBroker {
     return { ok: true };
   }
   async *streamFrames(opts: { signal?: AbortSignal }): AsyncGenerator<Frame> {
-    await new Promise<void>((resolve) => {
-      if (opts.signal?.aborted) return resolve();
-      opts.signal?.addEventListener("abort", () => resolve(), { once: true });
-    });
+    let cur = 0;
+    for (;;) {
+      while (cur < this.#inbound.length) {
+        const f = this.#inbound[cur++];
+        if (f) yield f;
+      }
+      if (opts.signal?.aborted) return;
+      await new Promise<void>((res) => {
+        const w = () => {
+          this.#wakes.delete(w);
+          res();
+        };
+        this.#wakes.add(w);
+        opts.signal?.addEventListener("abort", w, { once: true });
+      });
+    }
   }
-  async openFrame(): Promise<Uint8Array> {
-    return new Uint8Array();
+  // The relay opens THIS frame's plaintext — return its ct (the FakeBroker stores cleartext as ct).
+  async openFrame(frame?: Frame): Promise<Uint8Array> {
+    return frame?.ct ?? new Uint8Array();
   }
+}
+
+/** Build an inbound (viewer→host) frame carrying cleartext JSON in `ct` (the FakeBroker's openFrame
+ *  returns ct verbatim). Used to push a permission `allow` answer back to the relay. The FakeBroker's
+ *  streamFrames yields this verbatim, so identityId is irrelevant here (a 16-byte placeholder). */
+function inFrame(recordKind: string, msgId: string, text: string): Frame {
+  return {
+    v: 1,
+    identityId: new Uint8Array(16),
+    sessionId: "s",
+    dir: "in",
+    recordKind,
+    seq: null,
+    msgId,
+    keyEpoch: 0,
+    part: 0,
+    parts: 1,
+    salt: new Uint8Array(32),
+    nonce: new Uint8Array(12),
+    ct: new TextEncoder().encode(text),
+  } as Frame;
 }
 
 /** Build the DriverContext the OpencodeDriver needs, wired to a FakeBroker + the live OpencodeClient. */
@@ -124,6 +171,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(pred: () => boolean, ms: number): Promise<boolean> {
   const end = Date.now() + ms;
   while (!pred() && Date.now() < end) await sleep(100);
+  return pred();
+}
+/** Async-predicate variant of waitFor — polls an awaitable check (e.g. a live getMessages fetch). */
+async function waitForAsync(pred: () => Promise<boolean>, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await pred()) return true;
+    await sleep(300);
+  }
   return pred();
 }
 
@@ -464,6 +520,87 @@ describe("OpenCode driver — LIVE e2e (opencode serve)", { timeout: SUITE_TIMEO
     expect(summarized).toBeGreaterThanOrEqual(1); // routed to summarize
     expect(prompted).toBe(0); // and NOT fed to the model as a prompt
   }, 60000);
+
+  it("(k) permission mirroring: driver PATCHes session to ask (deterministic) + viewer ALLOW round-trips a real tool (best-effort)", async (ctx) => {
+    await gate(ctx);
+    const ses = await client.createSession("e2e-k");
+    // Spy the REAL client's setSessionPermission so we PROVE the driver PATCHed the LIVE session to "ask"
+    // AND the live server accepted it (the client throws on a non-2xx). This half is MODEL-INDEPENDENT:
+    // it holds even for the cheap default model that never calls a tool.
+    const permSets: Array<{ sessionId: string; rules: PermissionRule[]; ok: boolean }> = [];
+    const spy = new OpencodeClient({ baseUrl: BASE });
+    const origPatch = spy.setSessionPermission.bind(spy);
+    spy.setSessionPermission = async (s, rules) => {
+      try {
+        await origPatch(s, rules);
+        permSets.push({ sessionId: s, rules, ok: true });
+      } catch (e) {
+        permSets.push({ sessionId: s, rules, ok: false });
+        throw e;
+      }
+    };
+    const token = "oc-e2e-mirror";
+    await withDriver(
+      { client: spy, sessionId: ses, model: MODEL }, // mirrorPermissions defaults ON
+      async ({ session, broker }) => {
+        // DETERMINISTIC: on attach the driver sets the bridged session to ask and the server accepts it.
+        await turnGate(
+          ctx,
+          () => permSets.some((p) => p.sessionId === ses && p.ok),
+          "k:patched",
+          15000,
+        );
+        const set = permSets.find((p) => p.sessionId === ses);
+        // A single wildcard ask rule gates EVERY tool (the one rule we PATCH).
+        expect(set?.rules).toEqual([{ permission: "*", pattern: "*", action: "ask" }]);
+
+        // BEST-EFFORT round-trip — needs a tool-capable model. Drive a tool call; if no gate surfaces in
+        // budget, the cheap default declined (the gate→reply mapping is unit-proven) → SKIP, not fail.
+        session.pushUserInput(
+          `Run the bash command \`echo ${token}\` using the bash tool. Do not ask, just run it.`,
+        );
+        const gotGate = await waitFor(
+          () => broker.content.some((p) => p.recordKind === "permission_request"),
+          TURN_MS,
+        );
+        if (!gotGate) {
+          console.warn(
+            "[opencode e2e] (k) the model declined to call a tool — round-trip skipped (PATCH proven above). " +
+              "Set RC_OPENCODE_E2E_MODEL to a tool-capable model (e.g. amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0) to exercise it.",
+          );
+          ctx.skip("model did not raise a permission gate (not tool-capable)");
+          return;
+        }
+        // The viewer ALLOWS: push an inbound `permission` frame carrying the gate's request_id. The relay
+        // only acts on an OPEN gate (request_id in #openPerms), so this drives the real allow→reply→run path.
+        const gateFrame = broker.content.find((p) => p.recordKind === "permission_request");
+        const reqId = (JSON.parse(gateFrame?.text ?? "{}") as { request_id?: string }).request_id;
+        expect(typeof reqId).toBe("string");
+        broker.pushInbound(
+          inFrame(
+            "permission",
+            "k-allow",
+            JSON.stringify({ request_id: reqId, behavior: "allow" }),
+          ),
+        );
+        // After the allow round-trips, the real bash tool RUNS to completion with the token in its output.
+        const ran = await waitForAsync(async () => {
+          const msgs = await client.getMessages(ses);
+          return msgs.some((m) =>
+            (m.parts as unknown as Array<Record<string, unknown>>).some((part) => {
+              const state = (part as { state?: { status?: string; output?: unknown } }).state;
+              return (
+                (part as { type?: string }).type === "tool" &&
+                state?.status === "completed" &&
+                String(state.output ?? "").includes(token)
+              );
+            }),
+          );
+        }, TURN_MS);
+        expect(ran).toBe(true); // the gated tool ran ONLY after the viewer's allow round-tripped
+      },
+    );
+  });
 
   it("(j) two drivers on the SAME server stay isolated (server-wide /event filter, no cross-talk)", async (ctx) => {
     await gate(ctx);
