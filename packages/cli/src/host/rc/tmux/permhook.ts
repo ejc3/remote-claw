@@ -217,9 +217,11 @@ export function decisionFileContent(behavior: "allow" | "deny", reason?: string)
   return JSON.stringify(d);
 }
 
-/** Resolve whether to MIRROR permissions to the viewer (DEFAULT ON, B2). Off when the opt-out flag
- *  `--rc-tmux-skip-permissions` is passed OR `RC_TMUX_SKIP_PERMISSIONS` is truthy ("1"/"true"/"yes"/"on").
- *  Pure + unit-tested so the precedence and the truthy set can't drift (mirrors resolveInjectSessionHook). */
+/** Resolve whether to MIRROR permissions to the viewer (DEFAULT ON, B2). Off when the caller's opt-out
+ *  `skipFlag` is set OR `env` is truthy ("1"/"true"/"yes"/"on"). Generic over the driver: the tmux path
+ *  passes `--rc-tmux-skip-permissions` / `RC_TMUX_SKIP_PERMISSIONS`, the opencode path passes
+ *  `--rc-oc-skip-permissions` / `RC_OC_SKIP_PERMISSIONS`. Pure + unit-tested so the precedence and the
+ *  truthy set can't drift (mirrors resolveInjectSessionHook). */
 export function resolveMirrorPermissions(o: {
   skipFlag: boolean;
   env: string | undefined;

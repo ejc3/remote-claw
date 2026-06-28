@@ -52,6 +52,7 @@ import {
   type OpencodeClientOptions,
   type OpencodeEvent,
   type OpencodeModel,
+  type PermissionRule,
 } from "./client.js";
 import {
   coalesceMessage,
@@ -78,6 +79,19 @@ export interface OpencodeExtra {
    *  session verbatim — no auto-pick, no create. When unset, the driver auto-picks the server's most
    *  recent session (the active one), else creates a fresh one. THIN by default: bridge what's running. */
   sessionId?: string;
+  /** MIRROR tool permissions to the viewer (B2 parity, DEFAULT ON). When on, the driver PATCHes the
+   *  bridged session (and each followed child) into "ask" mode so every tool raises a `permission.asked`
+   *  gate the viewer answers — instead of opencode's default auto-run. Off (`--rc-oc-skip-permissions`)
+   *  leaves the session's own permission config untouched.
+   *
+   *  PERSISTENCE (documented limitation): opencode's PATCH /session/{id} { permission } is APPEND-ONLY
+   *  (verified live: rules concatenate; null/[]/{} are no-ops) — there is NO clear/replace. So once we
+   *  flip a borrowed session to ask we CANNOT cleanly revert it on teardown: re-PATCHing the original is a
+   *  no-op for the common empty config, and appending an allow-all to force auto-run would override the
+   *  user's GLOBAL deny policy (worse than leaving it). We therefore do NOT attempt a restore — the flip
+   *  is one-way and persists after the wrapper exits. This is the SAFE direction (ask never auto-approves
+   *  anything; it only prompts), and the user can clear the session's rules in opencode if undesired. */
+  mirrorPermissions?: boolean;
   /** Injectable client (tests) — bypasses the real HTTP server. */
   client?: OpencodeClient;
 }
@@ -89,12 +103,30 @@ function readExtra(extra: Record<string, unknown> | undefined): OpencodeExtra {
   if (typeof extra.password === "string") out.password = extra.password;
   if (typeof extra.sessionId === "string" && extra.sessionId !== "")
     out.sessionId = extra.sessionId;
+  if (typeof extra.mirrorPermissions === "boolean") out.mirrorPermissions = extra.mirrorPermissions;
   if (extra.client instanceof OpencodeClient) out.client = extra.client;
   const m = extra.model as { providerID?: unknown; modelID?: unknown } | undefined;
   if (m && typeof m.providerID === "string" && typeof m.modelID === "string") {
     out.model = { providerID: m.providerID, modelID: m.modelID };
   }
   return out;
+}
+
+/** The catch-all rule the driver adds so EVERY otherwise-unconfigured tool raises a gate (verified live
+ *  against opencode 1.17.5 — one wildcard ask gates all tools). */
+const ASK_ALL_RULE: PermissionRule = { permission: "*", pattern: "*", action: "ask" };
+
+/** Merge the catch-all ask with a session's EXISTING permission rules, preserving the existing policy —
+ *  especially a hard `deny`. opencode is LAST-match-wins (verified live), so the catch-all ask goes
+ *  FIRST and the existing rules AFTER it: an existing specific rule (deny/allow) still wins for its tool,
+ *  while every unconfigured tool falls through to ask. We drop any pre-existing copy of our OWN catch-all
+ *  ask so repeated attaches stay idempotent (the array can't grow without bound). */
+export function mergeAskRules(existing: readonly PermissionRule[]): PermissionRule[] {
+  const isOurCatchAll = (r: PermissionRule) =>
+    r.permission === ASK_ALL_RULE.permission &&
+    r.pattern === ASK_ALL_RULE.pattern &&
+    r.action === ASK_ALL_RULE.action;
+  return [ASK_ALL_RULE, ...existing.filter((r) => !isOurCatchAll(r))];
 }
 
 /** What we buffer for one in-flight assistant message: its parts keyed by partID, in arrival order, so
@@ -184,19 +216,14 @@ class BoundedMap<V> {
 }
 
 export class OpencodeDriver implements Driver {
-  readonly capabilities: DriverCapabilities = {
-    // We surface OpenCode permission gates as can_use_tool and round-trip the answer to .../permissions.
-    structuredPermissions: true,
-    // session.status / session.idle drive a real workerStatus.
-    status: true,
-    // interrupt → abort; set_model is remembered for the next prompt; end/set_mode safely no-op.
-    controlVerbs: true,
-    // Attachments are relay-owned (the driver only sees the resulting downstream `user` prompt).
-    attachments: true,
-  };
+  /** Capabilities. structuredPermissions reflects whether mirroring is ON (default): on, the driver
+   *  PATCHes the session to "ask" and round-trips each gate; off, opencode auto-runs tools (no gate). */
+  readonly capabilities: DriverCapabilities;
 
   readonly #ctx: DriverContext;
   readonly #extra: OpencodeExtra;
+  /** Mirror tool permissions to the viewer (default on; `--rc-oc-skip-permissions` opts out). */
+  readonly #mirror: boolean;
   readonly #model: OpencodeModel;
   readonly #client: OpencodeClient;
   readonly #tracer: Tracer;
@@ -256,6 +283,18 @@ export class OpencodeDriver implements Driver {
   constructor(ctx: DriverContext) {
     this.#ctx = ctx;
     this.#extra = readExtra(ctx.extra);
+    this.#mirror = this.#extra.mirrorPermissions ?? true; // DEFAULT ON (tmux parity)
+    this.capabilities = {
+      // Mirroring on → we PATCH the session to "ask" and round-trip each gate (structured permissions).
+      // Off → opencode auto-runs tools, so there is no gate to surface.
+      structuredPermissions: this.#mirror,
+      // session.status / session.idle drive a real workerStatus.
+      status: true,
+      // interrupt → abort; set_model is remembered for the next prompt; end/set_mode safely no-op.
+      controlVerbs: true,
+      // Attachments are relay-owned (the driver only sees the resulting downstream `user` prompt).
+      attachments: true,
+    };
     this.#model = this.#extra.model ?? DEFAULT_OPENCODE_MODEL;
     this.#activeModel = this.#model;
     this.#tracer = (ctx.tracer ?? tracerFromEnv("rc.opencode")).child({ driver: "opencode" });
@@ -310,6 +349,12 @@ export class OpencodeDriver implements Driver {
       return 1;
     }
     this.#tracer.info("opencode session attached", { session: session.id, opencode: ocSessionId });
+
+    // PERMISSION MIRRORING (default on): flip the bridged session into "ask" mode so every tool raises a
+    // `permission.asked` gate the viewer answers (opencode auto-runs tools otherwise — the gate plumbing
+    // below would never fire). Best-effort: a failure must NOT abort the bridge (the session still works,
+    // just without remote gating). Child sub-agent sessions are mirrored in the session.created handler.
+    if (this.#mirror) await this.#enableAskMirroring(ocSessionId);
 
     // HISTORY BACKFILL / RESUME runs INSIDE #capturePump, on the first SSE event (when the subscription
     // is LIVE) — NOT here. Backfilling before subscribing would lose any event arriving in the gap
@@ -570,6 +615,12 @@ export class OpencodeDriver implements Driver {
           this.#followed.has(parentId)
         ) {
           this.#followed.add(childId);
+          // Mirror permissions on the child too (best-effort, fire-and-forget) so sub-agent tool calls
+          // raise gates like the parent's — a child may not inherit the parent's per-session ask rules.
+          // Fire-and-forget (unlike the awaited parent PATCH): a child's FIRST tool call could in theory
+          // run ungated in the small window before this PATCH lands, but the PATCH is a local ms round-trip
+          // while the child's first tool needs seconds of LLM generation, so it wins in practice.
+          if (this.#mirror) void this.#enableAskMirroring(childId);
           // Pair to the spawning subtask anchor by (PARENT session, agent) FIFO — keying by agent alone
           // would let two parents spawning the same agent steal each other's anchors (codex review).
           const agent = typeof info?.agent === "string" ? info.agent : "";
@@ -900,6 +951,39 @@ export class OpencodeDriver implements Driver {
     // Any other downstream event type: nothing to inject.
   }
 
+  /** Turn on permission mirroring for one session: READ its current rules, merge our catch-all ask in
+   *  (preserving any existing policy — esp. a hard `deny`), and PATCH the result. Best-effort + FAIL-SAFE:
+   *  if we cannot READ the current rules we do NOT PATCH (a blind replace could silently drop a deny —
+   *  better to leave the session ungated than to weaken its policy). A PATCH failure likewise just warns.
+   *  The bridge keeps working either way; only remote gating is affected. */
+  async #enableAskMirroring(sessionId: string): Promise<void> {
+    let existing: PermissionRule[];
+    try {
+      existing = await this.#client.getSessionPermission(sessionId);
+    } catch (e) {
+      this.#tracer.warn(
+        "could not read opencode session rules — mirroring inactive (policy preserved)",
+        {
+          sessionId,
+          error: String(e),
+        },
+      );
+      return;
+    }
+    try {
+      await this.#client.setSessionPermission(sessionId, mergeAskRules(existing));
+      this.#tracer.info("opencode permission mirroring on (session set to ask)", {
+        sessionId,
+        preserved: existing.length,
+      });
+    } catch (e) {
+      this.#tracer.warn("could not set opencode session to ask mode — mirroring inactive", {
+        sessionId,
+        error: String(e),
+      });
+    }
+  }
+
   /** Surface an OpenCode `permission.asked` as the relay's `can_use_tool` control_request — the exact
    *  shape mapUpstreamItems renders as a permission_request. Idempotent at the relay (request_id). */
   #onPermissionAsked(session: Session, ev: OpencodeEvent): void {
@@ -921,16 +1005,20 @@ export class OpencodeDriver implements Driver {
   }
 
   /** Map a relay control_response (the viewer's permission answer) to an OpenCode permissions reply.
-   *  allow → "once", deny → "reject". The control_response payload carries response.request_id +
-   *  response.response.behavior (pushControlResponse's shape). */
+   *  FAIL-CLOSED: only an explicit "allow" → "once"; anything else (deny, or a malformed/absent behavior)
+   *  → "reject". The control_response payload carries response.request_id + response.response.behavior
+   *  (pushControlResponse's shape). */
   async #replyPermission(ocSessionId: string, payload: Record<string, unknown>): Promise<void> {
     const resp = payload.response as
       | { request_id?: unknown; response?: { behavior?: unknown } }
       | undefined;
     const requestId = typeof resp?.request_id === "string" ? resp.request_id : "";
     if (requestId === "") return;
+    // Fail CLOSED: only an explicit "allow" → "once"; anything else (deny, or a malformed/absent behavior)
+    // → "reject", so a garbled control_response can never auto-approve a tool. The relay normalizes
+    // behavior to allow|deny before this, so a real viewer grant is always "allow".
     const behavior = resp?.response?.behavior;
-    const reply = behavior === "deny" ? "reject" : "once";
+    const reply = behavior === "allow" ? "once" : "reject";
     await this.#client.replyPermission(ocSessionId, requestId, reply);
     this.#tracer.debug("permission replied", { requestId, reply });
   }

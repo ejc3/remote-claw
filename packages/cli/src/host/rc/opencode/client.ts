@@ -41,6 +41,27 @@ export interface OpencodeModel {
   modelID: string;
 }
 
+/** One OpenCode permission rule (PermissionRule in the OpenAPI). `permission` is a tool/category glob
+ *  ("*" = every tool, "bash", "edit", …), `pattern` matches the tool's argument ("*" = any), and `action`
+ *  is ask|allow|deny. Used to flip a session into "ask" mode so each tool raises a `permission.asked`
+ *  gate (verified live: a single {permission:"*",pattern:"*",action:"ask"} rule gates ALL tools). */
+export interface PermissionRule {
+  permission: string;
+  pattern: string;
+  action: "ask" | "allow" | "deny";
+}
+
+/** Runtime guard for a server-returned permission rule — filters malformed entries out of a GET so the
+ *  driver never re-PATCHes a garbled rule (and so a non-array/absent `permission` field degrades to []). */
+export function isPermissionRule(v: unknown): v is PermissionRule {
+  const r = v as { permission?: unknown; pattern?: unknown; action?: unknown };
+  return (
+    typeof r?.permission === "string" &&
+    typeof r?.pattern === "string" &&
+    (r.action === "ask" || r.action === "allow" || r.action === "deny")
+  );
+}
+
 /** One entry of GET /session/{id}/message — a message's `info` (id/role/time) + its `parts`. The
  *  driver replays these on attach (history backfill) through the SAME coalesce path as live events, so
  *  `info`/`parts` mirror what `message.updated`/`message.part.updated` carry on the SSE stream. */
@@ -190,6 +211,40 @@ export class OpencodeClient {
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       throw new OpencodeError(res.status, `summarize failed: ${res.status} ${detail}`.trim());
+    }
+  }
+
+  /** Read a session's current permission rules (GET /session/{id} → `.permission`). Returns [] when the
+   *  field is absent (a fresh session carries none) or malformed. The driver merges these with its
+   *  wildcard ask rule so an existing per-session policy — especially a hard `deny` — is PRESERVED rather
+   *  than clobbered by the mirroring PATCH. */
+  async getSessionPermission(sessionId: string): Promise<PermissionRule[]> {
+    const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}`, {
+      method: "GET",
+      headers: this.#headers(false),
+    });
+    if (!res.ok) throw new OpencodeError(res.status, `getSessionPermission failed: ${res.status}`);
+    const data = (await res.json()) as { permission?: unknown };
+    return Array.isArray(data.permission) ? data.permission.filter(isPermissionRule) : [];
+  }
+
+  /** Flip a session into permission "ask" mode: PATCH /session/{id} { permission: rules }. opencode
+   *  auto-runs every tool by default, so the driver's mirroring gate never fires unless a session carries
+   *  ask rules. Verified live against opencode 1.17.5: a per-session `permission` override (PATCH or at
+   *  create) makes each tool emit `permission.asked`. opencode is LAST-match-wins, so callers put the
+   *  catch-all ask FIRST and any preserved (specific) rules AFTER it. 200 on success; we don't read the body. */
+  async setSessionPermission(sessionId: string, rules: readonly PermissionRule[]): Promise<void> {
+    const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}`, {
+      method: "PATCH",
+      headers: this.#headers(true),
+      body: JSON.stringify({ permission: rules }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new OpencodeError(
+        res.status,
+        `setSessionPermission failed: ${res.status} ${detail}`.trim(),
+      );
     }
   }
 

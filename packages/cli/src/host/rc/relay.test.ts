@@ -481,6 +481,36 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     expect(replayed?.msgId).toBe(resolved?.msgId);
   });
 
+  it("FAILS CLOSED: a malformed/absent behavior in a permission answer resolves to DENY, not allow", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "perm-malformed",
+      request: { subtype: "can_use_tool", tool_name: "Bash", tool_input: { command: "echo" } },
+    });
+    await waitFor(() => client.content.some((p) => p.recordKind === "permission_request"));
+
+    // A garbled answer frame (behavior is neither "allow" nor "deny") must NOT auto-approve the tool.
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "perm-malformed-in",
+        JSON.stringify({ request_id: "perm-malformed", behavior: "maybe" }),
+      ),
+    );
+    await waitFor(() => client.posts.some((p) => p.recordKind === "permission_resolved"));
+    ac.abort();
+    await served;
+
+    const resolved = client.posts.find((p) => p.recordKind === "permission_resolved");
+    expect(JSON.parse(resolved?.text ?? "{}")).toMatchObject({ behavior: "deny" });
+  });
+
   it("does not apply a permission grant when logging permission_resolved fails", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();

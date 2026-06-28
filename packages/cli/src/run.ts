@@ -148,6 +148,7 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-oc-url" &&
       n !== "rc-oc-model" &&
       n !== "rc-oc-session" &&
+      n !== "rc-oc-skip-permissions" &&
       n !== "rc-session-hook" &&
       n !== "rc-no-session-hook" &&
       n !== "rc-tmux-skip-permissions" &&
@@ -201,6 +202,14 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     ) {
       warn(
         `remote-claw: --rc-session-hook / --rc-no-session-hook / --rc-tmux-skip-permissions only apply to --rc-driver=tmux; ignored for ${driver}\n`,
+      );
+    }
+    // `--rc-oc-skip-permissions` is the opencode permission-mirroring opt-out; warn if EXPLICITLY passed
+    // with another KNOWN driver. Allowlist-gated (like the tmux block above) so an UNKNOWN driver gets
+    // only its own error below — we don't also nag about the misapplied flag there.
+    if ((driver === "mitm" || driver === "tmux") && rc["rc-oc-skip-permissions"] === true) {
+      warn(
+        `remote-claw: --rc-oc-skip-permissions only applies to --rc-driver=opencode; ignored for ${driver}\n`,
       );
     }
     if (driver === "mitm") {
@@ -403,6 +412,12 @@ async function runOpencodeDriverPath(
         model,
         ...(password !== undefined ? { password } : {}),
         ...(ocSessionId !== undefined ? { sessionId: ocSessionId } : {}),
+        // Permission MIRRORING (B2 parity, DEFAULT ON): PATCH the bridged session to "ask" so every tool
+        // raises a viewer gate. Opt out with --rc-oc-skip-permissions / RC_OC_SKIP_PERMISSIONS truthy.
+        mirrorPermissions: resolveMirrorPermissions({
+          skipFlag: rc["rc-oc-skip-permissions"] === true,
+          env: process.env.RC_OC_SKIP_PERMISSIONS,
+        }),
       },
       ...(backend !== undefined ? { backend } : {}),
     };
