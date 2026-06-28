@@ -97,9 +97,17 @@ function failOnceOnFramePoll(base: Client): Client {
  *  retention sweep / dev dropScope deleting the db under a cached client (issue #111). Intercepts BOTH
  *  `execute` and `transaction`: publish-frame + maxSeq/frameCount go through `transaction()`, while
  *  __close + subscribe polls go through `execute()`. `op` is `"execute:<sql>"` or `"transaction:<mode>"`. */
-function channelGoneWhen(base: Client, trip: (op: string) => boolean): Client {
-  const boom = (): Error =>
-    new Error("Namespace ns-test was deleted while processing this request");
+function channelGoneWhen(base: Client, trip: (op: string) => boolean, code?: string): Client {
+  const boom = (): Error => {
+    const e = new Error("Namespace ns-test was deleted while processing this request") as Error & {
+      code?: string;
+    };
+    // Optionally ALSO carry a transient libSQL code (e.g. SERVER_ERROR): models a deleted-namespace
+    // error that matches BOTH isChannelGoneError (message) and isTransientLibsqlError (code) — the poll
+    // path must treat it as channel-gone, not retry it forever (codex review).
+    if (code !== undefined) e.code = code;
+    return e;
+  };
   return new Proxy(base, {
     get(target, prop) {
       if (prop === "execute") {
@@ -580,6 +588,72 @@ describe("channel-gone recovery (issue #111: per-session db deleted by retention
       expect(sub).not.toBeNull();
       // drain() only returns if the stream ENDS (controller.close) — a hard throw would reject, a hang
       // would time out the test. Reaching here proves the channel-gone path closes cleanly.
+      await expect(drain(sub as ReadableStream<WireFrame>)).resolves.toEqual([]);
+    } finally {
+      if (prevPoll === undefined) delete process.env.RC_SQLITE_POLL_MS;
+      else process.env.RC_SQLITE_POLL_MS = prevPoll;
+    }
+  });
+
+  it("forgets the locator memo on a channel-gone during ACQUIRE (before the write), so the recreate isn't blocked (codex review)", async () => {
+    // A channel-gone surfaced during acquire() — the PRAGMA prepare / schema, BEFORE the publishFrame
+    // callback — bypasses #withConnErrorEvict (which wraps only the callback). So forget() must ALSO fire
+    // in #publishFrameRecreating's catch, or the cloud locator's stale positive cache would make the
+    // recreating ensure() no-op and re-point at the deleted db, dropping the frame.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-gone-acquire-"));
+    dirs.push(dir);
+    class RecordingLocator extends FileDbLocator {
+      forgotten: string[] = [];
+      forget(token: string): void {
+        this.forgotten.push(token);
+      }
+    }
+    const loc = new RecordingLocator(dir);
+    try {
+      let armed = true; // the FIRST acquire's PRAGMA prepare throws channel-gone (pre-callback)
+      const be = new SqliteMultiBackend(loc, (config) =>
+        channelGoneWhen(createClient(config), (op) => {
+          if (armed && op.startsWith("execute:PRAGMA journal_mode")) {
+            armed = false; // only the first acquire; the recreate retry's PRAGMA succeeds
+            return true;
+          }
+          return false;
+        }),
+      );
+      const res = await be.publish(A, frame(1)); // acquire-path channel-gone → forget(A) + retry once
+      expect(res.created).toBe(true);
+      expect(loc.forgotten).toContain(A); // the fix: forget fired even though #withConnErrorEvict didn't
+      const sub = await be.subscribe(A, undefined);
+      expect(sub).not.toBeNull();
+      expect(seqs(await take(sub as ReadableStream<WireFrame>, 1))).toEqual([1]); // the frame landed
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("subscribe clean-closes on a channel-gone that ALSO carries a transient code — doesn't retry forever (codex review)", async () => {
+    const prevPoll = process.env.RC_SQLITE_POLL_MS;
+    process.env.RC_SQLITE_POLL_MS = "5";
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-gone-transient-"));
+    dirs.push(dir);
+    try {
+      let armed = false;
+      // The deleted-namespace error carries code SERVER_ERROR, so it matches BOTH the transient-retry
+      // check AND isChannelGoneError. `armed` stays true so EVERY poll throws it — if the poll treated it
+      // as transient it would retry forever and drain() would hang (test timeout). The fix checks
+      // channel-gone FIRST, so the stream ends cleanly.
+      const be = new SqliteMultiBackend(new FileDbLocator(dir), (config) =>
+        channelGoneWhen(
+          createClient(config),
+          (op) => armed && op.startsWith("execute:SELECT id, frame"),
+          "SERVER_ERROR",
+        ),
+      );
+      await be.publish(A, frame(0));
+      armed = true;
+      const sub = await be.subscribe(A, undefined);
+      expect(sub).not.toBeNull();
       await expect(drain(sub as ReadableStream<WireFrame>)).resolves.toEqual([]);
     } finally {
       if (prevPoll === undefined) delete process.env.RC_SQLITE_POLL_MS;

@@ -660,6 +660,12 @@ export class SqliteMultiBackend implements BrokerBackend {
         "[sqlite] channel gone on publish; recreating db and retrying once:",
         errorMessage(e),
       );
+      // Forget the locator's "db exists" memo HERE, not only inside #withConnErrorEvict: a channel-gone
+      // can surface during runWrite's acquire() (ensure()/awaitReady/prepare against the deleted db),
+      // which throws BEFORE the #withConnErrorEvict callback runs — so forget() would never fire and the
+      // retry's ensure() would no-op on the stale cloud cache and re-point at the deleted db, dropping
+      // the frame (codex review). Idempotent with the in-callback forget on the fn()-failure path.
+      this.#locator.forget?.(token);
       return await this.#cache.runWrite(token, (c) =>
         this.#withConnErrorEvict(token, c, () => this.#publishFrame(token, c, wire)),
       );
@@ -847,16 +853,18 @@ export class SqliteMultiBackend implements BrokerBackend {
                 args: [gen, pos],
               });
             } catch (e) {
-              if (await waitAfterTransientPollError(e, pollMs)) continue;
-              if (isConnectionLevelLibsqlError(c, e) || isChannelGoneError(e))
-                this.#cache.evictClient(token, c);
+              // Channel-gone is checked BEFORE the transient-retry: a deleted-namespace error can carry
+              // a transient code (e.g. SERVER_ERROR), and treating it as transient would retry forever
+              // instead of ending the stream (codex review). End cleanly like a closed channel — a
+              // reconnect re-subscribes once a publish recreates the db (issue #111).
               if (isChannelGoneError(e)) {
-                // The db was deleted mid-stream — end the stream cleanly, like a closed channel. A
-                // reconnect re-subscribes (to a recreated db once a publish lands) (issue #111).
+                this.#cache.evictClient(token, c);
                 controller.close();
                 release();
                 return;
               }
+              if (await waitAfterTransientPollError(e, pollMs)) continue;
+              if (isConnectionLevelLibsqlError(c, e)) this.#cache.evictClient(token, c);
               release();
               throw e;
             }
@@ -881,15 +889,16 @@ export class SqliteMultiBackend implements BrokerBackend {
             try {
               st = await c.execute("SELECT closed, gen FROM channel WHERE id = 1");
             } catch (e) {
-              if (await waitAfterTransientPollError(e, pollMs)) continue;
-              if (isConnectionLevelLibsqlError(c, e) || isChannelGoneError(e))
-                this.#cache.evictClient(token, c);
+              // Channel-gone before the transient-retry (codex review): a deleted-namespace error with a
+              // transient code would otherwise retry forever. End cleanly like a closed channel.
               if (isChannelGoneError(e)) {
-                // db deleted while polling for close/recycle → end the stream like a closed channel.
+                this.#cache.evictClient(token, c);
                 controller.close();
                 release();
                 return;
               }
+              if (await waitAfterTransientPollError(e, pollMs)) continue;
+              if (isConnectionLevelLibsqlError(c, e)) this.#cache.evictClient(token, c);
               release();
               throw e;
             }
