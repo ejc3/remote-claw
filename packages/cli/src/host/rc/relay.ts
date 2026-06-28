@@ -719,9 +719,12 @@ export class HostRcRelay {
       // the sticky-needs finding; the interrupt/end verb clear in #driveControlVerb is a backstop.)
       if (ev.eventType === "control_cancel_request") {
         const id = ev.payload.request_id;
-        if (typeof id === "string" && this.#openPerms.delete(id)) {
-          this.#trace.debug("gate cancelled by worker", { request_id: id });
-          await this.#maybeAnnounce();
+        if (typeof id === "string") {
+          this.#askqQuestions.delete(id); // symmetric with the other gate-teardown sites
+          if (this.#openPerms.delete(id)) {
+            this.#trace.debug("gate cancelled by worker", { request_id: id });
+            await this.#maybeAnnounce();
+          }
         }
         continue; // not a rendered content frame
       }

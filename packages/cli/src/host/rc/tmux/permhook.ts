@@ -34,6 +34,10 @@ export interface PermRequest {
 export interface PermDecision {
   behavior: "allow" | "deny";
   reason?: string;
+  /** AskUserQuestion (#42): the {questions, answers} object the helper re-emits as
+   *  `hookSpecificOutput.updatedInput` so claude proceeds with the viewer's chosen answers instead of
+   *  prompting in the pane. Present only on an AskUserQuestion ALLOW; ignored on deny. */
+  updatedInput?: unknown;
 }
 
 /** Single-quote a token for a POSIX shell command (the hook command runs via the user's shell). */
@@ -64,9 +68,15 @@ import { join } from "node:path";
 const [, , reqSentinel, decisionDir, pollMsArg] = process.argv;
 const pollMs = Math.max(20, Number.parseInt(pollMsArg ?? "", 10) || 100);
 
-function emit(behavior, reason) {
+function emit(behavior, reason, updatedInput) {
   const out = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: behavior } };
   if (reason) out.hookSpecificOutput.permissionDecisionReason = reason;
+  // AskUserQuestion (#42): on ALLOW, re-emit the viewer's {questions, answers} as updatedInput — claude
+  // replaces the tool input with it and proceeds with those answers, skipping the in-pane picker. Never on
+  // a deny (the tool won't run) and only for a non-null object (a scalar would corrupt the tool input).
+  if (behavior === "allow" && updatedInput !== null && typeof updatedInput === "object") {
+    out.hookSpecificOutput.updatedInput = updatedInput;
+  }
   process.stdout.write(JSON.stringify(out));
   process.exit(0);
 }
@@ -117,7 +127,12 @@ for (;;) {
     // file ATOMICALLY via tmp+rename, so a present file is normally already complete; this guard is the
     // belt-and-suspenders that makes a partial read safe instead of fail-open.)
     if (d.behavior === "allow" || d.behavior === "deny") {
-      emit(d.behavior, typeof d.reason === "string" ? d.reason : undefined);
+      // updatedInput is ONLY meaningful for AskUserQuestion (claude REPLACES the tool input with it, the
+      // chosen {questions, answers}). Gate by the tool THIS hook fired for: a crafted answers payload on,
+      // say, a Bash gate must never clobber that tool's real input. The driver also gates this upstream;
+      // this is the authoritative last guard at the point we hand input to claude.
+      const ui = req.toolName === "AskUserQuestion" ? d.updatedInput : undefined;
+      emit(d.behavior, typeof d.reason === "string" ? d.reason : undefined, ui);
     }
   }
   await new Promise((r) => setTimeout(r, pollMs));
@@ -211,9 +226,17 @@ export function parsePermRequest(line: string): PermRequest | null {
   };
 }
 
-/** Serialize the decision file content the driver writes for `<toolUseId>.json`. */
-export function decisionFileContent(behavior: "allow" | "deny", reason?: string): string {
-  const d: PermDecision = reason ? { behavior, reason } : { behavior };
+/** Serialize the decision file content the driver writes for `<toolUseId>.json`. `updatedInput` (the
+ *  AskUserQuestion {questions, answers}, #42) is included only when provided AND the behavior is allow —
+ *  a deny never carries it (the tool doesn't run). */
+export function decisionFileContent(
+  behavior: "allow" | "deny",
+  reason?: string,
+  updatedInput?: unknown,
+): string {
+  const d: PermDecision = { behavior };
+  if (reason) d.reason = reason;
+  if (behavior === "allow" && updatedInput !== undefined) d.updatedInput = updatedInput;
   return JSON.stringify(d);
 }
 

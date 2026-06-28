@@ -66,6 +66,24 @@ describe("downstreamControlResponse / downstreamSetModel (pure)", () => {
     (ev.payload.response as { response: { behavior: unknown } }).response.behavior = "maybe";
     expect(downstreamControlResponse(ev)).toEqual({ requestId: "r3", behavior: "deny" });
   });
+  it("carries AskUserQuestion updatedInput {questions, answers} on an ALLOW (#42)", () => {
+    const s = new Session("cse_1", "t", null);
+    const questions = [{ question: "Which name?", header: "Name", options: [{ label: "Orion" }] }];
+    const answers = { "Which name?": "Orion" };
+    // pushControlResponse(extra) builds response.updatedInput = {questions, answers} (the relay path).
+    const ev = s.pushControlResponse("askq-1", "allow", { toolUseId: "tu_q", answers, questions });
+    expect(downstreamControlResponse(ev)).toEqual({
+      requestId: "askq-1",
+      behavior: "allow",
+      updatedInput: { questions, answers },
+    });
+  });
+  it("DROPS updatedInput on a deny (a denied tool never runs, so it carries no answers)", () => {
+    const s = new Session("cse_1", "t", null);
+    const ev = s.pushControlResponse("askq-2", "deny", { answers: { q: "a" } });
+    // session builds updatedInput regardless; the extractor must strip it on deny (fail-closed + clean).
+    expect(downstreamControlResponse(ev)).toEqual({ requestId: "askq-2", behavior: "deny" });
+  });
   it("returns null for a non-control_response", () => {
     const s = new Session("cse_1", "t", null);
     expect(downstreamControlResponse(s.pushUserInput("x"))).toBeNull();
@@ -234,12 +252,14 @@ describe("runInjectPump", () => {
     expect(recorded).toEqual(["/model opus"]);
   });
 
-  it("permission mirroring (B2): a control_response invokes onDecision with {requestId, behavior}", async () => {
+  it("permission mirroring (B2): a DENY (even with answers) invokes onDecision with behavior 'deny' and NO updatedInput", async () => {
     const s = new Session("cse_1", "t", null);
     const { tmux, verbs } = spyTmux();
     const ac = new AbortController();
-    const decisions: Array<{ id: string; behavior: string }> = [];
-    s.pushControlResponse("tu_42", "deny");
+    const decisions: Array<{ id: string; behavior: string; updatedInput: unknown }> = [];
+    // Push a DENY that nonetheless carries answers (session builds updatedInput regardless of behavior) —
+    // the pump must surface behavior 'deny' and DROP the updatedInput (a denied tool never runs).
+    s.pushControlResponse("tu_42", "deny", { answers: { q: "a" } });
     s.pushUserInput("after"); // a real prompt as a deterministic drain marker (processed AFTER the response)
     const pump = runInjectPump({
       session: s,
@@ -247,15 +267,43 @@ describe("runInjectPump", () => {
       target: "rc-cse_1",
       signal: ac.signal,
       sleep: noSleep,
-      onDecision: (id, behavior) => {
-        decisions.push({ id, behavior });
+      onDecision: (id, behavior, updatedInput) => {
+        decisions.push({ id, behavior, updatedInput });
       },
     });
     await waitFor(() => verbs.includes("send-keys")); // the "after" prompt drained ⇒ the response was handled
     ac.abort();
     s.wake();
     await pump;
-    expect(decisions).toEqual([{ id: "tu_42", behavior: "deny" }]); // the viewer's deny surfaced to the driver
+    expect(decisions).toEqual([{ id: "tu_42", behavior: "deny", updatedInput: undefined }]);
+  });
+
+  it("permission mirroring (B2): an AskUserQuestion allow forwards updatedInput to onDecision (#42)", async () => {
+    const s = new Session("cse_1", "t", null);
+    const { tmux, verbs } = spyTmux();
+    const ac = new AbortController();
+    const questions = [{ question: "Which name?", header: "Name", options: [{ label: "Orion" }] }];
+    const answers = { "Which name?": "Orion" };
+    const seen: Array<{ id: string; behavior: string; updatedInput: unknown }> = [];
+    s.pushControlResponse("askq-9", "allow", { toolUseId: "askq-9", answers, questions });
+    s.pushUserInput("after"); // deterministic drain marker
+    const pump = runInjectPump({
+      session: s,
+      tmux,
+      target: "rc-cse_1",
+      signal: ac.signal,
+      sleep: noSleep,
+      onDecision: (id, behavior, updatedInput) => {
+        seen.push({ id, behavior, updatedInput });
+      },
+    });
+    await waitFor(() => verbs.includes("send-keys"));
+    ac.abort();
+    s.wake();
+    await pump;
+    expect(seen).toEqual([
+      { id: "askq-9", behavior: "allow", updatedInput: { questions, answers } },
+    ]);
   });
 
   it("retries the PASTE phase as a unit and acks once it lands (codex #4)", async () => {

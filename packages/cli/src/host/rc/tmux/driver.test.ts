@@ -771,6 +771,186 @@ describe("runTmuxDriver wiring", () => {
     }
   });
 
+  it("AskUserQuestion round-trip (#42): the viewer's answers reach the decision file as updatedInput {questions, answers}", async () => {
+    // Full path, no live claude: an AskUserQuestion tool request → the driver raises a can_use_tool gate
+    // carrying tool_name=AskUserQuestion + tool_input.questions → the relay STASHES the questions → the
+    // viewer answers (an inbound `permission` frame with `answers`) → the relay ECHOES the questions and
+    // builds control_response.updatedInput={questions,answers} → the inject pump writes that into the
+    // decision file the blocked helper polls. Proves the answers (not just allow/deny) survive the tmux path.
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-askq-cwd-");
+    const home = tmp("rc-askq-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const scratch = tmp("rc-askq-scratch-");
+    const permReqPath = join(scratch, "perm-req.ndjson");
+    const permDecDir = join(scratch, "perm-dec");
+    const permHelperPath = join(scratch, "perm-hook.mjs");
+    const questions = [
+      {
+        question: "Which name?",
+        header: "Name",
+        multiSelect: false,
+        options: [{ label: "Orion" }],
+      },
+    ];
+    const answers = { "Which name?": "Orion" };
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "a0a0a0a0-a0a0-4a0a-8a0a-a0a0a0a0a0a0",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        permReqPath,
+        permDecDir,
+        permHelperPath,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      // The (simulated) PreToolUse hook records an AskUserQuestion request carrying the questions.
+      await appendFile(
+        permReqPath,
+        `${JSON.stringify({
+          toolUseId: "tu_askq",
+          toolName: "AskUserQuestion",
+          toolInput: { questions },
+          sessionId: "s",
+          permissionMode: "default",
+        })}\n`,
+      );
+      await waitFor(() =>
+        client.content.some(
+          (p) => p.recordKind === "permission_request" && p.text.includes("tu_askq"),
+        ),
+      );
+      // The viewer answers (allow + chosen answers + the tool_use_id, exactly as apps/web sends).
+      client.pushInbound(
+        inFrame(
+          identity,
+          "permission",
+          "msg-perm-askq",
+          JSON.stringify({
+            request_id: "tu_askq",
+            behavior: "allow",
+            tool_use_id: "tu_askq",
+            answers,
+          }),
+        ),
+      );
+      const decFile = join(permDecDir, "tu_askq.json");
+      let decision: string | null = null;
+      const end = Date.now() + 4000;
+      while (decision === null && Date.now() < end) {
+        decision = await readFile(decFile, "utf8").catch(() => null);
+        if (decision === null) await new Promise((r) => setTimeout(r, 10));
+      }
+      if (decision === null) throw new Error("decision file never written");
+      // The relay echoed the stashed questions; the driver wrote {questions, answers} as updatedInput —
+      // which the helper re-emits as hookSpecificOutput.updatedInput so claude proceeds with the answers.
+      expect(JSON.parse(decision)).toEqual({
+        behavior: "allow",
+        updatedInput: { questions, answers },
+      });
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("a NON-AskUserQuestion gate answered with stray answers does NOT write updatedInput (#147 guard)", async () => {
+    // Defense-in-depth: even if a client posts `answers` on a Bash gate, the driver must NOT carry it into
+    // the decision file (only AskUserQuestion gates do), so Bash's real input can never be clobbered.
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-bashguard-cwd-");
+    const home = tmp("rc-bashguard-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const scratch = tmp("rc-bashguard-scratch-");
+    const permReqPath = join(scratch, "perm-req.ndjson");
+    const permDecDir = join(scratch, "perm-dec");
+    const permHelperPath = join(scratch, "perm-hook.mjs");
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        sessionId: "b0b0b0b0-b0b0-4b0b-8b0b-b0b0b0b0b0b0",
+        pollMs: 10,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
+        paneWatchMs: 5,
+        permReqPath,
+        permDecDir,
+        permHelperPath,
+      },
+    );
+    try {
+      await waitFor(() => client.announces.length > 0);
+      await appendFile(
+        permReqPath,
+        `${JSON.stringify({
+          toolUseId: "tu_bash",
+          toolName: "Bash",
+          toolInput: { command: "ls" },
+          sessionId: "s",
+          permissionMode: "default",
+        })}\n`,
+      );
+      await waitFor(() =>
+        client.content.some(
+          (p) => p.recordKind === "permission_request" && p.text.includes("tu_bash"),
+        ),
+      );
+      // A client posts allow + stray answers for the Bash gate (the relay forwards them as updatedInput).
+      client.pushInbound(
+        inFrame(
+          identity,
+          "permission",
+          "msg-perm-bash",
+          JSON.stringify({ request_id: "tu_bash", behavior: "allow", answers: { hijack: "x" } }),
+        ),
+      );
+      const decFile = join(permDecDir, "tu_bash.json");
+      let decision: string | null = null;
+      const end = Date.now() + 4000;
+      while (decision === null && Date.now() < end) {
+        decision = await readFile(decFile, "utf8").catch(() => null);
+        if (decision === null) await new Promise((r) => setTimeout(r, 10));
+      }
+      if (decision === null) throw new Error("decision file never written");
+      // Allowed, but NO updatedInput — the Bash gate isn't AskUserQuestion, so the answers are dropped.
+      expect(JSON.parse(decision)).toEqual({ behavior: "allow" });
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
   it("local-prompt ledger: suppresses OUR injected prompt's transcript echo, surfaces a LOCALLY-typed one", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();

@@ -736,6 +736,13 @@ export async function runTmuxDriver(
     }
   })().catch((e) => onPumpCrash("capture", e));
 
+  // Track which OPEN gates are AskUserQuestion (by tool_use_id), so onDecision only carries the answer
+  // `updatedInput` for THOSE — never letting a crafted `answers` payload on, say, a Bash gate replace that
+  // tool's real input (#42 / #147 codex). Populated by the perm pump when it raises a gate; consumed and
+  // DELETED by onDecision when the gate closes, so the set tracks only currently-open gates (bounded) —
+  // not every AskUserQuestion the session ever saw (codex #147: was append-only → unbounded growth).
+  const askqGateIds = new Set<string>();
+
   // INJECT: drain the downstream queue into the pane (strict serial; ack after success — review #5/#9).
   // Per-session paste buffer so concurrent drivers can't cross-wire (codex review #5); failed injects
   // retry step-aware until they land or abort (codex review #4 / wf#1).
@@ -754,7 +761,11 @@ export async function runTmuxDriver(
     // mirroring is on; off, control_responses are just acked.
     ...(mirror && permDecDir !== null
       ? {
-          onDecision: async (requestId: string, behavior: "allow" | "deny") => {
+          onDecision: async (
+            requestId: string,
+            behavior: "allow" | "deny",
+            updatedInput?: unknown,
+          ) => {
             // Defense-in-depth: never let a crafted id escape the decisions dir (the relay only forwards
             // ids it already gated, but the path join is user-influenced data).
             if (!isSafeToolUseId(requestId)) {
@@ -764,14 +775,26 @@ export async function runTmuxDriver(
             try {
               // ATOMIC write: the blocked helper polls this path with existsSync→readFileSync, so a plain
               // writeFile would briefly expose a 0-byte/partial file. Write a temp sibling then rename
-              // (atomic on the same fs) so the helper only ever observes a COMPLETE decision.
+              // (atomic on the same fs) so the helper only ever observes a COMPLETE decision. `updatedInput`
+              // (AskUserQuestion answers, #42) rides into the file on an allow so the helper re-emits it.
               const finalPath = join(permDecDir, `${requestId}.json`);
               const tmpPath = `${finalPath}.tmp`;
-              await writeFile(tmpPath, decisionFileContent(behavior));
+              // Only carry answer `updatedInput` for an AskUserQuestion gate (the helper also enforces this);
+              // for any other tool, drop it so a stray/crafted `answers` can't clobber the tool's input.
+              const answerInput = askqGateIds.has(requestId) ? updatedInput : undefined;
+              await writeFile(tmpPath, decisionFileContent(behavior, undefined, answerInput));
               await rename(tmpPath, finalPath);
-              tracer.debug("permission decision written", { requestId, behavior });
+              tracer.debug("permission decision written", {
+                requestId,
+                behavior,
+                answers: answerInput !== undefined,
+              });
             } catch (e) {
               tracer.warn("permission decision write failed", { requestId, error: String(e) });
+            } finally {
+              // The gate is closed once a decision lands (allow or deny), so drop its AskUserQuestion
+              // classification — keeps the set to currently-open gates, not an ever-growing history.
+              askqGateIds.delete(requestId);
             }
           },
         }
@@ -818,6 +841,8 @@ export async function runTmuxDriver(
                   tool_use_id: req.toolUseId,
                 },
               });
+              // Remember AskUserQuestion gates so onDecision carries the answer updatedInput for them only.
+              if (req.toolName === "AskUserQuestion") askqGateIds.add(req.toolUseId);
               seen.add(req.toolUseId); // only after a SUCCESSFUL push (a throw above propagates, not strands)
             }
             await sleep(pollMs);
