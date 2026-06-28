@@ -302,17 +302,28 @@ git diff --name-only origin/main..HEAD -- \
    `plan`->`reject` ("planning only"), `default`->pass through. Approximate.
 6. **Auth.** v1 runs unsecured on loopback (same trust boundary as the MITM); Basic auth
    (`OPENCODE_SERVER_PASSWORD`) documented for non-loopback.
-7. **Bedrock credentials + the Anthropic use-case-form gate.** OpenCode's Bedrock client needs static
-   env creds (no IMDS chain in 1.17.5); fetch+export temp creds from IMDS (expire ~hourly). The dev box's
-   `dev-server-role` **now has `bedrock:InvokeModel` for Anthropic models** (CLI `bedrock-runtime converse`
-   on `us.anthropic.claude-{sonnet-4-5,haiku-4-5,opus-4-1}` → real "PINEAPPLE", verified 2026-06-28) —
-   so the earlier "zero `bedrock:Invoke*`" note is obsolete. **But** OpenCode's AI-SDK streaming-invoke
-   path 400s on the **Anthropic First-Time-Use "use case details" form** (`Model use case details have
-   not been submitted for this account`) for every Anthropic model — an account-level **Bedrock console**
-   action (Model access → Anthropic → submit use case), **not** an IAM grant (the non-streaming Converse
-   path the CLI uses is NOT gated by it). Amazon Nova is `AccessDenied` (the role's invoke grant is
-   Anthropic-scoped). Net: OpenCode live inference here is blocked solely on the FTU form. The native
-   **MITM driver** (`--rc-inference=bedrock`) is unaffected — the `bedrock-mantle` endpoint needs no FTU form.
+7. **Bedrock credentials + the AWS Marketplace model-subscription gate.** OpenCode's Bedrock client needs
+   static env creds (no IMDS chain in 1.17.5); fetch+export temp creds from IMDS (expire ~hourly) — e.g.
+   `eval "$(aws configure export-credentials --format env)"`. The dev box's `dev-server-role` has
+   `bedrock:InvokeModel`, but live inference on Anthropic models is blocked on the **AWS Marketplace
+   model subscription**: both OpenCode's AI-SDK streaming invoke AND the plain CLI `bedrock-runtime
+   converse` return `AccessDeniedException: Model access is denied … not authorized to perform the
+   required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe)`
+   (live-probed 2026-06-28 on `us.anthropic.claude-sonnet-4-5`). A brief earlier "PINEAPPLE" via Converse
+   was the **auto-subscribe grace window** — [AWS docs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html):
+   *"During this setup period (up to 15 minutes), your API calls may succeed temporarily while the
+   subscription is being finalized. If any prerequisites are missing, the subscription attempt fails and
+   subsequent API calls will return `AccessDeniedException`."* So Converse and streaming gate **identically**.
+   The fix is an account-level step the role can't self-serve (it's also denied `bedrock:GetFoundationModelAvailability`
+   / `ListFoundationModelAgreementOffers` / `aws-marketplace:*`): either (a) an admin enables **Model
+   access → Anthropic** once in the Bedrock console (us-east-1) — after which all roles invoke without
+   Marketplace perms — or (b) grant the role `aws-marketplace:Subscribe`+`ViewSubscriptions` (these can't
+   be ARN-scoped) so first-use auto-subscribes, plus the one-time Anthropic FTU use-case form. Amazon Nova
+   is separately `AccessDenied` (the invoke grant is Anthropic-scoped). **The native MITM driver
+   (`--rc-inference=bedrock`) is unaffected** — AWS docs state the FTU form *and* the Marketplace
+   subscription **"do not apply to Anthropic models accessed through the `bedrock-mantle` endpoint"**,
+   which is exactly the endpoint #133 translates to. That is why `--rc-inference=bedrock` runs today while
+   OpenCode-on-Bedrock waits on the account subscription.
 
 ## v1 plan
 
@@ -329,10 +340,11 @@ git diff --name-only origin/main..HEAD -- \
 6. **e2e against Bedrock** — point `opencode serve` at a Bedrock Anthropic model
    (`RC_OPENCODE_E2E_MODEL=amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `AWS_REGION`
    + IMDS-exported static creds), start the driver against a local broker, drive a prompt from a headless
-   viewer, assert the `assistant` frame arrives unchanged. The driver's request reaches Bedrock and the
-   model+IAM are proven (CLI Converse), but a live SUCCESS additionally needs the account's **Anthropic
-   use-case form** submitted (see Gap #7). The e2e **skips (not fails)** when the server is unreachable
-   OR the model returns an account-gate error (turnGate → ctx.skip), so CI stays green until the form is
-   submitted — then the same suite proves a real Bedrock turn end-to-end with zero api.anthropic.com.
+   viewer, assert the `assistant` frame arrives unchanged. The driver's request reaches Bedrock (the
+   `amazon-bedrock` provider + correct model id are proven against the live server), but a live SUCCESS
+   additionally needs the account's **AWS Marketplace subscription** for the Anthropic model (see Gap #7).
+   The e2e **skips (not fails)** when the server is unreachable OR the model returns an account-gate error
+   (turnGate → ctx.skip), so CI stays green until the subscription lands — then the same suite proves a
+   real Bedrock turn end-to-end with zero api.anthropic.com.
 7. **Per-PR gate** (CLAUDE.md): `pnpm exec biome check .` + `pnpm exec tsc --noEmit` +
    `pnpm exec vitest run`, `/code-review` + codex, CI green.
