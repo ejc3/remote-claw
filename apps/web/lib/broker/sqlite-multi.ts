@@ -77,6 +77,20 @@ function isConnLevelLibsqlErrorByCode(e: unknown): boolean {
   return code !== undefined && CONNECTION_LIBSQL_CODES.has(code);
 }
 
+/** A "channel gone" error: the per-session database/namespace was deleted out from under a cached client
+ *  — the retention sweep dropped it after long idle, or the dev `dropScope` teardown removed it. libSQL
+ *  surfaces it as a generic error with NO transient/connection code, so it would otherwise hard-error
+ *  (issue #111). The broker treats it as "channel absent": publish recreates + retries once, subscribe
+ *  clean-closes, maxSeq/frameCount → null. Message-based (the only signal libSQL gives). */
+function isChannelGoneError(e: unknown): boolean {
+  const msg = errorMessage(e);
+  return (
+    /was deleted while processing/i.test(msg) ||
+    (/\bnamespace\b/i.test(msg) &&
+      /(doesn't exist|does not exist|not found|was deleted)/i.test(msg))
+  );
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -204,6 +218,12 @@ export interface DbLocator {
   awaitReady?(client: Client, token: string): Promise<void>;
   /** Whether the token's database already exists. Read paths must NOT create one (subscribe-or-null). */
   exists(token: string): Promise<boolean>;
+  /** Forget any cached "this db exists" memo for the token, so the NEXT `ensure()` actually re-checks /
+   *  re-provisions the store. Called when a cached client hit a deleted-db (channel-gone) error: the cloud
+   *  locator's positive existence cache is TTL'd and per-process, so after a CROSS-instance retention
+   *  delete it can be stale — `ensure()` would then no-op and the recreate wouldn't really happen (issue
+   *  #111 / codex review). Optional; omit for locators with no such cache (`file:` recreates on open). */
+  forget?(token: string): void;
   /** Delete a stored database by its `id` (from idFor / the session index), reclaiming its space. */
   dropStored?(id: string): Promise<void>;
 
@@ -600,26 +620,50 @@ export class SqliteMultiBackend implements BrokerBackend {
       // Mark an EXISTING live channel closed — never delete its rows (a buffered replay must survive a
       // close; the durable history is the point). A later publish reopens a fresh incarnation (gen+1).
       // No-op (and DON'T create a database) if the token is absent or already closed.
-      const res = await this.#cache.runReadOrNull(token, (c) =>
-        this.#withConnErrorEvict(token, c, async () => {
-          await withWriteLock(c, async () => {
-            await c.execute("UPDATE channel SET closed = 1 WHERE id = 1 AND closed = 0");
-          });
-          return { created: false, channelId: token } satisfies PublishResult;
-        }),
-      );
-      return res ?? { created: false, channelId: token };
+      try {
+        const res = await this.#cache.runReadOrNull(token, (c) =>
+          this.#withConnErrorEvict(token, c, async () => {
+            await withWriteLock(c, async () => {
+              await c.execute("UPDATE channel SET closed = 1 WHERE id = 1 AND closed = 0");
+            });
+            return { created: false, channelId: token } satisfies PublishResult;
+          }),
+        );
+        return res ?? { created: false, channelId: token };
+      } catch (e) {
+        // The db was deleted out from under us — there's nothing to close (issue #111). The dead client
+        // was already evicted by #withConnErrorEvict; treat the close as a no-op.
+        if (isChannelGoneError(e)) return { created: false, channelId: token };
+        throw e;
+      }
     }
-    const result = await this.#cache.runWrite(token, (c) =>
-      this.#withConnErrorEvict(token, c, () =>
-        this.#publishFrame(token, c, payload as Partial<WireFrame>),
-      ),
-    );
+    const result = await this.#publishFrameRecreating(token, payload as Partial<WireFrame>);
     // Catalog the db in the cold index — only on CREATE (once per session/incarnation), so this never
     // touches the index on the per-frame hot path. Best-effort: the frame is already durable, so an index
     // hiccup must not fail the publish (the worst case is one un-catalogued session escaping retention).
     if (result.created) await this.#recordInIndex(token);
     return result;
+  }
+
+  /** Append a frame, transparently RECREATING the db if it was deleted under us (issue #111). The first
+   *  attempt's #withConnErrorEvict drops the dead client on a channel-gone error; the retry's runWrite
+   *  re-acquires with create:true → the locator re-ensure()s a fresh db and the frame lands (created=true,
+   *  a new incarnation). ONE retry only — a second channel-gone is a real failure and propagates. */
+  async #publishFrameRecreating(token: string, wire: Partial<WireFrame>): Promise<PublishResult> {
+    try {
+      return await this.#cache.runWrite(token, (c) =>
+        this.#withConnErrorEvict(token, c, () => this.#publishFrame(token, c, wire)),
+      );
+    } catch (e) {
+      if (!isChannelGoneError(e)) throw e;
+      console.warn(
+        "[sqlite] channel gone on publish; recreating db and retrying once:",
+        errorMessage(e),
+      );
+      return await this.#cache.runWrite(token, (c) =>
+        this.#withConnErrorEvict(token, c, () => this.#publishFrame(token, c, wire)),
+      );
+    }
   }
 
   async #recordInIndex(token: string): Promise<void> {
@@ -707,44 +751,56 @@ export class SqliteMultiBackend implements BrokerBackend {
   }
 
   async maxSeq(token: string): Promise<number | null> {
-    return this.#cache.runReadOrNull(token, (c) =>
-      this.#withConnErrorEvict(token, c, async () => {
-        const tx = await c.transaction("read");
-        try {
-          const ch = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
-          const meta = ch.rows[0];
-          if (meta === undefined || Number(meta.closed) === 1) return null;
-          const r = await tx.execute({
-            sql: "SELECT MAX(seq) AS m FROM frames WHERE gen = ?",
-            args: [Number(meta.gen)],
-          });
-          const m = r.rows[0]?.m;
-          return m === null || m === undefined ? null : Number(m);
-        } finally {
-          tx.close();
-        }
-      }),
-    );
+    try {
+      return await this.#cache.runReadOrNull(token, (c) =>
+        this.#withConnErrorEvict(token, c, async () => {
+          const tx = await c.transaction("read");
+          try {
+            const ch = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
+            const meta = ch.rows[0];
+            if (meta === undefined || Number(meta.closed) === 1) return null;
+            const r = await tx.execute({
+              sql: "SELECT MAX(seq) AS m FROM frames WHERE gen = ?",
+              args: [Number(meta.gen)],
+            });
+            const m = r.rows[0]?.m;
+            return m === null || m === undefined ? null : Number(m);
+          } finally {
+            tx.close();
+          }
+        }),
+      );
+    } catch (e) {
+      // The db was deleted under us — the channel is absent, so report no max seq (the host resumes at
+      // seq 0 on the recreated db, same as a never-seen channel) (issue #111).
+      if (isChannelGoneError(e)) return null;
+      throw e;
+    }
   }
 
   async frameCount(token: string): Promise<number | null> {
-    return this.#cache.runReadOrNull(token, (c) =>
-      this.#withConnErrorEvict(token, c, async () => {
-        const tx = await c.transaction("read");
-        try {
-          const ch = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
-          const meta = ch.rows[0];
-          if (meta === undefined || Number(meta.closed) === 1) return null;
-          const r = await tx.execute({
-            sql: "SELECT COUNT(*) AS n FROM frames WHERE gen = ?",
-            args: [Number(meta.gen)],
-          });
-          return Number(r.rows[0]?.n ?? 0);
-        } finally {
-          tx.close();
-        }
-      }),
-    );
+    try {
+      return await this.#cache.runReadOrNull(token, (c) =>
+        this.#withConnErrorEvict(token, c, async () => {
+          const tx = await c.transaction("read");
+          try {
+            const ch = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
+            const meta = ch.rows[0];
+            if (meta === undefined || Number(meta.closed) === 1) return null;
+            const r = await tx.execute({
+              sql: "SELECT COUNT(*) AS n FROM frames WHERE gen = ?",
+              args: [Number(meta.gen)],
+            });
+            return Number(r.rows[0]?.n ?? 0);
+          } finally {
+            tx.close();
+          }
+        }),
+      );
+    } catch (e) {
+      if (isChannelGoneError(e)) return null; // channel absent (deleted) ⇒ startIndex 0 (issue #111)
+      throw e;
+    }
   }
 
   async subscribe(
@@ -792,7 +848,15 @@ export class SqliteMultiBackend implements BrokerBackend {
               });
             } catch (e) {
               if (await waitAfterTransientPollError(e, pollMs)) continue;
-              if (isConnectionLevelLibsqlError(c, e)) this.#cache.evictClient(token, c);
+              if (isConnectionLevelLibsqlError(c, e) || isChannelGoneError(e))
+                this.#cache.evictClient(token, c);
+              if (isChannelGoneError(e)) {
+                // The db was deleted mid-stream — end the stream cleanly, like a closed channel. A
+                // reconnect re-subscribes (to a recreated db once a publish lands) (issue #111).
+                controller.close();
+                release();
+                return;
+              }
               release();
               throw e;
             }
@@ -818,7 +882,14 @@ export class SqliteMultiBackend implements BrokerBackend {
               st = await c.execute("SELECT closed, gen FROM channel WHERE id = 1");
             } catch (e) {
               if (await waitAfterTransientPollError(e, pollMs)) continue;
-              if (isConnectionLevelLibsqlError(c, e)) this.#cache.evictClient(token, c);
+              if (isConnectionLevelLibsqlError(c, e) || isChannelGoneError(e))
+                this.#cache.evictClient(token, c);
+              if (isChannelGoneError(e)) {
+                // db deleted while polling for close/recycle → end the stream like a closed channel.
+                controller.close();
+                release();
+                return;
+              }
               release();
               throw e;
             }
@@ -837,8 +908,12 @@ export class SqliteMultiBackend implements BrokerBackend {
         },
       });
     } catch (e) {
-      if (isConnectionLevelLibsqlError(c, e)) this.#cache.evictClient(token, c);
+      if (isConnectionLevelLibsqlError(c, e) || isChannelGoneError(e))
+        this.#cache.evictClient(token, c);
       release();
+      // The db was deleted before the stream opened → treat as channel-absent: null ⇒ 200-empty, and a
+      // reconnect re-subscribes once a publish recreates it (issue #111).
+      if (isChannelGoneError(e)) return null;
       throw e;
     }
   }
@@ -1013,7 +1088,14 @@ export class SqliteMultiBackend implements BrokerBackend {
     try {
       return await fn();
     } catch (e) {
-      if (isConnectionLevelLibsqlError(c, e)) this.#cache.evictClient(token, c);
+      // Evict on a dead CONNECTION or a gone CHANNEL: either way the cached client is useless (a gone
+      // channel's client points at a deleted db), so the next acquire reopens — and for a write,
+      // re-ensure()s a fresh db (issue #111).
+      if (isConnectionLevelLibsqlError(c, e) || isChannelGoneError(e))
+        this.#cache.evictClient(token, c);
+      // …and forget the locator's "db exists" memo, or the cloud locator's stale positive cache would make
+      // the recreating ensure() no-op and the new client would re-point at the deleted db (codex review).
+      if (isChannelGoneError(e)) this.#locator.forget?.(token);
       throw e;
     }
   }

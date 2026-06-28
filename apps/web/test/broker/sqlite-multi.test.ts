@@ -92,6 +92,41 @@ function failOnceOnFramePoll(base: Client): Client {
   }) as Client;
 }
 
+/** Wrap a client so an operation throws a "namespace deleted" channel-gone error when `trip(op)` returns
+ *  true (the caller owns the one-shot timing via a shared flag), else it behaves normally. Models the
+ *  retention sweep / dev dropScope deleting the db under a cached client (issue #111). Intercepts BOTH
+ *  `execute` and `transaction`: publish-frame + maxSeq/frameCount go through `transaction()`, while
+ *  __close + subscribe polls go through `execute()`. `op` is `"execute:<sql>"` or `"transaction:<mode>"`. */
+function channelGoneWhen(base: Client, trip: (op: string) => boolean): Client {
+  const boom = (): Error =>
+    new Error("Namespace ns-test was deleted while processing this request");
+  return new Proxy(base, {
+    get(target, prop) {
+      if (prop === "execute") {
+        return async (...args: unknown[]) => {
+          const stmt = args[0];
+          const sql =
+            typeof stmt === "object" && stmt !== null && "sql" in stmt
+              ? String((stmt as { sql: unknown }).sql)
+              : String(stmt);
+          if (trip(`execute:${sql}`)) throw boom();
+          return (target.execute.bind(target) as (...a: unknown[]) => Promise<unknown>)(...args);
+        };
+      }
+      if (prop === "transaction") {
+        return async (...args: unknown[]) => {
+          if (trip(`transaction:${String(args[0] ?? "")}`)) throw boom();
+          return (target.transaction.bind(target) as (...a: unknown[]) => Promise<unknown>)(
+            ...args,
+          );
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Client;
+}
+
 const A = "sess:00000000000000000000000000000000:cse_aaaa";
 const B = "sess:00000000000000000000000000000000:cse_bbbb";
 const BUS = "bus:00000000000000000000000000000000";
@@ -383,6 +418,172 @@ describe("FileDbLocator lock semantics", () => {
     } finally {
       writer.close();
       reader.close();
+    }
+  });
+});
+
+describe("channel-gone recovery (issue #111: per-session db deleted by retention)", () => {
+  // Physically remove a session's db files — models the retention sweep / dev dropScope dropping it.
+  const deleteDb = (dir: string, token: string): void => {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      rmSync(join(dir, dbFileName(token) + suffix), { force: true });
+    }
+  };
+
+  it("publish recreates the db and retries once when the channel was deleted under a cached client", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-gone-pub-"));
+    dirs.push(dir);
+    try {
+      let armed = false;
+      const be = new SqliteMultiBackend(new FileDbLocator(dir), (config) =>
+        channelGoneWhen(createClient(config), (op) => {
+          // On the first write after arming: actually delete the db (so the recreate is observable),
+          // then surface the channel-gone error the cached client would get against Turso.
+          if (armed && op.startsWith("transaction:write")) {
+            armed = false;
+            deleteDb(dir, A);
+            return true;
+          }
+          return false;
+        }),
+      );
+      await be.publish(A, frame(0)); // creates the db normally
+      armed = true; // retention "deletes" the db before the next write
+      const res = await be.publish(A, frame(1)); // channel-gone → recreate + retry once
+      expect(res.created).toBe(true); // a fresh incarnation (history before the deletion is gone, by design)
+      // The recreated db holds only the retried frame.
+      const sub = await be.subscribe(A, undefined);
+      expect(sub).not.toBeNull();
+      expect(seqs(await take(sub as ReadableStream<WireFrame>, 1))).toEqual([1]);
+      expect(warn).toHaveBeenCalledWith(
+        "[sqlite] channel gone on publish; recreating db and retrying once:",
+        expect.stringContaining("was deleted"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("forgets the locator's existence memo on channel-gone (so a cloud recreate isn't blocked by a stale positive cache — codex review)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-gone-forget-"));
+    dirs.push(dir);
+    // A locator that records forget() — models the TursoCloudDbLocator whose ensure() would otherwise
+    // no-op on a stale positive cache after a cross-instance delete.
+    class RecordingLocator extends FileDbLocator {
+      forgotten: string[] = [];
+      forget(token: string): void {
+        this.forgotten.push(token);
+      }
+    }
+    const loc = new RecordingLocator(dir);
+    try {
+      let armed = false;
+      const be = new SqliteMultiBackend(loc, (config) =>
+        channelGoneWhen(createClient(config), (op) => {
+          if (armed && op.startsWith("transaction:write")) {
+            armed = false;
+            deleteDb(dir, A);
+            return true;
+          }
+          return false;
+        }),
+      );
+      await be.publish(A, frame(0));
+      armed = true;
+      await be.publish(A, frame(1)); // channel-gone → must forget(A) before re-ensure()
+      expect(loc.forgotten).toContain(A);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("publish(__close) is a no-op when the channel was already deleted", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-gone-close-"));
+    dirs.push(dir);
+    let armed = false;
+    const be = new SqliteMultiBackend(new FileDbLocator(dir), (config) =>
+      channelGoneWhen(createClient(config), (op) => {
+        if (armed && op.startsWith("execute:UPDATE channel SET closed")) {
+          armed = false;
+          return true;
+        }
+        return false;
+      }),
+    );
+    await be.publish(A, frame(0));
+    armed = true;
+    await expect(be.publish(A, { __close: true })).resolves.toEqual({
+      created: false,
+      channelId: A,
+    });
+  });
+
+  it("maxSeq and frameCount return null (channel absent ⇒ resume at 0) when the db was deleted", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-gone-meta-"));
+    dirs.push(dir);
+    let goneFor: "maxSeq" | "frameCount" | null = null;
+    const be = new SqliteMultiBackend(new FileDbLocator(dir), (config) =>
+      channelGoneWhen(createClient(config), (op) => {
+        if (goneFor !== null && op.startsWith("transaction:read")) {
+          goneFor = null;
+          return true;
+        }
+        return false;
+      }),
+    );
+    await be.publish(A, frame(7));
+    goneFor = "maxSeq";
+    expect(await be.maxSeq(A)).toBeNull();
+    goneFor = "frameCount";
+    expect(await be.frameCount(A)).toBeNull();
+  });
+
+  it("subscribe returns null (200-empty) when the channel is gone at open", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-gone-open-"));
+    dirs.push(dir);
+    let armed = false;
+    const be = new SqliteMultiBackend(new FileDbLocator(dir), (config) =>
+      channelGoneWhen(createClient(config), (op) => {
+        if (armed && op.startsWith("execute:SELECT gen, closed")) {
+          armed = false;
+          return true;
+        }
+        return false;
+      }),
+    );
+    await be.publish(A, frame(0));
+    armed = true;
+    expect(await be.subscribe(A, undefined)).toBeNull();
+  });
+
+  it("subscribe clean-closes (no throw, no hang) when the db is deleted mid-stream", async () => {
+    const prevPoll = process.env.RC_SQLITE_POLL_MS;
+    process.env.RC_SQLITE_POLL_MS = "10";
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-gone-stream-"));
+    dirs.push(dir);
+    try {
+      let armed = false;
+      const be = new SqliteMultiBackend(new FileDbLocator(dir), (config) =>
+        channelGoneWhen(createClient(config), (op) => {
+          if (armed && op.startsWith("execute:SELECT id, frame")) {
+            armed = false;
+            return true;
+          }
+          return false;
+        }),
+      );
+      await be.publish(A, frame(0));
+      armed = true; // the very next frame poll hits the deleted channel
+      const sub = await be.subscribe(A, undefined);
+      expect(sub).not.toBeNull();
+      // drain() only returns if the stream ENDS (controller.close) — a hard throw would reject, a hang
+      // would time out the test. Reaching here proves the channel-gone path closes cleanly.
+      await expect(drain(sub as ReadableStream<WireFrame>)).resolves.toEqual([]);
+    } finally {
+      if (prevPoll === undefined) delete process.env.RC_SQLITE_POLL_MS;
+      else process.env.RC_SQLITE_POLL_MS = prevPoll;
     }
   });
 });
