@@ -139,16 +139,17 @@ class FakeOpencodeClient extends OpencodeClient {
     // being delivered immediately (the predicate closes over the driver's live #followed set).
     const isPredicate = typeof want === "function";
     const deliver = (ev: OpencodeEvent): boolean => {
+      // Discovery: a predicate consumer gets EVERY session.created BEFORE any session filtering (its
+      // session is the not-yet-followed child, possibly carried only as info.id) — matches client.ts.
+      if (isPredicate && ev.type === "session.created") return true;
       const props = ev.properties as
         | { sessionID?: string; part?: { sessionID?: string }; info?: { sessionID?: string } }
         | undefined;
       const evSession = props?.sessionID ?? props?.part?.sessionID ?? props?.info?.sessionID;
       if (evSession === undefined) return ev.type.startsWith("server.");
-      const wanted = isPredicate
+      return isPredicate
         ? (want as (id: string | undefined) => boolean)(evSession)
         : evSession === want;
-      if (wanted) return true;
-      return isPredicate && ev.type === "session.created"; // discovery exception (see client.ts)
     };
     for (const ev of events) {
       if (signal.aborted) return;
@@ -223,6 +224,23 @@ function childIdle(): OpencodeEvent {
 }
 function statusOf(sid: string, type: string): OpencodeEvent {
   return { type: "session.status", properties: { sessionID: sid, status: { type } } };
+}
+// Generalized variants for tests with MULTIPLE child sessions (the part's session rides on part.sessionID,
+// the nested shape the real server uses for part events).
+function partFor(sid: string, p: Record<string, unknown>): OpencodeEvent {
+  return {
+    type: "message.part.updated",
+    properties: { part: { ...p, sessionID: sid } },
+  } as unknown as OpencodeEvent;
+}
+function msgUpdatedFor(sid: string, info: Record<string, unknown>): OpencodeEvent {
+  return {
+    type: "message.updated",
+    properties: { sessionID: sid, info },
+  } as unknown as OpencodeEvent;
+}
+function idleFor(sid: string): OpencodeEvent {
+  return { type: "session.idle", properties: { sessionID: sid } };
 }
 
 // The captured live sequence for "Reply with exactly: OK": the user prompt echo part (synthetic-free
@@ -986,6 +1004,132 @@ describe("OpencodeDriver — sub-agent (Task) bridging", () => {
     expect(wentIdle).toBe(true);
     ac.abort();
     await run;
+  });
+
+  // codex #5 — an UNTAGGED followed child (its session.created had no matching subtask anchor) must STILL
+  // suppress its internal user prompt (suppression keys on "is a followed non-main child", not on the tag).
+  it("suppresses an UNTAGGED child's internal prompt and keeps its reply top-level (no anchor matched)", async () => {
+    const SCRIPT: OpencodeEvent[] = [
+      { type: "server.connected", properties: {} },
+      statusOf(SES, "busy"),
+      // No subtask part is ever noted → the child gets NO tag when created.
+      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
+      childPart({
+        type: "text",
+        id: "prt_cu",
+        messageID: "msg_cu",
+        text: "internal subagent prompt",
+      }),
+      childMsgUpdated({ id: "msg_cu", role: "user", time: { created: 1 } }),
+      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "sub reply" }),
+      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 2, completed: 3 } }),
+      childIdle(),
+    ];
+    const client = new FakeOpencodeClient(SCRIPT);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
+    ac.abort();
+    await run;
+    const upstream = up(captured);
+    // The child's internal prompt was NOT surfaced (suppressed despite being untagged) …
+    expect(upstream.filter((e) => e.eventType === "user")).toHaveLength(0);
+    // … and its reply is top-level (untagged) rather than mis-nested.
+    const child = upstream.find((e) => e.payload.uuid === "msg_child");
+    expect(child?.eventType).toBe("assistant");
+    expect(child?.payload.parent_tool_use_id).toBeUndefined();
+  });
+
+  // codex #2 — backfill must NOT enqueue historical subtask anchors. A later live child with the same agent
+  // must NOT nest under a stale anchor from history (we can't reliably correlate a past anchor to a new child).
+  it("does NOT nest a live child under a subtask anchor that came from history backfill", async () => {
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      // a live child of the SAME agent as the historical subtask part
+      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
+      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "fresh reply" }),
+      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 9, completed: 10 } }),
+      childIdle(),
+      idle(),
+    ]);
+    // History: a completed parent assistant turn that INCLUDED a subtask (agent "explore"). Backfill renders
+    // its Task anchor but must NOT enqueue it for correlation (its real child already ran in the past).
+    client.history = [
+      histMsg({ id: "msg_hist", role: "assistant", time: { created: 1, completed: 2 } }, [
+        { type: "text", id: "prt_h", messageID: "msg_hist", text: "did some work" },
+        {
+          type: "subtask",
+          id: "prt_hist_task",
+          messageID: "msg_hist",
+          agent: "explore",
+          description: "old task",
+          prompt: "old prompt",
+        },
+      ]),
+    ];
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
+    ac.abort();
+    await run;
+    const upstream = up(captured);
+    // The historical Task anchor still rendered (history is shown) …
+    const hist = upstream.find((e) => e.payload.uuid === "msg_hist");
+    const histContent = (hist?.payload.message as { content: Array<Record<string, unknown>> })
+      .content;
+    expect(histContent.some((b) => b.type === "tool_use" && b.id === "prt_hist_task")).toBe(true);
+    // … but the LIVE child is NOT mis-nested under that stale anchor (backfill didn't enqueue it).
+    const child = upstream.find((e) => e.payload.uuid === "msg_child");
+    expect(child?.payload.parent_tool_use_id).toBeUndefined();
+  });
+
+  // codex #3 — correlation is keyed by (PARENT session, agent), not agent alone: two parents spawning the
+  // SAME agent must not steal each other's anchors. main(SES) and its followed child C1 both spawn "explore";
+  // a grandchild of C1 must nest under C1's anchor, not main's (agent-only FIFO would mis-tag it).
+  it("keys subtask correlation by (parent, agent): a grandchild nests under its own parent's anchor", async () => {
+    const C1 = "ses_c1";
+    const GC = "ses_gc";
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      statusOf(SES, "busy"),
+      // main spawns worker → C1 (so C1 becomes a followed parent in its own right)
+      part({ type: "subtask", id: "prt_c1_task", messageID: "msg_m", agent: "worker" }),
+      msgUpdated({ id: "msg_m", role: "assistant", time: { created: 1, completed: 2 } }),
+      sessionCreated({ id: C1, parentID: SES, agent: "worker" }),
+      // BOTH main and C1 now enqueue an "explore" anchor (same agent, different parents)
+      part({ type: "subtask", id: "prt_main_explore", messageID: "msg_m2", agent: "explore" }), // parent SES
+      msgUpdated({ id: "msg_m2", role: "assistant", time: { created: 3, completed: 4 } }),
+      partFor(C1, { type: "subtask", id: "prt_c1_explore", messageID: "msg_c1", agent: "explore" }), // parent C1
+      msgUpdatedFor(C1, { id: "msg_c1", role: "assistant", time: { created: 5, completed: 6 } }),
+      // a grandchild of C1 with agent "explore" — must pop C1's anchor (prt_c1_explore), NOT main's
+      sessionCreated({ id: GC, parentID: C1, agent: "explore" }),
+      partFor(GC, { type: "text", id: "prt_gc1", messageID: "msg_gc", text: "grandchild reply" }),
+      msgUpdatedFor(GC, { id: "msg_gc", role: "assistant", time: { created: 7, completed: 8 } }),
+      idleFor(GC),
+    ]);
+    const broker = new FakeBroker();
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (s) => {
+      captured = s;
+    });
+    ac = new AbortController();
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_gc"));
+    ac.abort();
+    await run;
+    const gc = up(captured).find((e) => e.payload.uuid === "msg_gc");
+    // Parent-keyed correlation → the grandchild nests under C1's anchor; agent-only FIFO would give main's.
+    expect(gc?.payload.parent_tool_use_id).toBe("prt_c1_explore");
   });
 });
 
