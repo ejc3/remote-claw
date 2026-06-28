@@ -26,11 +26,6 @@ export const PASTE_SETTLE_MS = 40;
 export const PASTE_SETTLE_PER_CHAR_MS = 1.5;
 /** Cap on the length-scaled settle (a pathologically long paste shouldn't stall the pump for seconds). */
 export const PASTE_SETTLE_MAX_MS = 1000;
-/** How many times submitPrompt re-checks the composer (resending Enter if the prompt is still sitting
- *  there) before giving up to the pump's higher retry/teardown. */
-export const SUBMIT_VERIFY_ATTEMPTS = 6;
-/** ms between submit re-checks (capture the pane, resend Enter if not yet submitted). */
-export const SUBMIT_VERIFY_MS = 150;
 
 /** Length-scaled settle for a paste of `text`: base + per-char, capped (see the consts above). */
 export function settleMs(text: string): number {
@@ -38,32 +33,6 @@ export function settleMs(text: string): number {
     PASTE_SETTLE_MS + Math.ceil(text.length * PASTE_SETTLE_PER_CHAR_MS),
     PASTE_SETTLE_MAX_MS,
   );
-}
-
-// ESC / BEL built at runtime so the regexes below carry no literal control chars (biome's
-// noControlCharactersInRegex only flags regex LITERALS, not RegExps built from strings).
-const ESC = String.fromCharCode(0x1b);
-const BEL = String.fromCharCode(0x07);
-const ANSI_CSI = new RegExp(`${ESC}\\[[0-9;?]*[ -/]*[@-~]`, "g"); // ESC [ … <final byte>
-const ANSI_OSC = new RegExp(`${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`, "g"); // ESC ] … BEL/ST
-
-/** Strip ANSI CSI/OSC escape sequences so a captured pane can be matched as plain text. */
-export function stripAnsi(s: string): string {
-  return s.replace(ANSI_CSI, "").replace(ANSI_OSC, "");
-}
-
-/** True if `text` is STILL sitting in claude's input composer in a captured pane — i.e. the prompt has
- *  NOT been submitted yet. The composer is the bottom-most `❯ <text…>` line; a submitted prompt moves
- *  into a message bubble ABOVE (no `❯` prefix), so we only inspect from the LAST `❯` onward — a
- *  distinctive head of the prompt there means it's unsubmitted. No `❯` captured ⇒ treat as submitted
- *  (don't resend blindly). Whitespace-collapsed so wrapping/padding don't defeat the match. */
-export function composerHasText(pane: string, text: string): boolean {
-  const head = text.trim().replace(/\s+/g, " ").slice(0, 16);
-  if (head === "") return false;
-  const flat = stripAnsi(pane).replace(/\s+/g, " ");
-  const marker = flat.lastIndexOf("❯");
-  if (marker < 0) return false; // no composer line captured → can't see it pending → assume submitted
-  return flat.slice(marker).includes(head);
 }
 
 /** Initial backoff between inject retries (a transient set-buffer/paste-buffer error clears fast). */
@@ -106,14 +75,17 @@ export async function loadAndPaste(
   await tmux.pasteBuffer(target, buffer);
 }
 
-/** PHASE 2 of injection — settle, then the SEPARATE send-keys Enter that actually submits, then CONFIRM
- *  the composer cleared. A `send-keys Enter` that the still-in-flight bracketed paste swallowed never
- *  errors, so a single Enter can be SILENTLY dropped on a long/contended paste (observed live: a long
- *  prompt sat unsubmitted in the box forever). We length-scale the settle, then read the pane back and
- *  resend Enter ONLY while the prompt is still visibly in the composer — capture-gated so we never resend
- *  after a confirmed submit (no double-submit). Bounded; a persistently stuck pane falls through to the
- *  pump's higher retry / the driver's pane-liveness teardown. Retried ALONE by the pump (never re-pasting).
- *  `text` is the prompt, needed to recognize it in the captured composer. */
+/** PHASE 2 of injection — settle, then the SEPARATE send-keys Enter that submits. A `send-keys Enter`
+ *  that the still-in-flight bracketed paste swallows never errors, so the Enter must land AFTER the paste
+ *  has been ingested; the fix is a LENGTH-SCALED settle (settleMs) — the original fixed 40ms was too
+ *  short for a long prompt, which left it unsubmitted in the box (observed live).
+ *
+ *  We deliberately do NOT read the pane back to "confirm" the submit and resend: capture-parsing claude's
+ *  TUI is unreliable (a ❯ inside the prompt text, the prompt head scrolled out of the captured region, or
+ *  a failed capture) and every ambiguous read defaults to "looks submitted" → the prompt is ACKed and
+ *  SILENTLY DROPPED (codex review found three such paths). A scaled settle + a single Enter has no such
+ *  false-negative; a genuine tmux error on the send-keys throws and is retried by the pump (which never
+ *  re-pastes), and a truly dead pane is caught by the driver's pane-liveness watcher. */
 export async function submitPrompt(
   tmux: TmuxCtl,
   target: string,
@@ -122,17 +94,6 @@ export async function submitPrompt(
 ): Promise<void> {
   await sleep(settleMs(text));
   await tmux.sendKeys(target, "Enter");
-  for (let i = 0; i < SUBMIT_VERIFY_ATTEMPTS; i++) {
-    await sleep(SUBMIT_VERIFY_MS);
-    let pane: string;
-    try {
-      pane = await tmux.capturePane(target);
-    } catch {
-      continue; // couldn't read the pane back this round — don't risk a blind resend; re-check next loop
-    }
-    if (!composerHasText(pane, text)) return; // composer cleared ⇒ the prompt submitted
-    await tmux.sendKeys(target, "Enter"); // still sitting in the box → the Enter was lost; resend
-  }
 }
 
 /**

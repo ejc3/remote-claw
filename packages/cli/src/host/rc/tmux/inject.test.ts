@@ -6,7 +6,6 @@
 import { describe, expect, it } from "vitest";
 import { Session } from "../session.js";
 import {
-  composerHasText,
   downstreamUserText,
   injectUserText,
   isInterrupt,
@@ -15,8 +14,6 @@ import {
   PASTE_SETTLE_PER_CHAR_MS,
   runInjectPump,
   settleMs,
-  stripAnsi,
-  submitPrompt,
 } from "./inject.js";
 import { TmuxCtl, type TmuxExec, type TmuxExecResult } from "./tmuxctl.js";
 
@@ -60,16 +57,10 @@ describe("injectUserText", () => {
       return Promise.resolve();
     };
     await injectUserText(new TmuxCtl(exec), "rc-cse_x", "hi", "rcin-cse_x", sleep);
-    // After Enter, submitPrompt settles again then reads the pane back to confirm the submit. The spy
-    // returns an empty pane (no "❯" composer line) → composerHasText is false → submitted, no resend.
-    expect(order).toEqual([
-      "set-buffer",
-      "paste-buffer",
-      "sleep",
-      "send-keys",
-      "sleep",
-      "capture-pane",
-    ]);
+    // loadAndPaste (set-buffer, paste-buffer) then submitPrompt (settle, send Enter). No pane read-back:
+    // a single Enter after the length-scaled settle — the capture-confirm/resend was removed because its
+    // TUI parse had false-"submitted" reads that silently dropped prompts (codex review).
+    expect(order).toEqual(["set-buffer", "paste-buffer", "sleep", "send-keys"]);
   });
 });
 
@@ -91,7 +82,7 @@ describe("runInjectPump", () => {
     ac.abort();
     s.wake();
     await pump;
-    expect(verbs).toEqual(["set-buffer", "paste-buffer", "send-keys", "capture-pane"]);
+    expect(verbs).toEqual(["set-buffer", "paste-buffer", "send-keys"]);
     // After ack, a reclaimed stream must NOT replay the prompt.
     expect(await replayedEventIds(s, ev.eventId)).toBe(false);
   });
@@ -178,7 +169,7 @@ describe("runInjectPump", () => {
     s.wake();
     await pump;
     // initialize / control_response produced NO tmux verbs; only the prompt did.
-    expect(verbs).toEqual(["set-buffer", "paste-buffer", "send-keys", "capture-pane"]);
+    expect(verbs).toEqual(["set-buffer", "paste-buffer", "send-keys"]);
     // initialize was acked (review #5) → not replayed.
     expect(init).not.toBeNull();
     if (init) expect(await replayedEventIds(s, init.eventId)).toBe(false);
@@ -326,80 +317,10 @@ async function replayedEventIds(s: Session, eventId: string): Promise<boolean> {
   return replayed;
 }
 
-describe("settleMs / stripAnsi / composerHasText (issue: long-prompt submit-Enter race)", () => {
-  it("settleMs scales the paste settle with length and caps it", () => {
+describe("settleMs (long-prompt submit-Enter race)", () => {
+  it("scales the paste settle with length and caps it", () => {
     expect(settleMs("hi")).toBe(PASTE_SETTLE_MS + Math.ceil(2 * PASTE_SETTLE_PER_CHAR_MS));
     expect(settleMs("")).toBe(PASTE_SETTLE_MS);
     expect(settleMs("x".repeat(100_000))).toBe(PASTE_SETTLE_MAX_MS);
-  });
-
-  it("stripAnsi removes CSI and OSC escape sequences", () => {
-    expect(stripAnsi("\x1b[31mred\x1b[0m")).toBe("red");
-    expect(stripAnsi("\x1b]0;title\x07body")).toBe("body");
-  });
-
-  it("composerHasText: true while the prompt sits after the composer marker, false once submitted", () => {
-    // Unsubmitted: the prompt is on the "❯ " composer line.
-    expect(composerHasText("❯ run the thing now please", "run the thing now please")).toBe(true);
-    // Submitted: the prompt moved into a bubble ABOVE; the LAST "❯" (composer) is now empty.
-    expect(
-      composerHasText("run the thing now please\n──────\n❯ ", "run the thing now please"),
-    ).toBe(false);
-    // No composer marker captured → treat as submitted (don't resend blindly).
-    expect(composerHasText("just some tool output", "run the thing")).toBe(false);
-    // Blank prompt → never "in the composer".
-    expect(composerHasText("❯ ", "   ")).toBe(false);
-  });
-
-  it("composerHasText sees through ANSI styling and collapsed wrapping whitespace", () => {
-    const pane = "\x1b[2m❯\x1b[0m \x1b[1mlong  prompt   wraps\x1b[0m";
-    expect(composerHasText(pane, "long prompt wraps")).toBe(true);
-  });
-});
-
-describe("submitPrompt capture-verified resubmit (issue: a swallowed Enter is silently lost)", () => {
-  it("resends Enter when the first was swallowed (composer still shows the prompt), then stops once it clears", async () => {
-    const text = "a long pasted prompt that did not submit on the first Enter";
-    let enters = 0;
-    const exec: TmuxExec = (args) => {
-      const verb = args[0] ?? "";
-      if (verb === "send-keys" && args.includes("Enter")) enters++;
-      if (verb === "capture-pane") {
-        // The first Enter was swallowed (paste still settling) → composer still holds the prompt; after
-        // the resend it clears.
-        const stdout = enters >= 2 ? "the prompt\n────\n❯ " : `❯ ${text}`;
-        return Promise.resolve({ code: 0, stdout, stderr: "" });
-      }
-      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
-    };
-    await submitPrompt(new TmuxCtl(exec), "rc-x", text, noSleep);
-    expect(enters).toBe(2); // initial Enter + exactly one resend, then confirmed clear
-  });
-
-  it("does NOT resend when the first Enter already submitted (composer clear) — no double-submit", async () => {
-    let enters = 0;
-    const exec: TmuxExec = (args) => {
-      const verb = args[0] ?? "";
-      if (verb === "send-keys" && args.includes("Enter")) enters++;
-      if (verb === "capture-pane") return Promise.resolve({ code: 0, stdout: "❯ ", stderr: "" });
-      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
-    };
-    await submitPrompt(new TmuxCtl(exec), "rc-x", "hi", noSleep);
-    expect(enters).toBe(1); // only the initial Enter; the composer was already clear
-  });
-
-  it("gives up after the bounded attempts if the composer never clears (falls through to the pump)", async () => {
-    const text = "stuck prompt";
-    let enters = 0;
-    const exec: TmuxExec = (args) => {
-      const verb = args[0] ?? "";
-      if (verb === "send-keys" && args.includes("Enter")) enters++;
-      if (verb === "capture-pane")
-        return Promise.resolve({ code: 0, stdout: `❯ ${text}`, stderr: "" });
-      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
-    };
-    await submitPrompt(new TmuxCtl(exec), "rc-x", text, noSleep);
-    // 1 initial Enter + one resend per verify attempt (bounded), never more.
-    expect(enters).toBe(1 + 6);
   });
 });
