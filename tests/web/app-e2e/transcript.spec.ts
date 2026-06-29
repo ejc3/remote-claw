@@ -205,6 +205,10 @@ test("serves the CSP + security headers, and the app still hydrates under them (
   expect(csp).toContain("object-src 'none'");
   expect(csp).toContain("frame-ancestors 'none'");
   expect(csp).not.toContain("'unsafe-eval'");
+  // upgrade-insecure-requests is in the prod CSP (forces HTTPS). This spec runs only on Chromium, where
+  // the header is untouched — assert it to guard prod parity. (The WebKit harness strips just this one
+  // directive for http://localhost — see fixtures.ts — but only the revive spec runs on WebKit.)
+  expect(csp).toContain("upgrade-insecure-requests");
   // Static defense-in-depth headers from next.config.
   expect(h["x-frame-options"]).toBe("DENY");
   expect(h["x-content-type-options"]).toBe("nosniff");

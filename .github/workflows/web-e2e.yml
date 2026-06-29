@@ -35,14 +35,16 @@ jobs:
       - name: Typecheck the e2e harness
         run: pnpm --filter remote-claw-web-tests run typecheck
 
-      # Playwright Chromium + its OS libraries (cached by the lockfile, which pins @playwright/test).
+      # Playwright Chromium + WebKit + their OS libraries (cached by the lockfile, which pins
+      # @playwright/test). WebKit is required by the app-e2e "ios-safari" project — the faithful iOS-Safari
+      # engine for the transport/revive specs; without --with-deps webkit that project would fail to launch.
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Install Chromium
-        run: pnpm --filter remote-claw-web-tests exec playwright install --with-deps chromium
+      - name: Install Chromium + WebKit
+        run: pnpm --filter remote-claw-web-tests exec playwright install --with-deps chromium webkit
 
       - name: App e2e — LocalBackend
         run: pnpm --filter remote-claw-web-tests run test:app
