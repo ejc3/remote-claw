@@ -792,10 +792,32 @@ function Transcript(props: {
   const announceMode = announce?.mode;
   const announceSentAt = announce?.sentAt;
   const displayedMode = displayedPermissionMode(announceMode, optimisticMode);
+  // Capability gating (#149): the host's driver declares which controls it can faithfully service.
+  // Absent (a legacy MITM host) → assume full capability, so nothing is disabled. A driver that can't
+  // honor a verb (tmux/opencode set_mode; opencode set_model) declares it false → the viewer disables
+  // that control so it never shows a "✓" the worker never applied.
+  const caps = announce?.capabilities;
+  const canSetMode = caps?.controls.setMode ?? true;
+  const canSetModel = caps?.controls.setModel ?? true;
+  const canInterrupt = caps?.controls.interrupt ?? true;
+  // Permissions are BYPASSED when the driver can't surface structured gates (--skip-permissions): tools
+  // run without a per-tool ask. Surface the posture so the human knows edits aren't gated.
+  const permsBypassed = caps?.structuredPermissions === false;
 
   useEffect(() => {
     if (announceMode !== undefined && announceSentAt !== undefined) setOptimisticMode(null);
   }, [announceMode, announceSentAt]);
+
+  // If capabilities arrive (or change) to say this driver can't switch mode, drop any optimistic mode and
+  // close the sheet: a driver that can't honor set_mode never announces a confirmed `mode`, so the effect
+  // above would never clear a stale optimistic pick made during the pre-announce window when the button was
+  // still enabled — leaving the (now-disabled) button showing a Plan/Code mode the worker never entered.
+  useEffect(() => {
+    if (!canSetMode) {
+      setOptimisticMode(null);
+      setModeSheet(false);
+    }
+  }, [canSetMode]);
 
   // `reviveKey` bumps to force a transcript RE-SUBSCRIBE without losing what's shown — the recovery for
   // iOS Safari SUSPENDING a fetch stream when the page is backgrounded (the photo picker opening, an app
@@ -991,6 +1013,9 @@ function Transcript(props: {
   const chooseMode = useCallback(
     async (id: string) => {
       setModeSheet(false);
+      // Defensive: a driver that can't honor set_mode would only no-op the verb AND show a false confirmed
+      // mode (the relay won't reflect it). The button is already disabled, but guard the path too.
+      if (!canSetMode) return;
       setSendError(null);
       const prev = optimisticMode;
       setOptimisticMode(id); // optimistic — revert if the control frame can't be sent
@@ -1002,7 +1027,7 @@ function Transcript(props: {
         setSendError(friendlySendError(e));
       }
     },
-    [optimisticMode, sessionId, viewer],
+    [optimisticMode, sessionId, viewer, canSetMode],
   );
 
   // Session ⋯ actions. set_model (the model switcher) sends Claude Code's documented `/model` alias to
@@ -1055,6 +1080,14 @@ function Transcript(props: {
         </button>
         <span className="row-title">{props.title}</span>
         {announce?.git && <GitChip git={announce.git} />}
+        {permsBypassed && (
+          <span
+            className="perms-bypassed"
+            title="This harness runs without per-tool permission gating — tools execute without asking."
+          >
+            ⚠ permissions off
+          </span>
+        )}
         <button
           type="button"
           className="chat-menu"
@@ -1136,8 +1169,13 @@ function Transcript(props: {
             className="mode-btn"
             aria-haspopup="dialog"
             aria-expanded={modeSheet}
-            onClick={() => setModeSheet(true)}
-            title="Permission mode"
+            disabled={!canSetMode}
+            onClick={() => canSetMode && setModeSheet(true)}
+            title={
+              canSetMode
+                ? "Permission mode"
+                : "This harness can't switch permission mode — showing the worker's current mode (read-only)"
+            }
           >
             <span className="mode-glyph">{modeGlyph(displayedMode)}</span>
             {modeLabel(displayedMode)}
@@ -1184,6 +1222,8 @@ function Transcript(props: {
         <SessionSheet
           branch={announce?.git?.branch ?? null}
           currentModel={optimisticModel}
+          canModel={canSetModel}
+          canInterrupt={canInterrupt}
           onModel={(id) => void chooseModel(id)}
           onInterrupt={() => void interruptSession()}
           onCopyBranch={copyBranch}
@@ -1412,10 +1452,14 @@ const MODELS = [
   { id: "haiku", label: "Haiku", glyph: "▪", desc: "Fastest — quick answers" },
 ] as const;
 
-/** The session ⋯ sheet: switch model (set_model), interrupt the current turn, copy the git branch. */
+/** The session ⋯ sheet: switch model (set_model), interrupt the current turn, copy the git branch.
+ *  `canModel`/`canInterrupt` reflect the host driver's capabilities (#149): a driver that can't honor a
+ *  verb gets that control disabled with an explanatory note, never a button that silently no-ops. */
 export function SessionSheet({
   branch,
   currentModel,
+  canModel,
+  canInterrupt,
   onModel,
   onInterrupt,
   onCopyBranch,
@@ -1424,6 +1468,10 @@ export function SessionSheet({
   branch: string | null;
   /** The optimistically-selected model (set_model isn't self-reported), or null until one is chosen. */
   currentModel: string | null;
+  /** The driver can switch model (opencode can't — it needs a providerID/modelID, not the viewer's aliases). */
+  canModel: boolean;
+  /** The driver can interrupt the current turn (true for every current driver; gated defensively). */
+  canInterrupt: boolean;
   onModel: (id: string) => void;
   onInterrupt: () => void;
   onCopyBranch: () => void;
@@ -1432,33 +1480,44 @@ export function SessionSheet({
   return (
     <Sheet label="Session actions" onClose={onClose}>
       <div className="sheet-title">Change model</div>
-      {MODELS.map((m) => (
-        <button
-          key={m.id}
-          type="button"
-          className="mode-row"
-          data-active={m.id === currentModel}
-          aria-pressed={m.id === currentModel}
-          onClick={() => onModel(m.id)}
-        >
-          <span className="mode-row-glyph">{m.glyph}</span>
-          <span className="mode-row-main">
-            <span className="mode-row-label">{m.label}</span>
-            <span className="mode-row-desc">{m.desc}</span>
-          </span>
-          {m.id === currentModel && (
-            <span className="mode-check" aria-hidden>
-              ✓
+      {canModel ? (
+        MODELS.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className="mode-row"
+            data-active={m.id === currentModel}
+            aria-pressed={m.id === currentModel}
+            onClick={() => onModel(m.id)}
+          >
+            <span className="mode-row-glyph">{m.glyph}</span>
+            <span className="mode-row-main">
+              <span className="mode-row-label">{m.label}</span>
+              <span className="mode-row-desc">{m.desc}</span>
             </span>
-          )}
-        </button>
-      ))}
+            {m.id === currentModel && (
+              <span className="mode-check" aria-hidden>
+                ✓
+              </span>
+            )}
+          </button>
+        ))
+      ) : (
+        <p className="sheet-note">This harness can’t switch model from the viewer.</p>
+      )}
       <div className="sheet-title">Session</div>
-      <button type="button" className="mode-row mode-row-danger" onClick={onInterrupt}>
+      <button
+        type="button"
+        className="mode-row mode-row-danger"
+        disabled={!canInterrupt}
+        onClick={onInterrupt}
+      >
         <span className="mode-row-glyph">⏹</span>
         <span className="mode-row-main">
           <span className="mode-row-label">Interrupt</span>
-          <span className="mode-row-desc">Stop the current turn</span>
+          <span className="mode-row-desc">
+            {canInterrupt ? "Stop the current turn" : "Not supported by this harness"}
+          </span>
         </span>
       </button>
       {branch !== null && (

@@ -146,6 +146,52 @@ export interface Announce {
   mode?: string;
   /** The session's git snapshot for the branch/dirty/ahead-behind chip (#49); null outside a repo. */
   git: GitInfo | null;
+  /** What the host's driver can faithfully service (#149). Absent on a pre-capability host → the viewer
+   *  assumes full capability (a legacy host is always the MITM driver), so nothing gets disabled. */
+  capabilities?: Capabilities;
+}
+
+/** Per-verb control support a driver declares (mirrors the host's ControlCapabilities). The viewer
+ *  disables + labels the controls a driver can't honor, so a permission-mode/model "✓" never lies. */
+export interface ControlCaps {
+  interrupt: boolean;
+  setModel: boolean;
+  setMode: boolean;
+  end: boolean;
+}
+
+/** Driver capabilities as carried on session_announce (mirrors the host's DriverCapabilities). */
+export interface Capabilities {
+  structuredPermissions: boolean;
+  status: boolean;
+  controls: ControlCaps;
+  attachments: boolean;
+}
+
+/** Defensively coerce an announce's `capabilities` into Capabilities|undefined. Decrypted-but-untrusted
+ *  (AEAD proves the host wrote it, not that it's well-formed), so every field is type-checked. A missing
+ *  or malformed body returns undefined → the viewer treats the host as fully capable (no false gating of
+ *  a legacy MITM host). Each control defaults to ENABLED when absent, for the same don't-over-gate reason;
+ *  a driver that can't honor a verb states `false` explicitly. */
+export function parseCapabilities(raw: unknown): Capabilities | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const c = raw as Record<string, unknown>;
+  const ctlRaw =
+    typeof c.controls === "object" && c.controls !== null
+      ? (c.controls as Record<string, unknown>)
+      : {};
+  const bool = (v: unknown, dflt: boolean): boolean => (typeof v === "boolean" ? v : dflt);
+  return {
+    structuredPermissions: bool(c.structuredPermissions, true),
+    status: bool(c.status, true),
+    controls: {
+      interrupt: bool(ctlRaw.interrupt, true),
+      setModel: bool(ctlRaw.setModel, true),
+      setMode: bool(ctlRaw.setMode, true),
+      end: bool(ctlRaw.end, true),
+    },
+    attachments: bool(c.attachments, true),
+  };
 }
 
 /** Defensively coerce an announce's `git` field into GitInfo|null. The body is decrypted-but-untrusted
@@ -309,6 +355,8 @@ export class Viewer {
             git: parseGit(body.git), // git chip (#49); null outside a repo / on an old host
           };
           if (typeof body.mode === "string" && body.mode !== "") announce.mode = body.mode;
+          const caps = parseCapabilities(body.capabilities); // driver capabilities (#149); undefined on legacy hosts
+          if (caps) announce.capabilities = caps;
           this.#rememberIncarnation(sessionId, announce.incarnation);
           yield announce;
         }

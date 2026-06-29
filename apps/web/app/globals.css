@@ -376,6 +376,22 @@ code {
   color: var(--warn);
 }
 
+/* #149: permissions-bypassed posture — the driver runs without per-tool gating (tools auto-execute). */
+.perms-bypassed {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
 /* empty states */
 .empty {
   display: grid;
@@ -1146,9 +1162,13 @@ code {
   font-weight: 550;
   transition: border-color 0.15s, color 0.15s;
 }
-.mode-btn:hover {
+.mode-btn:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--text-faint);
+}
+.mode-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 /* Composer attach-a-photo button (#44). */
@@ -1247,11 +1267,22 @@ code {
   color: var(--text);
   transition: background 0.12s;
 }
-.mode-row:hover {
+.mode-row:hover:not(:disabled) {
   background: var(--surface-2);
 }
 .mode-row[data-active="true"] {
   background: var(--surface-2);
+}
+.mode-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* #149: shown in the ⋯ sheet when a driver can't service a control (e.g. opencode model switching). */
+.sheet-note {
+  color: var(--text-faint);
+  font-size: 13px;
+  padding: 2px 10px 10px;
+  line-height: 1.45;
 }
 .mode-row-glyph {
   flex: none;

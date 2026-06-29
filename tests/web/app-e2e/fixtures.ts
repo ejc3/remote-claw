@@ -19,7 +19,13 @@ export interface SeedResult {
   pass: string;
   sessionId: string;
 }
-export type SeedHost = (opts?: { perm?: boolean; askq?: boolean }) => Promise<SeedResult>;
+export type SeedHost = (opts?: {
+  perm?: boolean;
+  askq?: boolean;
+  /** Driver capability preset (RC_E2E_CAPS) for the capability-gated viewer (#149): "tmux" |
+   *  "opencode-skip" | undefined (full MITM caps). */
+  caps?: string;
+}) => Promise<SeedResult>;
 
 /** Spawn one host-runner and resolve once it prints its `{pass,sessionId}` readiness line (or reject if it
  *  exits / times out first). Returns the result AND the child so the fixture can kill it on teardown. */
@@ -29,6 +35,7 @@ function spawnHost(opts: {
   bypass: string | undefined;
   perm?: boolean;
   askq?: boolean;
+  caps?: string;
 }): { child: ChildProcess; ready: Promise<SeedResult> } {
   const child = spawn(TSX, [RUNNER], {
     stdio: ["ignore", "pipe", "inherit"], // stdout = the readiness line; stderr inherited for host logs
@@ -39,6 +46,7 @@ function spawnHost(opts: {
       RC_E2E_BYPASS: opts.bypass ?? "",
       RC_E2E_PERM: opts.perm ? "1" : "",
       RC_E2E_ASKQ: opts.askq ? "1" : "",
+      RC_E2E_CAPS: opts.caps ?? "",
     },
   });
   const ready = new Promise<SeedResult>((resolve, reject) => {

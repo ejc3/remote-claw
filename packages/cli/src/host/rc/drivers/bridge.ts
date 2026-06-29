@@ -5,6 +5,7 @@
 
 import type { BrokerClient } from "../../../broker/client.js";
 import type { Tracer } from "../../../trace.js";
+import type { DriverCapabilities } from "../driver.js";
 import type { GitInfo } from "../gitinfo.js";
 import { HostRcRelay } from "../relay.js";
 import type { Session } from "../session.js";
@@ -12,6 +13,9 @@ import type { Session } from "../session.js";
 export interface BridgeArgs {
   /** The Session the driver created for this RC session. */
   session: Session;
+  /** What this driver can faithfully service — broadcast on session_announce so the viewer disables the
+   *  controls this driver can't honor (no false "✓"). */
+  capabilities: DriverCapabilities;
   /** Builds a fresh BrokerClient (provider + Vercel bypass + backend already wired), one per session. */
   newClient: () => BrokerClient;
   /** This machine's 16-byte identity id (frame headers). */
@@ -42,6 +46,7 @@ export function bridgeSession(a: BridgeArgs): Promise<void> {
     sessionId: a.session.id,
     session: a.session,
     tracer: a.tracer,
+    capabilities: a.capabilities,
   });
   void relay.announce(a.title, a.cwd, a.git).catch(() => {});
   // Surface relay death rather than silently swallowing it (review #10): serve() ending early (a fatal

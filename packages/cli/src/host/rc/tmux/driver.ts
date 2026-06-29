@@ -58,15 +58,15 @@ import { ensureCwdTrusted } from "./trust.js";
 
 /** Capabilities. With permission MIRRORING on (default, B2) the driver surfaces structured can_use_tool
  *  gates via the injected PreToolUse hook (so structuredPermissions=true); with it off (the opt-out flag)
- *  it runs `--dangerously-skip-permissions` and auto-approves (false). set_model is honored via a `/model`
- *  inject and interrupt via ESC, but set_mode/end have no faithful pane analogue, so controlVerbs stays
- *  false (the coarse flag can't say "some"). status comes from the transcript debounce; attachments arrive
- *  as relay-owned `user` injects. */
+ *  it runs `--dangerously-skip-permissions` and auto-approves (false). interrupt works via ESC and
+ *  set_model via a `/model <alias>` inject; set_mode/end have no faithful pane analogue so they stay
+ *  false (the viewer disables those controls). status comes from the transcript debounce; attachments
+ *  arrive as relay-owned `user` injects. */
 export function tmuxCapabilities(mirrorPermissions: boolean): Driver["capabilities"] {
   return {
     structuredPermissions: mirrorPermissions,
     status: true,
-    controlVerbs: false,
+    controls: { interrupt: true, setModel: true, setMode: false, end: false },
     attachments: true,
   };
 }
@@ -292,6 +292,7 @@ export async function runTmuxDriver(
   const relays = new Set<Promise<void>>();
   const served = bridgeSession({
     session,
+    capabilities: tmuxCapabilities(deps.mirrorPermissions ?? true),
     newClient: ctx.newClient,
     identityId: ctx.identity.identityId,
     title: ctx.title,

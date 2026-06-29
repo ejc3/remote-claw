@@ -7,6 +7,7 @@ import {
   emptyTranscriptHint,
   FRESH_WINDOW_MS,
   nextReconnectAnchor,
+  parseCapabilities,
   parseGit,
   RECONNECTING_WINDOW_MS,
   shouldAcceptAnnounce,
@@ -234,6 +235,60 @@ describe("parseGit", () => {
       dirty: false,
       ahead: 0,
       behind: 0,
+    });
+  });
+});
+
+// parseCapabilities defensively coerces the announce's `capabilities` field (decrypted-but-untrusted)
+// into Capabilities|undefined. Absent/malformed → undefined so the viewer treats a legacy host as fully
+// capable (no false gating); a present-but-partial body fills missing booleans with the safe default
+// (enabled), so we only ever DISABLE a control a driver explicitly declares false. (#149)
+describe("parseCapabilities", () => {
+  it("parses a well-formed reduced capability set verbatim", () => {
+    expect(
+      parseCapabilities({
+        structuredPermissions: false,
+        status: true,
+        controls: { interrupt: true, setModel: false, setMode: false, end: false },
+        attachments: true,
+      }),
+    ).toEqual({
+      structuredPermissions: false,
+      status: true,
+      controls: { interrupt: true, setModel: false, setMode: false, end: false },
+      attachments: true,
+    });
+  });
+
+  it("returns undefined for null / non-object (a legacy host → full capability assumed)", () => {
+    expect(parseCapabilities(null)).toBeUndefined();
+    expect(parseCapabilities(undefined)).toBeUndefined();
+    expect(parseCapabilities("nope")).toBeUndefined();
+  });
+
+  it("defaults every absent/ill-typed flag to enabled (never over-gates a present body)", () => {
+    expect(parseCapabilities({})).toEqual({
+      structuredPermissions: true,
+      status: true,
+      controls: { interrupt: true, setModel: true, setMode: true, end: true },
+      attachments: true,
+    });
+    // a malformed controls object still yields all-enabled controls
+    expect(parseCapabilities({ controls: "bad", setMode: 1 })?.controls).toEqual({
+      interrupt: true,
+      setModel: true,
+      setMode: true,
+      end: true,
+    });
+  });
+
+  it("only flips the controls a driver explicitly declares false", () => {
+    const caps = parseCapabilities({ controls: { setMode: false } });
+    expect(caps?.controls).toEqual({
+      interrupt: true,
+      setModel: true,
+      setMode: false,
+      end: true,
     });
   });
 });

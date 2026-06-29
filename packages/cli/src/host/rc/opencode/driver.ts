@@ -297,8 +297,10 @@ export class OpencodeDriver implements Driver {
       structuredPermissions: this.#mirror,
       // session.status / session.idle drive a real workerStatus.
       status: true,
-      // interrupt → abort; set_model is remembered for the next prompt; end/set_mode safely no-op.
-      controlVerbs: true,
+      // interrupt → client.abort (works). set_model only accepts a "providerID/modelID" form, but the
+      // viewer's model picker sends bare aliases — so it won't take effect → setModel false (honest).
+      // set_mode/end have no opencode analogue → false (viewer disables those controls).
+      controls: { interrupt: true, setModel: false, setMode: false, end: false },
       // Attachments are relay-owned (the driver only sees the resulting downstream `user` prompt).
       attachments: true,
     };
@@ -332,6 +334,7 @@ export class OpencodeDriver implements Driver {
     const relays = new Set<Promise<void>>();
     const served = bridgeSession({
       session,
+      capabilities: this.capabilities,
       newClient: this.#ctx.newClient,
       identityId: this.#ctx.identity.identityId,
       title: this.#ctx.title,
@@ -948,7 +951,8 @@ export class OpencodeDriver implements Driver {
         return;
       }
       // set_permission_mode / end / any other verb: safe no-op (review #4 — never throw on an
-      // unsupported verb; the viewer still emits these regardless of capabilities).
+      // unsupported verb; a capability-gated viewer hides these buttons, but an older viewer or a
+      // pre-announce race can still deliver them).
       return;
     }
     if (ev.eventType === "control_response") {

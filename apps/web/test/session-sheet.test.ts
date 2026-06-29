@@ -4,11 +4,17 @@ import { describe, expect, it } from "vitest";
 import { SessionSheet } from "../app/page.js";
 
 // Session ⋯ sheet (#111): model switcher (set_model) + interrupt + copy-branch.
-const render = (branch: string | null, currentModel: string | null = null) =>
+const render = (
+  branch: string | null,
+  currentModel: string | null = null,
+  caps: { canModel?: boolean; canInterrupt?: boolean } = {},
+) =>
   renderToStaticMarkup(
     createElement(SessionSheet, {
       branch,
       currentModel,
+      canModel: caps.canModel ?? true,
+      canInterrupt: caps.canInterrupt ?? true,
       onModel: () => {},
       onInterrupt: () => {},
       onCopyBranch: () => {},
@@ -55,5 +61,23 @@ describe("SessionSheet", () => {
   it("styles Interrupt as a destructive row", () => {
     const html = render("main");
     expect(html).toContain("mode-row-danger");
+  });
+
+  // #149 capability gating: a driver that can't switch model (opencode) gets the model rows replaced by
+  // an explanatory note instead of buttons that silently no-op.
+  it("replaces the model rows with a note when the driver can't switch model", () => {
+    const html = render("main", null, { canModel: false });
+    expect(html).toContain("Change model"); // the section header stays
+    expect(html).toContain("can’t switch model");
+    expect(html).not.toContain("Opus"); // no model buttons rendered
+    expect(html).toContain("Interrupt"); // other actions remain
+  });
+
+  // #149: Interrupt is disabled when the driver can't honor it (defensive — all current drivers can).
+  it("disables Interrupt when the driver can't interrupt", () => {
+    const html = render("main", null, { canInterrupt: false });
+    expect(html).toContain("Not supported by this harness");
+    // the destructive row carries a disabled attribute
+    expect(html).toMatch(/mode-row-danger[^>]*disabled|disabled[^>]*mode-row-danger/);
   });
 });

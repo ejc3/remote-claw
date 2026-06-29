@@ -1597,9 +1597,14 @@ describe("tmuxCapabilities — mirroring flips structuredPermissions", () => {
   it("mirroring OFF → structuredPermissions false (claude auto-approves)", () => {
     expect(tmuxCapabilities(false).structuredPermissions).toBe(false);
   });
-  it("controlVerbs stays false either way (no faithful set_mode/end pane analogue)", () => {
-    expect(tmuxCapabilities(true).controlVerbs).toBe(false);
-    expect(tmuxCapabilities(false).controlVerbs).toBe(false);
+  it("controls: interrupt+setModel honored (ESC / `/model` inject); setMode+end have no pane analogue", () => {
+    for (const mirror of [true, false]) {
+      const c = tmuxCapabilities(mirror).controls;
+      expect(c.interrupt).toBe(true);
+      expect(c.setModel).toBe(true);
+      expect(c.setMode).toBe(false);
+      expect(c.end).toBe(false);
+    }
   });
 });
 

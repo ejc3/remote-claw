@@ -122,6 +122,71 @@ test("permission Allow/Deny buttons meet the 44px minimum touch target", async (
   expect(minH).toBeGreaterThanOrEqual(44);
 });
 
+// #149 capability-aware viewer: a driver declares (on session_announce) which controls it can
+// faithfully service; the viewer disables + labels the ones it can't, so a permission-mode/model "✓"
+// never lies. Drive the real spine with reduced-capability presets and assert the rendered gating.
+test.describe("capability gating (#149)", () => {
+  test.use({ viewport: { width: 1100, height: 900 }, isMobile: false, hasTouch: false });
+
+  test("an opencode-skip host shows the permissions-off badge, a disabled mode button, and no model switcher", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost({ caps: "opencode-skip" });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+
+    // structuredPermissions:false → the "permissions off" posture badge is shown in the chat header.
+    await expect(page.locator(".perms-bypassed")).toBeVisible();
+
+    // controls.setMode:false → the composer's permission-mode button is disabled (read-only display).
+    await expect(page.locator("button.mode-btn")).toBeDisabled();
+
+    // controls.setModel:false → the ⋯ sheet replaces the model rows with an explanatory note.
+    await page.locator("button.chat-menu").click();
+    const sheet = page.locator(".sheet");
+    await expect(sheet).toBeVisible();
+    await expect(sheet).toContainText("can’t switch model");
+    await expect(sheet.locator(".mode-row", { hasText: "Opus" })).toHaveCount(0);
+    // interrupt:true → Interrupt is still actionable (not disabled).
+    await expect(sheet.locator(".mode-row-danger")).toBeEnabled();
+  });
+
+  test("a tmux host disables set_mode but keeps the model switcher and shows no permissions-off badge", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost({ caps: "tmux" });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+
+    // structuredPermissions:true → no bypassed badge (tmux mirrors permission gates).
+    await expect(page.locator(".perms-bypassed")).toHaveCount(0);
+    // controls.setMode:false → mode button disabled …
+    await expect(page.locator("button.mode-btn")).toBeDisabled();
+    // … but controls.setModel:true → the model switcher rows are present.
+    await page.locator("button.chat-menu").click();
+    await expect(page.locator(".sheet .mode-row", { hasText: "Opus" })).toBeVisible();
+  });
+
+  test("a default (MITM) host enables every control — mode button active, full model switcher, no badge", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost(); // no caps preset → full MITM capabilities
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+
+    await expect(page.locator(".perms-bypassed")).toHaveCount(0);
+    await expect(page.locator("button.mode-btn")).toBeEnabled();
+    await page.locator("button.chat-menu").click();
+    await expect(page.locator(".sheet .mode-row", { hasText: "Opus" })).toBeVisible();
+  });
+});
+
 // #design-pass (functional-1): the session ⋯ actions (model switcher / interrupt / copy-branch) were
 // only reachable from the MOBILE header — on desktop the chat header was hidden, so they were
 // completely unreachable. The fix shows the chat header on every viewport (carrying ⋯) and hides only
