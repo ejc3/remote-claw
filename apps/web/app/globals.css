@@ -1019,7 +1019,9 @@ code {
 }
 .q-option-desc {
   font-size: 12px;
-  color: var(--text-faint);
+  /* --text-dim, not --text-faint: a SELECTED option's accent tint over the card's warn tint
+     (.perm:has(.perm-actions)) drops #8a8a94 to 4.2:1 — sub-AA. #9a9aa3 clears it at 5.1:1. */
+  color: var(--text-dim);
   line-height: 1.4;
 }
 /* Submit now shares a `.perm-actions` flex row with Dismiss (it grows to fill; Dismiss sizes to content).
