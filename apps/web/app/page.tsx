@@ -65,6 +65,13 @@ const COMPOSER_MAX_H = 160;
 const BUS_ERROR_THRESHOLD = 3;
 const BUS_UNREACHABLE_MSG = "Can’t reach the broker — retrying…";
 
+/** Max images staged for one send — a bound so a runaway pick can't balloon the staged array + its object
+ *  URLs. (Per-image + total BYTES are enforced separately at send time via AttachmentTooLargeError.) */
+const MAX_STAGED_IMAGES = 24;
+/** How long an unconfirmed optimistic permission-mode pick survives before reverting to the announced mode
+ *  — a fallback so a set_mode the host never confirms (or that silently failed) can't stick indefinitely. */
+const OPTIMISTIC_MODE_TTL_MS = 8000;
+
 export function shouldShowGapRecovery(gap: TranscriptGap | null, now: number): boolean {
   return gap !== null && now - gap.since >= TRANSCRIPT_GAP_STALL_MS;
 }
@@ -146,10 +153,13 @@ export function optimisticMessage(
  *  FINE pointer (desktop) and no Shift; on a coarse pointer (touch keyboard) Enter is always a newline — the
  *  Send button is the explicit send there (#151). Pure for testing. */
 export function enterShouldSend(
-  e: { key: string; shiftKey: boolean },
+  e: { key: string; shiftKey: boolean; isComposing?: boolean },
   coarsePointer: boolean,
 ): boolean {
-  return e.key === "Enter" && !e.shiftKey && !coarsePointer;
+  // `isComposing` guards an IME (Japanese/Chinese/Korean): pressing Enter to COMMIT a candidate fires a
+  // keydown with key==="Enter" + isComposing===true — that must insert/commit, never send a half-composed
+  // message. Shift+Enter is always a newline; on a touch device Enter is a newline (the button sends).
+  return e.key === "Enter" && !e.shiftKey && !e.isComposing && !coarsePointer;
 }
 
 /** Re-stage the images of a FAILED send (#150) back into the composer. The send path revokes the
@@ -161,6 +171,18 @@ export function restageImages(
   makeUrl: (file: File) => string,
 ): StagedImage[] {
   return images.map((s) => ({ id: s.id, name: s.name, file: s.file, url: makeUrl(s.file) }));
+}
+
+/** How many newly-picked images fit under the staged-count cap, and how many are dropped. A bound so a
+ *  runaway pick (hundreds of files) can't balloon the staged array + its object URLs. Pure → testable. */
+export function fitStaged(
+  currentCount: number,
+  pickedCount: number,
+  max: number,
+): { accept: number; dropped: number } {
+  const room = Math.max(0, max - currentCount);
+  const accept = Math.min(pickedCount, room);
+  return { accept, dropped: pickedCount - accept };
 }
 
 /** Reconcile an optimistic echo against the host's `accepted` ack (#113): if the real `user-<seq>` echo
@@ -809,6 +831,12 @@ function Transcript(props: {
   const [input, setInput] = useState("");
   const [staged, setStaged] = useState<StagedImage[]>([]);
   const [sending, setSending] = useState(false);
+  // Synchronous re-entry guard for send() — the `sending` STATE can't block a same-tick double-fire (a
+  // double-tap / Enter-mash before React commits setSending), so the ref is the actual gate; state drives UI.
+  const sendingRef = useRef(false);
+  // A non-error notice for the composer (e.g. the staged-image cap) — distinct from sendError, which is a
+  // send FAILURE (it renders a "Couldn't send" + Retry).
+  const [stagedNotice, setStagedNotice] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   // On a COARSE pointer (phone/tablet) the on-screen keyboard's Return should insert a NEWLINE, not send —
   // sending on Enter strands multi-line prompts and mis-fires on autocorrect. Send is the explicit button.
@@ -838,8 +866,11 @@ function Transcript(props: {
     return m;
   }, [messages]);
   // The host announces the worker's effective permission mode. A local click is only a transient
-  // optimistic override; the next mode-bearing announce wins, including when another device changed it.
+  // optimistic override; a CONFIRMING (or genuinely remote) mode-bearing announce wins (see the reconcile
+  // effect below). `modeBeforePickRef` is the announced mode at the moment of the pick — it lets the
+  // reconcile tell a stale keepalive of the pre-pick value (keep the pick) from a real remote change (yield).
   const [optimisticMode, setOptimisticMode] = useState<string | null>(null);
+  const modeBeforePickRef = useRef<string | undefined>(undefined);
   // The model is set via set_model but the worker doesn't self-report it, so we track the last choice
   // ourselves to tick the active row in the sheet (#design-pass model-active-tick).
   const [optimisticModel, setOptimisticModel] = useState<string | null>(null);
@@ -867,9 +898,23 @@ function Transcript(props: {
   // run without a per-tool ask. Surface the posture so the human knows edits aren't gated.
   const permsBypassed = caps?.structuredPermissions === false;
 
+  // Reconcile a fresh announce against the optimistic pick: clear it once the announce CONFIRMS the pick or
+  // shows a genuine remote change, but KEEP it while the announce still echoes the pre-pick mode (a
+  // keepalive that predates the host applying our set_mode) — that echo is the flicker we're avoiding.
+  // (announceSentAt is in the deps so each new announce re-evaluates, even one with the same mode string.)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: announceSentAt is the per-announce re-trigger.
   useEffect(() => {
-    if (announceMode !== undefined && announceSentAt !== undefined) setOptimisticMode(null);
-  }, [announceMode, announceSentAt]);
+    if (shouldClearOptimisticMode(announceMode, optimisticMode, modeBeforePickRef.current)) {
+      setOptimisticMode(null);
+    }
+  }, [announceMode, announceSentAt, optimisticMode]);
+  // Fallback: an optimistic pick the host never confirms (silent failure / no re-announce) must not stick —
+  // revert to the announced mode after a bounded wait. Re-armed on each new pick; cleared when it resolves.
+  useEffect(() => {
+    if (optimisticMode === null) return;
+    const t = setTimeout(() => setOptimisticMode(null), OPTIMISTIC_MODE_TTL_MS);
+    return () => clearTimeout(t);
+  }, [optimisticMode]);
 
   // Detect a coarse (touch) pointer so Enter inserts a newline instead of sending (#151). Tracked live —
   // a 2-in-1 / external-keyboard switch flips the media query — so the composer adapts without a reload.
@@ -1014,19 +1059,33 @@ function Transcript(props: {
   // Attachments are STAGED, not auto-sent (#44): the paperclip queues image(s) as thumbnails; they go on
   // Submit with the composer text. Each holds a File + an object-URL preview (revoked on remove/clear/unmount).
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Mirror staged into a ref so addStaged + the send-failure recovery + the unmount cleanup read the LIVE
+  // value (their closures otherwise see only the render-time copy).
+  const stagedRef = useRef(staged);
+  stagedRef.current = staged;
   const addStaged = useCallback((files: FileList | null) => {
     if (files === null) return;
-    const items = Array.from(files)
-      .filter((f) => f.type.startsWith("image/"))
-      .map((f) => ({
-        id: crypto.randomUUID(),
-        name: f.name,
-        file: f,
-        url: URL.createObjectURL(f),
-      }));
+    const picked = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    // Bound the staged count (each image holds a File + an object URL); drop the overflow with a notice
+    // rather than silently, and don't mint URLs for files we won't keep.
+    const { accept, dropped } = fitStaged(
+      stagedRef.current.length,
+      picked.length,
+      MAX_STAGED_IMAGES,
+    );
+    const items = picked.slice(0, accept).map((f) => ({
+      id: crypto.randomUUID(),
+      name: f.name,
+      file: f,
+      url: URL.createObjectURL(f),
+    }));
+    setStagedNotice(
+      dropped > 0 ? `You can attach up to ${MAX_STAGED_IMAGES} images per message.` : null,
+    );
     if (items.length > 0) setStaged((prev) => [...prev, ...items]);
   }, []);
   const removeStaged = useCallback((id: string) => {
+    setStagedNotice(null); // back under the cap → drop any "max images" notice
     setStaged((prev) => {
       const hit = prev.find((s) => s.id === id);
       if (hit) URL.revokeObjectURL(hit.url);
@@ -1034,16 +1093,14 @@ function Transcript(props: {
     });
   }, []);
   const clearStaged = useCallback(() => {
+    setStagedNotice(null);
     setStaged((prev) => {
       for (const s of prev) URL.revokeObjectURL(s.url);
       return [];
     });
   }, []);
-  // Revoke any still-staged object URLs if the transcript unmounts (session switch / back) with a draft.
-  const stagedRef = useRef(staged);
-  stagedRef.current = staged;
-  // Mirror the live input/staged so the send-failure recovery (#150) can tell whether the user has begun
-  // a NEW draft during the in-flight send (don't clobber it) — the send closure only sees the pre-send values.
+  // Mirror the live input so the send-failure recovery (#150) can tell whether the user has begun a NEW
+  // draft during the in-flight send (don't clobber it) — the send closure only sees the pre-send values.
   const inputRef = useRef(input);
   inputRef.current = input;
   // The clientMsgId of a send we restored as FAILED. A `fetch` rejection can be a FALSE failure — the POST
@@ -1051,6 +1108,7 @@ function Transcript(props: {
   // `accepted` ack. If that ack arrives for a "failed" send, the send actually landed: clear the error
   // banner so the user isn't tempted to one-tap Retry into a duplicate (#150 review).
   const failedSendRef = useRef<string | null>(null);
+  // Revoke any still-staged object URLs if the transcript unmounts (session switch / back) with a draft.
   useEffect(
     () => () => {
       for (const s of stagedRef.current) URL.revokeObjectURL(s.url);
@@ -1061,6 +1119,11 @@ function Transcript(props: {
   const send = useCallback(async () => {
     const text = input.trim();
     if (text === "" && staged.length === 0) return;
+    // Synchronous re-entry guard (#H): a double-tap Send / Enter-mash fires send() twice in the same tick,
+    // before React commits setSending — so the async `sending` state can't block the second call, but this
+    // ref can. Released in `finally`. Without it, both calls mint different clientMsgIds → two messages sent.
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     const clientMsgId = `cm-${crypto.randomUUID()}`;
     const toSend = staged; // capture before clearStaged resets it (downscale reads item.file, not the URL)
     const original = input; // restore the EXACT draft (untrimmed) on failure, not the trimmed send text
@@ -1105,6 +1168,7 @@ function Transcript(props: {
       }
     } finally {
       setSending(false);
+      sendingRef.current = false;
     }
   }, [input, staged, sessionId, viewer, clearStaged]);
 
@@ -1126,6 +1190,8 @@ function Transcript(props: {
       if (!canSetMode) return;
       setSendError(null);
       const prev = optimisticMode;
+      modeBeforePickRef.current = announceMode; // the confirmed mode at pick time — lets the reconcile keep
+      // the pick through a stale keepalive of THIS value, yet yield to a genuine remote change to another.
       setOptimisticMode(id); // optimistic — revert if the control frame can't be sent
       try {
         await viewer.setMode(sessionId, id);
@@ -1135,7 +1201,7 @@ function Transcript(props: {
         setSendError(friendlySendError(e));
       }
     },
-    [optimisticMode, sessionId, viewer, canSetMode],
+    [optimisticMode, announceMode, sessionId, viewer, canSetMode],
   );
 
   // Session ⋯ actions. set_model (the model switcher) sends Claude Code's documented `/model` alias to
@@ -1298,6 +1364,11 @@ function Transcript(props: {
             ))}
           </div>
         )}
+        {stagedNotice !== null && (
+          <p className="staged-notice" role="status">
+            {stagedNotice}
+          </p>
+        )}
         {/* Prompt field on top, controls below (mirrors the native app composer). */}
         <textarea
           ref={taRef}
@@ -1308,7 +1379,14 @@ function Transcript(props: {
           onKeyDown={(e) => {
             // Desktop: Enter sends, Shift+Enter is a line break. Touch: Enter is always a line break (the
             // Send button sends) so a soft-keyboard Return doesn't strand a multi-line prompt (#151).
-            if (enterShouldSend(e, coarsePointer)) {
+            // `nativeEvent.isComposing` is the reliable IME-composition signal (React's synthetic event
+            // doesn't surface it as a typed field).
+            if (
+              enterShouldSend(
+                { key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing },
+                coarsePointer,
+              )
+            ) {
               e.preventDefault();
               void send();
             }
@@ -1493,6 +1571,24 @@ export function displayedPermissionMode(
   optimisticMode: string | null,
 ): string | null {
   return optimisticMode ?? announcedMode ?? null;
+}
+
+/** Whether a fresh mode-bearing announce should CLEAR the local optimistic pick. The flicker we prevent:
+ *  a ~20s keepalive announce that still carries the PRE-PICK mode (the host hasn't applied our set_mode
+ *  yet) would otherwise flash the old mode back. So keep the pick while the announce is still echoing the
+ *  pre-pick value; clear it when the announce CONFIRMS our pick (mode === optimistic) or shows a genuine
+ *  remote change (a value that's neither our pick nor the pre-pick mode — e.g. another device). A timeout
+ *  fallback (in the component) clears an unconfirmed pick so it can't stick forever. Pure → testable. */
+export function shouldClearOptimisticMode(
+  announceMode: string | undefined,
+  optimisticMode: string | null,
+  modeBeforePick: string | undefined,
+): boolean {
+  if (optimisticMode === null) return false; // nothing optimistic to reconcile
+  if (announceMode === undefined) return false; // this announce carries no mode → can't confirm/deny
+  if (announceMode === optimisticMode) return true; // host applied our pick → announce now drives it
+  if (announceMode === modeBeforePick) return false; // still the pre-pick value → stale echo, keep the pick
+  return true; // a third value from elsewhere → genuine remote change, let it win
 }
 
 /** Bottom sheet to pick the session's permission mode — mirrors Claude Code's "Select mode" sheet. */

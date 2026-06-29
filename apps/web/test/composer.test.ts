@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Viewer } from "../app/lib/viewer.js";
-import { enterShouldSend, restageImages, sendComposer } from "../app/page.js";
+import {
+  enterShouldSend,
+  fitStaged,
+  restageImages,
+  sendComposer,
+  shouldClearOptimisticMode,
+} from "../app/page.js";
 
 // Composer send-on-submit (#108/#112): attachments are STAGED then sent together with the text on submit
 // (no auto-send on file pick). sendComposer is the extracted, DOM-free core.
@@ -96,5 +102,52 @@ describe("enterShouldSend", () => {
   });
   it("a non-Enter key never sends", () => {
     expect(enterShouldSend({ key: "a", shiftKey: false }, false)).toBe(false);
+  });
+  // #H IME guard: Enter during composition COMMITS a candidate (isComposing===true) — it must not send a
+  // half-composed message. Without the guard a Japanese/Chinese/Korean user couldn't type at all.
+  it("Enter while an IME is composing never sends (even on desktop)", () => {
+    expect(enterShouldSend({ key: "Enter", shiftKey: false, isComposing: true }, false)).toBe(
+      false,
+    );
+    expect(enterShouldSend({ key: "Enter", shiftKey: false, isComposing: false }, false)).toBe(
+      true,
+    );
+  });
+});
+
+// #H staged-image cap: bound the number of staged images so a runaway pick can't balloon the array + its
+// object URLs. fitStaged is the pure decision (accept how many, drop how many) used by addStaged.
+describe("fitStaged", () => {
+  it("accepts all when there's room", () => {
+    expect(fitStaged(0, 3, 24)).toEqual({ accept: 3, dropped: 0 });
+    expect(fitStaged(20, 4, 24)).toEqual({ accept: 4, dropped: 0 });
+  });
+  it("drops the overflow past the cap", () => {
+    expect(fitStaged(22, 5, 24)).toEqual({ accept: 2, dropped: 3 });
+    expect(fitStaged(0, 30, 24)).toEqual({ accept: 24, dropped: 6 });
+  });
+  it("accepts nothing when already at/over the cap", () => {
+    expect(fitStaged(24, 3, 24)).toEqual({ accept: 0, dropped: 3 });
+    expect(fitStaged(25, 1, 24)).toEqual({ accept: 0, dropped: 1 });
+  });
+});
+
+// #H optimistic permission-mode reconcile: avoid the flicker where a keepalive announce still carrying the
+// PRE-PICK mode would flash the old mode back before the host applies our set_mode.
+describe("shouldClearOptimisticMode", () => {
+  it("keeps the pick while the announce still echoes the pre-pick mode (the flicker we prevent)", () => {
+    // picked "plan", was "default"; a keepalive still says "default" → keep "plan"
+    expect(shouldClearOptimisticMode("default", "plan", "default")).toBe(false);
+  });
+  it("clears once the announce CONFIRMS the pick", () => {
+    expect(shouldClearOptimisticMode("plan", "plan", "default")).toBe(true);
+  });
+  it("clears on a genuine remote change to a third value", () => {
+    // someone else set "auto" — neither our pick ("plan") nor the pre-pick value ("default") → yield
+    expect(shouldClearOptimisticMode("auto", "plan", "default")).toBe(true);
+  });
+  it("no-ops when there's no optimistic pick, or the announce carries no mode", () => {
+    expect(shouldClearOptimisticMode("default", null, "default")).toBe(false);
+    expect(shouldClearOptimisticMode(undefined, "plan", "default")).toBe(false);
   });
 });
