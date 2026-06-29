@@ -1167,6 +1167,16 @@ code {
   max-width: 820px;
   margin-inline: auto;
 }
+/* A benign composer notice (e.g. the staged-image cap) — muted, not the red send-error. */
+.staged-notice {
+  width: 100%;
+  max-width: 820px;
+  margin: 2px auto 0;
+  padding: 0 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .staged-item {
   position: relative;
   width: 56px;
