@@ -1,7 +1,7 @@
 // A typed, dependency-free wrapper over the OpenCode HTTP+SSE server (`opencode serve`, an Effect
 // HttpApi). It uses the global `fetch` (Node 22) — no `@opencode-ai/sdk` dep, since the surface we need
 // is small and the SDK isn't installed. Shapes verified against the live server's GET /doc (OpenAPI) and
-// by curling `opencode serve` on 127.0.0.1:4096 (model ollama/qwen2.5:0.5b):
+// by curling `opencode serve` on 127.0.0.1:4096:
 //   POST /session                                  → { id: "ses_…", … }
 //   POST /session/{id}/prompt_async {parts, model} → HTTP 204 (EMPTY body — never JSON-parse it)
 //   POST /session/{id}/abort                       → 200 (boolean)
@@ -35,7 +35,8 @@ export interface OpencodeEvent {
   };
 }
 
-/** The OpenCode model selector for prompt_async (providerID + modelID, e.g. ollama / qwen2.5:0.5b). */
+/** The OpenCode model selector for prompt_async (providerID + modelID, e.g.
+ *  amazon-bedrock / global.anthropic.claude-sonnet-4-6). */
 export interface OpencodeModel {
   providerID: string;
   modelID: string;

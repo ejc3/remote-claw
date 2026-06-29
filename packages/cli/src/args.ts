@@ -42,8 +42,9 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // `opencode serve`). Same broker/client/viewer for all (§ pluggable-harness).
   "rc-driver": "value",
   // OpenCode driver knobs (only meaningful with --rc-driver=opencode). The server origin
-  // (default 127.0.0.1:4096, env OPENCODE_URL) and the model as "providerID/modelID"
-  // (default ollama/qwen2.5:0.5b, env RC_OC_MODEL). Bedrock is the documented prod model path.
+  // (default 127.0.0.1:4096, env OPENCODE_URL) and the model as "providerID/modelID" (default
+  // amazon-bedrock/global.anthropic.claude-sonnet-4-6, env RC_OC_MODEL — a reliable tool-caller; the
+  // opencode server supplies AWS creds, and the `global.` profile needs no region).
   "rc-oc-url": "value",
   "rc-oc-model": "value",
   // Which OpenCode session to ATTACH to. Omitted ⇒ the driver bridges the server's MOST-RECENT

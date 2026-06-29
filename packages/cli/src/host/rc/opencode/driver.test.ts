@@ -10,13 +10,13 @@ import {
   type PermissionRule,
   parseSseFrame,
 } from "./client.js";
-import { errText, mergeAskRules, OpencodeDriver } from "./driver.js";
+import { DEFAULT_OPENCODE_MODEL, errText, mergeAskRules, OpencodeDriver } from "./driver.js";
 
 // Driver-level CAPTURE test. We drive the REAL OpencodeDriver + a REAL HostRcRelay (via bridgeSession),
 // replacing only the two transports with controllable fakes:
 //   • a FakeOpencodeClient (extends OpencodeClient so the driver's `instanceof` guard accepts it) that
-//     yields a CANNED SSE sequence — the exact shapes captured from the live `opencode serve` on
-//     ollama/qwen2.5:0.5b (a user-prompt text part, an empty-then-"OK" assistant text part re-sent on
+//     yields a CANNED SSE sequence — the exact (model-agnostic) shapes captured from the live
+//     `opencode serve` (a user-prompt text part, an empty-then-"OK" assistant text part re-sent on
 //     each message.part.updated, an assistant message.updated with time.completed, then session.idle).
 //   • a FakeBroker (records posts; streams nothing) so the relay's announce/serve run end-to-end.
 // The load-bearing assertion: ONE coalesced assistant upstream payload reaches the Session (NOT one per
@@ -426,10 +426,10 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     ac.abort();
     await run;
 
-    // A prompt was injected with the default ollama model.
+    // A prompt was injected with the default model (bedrock sonnet — no explicit model in extra).
     expect(client.prompts).toHaveLength(1);
     expect(client.prompts[0]?.text).toBe("hello opencode");
-    expect(client.prompts[0]?.model).toEqual({ providerID: "ollama", modelID: "qwen2.5:0.5b" });
+    expect(client.prompts[0]?.model).toEqual(DEFAULT_OPENCODE_MODEL);
     // The permission gate was surfaced upstream as a can_use_tool control_request…
     const session = captured as unknown as Session;
     const gates = session.snapshotUpstream().filter((e) => e.eventType === "control_request");
@@ -438,8 +438,9 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     expect(client.replies).toEqual([{ permissionId: "per_1", response: "once" }]);
   });
 
-  // Scenario (g): the cheap model (qwen2.5:0.5b) does not reliably surface a permission gate live, so the
-  // permission ROUND-TRIP is proven deterministically here against the driver's own translation:
+  // Scenario (g): the live e2e drives the permission round-trip against a real model (driver.e2e.test.ts
+  // (k)); this is the DETERMINISTIC twin — proving the gate path against the driver's own translation with
+  // no model in the loop, so it runs in CI without a server:
   //   • permission.asked → the EXACT can_use_tool control_request shape mapUpstreamItems renders, and
   //   • a viewer DENY → POST .../permissions/{id} { response: "reject" } (allow → "once" is proven above).
   it("(g) surfaces a permission gate as can_use_tool and maps deny → reject", async () => {

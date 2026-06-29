@@ -360,8 +360,8 @@ async function runOpencodeDriverPath(
     (process.env.RC_BACKEND ?? "").trim() ||
     undefined;
   // OpenCode server origin (--rc-oc-url, else OPENCODE_URL, else the default loopback). The model is
-  // "providerID/modelID" (--rc-oc-model, else RC_OC_MODEL, else ollama/qwen2.5:0.5b for the dev loop;
-  // Bedrock is the documented prod path).
+  // "providerID/modelID" (--rc-oc-model, else RC_OC_MODEL, else the bedrock-sonnet default — a reliable
+  // tool-caller via the region-agnostic `global.` profile; the opencode server supplies AWS creds).
   const baseUrl =
     (typeof rc["rc-oc-url"] === "string" ? rc["rc-oc-url"] : "").trim() ||
     (process.env.OPENCODE_URL ?? "").trim() ||

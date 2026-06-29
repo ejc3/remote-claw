@@ -1,5 +1,5 @@
 // Standalone HUMAN-STYLE verification of the OpenCode wrapper against a LIVE `opencode serve` (:4096)
-// + ollama/qwen2.5:0.5b. Proves the WRAPPED view == the NATIVE view (fidelity) and exercises
+// + Bedrock Claude Sonnet. Proves the WRAPPED view == the NATIVE view (fidelity) and exercises
 // human-like edge cases. NOT part of the unit suite. Run: pnpm exec tsx oc-verify.ts
 //
 // For each scenario we drive opencode through the REAL OpencodeDriver + REAL HostRcRelay (via the real
@@ -15,7 +15,7 @@ import { OpencodeDriver, type OpencodeExtra } from "./src/host/rc/opencode/drive
 import type { Session } from "./src/host/rc/session.js";
 
 const BASE = process.env.OPENCODE_URL ?? "http://127.0.0.1:4096";
-const MODEL = { providerID: "ollama", modelID: "qwen2.5:0.5b" };
+const MODEL = { providerID: "amazon-bedrock", modelID: "global.anthropic.claude-sonnet-4-6" };
 const client = new OpencodeClient({ baseUrl: BASE });
 
 class FakeBroker {
