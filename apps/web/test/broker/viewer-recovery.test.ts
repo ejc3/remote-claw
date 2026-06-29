@@ -264,6 +264,47 @@ describe("Viewer transcript restart and gap recovery", () => {
     }
   });
 
+  it("reports a persistent bus outage via announces(onError), then clears when the transport recovers", async () => {
+    const id = await uniqueIdentity();
+    // The bus stream is unreachable (network throw) until we flip `reachable` — modelling a broker outage
+    // or a wrong/stale pass that can't reach the bus. Everything else delegates to the in-memory broker.
+    let reachable = false;
+    const fetchFn = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (!reachable && url.pathname === "/api/stream") throw new TypeError("Failed to fetch");
+      return brokerFetch(input, init);
+    }) as typeof fetch;
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", fetchFn);
+    const sid = "bus-outage-recover";
+    const ac = new AbortController();
+    const events: unknown[] = []; // each onError arg in order: Error on a failed round, null on recovery
+
+    try {
+      void (async () => {
+        for await (const _a of viewer.announces(ac.signal, (err) => events.push(err))) {
+          // discovery output isn't what we're asserting — only the transport-health callbacks
+        }
+      })().catch(() => {});
+
+      // The generator reports the outage on EVERY failed retry; wait past the page's banner threshold (3).
+      await waitFor(() => events.filter((e) => e !== null).length >= 3);
+      expect(events.slice(0, 3).every((e) => e instanceof Error)).toBe(true);
+      expect(events.includes(null)).toBe(false); // no false "recovered" while still down
+
+      // Recover the transport and post an announce — the next subscribe streams it → onError(null) clears.
+      reachable = true;
+      const host = fakeHost(id);
+      await postAnnounce(host, id, sid, "inc-1");
+      await waitFor(() => events.includes(null));
+      expect(events.includes(null)).toBe(true);
+    } finally {
+      ac.abort();
+    }
+  });
+
   it("delivers seq-null permission_resolved while a content gap is open", async () => {
     const id = await uniqueIdentity();
     const host = fakeHost(id);

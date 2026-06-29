@@ -416,6 +416,18 @@ code {
   font-size: 13px;
   line-height: 1.55;
 }
+/* Bus-transport outage banner (broker unreachable / wrong-or-stale pass) — warn, not danger: discovery
+   is still retrying, so it reads as "working on it", not a hard failure. */
+.bus-error {
+  margin: 10px 12px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  color: var(--warn);
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
 
 /* chat header (mobile back button lives here) */
 .chat-head {

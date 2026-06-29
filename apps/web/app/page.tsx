@@ -59,6 +59,12 @@ export interface TranscriptGap {
  *  globals.css — the JS auto-grow clamp and the CSS cap must agree or the field stops short of the cap. */
 const COMPOSER_MAX_H = 160;
 
+/** Consecutive bus-subscribe failures before the "can't reach the broker" banner shows. >1 so a single
+ *  transient SSE blip (which Viewer.announces retries through silently) never flashes the banner; small
+ *  enough that a real outage / wrong pass surfaces within a second or two of retries. */
+const BUS_ERROR_THRESHOLD = 3;
+const BUS_UNREACHABLE_MSG = "Can’t reach the broker — retrying…";
+
 export function shouldShowGapRecovery(gap: TranscriptGap | null, now: number): boolean {
   return gap !== null && now - gap.since >= TRANSCRIPT_GAP_STALL_MS;
 }
@@ -613,24 +619,37 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   // this the announce stream stays dead on return and the session would read as disconnected forever.
   const [announceRevive, setAnnounceRevive] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
-  const [streamError, setStreamError] = useState<string | null>(null);
+  // The bus-transport banner: shown only when reaching the broker FAILS persistently (a wrong/stale pass
+  // or a broker outage), so the user isn't left staring at an empty session list with no idea why. null =
+  // healthy. Discovery itself never stops retrying (see Viewer.announces) — this is purely the signal.
+  const [busError, setBusError] = useState<string | null>(null);
+  const busFailures = useRef(0);
 
-  // Tail the bus → live session list (keep the freshest sent_at per session: replay-safe presence).
+  // Tail the bus → live session list (keep the freshest sent_at per session: replay-safe presence). The
+  // generator owns its own retry and never throws; it reports transport health via the callback. We count
+  // CONSECUTIVE failures and only raise the banner past a threshold, so a single SSE blip doesn't flash it,
+  // while a sustained outage becomes visible. Any success (a frame, or a clean drain) clears it at once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: announceRevive is a re-subscribe TRIGGER.
   useEffect(() => {
     const ac = new AbortController();
-    (async () => {
-      try {
-        for await (const a of viewer.announces(ac.signal)) {
-          setSessions((prev) => {
-            const next = new Map(prev);
-            const existing = next.get(a.sessionId);
-            if (shouldAcceptAnnounce(existing, a)) next.set(a.sessionId, a);
-            return next;
-          });
+    busFailures.current = 0;
+    void (async () => {
+      for await (const a of viewer.announces(ac.signal, (err) => {
+        if (ac.signal.aborted) return;
+        if (err === null) {
+          busFailures.current = 0;
+          setBusError(null);
+          return;
         }
-      } catch (e) {
-        if (!ac.signal.aborted) setStreamError(e instanceof Error ? e.message : String(e));
+        busFailures.current += 1;
+        if (busFailures.current >= BUS_ERROR_THRESHOLD) setBusError(BUS_UNREACHABLE_MSG);
+      })) {
+        setSessions((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(a.sessionId);
+          if (shouldAcceptAnnounce(existing, a)) next.set(a.sessionId, a);
+          return next;
+        });
       }
     })();
     return () => ac.abort();
@@ -699,7 +718,16 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
 
       <div className="panes" data-view={selected === null ? "list" : "chat"}>
         <nav className="sessions">
-          {list.length === 0 && (
+          {/* A persistent bus-transport failure (broker outage / wrong-or-stale pass). role=alert so AT
+              announces it; shown ABOVE the list since an outage usually leaves the list empty. */}
+          {busError !== null && (
+            <p className="bus-error" role="alert">
+              {busError}
+            </p>
+          )}
+          {/* Only claim "no sessions" when the bus is actually reachable — otherwise the real reason is the
+              outage above, and "no live sessions yet" would mislead (it reads as "all good, just waiting"). */}
+          {list.length === 0 && busError === null && (
             <p className="empty-pad">
               No live sessions yet. On a machine, run <code>claude --remote-control</code> through{" "}
               <code>remote-claw</code>.
@@ -744,7 +772,6 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
               </button>
             );
           })}
-          {streamError !== null && <p className="send-err">{streamError}</p>}
         </nav>
 
         {selected === null ? (

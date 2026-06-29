@@ -5,10 +5,11 @@ import { defineConfig, devices } from "@playwright/test";
 // seedHost fixture (app-e2e/fixtures.ts) spawns host-runner.ts (a real HostRcRelay + serve() + a scripted
 // RC turn) per test. Separate from playwright.config.ts (the docs site) — run with `pnpm test:app`.
 //
-// Four specs run against this one local server: transcript.spec.ts (the RC turn / live round-trips),
+// Five specs run against this one local server: transcript.spec.ts (the RC turn / live round-trips),
 // handoff.spec.ts (the ephemeral one-time-handoff PAIRING flow against the real /api/handoff route +
-// store), viewer-ux.spec.ts (the design-pass UX regression guards), and revive.spec.ts (the iOS-Safari
-// background→foreground stream re-subscribe). The sqlite variant (app-e2e.sqlite.config.ts) only re-runs
+// store), viewer-ux.spec.ts (the design-pass UX regression guards), revive.spec.ts (the iOS-Safari
+// background→foreground stream re-subscribe), and liveness.spec.ts (the bus-unreachable banner +
+// auto-recovery). The sqlite variant (app-e2e.sqlite.config.ts) only re-runs
 // transcript.spec.ts — the handoff store is backend-independent (it always uses its own locator) and the
 // UX/revive guards are layout/transport, both backend-agnostic, so there's nothing to re-prove there.
 //
@@ -21,7 +22,13 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./app-e2e",
-  testMatch: ["transcript.spec.ts", "handoff.spec.ts", "viewer-ux.spec.ts", "revive.spec.ts"],
+  testMatch: [
+    "transcript.spec.ts",
+    "handoff.spec.ts",
+    "viewer-ux.spec.ts",
+    "revive.spec.ts",
+    "liveness.spec.ts",
+  ],
   timeout: 90_000,
   expect: { timeout: 20_000 }, // absorb cold-start latency of a freshly-built prod server
   outputDir: "./test-results",
