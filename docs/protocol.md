@@ -308,26 +308,28 @@ the file natively, so no unverified write is needed. The full round trip (`viewe
    published **before** the inject (and a failed echo is **fatal** → teardown) so a torn-down relay can
    never have driven claude to read an image that reached no transcript.
 
-**There is NO optimistic local echo.** The viewer renders only `dir:"out"` frames (`viewer.ts`:
-`if (frame.dir !== "out") continue`), so the sent image/text bubble materialises **only** when the host's
-echo round-trips back over the broker — there is a window (from when the composer clears the staged
-thumbnail until the echo arrives) where the image is in neither the composer nor the transcript. On a
-healthy stream that is ~tens of ms; on a **suspended iOS stream** it lasts until a revive (§9 /
-`reviveKey`), which is the "my image vanished then came back" report. (#113 will add an optimistic pending
-bubble, reconciled with the echo.)
+**Optimistic local echo (#113, shipped).** A send renders an **instant pending bubble**
+(`optimisticMessage`, `msgId: pending-<clientMsgId>`) and clears the composer, so the image/text is never
+in *neither* place during the round-trip (the old gap — visible on a **suspended iOS stream** as "my image
+vanished then came back" — is closed). The send threads a `clientMsgId` end-to-end; the host's `accepted`
+ack `{client_msg_id, seq}` reconciles the pending bubble (`reconcileAccepted`): re-key `pending-<id>` →
+`user-<seq>` so the real `dir:"out"` echo dedups by `msgId` (`appendUniqueMessage`) — exactly one bubble,
+either arrival order, idempotent against a re-delivered ack (#127).
 
-**Echo identity / why reconciliation isn't possible yet.** The host echo's `msgId` is `${kind}-${seq}` =
-`user-${seq}` for **both** prompts and attachments. The viewer's own send ids are `c-${id}`
-(`sendPrompt`) / `att-${id}` (`sendAttachment`), and `appendUniqueMessage` dedups by `msgId` alone — so no
-optimistic pill can match the echo today. The partial hook that *does* exist: the `user` text frame
-carries a `clientMsgId` in its header and the host's `accepted` ack echoes it back, but the **attachment**
-frame carries none and the rendered `dir:"out"` echo carries none (only the un-rendered meta ack does).
-Threading `clientMsgId` end-to-end (or reconciling on the `accepted` ack) is the prerequisite for #113.
+**Send failure restores the draft (#150).** If the publish POST rejects (usually: it never landed), rather
+than strand the content in a dead "failed to send" bubble (which also lost the staged images, their
+previews already revoked), the viewer **drops the optimistic bubble and restores the draft to the
+composer** (text + re-staged images with fresh object URLs, `restageImages`) and shows a "Couldn't send …"
+banner with **Retry**. The restore is skipped only if a *new* draft was typed during the in-flight send
+(don't clobber it) — in that rare case the failed bubble is kept so the text isn't lost. A `fetch`
+rejection can also be a **false failure** (the POST published but the response was lost); the host then
+still emits the `accepted` ack, so the accepted-handler clears the banner for that `clientMsgId`
+(`failedSendRef`) — closing the window where a one-tap Retry would duplicate an already-accepted send.
 
-**Known wart.** After an image send the viewer bumps a transcript `reviveKey` (#121) to recover an
-iOS-suspended stream, which aborts and re-subscribes the live generator just as the echo is arriving —
-adding latency on the common (non-suspended) path. It overlaps the `visibilitychange` revive and is a
-candidate for removal once a transport-level stall-watchdog (one auto-reattach for *all* streams) lands.
+**Stream recovery.** The viewer no longer bumps `reviveKey` after a send (the old #121 post-send bump,
+which added latency on the common non-suspended path, was removed): the transport stall-watchdog (#125)
+auto-reattaches a stalled stream for *all* streams, and `reviveKey` is now bumped only on
+`visibilitychange` (a backgrounded tab returning) — the iOS-suspension recovery without the per-send cost.
 
 ---
 

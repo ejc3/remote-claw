@@ -122,6 +122,43 @@ test("permission Allow/Deny buttons meet the 44px minimum touch target", async (
   expect(minH).toBeGreaterThanOrEqual(44);
 });
 
+// #150 send-failure resilience: when the publish POST fails, the draft must NOT be lost. The previous
+// behavior cleared the composer optimistically and left only a dead "failed to send" bubble (and the
+// staged images' previews were revoked → unrecoverable). Now the draft is restored to the composer and a
+// Retry is offered. We force the failure by aborting the browser's `/api/relay` POST (the publish leg).
+test("a failed send restores the draft to the composer and offers Retry, then Retry succeeds", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost();
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  // Wait for the seeded turn to render first, so the subscribe + catch_up publish have already completed
+  // (catch_up also rides /api/relay — we only want to fail the SEND, not the history request).
+  await expect(page.locator(".prose.assistant").first()).toBeVisible();
+
+  // Abort the publish POST so the send rejects. (All broker traffic rides /api/relay, but the abort-window
+  // assertions below don't depend on the live stream — they're about the composer + banner.)
+  await page.route("**/api/relay**", (route) => route.abort());
+
+  await page.getByPlaceholder(/Send a prompt/).fill("don't lose me");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  // The error banner appears with a Retry, and the draft is BACK in the composer (not stranded/lost).
+  await expect(page.locator(".send-err")).toContainText("Couldn’t send");
+  await expect(page.locator(".send-err-retry")).toBeVisible();
+  await expect(page.locator("textarea.composer-input")).toHaveValue("don't lose me");
+  // No dead "failed to send" bubble was left behind (the draft moved back to the composer instead).
+  await expect(page.locator(".row-user .pill", { hasText: "failed to send" })).toHaveCount(0);
+
+  // Let the publish succeed, then Retry — the message goes through and echoes back as a user pill.
+  await page.unroute("**/api/relay**");
+  await page.locator(".send-err-retry").click();
+  await expect(page.locator(".row-user .pill", { hasText: "don't lose me" })).toBeVisible();
+  await expect(page.locator(".send-err")).toHaveCount(0); // banner cleared on the successful send
+});
+
 // #149 capability-aware viewer: a driver declares (on session_announce) which controls it can
 // faithfully service; the viewer disables + labels the ones it can't, so a permission-mode/model "✓"
 // never lies. Drive the real spine with reduced-capability presets and assert the rendered gating.

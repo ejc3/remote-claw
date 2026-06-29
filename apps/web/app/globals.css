@@ -1144,6 +1144,46 @@ code {
   font-size: 12px;
   margin: 0;
   padding: 6px 14px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.send-err-msg {
+  flex: 1;
+  min-width: 0;
+}
+/* #150: the failed send is RESTORED to the composer; Retry re-sends it (a one-tap shortcut for Send). */
+.send-err-retry {
+  flex: none;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 28px;
+  transition: background 0.12s;
+}
+.send-err-retry:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.send-err-retry:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.send-err-dismiss {
+  flex: none;
+  background: transparent;
+  border: none;
+  color: var(--danger);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  opacity: 0.7;
+}
+.send-err-dismiss:hover {
+  opacity: 1;
 }
 
 /* composer mode button (the </> Code affordance) */
