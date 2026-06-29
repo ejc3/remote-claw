@@ -1,7 +1,17 @@
 "use client";
 
 import { parsePass, toHex } from "@remote-claw/clawsec";
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { clearCredential, loadCredential, saveCredential } from "./lib/credential-store";
@@ -1439,6 +1449,33 @@ function Sheet({
   // runs exactly once (on open) without re-stealing focus or re-saving the trigger.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // Desktop (≥761px): render as a dropdown ANCHORED to the trigger instead of a phone-style bottom sheet
+  // (#desktop-layout). Computed in useLayoutEffect (before paint, so no bottom→anchored flicker) from the
+  // opener's rect — which is `document.activeElement` here, since the focus effect below hasn't moved focus
+  // into the sheet yet. Placement is automatic: drop below a top-half trigger (the header ⋯) / above a
+  // bottom-half one (the composer Mode button), aligned to whichever edge has room — so it works for both
+  // triggers regardless of the centered composer's dynamic position. null ⇒ mobile bottom-sheet.
+  const [anchorStyle, setAnchorStyle] = useState<CSSProperties | null>(null);
+  useLayoutEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    // Skip (→ keep the bottom sheet) unless we have a real, sized trigger on a desktop viewport. Guards the
+    // Safari quirk where clicking a <button> doesn't focus it, so activeElement is <body>: anchoring to the
+    // full-viewport body rect would shove the panel off-screen — a centered bottom sheet is the safe fallback.
+    if (!trigger || trigger === document.body || !window.matchMedia?.("(min-width: 761px)").matches)
+      return;
+    const t = trigger.getBoundingClientRect();
+    if (t.width === 0 && t.height === 0) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const s: CSSProperties = {};
+    if (t.top < vh / 2)
+      s.top = Math.round(t.bottom + 6); // trigger up top → drop below it
+    else s.bottom = Math.round(vh - t.top + 6); // trigger near the bottom → open upward
+    if (t.left < vw / 2)
+      s.left = Math.round(t.left); // left-side trigger → align left edges
+    else s.right = Math.round(vw - t.right); // right-side trigger → align right edges
+    setAnchorStyle(s);
+  }, []);
   useEffect(() => {
     const trigger = document.activeElement as HTMLElement | null; // the button that opened the sheet
     const focusables = () =>
@@ -1477,8 +1514,9 @@ function Sheet({
   }, []);
   // Scrim and sheet are siblings (not nested) so the sheet's own buttons aren't inside another button.
   // The scrim is mouse-only (tabIndex -1) — keyboard dismiss is Escape; role=dialog sits on the content.
+  const anchored = anchorStyle !== null;
   return (
-    <div className="sheet-layer">
+    <div className={anchored ? "sheet-layer sheet-layer--anchored" : "sheet-layer"}>
       <button
         type="button"
         className="sheet-scrim"
@@ -1486,8 +1524,15 @@ function Sheet({
         tabIndex={-1}
         onClick={onClose}
       />
-      <div className="sheet" ref={dialogRef} role="dialog" aria-modal="true" aria-label={label}>
-        <div className="sheet-handle" />
+      <div
+        className={anchored ? "sheet sheet--anchored" : "sheet"}
+        style={anchorStyle ?? undefined}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+      >
+        {!anchored && <div className="sheet-handle" />}
         {children}
       </div>
     </div>

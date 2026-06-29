@@ -1090,6 +1090,10 @@ code {
   display: flex;
   gap: 8px;
   align-items: center;
+  /* Match the input's centered measure so Send's right edge lines up with the transcript column. */
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
 }
 /* Send is pushed to the right; mode + attach stay on the left. */
 .composer-send {
@@ -1098,6 +1102,10 @@ code {
 }
 .composer-input {
   width: 100%;
+  /* Align the composer column with the centered transcript (max-width:820px) so the input/controls sit
+     UNDER the reading column on wide screens instead of running full-bleed. No-op on mobile (W < 820). */
+  max-width: 820px;
+  margin-inline: auto;
   padding: 9px 13px;
   font-family: inherit;
   /* ≥16px to suppress iOS Safari focus auto-zoom (we no longer pin maximum-scale) — see .field. */
@@ -1121,6 +1129,10 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  /* Keep the previews aligned to the same centered measure as the input/controls. */
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
 }
 .staged-item {
   position: relative;
@@ -1292,6 +1304,32 @@ code {
 @keyframes sheet-up {
   from {
     transform: translateY(12px);
+    opacity: 0;
+  }
+}
+/* Desktop dropdown variant (#desktop-layout): the sheet is anchored to its trigger (inline top/left/right
+   from the Sheet's useLayoutEffect) instead of a full-width bottom sheet. The scrim goes transparent — it's
+   a click-outside catcher, not a modal dim — and the panel becomes a compact, all-corners-rounded popover. */
+.sheet-layer--anchored .sheet-scrim {
+  background: transparent;
+  animation: none;
+}
+.sheet--anchored {
+  position: fixed;
+  width: max-content;
+  min-width: 240px;
+  max-width: 340px;
+  margin: 0;
+  max-height: min(70vh, 520px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 8px;
+  box-shadow: 0 16px 48px -16px rgba(0, 0, 0, 0.7);
+  animation: sheet-pop 0.13s ease-out;
+}
+@keyframes sheet-pop {
+  from {
+    transform: translateY(-4px);
     opacity: 0;
   }
 }
