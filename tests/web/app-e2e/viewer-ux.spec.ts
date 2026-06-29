@@ -286,7 +286,10 @@ test.describe("capability gating (#149)", () => {
 // completely unreachable. The fix shows the chat header on every viewport (carrying ⋯) and hides only
 // the now-redundant in-chat back button on desktop (the sidebar already navigates).
 test.describe("desktop layout (≥761px)", () => {
-  test.use({ viewport: { width: 1100, height: 900 }, isMobile: false, hasTouch: false });
+  // 1400px so the pane (~1120 after the sidebar) is meaningfully WIDER than the 820px reading column —
+  // making the composer cap + centering and the anchored-dropdown placement observable (at ~1100 the pane
+  // is itself ~820, so a full-bleed bug would be invisible).
+  test.use({ viewport: { width: 1400, height: 900 }, isMobile: false, hasTouch: false });
 
   test("the session ⋯ actions are reachable on desktop; the redundant back button is hidden", async ({
     page,
@@ -308,5 +311,49 @@ test.describe("desktop layout (≥761px)", () => {
     await expect(sheet).toBeVisible();
     await expect(sheet).toContainText("Change model");
     await expect(sheet).toContainText("Interrupt");
+  });
+
+  test("the composer is capped to the reading column and centered under the transcript (not full-bleed)", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+
+    const composer = page.locator(".composer-row");
+    const transcript = page.locator(".transcript");
+    const cb = await composer.boundingBox();
+    const tb = await transcript.boundingBox();
+    expect(cb).not.toBeNull();
+    expect(tb).not.toBeNull();
+    if (!cb || !tb) return;
+    // Capped to ~820 (the reading measure), NOT the full ~1120 pane — the full-bleed bug this fixes.
+    expect(cb.width).toBeLessThanOrEqual(821);
+    // Centered on the SAME column as the transcript (both margin-inline:auto at max-width 820).
+    const composerCenter = cb.x + cb.width / 2;
+    const transcriptCenter = tb.x + tb.width / 2;
+    expect(Math.abs(composerCenter - transcriptCenter)).toBeLessThan(5);
+  });
+
+  test("the ⋯ menu opens as a dropdown anchored to the trigger, not a full-width bottom sheet", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    await page.locator("button.chat-menu").click();
+
+    const sheet = page.locator(".sheet");
+    await expect(sheet).toBeVisible();
+    await expect(sheet).toHaveClass(/sheet--anchored/); // desktop dropdown, not the mobile bottom sheet
+    const sb = await sheet.boundingBox();
+    expect(sb).not.toBeNull();
+    if (!sb) return;
+    expect(sb.width).toBeLessThanOrEqual(360); // a compact popover, not full-width
+    expect(sb.y).toBeLessThan(300); // anchored below the top-right ⋯, not pinned to the bottom edge
   });
 });
