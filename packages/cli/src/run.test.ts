@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runWrapper } from "./run.js";
+import { misappliedDriverFlagWarnings, runWrapper } from "./run.js";
 
 function haveOpenssl(): boolean {
   try {
@@ -224,8 +224,9 @@ describe("runWrapper (functional)", () => {
           { spawnRcEnv: async () => 0, stderr: (l) => lines.push(l) },
         );
         expect(code).toBe(0); // the flag is a harmless no-op here — we warn, we do NOT fail
+        // The warning names ONLY the flag actually passed (precise), not the whole tmux group.
         expect(lines.join("")).toMatch(
-          /--rc-session-hook \/ --rc-no-session-hook \/ --rc-tmux-skip-permissions only apply to --rc-driver=tmux; ignored for mitm/,
+          /--rc-session-hook only applies to --rc-driver=tmux; ignored for mitm/,
         );
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -274,5 +275,75 @@ describe("runWrapper (functional)", () => {
     expect(calls).toHaveLength(0);
     expect(lines.join("")).toMatch(/unknown --rc-driver=bogus/);
     expect(lines.join("")).not.toMatch(/--rc-oc-skip-permissions only applies/); // no second message
+  });
+});
+
+describe("misappliedDriverFlagWarnings — cross-mode flag hygiene", () => {
+  it("inference flags are valid on mitm (no warning)", () => {
+    expect(
+      misappliedDriverFlagWarnings("mitm", {
+        "rc-inference": "bedrock",
+        "rc-bedrock-region": "us-east-1",
+        "rc-accountless": true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("warns that --rc-inference is a no-op for tmux (the real footgun: NOT zero-anthropic)", () => {
+    const w = misappliedDriverFlagWarnings("tmux", { "rc-inference": "bedrock" });
+    expect(w).toEqual([
+      "remote-claw: --rc-inference only applies to --rc-driver=mitm; ignored for tmux\n",
+    ]);
+  });
+
+  it("lists MULTIPLE misapplied inference flags with plural 'apply' (opencode)", () => {
+    const w = misappliedDriverFlagWarnings("opencode", {
+      "rc-bedrock-region": "us-west-2",
+      "rc-accountless": true,
+    });
+    expect(w).toEqual([
+      "remote-claw: --rc-bedrock-region / --rc-accountless only apply to --rc-driver=mitm; ignored for opencode\n",
+    ]);
+  });
+
+  it("warns that opencode value flags are a no-op for mitm", () => {
+    expect(misappliedDriverFlagWarnings("mitm", { "rc-oc-url": "http://x:4096" })).toEqual([
+      "remote-claw: --rc-oc-url only applies to --rc-driver=opencode; ignored for mitm\n",
+    ]);
+  });
+
+  it("a tmux run with BOTH opencode + inference flags warns once per group", () => {
+    const w = misappliedDriverFlagWarnings("tmux", {
+      "rc-oc-model": "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
+      "rc-inference": "bedrock",
+    });
+    expect(w).toEqual([
+      "remote-claw: --rc-oc-model only applies to --rc-driver=opencode; ignored for tmux\n",
+      "remote-claw: --rc-inference only applies to --rc-driver=mitm; ignored for tmux\n",
+    ]);
+  });
+
+  it("an EMPTY/blank value flag is treated as absent (no warning)", () => {
+    expect(misappliedDriverFlagWarnings("mitm", { "rc-oc-url": "   " })).toEqual([]);
+  });
+
+  it("correctly-applied flags never warn (opencode with oc flags; tmux with tmux flags)", () => {
+    expect(
+      misappliedDriverFlagWarnings("opencode", {
+        "rc-oc-url": "http://x",
+        "rc-oc-session": "ses_1",
+      }),
+    ).toEqual([]);
+    expect(misappliedDriverFlagWarnings("tmux", { "rc-tmux-skip-permissions": true })).toEqual([]);
+  });
+
+  it("an UNKNOWN driver gets NO misapplied-flag nag (allowlist-gated; it errors on its own)", () => {
+    expect(
+      misappliedDriverFlagWarnings("bogus", {
+        "rc-inference": "bedrock",
+        "rc-oc-url": "http://x",
+        "rc-tmux-skip-permissions": true,
+      }),
+    ).toEqual([]);
   });
 });
