@@ -68,15 +68,19 @@ the real-claude proofs are env-gated so they never gate CI but are run on demand
 **Advanced**
 
 24. Interactive multi-turn — ✅/🔬 `prove/real-session.prove.test.ts` + browser
-25. Tool-use permission grant — 🔬 real `claude` stream-json tool run, relayed *(planned: an automated relay test once the control-response path is wired into HostRelay)*
-26. Sub-agents (Task tool) — 🔬 real `claude` sub-agent run, relayed
+25. Tool-use permission grant — ✅ `e2e/rc-spine.integration.test.ts` (a worker `can_use_tool` surfaces to the viewer, which grants it back to the worker) + ✅ `tests/web/app-e2e/transcript.spec.ts` (a granted permission survives a reload; an AskUserQuestion answer submits) + 🔬 real `claude` tool run
+26. Sub-agents (Task tool) — ✅ `e2e/rc-spine.integration.test.ts` (a Task `tool_use` + sub-agent output relay through as `tool_use` + `assistant_sub` frames) + ✅ `tests/web/app-e2e/transcript.spec.ts` (sub-agent Task nesting renders in a real browser) + 🔬 real `claude` sub-agent run
 
 ## Known gaps / honest limits
-- **Scenarios 25–26** are demonstrated exploratorily; `HostRelay` currently relays content turns but
-  does not yet map a viewer `permission`/control frame back into claude's stream-json control input —
-  that bidirectional control wiring is the next build (then 25 becomes an automated test).
-- The **native `--remote-control` HTTPS MITM** (driving the interactive TUI vs a headless stream-json
-  session) is out of scope here; Phase-0-verified, optional.
+- **Scenarios 25–26** are automated end-to-end: a viewer `permission` frame maps back to the worker's
+  RC control-response (`HostRcRelay` → `session.pushControlResponse`), and a Task spawn relays its
+  sub-agent frames — both covered by `e2e/rc-spine.integration.test.ts` and rendered in a real browser by
+  `tests/web/app-e2e/transcript.spec.ts`. What stays exploratory (🔬) is a *real* logged-in `claude`
+  driving a tool/sub-agent turn through that path — gated, like the real-claude scenarios 20–21.
+- The **native `--remote-control` HTTPS MITM** path (a real `claude --remote-control` through `MitmProxy`
+  + `HostRcRelay`, with a viewer turn round-tripping the real model's reply) has a gated proof —
+  `prove/real-rc.prove.test.ts` (`RC_PROVE_REAL_CLAUDE=1`); env-gated so it never gates CI but runs on
+  demand.
 - Negative-`startIndex` exact last-N semantics are real-Vercel-verified (spike §14A); the in-process
   harness only guarantees an in-order suffix incl. the latest — asserted accordingly.
 
