@@ -364,6 +364,7 @@ export function Connect(props: {
           className="field"
           value={props.pass}
           onChange={(e) => props.setPass(e.target.value)}
+          aria-label="Machine pass"
           placeholder="rcp1_…"
           spellCheck={false}
           rows={2}
@@ -1129,15 +1130,29 @@ function Transcript(props: {
     },
     [sessionId, viewer],
   );
+  // Interrupt has no instant UI (the sheet just closes), so show a transient "Interrupting…" status until
+  // the worker actually goes idle. Cleared by the phase→idle announce, or a timeout fallback so it can't stick.
+  const [interrupting, setInterrupting] = useState(false);
   const interruptSession = useCallback(async () => {
     setSessionSheet(false);
     setSendError(null);
+    setInterrupting(true);
     try {
       await viewer.interrupt(sessionId);
     } catch (e) {
+      setInterrupting(false);
       setSendError(friendlySendError(e));
     }
   }, [sessionId, viewer]);
+  useEffect(() => {
+    if (!interrupting) return;
+    if (phase === "idle") {
+      setInterrupting(false);
+      return;
+    }
+    const t = setTimeout(() => setInterrupting(false), 8000);
+    return () => clearTimeout(t);
+  }, [interrupting, phase]);
   const copyBranch = useCallback(() => {
     setSessionSheet(false);
     const b = announce?.git?.branch;
@@ -1181,7 +1196,17 @@ function Transcript(props: {
         </button>
       </div>
 
-      <div className="transcript" ref={scrollerRef} onScroll={onTranscriptScroll}>
+      {/* role=log + aria-live so a screen reader announces assistant turns / tool rows as they stream in
+          (additions only — presence ticks don't re-read the whole log). Without this the transcript was
+          silent to AT users while Claude responded. */}
+      <div
+        className="transcript"
+        ref={scrollerRef}
+        onScroll={onTranscriptScroll}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+      >
         {showGapRecovery && gap !== null && (
           <GapRecovery gap={gap} retrying={gapRetrying} onRetry={() => void retryGap()} />
         )}
@@ -1198,7 +1223,7 @@ function Transcript(props: {
           New messages ↓
         </button>
       )}
-      <StatusStrip conn={cs} phase={phase} needs={needs} />
+      <StatusStrip conn={cs} phase={phase} needs={needs} interrupting={interrupting} />
       {sendError !== null && (
         <div className="send-err" role="alert">
           <span className="send-err-msg">Couldn’t send: {sendError}</span>
@@ -1261,7 +1286,10 @@ function Transcript(props: {
               void send();
             }
           }}
-          placeholder="Send a prompt…"
+          // Surface that slash commands work here (they ride the same input → command chip, #41); also the
+          // accessible name, since a placeholder isn't a reliable one (it vanishes on input).
+          aria-label="Message"
+          placeholder="Send a prompt — or /compact, /clear…"
           // Match the actual Enter behavior: a "send" return key on desktop, a newline key on touch.
           enterKeyHint={coarsePointer ? "enter" : "send"}
         />
@@ -1308,7 +1336,7 @@ function Transcript(props: {
             className="btn composer-send"
             disabled={sending || (input.trim() === "" && staged.length === 0)}
           >
-            Send
+            {sending ? "Sending…" : "Send"}
           </button>
         </div>
       </form>
@@ -1365,10 +1393,12 @@ function StatusStrip({
   conn,
   phase,
   needs,
+  interrupting,
 }: {
   conn: ConnState | null;
   phase: "idle" | "thinking";
   needs: boolean;
+  interrupting: boolean;
 }) {
   // role="alert" (assertive) for states that need attention now; role="status" (polite) for ambient
   // activity — so a screen reader announces the flip to disconnected / needs-you / working (#58 a11y).
@@ -1382,6 +1412,12 @@ function StatusStrip({
     return (
       <div className="chat-status" data-state="reconnecting" role="status">
         Reconnecting to the host… <Working />
+      </div>
+    );
+  if (conn === "connected" && interrupting)
+    return (
+      <div className="chat-status" data-state="thinking" role="status">
+        Interrupting… <Working />
       </div>
     );
   if (conn === "connected" && needs)
@@ -1736,7 +1772,12 @@ export function Bubble({
 function ThinkingRow({ text, sub }: { text: string; sub: boolean }) {
   return (
     <details className="thinking" data-sub={sub}>
-      <summary>💭 {sub ? "sub-agent thinking" : "thought"}</summary>
+      <summary>
+        <span>💭 {sub ? "sub-agent thinking" : "thought"}</span>
+        <span className="chev" aria-hidden>
+          ›
+        </span>
+      </summary>
       <div className="thinking-body">{text}</div>
     </details>
   );
@@ -1863,10 +1904,14 @@ function QuestionCard({
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
+  // Which way this card was resolved locally (null = unanswered). Tracks deny too, so a Dismiss doesn't
+  // mislabel as "✓ Answered" before the host's permission_resolved frame lands.
+  const [sentBehavior, setSentBehavior] = useState<"allow" | "deny" | null>(null);
   const deciding = useRef(false);
 
-  const done = resolved.get(req.requestId) != null || sent; // host-logged answer survives reload
+  // host-logged answer survives reload; the local optimistic value covers the gap before it lands.
+  const resolvedBehavior = resolved.get(req.requestId) ?? sentBehavior;
+  const done = resolvedBehavior != null;
 
   const pick = (q: Question, label: string) =>
     setAnswers((a) => {
@@ -1894,7 +1939,7 @@ function QuestionCard({
     setErr(null);
     try {
       await onGrant(req.requestId, "allow", { answers, toolUseId: req.toolUseId });
-      setSent(true);
+      setSentBehavior("allow");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       deciding.current = false; // failed — let the user retry
@@ -1903,11 +1948,29 @@ function QuestionCard({
     }
   }, [req.requestId, req.toolUseId, answers, allAnswered, onGrant]);
 
+  // Decline a question you don't want to answer — rides the same path as a permission Deny (#42 review).
+  const dismiss = useCallback(async () => {
+    if (req.requestId === "" || deciding.current) return;
+    deciding.current = true;
+    setBusy(true);
+    setErr(null);
+    try {
+      await onGrant(req.requestId, "deny", { toolUseId: req.toolUseId });
+      setSentBehavior("deny");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      deciding.current = false;
+    } finally {
+      setBusy(false);
+    }
+  }, [req.requestId, req.toolUseId, onGrant]);
+
   if (done) {
+    const denied = resolvedBehavior === "deny";
     return (
       <div className="perm perm-q">
-        <div className="perm-resolved" data-behavior="allow">
-          ✓ Answered
+        <div className="perm-resolved" data-behavior={resolvedBehavior ?? "allow"}>
+          {denied ? "✕ Dismissed" : "✓ Answered"}
         </div>
       </div>
     );
@@ -1930,6 +1993,7 @@ function QuestionCard({
                 type="button"
                 className="q-option"
                 data-selected={isPicked(q, o.label)}
+                aria-pressed={isPicked(q, o.label)}
                 onClick={() => pick(q, o.label)}
               >
                 <span className="q-option-label">{o.label}</span>
@@ -1939,14 +2003,27 @@ function QuestionCard({
           </div>
         </div>
       ))}
-      <button
-        type="button"
-        className="perm-btn perm-allow q-submit"
-        disabled={busy || !allAnswered || req.requestId === ""}
-        onClick={() => void submit()}
-      >
-        {busy ? "Sending…" : "Submit answers"}
-      </button>
+      <div className="perm-actions">
+        <button
+          type="button"
+          className="perm-btn perm-allow q-submit"
+          disabled={busy || !allAnswered || req.requestId === ""}
+          onClick={() => void submit()}
+        >
+          {busy ? "Sending…" : "Submit answers"}
+        </button>
+        <button
+          type="button"
+          className="perm-btn perm-deny"
+          disabled={busy || req.requestId === ""}
+          onClick={() => void dismiss()}
+        >
+          Dismiss
+        </button>
+      </div>
+      {req.requestId === "" && (
+        <div className="perm-hint">No request id — this prompt can’t be answered from here.</div>
+      )}
       {err !== null && <div className="perm-err">Couldn’t send: {err}</div>}
     </div>
   );
