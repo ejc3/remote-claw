@@ -164,7 +164,7 @@ for await (const ev of session.followDownstream(gen, () => stop.aborted)) {
   if (ev.eventType === "user") {
     const text = userText(ev.payload);
     await client.promptAsync(sessionId, {
-      model: { providerID: "amazon-bedrock", modelID: SMALL_MODEL },
+      model: activeModel, // the session's active model (default: bedrock sonnet)
       parts: [{ type: "text", text }],
     });
   } else if (ev.eventType === "control_request") {
@@ -180,11 +180,12 @@ Slash commands ride the `user` path like the claude protocol. `/compact` is rout
 equivalent (`POST /session/{id}/summarize`) **and is implemented + live-verified** — without it the
 literal string `/compact` would be fed to the model. Every other slash command currently passes through
 as a prompt (full `/command` routing via `POST /session/{id}/command` is follow-up). A blank prompt
-(empty OR whitespace-only) is a no-op, not a burned model turn.
-`SMALL_MODEL` defaults to the cheap Bedrock model (`us.amazon.nova-micro-v1:0`) so debugging + e2e
-loops stay cheap (configurable via `--rc-oc-model` / `RC_OC_MODEL`). Permission answers are NOT
-handled here — they arrive via the relay calling `session.pushControlResponse`, observed by the
-PERMISSIONS path.
+(empty OR whitespace-only) is a no-op, not a burned model turn. `/compact` summarizes with the session's
+**active model** (the one prompts use), not a separate small model.
+The model defaults to Bedrock Claude Sonnet via the region-agnostic `global.` inference profile — a
+reliable tool-caller, and `global.` needs no region (configurable via `--rc-oc-model` / `RC_OC_MODEL`).
+Permission answers are NOT handled here — they arrive via the relay calling
+`session.pushControlResponse`, observed by the PERMISSIONS path.
 
 ## PERMISSIONS — OpenCode gate to relay round-trip to OpenCode reply
 
@@ -302,31 +303,29 @@ git diff --name-only origin/main..HEAD -- \
    `plan`->`reject` ("planning only"), `default`->pass through. Approximate.
 6. **Auth.** v1 runs unsecured on loopback (same trust boundary as the MITM); Basic auth
    (`OPENCODE_SERVER_PASSWORD`) documented for non-loopback.
-7. **Bedrock credentials — OpenCode-on-Bedrock now PROVEN end-to-end (2026-06-28).** OpenCode's Bedrock
-   client needs static env creds (no IMDS chain in 1.17.5); fetch+export temp creds from IMDS — e.g.
-   `eval "$(aws configure export-credentials --format env)"; export AWS_REGION=us-east-1`. The account now
-   grants this role live Anthropic inference on `bedrock-runtime`: the AWS-Marketplace-subscription wall
-   from the previous revision is **cleared** — a `converse` to `us.anthropic.claude-sonnet-4-5` returns real
-   text instead of the prior `aws-marketplace:Subscribe` `AccessDeniedException`. With that, the full live
-   e2e (`driver.e2e.test.ts`) **passes 10/10**, its model-bearing turns driven by Bedrock
-   `us.anthropic.claude-sonnet-4-5` through OpenCode's `amazon-bedrock` (AI-SDK) provider — a real streaming
-   turn end-to-end through the actual driver→relay→broker (frame coalesce, dedup, best-effort tool-use,
-   local-vs-injected prompt origin, history/resume with no dup, interrupt, `session.error`, `/compact`→
-   summarize, two-driver isolation). Two of the ten scenarios don't exercise the Bedrock model by design:
-   `(h)` hard-codes a bad ollama id to drive the error path, and `(c)` tool-use passes even if the model
-   declines the tool. Beyond the suite, each current Claude model was spot-checked live via `bedrock-runtime
-   converse` (opus-4-8, sonnet-4-6, opus-4-5, sonnet-4-5, haiku-4-5) in us-east-1 + us-east-2 + us-west-2,
-   and the legacy `anthropic.claude-sonnet-4-20250514` is rejected as provider-Legacy. Run the suite:
-   `OPENCODE_URL=http://127.0.0.1:4096
-   RC_OPENCODE_E2E_MODEL=amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0 pnpm exec vitest run
-   src/host/rc/opencode/driver.e2e.test.ts` against an `opencode serve` started with those creds.
-   (Footgun fixed alongside: `vitest.setup.ts` scrubbed **all** `RC_*` vars including the e2e's own
-   `RC_OPENCODE_E2E_*` knobs, so the suite silently fell back to the ollama default and could never exercise
-   Bedrock — now allowlisted, with a unit guard, since CI skips the live suite and can't catch it.) The
-   native MITM driver (`--rc-inference=bedrock`) reaches Bedrock via the `bedrock-mantle` endpoint, which
-   [AWS's model-access docs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html) state
-   is exempt from the FTU form *and* the Marketplace subscription — so it ran even before this grant; both
-   paths now work.
+7. **Bedrock credentials — OpenCode-on-Bedrock PROVEN end-to-end (2026-06-28).** OpenCode's AI-SDK Bedrock
+   client does NOT walk the IMDS instance-role chain (verified on 1.17.5) — it needs STATIC creds in the
+   `opencode serve` process env, so export them from the instance role before launching:
+   `eval "$(aws configure export-credentials --format env)"` (or set `AWS_BEARER_TOKEN_BEDROCK`). The
+   `global.` profile is region-agnostic, so any `AWS_REGION` the SDK picks up works (no "right" region to
+   set). The account grants this role live Anthropic inference on `bedrock-runtime`.
+   The driver's **default** model is `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — the `global.`
+   inference profile is region-agnostic (any `AWS_REGION` works; there is no "right" region to pick). With
+   that, the full live e2e (`driver.e2e.test.ts`) **passes 11/11**, its model-bearing turns driven by
+   Bedrock Claude Sonnet through OpenCode's `amazon-bedrock` (AI-SDK) provider — a real streaming turn
+   end-to-end through the actual driver→relay→broker (frame coalesce, dedup, tool-use, local-vs-injected
+   prompt origin, history/resume with no dup, interrupt, `session.error`, `/compact`→summarize, permission
+   round-trip, two-driver isolation). `(c)` tool-use and `(k)` the permission round-trip are HARD asserted
+   (Sonnet reliably calls tools): `(c)` runs with mirroring OFF so the tool auto-runs and its frames
+   render; `(k)` runs with mirroring ON, raises a gate, and a viewer ALLOW round-trips so the tool runs.
+   `(h)` drives the error path with a deliberately-bad Bedrock model id. Run the suite:
+   `OPENCODE_URL=http://127.0.0.1:4096 pnpm exec vitest run src/host/rc/opencode/driver.e2e.test.ts`
+   against an `opencode serve` started with those creds (the default model needs no `RC_OPENCODE_E2E_MODEL`).
+   (Footgun guarded alongside: `vitest.setup.ts` scrubs **all** `RC_*` vars EXCEPT the e2e's own
+   `RC_OPENCODE_E2E_*` knobs — allowlisted, with a unit guard, since CI skips the live suite and can't
+   catch it.) The native MITM driver (`--rc-inference=bedrock`) reaches Bedrock via the `bedrock-mantle`
+   endpoint, which [AWS's model-access docs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
+   state is exempt from the FTU form *and* the Marketplace subscription; both paths work.
 
 ## v1 plan
 
@@ -338,15 +337,16 @@ git diff --name-only origin/main..HEAD -- \
 3. **`driver.ts`** — `OpencodeDriver` implementing the seam; `start(session, signal)` mirrors
    `launch.ts` (constructs `HostRcRelay`, `announce` + `serve`); the OpenCode path skips the MITM.
 4. **Wiring** — `--rc-driver={mitm|tmux|opencode}` (default `mitm`) + `--rc-oc-url` / `--rc-oc-model`
-   (default `us.amazon.nova-micro-v1:0`) + `RC_OC_*` envs.
+   (default `amazon-bedrock/global.anthropic.claude-sonnet-4-6`) + `RC_OC_*` envs.
 5. **client_unchanged gate** — the empty-diff grep in CI + a parity test.
-6. **e2e against Bedrock — DONE (10/10 live, 2026-06-28).** Point `opencode serve` at a Bedrock Anthropic
-   model (`RC_OPENCODE_E2E_MODEL=amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `AWS_REGION`
-   + IMDS-exported static creds), start the driver against a local broker, drive prompts, assert the frames
-   arrive unchanged. The full `driver.e2e.test.ts` suite (10 scenarios) **passes against real Bedrock** — a
-   real streaming Bedrock turn end-to-end with zero api.anthropic.com (see Gap #7). The
-   e2e **skips (not fails)** when the `opencode serve` is unreachable OR the model returns an account-gate
-   error (turnGate → ctx.skip), so CI (which has no server) stays green; locally with the server up + the
-   creds, the same suite proves a real streaming Bedrock turn (via OpenCode's `amazon-bedrock` provider).
+6. **e2e against Bedrock — DONE (11/11 live, 2026-06-28).** Start `opencode serve` with the `amazon-bedrock`
+   provider + IMDS-exported static creds (the default model `amazon-bedrock/global.anthropic.claude-sonnet-4-6`
+   needs no `RC_OPENCODE_E2E_MODEL`; the `global.` profile needs no specific region), start the driver
+   against a local broker, drive prompts, assert the frames arrive unchanged. The full `driver.e2e.test.ts`
+   suite (11 scenarios) **passes against real Bedrock** — a real streaming Bedrock turn end-to-end with zero
+   api.anthropic.com (see Gap #7). The e2e **skips (not fails) when the `opencode serve` is unreachable**
+   (server-reachability gate), so CI (which has no server) stays green; a structural live turn may also
+   skip on a slow/contended box (turnGate / `RC_OPENCODE_E2E_TURN_MS`). The model-bearing scenarios
+   `(c)`/`(k)` HARD assert (no skip on model behavior), so a real tool/round-trip regression goes red.
 7. **Per-PR gate** (CLAUDE.md): `pnpm exec biome check .` + `pnpm exec tsc --noEmit` +
    `pnpm exec vitest run`, `/code-review` + codex, CI green.

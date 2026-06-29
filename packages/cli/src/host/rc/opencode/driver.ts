@@ -62,16 +62,23 @@ import {
   userText,
 } from "./translate.js";
 
+// Bedrock Claude Sonnet is the default model path: a reliable tool-caller, so the permission/tool
+// round-trips actually exercise (no flaky tiny-model fallback). The `global.` inference profile is
+// region-agnostic, so there is no region to configure. The opencode SERVER must have the `amazon-bedrock`
+// provider + AWS credentials in ITS process env — opencode's AI-SDK Bedrock client does NOT walk the IMDS
+// instance-role chain (verified on 1.17.5), so it needs STATIC creds (e.g. exported from the instance
+// role via `aws configure export-credentials --format env`) or AWS_BEARER_TOKEN_BEDROCK. See
+// docs/opencode-driver.md.
 export const DEFAULT_OPENCODE_MODEL: OpencodeModel = {
-  providerID: "ollama",
-  modelID: "qwen2.5:0.5b",
+  providerID: "amazon-bedrock",
+  modelID: "global.anthropic.claude-sonnet-4-6",
 };
 
 /** OpenCode-specific knobs the driver reads from DriverContext.extra (set by the wiring in run.ts). */
 export interface OpencodeExtra {
   /** OpenCode server origin (default http://127.0.0.1:4096). */
   baseUrl?: string;
-  /** providerID + modelID for prompt_async (default ollama/qwen2.5:0.5b). */
+  /** providerID + modelID for prompt_async (default amazon-bedrock/global.anthropic.claude-sonnet-4-6). */
   model?: OpencodeModel;
   /** Optional HTTP Basic password (OPENCODE_SERVER_PASSWORD). */
   password?: string;

@@ -1,4 +1,4 @@
-// Exploratory edge-case probes for the OpenCode wrapper (live :4096 + ollama). These target the gaps a
+// Exploratory edge-case probes for the OpenCode wrapper (live :4096 + Bedrock Claude Sonnet). These target the gaps a
 // scenario-discovery workflow flagged: doc-vs-impl divergences (/compact routing, session.error
 // surfacing), the server-wide /event filter under TWO concurrent drivers (cross-session leak?), and the
 // whitespace-only prompt burn. PROBES (not pass/fail asserts) — they print ground truth so we can make
@@ -12,7 +12,7 @@ import { OpencodeDriver, type OpencodeExtra } from "./src/host/rc/opencode/drive
 import type { Session } from "./src/host/rc/session.js";
 
 const BASE = process.env.OPENCODE_URL ?? "http://127.0.0.1:4096";
-const MODEL = { providerID: "ollama", modelID: "qwen2.5:0.5b" };
+const MODEL = { providerID: "amazon-bedrock", modelID: "global.anthropic.claude-sonnet-4-6" };
 const client = new OpencodeClient({ baseUrl: BASE });
 
 class FakeBroker {
@@ -117,7 +117,10 @@ async function main() {
   // ── PROBE 2: session.error — drive a turn with a NONEXISTENT model; does an error frame reach the viewer? ──
   {
     const ses = await client.createSession("explore-error");
-    const badModel = { providerID: "ollama", modelID: "this-model-does-not-exist-zzz" };
+    const badModel = {
+      providerID: "amazon-bedrock",
+      modelID: "global.anthropic.this-model-does-not-exist-zzz",
+    };
     const d = await startDriver({ client, sessionId: ses, model: badModel });
     d.session.pushUserInput("Reply with: X");
     // Wait for SOMETHING (an error frame, an assistant frame, or a timeout).

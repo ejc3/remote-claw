@@ -31,13 +31,16 @@ describe("OpencodeClient.summarize (/compact native equivalent)", () => {
   it("POSTs /session/{id}/summarize with { providerID, modelID, auto:false }", async () => {
     const calls: Captured[] = [];
     const c = new OpencodeClient({ baseUrl: "http://oc.test", fetchFn: fakeFetch(calls) });
-    await c.summarize("ses_1", { providerID: "ollama", modelID: "qwen2.5:0.5b" });
+    await c.summarize("ses_1", {
+      providerID: "amazon-bedrock",
+      modelID: "global.anthropic.claude-sonnet-4-6",
+    });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe("http://oc.test/session/ses_1/summarize");
     expect(calls[0]?.method).toBe("POST");
     expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual({
-      providerID: "ollama",
-      modelID: "qwen2.5:0.5b",
+      providerID: "amazon-bedrock",
+      modelID: "global.anthropic.claude-sonnet-4-6",
       auto: false,
     });
   });

@@ -1,13 +1,14 @@
 // LIVE end-to-end tests for the OpenCode driver. These drive the REAL OpencodeDriver + a REAL
 // HostRcRelay (via the real bridgeSession) against a LIVE `opencode serve` on http://127.0.0.1:4096
-// using the cheap local model (ollama / qwen2.5:0.5b). The ONLY fake is the broker: a FakeBroker that
-// captures the plaintext content frames the relay would seal + post (relay #post passes utf8(text) as
-// the body, so this captures exactly what a viewer renders) and parks its inbound stream.
+// using Bedrock Claude Sonnet (the default; a reliable tool-caller via the region-agnostic `global.`
+// profile). The ONLY fake is the broker: a FakeBroker that captures the plaintext content frames the
+// relay would seal + post (relay #post passes utf8(text) as the body, so this captures exactly what a
+// viewer renders) and parks its inbound stream.
 //
 // What this proves (the user wants certainty it works the way we think intuitively):
 //   (a) a prompt → exactly ONE coalesced `assistant` frame with the model's text.
 //   (b) two prompts → two ordered assistant frames, no dup.
-//   (c) tool use → tool_use + tool_result frames render (when the model calls a tool).
+//   (c) tool use → tool_use + tool_result frames render (the model calls a tool — HARD asserted).
 //   (d) a SHARED/LOCAL prompt sent to the session DIRECTLY (a 2nd client / the TUI) → a `local_prompt`
 //       `user` frame, and a driver-injected prompt is NOT double-emitted.
 //   (e) history/resume → pre-seeded messages are backfilled in order; a fresh driver on the same
@@ -15,16 +16,17 @@
 //   (f) interrupt → an abort reaches the live server.
 //   (g) permissions → DETERMINISTIC: the driver PATCHes the bridged session to "ask" (mirroring on,
 //       default) and the live server accepts it — proven by spying the real client's setSessionPermission
-//       (model-independent). BEST-EFFORT round-trip (k): with a tool-capable model (RC_OPENCODE_E2E_MODEL,
-//       e.g. amazon-bedrock/us.anthropic.claude-sonnet-4-6) a real tool raises a `permission_request`, a
-//       viewer ALLOW round-trips, and the tool RUNS; SKIPPED (not failed) when the cheap default model
-//       declines to call a tool — the gate→reply mapping itself is unit-proven.
+//       (model-independent). Full round-trip (k): a real tool raises a `permission_request`, a viewer
+//       ALLOW round-trips, and the tool RUNS — HARD asserted (Sonnet reliably calls tools, so a miss is a
+//       real regression, not a skip).
 //   (h) session.error (bad model) → a `result` error frame reaches the viewer (not a silent idle).
 //   (i) /compact → routes to the native summarize endpoint, NOT a model prompt.
 //   (j) two drivers on the SAME server stay isolated (the server-wide /event filter — no cross-talk).
 //
-// Skipped automatically (with a clear message) when the live server is unreachable, so CI without an
-// opencode server stays green; run locally with the server up to exercise the real path.
+// Skipped automatically (with a clear message) when the live server is unreachable (so CI without an
+// opencode server stays green); a structural live turn may also skip on a slow/contended box (turnGate).
+// The MODEL-BEARING scenarios (c) tool-use and (k) permission round-trip do NOT skip — they HARD assert,
+// so a model/round-trip regression goes RED. Run locally with a Bedrock-authed server to exercise it.
 
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
 import { deriveIdentity } from "@remote-claw/clawsec";
@@ -35,12 +37,15 @@ import { OpencodeClient, type PermissionRule } from "./client.js";
 import { OpencodeDriver, type OpencodeExtra } from "./driver.js";
 
 const BASE = process.env.OPENCODE_URL ?? "http://127.0.0.1:4096";
-// The live model, as "providerID/modelID" via RC_OPENCODE_E2E_MODEL (default ollama/qwen2.5:0.5b). CI can
-// point at an even tinier instruct model (e.g. ollama/smollm2:135m) for faster turns + a smaller pull —
-// our assertions are STRUCTURAL (frame counts/order/no-dup/isolation) + prompt echoes, not exact model
-// text, so a less-coherent tiny model still satisfies them.
+// The live model, as "providerID/modelID" via RC_OPENCODE_E2E_MODEL. The default is Bedrock Claude
+// Sonnet through the region-agnostic `global.` inference profile — a RELIABLE tool-caller, so the tool +
+// permission round-trips (c)/(k) assert hard (no flaky tiny-model fallback, no self-skip). The opencode
+// SERVER must have the `amazon-bedrock` provider + STATIC AWS creds in its env (opencode's AI-SDK Bedrock
+// client does NOT walk the IMDS instance-role chain on 1.17.5 — export creds via
+// `aws configure export-credentials --format env`, or set AWS_BEARER_TOKEN_BEDROCK); the `global.` profile
+// needs no specific region. Override only to drive a different tool-capable model.
 const MODEL = ((): { providerID: string; modelID: string } => {
-  const DEFAULT = { providerID: "ollama", modelID: "qwen2.5:0.5b" };
+  const DEFAULT = { providerID: "amazon-bedrock", modelID: "global.anthropic.claude-sonnet-4-6" };
   const raw = (process.env.RC_OPENCODE_E2E_MODEL ?? "").trim();
   const slash = raw.indexOf("/"); // FIRST slash splits "provider/rest"; rest keeps any further slashes
   if (slash <= 0) return DEFAULT; // unset, no slash, or leading slash ("/m") → malformed → default
@@ -48,7 +53,7 @@ const MODEL = ((): { providerID: string; modelID: string } => {
   const modelID = raw.slice(slash + 1);
   return providerID && modelID ? { providerID, modelID } : DEFAULT; // trailing slash → empty modelID → default
 })();
-const TINY = "Reply with exactly: OK"; // tiny prompt — keeps the cheap model fast + cheap
+const TINY = "Reply with exactly: OK"; // tiny prompt — fast + cheap
 
 /** Reachability probe: GET /session must answer. Set once in beforeAll; the suite skips when false. */
 let live = false;
@@ -183,7 +188,7 @@ async function waitForAsync(pred: () => Promise<boolean>, ms: number): Promise<b
   return pred();
 }
 
-/** Generous per-turn budget for a LIVE local model. A cooperating model satisfies a tiny prompt well
+/** Generous per-turn budget for a LIVE model. A cooperating model satisfies a tiny prompt well
  *  under this; only a slow/contended box (or a dead server) hits it — and that SKIPS, never fails. Tune
  *  with RC_OPENCODE_E2E_TURN_MS for a slower box. A non-positive/NaN value (unset, "0", "-5", "abc") is
  *  ignored: `> 0` rejects a negative (which would make waitFor's deadline already-past → skip everything),
@@ -214,7 +219,7 @@ async function gate(ctx: SkipCtx): Promise<void> {
 }
 
 /** Wait for a live-turn condition; if it doesn't arrive in `ms`, SKIP (not fail) — a slow/contended
- *  local model (or a server that just died) is environmental, not a code bug. Returns only on success. */
+ *  model (or a server that just died) is environmental, not a code bug. Returns only on success. */
 async function turnGate(
   ctx: SkipCtx,
   pred: () => boolean,
@@ -320,48 +325,40 @@ describe("OpenCode driver — LIVE e2e (opencode serve)", { timeout: SUITE_TIMEO
     expect(broker.content.filter((p) => p.recordKind === "user")).toHaveLength(0);
   });
 
-  it("(c) tool use → tool_use + tool_result frames render (best-effort: documented if the model declines)", async (ctx) => {
+  it("(c) tool use → tool_use + tool_result frames render", async (ctx) => {
     await gate(ctx);
     const ses = await client.createSession("e2e-c");
     const broker = await withDriver(
-      { client, sessionId: ses, model: MODEL },
+      // mirrorPermissions OFF: this scenario tests tool-FRAME rendering, so the tool must auto-run to
+      // completion — with mirroring on it would block on a gate nobody answers here (that round-trip is
+      // (k)'s job). An unpatched opencode session auto-runs tools, so Sonnet's bash completes.
+      { client, sessionId: ses, model: MODEL, mirrorPermissions: false },
       async ({ session, broker }) => {
-        // Nudge the model to use a tool. The tiny model is unreliable about tool calls, so we wait a
-        // bounded time and DOCUMENT the outcome rather than hard-failing on the model's behavior.
-        // NOTE: this is the ONE live test that uses bounded waitFor, NOT turnGate — by design. A model
-        // that simply declines to call a tool is a documented PASS (see below), not a skip; turnGate
-        // would wrongly SKIP that legitimate outcome. (gate(ctx) above still skips if the server is down.)
+        // Sonnet reliably calls a tool when told to, so these are HARD asserts (waitFor → expect, NOT
+        // turnGate): a turn that never emits a tool_use/tool_result is a real regression and must go RED,
+        // never skip. gate(ctx) above still skips only when the server is unreachable.
         session.pushUserInput(
           "Use the bash tool to run exactly: echo hello. Then reply with the output.",
         );
-        await waitFor(() => broker.content.some((p) => p.recordKind === "tool_use"), 60000);
-        // give the result a moment to follow the tool_use
-        await waitFor(() => broker.content.some((p) => p.recordKind === "tool_result"), 15000);
+        expect(
+          await waitFor(() => broker.content.some((p) => p.recordKind === "tool_use"), TURN_MS),
+        ).toBe(true);
+        expect(
+          await waitFor(() => broker.content.some((p) => p.recordKind === "tool_result"), TURN_MS),
+        ).toBe(true);
       },
     );
+    // The tool_use body is JSON {name,input,sub}; a completed tool also yields a tool_result
+    // {tool_use_id,is_error,output,sub}. Both render as their own frames.
     const toolUses = broker.content.filter((p) => p.recordKind === "tool_use");
     const toolResults = broker.content.filter((p) => p.recordKind === "tool_result");
-    if (toolUses.length === 0) {
-      // DOCUMENTED LIMITATION (best-effort): qwen2.5:0.5b (a 0.5B model) does NOT reliably emit a tool
-      // call — across runs it usually answers directly. So this live scenario does NOT assert on the
-      // model's behavior (that would be flaky); the tool path is proven DETERMINISTICALLY elsewhere:
-      // translate.test.ts golden-tests partToBlocks for pending/completed/error tools, and
-      // driver.test.ts "(c-det)" drives a real completed-tool SSE sequence end-to-end through the relay
-      // and asserts the tool_use + tool_result content frames render. This test passes either way.
-      console.warn(
-        "[opencode e2e] (c) the tiny model did not call a tool this run — tool path proven deterministically in driver.test.ts (c-det) + translate.test.ts",
-      );
-      return;
-    }
-    // When the model DID call a tool: the tool_use body is JSON {name,input,sub}; a completed tool also
-    // yields a tool_result {tool_use_id,is_error,output,sub}. Both render as their own frames.
+    expect(toolUses.length).toBeGreaterThanOrEqual(1);
+    expect(toolResults.length).toBeGreaterThanOrEqual(1);
     const tu = JSON.parse(toolUses[0]?.text ?? "{}");
     expect(typeof tu.name).toBe("string");
-    if (toolResults.length > 0) {
-      const tr = JSON.parse(toolResults[0]?.text ?? "{}");
-      expect(tr).toHaveProperty("output");
-      expect(tr).toHaveProperty("is_error");
-    }
+    const tr = JSON.parse(toolResults[0]?.text ?? "{}");
+    expect(tr).toHaveProperty("output");
+    expect(tr).toHaveProperty("is_error");
   }, 120000);
 
   it("(d) SHARED/LOCAL prompt sent directly to the session → a `local_prompt` user frame; injected prompt not double-emitted", async (ctx) => {
@@ -483,7 +480,10 @@ describe("OpenCode driver — LIVE e2e (opencode serve)", { timeout: SUITE_TIMEO
       {
         client,
         sessionId: ses,
-        model: { providerID: "ollama", modelID: "this-model-does-not-exist-zzz" },
+        model: {
+          providerID: "amazon-bedrock",
+          modelID: "global.anthropic.this-model-does-not-exist-zzz",
+        },
       },
       async ({ session, broker }) => {
         session.pushUserInput("Reply with: X");
@@ -521,12 +521,12 @@ describe("OpenCode driver — LIVE e2e (opencode serve)", { timeout: SUITE_TIMEO
     expect(prompted).toBe(0); // and NOT fed to the model as a prompt
   }, 60000);
 
-  it("(k) permission mirroring: driver PATCHes session to ask (deterministic) + viewer ALLOW round-trips a real tool (best-effort)", async (ctx) => {
+  it("(k) permission mirroring: driver PATCHes session to ask (deterministic) + viewer ALLOW round-trips a real tool", async (ctx) => {
     await gate(ctx);
     const ses = await client.createSession("e2e-k");
     // Spy the REAL client's setSessionPermission so we PROVE the driver PATCHed the LIVE session to "ask"
     // AND the live server accepted it (the client throws on a non-2xx). This half is MODEL-INDEPENDENT:
-    // it holds even for the cheap default model that never calls a tool.
+    // it holds even for a model that never calls a tool.
     const permSets: Array<{ sessionId: string; rules: readonly PermissionRule[]; ok: boolean }> =
       [];
     const spy = new OpencodeClient({ baseUrl: BASE });
@@ -554,23 +554,18 @@ describe("OpenCode driver — LIVE e2e (opencode serve)", { timeout: SUITE_TIMEO
         // A fresh session carries no prior rules, so the merge is exactly the catch-all ask.
         expect(set?.rules).toEqual([{ permission: "*", pattern: "*", action: "ask" }]);
 
-        // BEST-EFFORT round-trip — needs a tool-capable model. Drive a tool call; if no gate surfaces in
-        // budget, the cheap default declined (the gate→reply mapping is unit-proven) → SKIP, not fail.
+        // Full round-trip — Sonnet reliably calls a tool, so the gate is HARD asserted (waitFor → expect,
+        // NOT turnGate): a turn that never raises a permission_request is a real regression in the gate
+        // path and must go RED, never skip. gate(ctx) above still skips only when the server is unreachable.
         session.pushUserInput(
           `Run the bash command \`echo ${token}\` using the bash tool. Do not ask, just run it.`,
         );
-        const gotGate = await waitFor(
-          () => broker.content.some((p) => p.recordKind === "permission_request"),
-          TURN_MS,
-        );
-        if (!gotGate) {
-          console.warn(
-            "[opencode e2e] (k) the model declined to call a tool — round-trip skipped (PATCH proven above). " +
-              "Set RC_OPENCODE_E2E_MODEL to a tool-capable model (e.g. amazon-bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0) to exercise it.",
-          );
-          ctx.skip("model did not raise a permission gate (not tool-capable)");
-          return;
-        }
+        expect(
+          await waitFor(
+            () => broker.content.some((p) => p.recordKind === "permission_request"),
+            TURN_MS,
+          ),
+        ).toBe(true);
         // The viewer ALLOWS: push an inbound `permission` frame carrying the gate's request_id. The relay
         // only acts on an OPEN gate (request_id in #openPerms), so this drives the real allow→reply→run path.
         const gateFrame = broker.content.find((p) => p.recordKind === "permission_request");
