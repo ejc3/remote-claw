@@ -126,6 +126,16 @@ export function optimisticMessage(
   };
 }
 
+/** Whether an Enter keypress in the composer should SEND (vs. insert a newline). Send on Enter only with a
+ *  FINE pointer (desktop) and no Shift; on a coarse pointer (touch keyboard) Enter is always a newline — the
+ *  Send button is the explicit send there (#151). Pure for testing. */
+export function enterShouldSend(
+  e: { key: string; shiftKey: boolean },
+  coarsePointer: boolean,
+): boolean {
+  return e.key === "Enter" && !e.shiftKey && !coarsePointer;
+}
+
 /** Re-stage the images of a FAILED send (#150) back into the composer. The send path revokes the
  *  original object URLs when it optimistically clears the composer, so a recovered preview needs a FRESH
  *  URL minted from the (still-valid) `File`. Pure + injectable `makeUrl` so it's testable without a DOM.
@@ -762,6 +772,10 @@ function Transcript(props: {
   const [staged, setStaged] = useState<StagedImage[]>([]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // On a COARSE pointer (phone/tablet) the on-screen keyboard's Return should insert a NEWLINE, not send —
+  // sending on Enter strands multi-line prompts and mis-fires on autocorrect. Send is the explicit button.
+  // Default false (SSR / desktop); a matchMedia effect flips it on a touch device. (#151)
+  const [coarsePointer, setCoarsePointer] = useState(false);
   const [gap, setGap] = useState<TranscriptGap | null>(null);
   const [gapRetrying, setGapRetrying] = useState(false);
   const autoGapRetry = useRef<string | null>(null);
@@ -818,6 +832,17 @@ function Transcript(props: {
   useEffect(() => {
     if (announceMode !== undefined && announceSentAt !== undefined) setOptimisticMode(null);
   }, [announceMode, announceSentAt]);
+
+  // Detect a coarse (touch) pointer so Enter inserts a newline instead of sending (#151). Tracked live —
+  // a 2-in-1 / external-keyboard switch flips the media query — so the composer adapts without a reload.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(pointer: coarse)");
+    setCoarsePointer(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setCoarsePointer(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
 
   // If capabilities arrive (or change) to say this driver can't switch mode, drop any optimistic mode and
   // close the sheet: a driver that can't honor set_mode never announces a confirmed `mode`, so the effect
@@ -1219,14 +1244,16 @@ function Transcript(props: {
           rows={1}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            // Enter sends; Shift+Enter (or the mobile newline key) inserts a line break.
-            if (e.key === "Enter" && !e.shiftKey) {
+            // Desktop: Enter sends, Shift+Enter is a line break. Touch: Enter is always a line break (the
+            // Send button sends) so a soft-keyboard Return doesn't strand a multi-line prompt (#151).
+            if (enterShouldSend(e, coarsePointer)) {
               e.preventDefault();
               void send();
             }
           }}
           placeholder="Send a prompt…"
-          enterKeyHint="send"
+          // Match the actual Enter behavior: a "send" return key on desktop, a newline key on touch.
+          enterKeyHint={coarsePointer ? "enter" : "send"}
         />
         <div className="composer-row">
           <button

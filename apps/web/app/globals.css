@@ -117,7 +117,9 @@ code {
   margin-top: 18px;
   padding: 12px 13px;
   font-family: ui-monospace, monospace;
-  font-size: 13px;
+  /* ≥16px so iOS Safari doesn't auto-zoom the page when this input is focused (we no longer pin
+     maximum-scale, so the font size IS the auto-zoom guard). */
+  font-size: 16px;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--line);
@@ -435,6 +437,7 @@ code {
   color: var(--accent);
   font-size: 15px;
   padding: 6px 8px;
+  min-height: 44px; /* ≥44px touch target — it's the primary mobile back-nav (#151) */
 }
 /* The session ⋯ menu trigger — sits at the right of the mobile chat header (.row-title takes the slack). */
 .chat-menu {
@@ -444,6 +447,9 @@ code {
   color: var(--text-dim);
   font-size: 20px;
   line-height: 1;
+  /* ≥44px touch target (#151). */
+  min-width: 44px;
+  min-height: 44px;
   padding: 6px 10px;
   transition: color 0.15s;
 }
@@ -455,6 +461,10 @@ code {
 .transcript {
   flex: 1;
   overflow-y: auto;
+  /* Keep scroll momentum inside the transcript: no chaining to the page (which on mobile triggers
+     pull-to-refresh / address-bar bounce and can hide the composer). */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 18px 16px;
   display: flex;
   flex-direction: column;
@@ -1084,12 +1094,14 @@ code {
 /* Send is pushed to the right; mode + attach stay on the left. */
 .composer-send {
   margin-left: auto;
+  min-height: 44px; /* ≥44px touch target (#151) */
 }
 .composer-input {
   width: 100%;
   padding: 9px 13px;
   font-family: inherit;
-  font-size: 15px;
+  /* ≥16px to suppress iOS Safari focus auto-zoom (we no longer pin maximum-scale) — see .field. */
+  font-size: 16px;
   line-height: 1.4;
   background: var(--surface);
   color: var(--text);
@@ -1125,13 +1137,14 @@ code {
 }
 .staged-remove {
   position: absolute;
-  top: -7px;
-  right: -7px;
+  top: -8px;
+  right: -8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  /* 28px clears the WCAG 2.5.8 (AA) 24px minimum — a 44px target would overflow the small thumbnail. */
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: var(--surface-2);
   color: var(--text);
@@ -1193,7 +1206,7 @@ code {
   gap: 6px;
   flex-shrink: 0;
   padding: 0 12px;
-  height: 40px;
+  height: 44px; /* ≥44px touch target (#151) */
   background: var(--surface);
   color: var(--text-dim);
   border: 1px solid var(--line);
@@ -1214,8 +1227,9 @@ code {
 /* Composer attach-a-photo button (#44). */
 .attach-btn {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  /* ≥44px touch target (#151). */
+  width: 44px;
+  height: 44px;
   background: var(--surface);
   color: var(--text-dim);
   border: 1px solid var(--line);
@@ -1374,7 +1388,7 @@ code {
   color: #fff;
   border: none;
   border-radius: 999px;
-  padding: 7px 14px;
+  padding: 10px 16px; /* ≥40px touch target for the floating jump pill (#151) */
   font-size: 13px;
   font-weight: 600;
   box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.7);

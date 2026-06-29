@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Viewer } from "../app/lib/viewer.js";
-import { restageImages, sendComposer } from "../app/page.js";
+import { enterShouldSend, restageImages, sendComposer } from "../app/page.js";
 
 // Composer send-on-submit (#108/#112): attachments are STAGED then sent together with the text on submit
 // (no auto-send on file pick). sendComposer is the extracted, DOM-free core.
@@ -80,5 +80,21 @@ describe("restageImages", () => {
 
   it("returns an empty list for no images (a text-only failed send restores no previews)", () => {
     expect(restageImages([], () => "blob:x")).toEqual([]);
+  });
+});
+
+// #151 mobile a11y: on a coarse (touch) pointer, Enter is a NEWLINE (the Send button sends); on a fine
+// (desktop) pointer Enter sends and Shift+Enter is a line break.
+describe("enterShouldSend", () => {
+  it("desktop (fine pointer): Enter sends, Shift+Enter does not", () => {
+    expect(enterShouldSend({ key: "Enter", shiftKey: false }, false)).toBe(true);
+    expect(enterShouldSend({ key: "Enter", shiftKey: true }, false)).toBe(false);
+  });
+  it("touch (coarse pointer): Enter NEVER sends (it's a newline)", () => {
+    expect(enterShouldSend({ key: "Enter", shiftKey: false }, true)).toBe(false);
+    expect(enterShouldSend({ key: "Enter", shiftKey: true }, true)).toBe(false);
+  });
+  it("a non-Enter key never sends", () => {
+    expect(enterShouldSend({ key: "a", shiftKey: false }, false)).toBe(false);
   });
 });
