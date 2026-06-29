@@ -126,6 +126,17 @@ export function optimisticMessage(
   };
 }
 
+/** Re-stage the images of a FAILED send (#150) back into the composer. The send path revokes the
+ *  original object URLs when it optimistically clears the composer, so a recovered preview needs a FRESH
+ *  URL minted from the (still-valid) `File`. Pure + injectable `makeUrl` so it's testable without a DOM.
+ *  Ids are preserved so React keys stay stable across the restore. */
+export function restageImages(
+  images: readonly StagedImage[],
+  makeUrl: (file: File) => string,
+): StagedImage[] {
+  return images.map((s) => ({ id: s.id, name: s.name, file: s.file, url: makeUrl(s.file) }));
+}
+
 /** Reconcile an optimistic echo against the host's `accepted` ack (#113): if the real `user-<seq>` echo
  *  has already arrived, drop the still-pending optimistic twin; otherwise re-key the optimistic to
  *  `user-<seq>` so the upcoming echo dedups by msgId. Either order → exactly one bubble, no flash.
@@ -852,8 +863,15 @@ function Transcript(props: {
           } else if (m.kind === "accepted") {
             // Reconcile the optimistic echo (#113) — don't render the ack itself.
             const ack = parseAccepted(m.text);
-            if (ack !== null)
+            if (ack !== null) {
+              // A FALSE failure: this send was restored as failed, but its ack just arrived → it actually
+              // landed. Clear the error banner (+ Retry) so the user can't one-tap a duplicate (#150).
+              if (ack.clientMsgId === failedSendRef.current) {
+                failedSendRef.current = null;
+                setSendError(null);
+              }
               setMessages((prev) => reconcileAccepted(prev, ack.clientMsgId, ack.seq));
+            }
           } else {
             setGap(null);
             setMessages((prev) => appendUniqueMessage(prev, m));
@@ -961,6 +979,15 @@ function Transcript(props: {
   // Revoke any still-staged object URLs if the transcript unmounts (session switch / back) with a draft.
   const stagedRef = useRef(staged);
   stagedRef.current = staged;
+  // Mirror the live input/staged so the send-failure recovery (#150) can tell whether the user has begun
+  // a NEW draft during the in-flight send (don't clobber it) — the send closure only sees the pre-send values.
+  const inputRef = useRef(input);
+  inputRef.current = input;
+  // The clientMsgId of a send we restored as FAILED. A `fetch` rejection can be a FALSE failure — the POST
+  // reached the broker and published, but the response was lost — in which case the host still emits the
+  // `accepted` ack. If that ack arrives for a "failed" send, the send actually landed: clear the error
+  // banner so the user isn't tempted to one-tap Retry into a duplicate (#150 review).
+  const failedSendRef = useRef<string | null>(null);
   useEffect(
     () => () => {
       for (const s of stagedRef.current) URL.revokeObjectURL(s.url);
@@ -973,8 +1000,10 @@ function Transcript(props: {
     if (text === "" && staged.length === 0) return;
     const clientMsgId = `cm-${crypto.randomUUID()}`;
     const toSend = staged; // capture before clearStaged resets it (downscale reads item.file, not the URL)
+    const original = input; // restore the EXACT draft (untrimmed) on failure, not the trimmed send text
     setSending(true);
     setSendError(null);
+    failedSendRef.current = null; // a new attempt supersedes any prior failed-send tracking
     // Optimistic echo (#113): render the message INSTANTLY and clear the composer, so the image/text is
     // never in neither place during the host round-trip (or an iOS-suspended stream). The host's `accepted`
     // ack reconciles it; the transport watchdog (#125) recovers the stream — so no post-send reviveKey bump.
@@ -986,15 +1015,31 @@ function Transcript(props: {
     try {
       await sendComposer(viewer, sessionId, text, toSend, downscaleToBase64, clientMsgId);
     } catch (e) {
+      // The send's POST rejected. USUALLY that means it never landed (no `accepted` will come) — but it can
+      // also be a FALSE failure (the POST published, only the response was lost), in which case the ack DOES
+      // arrive and the accepted-handler clears this banner (failedSendRef) so Retry can't duplicate it.
+      // Don't strand the content in a dead "failed to send" bubble (the previous behavior, which also LOST
+      // the staged images — their previews were revoked): RESTORE the draft to the composer so the user can
+      // edit + Send again (#150). Only restore into an EMPTY composer — if a new draft was typed during the
+      // in-flight send, keep it and leave the failed bubble in place instead of clobbering their work.
       setSendError(friendlySendError(e));
-      // The send failed → no `accepted` will come; flag the optimistic bubble so it isn't a silent loss.
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.clientMsgId === clientMsgId
-            ? { ...m, optimistic: false, text: `${m.text}\n⚠️ failed to send` }
-            : m,
-        ),
-      );
+      const composerDirty = inputRef.current.trim() !== "" || stagedRef.current.length > 0;
+      if (composerDirty) {
+        // Can't restore without clobbering — mark the optimistic bubble failed so the text isn't a silent loss.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.clientMsgId === clientMsgId
+              ? { ...m, optimistic: false, text: `${m.text}\n⚠️ failed to send` }
+              : m,
+          ),
+        );
+      } else {
+        // Composer is free → drop the optimistic bubble and put the draft back exactly as it was.
+        failedSendRef.current = clientMsgId; // a late ack for this id ⇒ false failure ⇒ clear the banner
+        setMessages((prev) => prev.filter((m) => m.clientMsgId !== clientMsgId));
+        setInput(original);
+        if (toSend.length > 0) setStaged(restageImages(toSend, (f) => URL.createObjectURL(f)));
+      }
     } finally {
       setSending(false);
     }
@@ -1119,7 +1164,27 @@ function Transcript(props: {
         </button>
       )}
       <StatusStrip conn={cs} phase={phase} needs={needs} />
-      {sendError !== null && <p className="send-err">Couldn’t send: {sendError}</p>}
+      {sendError !== null && (
+        <div className="send-err" role="alert">
+          <span className="send-err-msg">Couldn’t send: {sendError}</span>
+          <button
+            type="button"
+            className="send-err-retry"
+            disabled={sending || (input.trim() === "" && staged.length === 0)}
+            onClick={() => void send()}
+          >
+            Retry
+          </button>
+          <button
+            type="button"
+            className="send-err-dismiss"
+            aria-label="Dismiss"
+            onClick={() => setSendError(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <form
         className="composer"
