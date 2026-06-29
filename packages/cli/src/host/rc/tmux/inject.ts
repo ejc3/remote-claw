@@ -67,23 +67,32 @@ export function downstreamSetModel(ev: RcEvent): string | null {
   return typeof req.model === "string" && req.model !== "" ? req.model : null;
 }
 
-/** Extract { requestId, behavior } from a downstream `control_response` (the permission-mirroring answer,
- *  B2): the viewer's grant/deny rides this, and the driver writes the matching decision file the blocked
- *  PreToolUse hook is polling. `pushControlResponse` sets payload.response.{request_id,response.behavior}.
- *  Returns null if it isn't a well-formed control_response. */
+/** Extract { requestId, behavior, updatedInput? } from a downstream `control_response` (the
+ *  permission-mirroring answer, B2): the viewer's grant/deny rides this, and the driver writes the matching
+ *  decision file the blocked PreToolUse hook is polling. `pushControlResponse` sets
+ *  payload.response.{request_id,response.behavior} and, for an AskUserQuestion answer (#42),
+ *  response.response.updatedInput = {questions, answers}. Returns null if it isn't a well-formed
+ *  control_response. */
 export function downstreamControlResponse(
   ev: RcEvent,
-): { requestId: string; behavior: "allow" | "deny" } | null {
+): { requestId: string; behavior: "allow" | "deny"; updatedInput?: unknown } | null {
   if (ev.eventType !== "control_response") return null;
   const resp = ev.payload.response as
-    | { request_id?: unknown; response?: { behavior?: unknown } }
+    | { request_id?: unknown; response?: { behavior?: unknown; updatedInput?: unknown } }
     | undefined;
   const requestId = resp?.request_id;
   if (typeof requestId !== "string" || requestId === "") return null;
   // Fail CLOSED: only an explicit "allow" allows; anything else — "deny", or a malformed/absent behavior —
   // denies, so a garbled control_response can never auto-approve a tool. The relay normalizes behavior to
   // exactly allow|deny before this, so a real viewer grant is always "allow"; this is the last-gate guard.
-  return { requestId, behavior: resp?.response?.behavior === "allow" ? "allow" : "deny" };
+  const behavior = resp?.response?.behavior === "allow" ? "allow" : "deny";
+  // AskUserQuestion (#42): carry the {questions, answers} the relay built so the PreToolUse helper re-emits
+  // it as hookSpecificOutput.updatedInput and claude proceeds with the viewer's answers instead of
+  // prompting in the pane. Only meaningful on ALLOW — a deny never carries it (a denied tool doesn't run).
+  const updatedInput = resp?.response?.updatedInput;
+  return behavior === "allow" && updatedInput !== undefined
+    ? { requestId, behavior, updatedInput }
+    : { requestId, behavior };
 }
 
 /**
@@ -197,9 +206,14 @@ export interface InjectPumpOptions {
   onInjected?: (text: string) => void;
   /** Called on a `control_response` (a viewer permission answer) when permission MIRRORING is on (B2):
    *  the driver writes the decision file the blocked PreToolUse hook is polling, keyed by request_id (==
-   *  the can_use_tool gate's id == the tool_use_id). When absent (mirroring off), control_responses are
-   *  just acked (today's behavior). May be async; awaited before the event is acked. */
-  onDecision?: (requestId: string, behavior: "allow" | "deny") => void | Promise<void>;
+   *  the can_use_tool gate's id == the tool_use_id). `updatedInput` is present only for an AskUserQuestion
+   *  allow (#42): the {questions, answers} the helper re-emits as hookSpecificOutput.updatedInput. When
+   *  absent (mirroring off), control_responses are just acked. May be async; awaited before the ack. */
+  onDecision?: (
+    requestId: string,
+    behavior: "allow" | "deny",
+    updatedInput?: unknown,
+  ) => void | Promise<void>;
 }
 
 /**
@@ -298,12 +312,11 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
     } else if (ev.eventType === "control_response" && opts.onDecision) {
       // Permission mirroring (B2): the viewer's grant/deny → write the decision file the blocked PreToolUse
       // hook polls. ACK after so a reclaimed stream doesn't replay the answer (a second, redundant write).
-      // LIMITATION: this carries only allow/deny, not structured answers. An AskUserQuestion tool gated via
-      // the PreToolUse path is therefore allow/deny-only — the viewer's chosen answers (the #42 updatedInput
-      // path) reach claude on the MITM driver but NOT here, where the hook can return only a permission
-      // decision. Allowing the tool lets claude fall back to its own in-pane question flow.
+      // For an AskUserQuestion allow, `updatedInput` ({questions, answers}, #42) rides along — the helper
+      // re-emits it as hookSpecificOutput.updatedInput so claude proceeds with the viewer's chosen answers
+      // instead of falling back to its own in-pane question flow.
       const dec = downstreamControlResponse(ev);
-      if (dec !== null) await opts.onDecision(dec.requestId, dec.behavior);
+      if (dec !== null) await opts.onDecision(dec.requestId, dec.behavior, dec.updatedInput);
       session.ack(ev.eventId);
     } else {
       // control_request (initialize / set_mode / end) and an unhandled control_response (mirroring off):

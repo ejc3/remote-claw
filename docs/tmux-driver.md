@@ -190,6 +190,15 @@ round-trip (no relay change), and on the viewer's answer writes the decision fil
 on. The decision is **fail-closed**: anything but an explicit `allow` is treated as deny. With mirroring
 on, `capabilities.structuredPermissions = true`.
 
+**AskUserQuestion answers (#42).** A `can_use_tool` gate whose `tool_name` is `AskUserQuestion` is
+answered with *choices*, not a bare allow/deny: the relay echoes the stashed `questions` and builds
+`control_response.updatedInput = {questions, answers}`. The perm pump records which open gates are
+AskUserQuestion (so a crafted `answers` payload can never replace a *Bash* gate's input — both the driver
+and the helper gate `updatedInput` to `tool_name === "AskUserQuestion"`, and only on an `allow`), and on
+the answer writes that `updatedInput` into the decision file. The helper re-emits it as the PreToolUse
+hook's `hookSpecificOutput.updatedInput`, which **replaces** the tool input — so claude proceeds with the
+viewer's answers instead of drawing its in-pane picker, matching the MITM driver.
+
 **Folder trust (mirror on).** Dropping `--dangerously-skip-permissions` also drops the flag's bypass of
 claude's startup *"Do you trust the files in this folder?"* gate — which the PreToolUse hook does NOT
 cover (it's a startup gate, not a tool) and no one is at the detached pane to answer → a hung pane on a

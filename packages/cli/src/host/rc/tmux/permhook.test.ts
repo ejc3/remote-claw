@@ -162,6 +162,18 @@ describe("decisionFileContent", () => {
       '{"behavior":"deny","reason":"blocked by viewer"}',
     );
   });
+  it("includes AskUserQuestion updatedInput on an ALLOW only (#42)", () => {
+    const updatedInput = { questions: [{ question: "Q?" }], answers: { "Q?": "A" } };
+    expect(JSON.parse(decisionFileContent("allow", undefined, updatedInput))).toEqual({
+      behavior: "allow",
+      updatedInput,
+    });
+    // A deny never carries updatedInput (the tool won't run) — even if one is passed.
+    expect(JSON.parse(decisionFileContent("deny", "no", updatedInput))).toEqual({
+      behavior: "deny",
+      reason: "no",
+    });
+  });
 });
 
 // The helper is the load-bearing, otherwise-untested blocking loop. Run it as a REAL subprocess (no live
@@ -174,6 +186,10 @@ describe("PRE_TOOL_USE_HELPER_SOURCE (subprocess)", () => {
     decide: (req: { toolUseId: string; toolName: string }) => {
       behavior: "allow" | "deny";
       reason?: string;
+      updatedInput?: unknown;
+      /** Write this verbatim as the decision file instead of decisionFileContent(...) — lets a test feed
+       *  a RAW shape (e.g. a deny that DOES carry updatedInput) to exercise the helper's OWN guards. */
+      raw?: string;
     },
   ): Promise<{ stdout: string; requestLine: unknown }> {
     const dir = await mkdtemp(join(tmpdir(), "permhook-"));
@@ -213,7 +229,7 @@ describe("PRE_TOOL_USE_HELPER_SOURCE (subprocess)", () => {
     const d = decide(req);
     await writeFile(
       join(decisionDir, `${req.toolUseId}.json`),
-      decisionFileContent(d.behavior, d.reason),
+      d.raw ?? decisionFileContent(d.behavior, d.reason, d.updatedInput),
     );
 
     await new Promise<void>((resolve) => child.on("close", () => resolve()));
@@ -234,6 +250,66 @@ describe("PRE_TOOL_USE_HELPER_SOURCE (subprocess)", () => {
     expect((requestLine as { toolName: string }).toolName).toBe("Bash");
     expect(JSON.parse(stdout)).toEqual({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+    });
+  });
+
+  it("emits ALLOW with updatedInput {questions, answers} for an AskUserQuestion answer (#42)", async () => {
+    const questions = [{ question: "Which name?", header: "Name", options: [{ label: "Orion" }] }];
+    const answers = { "Which name?": "Orion" };
+    const { stdout } = await runHelper(
+      {
+        tool_use_id: "tu_askq",
+        tool_name: "AskUserQuestion",
+        tool_input: { questions },
+        session_id: "cse_a",
+        permission_mode: "default",
+      },
+      () => ({ behavior: "allow", updatedInput: { questions, answers } }),
+    );
+    // claude REPLACES the tool input with this updatedInput → it proceeds with the viewer's answers,
+    // skipping the in-pane picker. The questions are echoed so its tool call() gets {questions, answers}.
+    expect(JSON.parse(stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        updatedInput: { questions, answers },
+      },
+    });
+  });
+
+  it("does NOT emit updatedInput for a NON-AskUserQuestion tool even if the decision file carries one (#147)", async () => {
+    // Guard: a crafted/stray `answers` on a Bash gate must never clobber Bash's real input. The helper
+    // gates updatedInput by the tool it fired for, so it drops it here even though the decision file has one.
+    const { stdout } = await runHelper(
+      { tool_use_id: "tu_bash", tool_name: "Bash", tool_input: { command: "ls" } },
+      () => ({ behavior: "allow", updatedInput: { answers: { hijack: "x" } } }),
+    );
+    expect(JSON.parse(stdout)).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+    });
+  });
+
+  it("emit() guard: a RAW deny file that DOES carry updatedInput still emits no updatedInput (helper's own last line)", async () => {
+    // Feed a raw decision the driver would never write (decisionFileContent strips updatedInput on deny) so
+    // we actually exercise the HELPER's belt-and-suspenders `behavior === "allow"` guard in emit() — a deny
+    // must never carry updatedInput to claude even if the file on disk somehow does.
+    const { stdout } = await runHelper(
+      { tool_use_id: "tu_askq_deny", tool_name: "AskUserQuestion", tool_input: { questions: [] } },
+      () => ({
+        behavior: "deny",
+        raw: JSON.stringify({
+          behavior: "deny",
+          reason: "vetoed",
+          updatedInput: { answers: { q: "a" } },
+        }),
+      }),
+    );
+    expect(JSON.parse(stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "vetoed",
+      },
     });
   });
 
