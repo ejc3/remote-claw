@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import Home, { Connect, entryFromFragment, Pairing } from "../app/page.js";
 
-// Auto-reconnect on reload (#110): a plain reload should restore the stored credential and reconnect,
-// landing back in the console — NOT flash the pass/token form. These cover the pure load-time routing
-// and the initial render (the splash), so a returning user never sees the pass form on reload.
+// Restore-on-load (#110): a plain reload should restore the stored credential and land back in the
+// console — NOT flash the pass/token form. These cover the pure load-time ROUTING (entryFromFragment)
+// and the initial render (the splash), so a returning user never sees the pass form on reload. (Named
+// for what it tests — load-time credential restore — not "reconnect", which is the network-stream
+// re-subscribe exercised by the browser revive spec in tests/web/app-e2e/revive.spec.ts.)
 describe("entryFromFragment (load-time routing)", () => {
   it("classifies a legacy bare pass", () => {
     expect(entryFromFragment("rcp1_ABC")).toEqual({ kind: "pass", value: "rcp1_ABC" });

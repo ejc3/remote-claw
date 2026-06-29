@@ -118,6 +118,29 @@ function terminate(child: ChildProcess): Promise<void> {
 }
 
 export const test = base.extend<{ seedHost: SeedHost }>({
+  // WebKit (the ios-safari project) honors the prod CSP's `upgrade-insecure-requests` even on
+  // http://localhost — Chromium exempts localhost, WebKit does not — so it upgrades the _next/static
+  // chunks to https://localhost, which the plain-http test server can't serve (TLS handshake fails), and
+  // the app never hydrates (stuck on the "Connecting…" splash). Strip ONLY that one directive from the
+  // DOCUMENT response so the prod build runs over http; every other directive (and HSTS) stays enforced,
+  // and the full prod CSP — including upgrade-insecure-requests — is still asserted on Chromium (the CSP
+  // test in transcript.spec.ts). The app/prod policy is untouched (this lives entirely in the harness).
+  // Documents only: API/SSE responses (resourceType fetch/xhr) pass through untouched so the live
+  // transcript stream is never buffered by route.fetch().
+  page: async ({ page, browserName }, use) => {
+    if (browserName === "webkit") {
+      await page.route("**/*", async (route, req) => {
+        if (req.resourceType() !== "document") return route.continue();
+        const resp = await route.fetch();
+        const headers = resp.headers();
+        const csp = headers["content-security-policy"];
+        if (csp)
+          headers["content-security-policy"] = csp.replace(/;?\s*upgrade-insecure-requests/i, "");
+        await route.fulfill({ response: resp, headers });
+      });
+    }
+    await use(page);
+  },
   seedHost: async ({ baseURL }, use) => {
     const children: ChildProcess[] = [];
     const seed: SeedHost = async (opts) => {
