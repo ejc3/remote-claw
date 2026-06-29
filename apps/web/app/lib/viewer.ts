@@ -85,7 +85,10 @@ export function emptyTranscriptHint(cs: ConnState | null): string {
     case "reconnecting":
       return "Reconnecting to the session…";
     case "disconnected":
-      return "The host is offline — waiting for it to reconnect.";
+      // Neutral: a disconnected host MIGHT reconnect, but a wrong/stale pass or a host that exited never
+      // will — so don't promise a reconnect we can't guarantee (the old "waiting for it to reconnect" read
+      // as "it's coming back", leaving a dead/stale session looking perpetually hopeful).
+      return "The host is offline — it may reconnect, or the session has ended.";
     default:
       return "Connecting…"; // no announce yet — we haven't reached the session
   }
@@ -329,11 +332,26 @@ export class Viewer {
    * when the stream ends: the bus run may not exist yet (you opened the app before any host
    * announced) or may have cap-rolled. Consumers key presence by session_id + sent_at, so a
    * re-yielded announce across a reconnect is harmless. Loops until `signal` aborts.
+   *
+   * `onError` reports the bus transport's health so a SUSTAINED outage becomes observable instead of a
+   * silent retry-forever: it's called with the error when a subscribe/stream throws (broker down, a
+   * wrong/stale pass that can't reach the bus, a 5xx), and with `null` the moment the transport is back
+   * up — a frame streamed, or the stream drained cleanly (the run just doesn't exist yet). Discovery
+   * itself NEVER ends on an error; it always falls through to the retry. The caller debounces (a single
+   * SSE blip clears on the next subscribe; only a persistent failure should surface to the user).
    */
-  async *announces(signal: AbortSignal): AsyncGenerator<Announce> {
+  async *announces(
+    signal: AbortSignal,
+    onError?: (err: unknown) => void,
+  ): AsyncGenerator<Announce> {
     while (!signal.aborted) {
       try {
+        let up = false;
         for await (const frame of this.#client.streamFrames({ startIndex: -64, signal })) {
+          if (!up) {
+            up = true;
+            onError?.(null); // a frame streamed → transport is up → clear any prior outage
+          }
           if (frame.recordKind !== "session_announce") continue;
           let body: Record<string, unknown>;
           try {
@@ -360,9 +378,13 @@ export class Viewer {
           this.#rememberIncarnation(sessionId, announce.incarnation);
           yield announce;
         }
-      } catch {
-        // A transient stream error (network blip / SSE reset / broker 5xx) must NOT end discovery —
-        // fall through to the resume-or-retry sleep and re-subscribe, exactly like the relay does.
+        onError?.(null); // stream drained cleanly (run not up yet / cap-rolled) → broker still reachable
+      } catch (e) {
+        // A transient stream error (network blip / SSE reset / broker 5xx) must NOT end discovery — fall
+        // through to the resume-or-retry sleep and re-subscribe, exactly like the relay does. But REPORT it
+        // so the UI can debounce a SUSTAINED outage into a visible "can't reach the broker" signal rather
+        // than spinning forever in silence.
+        onError?.(e);
       }
       if (signal.aborted) break;
       await new Promise((r) => setTimeout(r, 150)); // bus run not up / stream closed → resume-or-retry
