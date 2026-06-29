@@ -12,8 +12,32 @@
 // then we run serve() forever until SIGTERM/SIGINT aborts it.
 import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
-import { HostRcRelay, Session } from "@remote-claw/cli/rc";
+import { type DriverCapabilities, HostRcRelay, Session } from "@remote-claw/cli/rc";
 import { scenario } from "./scenario.js";
+
+/** Capability presets the browser e2e can drive (RC_E2E_CAPS) so the capability-gated viewer (#149) can be
+ *  exercised end-to-end without a real tmux/opencode host. Unset ⇒ the relay's default (full MITM caps). */
+function presetCaps(p: string | undefined): DriverCapabilities | undefined {
+  if (p === "tmux")
+    // tmux with mirroring on: structured permissions + interrupt + set_model (via `/model`), but no
+    // faithful set_mode/end pane analogue → those controls disable in the viewer.
+    return {
+      structuredPermissions: true,
+      status: true,
+      controls: { interrupt: true, setModel: true, setMode: false, end: false },
+      attachments: true,
+    };
+  if (p === "opencode-skip")
+    // opencode with --skip-permissions: NO structured gating (the "permissions off" posture), interrupt
+    // only — set_model needs a providerID/modelID the viewer's aliases lack, set_mode/end no-op.
+    return {
+      structuredPermissions: false,
+      status: true,
+      controls: { interrupt: true, setModel: false, setMode: false, end: false },
+      attachments: true,
+    };
+  return undefined; // default → MITM_CAPABILITIES (full)
+}
 
 const base = process.env.RC_E2E_BASE;
 if (!base) {
@@ -42,7 +66,14 @@ const clientOpts: ConstructorParameters<typeof BrokerClient>[0] = {
 if (backend) clientOpts.backend = backend;
 if (bypass) clientOpts.protectionBypass = bypass;
 const client = new BrokerClient(clientOpts);
-const relay = new HostRcRelay({ client, identityId: id.identityId, sessionId, session });
+const caps = presetCaps(process.env.RC_E2E_CAPS); // capability-gated viewer e2e (#149); unset ⇒ full MITM
+const relay = new HostRcRelay({
+  client,
+  identityId: id.identityId,
+  sessionId,
+  session,
+  ...(caps ? { capabilities: caps } : {}),
+});
 
 const ac = new AbortController();
 const stop = () => {

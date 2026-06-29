@@ -2,14 +2,16 @@
 // --remote-control` is pointed at MitmProxy via HTTPS_PROXY; the proxy serves the RC worker
 // endpoints from RelayCore/Session; HostRcRelay bridges that session to the E2E-encrypted broker.
 export { type CertPaths, certPaths, ensureCerts, MITM_HOST } from "./certs.js";
-export type {
-  ContentBlock,
-  Driver,
-  DriverCapabilities,
-  DriverContext,
-  DriverFactory,
-  DriverName,
-  UpstreamPayload,
+export {
+  type ContentBlock,
+  type ControlCapabilities,
+  type Driver,
+  type DriverCapabilities,
+  type DriverContext,
+  type DriverFactory,
+  type DriverName,
+  MITM_CAPABILITIES,
+  type UpstreamPayload,
 } from "./driver.js";
 export { type BridgeArgs, bridgeSession } from "./drivers/bridge.js";
 export { type GitInfo, gitInfo, parseGitStatusV2 } from "./gitinfo.js";

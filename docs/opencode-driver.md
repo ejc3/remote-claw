@@ -176,6 +176,13 @@ for await (const ev of session.followDownstream(gen, () => stop.aborted)) {
 }
 ```
 
+**Viewer-facing capabilities (#149).** The opencode driver declares `controls.interrupt: true`
+(`client.abort`) but `controls.setModel: false`: its `set_model` handler only accepts a
+`providerID/modelID` string, while the viewer's model switcher sends bare aliases (`opus`/`sonnet`/…), so
+a viewer-driven switch would silently no-op — the viewer therefore disables the model switcher rather than
+show a "✓" that lies. `set_mode`/`end` have no opencode analogue (false), and with
+`--rc-oc-skip-permissions` (`structuredPermissions: false`) the viewer shows a "permissions off" posture.
+
 Slash commands ride the `user` path like the claude protocol. `/compact` is routed to its native
 equivalent (`POST /session/{id}/summarize`) **and is implemented + live-verified** — without it the
 literal string `/compact` would be fed to the model. Every other slash command currently passes through

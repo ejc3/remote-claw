@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError, type SeqCursor } from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
+import { type DriverCapabilities, MITM_CAPABILITIES } from "./driver.js";
 import type { GitInfo } from "./gitinfo.js";
 import { assistantText, permissionModeFrom, type RcEvent, type Session } from "./session.js";
 
@@ -120,6 +121,10 @@ export interface HostRcRelayOptions {
    *  `defaultAttachmentsDir(sessionId)` — claude's own uploads dir, which it reads without a permission
    *  prompt (see that helper); override to redirect. */
   attachmentsDir?: string;
+  /** What this driver can faithfully service. Rides every session_announce so the viewer disables the
+   *  controls a driver can't honor (no false "✓"). Defaults to MITM_CAPABILITIES (full) so a relay built
+   *  without it behaves exactly as before. */
+  capabilities?: DriverCapabilities;
 }
 
 /** Default on-disk location for a viewer-sent attachment (#44): `~/.claude/uploads/<sessionId>/`. This
@@ -411,6 +416,8 @@ export class HostRcRelay {
   readonly #trace: Tracer;
   /** Where a viewer attachment is written before claude Reads it (#44). */
   readonly #attachmentsDir: string;
+  /** Declared driver capabilities, broadcast on every announce so the viewer can gate controls. */
+  readonly #capabilities: DriverCapabilities;
   /** Monotonic prefix making each on-disk attachment name unique (so a later upload can't overwrite a
    *  file an earlier still-queued prompt will Read). (#44) */
   #attachmentSeq = 0;
@@ -427,6 +434,7 @@ export class HostRcRelay {
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
     this.#attachmentsDir = opts.attachmentsDir ?? defaultAttachmentsDir(opts.sessionId);
+    this.#capabilities = opts.capabilities ?? MITM_CAPABILITIES;
     // Bind the session id onto every line (span-like) so interleaved sessions are distinguishable.
     this.#trace = (opts.tracer ?? NOOP_TRACER).child({ session: opts.sessionId });
   }
@@ -491,6 +499,7 @@ export class HostRcRelay {
       phase: p.phase,
       needs: p.needs,
       git: this.#annGit,
+      capabilities: this.#capabilities,
     };
     if (p.mode !== null) body.mode = p.mode;
     await this.#client.postFrame(
@@ -1095,9 +1104,16 @@ export class HostRcRelay {
         break;
       case "set_mode":
         if (typeof body.mode === "string" && body.mode !== "") {
-          this.#session.permissionMode = body.mode;
+          // Drive the worker verb regardless — the driver honors it (mitm) or safely no-ops it
+          // (obligation #4). But only REFLECT the mode as confirmed presence when this driver can
+          // actually enter it; otherwise announcing body.mode fabricates a "✓" the worker never honored
+          // (tmux/opencode have no mode analogue). A capability-gated viewer won't show the control, but
+          // an older viewer or a pre-announce race can still send set_mode — so guard here too.
           this.#session.pushControlRequest("set_permission_mode", { mode: body.mode });
-          await this.#maybeAnnounce();
+          if (this.#capabilities.controls.setMode) {
+            this.#session.permissionMode = body.mode;
+            await this.#maybeAnnounce();
+          }
         }
         break;
       case "end":

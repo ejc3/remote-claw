@@ -220,8 +220,9 @@ export interface InjectPumpOptions {
  * Drain the downstream queue into the pane until `signal` aborts. For each event:
  *   • `user`            → loadAndPaste (phase 1) then submitPrompt (phase 2), then `session.ack`.
  *   • `control_request` `interrupt` → send Escape, then ack.
- *   • `control_request` (other verbs: set_model/set_permission_mode/end) → no faithful pane analogue;
- *      ack so a reclaimed stream doesn't replay it (capabilities.controlVerbs=false documents this).
+ *   • `control_request` `set_model` → type `/model <id>` into the pane (capabilities.controls.setModel=true).
+ *   • `control_request` (other verbs: set_permission_mode/end) → no faithful pane analogue; ack so a
+ *      reclaimed stream doesn't replay it (capabilities.controls.setMode/end=false documents this).
  *   • `control_request` `initialize`, `control_response` → no pane action, but ACK (review #5) so the
  *      leading initialize isn't replayed on reconnect.
  *

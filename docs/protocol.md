@@ -227,6 +227,18 @@ logged, so re-announcing is cheap (`relay.ts` `#sendAnnounce`). The host folds l
 - `title`, `cwd`, and a static `git` snapshot (branch / dirty / ahead-behind, `gitinfo.ts`, #49).
 - `status` (raw `worker_status`), `phase` (`phaseFor`: `running`/`busy` → `thinking`, else `idle`, #48),
   and `needs` (`status === "requires_action" || #openPerms.size > 0`, `#presence`).
+- `mode` — the worker's effective permission mode, present whenever it's known (`session.permissionMode
+  !== null`: seeded from session config, or updated by an upstream `system/init`). A **viewer-requested**
+  `set_mode`, though, is reflected as a confirmed mode **only when the driver can honor it**
+  (`capabilities.controls.setMode`); for a driver that can't (tmux/opencode) the relay still forwards the
+  `set_permission_mode` verb but does **not** write/announce the mode — announcing one would be a "✓" the
+  worker never entered (#149). In practice tmux/opencode carry no upstream mode either, so their announce
+  omits `mode` entirely.
+- `capabilities` — the driver's `DriverCapabilities` (`structuredPermissions`, `status`, `attachments`,
+  and per-verb `controls.{interrupt,setModel,setMode,end}`). The viewer **disables + labels** the
+  controls a driver can't service and shows a "permissions off" posture when `structuredPermissions`
+  is false — so a permission-mode / model control never silently no-ops (#149). Absent on a legacy host
+  → the viewer assumes full capability (a pre-capability host is always the MITM driver).
 - `sent_at` — the freshness clock the viewer reads for liveness.
 
 Cadence (`relay.ts` `#maybeAnnounce`): re-announce **immediately** when the presence key

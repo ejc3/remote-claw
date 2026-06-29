@@ -5,6 +5,7 @@ import type { Frame, FrameHeader } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import type { Tracer } from "../../trace.js";
+import { type DriverCapabilities, MITM_CAPABILITIES } from "./driver.js";
 import {
   defaultAttachmentsDir,
   extForMime,
@@ -278,12 +279,17 @@ function inChunk(
   return { ...inFrame(recordKind, msgId, piece), part, parts };
 }
 
-function relayOf(session: Session, client: FakeClient): HostRcRelay {
+function relayOf(
+  session: Session,
+  client: FakeClient,
+  capabilities?: DriverCapabilities,
+): HostRcRelay {
   return new HostRcRelay({
     client: client as unknown as BrokerClient,
     identityId: ID,
     sessionId: session.id,
     session,
+    ...(capabilities ? { capabilities } : {}),
   });
 }
 
@@ -648,6 +654,60 @@ describe("HostRcRelay permission mode presence", () => {
 
     expect(session.permissionMode).toBe("plan");
     expect(pushControl).toHaveBeenCalledWith("set_permission_mode", { mode: "plan" });
+  });
+
+  it("a driver that can't honor set_mode drives the verb but does NOT fabricate a confirmed mode", async () => {
+    // tmux/opencode-style caps: controls.setMode=false. The relay must still forward the verb (the driver
+    // safely no-ops it) but must NOT set #session.permissionMode — announcing it would be a "✓" lie.
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const caps: DriverCapabilities = {
+      ...MITM_CAPABILITIES,
+      controls: { ...MITM_CAPABILITIES.controls, setMode: false },
+    };
+    const relay = relayOf(session, client, caps);
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    await relay.announce("box");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+
+    const annBefore = client.announces.length;
+    client.pushInbound(
+      inFrame("set_mode", "mode-1", JSON.stringify({ mode: "plan", expiry: Date.now() + 60_000 })),
+    );
+    // The verb is still forwarded to the worker (driver decides what to do with it).
+    await waitFor(() => pushControl.mock.calls.some(([v]) => v === "set_permission_mode"));
+    await tick();
+    ac.abort();
+    await served;
+
+    // But the relay never claims the mode took effect: no permissionMode write, no mode re-announce.
+    expect(session.permissionMode).toBeNull();
+    expect(client.announces.slice(annBefore).some((a) => a.mode === "plan")).toBe(false);
+  });
+});
+
+describe("HostRcRelay capabilities on session_announce", () => {
+  it("broadcasts the full MITM capability set by default", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    await relay.announce("box");
+    expect(client.announces.at(-1)?.capabilities).toEqual(MITM_CAPABILITIES);
+  });
+
+  it("broadcasts a driver's reduced capabilities verbatim", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const caps: DriverCapabilities = {
+      structuredPermissions: false,
+      status: true,
+      controls: { interrupt: true, setModel: false, setMode: false, end: false },
+      attachments: true,
+    };
+    const relay = relayOf(session, client, caps);
+    await relay.announce("box");
+    expect(client.announces.at(-1)?.capabilities).toEqual(caps);
   });
 });
 

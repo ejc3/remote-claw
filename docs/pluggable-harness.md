@@ -36,7 +36,8 @@ new HostRcRelay({
   `session.pushControlRequest(...)`.
 
 So the relay is *already* a pure function of `(Session, BrokerClient)`. The MITM
-(`mitm.ts`) is simply the **only current driver**: it serves claude's RC HTTP/SSE endpoints from a
+(`mitm.ts`) is the **reference driver** (three ship today: `mitm` / `tmux` / `opencode`): it serves
+claude's RC HTTP/SSE endpoints from a
 `RelayCore`, turning claude's `POST /worker/events` into `session.pushUpstream(payload)` and claude's
 `GET /worker/events/stream` into a `session.followDownstream(...)` SSE loop. A second driver replaces
 *that HTTP wiring* with a different capture/inject mechanism — and reuses the relay verbatim.
@@ -113,14 +114,18 @@ export interface DriverContext {
   extra?: Record<string, unknown>;
 }
 
-/** A driver declares which broker-side features it can faithfully service. */
+/** A driver declares which broker-side features it can faithfully service. The relay broadcasts this on
+ *  every session_announce, and the VIEWER disables + labels the controls a driver can't honor — so a
+ *  permission-mode / model "✓" never lies (#149). */
 export interface DriverCapabilities {
-  /** Can surface + round-trip structured can_use_tool gates (else auto-approve/ignore). */
+  /** Can surface + round-trip structured can_use_tool gates (else auto-approve/ignore). When false the
+   *  session runs WITHOUT per-tool gating and the viewer shows a "permissions off" posture. */
   structuredPermissions: boolean;
   /** Reports real workerStatus transitions (else presence is best-effort heuristic). */
   status: boolean;
-  /** Honors control verbs interrupt/set_model/set_mode/end (else best-effort/ignored). */
-  controlVerbs: boolean;
+  /** Per-verb control support — coarse "controlVerbs: boolean" couldn't say "interrupt works but
+   *  set_mode doesn't". `end` is false on EVERY driver (claude's REPL bridge has no remote end). */
+  controls: { interrupt: boolean; setModel: boolean; setMode: boolean; end: boolean };
   /** Receives viewer attachments. NOTE: attachments are relay-owned end-to-end (§5); a driver never
    *  sees the attachment frame — only the resulting `user` prompt downstream. Tracks `user`
    *  injection support; listed for documentation. */
@@ -165,7 +170,7 @@ is a wrapper that maps `DriverContext` onto `RcLaunchOptions` and calls it:
 // packages/cli/src/host/rc/drivers/mitm-driver.ts  (new, ~25 lines)
 export function mitmDriver(ctx: DriverContext): Driver {
   return {
-    capabilities: { structuredPermissions: true, status: true, controlVerbs: true, attachments: true },
+    capabilities: MITM_CAPABILITIES, // { structuredPermissions, status, attachments: true, controls: { interrupt:true, setModel:true, setMode:true, end:false } }
     run: (signal) =>
       runRcLaunch({
         claudeArgs: ctx.harnessArgs,
@@ -409,7 +414,9 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   entry — Track B (the tmux track in `docs/future-directions.md`). Spawns plain `claude` in tmux
   (no MITM, no HTTPS_PROXY), tails the transcript JSONL → `pushUpstream`, injects via send-keys,
   debounced status.
-- `packages/cli/src/host/rc/opencode/{driver,launch}.ts` — Track C stub (deferred).
+- `packages/cli/src/host/rc/opencode/driver.ts` — Track C driver (SHIPPED): bridges an `opencode serve`
+  HTTP+SSE session; declares `controls.setModel:false` (its set_model needs a providerID/modelID, not the
+  viewer's aliases), so the viewer disables the model switcher (#149).
 
 ### Modified
 - `packages/cli/src/args.ts` — add `"rc-driver": "value"` to `RC_FLAGS`.
@@ -454,8 +461,9 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
    `runRcLaunch`; wrap it. `launch.test.ts` is the guard and its surface is untouched.
 3. **Injection ordering / send-keys races (tmux).** `followDownstream` is one stream of
    user + control verbs; a paste+Enter has a ~40ms settle, so a burst of verbs can race. Mitigation:
-   per-driver serialization of the inject loop (process one downstream event fully before the next);
-   map only `interrupt` (→ ESC) and `end` (→ kill) in v1, others best-effort.
+   per-driver serialization of the inject loop (process one downstream event fully before the next).
+   tmux maps `interrupt` (→ ESC) and `set_model` (→ `/model <id>` inject); `set_mode`/`end` have no
+   faithful pane analogue (the viewer disables those controls, #149), so they safely no-op.
 4. **Permission fidelity on non-MITM drivers.** SHIPPED (was deferred): both non-MITM drivers now
    mirror permissions by default. **tmux** injects a **PreToolUse hook** that blocks each tool until the
    viewer answers (and pre-seeds claude's folder-trust bit so dropping `--dangerously-skip-permissions`
@@ -481,6 +489,8 @@ The `Session` is the seam. A `Driver` is the only new abstraction: it produces a
 **captures** harness output into the canonical content-block envelope (`pushUpstream`), **injects**
 the relay's downstream user/control events into the harness (`followDownstream`), reports **status**
 (`workerStatus` + `wake`), and lets the relay own **permissions + attachments** end-to-end. With
-`--rc-driver={mitm|tmux|opencode}` (default `mitm`), the relay, the broker router/backends, and the
-web viewer remain **completely unchanged** — because they are already pure functions of
-`(Session, BrokerClient)` and the canonical frame shape.
+`--rc-driver={mitm|tmux|opencode}` (default `mitm`), the broker router/backends and the per-frame
+transcript contract remain **completely unchanged** — they're already pure functions of
+`(Session, BrokerClient)` and the canonical frame shape. The one capability-aware seam (#149): a driver
+declares `DriverCapabilities`, the relay rides them on `session_announce`, and the viewer disables +
+labels the controls a driver can't faithfully service (so a permission-mode / model "✓" never lies).

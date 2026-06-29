@@ -247,8 +247,10 @@ covers the inbound (viewer) path, not the local-paste outbound path. Surfacing l
 - `packages/cli/src/host/rc/tmux/driver.ts` — `runTmuxDriver(ctx)` / `tmuxDriver(ctx)`: the lifecycle
   + the pumps (capture / inject / status / **perm**) + teardown.
   `capabilities = tmuxCapabilities(mirror)` = `{ structuredPermissions: mirror, status:true,
-  controlVerbs:false, attachments:true }` — `mirror` defaults true, so structured permissions are on
-  unless `--rc-tmux-skip-permissions`.
+  controls:{ interrupt:true, setModel:true, setMode:false, end:false }, attachments:true }` — `mirror`
+  defaults true, so structured permissions are on unless `--rc-tmux-skip-permissions`. interrupt (ESC)
+  and set_model (`/model <id>` inject) are honored; set_mode/end have no pane analogue, so the viewer
+  disables those controls (#149).
 - `packages/cli/src/host/rc/tmux/permhook.ts` — the injected PreToolUse helper source
   (`PRE_TOOL_USE_HELPER_SOURCE`) + the request/decision plumbing for permission mirroring (§2.5).
 - `packages/cli/src/host/rc/tmux/trust.ts` — `ensureCwdTrusted` (pre-seed claude's per-folder trust bit;
@@ -375,7 +377,8 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
    (`--dangerously-skip-permissions`, `structuredPermissions:false`, single-user-trusted).
 5. **send-keys timing** — strictly serialized inject; the paste phase (set-buffer+paste-buffer) and the
    submit (Enter) retry **separately** so a transient post-paste failure never double-pastes; retries
-   until the prompt lands or the pane dies. Only `interrupt` is mapped in v1.
+   until the prompt lands or the pane dies. `interrupt` (→ ESC) and `set_model` (→ `/model <id>` inject)
+   are mapped; `set_mode`/`end` have no faithful pane analogue, so the viewer disables those controls (#149).
 6. **Transcript discovery/rotation** — discovery excludes pre-spawn inodes and gates on creation time;
    the tailer keys on `dev:ino:birthtime` (rotation-safe even under inode reuse) and opens-then-fstats
    (no stat/open race). Two residual limits remain (see below).

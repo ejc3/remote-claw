@@ -15,20 +15,51 @@ import type { Session } from "./session.js";
 /** The driver names the wrapper can dispatch on (`--rc-driver=<name>`, default "mitm"). */
 export type DriverName = "mitm" | "tmux" | "opencode";
 
-/** A driver declares which broker-side features it can faithfully service. The relay/wrapper
- *  degrade gracefully when a feature is absent. */
+/** Per-verb control support. Coarse "controlVerbs: boolean" couldn't say "interrupt works but set_mode
+ *  doesn't", which made the viewer fabricate a confirmed mode/model for a driver that silently no-ops it
+ *  (a permission-mode "✓" that lies). Each verb is declared independently so the viewer can disable+label
+ *  exactly the controls a driver can't honor. `end` is false on EVERY driver: claude's REPL bridge has no
+ *  remote session-end (see relay.ts `end` case), so no harness can faithfully service it. */
+export interface ControlCapabilities {
+  /** interrupt the current turn (mitm: control_request; tmux: ESC; opencode: abort). */
+  interrupt: boolean;
+  /** switch model and have it take effect (mitm: set_model; tmux: `/model <alias>` inject). opencode
+   *  only honors `providerID/modelID`, not the viewer's bare aliases, so it declares false. */
+  setModel: boolean;
+  /** switch permission mode (Plan / Accept-edits / …) and have the worker actually enter it (mitm only;
+   *  tmux/opencode have no faithful pane/session analogue). */
+  setMode: boolean;
+  /** end the session remotely — false everywhere (no claude REPL analogue). */
+  end: boolean;
+}
+
+/** A driver declares which broker-side features it can faithfully service. The relay surfaces this on
+ *  `session_announce` and the viewer disables+labels controls a driver can't honor (no false "✓"). */
 export interface DriverCapabilities {
-  /** Can surface + round-trip structured can_use_tool permission gates (else auto-approve/ignore). */
+  /** Can surface + round-trip structured can_use_tool permission gates (else auto-approve/ignore). When
+   *  false the session runs WITHOUT gating (--dangerously-skip-permissions / no per-tool ask) — the
+   *  viewer shows a "permissions bypassed" posture so the human knows edits aren't gated. */
   structuredPermissions: boolean;
   /** Reports real workerStatus transitions (else presence is a best-effort heuristic). */
   status: boolean;
-  /** Honors control verbs interrupt/set_model/set_mode/end (else best-effort/ignored). */
-  controlVerbs: boolean;
+  /** Per-verb control support (interrupt / setModel / setMode / end). */
+  controls: ControlCapabilities;
   /** Receives viewer attachments. NOTE: attachments are relay-owned end-to-end — a driver never sees
    *  the `attachment` frame, only the resulting downstream `user` prompt. So this tracks `user`
    *  injection support; listed for documentation. */
   attachments: boolean;
 }
+
+/** The MITM driver's capabilities — the maximal *real* set: native claude RC honors interrupt, set_model
+ *  and set_permission_mode, surfaces structured permission gates, and reports real status. `end` is false
+ *  even here (claude's REPL bridge has no remote session-end). Also the relay's safe default when a relay
+ *  is built without explicit capabilities (preserves pre-capability mitm behavior: nothing gets gated). */
+export const MITM_CAPABILITIES: DriverCapabilities = {
+  structuredPermissions: true,
+  status: true,
+  controls: { interrupt: true, setModel: true, setMode: true, end: false },
+  attachments: true,
+};
 
 /**
  * Everything a driver needs to bridge a harness to the broker. Mirrors the launch surface
@@ -201,10 +232,11 @@ export interface ToolResultBlock {
 //     #acked set; the MITM acks via /worker/events/delivery, which non-MITM drivers don't have. So after
 //     SUCCESSFULLY injecting a downstream event, call session.ack(ev.eventId) (including for the leading
 //     `initialize`) — else a reclaimed worker stream replays old prompts/control events.
-//  4. EMULATE controls in v1 (review #4). DriverCapabilities is informational today: the viewer still
-//     sends interrupt/set_model/set_mode/end/attachments/permission grants regardless. A driver must
-//     handle or SAFELY no-op each (never throw on an unsupported verb). Gating the viewer on
-//     capabilities (via session_announce) is a later change — and WOULD change the viewer.
+//  4. SAFELY NO-OP unsupported controls (review #4). DriverCapabilities now rides session_announce and
+//     the viewer DISABLES the controls a driver declares false (no false "✓") — but a driver must STILL
+//     handle or safely no-op every verb it receives (never throw on an unsupported one): an older viewer,
+//     a race before the first announce, or a hand-crafted frame can still deliver any verb. Declaring a
+//     verb false hides its button; it does not guarantee the verb never arrives.
 //  5. TEARDOWN cleanly (review #10). bridgeSession returns the served promise; on teardown abort the
 //     signal, session.close(), and await it (mirrors runRcLaunch) so a final frame flushes and the
 //     relay's death is observable rather than swallowed.
