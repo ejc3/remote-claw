@@ -33,6 +33,63 @@ function signalExitCode(signal: NodeJS.Signals): number {
   return 128 + (n ?? 0);
 }
 
+/** Warning lines for reserved flags that belong to a DIFFERENT known driver than the selected one — a
+ *  silent no-op otherwise. Pure (no I/O) so it's unit-tested directly; the caller emits each line via
+ *  `warn`. Allowlist-gated to KNOWN drivers (mitm | tmux | opencode) so an UNKNOWN driver gets only its
+ *  own "unknown --rc-driver" error, not a second misapplied-flag nag. A reserved VALUE flag counts as
+ *  "passed" only when it carries a non-empty (trimmed) value — an empty/blank value is absent everywhere.
+ *  Each group names the driver it DOES apply to:
+ *    • tmux: --rc-session-hook / --rc-no-session-hook / --rc-tmux-skip-permissions
+ *    • opencode: --rc-oc-url / --rc-oc-model / --rc-oc-session / --rc-oc-skip-permissions
+ *    • mitm (inference): --rc-inference / --rc-bedrock-region / --rc-bedrock-model / --rc-accountless
+ *      (tmux/opencode reach Bedrock via their own provider, NOT our MITM translation). */
+export function misappliedDriverFlagWarnings(
+  driver: string,
+  rc: Record<string, unknown>,
+): string[] {
+  const has = (n: string) => typeof rc[n] === "string" && (rc[n] as string).trim() !== "";
+  const out: string[] = [];
+  const emit = (flags: string[], appliesTo: string) => {
+    if (flags.length === 0) return;
+    out.push(
+      `remote-claw: ${flags.join(" / ")} only appl${flags.length > 1 ? "y" : "ies"} to --rc-driver=${appliesTo}; ignored for ${driver}\n`,
+    );
+  };
+  if (driver === "mitm" || driver === "opencode") {
+    emit(
+      [
+        ...(rc["rc-session-hook"] === true ? ["--rc-session-hook"] : []),
+        ...(rc["rc-no-session-hook"] === true ? ["--rc-no-session-hook"] : []),
+        ...(rc["rc-tmux-skip-permissions"] === true ? ["--rc-tmux-skip-permissions"] : []),
+      ],
+      "tmux",
+    );
+  }
+  if (driver === "mitm" || driver === "tmux") {
+    emit(
+      [
+        ...(rc["rc-oc-skip-permissions"] === true ? ["--rc-oc-skip-permissions"] : []),
+        ...(has("rc-oc-url") ? ["--rc-oc-url"] : []),
+        ...(has("rc-oc-model") ? ["--rc-oc-model"] : []),
+        ...(has("rc-oc-session") ? ["--rc-oc-session"] : []),
+      ],
+      "opencode",
+    );
+  }
+  if (driver === "tmux" || driver === "opencode") {
+    emit(
+      [
+        ...(has("rc-inference") ? ["--rc-inference"] : []),
+        ...(has("rc-bedrock-region") ? ["--rc-bedrock-region"] : []),
+        ...(has("rc-bedrock-model") ? ["--rc-bedrock-model"] : []),
+        ...(rc["rc-accountless"] === true ? ["--rc-accountless"] : []),
+      ],
+      "mitm",
+    );
+  }
+  return out;
+}
+
 /** True if `--help`/`-h` appears before the `--` escape (post-`--` tokens are opaque claude payload). */
 function wantsHelp(claudeArgs: readonly string[]): boolean {
   const end = claudeArgs.indexOf("--");
@@ -191,27 +248,10 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       (process.env.RC_DRIVER ?? "").trim() ||
       "mitm"
     ).toLowerCase();
-    // The SessionStart-hook flags only apply to the tmux driver (transcript discovery); warn if they
-    // were EXPLICITLY passed with another KNOWN driver so the no-op isn't silent. (An unknown driver
-    // gets its own error below — no need to also nag about the hook flag there.)
-    if (
-      (driver === "mitm" || driver === "opencode") &&
-      (rc["rc-session-hook"] === true ||
-        rc["rc-no-session-hook"] === true ||
-        rc["rc-tmux-skip-permissions"] === true)
-    ) {
-      warn(
-        `remote-claw: --rc-session-hook / --rc-no-session-hook / --rc-tmux-skip-permissions only apply to --rc-driver=tmux; ignored for ${driver}\n`,
-      );
-    }
-    // `--rc-oc-skip-permissions` is the opencode permission-mirroring opt-out; warn if EXPLICITLY passed
-    // with another KNOWN driver. Allowlist-gated (like the tmux block above) so an UNKNOWN driver gets
-    // only its own error below — we don't also nag about the misapplied flag there.
-    if ((driver === "mitm" || driver === "tmux") && rc["rc-oc-skip-permissions"] === true) {
-      warn(
-        `remote-claw: --rc-oc-skip-permissions only applies to --rc-driver=opencode; ignored for ${driver}\n`,
-      );
-    }
+    // Warn (don't fail) when a flag that belongs to a DIFFERENT known driver was explicitly passed, so a
+    // silent no-op (e.g. `--rc-driver=tmux --rc-inference=bedrock`, which is NOT zero-api.anthropic.com)
+    // becomes visible. Pure + allowlist-gated (an unknown driver gets only its own error below).
+    for (const line of misappliedDriverFlagWarnings(driver, rc)) warn(line);
     if (driver === "mitm") {
       return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
     }

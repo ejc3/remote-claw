@@ -1,14 +1,15 @@
 // The `--help` banner for the reserved `--rc-*` surface. `remote-claw --help` prints this and
 // then falls through to `claude --help`, so the user sees both layers. Kept honest to what is
-// actually implemented today; deferred actions are named as "later releases", not listed as if
-// usable.
+// actually implemented today: every flag listed here is wired in run.ts; each value flag names its
+// env-var equivalent and default so the surface is discoverable without reading the source.
 
 export const RC_HELP = `remote-claw — a transparent wrapper around \`claude\`.
 Everything except the reserved --rc-* flags is forwarded verbatim to claude (use \`--\` to pass a
 literal --rc-* through). To start a session already remote-controlled, pass claude's own
 \`--remote-control\`.
 
-Identity (local; never launches claude, never touches the network):
+Identity & passes (local; never launches claude — the ONLY network touch is --rc-pass --rc-qr with an
+app origin, which uploads a one-time handoff, noted below):
   --rc-identity      ensure this host's secret exists and print it once (create-once, idempotent).
                      Re-run with --rc-confirm <identity_id> to REPLACE it: mint a new, unrelated
                      identity and abandon the old one (DESTRUCTIVE; not a true rotation and NOT a
@@ -37,12 +38,51 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      sqlite. Omitted ⇒ the broker's default. Must match what your viewers use.
                      When the server reports a durable log, the host serves history from it instead of
                      keeping (and replaying) an in-memory transcript.
+  --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | tmux | opencode (default mitm).
+                     mitm runs the real claude behind our MITM; tmux drives a PLAIN claude in a detached
+                     tmux pane and bridges via its transcript (provider-agnostic, Bedrock-capable, no
+                     MITM); opencode peer-attaches to an \`opencode serve\`. All bridge the SAME broker.
+
+Inference (mitm driver; route model traffic off api.anthropic.com):
+  --rc-inference <t> anthropic | bedrock (or set RC_INFERENCE; default anthropic = pass through).
+                     bedrock routes /v1/messages to Amazon Bedrock and synthesizes the rest — zero
+                     api.anthropic.com.
+  --rc-bedrock-region <r>  AWS region for Bedrock (bedrock only; default: AWS_REGION / AWS_DEFAULT_REGION,
+                     else us-east-1).
+  --rc-bedrock-model <m>   override the Bedrock model id (bedrock only; default: map claude's own model).
+  --rc-accountless   seed a synthetic claude.ai login + RC gates so native --remote-control works with no
+                     real account (or set RC_ACCOUNTLESS=1). Requires --rc-inference=bedrock (a fabricated
+                     credential can't reach real Anthropic).
+
+tmux driver (--rc-driver=tmux):
+  --rc-tmux-skip-permissions   auto-approve tools (\`claude --dangerously-skip-permissions\`) instead of
+                     mirroring each tool gate to the viewer (or set RC_TMUX_SKIP_PERMISSIONS). Default is
+                     mirroring ON (the viewer is the gate).
+  --rc-session-hook / --rc-no-session-hook   enable/disable the SessionStart hook used to discover the
+                     pane's transcript (or set RC_SESSION_HOOK; default ON).
+
+opencode driver (--rc-driver=opencode):
+  --rc-oc-url <origin>     the \`opencode serve\` origin (or set OPENCODE_URL; default
+                     http://127.0.0.1:4096).
+  --rc-oc-model <p/m>      provider/model for prompts (or set RC_OC_MODEL; default
+                     amazon-bedrock/global.anthropic.claude-sonnet-4-6 — a reliable Bedrock tool-caller).
+  --rc-oc-session <id>     attach to THIS opencode session (or set RC_OC_SESSION); omitted ⇒ auto-pick the
+                     most-recent session, else create one.
+  --rc-oc-skip-permissions opt out of permission mirroring (or set RC_OC_SKIP_PERMISSIONS): leave the
+                     session's own permission config instead of PATCHing it to "ask". Default is mirroring
+                     ON.
 
 Diagnostics:
   --rc-trace         stand up a MITM that passes through to the REAL api.anthropic.com and traces the
                      Remote-Control protocol both ways, then spawn claude behind it (no broker — a live
                      protocol inspector). Set RC_LOG=debug for frame shapes, RC_LOG=trace for full
-                     bodies (RC_LOG_FILE=… to capture on disk). All local.
+                     bodies; RC_LOG_FILE=<path> captures to disk, RC_LOG_FORMAT=json emits JSONL. Local.
+
+Environment-only knobs (no flag):
+  RC_CLAUDE_BIN             path to the claude binary to spawn (default: \`claude\` on PATH).
+  RC_BEDROCK_STRIP_KEYS    comma-separated body keys to drop before forwarding to Bedrock, for a model
+                     that hard-400s on a field claude sends (e.g. output_config). Bedrock inference only.
+  OPENCODE_SERVER_PASSWORD HTTP Basic password for a protected \`opencode serve\` (opencode driver).
 
 Below is claude's own help:
 `;
