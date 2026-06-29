@@ -122,6 +122,63 @@ test("permission Allow/Deny buttons meet the 44px minimum touch target", async (
   expect(minH).toBeGreaterThanOrEqual(44);
 });
 
+// #151 mobile a11y: pinch-zoom must not be blocked (no maximum-scale), focusable inputs are ≥16px (so
+// iOS doesn't auto-zoom on focus once scale is unpinned), composer controls meet the 44px touch target,
+// and on a coarse pointer Enter inserts a newline instead of sending. The default project is Pixel 5
+// (a touch device → pointer: coarse), so these run in the real mobile context.
+test.describe("mobile a11y (#151)", () => {
+  test("the viewport allows pinch-zoom (no maximum-scale / user-scalable=no)", async ({ page }) => {
+    await page.goto(`/${qp}`);
+    const content = await page.locator('meta[name="viewport"]').getAttribute("content");
+    expect(content).not.toMatch(/maximum-scale/i);
+    expect(content).not.toMatch(/user-scalable\s*=\s*no/i);
+  });
+
+  test("the connect field is ≥16px (no iOS focus auto-zoom)", async ({ page }) => {
+    await page.goto(`/${qp}`);
+    const fs = await page
+      .locator("textarea.field")
+      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(fs).toBeGreaterThanOrEqual(16);
+  });
+
+  test("composer input is ≥16px and its controls meet the 44px touch target", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+
+    const inputFs = await page
+      .locator("textarea.composer-input")
+      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(inputFs).toBeGreaterThanOrEqual(16);
+
+    for (const sel of ["button.attach-btn", "button.mode-btn", "button.composer-send"]) {
+      const h = await page.locator(sel).evaluate((el) => el.getBoundingClientRect().height);
+      expect(h, `${sel} height`).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test("on a touch device, Enter inserts a newline (does not send)", async ({ page, seedHost }) => {
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+
+    const input = page.getByPlaceholder(/Send a prompt/);
+    await input.click();
+    await input.type("line one");
+    await input.press("Enter");
+    await input.type("line two");
+    // Enter did NOT send — the draft is still in the composer, now multi-line, and no user pill appeared.
+    await expect(input).toHaveValue("line one\nline two");
+    await expect(page.locator(".row-user .pill", { hasText: "line one" })).toHaveCount(0);
+  });
+});
+
 // #150 send-failure resilience: when the publish POST fails, the draft must NOT be lost. The previous
 // behavior cleared the composer optimistically and left only a dead "failed to send" bubble (and the
 // staged images' previews were revoked → unrecoverable). Now the draft is restored to the composer and a
