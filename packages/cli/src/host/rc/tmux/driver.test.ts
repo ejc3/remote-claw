@@ -137,6 +137,7 @@ function tmuxSpy(): {
   env: () => Record<string, string>;
   command: () => string;
   killed: () => boolean;
+  started: () => boolean;
 } {
   const calls: string[][] = [];
   const exec: TmuxExec = (args): Promise<TmuxExecResult> => {
@@ -147,6 +148,11 @@ function tmuxSpy(): {
   return {
     exec,
     calls,
+    // The driver announces (bridgeSession) BEFORE it spawns the pane (newSession), so `announces.length`
+    // is NOT a safe barrier for asserting spawn state (env/command/new-session): under parallel load the
+    // spawn coroutine may not have run yet. `started` waits for the actual spawn — and since the spawn
+    // happens after the announce, it implies the announce already fired too.
+    started: () => calls.some((c) => c[0] === "new-session"),
     env: () => {
       const e: Record<string, string> = {};
       const ns = newSession() ?? [];
@@ -265,7 +271,8 @@ describe("runTmuxDriver wiring", () => {
 
     // The spawned command is plain claude with --dangerously-skip-permissions + forwarded args,
     // prefixed by an `env -u …` scrub that unsets the stub-gotcha ids even if a stale tmux server env
-    // holds them (codex review #1).
+    // holds them (codex review #1). Wait for the spawn first — it happens AFTER the announce.
+    await waitFor(spy.started);
     expect(spy.command()).toContain("claude");
     expect(spy.command()).toContain("--dangerously-skip-permissions");
     expect(spy.command()).toContain("--model");
@@ -363,7 +370,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       const cmd = spy.command();
       // Mirroring on → the viewer decides, so claude must NOT skip permissions.
       expect(cmd).not.toContain("--dangerously-skip-permissions");
@@ -417,7 +424,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       expect(trustCalls).toEqual([cwd]); // trust seeded for exactly the spawn cwd, before the pane runs
     } finally {
       ac.abort();
@@ -460,7 +467,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       expect(spy.command()).toContain("--dangerously-skip-permissions");
       expect(trustCalls).toEqual([]); // not called — skip-permissions already trusts the folder
     } finally {
@@ -505,7 +512,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       expect(spy.command()).toContain("--dangerously-skip-permissions"); // the user's flag survives
       expect(trustCalls).toEqual([]); // not seeded — the forwarded flag already bypasses the gate
     } finally {
@@ -548,7 +555,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       expect(spy.command()).toContain("CLAUDE_CONFIG_DIR"); // appears only as an `env -u` token
       expect(spy.env().CLAUDE_CONFIG_DIR).toBeUndefined(); // not passed through to the child
     } finally {
@@ -588,7 +595,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       expect(spy.env().CLAUDE_CONFIG_DIR).toBe("/custom/cfg"); // passed through via -e (pane == writer)
       expect(spy.command()).not.toContain("CLAUDE_CONFIG_DIR"); // NOT in the `env -u` unset list
     } finally {
@@ -631,7 +638,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0); // spawn proceeded despite the throw
+      await waitFor(spy.started); // spawn proceeded despite the throw
       expect(spy.calls.some((c) => c[0] === "new-session")).toBe(true);
       expect(records.some((r) => r.level === "warn" && r.msg.includes("folder trust"))).toBe(true);
     } finally {
@@ -672,7 +679,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       expect(records.some((r) => r.level === "warn" && r.msg.includes("folder trust"))).toBe(true);
     } finally {
       ac.abort();
@@ -721,7 +728,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       // The PreToolUse hook (simulated) records ONE tool request on the sentinel the driver tails.
       await appendFile(
         permReqPath,
@@ -821,7 +828,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       // The (simulated) PreToolUse hook records an AskUserQuestion request carrying the questions.
       await appendFile(
         permReqPath,
@@ -910,7 +917,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       await appendFile(
         permReqPath,
         `${JSON.stringify({
@@ -985,7 +992,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       await writeFile(transcript, ""); // create the pinned file so capture attaches
       // 1) A VIEWER prompt drives the pane → the inject pump records "say hi" in the ledger (onInjected).
       client.pushInbound(inFrame(identity, "user", "msg-1", "say hi"));
@@ -1068,7 +1075,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       await writeFile(transcript, "");
       // A MAIN-file user line already carrying parentToolUseID (renamed → parent_tool_use_id) is a nested
       // turn, NOT a typed prompt — it must be excluded from the ledger (gated on the payload field, not the
@@ -1173,7 +1180,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       // The parent's main transcript: the Agent tool_use that spawns the sub-agent.
       await appendFile(
         transcript,
@@ -1252,7 +1259,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       await appendFile(
         transcript,
         `${JSON.stringify({ type: "assistant", uuid: "parent-r", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_R", name: "Agent", input: { description: "x" } }] } })}\n`,
@@ -1332,7 +1339,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       // The spawned command carries a single merged --settings that preserves the user's model AND adds
       // our SessionStart hook writing to the sentinel.
       const cmd = spy.command();
@@ -1391,7 +1398,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       const cmd = spy.command();
       expect(cmd).toContain("--settings");
       expect(cmd).toContain("SessionStart");
@@ -1438,7 +1445,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       const cmd = spy.command();
       expect(cmd).toContain("/no/such/settings/file.json"); // user's --settings passed through unchanged
       expect(cmd).not.toContain("SessionStart"); // no hook injected
@@ -1491,7 +1498,7 @@ describe("runTmuxDriver wiring", () => {
       },
     );
     try {
-      await waitFor(() => client.announces.length > 0);
+      await waitFor(spy.started);
       expect(spy.command()).toContain("--settings"); // hook was injected
       // The pinned transcript appears (the hook never wrote the sentinel) → fallback discovers it.
       await writeFile(
