@@ -3,7 +3,11 @@
 // nested output (incl. a null content block the relay must survive), an error tool_result, and a final
 // result. `withPerm` injects a can_use_tool gate (the UI renders a permission card, #56); `withAskq`
 // injects an AskUserQuestion gate (#42).
-export function scenario(withPerm: boolean, withAskq = false): Array<Record<string, unknown>> {
+export function scenario(
+  withPerm: boolean,
+  withAskq = false,
+  askqMulti = false,
+): Array<Record<string, unknown>> {
   const events: Array<Record<string, unknown>> = [
     {
       type: "assistant",
@@ -148,7 +152,27 @@ export function scenario(withPerm: boolean, withAskq = false): Array<Record<stri
   }
   if (withAskq) {
     // Inject an AskUserQuestion gate (the real shape captured via --rc-trace: tool input under `input`
-    // with a sibling `tool_use_id`) so the app-e2e can render the question UI + answer it (#42).
+    // with a sibling `tool_use_id`) so the app-e2e can render the question UI + answer it (#42). The
+    // multi variant exercises the multiSelect array branch (picked labels + appended freeform).
+    const question = askqMulti
+      ? {
+          question: "Which do you want to test?",
+          header: "Coverage",
+          multiSelect: true,
+          options: [
+            { label: "Unit", description: "Fast, isolated." },
+            { label: "Integration", description: "Cross-module." },
+          ],
+        }
+      : {
+          question: "Which name do you like best?",
+          header: "Name pick",
+          multiSelect: false,
+          options: [
+            { label: "Orion", description: "A bold, cosmic name." },
+            { label: "Sable", description: "Sleek and distinctive." },
+          ],
+        };
     events.splice(1, 0, {
       type: "control_request",
       request_id: "askq-e2e-1",
@@ -156,19 +180,7 @@ export function scenario(withPerm: boolean, withAskq = false): Array<Record<stri
         subtype: "can_use_tool",
         tool_name: "AskUserQuestion",
         tool_use_id: "toolu_e2e_q1",
-        input: {
-          questions: [
-            {
-              question: "Which name do you like best?",
-              header: "Name pick",
-              multiSelect: false,
-              options: [
-                { label: "Orion", description: "A bold, cosmic name." },
-                { label: "Sable", description: "Sleek and distinctive." },
-              ],
-            },
-          ],
-        },
+        input: { questions: [question] },
       },
     });
   }

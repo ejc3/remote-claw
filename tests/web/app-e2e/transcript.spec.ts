@@ -183,6 +183,39 @@ test("an AskUserQuestion accepts a FREEFORM 'type your own' answer with no optio
   await card.screenshot({ path: "test-results/askuserquestion-freeform.png" });
   await submit.click();
   await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
+  // The resolved card echoes the ACTUAL answer that reached the host (folded from the host-LOGGED
+  // permission_resolved frame — the outbound answers, not local state). This is the real proof the
+  // freeform string round-trips to the worker: a regression that submitted the empty option map instead
+  // of `out` would still say "Answered" but carry no value here.
+  await expect(card.locator(".q-answer")).toHaveText("Nebula (my own pick)");
+});
+
+test("a multiSelect AskUserQuestion sends BOTH picked options and an appended freeform answer (#42 multiSelect)", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ askq: "multi" });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+
+  const card = page.locator(".perm.perm-q");
+  const submit = card.getByRole("button", { name: "Submit answers" });
+  await expect(submit).toBeDisabled();
+
+  // Pick a listed option AND type a freeform one — multiSelect appends the freeform string to the picked
+  // labels, so the outbound array must contain BOTH. Picking does NOT clear the box (unlike single-select).
+  await card.getByRole("button", { name: "Unit" }).click();
+  await expect(card.locator('.q-option[data-selected="true"]')).toHaveCount(1);
+  await card.locator(".q-freeform").fill("Fuzz");
+  await expect(card.locator('.q-option[data-selected="true"]')).toHaveCount(1); // still picked
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
+  // The host-logged answer proves the outbound array carried the picked label AND the appended freeform.
+  const answer = card.locator(".q-answer");
+  await expect(answer).toContainText("Unit");
+  await expect(answer).toContainText("Fuzz");
 });
 
 test("a photo STAGES, then is sent on submit and echoes in the transcript (#44/#112)", async ({

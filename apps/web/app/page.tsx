@@ -865,6 +865,18 @@ function Transcript(props: {
     }
     return m;
   }, [messages]);
+  // The answers an AskUserQuestion was resolved with (#42), folded from the SAME logged frames so the
+  // resolved card can show WHAT was answered (not just "Answered") and it survives reload. Kept separate
+  // from `resolved` (behavior-only) so the plain permission path is untouched.
+  const resolvedAnswers = useMemo(() => {
+    const m = new Map<string, Record<string, string | string[]>>();
+    for (const msg of messages) {
+      if (msg.kind !== "permission_resolved") continue;
+      const r = parsePermissionResolved(msg.text);
+      if (r.requestId !== "" && r.answers) m.set(r.requestId, r.answers);
+    }
+    return m;
+  }, [messages]);
   // The host announces the worker's effective permission mode. A local click is only a transient
   // optimistic override; a CONFIRMING (or genuinely remote) mode-bearing announce wins (see the reconcile
   // effect below). `modeBeforePickRef` is the announced mode at the moment of the pick — it lets the
@@ -1307,7 +1319,13 @@ function Transcript(props: {
           <p className="empty-pad">{emptyTranscriptHint(cs)}</p>
         )}
         {messages.map((m) => (
-          <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} resolved={resolved} />
+          <Bubble
+            key={`${m.msgId}:${m.seq}`}
+            message={m}
+            onGrant={grant}
+            resolved={resolved}
+            resolvedAnswers={resolvedAnswers}
+          />
         ))}
       </div>
 
@@ -1840,10 +1858,12 @@ export function Bubble({
   message,
   onGrant,
   resolved,
+  resolvedAnswers,
 }: {
   message: Message;
   onGrant: GrantFn;
   resolved: Map<string, "allow" | "deny">;
+  resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   switch (message.kind) {
     case "result":
@@ -1883,7 +1903,14 @@ export function Bubble({
     case "task":
       return <TaskRow text={message.text} />;
     case "permission_request":
-      return <PermissionRow text={message.text} onGrant={onGrant} resolved={resolved} />;
+      return (
+        <PermissionRow
+          text={message.text}
+          onGrant={onGrant}
+          resolved={resolved}
+          resolvedAnswers={resolvedAnswers}
+        />
+      );
     default:
       // accepted acks + lifecycle frames are not rendered standalone; permission_resolved is folded
       // into its PermissionRow (via the `resolved` map), not shown as its own row.
@@ -1915,10 +1942,12 @@ function PermissionRow({
   text,
   onGrant,
   resolved,
+  resolvedAnswers,
 }: {
   text: string;
   onGrant: GrantFn;
   resolved: Map<string, "allow" | "deny">;
+  resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   const req = parsePermission(text);
   const [decision, setDecision] = useState<"allow" | "deny" | null>(null);
@@ -1957,7 +1986,14 @@ function PermissionRow({
   // UI + answer with updatedInput.answers, not a bare Allow/Deny (#42). (Branch AFTER the hooks above
   // so the rules of hooks hold; QuestionCard owns its own state.)
   if (req.questions.length > 0) {
-    return <QuestionCard req={req} onGrant={onGrant} resolved={resolved} />;
+    return (
+      <QuestionCard
+        req={req}
+        onGrant={onGrant}
+        resolved={resolved}
+        resolvedAnswers={resolvedAnswers}
+      />
+    );
   }
 
   return (
@@ -2019,10 +2055,12 @@ function QuestionCard({
   req,
   onGrant,
   resolved,
+  resolvedAnswers,
 }: {
   req: ParsedPermission;
   onGrant: GrantFn;
   resolved: Map<string, "allow" | "deny">;
+  resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   // A per-question freeform answer — ALWAYS available so the user can "type your own" instead of being
@@ -2034,11 +2072,17 @@ function QuestionCard({
   // Which way this card was resolved locally (null = unanswered). Tracks deny too, so a Dismiss doesn't
   // mislabel as "✓ Answered" before the host's permission_resolved frame lands.
   const [sentBehavior, setSentBehavior] = useState<"allow" | "deny" | null>(null);
+  // The answers we submitted — shown in the resolved card immediately (optimistic), before the host's
+  // permission_resolved frame (which carries the same answers) lands and takes over on reload.
+  const [sentAnswers, setSentAnswers] = useState<Record<string, string | string[]> | null>(null);
   const deciding = useRef(false);
 
   // host-logged answer survives reload; the local optimistic value covers the gap before it lands.
   const resolvedBehavior = resolved.get(req.requestId) ?? sentBehavior;
   const done = resolvedBehavior != null;
+  // What was answered, for the resolved card: the logged frame (survives reload) wins, else the local
+  // optimistic copy fills the gap between submit and the frame landing.
+  const doneAnswers = resolvedAnswers.get(req.requestId) ?? sentAnswers;
 
   const pick = (q: Question, label: string) => {
     // Single-select: picking an option clears this question's freeform box (options ⟂ freeform).
@@ -2101,6 +2145,7 @@ function QuestionCard({
         if (a !== undefined) out[q.question] = a;
       }
       await onGrant(req.requestId, "allow", { answers: out, toolUseId: req.toolUseId });
+      setSentAnswers(out);
       setSentBehavior("allow");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -2129,10 +2174,21 @@ function QuestionCard({
 
   if (done) {
     const denied = resolvedBehavior === "deny";
+    // Flatten the answered value(s) into a readable summary — a multiSelect answer is an array, and a
+    // multi-question card joins its per-question answers. Shows the user WHAT they picked (Claude Code's
+    // transcript keeps the choice, so ours should too) and survives reload via the logged frame.
+    const summary =
+      !denied && doneAnswers
+        ? Object.values(doneAnswers)
+            .map((v) => (Array.isArray(v) ? v.join(", ") : v))
+            .filter((s) => s !== "")
+            .join(" · ")
+        : "";
     return (
       <div className="perm perm-q">
         <div className="perm-resolved" data-behavior={resolvedBehavior ?? "allow"}>
           {denied ? "✕ Skipped" : "✓ Answered"}
+          {summary !== "" && <span className="q-answer">{summary}</span>}
         </div>
       </div>
     );

@@ -1051,6 +1051,13 @@ code {
   border-color: var(--accent-text);
   outline: none;
 }
+/* The answered value shown beside "✓ Answered" in the resolved question card — the transcript keeps a
+   record of WHAT was picked (Claude Code does), and inherits the resolved chip's colour. */
+.q-answer {
+  margin-left: 8px;
+  font-weight: 500;
+  color: var(--text);
+}
 
 /* Extended-thinking block — collapsed by default, muted; recedes below the answer. */
 .thinking {

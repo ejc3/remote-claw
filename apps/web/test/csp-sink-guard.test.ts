@@ -52,10 +52,16 @@ describe("CSP sink guard", () => {
     const attacker = `<script>globalThis.${marker}=true</script><img src=x onerror="globalThis.${marker}=true"><a href="javascript:globalThis.${marker}=true">x</a>`;
     const onGrant = async () => undefined;
     const resolved = new Map<string, "allow" | "deny">();
+    const resolvedAnswers = new Map<string, Record<string, string | string[]>>();
 
     const html = [
       renderToStaticMarkup(
-        createElement(Bubble, { message: msg("assistant", attacker), onGrant, resolved }),
+        createElement(Bubble, {
+          message: msg("assistant", attacker),
+          onGrant,
+          resolved,
+          resolvedAnswers,
+        }),
       ),
       renderToStaticMarkup(
         createElement(Bubble, {
@@ -68,6 +74,7 @@ describe("CSP sink guard", () => {
           ),
           onGrant,
           resolved,
+          resolvedAnswers,
         }),
       ),
       renderToStaticMarkup(
@@ -82,6 +89,7 @@ describe("CSP sink guard", () => {
           ),
           onGrant,
           resolved,
+          resolvedAnswers,
         }),
       ),
     ].join("\n");
