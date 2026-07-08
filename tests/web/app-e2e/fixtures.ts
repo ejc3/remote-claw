@@ -27,6 +27,9 @@ export type SeedHost = (opts?: {
   /** Driver capability preset (RC_E2E_CAPS) for the capability-gated viewer (#149): "tmux" |
    *  "opencode-skip" | undefined (full MITM caps). */
   caps?: string;
+  /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164): "tmux" | "opencode" | undefined
+   *  (MITM native-RC). Controls only the announced label, independent of `caps`. */
+  harness?: string;
 }) => Promise<SeedResult>;
 
 /** Spawn one host-runner and resolve once it prints its `{pass,sessionId}` readiness line (or reject if it
@@ -38,6 +41,7 @@ function spawnHost(opts: {
   perm?: boolean;
   askq?: boolean | "multi";
   caps?: string;
+  harness?: string;
 }): { child: ChildProcess; ready: Promise<SeedResult> } {
   const child = spawn(TSX, [RUNNER], {
     stdio: ["ignore", "pipe", "inherit"], // stdout = the readiness line; stderr inherited for host logs
@@ -49,6 +53,7 @@ function spawnHost(opts: {
       RC_E2E_PERM: opts.perm ? "1" : "",
       RC_E2E_ASKQ: opts.askq === "multi" ? "multi" : opts.askq ? "1" : "",
       RC_E2E_CAPS: opts.caps ?? "",
+      RC_E2E_HARNESS: opts.harness ?? "",
     },
   });
   const ready = new Promise<SeedResult>((resolve, reject) => {

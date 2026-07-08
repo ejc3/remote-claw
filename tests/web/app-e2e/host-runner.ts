@@ -12,8 +12,24 @@
 // then we run serve() forever until SIGTERM/SIGINT aborts it.
 import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
-import { type DriverCapabilities, HostRcRelay, Session } from "@remote-claw/cli/rc";
+import {
+  type DriverCapabilities,
+  type HarnessDescriptor,
+  HostRcRelay,
+  MITM_HARNESS,
+  OPENCODE_HARNESS,
+  Session,
+  TMUX_HARNESS,
+} from "@remote-claw/cli/rc";
 import { scenario } from "./scenario.js";
+
+/** Which harness the announce declares (RC_E2E_HARNESS), so the agent+mode badge (#164) can be exercised
+ *  end-to-end for all three drivers without a real tmux/opencode host. Unset ⇒ MITM (native-RC). */
+function presetHarness(p: string | undefined): HarnessDescriptor {
+  if (p === "tmux") return TMUX_HARNESS;
+  if (p === "opencode") return OPENCODE_HARNESS;
+  return MITM_HARNESS;
+}
 
 /** Capability presets the browser e2e can drive (RC_E2E_CAPS) so the capability-gated viewer (#149) can be
  *  exercised end-to-end without a real tmux/opencode host. Unset ⇒ the relay's default (full MITM caps). */
@@ -69,11 +85,13 @@ if (backend) clientOpts.backend = backend;
 if (bypass) clientOpts.protectionBypass = bypass;
 const client = new BrokerClient(clientOpts);
 const caps = presetCaps(process.env.RC_E2E_CAPS); // capability-gated viewer e2e (#149); unset ⇒ full MITM
+const harness = presetHarness(process.env.RC_E2E_HARNESS); // agent+mode badge (#164); unset ⇒ MITM
 const relay = new HostRcRelay({
   client,
   identityId: id.identityId,
   sessionId,
   session,
+  harness,
   ...(caps ? { capabilities: caps } : {}),
 });
 

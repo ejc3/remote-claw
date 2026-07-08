@@ -5,7 +5,13 @@ import type { Frame, FrameHeader } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { type BrokerClient, BrokerError } from "../../broker/client.js";
 import type { Tracer } from "../../trace.js";
-import { type DriverCapabilities, MITM_CAPABILITIES } from "./driver.js";
+import {
+  type DriverCapabilities,
+  MITM_CAPABILITIES,
+  MITM_HARNESS,
+  OPENCODE_HARNESS,
+  TMUX_HARNESS,
+} from "./driver.js";
 import {
   defaultAttachmentsDir,
   extForMime,
@@ -708,6 +714,32 @@ describe("HostRcRelay capabilities on session_announce", () => {
     const relay = relayOf(session, client, caps);
     await relay.announce("box");
     expect(client.announces.at(-1)?.capabilities).toEqual(caps);
+  });
+});
+
+describe("HostRcRelay harness on session_announce (#164)", () => {
+  it("defaults to the MITM harness (native-RC Claude Code) when none is given", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    await relay.announce("box");
+    expect(client.announces.at(-1)?.harness).toEqual(MITM_HARNESS);
+  });
+
+  it("broadcasts a driver's harness verbatim (tmux / opencode)", async () => {
+    for (const h of [TMUX_HARNESS, OPENCODE_HARNESS]) {
+      const session = new Session("s", "t", {});
+      const client = new FakeClient();
+      const relay = new HostRcRelay({
+        client: client as unknown as BrokerClient,
+        identityId: ID,
+        sessionId: session.id,
+        session,
+        harness: h,
+      });
+      await relay.announce("box");
+      expect(client.announces.at(-1)?.harness).toEqual(h);
+    }
   });
 });
 

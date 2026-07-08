@@ -399,6 +399,32 @@ code {
   white-space: nowrap;
 }
 
+/* #164: which agent + bridge mode a session runs — labels the list row's sub-line and the chat header so
+   native-RC Claude Code, tmux Claude Code, and opencode don't look identical. opencode gets an accent
+   tint (via data-agent) so the different product stands out from the two Claude Code variants. */
+.agent-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 7px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+.agent-badge[data-agent="opencode"] {
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent-text) 45%, transparent);
+}
+/* In the chat header the badge sits next to the (larger) title — nudge it to the baseline. */
+.chat-head .agent-badge {
+  align-self: center;
+}
+
 /* empty states */
 .empty {
   display: grid;

@@ -15,7 +15,7 @@ import { tracerFromEnv } from "../../trace.js";
 import { PRETEND_API_KEY, seedAccountlessConfigDir } from "./accountless.js";
 import type { BedrockConfig } from "./bedrock/inference.js";
 import { ensureCerts } from "./certs.js";
-import { MITM_CAPABILITIES } from "./driver.js";
+import { MITM_CAPABILITIES, MITM_HARNESS } from "./driver.js";
 import { bridgeSession } from "./drivers/bridge.js";
 import { type GitInfo, gitInfo } from "./gitinfo.js";
 import { MitmProxy } from "./mitm.js";
@@ -128,6 +128,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
       bridgeSession({
         session: s,
         capabilities: MITM_CAPABILITIES,
+        harness: MITM_HARNESS,
         newClient,
         identityId: opts.identity.identityId,
         title,

@@ -152,6 +152,16 @@ export interface Announce {
   /** What the host's driver can faithfully service (#149). Absent on a pre-capability host → the viewer
    *  assumes full capability (a legacy host is always the MITM driver), so nothing gets disabled. */
   capabilities?: Capabilities;
+  /** Which harness (agent + bridge mode) the session runs, for the list label. Absent on a pre-harness
+   *  host → treated as the MITM harness (a legacy host is always native-RC Claude Code). */
+  harness?: Harness;
+}
+
+/** Which harness a session runs (mirrors the host's HarnessDescriptor) — the viewer's session list
+ *  labels each session by it (Claude Code · RC / · TX / opencode) so the three don't look identical. */
+export interface Harness {
+  agent: "claude-code" | "opencode";
+  mode: "rc" | "tmux" | "opencode";
 }
 
 /** Per-verb control support a driver declares (mirrors the host's ControlCapabilities). The viewer
@@ -195,6 +205,26 @@ export function parseCapabilities(raw: unknown): Capabilities | undefined {
     },
     attachments: bool(c.attachments, true),
   };
+}
+
+/** The exact agent+mode PAIRS a host can announce (the host's MITM/TMUX/OPENCODE_HARNESS consts). Only
+ *  these three are valid — an enum-valid but nonsensical pair (e.g. claude-code+opencode) must NOT slip
+ *  through and mislabel, so we match the whole descriptor, not each field independently. */
+const KNOWN_HARNESSES: readonly Harness[] = [
+  { agent: "claude-code", mode: "rc" },
+  { agent: "claude-code", mode: "tmux" },
+  { agent: "opencode", mode: "opencode" },
+];
+
+/** Defensively coerce an announce's `harness` into Harness|undefined. Decrypted-but-untrusted (AEAD
+ *  proves the host wrote it, not that it's well-formed), so the (agent, mode) PAIR is matched against the
+ *  three declared descriptors; anything else → undefined, and the viewer falls back to the MITM label (a
+ *  legacy host is always native-RC Claude Code). Matching the pair (not each field) means a hostile body
+ *  with a valid-but-mismatched combo can't be mislabelled instead of falling back. */
+export function parseHarness(raw: unknown): Harness | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const h = raw as Record<string, unknown>;
+  return KNOWN_HARNESSES.find((k) => k.agent === h.agent && k.mode === h.mode);
 }
 
 /** Defensively coerce an announce's `git` field into GitInfo|null. The body is decrypted-but-untrusted
@@ -375,6 +405,8 @@ export class Viewer {
           if (typeof body.mode === "string" && body.mode !== "") announce.mode = body.mode;
           const caps = parseCapabilities(body.capabilities); // driver capabilities (#149); undefined on legacy hosts
           if (caps) announce.capabilities = caps;
+          const harness = parseHarness(body.harness); // agent + mode label; undefined on legacy hosts
+          if (harness) announce.harness = harness;
           this.#rememberIncarnation(sessionId, announce.incarnation);
           yield announce;
         }

@@ -18,7 +18,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
-import type { Driver, DriverContext } from "../driver.js";
+import { type Driver, type DriverContext, TMUX_HARNESS } from "../driver.js";
 import { bridgeSession } from "../drivers/bridge.js";
 import { RelayCore, type Session } from "../session.js";
 import { INJECT_BUFFER, runInjectPump } from "./inject.js";
@@ -293,6 +293,7 @@ export async function runTmuxDriver(
   const served = bridgeSession({
     session,
     capabilities: tmuxCapabilities(deps.mirrorPermissions ?? true),
+    harness: TMUX_HARNESS,
     newClient: ctx.newClient,
     identityId: ctx.identity.identityId,
     title: ctx.title,

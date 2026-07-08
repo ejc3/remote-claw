@@ -10,7 +10,11 @@ export {
   type DriverContext,
   type DriverFactory,
   type DriverName,
+  type HarnessDescriptor,
   MITM_CAPABILITIES,
+  MITM_HARNESS,
+  OPENCODE_HARNESS,
+  TMUX_HARNESS,
   type UpstreamPayload,
 } from "./driver.js";
 export { type BridgeArgs, bridgeSession } from "./drivers/bridge.js";
