@@ -2025,6 +2025,10 @@ function QuestionCard({
   resolved: Map<string, "allow" | "deny">;
 }) {
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
+  // A per-question freeform answer — ALWAYS available so the user can "type your own" instead of being
+  // limited to the listed options (real Claude Code always offers this). An arbitrary string is a valid
+  // answer end to end: session.ts passes `answers` through with no membership check (#42 freeform).
+  const [freeform, setFreeform] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Which way this card was resolved locally (null = unanswered). Tracks deny too, so a Dismiss doesn't
@@ -2036,7 +2040,9 @@ function QuestionCard({
   const resolvedBehavior = resolved.get(req.requestId) ?? sentBehavior;
   const done = resolvedBehavior != null;
 
-  const pick = (q: Question, label: string) =>
+  const pick = (q: Question, label: string) => {
+    // Single-select: picking an option clears this question's freeform box (options ⟂ freeform).
+    if (!q.multiSelect) setFreeform((f) => (f[q.question] ? { ...f, [q.question]: "" } : f));
     setAnswers((a) => {
       if (!q.multiSelect) return { ...a, [q.question]: label };
       const cur = Array.isArray(a[q.question]) ? (a[q.question] as string[]) : [];
@@ -2045,14 +2051,40 @@ function QuestionCard({
         [q.question]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label],
       };
     });
+  };
+  const onFreeform = (q: Question, val: string) => {
+    setFreeform((f) => ({ ...f, [q.question]: val }));
+    // Single-select: typing clears any picked option so the two never both count.
+    if (!q.multiSelect && val.trim() !== "")
+      setAnswers((a) => {
+        if (!(q.question in a)) return a;
+        const n = { ...a };
+        delete n[q.question];
+        return n;
+      });
+  };
   const isPicked = (q: Question, label: string) => {
     const v = answers[q.question];
     return Array.isArray(v) ? v.includes(label) : v === label;
   };
-  const answered = (q: Question) => {
-    const v = answers[q.question];
-    return Array.isArray(v) ? v.length > 0 : typeof v === "string";
-  };
+  // The effective answer: freeform text wins for single-select; for multiSelect the trimmed freeform
+  // string is APPENDED to the picked labels. One helper for BOTH the gate and submit so they can't
+  // diverge. undefined ⇒ unanswered. Memoized so submit can depend on it directly.
+  const finalAnswer = useCallback(
+    (q: Question): string | string[] | undefined => {
+      const ft = (freeform[q.question] ?? "").trim();
+      if (!q.multiSelect) {
+        if (ft !== "") return ft;
+        const v = answers[q.question];
+        return typeof v === "string" ? v : undefined;
+      }
+      const picked = Array.isArray(answers[q.question]) ? (answers[q.question] as string[]) : [];
+      const merged = ft !== "" ? [...picked, ft] : picked;
+      return merged.length > 0 ? merged : undefined;
+    },
+    [answers, freeform],
+  );
+  const answered = (q: Question) => finalAnswer(q) !== undefined;
   const allAnswered = req.questions.every(answered);
 
   const submit = useCallback(async () => {
@@ -2061,7 +2093,14 @@ function QuestionCard({
     setBusy(true);
     setErr(null);
     try {
-      await onGrant(req.requestId, "allow", { answers, toolUseId: req.toolUseId });
+      // Build the outgoing map from finalAnswer so a freeform-only answer is sent (the raw `answers`
+      // state holds only option picks). Keyed by question text — the shape claude expects.
+      const out: Record<string, string | string[]> = {};
+      for (const q of req.questions) {
+        const a = finalAnswer(q);
+        if (a !== undefined) out[q.question] = a;
+      }
+      await onGrant(req.requestId, "allow", { answers: out, toolUseId: req.toolUseId });
       setSentBehavior("allow");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -2069,7 +2108,7 @@ function QuestionCard({
     } finally {
       setBusy(false);
     }
-  }, [req.requestId, req.toolUseId, answers, allAnswered, onGrant]);
+  }, [req.requestId, req.toolUseId, req.questions, finalAnswer, allAnswered, onGrant]);
 
   // Decline a question you don't want to answer — rides the same path as a permission Deny (#42 review).
   const dismiss = useCallback(async () => {
@@ -2093,7 +2132,7 @@ function QuestionCard({
     return (
       <div className="perm perm-q">
         <div className="perm-resolved" data-behavior={resolvedBehavior ?? "allow"}>
-          {denied ? "✕ Dismissed" : "✓ Answered"}
+          {denied ? "✕ Skipped" : "✓ Answered"}
         </div>
       </div>
     );
@@ -2124,6 +2163,18 @@ function QuestionCard({
               </button>
             ))}
           </div>
+          <textarea
+            className="q-freeform"
+            rows={1}
+            placeholder={q.multiSelect ? "Add your own answer…" : "Or type your own answer…"}
+            value={freeform[q.question] ?? ""}
+            onChange={(e) => onFreeform(q, e.target.value)}
+            onKeyDown={(e) => {
+              // Cmd/Ctrl+Enter submits when every question is answered (parity with the composer).
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && allAnswered) void submit();
+            }}
+            aria-label={`Type your own answer for: ${q.question}`}
+          />
         </div>
       ))}
       <div className="perm-actions">
@@ -2141,7 +2192,7 @@ function QuestionCard({
           disabled={busy || req.requestId === ""}
           onClick={() => void dismiss()}
         >
-          Dismiss
+          Skip / answer in chat
         </button>
       </div>
       {req.requestId === "" && (
