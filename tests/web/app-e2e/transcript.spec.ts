@@ -183,11 +183,15 @@ test("an AskUserQuestion accepts a FREEFORM 'type your own' answer with no optio
   await card.screenshot({ path: "test-results/askuserquestion-freeform.png" });
   await submit.click();
   await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
-  // The resolved card echoes the ACTUAL answer that reached the host (folded from the host-LOGGED
-  // permission_resolved frame — the outbound answers, not local state). This is the real proof the
-  // freeform string round-trips to the worker: a regression that submitted the empty option map instead
-  // of `out` would still say "Answered" but carry no value here.
   await expect(card.locator(".q-answer")).toHaveText("Nebula (my own pick)");
+
+  // RELOAD forces the LOGGED-frame path: component-local optimistic `sentAnswers` is wiped on remount,
+  // so after catch_up the resolved value can ONLY come from the host's permission_resolved.answers. This
+  // is the real proof the freeform string reached the host (not just optimistic UI) — a regression that
+  // submitted an empty/absent answers payload would show "Answered" here but no `.q-answer` (codex).
+  await page.reload();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(page.locator(".perm.perm-q .q-answer")).toHaveText("Nebula (my own pick)");
 });
 
 test("a multiSelect AskUserQuestion sends BOTH picked options and an appended freeform answer (#42 multiSelect)", async ({
@@ -212,10 +216,18 @@ test("a multiSelect AskUserQuestion sends BOTH picked options and an appended fr
   await expect(submit).toBeEnabled();
   await submit.click();
   await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
-  // The host-logged answer proves the outbound array carried the picked label AND the appended freeform.
   const answer = card.locator(".q-answer");
   await expect(answer).toContainText("Unit");
   await expect(answer).toContainText("Fuzz");
+
+  // RELOAD forces the logged-frame path (optimistic sentAnswers wiped on remount) — the resolved value
+  // now comes ONLY from the host's permission_resolved.answers, proving the outbound array carried BOTH
+  // the picked label and the appended freeform, not just optimistic UI (codex).
+  await page.reload();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const afterReload = page.locator(".perm.perm-q .q-answer");
+  await expect(afterReload).toContainText("Unit");
+  await expect(afterReload).toContainText("Fuzz");
 });
 
 test("a photo STAGES, then is sent on submit and echoes in the transcript (#44/#112)", async ({
