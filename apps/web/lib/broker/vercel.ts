@@ -44,8 +44,11 @@ function runIdOf(hook: unknown): string {
  * One run per token is SDK-enforced (a duplicate createHook on a held token throws HookConflictError
  * inside the loser run, which dies harmlessly while the winner's token resolves), so start() itself
  * never conflicts — only the in-workflow createHook can — and the caller never needs to catch it.
+ *
+ * Concurrent callers IN THIS PROCESS are collapsed by `ensureChannel` (below), so this inner fn is
+ * the sole in-process starter for its token per invocation and won't race a sibling's start().
  */
-async function ensureChannel(token: string): Promise<{ runId: string; created: boolean }> {
+async function resolveOrStartChannel(token: string): Promise<{ runId: string; created: boolean }> {
   try {
     return { runId: runIdOf(await getHookByToken(token)), created: false };
   } catch {
@@ -80,6 +83,29 @@ async function ensureChannel(token: string): Promise<{ runId: string; created: b
     `[broker] relay hook did NOT register channel=${channel} deadlineMs=${REGISTER_DEADLINE_MS} attempts=${attempts}`,
   );
   throw new Error(`relay hook did not register within ${REGISTER_DEADLINE_MS}ms`);
+}
+
+// Singleflight over resolveOrStartChannel, keyed by token. A host announces + serves (+ heartbeats
+// presence) near-simultaneously, so two publishers race to resolve-or-start the SAME bus/session
+// token: both see no hook, both start() a run, one wins createHook and the loser dies with a
+// HookConflictError. That death is benign by design — but it burns a wasted cold-start round, spams
+// the log with the conflict, and on a COLD/loaded workflow runtime can push the winner's hook
+// registration past REGISTER_DEADLINE_MS, surfacing as a spurious relay outage or a stalled
+// round-trip (the flaky real-rc prove timeout). Collapsing concurrent same-token calls to a single
+// start() removes the loser run entirely. The entry clears on settle (success OR failure), so
+// liveness is always re-checked on the next call and a failed start never poisons the token.
+// Cross-process races (host and viewer on different invocations) can't share this map and still fall
+// back to the SDK-enforced one-run-per-token conflict, which stays correct there.
+const inflightEnsure = new Map<string, Promise<{ runId: string; created: boolean }>>();
+
+function ensureChannel(token: string): Promise<{ runId: string; created: boolean }> {
+  const pending = inflightEnsure.get(token);
+  if (pending) return pending;
+  const p = resolveOrStartChannel(token).finally(() => {
+    inflightEnsure.delete(token);
+  });
+  inflightEnsure.set(token, p);
+  return p;
 }
 
 export class VercelBackend implements BrokerBackend {

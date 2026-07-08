@@ -933,8 +933,13 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   ±25% jitter**). One bus per identity is **enforced by the SDK**: hook tokens must be unique
   across all running workflows, and a duplicate `createHook` on a held token throws
   **`HookConflictError`** (`@workflow/errors`; verified in the bundled SDK docs, §13) — so the
-  create-race loser deterministically catches it and resume-tails the winner; the loser
-  resume-tails the winner.
+  create-race loser's run dies with that error while its caller keeps polling `getHookByToken` and
+  resolves (resume-tails) the winner — nothing in our code `catch`es the conflict; the losing
+  *workflow run* terminates. Within a *single* broker process, concurrent publishers to the same
+  token (one wrapper's near-simultaneous announce + serve + presence heartbeat) are collapsed by an
+  **in-process singleflight** on `ensureChannel`: only one `start()` is in flight per token while
+  `resolveOrStartChannel` runs (the map entry clears on settle), so the SDK conflict path is reached
+  only by genuinely distinct wrapper processes racing — not by a single wrapper racing itself.
 - **Long-lived; durable, no idle reaper (verified §13).** The bus run loops awaiting its
   hook. Vercel sets **no max run duration and no idle-timeout** — a suspended run waits
   **indefinitely** and **consumes no compute while idle** (only storage-retained billing).
