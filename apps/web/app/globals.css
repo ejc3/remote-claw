@@ -1029,6 +1029,35 @@ code {
 .q-submit {
   flex: 1;
 }
+/* The always-present "type your own answer" box under each question's options (#42 freeform). Mirrors
+   .q-option so options + freeform read as one control group; theme-aware via the shared vars. */
+.q-freeform {
+  margin-top: 6px;
+  width: 100%;
+  resize: vertical;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+}
+.q-freeform::placeholder {
+  color: var(--text-faint);
+}
+.q-freeform:focus {
+  border-color: var(--accent-text);
+  outline: none;
+}
+/* The answered value shown beside "✓ Answered" in the resolved question card — the transcript keeps a
+   record of WHAT was picked (Claude Code does), and inherits the resolved chip's colour. */
+.q-answer {
+  margin-left: 8px;
+  font-weight: 500;
+  color: var(--text);
+}
 
 /* Extended-thinking block — collapsed by default, muted; recedes below the answer. */
 .thinking {

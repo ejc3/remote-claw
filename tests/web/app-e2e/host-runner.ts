@@ -47,7 +47,9 @@ if (!base) {
 const backend = process.env.RC_E2E_BACKEND || undefined; // ?backend= equivalent; unset ⇒ deployment default
 const bypass = process.env.RC_E2E_BYPASS || undefined; // VERCEL_AUTOMATION_BYPASS_SECRET for the preview SSO
 const withPerm = process.env.RC_E2E_PERM === "1";
-const withAskq = process.env.RC_E2E_ASKQ === "1";
+const askqMode = process.env.RC_E2E_ASKQ; // "1" (single-select) | "multi" (multiSelect) | unset
+const withAskq = askqMode === "1" || askqMode === "multi";
+const askqMulti = askqMode === "multi";
 
 // A fresh random identity per host so each test gets isolated bus/session channels.
 const secret = new Uint8Array(32);
@@ -98,7 +100,7 @@ try {
     ahead: 2,
     behind: 0,
   });
-  for (const payload of scenario(withPerm, withAskq)) session.pushUpstream(payload);
+  for (const payload of scenario(withPerm, withAskq, askqMulti)) session.pushUpstream(payload);
 } catch (e) {
   console.error(`[host-runner] announce/seed failed (base=${base}):`, e);
   process.exit(2);

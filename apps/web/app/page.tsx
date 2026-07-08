@@ -865,6 +865,18 @@ function Transcript(props: {
     }
     return m;
   }, [messages]);
+  // The answers an AskUserQuestion was resolved with (#42), folded from the SAME logged frames so the
+  // resolved card can show WHAT was answered (not just "Answered") and it survives reload. Kept separate
+  // from `resolved` (behavior-only) so the plain permission path is untouched.
+  const resolvedAnswers = useMemo(() => {
+    const m = new Map<string, Record<string, string | string[]>>();
+    for (const msg of messages) {
+      if (msg.kind !== "permission_resolved") continue;
+      const r = parsePermissionResolved(msg.text);
+      if (r.requestId !== "" && r.answers) m.set(r.requestId, r.answers);
+    }
+    return m;
+  }, [messages]);
   // The host announces the worker's effective permission mode. A local click is only a transient
   // optimistic override; a CONFIRMING (or genuinely remote) mode-bearing announce wins (see the reconcile
   // effect below). `modeBeforePickRef` is the announced mode at the moment of the pick — it lets the
@@ -1307,7 +1319,13 @@ function Transcript(props: {
           <p className="empty-pad">{emptyTranscriptHint(cs)}</p>
         )}
         {messages.map((m) => (
-          <Bubble key={`${m.msgId}:${m.seq}`} message={m} onGrant={grant} resolved={resolved} />
+          <Bubble
+            key={`${m.msgId}:${m.seq}`}
+            message={m}
+            onGrant={grant}
+            resolved={resolved}
+            resolvedAnswers={resolvedAnswers}
+          />
         ))}
       </div>
 
@@ -1840,10 +1858,12 @@ export function Bubble({
   message,
   onGrant,
   resolved,
+  resolvedAnswers,
 }: {
   message: Message;
   onGrant: GrantFn;
   resolved: Map<string, "allow" | "deny">;
+  resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   switch (message.kind) {
     case "result":
@@ -1883,7 +1903,14 @@ export function Bubble({
     case "task":
       return <TaskRow text={message.text} />;
     case "permission_request":
-      return <PermissionRow text={message.text} onGrant={onGrant} resolved={resolved} />;
+      return (
+        <PermissionRow
+          text={message.text}
+          onGrant={onGrant}
+          resolved={resolved}
+          resolvedAnswers={resolvedAnswers}
+        />
+      );
     default:
       // accepted acks + lifecycle frames are not rendered standalone; permission_resolved is folded
       // into its PermissionRow (via the `resolved` map), not shown as its own row.
@@ -1915,10 +1942,12 @@ function PermissionRow({
   text,
   onGrant,
   resolved,
+  resolvedAnswers,
 }: {
   text: string;
   onGrant: GrantFn;
   resolved: Map<string, "allow" | "deny">;
+  resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   const req = parsePermission(text);
   const [decision, setDecision] = useState<"allow" | "deny" | null>(null);
@@ -1957,7 +1986,14 @@ function PermissionRow({
   // UI + answer with updatedInput.answers, not a bare Allow/Deny (#42). (Branch AFTER the hooks above
   // so the rules of hooks hold; QuestionCard owns its own state.)
   if (req.questions.length > 0) {
-    return <QuestionCard req={req} onGrant={onGrant} resolved={resolved} />;
+    return (
+      <QuestionCard
+        req={req}
+        onGrant={onGrant}
+        resolved={resolved}
+        resolvedAnswers={resolvedAnswers}
+      />
+    );
   }
 
   return (
@@ -2019,24 +2055,38 @@ function QuestionCard({
   req,
   onGrant,
   resolved,
+  resolvedAnswers,
 }: {
   req: ParsedPermission;
   onGrant: GrantFn;
   resolved: Map<string, "allow" | "deny">;
+  resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
+  // A per-question freeform answer — ALWAYS available so the user can "type your own" instead of being
+  // limited to the listed options (real Claude Code always offers this). An arbitrary string is a valid
+  // answer end to end: session.ts passes `answers` through with no membership check (#42 freeform).
+  const [freeform, setFreeform] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Which way this card was resolved locally (null = unanswered). Tracks deny too, so a Dismiss doesn't
   // mislabel as "✓ Answered" before the host's permission_resolved frame lands.
   const [sentBehavior, setSentBehavior] = useState<"allow" | "deny" | null>(null);
+  // The answers we submitted — shown in the resolved card immediately (optimistic), before the host's
+  // permission_resolved frame (which carries the same answers) lands and takes over on reload.
+  const [sentAnswers, setSentAnswers] = useState<Record<string, string | string[]> | null>(null);
   const deciding = useRef(false);
 
   // host-logged answer survives reload; the local optimistic value covers the gap before it lands.
   const resolvedBehavior = resolved.get(req.requestId) ?? sentBehavior;
   const done = resolvedBehavior != null;
+  // What was answered, for the resolved card: the logged frame (survives reload) wins, else the local
+  // optimistic copy fills the gap between submit and the frame landing.
+  const doneAnswers = resolvedAnswers.get(req.requestId) ?? sentAnswers;
 
-  const pick = (q: Question, label: string) =>
+  const pick = (q: Question, label: string) => {
+    // Single-select: picking an option clears this question's freeform box (options ⟂ freeform).
+    if (!q.multiSelect) setFreeform((f) => (f[q.question] ? { ...f, [q.question]: "" } : f));
     setAnswers((a) => {
       if (!q.multiSelect) return { ...a, [q.question]: label };
       const cur = Array.isArray(a[q.question]) ? (a[q.question] as string[]) : [];
@@ -2045,14 +2095,40 @@ function QuestionCard({
         [q.question]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label],
       };
     });
+  };
+  const onFreeform = (q: Question, val: string) => {
+    setFreeform((f) => ({ ...f, [q.question]: val }));
+    // Single-select: typing clears any picked option so the two never both count.
+    if (!q.multiSelect && val.trim() !== "")
+      setAnswers((a) => {
+        if (!(q.question in a)) return a;
+        const n = { ...a };
+        delete n[q.question];
+        return n;
+      });
+  };
   const isPicked = (q: Question, label: string) => {
     const v = answers[q.question];
     return Array.isArray(v) ? v.includes(label) : v === label;
   };
-  const answered = (q: Question) => {
-    const v = answers[q.question];
-    return Array.isArray(v) ? v.length > 0 : typeof v === "string";
-  };
+  // The effective answer: freeform text wins for single-select; for multiSelect the trimmed freeform
+  // string is APPENDED to the picked labels. One helper for BOTH the gate and submit so they can't
+  // diverge. undefined ⇒ unanswered. Memoized so submit can depend on it directly.
+  const finalAnswer = useCallback(
+    (q: Question): string | string[] | undefined => {
+      const ft = (freeform[q.question] ?? "").trim();
+      if (!q.multiSelect) {
+        if (ft !== "") return ft;
+        const v = answers[q.question];
+        return typeof v === "string" ? v : undefined;
+      }
+      const picked = Array.isArray(answers[q.question]) ? (answers[q.question] as string[]) : [];
+      const merged = ft !== "" ? [...picked, ft] : picked;
+      return merged.length > 0 ? merged : undefined;
+    },
+    [answers, freeform],
+  );
+  const answered = (q: Question) => finalAnswer(q) !== undefined;
   const allAnswered = req.questions.every(answered);
 
   const submit = useCallback(async () => {
@@ -2061,7 +2137,15 @@ function QuestionCard({
     setBusy(true);
     setErr(null);
     try {
-      await onGrant(req.requestId, "allow", { answers, toolUseId: req.toolUseId });
+      // Build the outgoing map from finalAnswer so a freeform-only answer is sent (the raw `answers`
+      // state holds only option picks). Keyed by question text — the shape claude expects.
+      const out: Record<string, string | string[]> = {};
+      for (const q of req.questions) {
+        const a = finalAnswer(q);
+        if (a !== undefined) out[q.question] = a;
+      }
+      await onGrant(req.requestId, "allow", { answers: out, toolUseId: req.toolUseId });
+      setSentAnswers(out);
       setSentBehavior("allow");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -2069,7 +2153,7 @@ function QuestionCard({
     } finally {
       setBusy(false);
     }
-  }, [req.requestId, req.toolUseId, answers, allAnswered, onGrant]);
+  }, [req.requestId, req.toolUseId, req.questions, finalAnswer, allAnswered, onGrant]);
 
   // Decline a question you don't want to answer — rides the same path as a permission Deny (#42 review).
   const dismiss = useCallback(async () => {
@@ -2090,10 +2174,21 @@ function QuestionCard({
 
   if (done) {
     const denied = resolvedBehavior === "deny";
+    // Flatten the answered value(s) into a readable summary — a multiSelect answer is an array, and a
+    // multi-question card joins its per-question answers. Shows the user WHAT they picked (Claude Code's
+    // transcript keeps the choice, so ours should too) and survives reload via the logged frame.
+    const summary =
+      !denied && doneAnswers
+        ? Object.values(doneAnswers)
+            .map((v) => (Array.isArray(v) ? v.join(", ") : v))
+            .filter((s) => s !== "")
+            .join(" · ")
+        : "";
     return (
       <div className="perm perm-q">
         <div className="perm-resolved" data-behavior={resolvedBehavior ?? "allow"}>
-          {denied ? "✕ Dismissed" : "✓ Answered"}
+          {denied ? "✕ Skipped" : "✓ Answered"}
+          {summary !== "" && <span className="q-answer">{summary}</span>}
         </div>
       </div>
     );
@@ -2124,6 +2219,18 @@ function QuestionCard({
               </button>
             ))}
           </div>
+          <textarea
+            className="q-freeform"
+            rows={1}
+            placeholder={q.multiSelect ? "Add your own answer…" : "Or type your own answer…"}
+            value={freeform[q.question] ?? ""}
+            onChange={(e) => onFreeform(q, e.target.value)}
+            onKeyDown={(e) => {
+              // Cmd/Ctrl+Enter submits when every question is answered (parity with the composer).
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && allAnswered) void submit();
+            }}
+            aria-label={`Type your own answer for: ${q.question}`}
+          />
         </div>
       ))}
       <div className="perm-actions">
@@ -2141,7 +2248,7 @@ function QuestionCard({
           disabled={busy || req.requestId === ""}
           onClick={() => void dismiss()}
         >
-          Dismiss
+          Skip / answer in chat
         </button>
       </div>
       {req.requestId === "" && (

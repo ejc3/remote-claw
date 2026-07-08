@@ -463,7 +463,12 @@ the UI are scoped features, **not** unknowns.
   answer is a **`control_response`** with `response.response = {behavior:"allow", toolUseID,
   updatedInput:{answers:{"<question>":"<choice>", …}}}`; the worker then posts a `user`/`tool_result`
   summarising the answers. So #42 reuses the §10 permission spine — the viewer renders the options and
-  returns `updatedInput.answers` instead of a bare allow/deny.
+  returns `updatedInput.answers` instead of a bare allow/deny. An answer value is an **arbitrary string**
+  (single-select) or **string array** (multiSelect) — claude's tool runs `call({questions, answers})` with
+  **no membership check**, so it need not be one of the listed option labels. The viewer therefore always
+  offers a per-question **freeform "type your own answer"** input alongside the options (mirroring real
+  Claude Code); a freeform single-select answer replaces the option pick, a freeform multiSelect answer is
+  appended to the picked labels. "Skip / answer in chat" is the deny path (claude then re-asks in plain text).
 - **#44 composer attachments** — the captured RC shape is a `user` event whose payload carries
   `file_attachments:[{file_name, file_uuid, is_image}]` (`client_platform:"ios"`): the bytes are uploaded
   out-of-band and referenced by `file_uuid`, **not** inlined. We can't reproduce that upload

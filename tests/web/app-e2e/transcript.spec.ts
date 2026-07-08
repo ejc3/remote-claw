@@ -147,6 +147,8 @@ test("an AskUserQuestion renders a question UI and submits answers (#42)", async
   // The AskUserQuestion renders as a question card (options), not a bare Allow/Deny.
   const card = page.locator(".perm.perm-q");
   await expect(card.locator(".q-text", { hasText: "Which name do you like best?" })).toBeVisible();
+  // The always-present "type your own answer" box is there alongside the options (#42 freeform).
+  await expect(card.locator(".q-freeform")).toBeVisible();
   const submit = card.getByRole("button", { name: "Submit answers" });
   await expect(submit).toBeDisabled(); // can't submit until a choice is picked
   await card.getByRole("button", { name: "Orion" }).click();
@@ -154,6 +156,78 @@ test("an AskUserQuestion renders a question UI and submits answers (#42)", async
   await submit.click();
   await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
   await page.locator("section.chat").screenshot({ path: "test-results/askuserquestion-e2e.png" });
+});
+
+test("an AskUserQuestion accepts a FREEFORM 'type your own' answer with no option picked (#42 freeform)", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ askq: true });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+
+  const card = page.locator(".perm.perm-q");
+  const freeform = card.locator(".q-freeform");
+  await expect(freeform).toBeVisible();
+  const submit = card.getByRole("button", { name: "Submit answers" });
+  await expect(submit).toBeDisabled(); // nothing answered yet
+
+  // Type a custom answer that is NOT any listed option — before the fix there was no such input at all,
+  // and finalAnswer routes the freeform string into the outgoing answers map, enabling Submit WITHOUT a
+  // click on an option. This is the whole point of the reported "there should always be a freeform" ask.
+  await freeform.fill("Nebula (my own pick)");
+  await expect(submit).toBeEnabled();
+  // No option button shows selected — freeform and options are mutually exclusive for single-select.
+  await expect(card.locator('.q-option[data-selected="true"]')).toHaveCount(0);
+  await card.screenshot({ path: "test-results/askuserquestion-freeform.png" });
+  await submit.click();
+  await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
+  await expect(card.locator(".q-answer")).toHaveText("Nebula (my own pick)");
+
+  // RELOAD forces the LOGGED-frame path: component-local optimistic `sentAnswers` is wiped on remount,
+  // so after catch_up the resolved value can ONLY come from the host's permission_resolved.answers. This
+  // is the real proof the freeform string reached the host (not just optimistic UI) — a regression that
+  // submitted an empty/absent answers payload would show "Answered" here but no `.q-answer` (codex).
+  await page.reload();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(page.locator(".perm.perm-q .q-answer")).toHaveText("Nebula (my own pick)");
+});
+
+test("a multiSelect AskUserQuestion sends BOTH picked options and an appended freeform answer (#42 multiSelect)", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ askq: "multi" });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+
+  const card = page.locator(".perm.perm-q");
+  const submit = card.getByRole("button", { name: "Submit answers" });
+  await expect(submit).toBeDisabled();
+
+  // Pick a listed option AND type a freeform one — multiSelect appends the freeform string to the picked
+  // labels, so the outbound array must contain BOTH. Picking does NOT clear the box (unlike single-select).
+  await card.getByRole("button", { name: "Unit" }).click();
+  await expect(card.locator('.q-option[data-selected="true"]')).toHaveCount(1);
+  await card.locator(".q-freeform").fill("Fuzz");
+  await expect(card.locator('.q-option[data-selected="true"]')).toHaveCount(1); // still picked
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(card.locator(".perm-resolved")).toHaveText(/Answered/);
+  const answer = card.locator(".q-answer");
+  await expect(answer).toContainText("Unit");
+  await expect(answer).toContainText("Fuzz");
+
+  // RELOAD forces the logged-frame path (optimistic sentAnswers wiped on remount) — the resolved value
+  // now comes ONLY from the host's permission_resolved.answers, proving the outbound array carried BOTH
+  // the picked label and the appended freeform, not just optimistic UI (codex).
+  await page.reload();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const afterReload = page.locator(".perm.perm-q .q-answer");
+  await expect(afterReload).toContainText("Unit");
+  await expect(afterReload).toContainText("Fuzz");
 });
 
 test("a photo STAGES, then is sent on submit and echoes in the transcript (#44/#112)", async ({

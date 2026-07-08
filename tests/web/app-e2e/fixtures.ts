@@ -21,7 +21,9 @@ export interface SeedResult {
 }
 export type SeedHost = (opts?: {
   perm?: boolean;
-  askq?: boolean;
+  /** Inject an AskUserQuestion gate (#42): true = a single-select question; "multi" = a multiSelect
+   *  question (exercises the picked-labels + appended-freeform array branch). */
+  askq?: boolean | "multi";
   /** Driver capability preset (RC_E2E_CAPS) for the capability-gated viewer (#149): "tmux" |
    *  "opencode-skip" | undefined (full MITM caps). */
   caps?: string;
@@ -34,7 +36,7 @@ function spawnHost(opts: {
   backend: string | undefined;
   bypass: string | undefined;
   perm?: boolean;
-  askq?: boolean;
+  askq?: boolean | "multi";
   caps?: string;
 }): { child: ChildProcess; ready: Promise<SeedResult> } {
   const child = spawn(TSX, [RUNNER], {
@@ -45,7 +47,7 @@ function spawnHost(opts: {
       RC_E2E_BACKEND: opts.backend ?? "",
       RC_E2E_BYPASS: opts.bypass ?? "",
       RC_E2E_PERM: opts.perm ? "1" : "",
-      RC_E2E_ASKQ: opts.askq ? "1" : "",
+      RC_E2E_ASKQ: opts.askq === "multi" ? "multi" : opts.askq ? "1" : "",
       RC_E2E_CAPS: opts.caps ?? "",
     },
   });

@@ -149,6 +149,30 @@ describe("Session producers", () => {
     expect(resp.response.updatedInput.answers).toEqual({ "Which name?": "Orion" });
   });
 
+  it("pushControlResponse carries an ARBITRARY freeform answer string (not among the options) unchanged (#42 freeform)", () => {
+    // The viewer always offers a "type your own answer" input; the typed string is NOT necessarily one of
+    // the option labels. session builds updatedInput with NO membership check, so a freeform answer flows
+    // through verbatim — this locks that in (the protocol path already supports it; only the UI was missing).
+    const s = new Session("cse_x", "t", {});
+    const questions = [
+      {
+        question: "Which name?",
+        header: "Name",
+        multiSelect: false,
+        options: [{ label: "Orion" }, { label: "Sable" }],
+      },
+    ];
+    const ev = s.pushControlResponse("req-ff", "allow", {
+      toolUseId: "toolu_ff",
+      answers: { "Which name?": "Nebula (my own pick)" }, // not an option label
+      questions,
+    });
+    const resp = ev.payload.response as {
+      response: { updatedInput: { answers: Record<string, string> } };
+    };
+    expect(resp.response.updatedInput.answers).toEqual({ "Which name?": "Nebula (my own pick)" });
+  });
+
   it("pushControlResponse falls back to updatedInput.{answers} when no questions are stashed", () => {
     const s = new Session("cse_x", "t", {});
     const ev = s.pushControlResponse("req-2", "allow", { answers: { Q: "A" } });

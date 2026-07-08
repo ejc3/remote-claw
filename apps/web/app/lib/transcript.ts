@@ -238,19 +238,27 @@ export function parseTask(text: string): TaskEvent {
 export interface PermissionResolution {
   requestId: string;
   behavior: "allow" | "deny";
+  /** For an AskUserQuestion allow (#42), the answers the client sent, keyed by question text. Present
+   *  only when the frame carried them — a plain permission allow/deny has none. Lets the resolved card
+   *  render WHAT was answered (a faithful transcript of the choice), surviving reload via the log. */
+  answers?: Record<string, string | string[]>;
 }
 
-/** Parse a `permission_resolved` replay frame — `{request_id, behavior}` — tolerating bad JSON. The
- *  host LOGS this when a permission is answered, so a reload / catch_up can render the request as
- *  resolved instead of re-prompting (#56). An unknown behavior defaults to "allow" (the relay only
+/** Parse a `permission_resolved` replay frame — `{request_id, behavior, answers?}` — tolerating bad
+ *  JSON. The host LOGS this when a permission is answered, so a reload / catch_up can render the request
+ *  as resolved instead of re-prompting (#56). An unknown behavior defaults to "allow" (the relay only
  *  ever emits allow|deny; "" requestId means we couldn't fold it onto a request — caller drops it). */
 export function parsePermissionResolved(text: string): PermissionResolution {
   try {
-    const r = JSON.parse(text) as { request_id?: unknown; behavior?: unknown };
-    return {
+    const r = JSON.parse(text) as { request_id?: unknown; behavior?: unknown; answers?: unknown };
+    const res: PermissionResolution = {
       requestId: typeof r.request_id === "string" ? r.request_id : "",
       behavior: r.behavior === "deny" ? "deny" : "allow",
     };
+    if (r.answers !== null && typeof r.answers === "object") {
+      res.answers = r.answers as Record<string, string | string[]>;
+    }
+    return res;
   } catch {
     return { requestId: "", behavior: "allow" };
   }
