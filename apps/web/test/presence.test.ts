@@ -325,4 +325,12 @@ describe("parseHarness", () => {
     expect(parseHarness({ agent: "claude-code" })).toBeUndefined(); // missing mode
     expect(parseHarness({ mode: "rc" })).toBeUndefined(); // missing agent
   });
+
+  it("rejects an enum-valid but nonsensical PAIR (matches the whole descriptor, not each field)", () => {
+    // Both fields are individually valid enums, but the COMBO is not one a host announces — it must fall
+    // back to the MITM label, never be mislabelled (e.g. as "Claude Code · RC"). codex.
+    expect(parseHarness({ agent: "claude-code", mode: "opencode" })).toBeUndefined();
+    expect(parseHarness({ agent: "opencode", mode: "rc" })).toBeUndefined();
+    expect(parseHarness({ agent: "opencode", mode: "tmux" })).toBeUndefined();
+  });
 });

@@ -207,21 +207,24 @@ export function parseCapabilities(raw: unknown): Capabilities | undefined {
   };
 }
 
+/** The exact agent+mode PAIRS a host can announce (the host's MITM/TMUX/OPENCODE_HARNESS consts). Only
+ *  these three are valid — an enum-valid but nonsensical pair (e.g. claude-code+opencode) must NOT slip
+ *  through and mislabel, so we match the whole descriptor, not each field independently. */
+const KNOWN_HARNESSES: readonly Harness[] = [
+  { agent: "claude-code", mode: "rc" },
+  { agent: "claude-code", mode: "tmux" },
+  { agent: "opencode", mode: "opencode" },
+];
+
 /** Defensively coerce an announce's `harness` into Harness|undefined. Decrypted-but-untrusted (AEAD
- *  proves the host wrote it, not that it's well-formed), so both fields are validated against the known
- *  enums; anything else → undefined, and the viewer falls back to the MITM label (a legacy host is always
- *  native-RC Claude Code). */
+ *  proves the host wrote it, not that it's well-formed), so the (agent, mode) PAIR is matched against the
+ *  three declared descriptors; anything else → undefined, and the viewer falls back to the MITM label (a
+ *  legacy host is always native-RC Claude Code). Matching the pair (not each field) means a hostile body
+ *  with a valid-but-mismatched combo can't be mislabelled instead of falling back. */
 export function parseHarness(raw: unknown): Harness | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const h = raw as Record<string, unknown>;
-  const agent =
-    h.agent === "opencode" ? "opencode" : h.agent === "claude-code" ? "claude-code" : null;
-  const mode =
-    h.mode === "rc" || h.mode === "tmux" || h.mode === "opencode"
-      ? (h.mode as Harness["mode"])
-      : null;
-  if (agent === null || mode === null) return undefined;
-  return { agent, mode };
+  return KNOWN_HARNESSES.find((k) => k.agent === h.agent && k.mode === h.mode);
 }
 
 /** Defensively coerce an announce's `git` field into GitInfo|null. The body is decrypted-but-untrusted
