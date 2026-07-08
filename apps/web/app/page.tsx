@@ -42,6 +42,7 @@ import {
   connStateLabel,
   emptyTranscriptHint,
   type GitInfo,
+  type Harness,
   type Message,
   nextReconnectAnchor,
   shouldAcceptAnnounce,
@@ -534,6 +535,16 @@ export function transcriptScrollAction(
   return contentGrew ? "show-pill" : "none";
 }
 
+/** The session-list label for a session's harness (#164): which agent + how it's bridged, so the three
+ *  sessions (native-RC Claude Code, tmux Claude Code, opencode) don't look identical. A legacy host omits
+ *  `harness` → treated as native-RC Claude Code (the only pre-#164 driver). opencode's mode is redundant
+ *  with its agent name, so it shows just "opencode"; the two Claude Code variants show RC vs TX. */
+function harnessLabel(harness: Harness | undefined): string {
+  if (harness?.agent === "opencode") return "opencode";
+  const mode = harness?.mode === "tmux" ? "TX" : "RC";
+  return `Claude Code · ${mode}`;
+}
+
 /** The session's git context (#49): branch, a dot for uncommitted changes, and ahead/behind vs its
  *  upstream (zeros omitted). A static snapshot from announce time — title carries the precise sha. */
 function GitChip({ git }: { git: GitInfo }) {
@@ -768,7 +779,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                 data-state={cs}
                 // Full context on hover/long-press: the sub-line truncates the cwd, so reveal the whole
                 // path (+ branch) here so users can disambiguate sessions (#design-pass cwd-tooltip).
-                title={`${s.title}${s.git ? ` · ${s.git.branch}` : ""}${s.cwd ? ` · ${s.cwd}` : ""}`}
+                title={`${harnessLabel(s.harness)} · ${s.title}${s.git ? ` · ${s.git.branch}` : ""}${s.cwd ? ` · ${s.cwd}` : ""}`}
                 onClick={() => setSelected(s.sessionId)}
               >
                 <span className="row-top">
@@ -787,6 +798,11 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                   ) : null}
                 </span>
                 <span className="row-sub">
+                  {/* Which agent + mode this session is (#164) — so native-RC / tmux Claude Code /
+                      opencode don't look identical in the list. */}
+                  <span className="agent-badge" data-agent={s.harness?.agent ?? "claude-code"}>
+                    {harnessLabel(s.harness)}
+                  </span>
                   {s.git && <GitChip git={s.git} />}
                   {presenceWord(s, now, since)}
                   {s.cwd !== null ? ` · ${s.cwd}` : ""}
@@ -1279,6 +1295,9 @@ function Transcript(props: {
           ‹ Sessions
         </button>
         <span className="row-title">{props.title}</span>
+        <span className="agent-badge" data-agent={announce?.harness?.agent ?? "claude-code"}>
+          {harnessLabel(announce?.harness)}
+        </span>
         {announce?.git && <GitChip git={announce.git} />}
         {permsBypassed && (
           <span

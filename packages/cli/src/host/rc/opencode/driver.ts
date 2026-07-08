@@ -40,7 +40,12 @@
 
 import type { BrokerClient } from "../../../broker/client.js";
 import { type Tracer, tracerFromEnv } from "../../../trace.js";
-import type { Driver, DriverCapabilities, DriverContext } from "../driver.js";
+import {
+  type Driver,
+  type DriverCapabilities,
+  type DriverContext,
+  OPENCODE_HARNESS,
+} from "../driver.js";
 import { bridgeSession } from "../drivers/bridge.js";
 import type { GitInfo } from "../gitinfo.js";
 import { RelayCore, type Session } from "../session.js";
@@ -335,6 +340,7 @@ export class OpencodeDriver implements Driver {
     const served = bridgeSession({
       session,
       capabilities: this.capabilities,
+      harness: OPENCODE_HARNESS,
       newClient: this.#ctx.newClient,
       identityId: this.#ctx.identity.identityId,
       title: this.#ctx.title,

@@ -25,7 +25,12 @@ import { join } from "node:path";
 import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { type BrokerClient, BrokerError, type SeqCursor } from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
-import { type DriverCapabilities, MITM_CAPABILITIES } from "./driver.js";
+import {
+  type DriverCapabilities,
+  type HarnessDescriptor,
+  MITM_CAPABILITIES,
+  MITM_HARNESS,
+} from "./driver.js";
 import type { GitInfo } from "./gitinfo.js";
 import { assistantText, permissionModeFrom, type RcEvent, type Session } from "./session.js";
 
@@ -125,6 +130,10 @@ export interface HostRcRelayOptions {
    *  controls a driver can't honor (no false "✓"). Defaults to MITM_CAPABILITIES (full) so a relay built
    *  without it behaves exactly as before. */
   capabilities?: DriverCapabilities;
+  /** Which harness (agent + bridge mode) this session runs. Rides every session_announce so the viewer's
+   *  session list can label it (Claude Code · RC / · TX / opencode). Defaults to MITM_HARNESS so a relay
+   *  built without it behaves exactly as before. */
+  harness?: HarnessDescriptor;
 }
 
 /** Default on-disk location for a viewer-sent attachment (#44): `~/.claude/uploads/<sessionId>/`. This
@@ -418,6 +427,8 @@ export class HostRcRelay {
   readonly #attachmentsDir: string;
   /** Declared driver capabilities, broadcast on every announce so the viewer can gate controls. */
   readonly #capabilities: DriverCapabilities;
+  /** Which harness (agent + bridge mode) this session runs; broadcast on every announce for the list label. */
+  readonly #harness: HarnessDescriptor;
   /** Monotonic prefix making each on-disk attachment name unique (so a later upload can't overwrite a
    *  file an earlier still-queued prompt will Read). (#44) */
   #attachmentSeq = 0;
@@ -435,6 +446,7 @@ export class HostRcRelay {
     this.#session = opts.session;
     this.#attachmentsDir = opts.attachmentsDir ?? defaultAttachmentsDir(opts.sessionId);
     this.#capabilities = opts.capabilities ?? MITM_CAPABILITIES;
+    this.#harness = opts.harness ?? MITM_HARNESS;
     // Bind the session id onto every line (span-like) so interleaved sessions are distinguishable.
     this.#trace = (opts.tracer ?? NOOP_TRACER).child({ session: opts.sessionId });
   }
@@ -500,6 +512,7 @@ export class HostRcRelay {
       needs: p.needs,
       git: this.#annGit,
       capabilities: this.#capabilities,
+      harness: this.#harness,
     };
     if (p.mode !== null) body.mode = p.mode;
     await this.#client.postFrame(

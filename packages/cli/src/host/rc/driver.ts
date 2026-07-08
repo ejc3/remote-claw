@@ -61,6 +61,23 @@ export const MITM_CAPABILITIES: DriverCapabilities = {
   attachments: true,
 };
 
+/** Which harness a session runs, so the viewer's session list can show WHICH agent + mode it is (the
+ *  three sessions look identical otherwise). `agent` is the product; `mode` is how we bridge it. Rides
+ *  every session_announce alongside `capabilities`. */
+export interface HarnessDescriptor {
+  /** The underlying agent product. */
+  agent: "claude-code" | "opencode";
+  /** How the session is bridged: native RC (mitm), a tmux pane, or opencode's own server. */
+  mode: "rc" | "tmux" | "opencode";
+}
+
+/** The MITM driver runs the real `claude` under native remote-control. */
+export const MITM_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "rc" };
+/** The tmux driver runs a plain `claude` in a tmux pane, bridged via the permission hook + transcript. */
+export const TMUX_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "tmux" };
+/** The opencode driver peer-attaches to an `opencode serve`. */
+export const OPENCODE_HARNESS: HarnessDescriptor = { agent: "opencode", mode: "opencode" };
+
 /**
  * Everything a driver needs to bridge a harness to the broker. Mirrors the launch surface
  * (RcLaunchOptions in launch.ts) so the MITM driver maps onto it 1:1; non-MITM drivers ignore the

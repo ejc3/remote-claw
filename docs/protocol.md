@@ -239,6 +239,10 @@ logged, so re-announcing is cheap (`relay.ts` `#sendAnnounce`). The host folds l
   controls a driver can't service and shows a "permissions off" posture when `structuredPermissions`
   is false — so a permission-mode / model control never silently no-ops (#149). Absent on a legacy host
   → the viewer assumes full capability (a pre-capability host is always the MITM driver).
+- `harness` — the driver's `HarnessDescriptor` (`{ agent: "claude-code" | "opencode"; mode: "rc" |
+  "tmux" | "opencode" }`). The viewer labels each session-list row from it — **Claude Code · RC** /
+  **Claude Code · TX** / **opencode** — so the three harnesses don't look identical (#164). Absent on a
+  legacy host → treated as the MITM harness (native-RC Claude Code, the only pre-#164 driver).
 - `sent_at` — the freshness clock the viewer reads for liveness.
 
 Cadence (`relay.ts` `#maybeAnnounce`): re-announce **immediately** when the presence key

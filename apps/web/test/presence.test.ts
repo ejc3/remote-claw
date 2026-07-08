@@ -9,6 +9,7 @@ import {
   nextReconnectAnchor,
   parseCapabilities,
   parseGit,
+  parseHarness,
   RECONNECTING_WINDOW_MS,
   shouldAcceptAnnounce,
 } from "../app/lib/viewer.js";
@@ -290,5 +291,38 @@ describe("parseCapabilities", () => {
       setMode: false,
       end: true,
     });
+  });
+});
+
+// parseHarness coerces the announce's `harness` (decrypted-but-untrusted) into the agent+mode label the
+// session list shows (#164). Unknown enums / malformed bodies → undefined so the viewer falls back to the
+// MITM label (a legacy host is always native-RC Claude Code) rather than mislabeling.
+describe("parseHarness", () => {
+  it("parses each known agent+mode verbatim", () => {
+    expect(parseHarness({ agent: "claude-code", mode: "rc" })).toEqual({
+      agent: "claude-code",
+      mode: "rc",
+    });
+    expect(parseHarness({ agent: "claude-code", mode: "tmux" })).toEqual({
+      agent: "claude-code",
+      mode: "tmux",
+    });
+    expect(parseHarness({ agent: "opencode", mode: "opencode" })).toEqual({
+      agent: "opencode",
+      mode: "opencode",
+    });
+  });
+
+  it("returns undefined for a legacy host (absent) or a non-object", () => {
+    expect(parseHarness(undefined)).toBeUndefined();
+    expect(parseHarness(null)).toBeUndefined();
+    expect(parseHarness("nope")).toBeUndefined();
+  });
+
+  it("returns undefined for an unknown agent or mode (never mislabels)", () => {
+    expect(parseHarness({ agent: "gemini", mode: "rc" })).toBeUndefined();
+    expect(parseHarness({ agent: "claude-code", mode: "ssh" })).toBeUndefined();
+    expect(parseHarness({ agent: "claude-code" })).toBeUndefined(); // missing mode
+    expect(parseHarness({ mode: "rc" })).toBeUndefined(); // missing agent
   });
 });

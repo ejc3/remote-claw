@@ -494,3 +494,10 @@ transcript contract remain **completely unchanged** — they're already pure fun
 `(Session, BrokerClient)` and the canonical frame shape. The one capability-aware seam (#149): a driver
 declares `DriverCapabilities`, the relay rides them on `session_announce`, and the viewer disables +
 labels the controls a driver can't faithfully service (so a permission-mode / model "✓" never lies).
+
+Alongside capabilities, each driver declares a `HarnessDescriptor` — `{ agent: "claude-code" |
+"opencode"; mode: "rc" | "tmux" | "opencode" }` (the consts `MITM_HARNESS` / `TMUX_HARNESS` /
+`OPENCODE_HARNESS`) — which the relay also rides on every `session_announce` (#164). The viewer labels
+each row in the session list from it (**Claude Code · RC** / **Claude Code · TX** / **opencode**) so the
+three harnesses don't look identical; a legacy host that omits it is treated as the MITM harness
+(native-RC Claude Code, the only pre-#164 driver).

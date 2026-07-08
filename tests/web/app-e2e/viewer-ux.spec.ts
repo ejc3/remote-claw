@@ -41,6 +41,30 @@ test("the session row title carries branch + cwd as a hover tooltip", async ({ p
   expect(title).toContain("rc box"); // the session title
   expect(title).toContain("main"); // the git branch from the announce
   expect(title).toContain("/home/ubuntu/remote-claw"); // the full cwd (the part the ellipsis hides)
+  // The default (MITM) host announces the native-RC harness → the list badge reads "Claude Code · RC" (#164).
+  await expect(row.locator(".agent-badge")).toHaveText("Claude Code · RC");
+});
+
+// #164: the session list labels WHICH agent + bridge mode each session is, so native-RC Claude Code, tmux
+// Claude Code, and opencode don't look identical. The host announces its HarnessDescriptor; the badge is
+// driven end-to-end from that announce (RC_E2E_HARNESS picks which the scripted host declares).
+test("the session-list badge labels the harness (RC / TX / opencode) from the announce", async ({
+  page,
+  seedHost,
+}) => {
+  for (const [harness, label, agent] of [
+    ["tmux", "Claude Code · TX", "claude-code"],
+    ["opencode", "opencode", "opencode"],
+  ] as const) {
+    const { pass } = await seedHost({ harness });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    const row = page.locator("button.row", { hasText: "rc box" });
+    const badge = row.locator(".agent-badge");
+    await expect(badge).toHaveText(label);
+    await expect(badge).toHaveAttribute("data-agent", agent);
+    await row.screenshot({ path: `test-results/agent-badge-${harness}.png` });
+  }
 });
 
 // #design-pass: "Forget pass" wipes the credential and bounces to the gate — a single misclick used to
