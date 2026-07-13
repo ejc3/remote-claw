@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Atelier Palette — Paint Plan for Connor's Room</title>
+
+<style>
+  :root{
+    --paper:#f4eddc; --panel:#faf5e8; --ink:#232433; --muted:#6d6a58;
+    --indigo:#28304d; --indigo-deep:#1d2338;
+    --gold:#7d5c15; --gold-hi:#d8b45f; --hair:#d5cab0;
+    --star:#fdf6e4;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#151827; --panel:#1c2033; --ink:#efe9d6; --muted:#9a94a8;
+      --indigo:#39415f; --indigo-deep:#12162a;
+      --gold:#d8b45f; --gold-hi:#eccf8a; --hair:#33384f;
+      --star:#fdf6e4;
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#f4eddc;--panel:#faf5e8;--ink:#232433;--muted:#6d6a58;--indigo:#28304d;--indigo-deep:#1d2338;
+    --gold:#7d5c15;--gold-hi:#d8b45f;--hair:#d5cab0;--star:#fdf6e4;
+  }
+  :root[data-theme="dark"]{
+    --paper:#151827;--panel:#1c2033;--ink:#efe9d6;--muted:#9a94a8;--indigo:#39415f;--indigo-deep:#12162a;
+    --gold:#d8b45f;--gold-hi:#eccf8a;--hair:#33384f;--star:#fdf6e4;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--serif);line-height:1.6;
+    -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:980px;margin:0 auto;padding:0 20px 80px;}
+
+  .kick{font-family:var(--mono);font-size:11px;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);}
+  h1{font-size:clamp(34px,6.4vw,60px);font-weight:500;font-style:italic;letter-spacing:.01em;
+    line-height:1.04;margin:10px 0 14px;text-wrap:balance;}
+  h2{font-size:clamp(22px,3.2vw,30px);font-weight:500;font-style:italic;margin:0;}
+  .lead{font-size:17px;max-width:60ch;color:var(--ink);}
+  .muted{color:var(--muted);}
+
+  .card{background:var(--panel);border:1px solid var(--ink);border-radius:2px;position:relative;}
+  .card::after{content:"";position:absolute;inset:5px;border:1px solid var(--hair);border-radius:1px;pointer-events:none;}
+  .pad{padding:clamp(22px,4vw,44px);}
+  section{margin-top:26px;}
+
+  /* cover */
+  .cover{position:relative;overflow:hidden;margin-top:26px;background:
+    linear-gradient(180deg,var(--indigo-deep) 0%,var(--indigo) 78%,var(--indigo-deep) 100%);
+    color:var(--star);border:1px solid var(--ink);}
+  .cover .pad{position:relative;}
+  .cover .kick{color:var(--gold-hi);}
+  .cover .lead{color:var(--star);opacity:.92;}
+  .cover::after{border-color:color-mix(in srgb,var(--gold) 45%,transparent);}
+  .glyphs{position:absolute;inset:0;pointer-events:none;opacity:.9;}
+
+  /* swatch cards */
+  .swgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;}
+  @media(max-width:820px){.swgrid{grid-template-columns:repeat(2,1fr);}}
+  @media(max-width:520px){.swgrid{grid-template-columns:1fr;}}
+  .swc{display:flex;flex-direction:column;border:1px solid var(--ink);background:var(--panel);border-radius:2px;overflow:hidden;}
+  .swc .chip{height:118px;position:relative;}
+  .swc .chip .no{position:absolute;top:10px;left:12px;font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;}
+  .swc .body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--ink);}
+  .swc h3{font-size:17px;font-style:italic;font-weight:600;margin:0;}
+  .swc .hex{font-family:var(--mono);font-size:11.5px;color:var(--muted);letter-spacing:.06em;}
+  .swc .use{font-size:13.5px;color:var(--muted);line-height:1.5;}
+  .swc .match{font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;color:var(--gold);text-transform:uppercase;}
+
+  /* where it goes — the same elevations as the Ink & Grain board, painted */
+  .elev{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+  @media(max-width:760px){.elev{grid-template-columns:1fr;}}
+  .ecard{border:1px solid var(--ink);border-radius:2px;background:var(--panel);overflow:hidden;}
+  .ecard svg{display:block;width:100%;height:auto;}
+  .ecap{border-top:1px solid var(--ink);padding:11px 16px 13px;}
+  .ecap h3{font-size:15px;font-style:italic;font-weight:600;margin:0 0 3px;}
+  .ecap h3 span{color:var(--gold);font-style:normal;font-family:var(--mono);font-size:12px;}
+  .ecap p{margin:0;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--muted);letter-spacing:.02em;}
+
+  /* sigil DIY */
+  .sigilgrid{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:center;}
+  @media(max-width:760px){.sigilgrid{grid-template-columns:1fr;}}
+  .steps{margin:0;padding:0;list-style:none;counter-reset:st;display:flex;flex-direction:column;gap:13px;}
+  .steps li{counter-increment:st;position:relative;padding-left:40px;font-size:15px;color:var(--muted);}
+  .steps li b{color:var(--ink);}
+  .steps li::before{content:counter(st);position:absolute;left:0;top:1px;width:26px;height:26px;border:1px solid var(--gold);
+    border-radius:50%;display:grid;place-content:center;font-family:var(--mono);font-size:12px;color:var(--gold);}
+
+  .note{font-size:14px;color:var(--muted);max-width:70ch;}
+  .note b{color:var(--ink);}
+  a.link{color:var(--gold);font-weight:600;text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--gold) 45%,transparent);}
+  a.link:hover{border-bottom-color:var(--gold);}
+  a:focus-visible{outline:2px solid var(--gold);outline-offset:3px;}
+
+  table{border-collapse:collapse;width:100%;font-size:14px;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--hair);}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:500;}
+  td:first-child{font-style:italic;font-weight:600;}
+  td{color:var(--muted);} td:first-child{color:var(--ink);}
+  .tablewrap{overflow-x:auto;}
+
+  .foot{margin-top:28px;text-align:center;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--muted);}
+</style>
+
+<div class="wrap">
+
+  <!-- ============ COVER: night in the atelier ============ -->
+  <header class="cover card">
+    <svg class="glyphs" viewBox="0 0 960 340" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <g fill="none" stroke="var(--gold-hi)" opacity=".5">
+        <circle cx="790" cy="120" r="72" stroke-width="1.2"/>
+        <circle cx="790" cy="120" r="61.9" stroke-width="0.7"/>
+        <path d="M851.9 120 L862 120 M843.6 151 L852.4 156 M821 173.6 L826 182.4 M790 181.9 L790 192 M759 173.6 L754 182.4 M736.4 151 L727.6 156 M728.1 120 L718 120 M736.4 89 L727.6 84 M759 66.4 L754 57.6 M790 58.1 L790 48 M821 66.4 L826 57.6 M843.6 89 L852.4 84" stroke-width="0.6"/>
+        <path d="M836.1 146.6 L823.8 143.8 L827.5 137.4 Z" stroke-width="0.7"/>
+        <circle cx="790" cy="166.1" r="3.6" stroke-width="0.7"/>
+        <path d="M743.9 146.6 L752.5 137.4 L756.2 143.8 Z" stroke-width="0.7"/>
+        <circle cx="750.1" cy="97" r="3.6" stroke-width="0.7"/>
+        <path d="M790 66.7 L793.7 78.8 L786.3 78.8 Z" stroke-width="0.7"/>
+        <circle cx="829.9" cy="97" r="3.6" stroke-width="0.7"/>
+        <path d="M813.7 132.1 A18.7 18.7 0 1 1 784.6 108.5 M767.7 134.5 A18.7 18.7 0 1 1 802.6 121 M788.6 93.5 A18.7 18.7 0 1 1 782.8 130.4" stroke-width="0.8"/>
+        <circle cx="790" cy="120" r="2.9" stroke-width="0.8"/>
+      </g>
+      <g fill="var(--star)">
+        <circle cx="88" cy="70" r="1.6"/><circle cx="200" cy="120" r="1.1"/><circle cx="286" cy="200" r="1.4"/>
+        <circle cx="420" cy="90" r="1.2"/><circle cx="520" cy="180" r="1.6"/><circle cx="600" cy="60" r="1.1"/>
+        <circle cx="660" cy="230" r="1.3"/><circle cx="900" cy="240" r="1.5"/><circle cx="940" cy="80" r="1.1"/>
+        <circle cx="368" cy="280" r="1.2"/><circle cx="60" cy="160" r="1.2"/><circle cx="730" cy="40" r="1.2"/>
+      </g>
+    </svg>
+    <div class="pad">
+      <p class="kick">Connor’s Room · companion paint board</p>
+      <h1>The Atelier Palette</h1>
+      <p class="lead">Paint choices for Connor’s room, drawn from <em>Witch Hat Atelier</em> — a world
+      where magic is nothing more than ink, a steady hand, and the courage to draw the circle.
+      Parchment days, one deep indigo night, and a constellation of gold sigils he draws himself.</p>
+    </div>
+  </header>
+
+  <!-- ============ SWATCHES ============ -->
+  <section class="card pad">
+    <p class="kick">Six paints</p>
+    <h2>The swatch ring</h2>
+    <p class="muted" style="font-size:14.5px;max-width:66ch;margin:10px 0 18px">Hexes are the design
+    targets; the named paints are the closest well-known matches — <b>always check a real swatch on the
+    wall first</b>, in daylight and at night.</p>
+    <div class="swgrid">
+      <div class="swc"><div class="chip" style="background:#f2ead6"><span class="no" style="color:#6d6a58">01</span></div>
+        <div class="body"><h3>Parchment</h3><span class="hex">#F2EAD6 · eggshell</span>
+        <span class="use">Walls N · E · S + the ceiling field — the warm page every panel sits on.</span>
+        <span class="match">≈ BM White Dove · SW Alabaster</span></div></div>
+      <div class="swc"><div class="chip" style="background:#28304d"><span class="no" style="color:#d8b45f">02</span></div>
+        <div class="body"><h3>Ink-Cap Indigo</h3><span class="hex">#28304D · matte</span>
+        <span class="use">Wall W only, behind the bed — night sky for the gallery and the sigils.</span>
+        <span class="match">≈ BM Hale Navy · SW Naval</span></div></div>
+      <div class="swc"><div class="chip" style="background:#b58a2e;background-image:linear-gradient(120deg,#b58a2e,#d8b45f 55%,#b58a2e)"><span class="no" style="color:#1d2338">03</span></div>
+        <div class="body"><h3>Gold Sigil</h3><span class="hex">metallic · paint pen</span>
+        <span class="use">Hand-drawn glyphs on wall W’s indigo. Connor’s own linework.</span>
+        <span class="match">Gold paint marker, 2–3 mm nib</span></div></div>
+      <div class="swc"><div class="chip" style="background:#3e6a70"><span class="no" style="color:#f2ead6">04</span></div>
+        <div class="body"><h3>Starglass Teal</h3><span class="hex">#3E6A70 · eggshell</span>
+        <span class="use">Small doses on walls N + E: the shelf backs and the pegboard. Depth without dark.</span>
+        <span class="match">≈ BM Aegean Teal · SW Riverway</span></div></div>
+      <div class="swc"><div class="chip" style="background:#c9c1d6"><span class="no" style="color:#3f3a52">05</span></div>
+        <div class="body"><h3>Twilight Lilac</h3><span class="hex">#C9C1D6 · flat</span>
+        <span class="use">Optional ceiling tint over the bed zone — see the ceiling plan below.</span>
+        <span class="match">≈ BM Iced Mauve family — sample first</span></div></div>
+      <div class="swc"><div class="chip" style="background:#232433"><span class="no" style="color:#c9c1d6">06</span></div>
+        <div class="body"><h3>Brimmed-Hat Black</h3><span class="hex">#232433 · satin</span>
+        <span class="use">Not a wall — the line, on every wall: frames, rod, lamp arms, chair.</span>
+        <span class="match">Off-the-shelf black satin / frames as-is</span></div></div>
+    </div>
+  </section>
+
+  <!-- ============ WHERE EACH COLOR GOES ============ -->
+  <section class="card pad">
+    <p class="kick">The map</p>
+    <h2>Where each paint lands</h2>
+    <p class="note" style="margin:10px 0 16px">These are the <b>same four elevations as the Ink &amp;
+    Grain board</b> — same furniture, same views — now painted. The numbered chips match the swatch
+    ring above.</p>
+    <div class="elev">
+
+      <!-- W · gallery wall — 02 indigo + 03 sigils -->
+      <div class="ecard">
+        <svg viewBox="0 0 460 260" role="img" aria-label="West wall painted: indigo with gold sigils">
+          <rect x="15" y="18" width="430" height="204" fill="#28304d" stroke="#232433" stroke-width="2.5"/>
+          <rect x="15" y="212" width="430" height="10" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+          <rect x="402" y="18" width="43" height="204" fill="#f2ead6" stroke="#232433" stroke-width="2.5"/>
+          <text x="423" y="120" text-anchor="middle" transform="rotate(-90 423 120)" font-family="ui-monospace,Menlo,monospace" font-size="9" letter-spacing=".14em" fill="#6d6a58">16″ COLUMN</text>
+          <g fill="none" stroke="#d8b45f" opacity=".85">
+            <circle cx="324" cy="62" r="24" stroke-width="1.1"/>
+        <circle cx="324" cy="62" r="20.6" stroke-width="0.6"/>
+        <path d="M344.6 62 L348 62 M341.9 72.3 L344.8 74 M334.3 79.9 L336 82.8 M324 82.6 L324 86 M313.7 79.9 L312 82.8 M306.1 72.3 L303.2 74 M303.4 62 L300 62 M306.1 51.7 L303.2 50 M313.7 44.1 L312 41.2 M324 41.4 L324 38 M334.3 44.1 L336 41.2 M341.9 51.7 L344.8 50" stroke-width="0.5"/>
+        <path d="M339.4 70.9 L335.3 69.9 L336.5 67.8 Z" stroke-width="0.6"/>
+        <path d="M308.6 70.9 L311.5 67.8 L312.7 69.9 Z" stroke-width="0.6"/>
+        <path d="M324 44.2 L325.2 48.3 L322.8 48.3 Z" stroke-width="0.6"/>
+        <path d="M331.9 66 A6.2 6.2 0 1 1 322.2 58.2 M316.6 66.8 A6.2 6.2 0 1 1 328.2 62.3 M323.5 53.2 A6.2 6.2 0 1 1 321.6 65.5" stroke-width="0.7"/>
+        <circle cx="324" cy="62" r="1" stroke-width="0.7"/>
+            <circle cx="70" cy="130" r="16" stroke-width="0.8"/>
+        <circle cx="70" cy="130" r="13.8" stroke-width="0.5"/>
+        <path d="M83.8 130 L86 130 M81.9 136.9 L83.9 138 M76.9 141.9 L78 143.9 M70 143.8 L70 146 M63.1 141.9 L62 143.9 M58.1 136.9 L56.1 138 M56.2 130 L54 130 M58.1 123.1 L56.1 122 M63.1 118.1 L62 116.1 M70 116.2 L70 114 M76.9 118.1 L78 116.1 M81.9 123.1 L83.9 122" stroke-width="0.4"/>
+        <path d="M80.3 135.9 L77.5 135.3 L78.3 133.9 Z" stroke-width="0.5"/>
+        <path d="M59.7 135.9 L61.7 133.9 L62.5 135.3 Z" stroke-width="0.5"/>
+        <path d="M70 118.2 L70.8 120.8 L69.2 120.8 Z" stroke-width="0.5"/>
+        <path d="M75.3 132.7 A4.2 4.2 0 1 1 68.8 127.5 M65 133.2 A4.2 4.2 0 1 1 72.8 130.2 M69.7 124.1 A4.2 4.2 0 1 1 68.4 132.3" stroke-width="0.6"/>
+        <circle cx="70" cy="130" r="0.6" stroke-width="0.6"/>
+          </g>
+          <g fill="#fdf6e4"><circle cx="40" cy="52" r="1.4"/><circle cx="66" cy="86" r="1.1"/><circle cx="316" cy="34" r="1.2"/>
+            <circle cx="356" cy="120" r="1.3"/><circle cx="308" cy="112" r="1.1"/><circle cx="38" cy="168" r="1.2"/></g>
+          <g stroke="#232433" stroke-width="2">
+            <rect x="153" y="53" width="30" height="32" fill="#faf5e8"/>
+            <rect x="190" y="53" width="30" height="32" fill="#d8382a"/>
+            <rect x="226" y="53" width="30" height="32" fill="#faf5e8"/>
+            <rect x="153" y="89" width="30" height="32" fill="#faf5e8"/>
+            <rect x="190" y="89" width="30" height="32" fill="#faf5e8"/>
+            <rect x="226" y="89" width="30" height="32" fill="#faf5e8"/>
+          </g>
+          <g fill="#6d6a58" opacity=".55">
+            <rect x="158" y="62" width="20" height="3"/><rect x="158" y="69" width="15" height="3"/>
+            <rect x="231" y="62" width="20" height="3"/><rect x="158" y="98" width="18" height="3"/>
+            <rect x="195" y="98" width="20" height="3"/><rect x="231" y="100" width="19" height="3"/>
+          </g>
+          <rect x="125" y="160" width="143" height="38" rx="4" fill="#d3e2d5" stroke="#232433" stroke-width="2.5"/>
+          <path d="M125 174 H268" stroke="#232433" stroke-width="1.4" opacity=".5"/>
+          <rect x="134" y="146" width="55" height="20" rx="8" fill="#f5edd9" stroke="#232433" stroke-width="2"/>
+          <rect x="204" y="146" width="55" height="20" rx="8" fill="#f5edd9" stroke="#232433" stroke-width="2"/>
+          <circle cx="148" cy="150" r="13" fill="#d8b45f" stroke="#232433" stroke-width="2"/>
+          <circle cx="142" cy="146" r="3" fill="#232433"/><circle cx="154" cy="146" r="3" fill="#232433"/>
+          <rect x="125" y="198" width="143" height="14" fill="#c9a97f" stroke="#232433" stroke-width="2"/>
+          <rect x="273" y="163" width="86" height="49" fill="#c9a97f" stroke="#232433" stroke-width="2.5"/>
+          <line x1="273" y1="187" x2="359" y2="187" stroke="#232433" stroke-width="1.5"/>
+          <circle cx="316" cy="175" r="3" fill="#a97c24"/>
+          <rect x="307" y="133" width="18" height="14" fill="#d8382a" stroke="#232433" stroke-width="2"/>
+          <line x1="316" y1="147" x2="316" y2="163" stroke="#232433" stroke-width="2.5"/>
+          <g><circle cx="46" cy="46" r="11" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+            <text x="46" y="50" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" font-weight="700" fill="#232433">02</text></g>
+          <g><circle cx="324" cy="110" r="11" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+            <text x="324" y="114" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" font-weight="700" fill="#232433">03</text></g>
+        </svg>
+        <div class="ecap"><h3><span>W</span> · The gallery wall (bed)</h3>
+          <p>02 Ink-Cap Indigo, full wall · 03 Gold Sigil constellation · gallery frames in 06 black</p></div>
+      </div>
+
+      <!-- N · library wall — 01 parchment + 04 teal backs -->
+      <div class="ecard">
+        <svg viewBox="0 0 460 260" role="img" aria-label="North wall painted: parchment with teal shelf backs">
+          <rect x="15" y="18" width="430" height="204" fill="#f2ead6" stroke="#232433" stroke-width="2.5"/>
+          <rect x="15" y="212" width="430" height="10" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+          <rect x="15" y="18" width="48" height="204" fill="#f2ead6" stroke="#232433" stroke-width="2.5"/>
+          <text x="39" y="120" text-anchor="middle" transform="rotate(-90 39 120)" font-family="ui-monospace,Menlo,monospace" font-size="10" letter-spacing=".18em" fill="#6d6a58">16″ COLUMN</text>
+          <text lang="ja" x="254" y="34" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-weight="800" font-size="19" fill="#d8382a">コナー</text>
+          <rect x="148" y="52" width="212" height="94" fill="#bdd4d8" stroke="#232433" stroke-width="2.5"/>
+          <ellipse cx="192" cy="126" rx="26" ry="16" fill="#9cba89"/>
+          <ellipse cx="322" cy="118" rx="34" ry="20" fill="#9cba89"/>
+          <line x1="254" y1="52" x2="254" y2="146" stroke="#232433" stroke-width="2"/>
+          <line x1="148" y1="99" x2="360" y2="99" stroke="#232433" stroke-width="2"/>
+          <rect x="142" y="40" width="224" height="22" fill="#f5edd9" stroke="#232433" stroke-width="2"/>
+          <rect x="133" y="156" width="242" height="66" fill="#c9a97f" stroke="#232433" stroke-width="2.5"/>
+          <line x1="212" y1="156" x2="212" y2="222" stroke="#232433" stroke-width="1.6"/>
+          <line x1="297" y1="156" x2="297" y2="222" stroke="#232433" stroke-width="1.6"/>
+          <line x1="139" y1="156" x2="139" y2="222" stroke="#232433" stroke-width="1"/>
+          <line x1="369" y1="156" x2="369" y2="222" stroke="#232433" stroke-width="1"/>
+          <rect x="214" y="159" width="81" height="60" fill="#3e6a70"/>
+          <line x1="214" y1="189" x2="295" y2="189" stroke="#232433" stroke-width="1.4"/>
+          <rect x="164" y="168" width="14" height="3" fill="#a97c24"/>
+          <rect x="330" y="168" width="14" height="3" fill="#a97c24"/>
+          <g>
+            <rect x="218" y="164" width="8" height="22" fill="#d8382a"/><rect x="228" y="166" width="8" height="20" fill="#6d6a58"/>
+            <rect x="238" y="163" width="8" height="23" fill="#7c5230"/><rect x="248" y="166" width="8" height="20" fill="#b9cdbc"/>
+            <rect x="258" y="164" width="8" height="22" fill="#f5edd9"/>
+            <rect x="218" y="194" width="8" height="22" fill="#6d6a58"/><rect x="228" y="196" width="8" height="20" fill="#d8382a"/>
+            <rect x="238" y="193" width="8" height="23" fill="#b9cdbc"/><rect x="248" y="196" width="8" height="20" fill="#7c5230"/>
+          </g>
+          <circle cx="320" cy="150" r="7" fill="#f5edd9" stroke="#232433" stroke-width="1.6"/>
+          <circle cx="272" cy="207" r="8" fill="#d8b45f" stroke="#232433" stroke-width="1.6"/>
+          <circle cx="185" cy="148" r="6" fill="#d3e2d5" stroke="#232433" stroke-width="1.6"/>
+          <rect x="384" y="190" width="46" height="22" rx="10" fill="#d3e2d5" stroke="#232433" stroke-width="2"/>
+          <g><circle cx="100" cy="46" r="11" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+            <text x="100" y="50" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" font-weight="700" fill="#232433">01</text></g>
+          <g><circle cx="203" cy="205" r="9" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+            <text x="203" y="209" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10" font-weight="700" fill="#232433">04</text></g>
+        </svg>
+        <div class="ecap"><h3><span>N</span> · The library wall (window)</h3>
+          <p>01 Parchment · 04 Starglass Teal inside the console’s open bays · shade &amp; cushion unchanged</p></div>
+      </div>
+
+      <!-- E · studio wall — 01 parchment + 04 teal pegboard -->
+      <div class="ecard">
+        <svg viewBox="0 0 460 260" role="img" aria-label="East wall painted: parchment with teal pegboard">
+          <rect x="15" y="18" width="430" height="204" fill="#f2ead6" stroke="#232433" stroke-width="2.5"/>
+          <rect x="15" y="212" width="430" height="10" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+          <rect x="120" y="62" width="140" height="64" rx="2" fill="#2a2620" stroke="#232433" stroke-width="2.5"/>
+          <rect x="268" y="80" width="54" height="46" fill="#3e6a70" stroke="#232433" stroke-width="2"/>
+          <g fill="#f2ead6" opacity=".75">
+            <circle cx="277" cy="92" r="1.6"/><circle cx="289" cy="92" r="1.6"/><circle cx="301" cy="92" r="1.6"/><circle cx="313" cy="92" r="1.6"/>
+            <circle cx="277" cy="104" r="1.6"/><circle cx="289" cy="104" r="1.6"/><circle cx="301" cy="104" r="1.6"/><circle cx="313" cy="104" r="1.6"/>
+            <circle cx="277" cy="116" r="1.6"/><circle cx="289" cy="116" r="1.6"/><circle cx="301" cy="116" r="1.6"/><circle cx="313" cy="116" r="1.6"/>
+          </g>
+          <rect x="274" y="88" width="5" height="22" fill="#d8382a"/>
+          <rect x="282" y="88" width="5" height="22" fill="#232433"/>
+          <rect x="293" y="100" width="22" height="18" fill="#f5edd9" stroke="#232433" stroke-width="1.6"/>
+          <line x1="20" y1="82" x2="74" y2="82" stroke="#a97c24" stroke-width="3"/>
+          <rect x="24" y="86" width="19" height="30" fill="#faf5e8" stroke="#232433" stroke-width="1.6"/>
+          <rect x="51" y="86" width="19" height="30" fill="#faf5e8" stroke="#232433" stroke-width="1.6"/>
+          <rect x="109" y="150" width="161" height="8" fill="#c9a97f" stroke="#232433" stroke-width="2.5"/>
+          <rect x="119" y="158" width="141" height="18" fill="#c9a97f" stroke="#232433" stroke-width="2"/>
+          <line x1="190" y1="158" x2="190" y2="176" stroke="#232433" stroke-width="1.6"/>
+          <circle cx="154" cy="167" r="3" fill="#a97c24"/><circle cx="226" cy="167" r="3" fill="#a97c24"/>
+          <line x1="115" y1="176" x2="115" y2="212" stroke="#232433" stroke-width="4"/>
+          <line x1="264" y1="176" x2="264" y2="212" stroke="#232433" stroke-width="4"/>
+          <line x1="240" y1="150" x2="250" y2="128" stroke="#232433" stroke-width="2.5"/>
+          <path d="M244 120 l16 8 -8 12 -14 -8 Z" fill="#d8382a" stroke="#232433" stroke-width="2"/>
+          <rect x="164" y="172" width="52" height="9" rx="4" fill="#2a2620" stroke="#232433" stroke-width="2"/>
+          <rect x="168" y="141" width="44" height="35" rx="4" fill="#2a2620" stroke="#232433" stroke-width="2"/>
+          <line x1="190" y1="181" x2="190" y2="204" stroke="#232433" stroke-width="2.5"/>
+          <path d="M172 210 h36" stroke="#232433" stroke-width="2.5"/>
+          <rect x="431" y="52" width="14" height="170" fill="#faf5e8" stroke="#232433" stroke-width="2"/>
+          <g><circle cx="330" cy="46" r="11" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+            <text x="330" y="50" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" font-weight="700" fill="#232433">01</text></g>
+          <g><circle cx="295" cy="60" r="9" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+            <text x="295" y="64" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10" font-weight="700" fill="#232433">04</text></g>
+        </svg>
+        <div class="ecap"><h3><span>E</span> · The studio wall (TV + desk)</h3>
+          <p>01 Parchment · 04 Starglass Teal pegboard · task lamp stays vermilion</p></div>
+      </div>
+
+      <!-- S · mirror wall — 01 parchment + 06 black frame -->
+      <div class="ecard">
+        <svg viewBox="0 0 460 260" role="img" aria-label="South wall painted: parchment, mirrors and door untouched">
+          <rect x="15" y="18" width="430" height="204" fill="#f2ead6" stroke="#232433" stroke-width="2.5"/>
+          <rect x="15" y="212" width="430" height="10" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+          <rect x="21" y="52" width="91" height="170" fill="#faf5e8" stroke="#232433" stroke-width="2.5"/>
+          <rect x="32" y="66" width="69" height="60" fill="none" stroke="#232433" stroke-width="1.6"/>
+          <rect x="32" y="138" width="69" height="70" fill="none" stroke="#232433" stroke-width="1.6"/>
+          <circle cx="102" cy="132" r="4" fill="#a97c24"/>
+          <rect x="124" y="185" width="13" height="18" rx="2" fill="#faf5e8" stroke="#232433" stroke-width="1.6"/>
+          <rect x="164" y="68" width="42" height="46" fill="#232433" stroke="#232433" stroke-width="2.5"/>
+          <rect x="170" y="74" width="30" height="34" fill="#d8382a"/>
+          <rect x="257" y="48" width="182" height="174" fill="#bdd4d8" stroke="#232433" stroke-width="2.5"/>
+          <line x1="348" y1="48" x2="348" y2="222" stroke="#232433" stroke-width="2.5"/>
+          <g stroke="#232433" opacity=".25">
+            <line x1="268" y1="206" x2="330" y2="62"/><line x1="284" y1="210" x2="344" y2="66"/>
+            <line x1="358" y1="206" x2="420" y2="62"/><line x1="374" y1="210" x2="434" y2="66"/>
+          </g>
+          <g><circle cx="140" cy="158" r="11" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+            <text x="140" y="162" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" font-weight="700" fill="#232433">01</text></g>
+          <g><circle cx="158" cy="60" r="11" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+            <text x="158" y="64" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" font-weight="700" fill="#232433">06</text></g>
+        </svg>
+        <div class="ecap"><h3><span>S</span> · The mirror wall (closet + door)</h3>
+          <p>01 Parchment · 06 Brimmed-Hat Black on the cover frame · mirrors &amp; door untouched</p></div>
+      </div>
+
+    </div>
+
+    <!-- ceiling plan — 05 lilac over the bed zone -->
+    <div class="ecard" style="margin-top:20px">
+      <svg viewBox="0 0 940 250" role="img" aria-label="Ceiling plan: twilight lilac tint over the bed zone">
+        <rect x="150" y="26" width="640" height="188" fill="#f2ead6" stroke="#232433" stroke-width="3"/>
+        <rect x="157" y="101" width="360" height="66" rx="10" fill="#c9c1d6" stroke="#232433" stroke-width="1.2" stroke-dasharray="5 4"/>
+        <g fill="none" stroke="#232433" opacity=".35">
+          <rect x="168" y="105" width="338" height="62" rx="5" stroke-dasharray="3 4" stroke-width="1.5"/>
+        </g>
+        <rect x="150" y="26" width="72" height="19" fill="none" stroke="#232433" stroke-width="1.5" stroke-dasharray="3 3"/>
+        <text x="232" y="40" font-family="ui-monospace,Menlo,monospace" font-size="10" fill="#6d6a58">column</text>
+        <text x="337" y="139" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#3f3a52" opacity=".8">bed below (dashed)</text>
+        <g><circle cx="192" cy="122" r="11" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+          <text x="192" y="126" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" font-weight="700" fill="#232433">05</text></g>
+        <g><circle cx="750" cy="60" r="11" fill="#faf5e8" stroke="#232433" stroke-width="1.5"/>
+          <text x="750" y="64" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" font-weight="700" fill="#232433">01</text></g>
+        <text x="620" y="128" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#6d6a58">01 Parchment field</text>
+        <text x="90" y="120" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#6d6a58" transform="rotate(-90 90 120)">W · bed wall</text>
+        <text x="852" y="120" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#6d6a58" transform="rotate(90 852 120)">E · desk wall</text>
+      </svg>
+      <div class="ecap"><h3><span>CEILING</span> · Reflected ceiling plan — same orientation as the floor plan</h3>
+        <p>05 Twilight Lilac — optional whisper-tint over the bed zone, feathered edge · 01 Parchment everywhere else</p></div>
+    </div>
+    <p class="note" style="margin-top:8px">One dark wall only — behind the bed, where you never face it
+    from the desk. It makes the black gallery frames glow, hides at night, and turns the ceiling-light
+    shadows soft. Everything else stays parchment so daylight keeps bouncing.</p>
+  </section>
+
+  <!-- ============ THE SIGIL CONSTELLATION ============ -->
+  <section class="card pad">
+    <p class="kick">The signature move</p>
+    <h2>A constellation he draws himself</h2>
+    <div class="sigilgrid" style="margin-top:14px">
+      <svg viewBox="0 0 380 300" role="img" aria-label="Gold sigil ring sample on indigo" style="width:100%;height:auto;border:1px solid var(--ink);background:#1d2338;border-radius:2px">
+        <g fill="none" stroke="#d8b45f">
+          <circle cx="190" cy="146" r="92" stroke-width="1.8"/>
+        <circle cx="190" cy="146" r="79.1" stroke-width="1"/>
+        <path d="M269.1 146 L282 146 M258.5 185.6 L269.7 192 M229.6 214.5 L236 225.7 M190 225.1 L190 238 M150.4 214.5 L144 225.7 M121.5 185.6 L110.3 192 M110.9 146 L98 146 M121.5 106.4 L110.3 100 M150.4 77.5 L144 66.3 M190 66.9 L190 54 M229.6 77.5 L236 66.3 M258.5 106.4 L269.7 100" stroke-width="0.9"/>
+        <path d="M249 180 L233.2 176.4 L237.9 168.3 Z" stroke-width="1"/>
+        <circle cx="190" cy="204.9" r="4.6" stroke-width="1"/>
+        <path d="M131 180 L142.1 168.3 L146.8 176.4 Z" stroke-width="1"/>
+        <circle cx="139" cy="116.6" r="4.6" stroke-width="1"/>
+        <path d="M190 77.9 L194.7 93.4 L185.3 93.4 Z" stroke-width="1"/>
+        <circle cx="241" cy="116.6" r="4.6" stroke-width="1"/>
+        <path d="M220.3 161.4 A23.9 23.9 0 1 1 183 131.4 M161.5 164.5 A23.9 23.9 0 1 1 206.2 147.3 M188.2 112.1 A23.9 23.9 0 1 1 180.8 159.3" stroke-width="1.2"/>
+        <circle cx="190" cy="146" r="3.7" stroke-width="1.2"/>
+          <g stroke-width=".9">
+            <path d="M104 240 q10 -14 24 -6"/><path d="M262 74 q12 -10 22 0"/>
+            <circle cx="88" cy="88" r="10"/><path d="M84 88 h8 M88 84 v8" stroke-width=".6"/>
+            <circle cx="304" cy="216" r="13"/><path d="M298 216 h12" stroke-width=".6"/>
+          </g>
+        </g>
+        <g fill="#fdf6e4">
+          <circle cx="52" cy="52" r="1.4"/><circle cx="330" cy="60" r="1.2"/><circle cx="320" cy="130" r="1"/>
+          <circle cx="60" cy="180" r="1.2"/><circle cx="120" cy="40" r="1"/><circle cx="280" cy="272" r="1.3"/>
+          <circle cx="180" cy="272" r="1"/><circle cx="350" cy="180" r="1.1"/>
+        </g>
+      </svg>
+      <div>
+        <ol class="steps">
+          <li><b>Paint the wall</b> in Ink-Cap Indigo; let it cure 48 hours before any pen work.</li>
+          <li><b>Plot the rings in chalk</b> — string + pushpin as a compass, lightest touch. Big ring
+          over the headboard, two small ones drifting toward the corner.</li>
+          <li><b>Connor inks the glyphs</b> in gold paint pen — his runes, his rules. Pencil guides
+          first if he wants; WHA panels open on the desk for reference.</li>
+          <li><b>Dot the stars</b> — scattered gold points between the rings; wipe the chalk with a dry
+          cloth once the pen has set.</li>
+          <li><b>Leave one ring unfinished.</b> Atelier rule: there is always a next spell to learn.</li>
+        </ol>
+        <p class="note" style="margin-top:14px"><b>Why it works:</b> in <em>Witch Hat Atelier</em>, magic
+        is drawn, not cast — which makes a kid with a pen the most powerful person in the room. The wall
+        says exactly that. And if taste changes at 15: one coat of indigo, blank sky, new constellation.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SHOPPING / SPECS ============ -->
+  <section class="card pad">
+    <p class="kick">Specs</p>
+    <h2>The paint list</h2>
+    <div class="tablewrap" style="margin-top:12px">
+      <table>
+        <thead><tr><th>Paint</th><th>Finish</th><th>Amount</th><th>Goes on</th></tr></thead>
+        <tbody>
+          <tr><td>01 Parchment</td><td>Eggshell</td><td>2 gal</td><td>N + E + S walls, ceiling field</td></tr>
+          <tr><td>02 Ink-Cap Indigo</td><td>Matte</td><td>1 gal</td><td>W feature wall (bed)</td></tr>
+          <tr><td>03 Gold Sigil</td><td>Metallic pen</td><td>×2 pens</td><td>Glyph constellation on 02</td></tr>
+          <tr><td>04 Starglass Teal</td><td>Eggshell</td><td>1 qt</td><td>Bookcase backs · pegboard</td></tr>
+          <tr><td>05 Twilight Lilac</td><td>Flat</td><td>1 qt (optional)</td><td>Ceiling tint over bed zone</td></tr>
+          <tr><td>06 Brimmed-Hat Black</td><td>Satin</td><td>1 qt</td><td>Rod · lamp arms · touch-ups</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note" style="margin-top:14px">Painter’s order: ceiling → parchment walls → indigo wall →
+    48h cure → chalk + sigils. Whole-room paint budget lands around <b>$220–280</b> including the pens —
+    the cheapest square footage of drama in the entire project. Furniture spec lives on the main
+    <a class="link" href="https://claude.ai/code/artifact/1e280628-3213-414d-84e8-e3e4cad55752">Ink &amp; Grain board</a>.</p>
+  </section>
+
+  <p class="foot">The Atelier Palette · after Kamome Shirahama’s Witch Hat Atelier · for Connor’s room</p>
+</div>
+
+</html>

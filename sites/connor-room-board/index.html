@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connor&rsquo;s Room — The Board</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖋️</text></svg>">
+<style>
+  :root{--paper:#f4eddc;--panel:#faf5e8;--ink:#232433;--muted:#6d6a58;--spot:#c53024;
+    --hair:#d5cab0;--walnut:#7c5230;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;}
+  @media (prefers-color-scheme:dark){:root{--paper:#17140e;--panel:#211c13;--ink:#efe9d6;
+    --muted:#a89e88;--spot:#e05a48;--hair:#3a3426;--walnut:#c9a97f;}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--serif);line-height:1.6;
+    -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:860px;margin:0 auto;padding:9vh 22px 64px;}
+  .kick{font-family:var(--mono);font-size:11px;letter-spacing:.32em;text-transform:uppercase;color:var(--spot);}
+  h1{font-family:var(--sans);font-weight:800;text-transform:uppercase;letter-spacing:-.02em;
+    font-size:clamp(38px,7.5vw,72px);line-height:.95;margin:14px 0 18px;}
+  h1 .alt{-webkit-text-stroke:2.5px var(--ink);color:transparent;}
+  .lead{font-size:18px;max-width:58ch;color:var(--ink);}
+  .lead b{color:var(--spot);}
+  .cta{display:inline-block;margin:26px 0 8px;background:var(--spot);color:#fff;text-decoration:none;
+    font-family:var(--sans);font-weight:700;font-size:17px;padding:14px 26px;border-radius:3px;
+    border:1px solid var(--ink);box-shadow:4px 4px 0 var(--ink);}
+  .cta:active{transform:translate(2px,2px);box-shadow:2px 2px 0 var(--ink);}
+  .hint{font-family:var(--mono);font-size:11.5px;color:var(--muted);letter-spacing:.05em;margin-top:10px;}
+  .film{margin-top:44px;border:1px solid var(--ink);background:var(--panel);border-radius:3px;overflow:hidden;}
+  .film video{display:block;width:100%;height:auto;}
+  .film .cap{padding:10px 16px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--muted);
+    border-top:1px solid var(--ink);}
+  .suite{margin-top:48px;border-top:1px solid var(--hair);padding-top:22px;}
+  .suite p{font-family:var(--mono);font-size:10.5px;letter-spacing:.28em;text-transform:uppercase;color:var(--muted);margin:0 0 12px;}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media(max-width:640px){.cards{grid-template-columns:1fr;}}
+  .card{display:block;text-decoration:none;color:var(--ink);border:1px solid var(--ink);background:var(--panel);
+    border-radius:3px;padding:14px 16px;}
+  .card:hover{box-shadow:3px 3px 0 var(--ink);}
+  .card b{font-family:var(--sans);font-size:15px;}
+  .card span{display:block;font-size:13.5px;color:var(--muted);margin-top:3px;}
+  footer{margin-top:52px;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <p class="kick">Connor&rsquo;s Room · an Ink &amp; Grain design · chapter 01</p>
+    <h1>The <span class="alt">Board</span></h1>
+    <p class="lead">The complete plan for a twelve-year-old reader, gamer, and manga obsessive: a floor plan measured wall by wall, elevations for all four walls, Crate &amp; Barrel&rsquo;s walnut line with real product photos and prices, the paint, the budget — and the alternatives the room said no to.</p>
+    <a class="cta" href="/board">Open the board →</a>
+    <p class="hint">ONE LONG SCROLL · DRAWN TO SCALE · REV 05</p>
+    <div class="film">
+      <video controls preload="metadata" poster="/poster.jpg" src="/film/connor-room-walkthrough.mp4"></video>
+      <div class="cap">THE WALKTHROUGH · 2:00 · NARRATED, WITH ORIGINAL SCORE</div>
+    </div>
+    <div class="suite">
+      <p>The rest of the suite</p>
+      <div class="cards">
+      <a class="card" href="https://connor-room-3d.vercel.app"><b>The 3D Room</b><span>Walk it yourself — every inch to scale, day or night.</span></a>
+      <a class="card" href="https://connor-room-palette.vercel.app"><b>The Atelier Palette</b><span>Six paints from Witch Hat Atelier, mapped to every wall.</span></a>
+      </div>
+    </div>
+    <footer>walnut first · manga always · コナー</footer>
+  </div>
+</body>
+</html>
