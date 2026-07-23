@@ -1,0 +1,17 @@
+/* The canonical cascade-layer order for the viewer. MUST be its own file, imported FIRST from
+   globals.css: with a webpack-based bundler (which is what `next build --webpack` is) the contents of an
+   @import are hoisted ABOVE any inline CSS in the importing file, so an `@layer a, b;` declaration written
+   inline in globals.css would land AFTER the imported stylesheets and silently lose its ordering effect.
+   (`astryx docs migration` → "Cascade Layer Safety" calls this out as the single most common way an
+   adoption breaks — with no error and no warning.)
+
+   Why the order matters here: layers beat specificity. A later layer wins over an earlier one regardless
+   of how specific its selectors are, and UNLAYERED css beats every layer. So:
+
+     reset         Astryx's :where()-based reset (zero specificity, must lose to everything).
+     astryx-base   the pre-compiled component styles from @astryxdesign/core/astryx.css.
+     astryx-theme  our brand token + prose overrides from app/theme/built/remote-claw.css.
+     remote-claw   the viewer's own stylesheet (viewer.css) — LAST, so a hand-written rule can still
+                   override a component while the migration is in flight. Rules leave this layer as their
+                   component moves to Astryx; the layer disappears when viewer.css does. */
+@layer reset, astryx-base, astryx-theme, remote-claw;

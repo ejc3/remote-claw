@@ -11,7 +11,7 @@ const qp = BACKEND ? `?backend=${BACKEND}` : "";
 // without a click. Caught in the pass: every connect started with an extra tab/click into the field.
 test("the connect gate autofocuses its pass field", async ({ page }) => {
   await page.goto(`/${qp}`);
-  await expect(page.locator("textarea.field")).toBeFocused();
+  await expect(page.getByLabel("Machine pass")).toBeFocused();
 });
 
 // #design-pass: the disabled primary CTA used to render as a dead grey slab indistinguishable from a
@@ -27,6 +27,42 @@ test("the disabled Connect CTA stays a dimmed primary, not a dead grey slab", as
   }));
   expect(style.opacity).toBe("0.5"); // dimmed, not hidden
   expect(style.bg).not.toBe("rgba(0, 0, 0, 0)"); // still carries the accent fill (not transparent)
+});
+
+// The entry screens' actions are full-width primary CTAs on a phone, so they hold the same 44px touch
+// minimum this app already enforces on permission buttons. Astryx's largest Button (size="lg") is 36px
+// — a considered size for the system, but below this app's floor — so viewer.css raises it. Measured on
+// the migrated (Astryx) control, because the whole point is that adopting a design system must not
+// quietly lower an accessibility standard the app already held: the md default rendered 32px.
+test("the entry CTA meets the 44px touch target", async ({ page }) => {
+  await page.goto(`/${qp}`);
+  const cta = page.getByRole("button", { name: "Connect" });
+  await expect(cta).toBeVisible();
+  const box = await cta.boundingBox();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+});
+
+// The keyboard focus ring must stay the BRIGHT accent (#7c7ef5 → rgb(124,126,245)). This is a live
+// regression risk rather than a hypothetical: what draws it is the global :focus-visible rule in
+// viewer.css, and every OTHER rule in that file is migration debt scheduled for deletion as its
+// component moves to Astryx. Deleting this one along with them silently changes the indicator —
+// bite-checked here, where removing the rule drops this control's outline to rgb(236,236,238) (the
+// inherited text colour). Astryx's own rings would not restore it either: astryx.css draws them as
+// `outline: 2px solid var(--color-accent)`, and this theme pins --color-accent to the darker #5457e8
+// FILL for brand reasons (~3.4:1 on the near-black background vs 5.8:1 for #7c7ef5 — still over the 3:1
+// WCAG 2.2 SC 1.4.11 asks of a non-text indicator, but visibly dimmer). Asserted on a migrated (Astryx
+// TextArea) control specifically, so it covers the components the migration has already replaced.
+test("keyboard focus rings stay the bright accent on Astryx controls", async ({ page }) => {
+  await page.goto(`/${qp}`);
+  const field = page.getByLabel("Machine pass");
+  await field.focus();
+  const ring = await field.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { color: s.outlineColor, width: s.outlineWidth, style: s.outlineStyle };
+  });
+  expect(ring.color).toBe("rgb(124, 126, 245)"); // --accent-text, NOT the #5457e8 fill
+  expect(ring.style).toBe("solid");
+  expect(Number.parseFloat(ring.width)).toBeGreaterThanOrEqual(2);
 });
 
 // #design-pass (#8): the session row truncates its title/cwd to one line; the full identity (title ·
@@ -88,7 +124,7 @@ test("Forget pass is a two-step confirm — one tap arms without dropping the se
   await confirm.click(); // second tap forgets
 
   // Now the credential is wiped and we land back on the connect gate.
-  await expect(page.locator("textarea.field")).toBeVisible();
+  await expect(page.getByLabel("Machine pass")).toBeVisible();
 });
 
 // #design-pass (review follow-up): the transcript must FOLLOW to the foot when the reader is pinned there
@@ -161,7 +197,7 @@ test.describe("mobile a11y (#151)", () => {
   test("the connect field is ≥16px (no iOS focus auto-zoom)", async ({ page }) => {
     await page.goto(`/${qp}`);
     const fs = await page
-      .locator("textarea.field")
+      .getByLabel("Machine pass")
       .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(fs).toBeGreaterThanOrEqual(16);
   });

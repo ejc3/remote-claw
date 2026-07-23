@@ -1,0 +1,1556 @@
+/* remote-claw web client — the viewer's own stylesheet, being migrated onto Astryx one surface at a
+   time. Everything here lives in the `remote-claw` cascade layer, declared LAST in app/layers.css so a
+   rule that hasn't moved to a component yet still wins over @layer astryx-base. Rules leave this file as
+   their component migrates; the file (and the layer) go away when the last one does.
+
+   The @layer wrapper is written INTO this file rather than applied at the import site
+   (`@import "./viewer.css" layer(remote-claw)`) because Next 16's CSS pipeline silently DROPS the
+   `layer()` function on an @import: it inlines the file's contents unlayered, with no error and no
+   warning. Unlayered CSS beats every layer, so the page still looked correct — while the layer we
+   thought we were in did not exist. A file-internal `@layer name { … }` block survives the same
+   pipeline intact (it is how @astryxdesign/core/astryx.css ships), so that is what we use. The
+   layer-order-only file (layers.css) still has to be its own first import, since webpack hoists imported
+   content above any inline rules in the importing file. Verified by asserting on the built CSS — see
+   test/astryx-foundation.test.ts. */
+@layer remote-claw {
+:root {
+  --bg: #0a0a0b;
+  --surface: #141417;
+  --surface-2: #1b1b1f;
+  --line: #26262b;
+  --line-soft: #1c1c20;
+  --text: #ececee;
+  --text-dim: #9a9aa3;
+  --text-faint: #8a8a94;
+  /* Two accents because white-on-fill and accent-on-dark move in OPPOSITE directions. --accent is the
+     button FILL (white text on it): #5457e8 → white-on-fill 5.38 (was #6366f1 = 4.47, sub-AA). --accent-text
+     is accent used AS text/borders/focus on the dark bg: #7c7ef5 → 5.8 on bg / 5.4 on surface (the old
+     #6366f1 was 4.43/4.12 there). Both now clear WCAG AA 4.5:1. (#design-pass contrast) */
+  --accent: #5457e8;
+  --accent-hover: #5e61ee; /* fill hover — white-on-fill 4.75 (the old #7c7ef5 was 3.41, failed AA) */
+  --accent-text: #7c7ef5;
+  --online: #34d399;
+  --warn: #fbbf24; /* amber — reconnecting / needs-you (#58) */
+  --danger: #fb7185;
+  --radius: 12px;
+  --radius-sm: 9px;
+  --header-h: 56px;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: radial-gradient(1200px 600px at 50% -10%, #15151b 0%, var(--bg) 55%) fixed;
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keyboard accessibility (#design-pass): a visible focus ring on every interactive control. Uses
+   :focus-visible so it shows for keyboard/AT users without ringing on every mouse click. The outline
+   follows each control's OWN border-radius, so we don't set radius here (doing so would square off the
+   pill-shaped .jump-latest button on focus).
+
+   KEEP THIS. Unlike everything else in this file it is NOT migration debt waiting for a component to
+   replace it. Astryx draws its own focus rings from `--color-accent`
+   (`outline: 2px solid var(--color-accent)` in astryx.css) — which this theme pins to the darker button
+   FILL (#5457e8) for brand reasons. That clears the 3:1 WCAG 2.2 SC 1.4.11 asks of a non-text
+   indicator, but it is dimmer on a near-black background than the #7c7ef5 ring this app has always
+   drawn (5.8:1). This rule sits in @layer remote-claw, which is declared last, so it wins over the
+   component default and every control — Astryx or hand-written — rings the same bright colour.
+   tests/web/app-e2e/viewer-ux.spec.ts asserts the computed outline colour so deleting this is loud. */
+button:focus-visible,
+a:focus-visible,
+textarea:focus-visible,
+input:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+/* ---------- connect screen ---------- */
+.connect {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+/* The entry card (Connect / Pairing / the reconnect splash) floats on an otherwise empty page. Astryx's
+   Card has no elevation prop, and on this near-black palette a card surface sits only 1.14:1 above the
+   body — so without a shadow the screen reads as one flat slab with a button on it (which is exactly the
+   feedback it got). --shadow-high is Astryx's own token, so it tracks the theme rather than hard-coding
+   the drop shadow the hand-written .connect-card used to carry. */
+.connect .entry-card {
+  box-shadow: var(--shadow-high);
+}
+/* Touch target. Astryx's largest Button (size="lg") is 36px tall, which is the system's considered
+   size — but this app already holds itself to a 44px minimum on every touch control (see the
+   permission-button assertion in viewer-ux.spec.ts), and these are full-width primary actions on a
+   phone. So this is an app-level a11y POLICY on top of the system, not a disagreement with it: raise
+   the floor, change nothing else. Measured and guarded in viewer-ux.spec.ts. */
+.connect .astryx-button {
+  min-height: 44px;
+}
+
+/* The pairing screen's identity_id — the hex the human compares against the host's `--rc-pass` output
+   before trusting the pass. Astryx's <Code> is an inline span; this promotes it to a block that wraps on
+   ANY character, so a 32-byte hex can't overflow the card or be truncated into a false match. Written
+   against Astryx TOKENS rather than our own variables: this is the pattern for the CSS that survives the
+   migration — layout the system doesn't cover, expressed in the system's vocabulary. */
+.identity-hex {
+  display: block;
+  width: 100%;
+  padding: var(--spacing-3);
+  border-radius: var(--radius-element);
+  word-break: break-all;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), #a855f7);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 15px;
+}
+.btn {
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 11px 18px;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.btn:disabled {
+  /* Keep the primary identity (the base .btn fill + #fff), just dim it — an inactive primary, not a dead
+     grey slab (#design-pass). */
+  background: var(--accent);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* ---------- console layout ---------- */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.topbar {
+  height: var(--header-h);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: rgba(10, 10, 11, 0.7);
+  backdrop-filter: blur(8px);
+}
+.topbar .count {
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.ghost {
+  margin-left: auto;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.ghost:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.sessions {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line-soft);
+  overflow-y: auto;
+}
+.chat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative; /* positioning context for the floating "jump to latest" pill */
+}
+
+/* session rows */
+.row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 12px 16px;
+  color: var(--text);
+  transition: background 0.12s;
+}
+.row:hover {
+  background: var(--surface);
+}
+.row[data-active="true"] {
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 var(--accent-text);
+}
+.row-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #3a3a42; /* disconnected / unknown — a dim grey */
+}
+.dot[data-state="connected"] {
+  background: var(--online);
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
+}
+.dot[data-state="reconnecting"] {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.row-title {
+  font-size: 14.5px;
+  font-weight: 550;
+  /* flex:1 + min-width:0 so the title fills the row AND can shrink to an ellipsis — without min-width:0
+     a flex item won't shrink below its content, which would push a right-pinned badge off the edge. */
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row[data-state="disconnected"] .row-title {
+  color: var(--text-faint);
+}
+
+/* "needs you" chip on a session row (and the activity it stands in for). */
+.needs-badge {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1a1205;
+  background: var(--warn);
+}
+
+/* The working pulse — three dots that fade in sequence (the thinking indicator, #48). */
+.working {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  flex: none;
+}
+.working > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--online);
+  animation: working-bounce 1s ease-in-out infinite;
+}
+.working > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.working > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes working-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+.row-sub {
+  margin: 3px 0 0 17px;
+  color: var(--text-faint);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Git chip (#49): branch + a dot for uncommitted changes + ahead/behind vs upstream. Used in the
+   session row's sub-line and the mobile chat header. */
+.git-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-right: 6px;
+}
+.git-branch {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-dirty {
+  color: var(--warn);
+  font-size: 8px;
+  line-height: 1;
+}
+.git-ab {
+  color: var(--text-faint);
+}
+.git-behind {
+  color: var(--warn);
+}
+
+/* #149: permissions-bypassed posture — the driver runs without per-tool gating (tools auto-execute). */
+.perms-bypassed {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+/* #164: which agent + bridge mode a session runs — labels the list row's sub-line and the chat header so
+   native-RC Claude Code, tmux Claude Code, and opencode don't look identical. opencode gets an accent
+   tint (via data-agent) so the different product stands out from the two Claude Code variants. */
+.agent-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 7px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+.agent-badge[data-agent="opencode"] {
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent-text) 45%, transparent);
+}
+/* In the chat header the badge sits next to the (larger) title — nudge it to the baseline. */
+.chat-head .agent-badge {
+  align-self: center;
+}
+
+/* empty states */
+.empty {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  height: 100%;
+  padding: 32px;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.empty-pad {
+  padding: 24px 18px;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1.55;
+}
+/* Bus-transport outage banner (broker unreachable / wrong-or-stale pass) — warn, not danger: discovery
+   is still retrying, so it reads as "working on it", not a hard failure. */
+.bus-error {
+  margin: 10px 12px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  color: var(--warn);
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* chat header (mobile back button lives here) */
+.chat-head {
+  /* Shown on every viewport now: on desktop it carries the session ⋯ actions (model/interrupt/
+     copy-branch) that were previously unreachable (#design-pass functional-1). The redundant back
+     button is hidden on desktop below (the sidebar already provides navigation). */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+/* Desktop keeps the sidebar visible, so the in-chat back button is redundant there. */
+@media (min-width: 761px) {
+  .back {
+    display: none;
+  }
+}
+.back {
+  background: transparent;
+  border: none;
+  color: var(--accent-text);
+  font-size: 15px;
+  padding: 6px 8px;
+  min-height: 44px; /* ≥44px touch target — it's the primary mobile back-nav (#151) */
+  /* Never wrap or shrink. Without these the header's other items (badge, git chip) refused to give up
+     width, so "‹ Sessions" broke onto two lines AND pushed the session title — flex:1, min-width:0 — to
+     zero width, leaving a header that didn't say which session you were in. */
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* The session ⋯ menu trigger — sits at the right of the mobile chat header (.row-title takes the slack). */
+.chat-menu {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  /* ≥44px touch target (#151). */
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 10px;
+  transition: color 0.15s;
+}
+.chat-menu:hover {
+  color: var(--text);
+}
+
+/* transcript */
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  /* Keep scroll momentum inside the transcript: no chaining to the page (which on mobile triggers
+     pull-to-refresh / address-bar bounce and can hide the composer). */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Cap the reading measure on wide screens so serif prose reads as a document, not a full-bleed
+     log; centered within the pane. On mobile the pane is already narrower, so this never bites.
+     Capping the container (not its children) keeps every child's own margins — sub-thread and
+     sub-agent-row indents stay intact. */
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
+}
+/* ── transcript: an asymmetric document, not symmetric chat ───────────────────────────────────
+   USER = small right-aligned pill; ASSISTANT = full-width prose, no bubble (reads as authored
+   text). Tool calls are compact tappable rows that expand to a Command/Diff detail. (Design spec.) */
+
+/* Diff + code accents, tuned for the dark theme (the app's default palette). */
+:root {
+  --add-fg: #3fb950;
+  --add-bg: rgba(63, 185, 80, 0.14);
+  --del-fg: #f85149;
+  --del-bg: rgba(248, 81, 73, 0.13);
+  --code-bg: var(--surface-2);
+}
+
+/* Soft turn separator — a hairline with breathing room, not a loud rule. */
+.turn-sep {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--line-soft) 18%, var(--line-soft) 82%, transparent);
+  margin: 20px 6%;
+  border: 0;
+}
+
+/* USER pill */
+.row-user {
+  display: flex;
+  justify-content: flex-end;
+  margin: 12px 0 4px;
+}
+.pill {
+  max-width: 78%;
+  padding: 9px 14px;
+  border-radius: 17px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  font-size: 15px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* An optimistic echo (#113): shown instantly on send, dimmed until the host's `accepted` ack confirms it. */
+.pill-pending {
+  opacity: 0.55;
+}
+
+/* Slash-command chip (#41): a centered, muted instruction marker — not a chat pill. */
+.row-command {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0 6px;
+}
+.cmd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 80%;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmd-glyph {
+  color: var(--accent-text);
+  font-size: 12px;
+}
+
+/* ASSISTANT prose — full width, no bubble; serif body to read as a document. Rendered as GitHub-
+ * Flavored Markdown (react-markdown), so block elements carry their own spacing — no `white-space:
+ * pre-wrap` (which would double the markdown's own line breaks). */
+.prose {
+  font-family: Georgia, "Times New Roman", ui-serif, serif;
+  font-size: 16.5px;
+  line-height: 1.62;
+  word-break: break-word;
+  margin: 6px 0 12px;
+  color: var(--text);
+}
+.prose.assistant-sub {
+  font-size: 15px;
+}
+/* Collapse the outer margins of the first/last block so the prose block keeps its own 6/12px frame. */
+.prose > :first-child {
+  margin-top: 0;
+}
+.prose > :last-child {
+  margin-bottom: 0;
+}
+.prose p {
+  margin: 0 0 12px;
+}
+.prose ul,
+.prose ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.prose li {
+  margin: 2px 0;
+}
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 16px 0 8px;
+}
+.prose h1 {
+  font-size: 1.35em;
+}
+.prose h2 {
+  font-size: 1.2em;
+}
+.prose h3 {
+  font-size: 1.06em;
+}
+.prose blockquote {
+  margin: 0 0 12px;
+  padding-left: 12px;
+  border-left: 3px solid var(--line-soft);
+  color: var(--text-dim);
+}
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  margin: 14px 0;
+}
+.prose a {
+  /* --accent-text, not --accent: links are text on the dark transcript, where the button-fill --accent
+     (#5457e8) only reaches 3.6:1. --accent-text (#7c7ef5) clears AA (5.7 on bg / 5.2 on surface). */
+  color: var(--accent-text, #7c7ef5);
+  text-decoration: underline;
+}
+/* GFM tables — bordered, and horizontally scrollable on a narrow phone (the live trigger for this). */
+.prose table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 4px 0 14px;
+  font-family: system-ui, sans-serif;
+  font-size: 0.9em;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--line-soft);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.prose th {
+  background: var(--code-bg);
+  font-weight: 600;
+}
+/* Inline code (markdown `code`) — but NOT inside a fenced block, where the <pre> owns the styling. */
+.inline-code,
+.prose :not(pre) > code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  word-break: break-word;
+}
+.prose pre {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  overflow-x: auto;
+}
+.prose pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84em;
+  line-height: 1.5;
+}
+
+/* Sub-agent thread — indent + a left thread-line so nested agent work reads as nested. */
+.sub-thread {
+  margin-left: 16px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-soft);
+}
+
+/* Tool-call rows — compact, tappable; expand for the Command / diff detail. */
+.tool-row {
+  margin: 4px 0;
+  font-size: 13.5px;
+  color: var(--text-faint);
+}
+.tool-row[data-sub="true"] {
+  margin-left: 16px;
+}
+.tool-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.tool-glyph {
+  flex: none;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.tool-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool-stat {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.stat-add {
+  color: var(--add-fg);
+}
+.stat-del {
+  color: var(--del-fg);
+  margin-left: 5px;
+}
+.tool-row-x > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  padding: 3px 6px;
+  border-radius: 8px;
+}
+.tool-row-x > summary:hover {
+  background: var(--surface);
+}
+.tool-row-x > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-row-x .chev {
+  flex: none;
+  transition: transform 0.15s;
+  opacity: 0.6;
+}
+.tool-row-x[open] .chev {
+  transform: rotate(90deg);
+}
+.tool-detail {
+  margin: 4px 0 8px 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-soft);
+}
+.detail-section {
+  margin: 8px 0;
+}
+.detail-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+.detail-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13.5px;
+}
+.code-block {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+/* Tool Output (tool_result) — a collapsible row nested under the tool call. */
+.tool-result {
+  margin: 2px 0 6px 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-soft);
+  font-size: 13px;
+}
+/* A sub-agent's tool output nests one level deeper, matching .tool-row[data-sub]. */
+.tool-result[data-sub="true"] {
+  margin-left: 26px;
+}
+.tool-result > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-faint);
+  padding: 2px 0;
+}
+.tool-result > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-result[data-error="true"] > summary {
+  color: var(--del-fg);
+}
+.tool-result .chev {
+  margin-left: auto;
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+.tool-result[open] .chev {
+  transform: rotate(90deg);
+}
+.tool-output {
+  margin-top: 4px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* Sub-agent Task lifecycle status line. */
+.task-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 4px 0 4px 16px;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+/* Diff viewer — path header + removed (red) / added (green) lines with a sign gutter. */
+.diff {
+  margin: 6px 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.diff-path {
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.diff-dir {
+  font-weight: 400;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.diff-body {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+.dl {
+  display: block;
+  padding: 0 8px 0 2px;
+  white-space: pre;
+}
+.dl .dg {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-faint);
+  user-select: none;
+}
+.dl-add {
+  background: var(--add-bg);
+  color: var(--add-fg);
+}
+.dl-del {
+  background: var(--del-bg);
+  color: var(--del-fg);
+}
+.dl-more {
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 2px 8px;
+}
+.diff-empty {
+  padding: 8px 10px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+/* Permission prompt — a worker can_use_tool surfaced to grant/deny (§17.4). Stands out from the
+   muted tool rows: a bordered card with Allow / Deny. */
+.perm {
+  margin: 8px 0;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+/* A PENDING permission (it still has Allow/Deny) is the one blocking decision in the transcript —
+   give it an "action required" amber treatment so it doesn't vanish in the wall of grey tool cards
+   (#design-pass perm-1). Resolved cards (no .perm-actions) keep the neutral surface. */
+.perm:has(.perm-actions) {
+  border-color: var(--warn);
+  border-left-width: 3px;
+  background: color-mix(in oklab, var(--warn) 8%, var(--surface));
+}
+.perm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.perm-label strong {
+  font-weight: 650;
+}
+.perm-hint {
+  margin: 6px 0 0 24px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.perm-actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 0 24px;
+  /* Wrap the ROW, never a label. On a phone "Submit answers" and "Skip / answer in chat" don't fit
+     side by side, and sizing to content made the PRIMARY action the narrow one that broke onto two
+     lines while the secondary stayed on one — inverting their apparent weight. */
+  flex-wrap: wrap;
+}
+.perm-btn {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 7px 16px;
+  white-space: nowrap;
+  /* A 44px hit target for an irreversible grant/deny on mobile (#design-pass perm/touch-targets). */
+  min-height: 44px;
+  font-size: 13.5px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text);
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.perm-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.perm-allow:not(:disabled) {
+  border-color: rgba(63, 185, 80, 0.5);
+  color: var(--add-fg);
+}
+.perm-allow:not(:disabled):hover {
+  background: var(--add-bg);
+}
+.perm-deny:not(:disabled):hover {
+  background: var(--del-bg);
+  border-color: rgba(248, 81, 73, 0.5);
+  color: var(--del-fg);
+}
+.perm-resolved {
+  margin: 10px 0 0 24px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.perm-resolved[data-behavior="allow"] {
+  color: var(--add-fg);
+}
+.perm-resolved[data-behavior="deny"] {
+  color: var(--del-fg);
+}
+.perm-err {
+  margin: 8px 0 0 24px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* AskUserQuestion card (#42) — each question's header/prompt + selectable option buttons. */
+.perm-q .perm-label {
+  font-weight: 600;
+}
+.q-block {
+  margin: 12px 0 0;
+}
+.q-header {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  margin-bottom: 3px;
+}
+.q-text {
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.q-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.q-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  transition: border-color 0.12s, background 0.12s;
+}
+.q-option:hover {
+  border-color: var(--text-faint);
+}
+.q-option[data-selected="true"] {
+  border-color: var(--accent-text);
+  background: rgba(84, 87, 232, 0.14); /* --accent (#5457e8) @ ~14% — tint of the new accent, not the old #6366f1 */
+}
+.q-option-label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.q-option-desc {
+  font-size: 12px;
+  /* --text-dim, not --text-faint: a SELECTED option's accent tint over the card's warn tint
+     (.perm:has(.perm-actions)) drops #8a8a94 to 4.2:1 — sub-AA. #9a9aa3 clears it at 5.1:1. */
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+/* Submit now shares a `.perm-actions` flex row with Dismiss (it grows to fill; Dismiss sizes to content).
+   The row supplies the top spacing, so no standalone margin-top/width:100% here (that offset it from Dismiss). */
+.q-submit {
+  flex: 1;
+}
+/* The always-present "type your own answer" box under each question's options (#42 freeform). Mirrors
+   .q-option so options + freeform read as one control group; theme-aware via the shared vars. */
+.q-freeform {
+  margin-top: 6px;
+  width: 100%;
+  resize: vertical;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+}
+.q-freeform::placeholder {
+  color: var(--text-faint);
+}
+.q-freeform:focus {
+  border-color: var(--accent-text);
+  outline: none;
+}
+/* The answered value shown beside "✓ Answered" in the resolved question card — the transcript keeps a
+   record of WHAT was picked (Claude Code does), and inherits the resolved chip's colour. */
+.q-answer {
+  margin-left: 8px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Extended-thinking block — collapsed by default, muted; recedes below the answer. */
+.thinking {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+.thinking[data-sub="true"] {
+  margin-left: 16px;
+}
+.thinking > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: 2px 6px;
+  /* A rotating chevron so the collapsed <details> reads as expandable (it looked like static text before),
+     matching the tool/tool-result rows. */
+  display: flex;
+  align-items: center;
+}
+.thinking > summary::-webkit-details-marker {
+  display: none;
+}
+.thinking > summary .chev {
+  margin-left: auto;
+  transition: transform 0.15s;
+  opacity: 0.6;
+}
+.thinking[open] > summary .chev {
+  transform: rotate(90deg);
+}
+.thinking-body {
+  margin-top: 4px;
+  padding: 8px 11px;
+  border-left: 2px solid var(--line-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+/* Pinned status strip above the composer — connection problems + worker activity (#48/#58). */
+.chat-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 550;
+  border-top: 1px solid var(--line-soft);
+}
+.chat-status[data-state="thinking"] {
+  color: var(--text-dim);
+}
+.chat-status[data-state="needs"] {
+  color: var(--warn);
+}
+.chat-status[data-state="reconnecting"] {
+  color: var(--warn);
+  background: rgba(251, 191, 36, 0.07);
+}
+.chat-status[data-state="disconnected"] {
+  color: var(--danger);
+  background: rgba(251, 113, 133, 0.08);
+}
+.transcript-gap {
+  justify-content: space-between;
+}
+.gap-retry {
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--warn);
+  background: rgba(251, 191, 36, 0.08);
+  min-height: 24px; /* WCAG 2.5.8 (AA) minimum target size */
+}
+.gap-retry:disabled {
+  opacity: 0.55;
+}
+
+/* composer */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line-soft);
+  background: var(--bg);
+}
+/* The prompt field sits ABOVE its controls (mirrors the native app composer): a full-width textarea,
+   then a row of mode · attach · … · send. */
+.composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  /* Match the input's centered measure so Send's right edge lines up with the transcript column. */
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
+}
+/* Send is pushed to the right; mode + attach stay on the left. */
+.composer-send {
+  margin-left: auto;
+  min-height: 44px; /* ≥44px touch target (#151) */
+}
+.composer-input {
+  width: 100%;
+  /* Align the composer column with the centered transcript (max-width:820px) so the input/controls sit
+     UNDER the reading column on wide screens instead of running full-bleed. No-op on mobile (W < 820). */
+  max-width: 820px;
+  margin-inline: auto;
+  padding: 9px 13px;
+  font-family: inherit;
+  /* ≥16px to suppress iOS Safari focus auto-zoom (we no longer pin maximum-scale). The connect screen's
+     field gets the same protection from Astryx's TextArea, which floors it under
+     `@media (pointer: coarse)`; this composer textarea is still hand-written, so it states it here. */
+  font-size: 16px;
+  line-height: 1.4;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  outline: none;
+  resize: none;
+  min-height: 44px;
+  max-height: 160px;
+  transition: border-color 0.15s;
+}
+.composer-input:focus {
+  border-color: var(--accent-text);
+}
+/* Staged image previews above the row — wrap; each removable via the ×. */
+.staged {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  /* Keep the previews aligned to the same centered measure as the input/controls. */
+  width: 100%;
+  max-width: 820px;
+  margin-inline: auto;
+}
+/* A benign composer notice (e.g. the staged-image cap) — muted, not the red send-error. */
+.staged-notice {
+  width: 100%;
+  max-width: 820px;
+  margin: 2px auto 0;
+  padding: 0 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.staged-item {
+  position: relative;
+  width: 56px;
+  height: 56px;
+}
+.staged-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  display: block;
+}
+.staged-remove {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 28px clears the WCAG 2.5.8 (AA) 24px minimum — a 44px target would overflow the small thumbnail. */
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  font-size: 14px;
+  line-height: 1;
+}
+.send-err {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0;
+  padding: 6px 14px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.send-err-msg {
+  flex: 1;
+  min-width: 0;
+}
+/* #150: the failed send is RESTORED to the composer; Retry re-sends it (a one-tap shortcut for Send). */
+.send-err-retry {
+  flex: none;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 28px;
+  transition: background 0.12s;
+}
+.send-err-retry:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.send-err-retry:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.send-err-dismiss {
+  flex: none;
+  background: transparent;
+  border: none;
+  color: var(--danger);
+  font-size: 16px;
+  line-height: 1;
+  /* ≥24×24 (WCAG 2.5.8 AA) — was ~20×18 from the 2px/4px padding alone. */
+  min-width: 24px;
+  min-height: 24px;
+  opacity: 0.7;
+}
+.send-err-dismiss:hover {
+  opacity: 1;
+}
+
+/* composer mode button (the </> Code affordance) */
+.mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  height: 44px; /* ≥44px touch target (#151) */
+  background: var(--surface);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  font-size: 13.5px;
+  font-weight: 550;
+  transition: border-color 0.15s, color 0.15s;
+}
+.mode-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.mode-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Composer attach-a-photo button (#44). */
+.attach-btn {
+  flex-shrink: 0;
+  /* ≥44px touch target (#151). */
+  width: 44px;
+  height: 44px;
+  background: var(--surface);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  font-size: 16px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.attach-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.mode-glyph {
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+/* ---------- bottom sheet (mode picker) ---------- */
+.sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.sheet-scrim {
+  position: absolute;
+  inset: 0;
+  border: none;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.5);
+  animation: scrim-in 0.15s ease-out;
+}
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+.sheet {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  margin: 0 auto;
+  /* A tall sheet (many model/session rows on a short viewport) must scroll inside itself, not grow
+     upward past the top and clip its handle/first title with the body scroll-locked (#design-pass). */
+  max-height: min(85vh, 640px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-bottom: none;
+  border-radius: 18px 18px 0 0;
+  padding: 8px 12px calc(16px + env(safe-area-inset-bottom));
+  box-shadow: 0 -20px 60px -28px rgba(0, 0, 0, 0.9);
+  animation: sheet-up 0.18s ease-out;
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+}
+/* Desktop dropdown variant (#desktop-layout): the sheet is anchored to its trigger (inline top/left/right
+   from the Sheet's useLayoutEffect) instead of a full-width bottom sheet. The scrim goes transparent — it's
+   a click-outside catcher, not a modal dim — and the panel becomes a compact, all-corners-rounded popover. */
+.sheet-layer--anchored .sheet-scrim {
+  background: transparent;
+  animation: none;
+}
+.sheet--anchored {
+  position: fixed;
+  width: max-content;
+  min-width: 240px;
+  max-width: 340px;
+  margin: 0;
+  max-height: min(70vh, 520px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 8px;
+  box-shadow: 0 16px 48px -16px rgba(0, 0, 0, 0.7);
+  animation: sheet-pop 0.13s ease-out;
+}
+@keyframes sheet-pop {
+  from {
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+}
+.sheet-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  margin: 4px auto 10px;
+}
+.sheet-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 0 6px 8px;
+}
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  padding: 11px 10px;
+  color: var(--text);
+  transition: background 0.12s;
+}
+.mode-row:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.mode-row[data-active="true"] {
+  background: var(--surface-2);
+}
+.mode-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* #149: shown in the ⋯ sheet when a driver can't service a control (e.g. opencode model switching). */
+.sheet-note {
+  color: var(--text-faint);
+  font-size: 13px;
+  padding: 2px 10px 10px;
+  line-height: 1.45;
+}
+.mode-row-glyph {
+  flex: none;
+  width: 22px;
+  text-align: center;
+  font-size: 16px;
+  opacity: 0.9;
+}
+.mode-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mode-row-label {
+  font-size: 15px;
+  font-weight: 600;
+}
+.mode-row-desc {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+.mode-check {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent-text);
+  font-weight: 700;
+}
+/* A destructive sheet row (Interrupt) reads differently from the benign model/branch rows so it isn't
+   mis-tapped (#design-pass). */
+.mode-row-danger .mode-row-glyph,
+.mode-row-danger .mode-row-label {
+  color: var(--danger);
+}
+.mode-row-danger:hover {
+  background: color-mix(in oklab, var(--danger) 12%, transparent);
+}
+
+/* "Jump to latest" pill: shown only when the user has scrolled up and new content arrived, so the
+   transcript can stick-to-bottom without yanking a reader down (#design-pass autoscroll). */
+.jump-latest {
+  position: absolute;
+  left: 50%;
+  bottom: 84px;
+  transform: translateX(-50%);
+  z-index: 5;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 10px 16px; /* ≥40px touch target for the floating jump pill (#151) */
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.7);
+}
+
+/* Armed "Forget pass" — the destructive confirm state. */
+.ghost-danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ---------- mobile: single column with view switching ---------- */
+@media (max-width: 760px) {
+  .sessions {
+    width: 100%;
+    border-right: none;
+  }
+  .panes[data-view="chat"] .sessions {
+    display: none;
+  }
+  .panes[data-view="list"] .chat {
+    display: none;
+  }
+  /* Drop the git chip from the CHAT header on a phone. Back-nav + harness badge + branch + ⋯ overflow a
+     393px header, and the item that lost was the session TITLE (flex:1, min-width:0 → zero width), so
+     the header stopped saying which session you were looking at. The branch is not lost: the session
+     list row still shows it, and the ⋯ sheet offers "Copy branch". Same reasoning as hiding the back
+     button on desktop — drop the redundant item, keep the identifying one. */
+  .chat-head .git-chip {
+    display: none;
+  }
+  /* Give the title a real floor so it ellipsises instead of collapsing if the header is still tight. */
+  .chat-head .row-title {
+    min-width: 4rem;
+  }
+}
+
+/* Respect a user's reduced-motion preference: neutralize the looping/entrance animations (the presence
+   pulse, the "working" bounce, the sheet/scrim entrance) rather than animating regardless (#design-pass). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+} /* @layer remote-claw */

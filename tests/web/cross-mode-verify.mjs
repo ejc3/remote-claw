@@ -29,7 +29,7 @@ try {
 
 	// Human-like connect: type the pass into the field, then click Connect (the button is disabled until
 	// the field is non-empty, so filling explicitly is more robust than racing the #fragment prefill).
-	const field = page.locator("textarea.field");
+	const field = page.getByLabel("Machine pass");
 	await field.waitFor({ state: "visible", timeout: 20_000 });
 	await field.fill(pass);
 	const connect = page.getByRole("button", { name: "Connect" });

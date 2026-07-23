@@ -142,6 +142,29 @@ install-deps webkit && pnpm exec playwright install webkit`. WebKit is the only 
 repro (e.g. a fetch failing as "Load failed"); Chromium with `devices['iPhone 15']` emulation
 reproduces mobile *layout* but not WebKit-specific transport behavior.
 
+## The viewer's CSS (Astryx) — three things that fail SILENTLY
+
+`apps/web` is migrating onto **Astryx** (`@astryxdesign/core`). Full status + a findings report for the
+Astryx team is in `docs/astryx-migration.md`. Three traps, all of which produce a page that *looks*
+right while being wrong:
+
+- **`app/globals.css` is an import manifest — never write a rule in it.** A rule there is UNLAYERED, and
+  unlayered CSS beats every cascade layer. Layer order lives in its own `app/layers.css`, imported first
+  (webpack hoists imported CSS above the importing file's inline rules, so an inline `@layer a, b;`
+  sorts too late to order anything).
+- **`@import "…" layer(x)` DOES NOT WORK on Next 16** — the pipeline drops the `layer()` and inlines the
+  file unlayered. `app/viewer.css` therefore carries its own `@layer remote-claw { … }` wrapper
+  internally. Guarded by `test/astryx-foundation.test.ts`, which asserts on the BUILT css in `.next`
+  (source-level assertions pass in both the broken and fixed state — that's how this got through once).
+- **The theme is compiled, not runtime.** Edit `app/theme/remote-claw.ts`, then run `pnpm run
+  theme:build` — the built artifacts in `app/theme/built/` are committed and are what ships. Never edit
+  them. `--color-accent` / `--color-on-accent` are pinned on purpose: seeding the accent family alone
+  makes Astryx INVERT the accent in dark mode (pale fill, dark text), which no test catches.
+
+Because the last one is invisible to the test suite, **look at a screenshot before merging any viewer
+change**: `cd tests/web && pnpm exec playwright test -c app-e2e.shots.config.ts` writes 11 surfaces per
+width to `tests/web/shots/<project>/`. Take a set before and after and actually open them.
+
 ## CLI / clawsec workflow
 
 - Each change lands as its own reviewed PR (stacked when dependent). Per-PR gate: `pnpm exec biome

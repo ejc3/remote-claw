@@ -39,7 +39,7 @@ test("host upload → scan deep link → pair recovers the pass → connects to 
   // opens it LOCALLY with the OTK and recovers the FOREVER pass. The revealed identity_id (recomputed in
   // the browser from the recovered pass) must equal the host's — proof the exact pass round-tripped.
   await page.getByRole("button", { name: "Pair this device" }).click();
-  await expect(page.locator("code.field", { hasText: idHex })).toBeVisible();
+  await expect(page.getByTestId("identity-hex").filter({ hasText: idHex })).toBeVisible();
 
   // Confirm + connect with the recovered pass → it lands on the live session list (a real, usable creds).
   await page.getByRole("button", { name: "Connect" }).click();
