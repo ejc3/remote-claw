@@ -4,20 +4,15 @@ test-results-sqlite/
 test-results-turso/
 test-results-drain/
 test-results-temporal/
-playwright-report/
 test-results-shots/
 test-results-zoom/
 test-results-evidence/
-# Zoom crops + measured geometry from app-e2e.zoom.config.ts — regenerated on demand and compared
-# between commits locally. The curated before/after PAIRS that back findings in the migration report
-# DO live in git, at docs/assets/astryx/, because the doc renders them.
-zoom/
-# Visual-verification artifacts from app-e2e.shots.config.ts — regenerated on demand,
-# compared between commits locally; not a committed baseline.
+playwright-report/
+
+# Visual-verification artifacts, all regenerated on demand and compared between commits locally:
+#   shots/  — app-e2e.shots.config.ts, 11 surfaces × phone + desktop
+#   zoom/   — app-e2e.zoom.config.ts, tight 3× crops + metrics.json (measured geometry)
+# The curated before/after PAIRS that back findings in the migration report are NOT here — they live in
+# git at docs/assets/astryx/, because docs/astryx-migration.md renders them inline.
 shots/
-test-results-zoom/
-test-results-evidence/
-# Zoom crops + measured geometry from app-e2e.zoom.config.ts — regenerated on demand and compared
-# between commits locally. The curated before/after PAIRS that back findings in the migration report
-# DO live in git, at docs/assets/astryx/, because the doc renders them.
 zoom/
