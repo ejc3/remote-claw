@@ -29,7 +29,15 @@ jobs:
         run: pnpm --filter @remote-claw/web run check
       - name: Type check
         run: pnpm --filter @remote-claw/web run typecheck
-      - name: Integration tests (in-process Workflow runtime)
-        run: pnpm --filter @remote-claw/web run test:run
+      # BUILD BEFORE TEST, deliberately. test/astryx-foundation.test.ts asserts on the CSS webpack
+      # actually emits into .next (the cascade-layer and CSP guards are only truthful against the built
+      # artifact — the source looks correct in both the broken and the fixed state). With the old
+      # order it found no build output and SKIPPED, so the guard was silently absent from CI. RC_CI=1
+      # makes that skip a hard failure here, so a future reordering breaks the build instead of quietly
+      # disarming the test.
       - name: Production build (Next + Workflow compiler) — proves the broker deploys
         run: pnpm --filter @remote-claw/web run build
+      - name: Theme drift (built artifacts match app/theme/remote-claw.ts)
+        run: pnpm --filter @remote-claw/web run theme:check
+      - name: Integration tests (in-process Workflow runtime)
+        run: RC_CI=1 pnpm --filter @remote-claw/web run test:run

@@ -17,10 +17,17 @@ import { describe, expect, it } from "vitest";
  *     reason. viewer.css therefore carries its own `@layer remote-claw { … }` wrapper.
  *
  * Asserting on source text would miss both (the source looked right in each case); only the built
- * artifact tells the truth. Requires a prior `pnpm run build`, and is skipped when there isn't one so a
- * plain `vitest run` on a fresh clone doesn't fail for the wrong reason — CI builds before it tests.
+ * artifact tells the truth.
+ *
+ * This needs a prior `pnpm run build`. Locally, a fresh clone running a bare `vitest run` has no build
+ * output, and failing there would just be noise — so it skips. In CI that same skip would silently
+ * DISARM the guard (and did: .github/workflows/web.yml used to run test:run before build), so CI sets
+ * RC_CI=1, which turns a missing build into a hard failure instead.
  */
 const CSS_DIR = join(import.meta.dirname, "..", ".next", "static", "css");
+/** Set by .github/workflows/web.yml. Not `process.env.CI`: that is also set by unrelated local tooling
+ *  and by the app-e2e runner, where a bare vitest without a build is legitimate. */
+const REQUIRE_BUILD = process.env.RC_CI === "1";
 
 function builtCss(): { name: string; text: string }[] | null {
   try {
@@ -35,9 +42,20 @@ function builtCss(): { name: string; text: string }[] | null {
 
 const sheets = builtCss();
 
+describe("astryx foundation build output", () => {
+  it.skipIf(!REQUIRE_BUILD)("is present (RC_CI=1 ⇒ the guards below must actually run)", () => {
+    expect(
+      sheets,
+      `no CSS under ${CSS_DIR} — run \`pnpm run build\` before the tests, or the cascade-layer and CSP guards silently skip`,
+    ).not.toBeNull();
+  });
+});
+
 describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
-  // biome-ignore lint/style/noNonNullAssertion: describe.skipIf already gated on sheets !== null
-  const css = sheets!;
+  // `describe.skipIf` skips the TESTS but still RUNS this callback during collection, so this body has
+  // to survive `sheets === null` rather than assume the guard above already excluded it — asserting
+  // non-null here crashed collection with a TypeError instead of skipping.
+  const css = sheets ?? [];
   const all = css.map((c) => c.text).join("\n");
 
   it("declares the canonical layer order exactly once", () => {
