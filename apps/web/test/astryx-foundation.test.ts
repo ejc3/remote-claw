@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -31,13 +31,12 @@ const REQUIRE_BUILD = process.env.RC_CI === "1";
 
 function builtCss(): { name: string; text: string }[] | null {
   try {
-    if (!statSync(CSS_DIR).isDirectory()) return null;
+    const files = readdirSync(CSS_DIR).filter((f) => f.endsWith(".css"));
+    if (files.length === 0) return null;
+    return files.map((name) => ({ name, text: readFileSync(join(CSS_DIR, name), "utf8") }));
   } catch {
-    return null;
+    return null; // no build output yet
   }
-  const files = readdirSync(CSS_DIR).filter((f) => f.endsWith(".css"));
-  if (files.length === 0) return null;
-  return files.map((name) => ({ name, text: readFileSync(join(CSS_DIR, name), "utf8") }));
 }
 
 const sheets = builtCss();
@@ -80,16 +79,16 @@ function splitLayers(css: string): { blocks: { name: string; body: string }[]; r
   return { blocks, rest };
 }
 
-/** The stylesheet <link> hrefs of the prerendered route, IN DOCUMENT ORDER. The layer-order declaration
- *  has to reach the browser before the layers it names are first used; a sheet that merely *starts* with
- *  the declaration proves nothing if the browser loaded astryx-base first. */
-function linkedStylesheets(): string[] | null {
+/** The FIRST stylesheet the prerendered route links. The layer-order declaration has to reach the
+ *  browser before the layers it names are first used, so a sheet that merely *starts* with the
+ *  declaration proves nothing if the browser loaded astryx-base ahead of it. Returns null when there is
+ *  no prerendered HTML to read, which the caller asserts on rather than skipping past. */
+function firstLinkedStylesheet(): string | null {
   for (const html of ["index.html", "_not-found.html"]) {
     const p = join(import.meta.dirname, "..", ".next", "server", "app", html);
     try {
-      const text = readFileSync(p, "utf8");
-      const hrefs = [...text.matchAll(/static\/css\/([a-z0-9]+\.css)/g)].map((m) => m[1] ?? "");
-      if (hrefs.length > 0) return [...new Set(hrefs)];
+      const m = readFileSync(p, "utf8").match(/static\/css\/([a-z0-9]+\.css)/);
+      if (m?.[1] !== undefined) return m[1];
     } catch {
       /* try the next candidate */
     }
@@ -116,10 +115,10 @@ describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
     // Not "the declaration starts its own file" — that proves nothing if the browser loaded
     // astryx-base first, which would establish the order from source order and make the declaration a
     // no-op. Assert against the document's actual <link> order.
-    const linked = linkedStylesheets();
-    expect(linked, "no prerendered route HTML to read stylesheet order from").not.toBeNull();
-    const first = css.find((c) => c.name === (linked ?? [])[0]);
-    expect(first, `first linked stylesheet ${(linked ?? [])[0]} not found on disk`).toBeDefined();
+    const name = firstLinkedStylesheet();
+    expect(name, "no prerendered route HTML to read stylesheet order from").not.toBeNull();
+    const first = css.find((c) => c.name === name);
+    expect(first, `first linked stylesheet ${name} not found on disk`).toBeDefined();
     expect(first?.text.trimStart().startsWith("@layer reset,")).toBe(true);
   });
 
@@ -142,24 +141,29 @@ describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
 
   it("puts the viewer's own rules in the remote-claw layer specifically", () => {
     // Unlayered is not the only failure — landing in the WRONG layer (e.g. astryx-base, where it would
-    // lose to the theme) is just as silent.
-    const sheet = css.find((c) => c.text.includes(".q-freeform"));
+    // lose to the theme) is just as silent, and the no-unlayered test above wouldn't see it.
+    //
+    // The sentinel is `.identity-hex` deliberately: it is the one rule in viewer.css designated to
+    // SURVIVE the migration (layout Astryx doesn't cover, written in Astryx tokens). Sampling classes
+    // like `.q-freeform` or `.perm-actions` instead would turn this red every time their component
+    // migrates and the rule legitimately disappears — a guard that cries wolf gets deleted.
+    const sheet = css.find((c) => c.text.includes(".identity-hex"));
     expect(sheet, "viewer.css must reach the build").toBeDefined();
-    const { blocks } = splitLayers(sheet?.text ?? "");
-    const mine = blocks
-      .filter((b) => b.name === "remote-claw")
+    const mine = splitLayers(sheet?.text ?? "")
+      .blocks.filter((b) => b.name === "remote-claw")
       .map((b) => b.body)
       .join("\n");
-    for (const cls of [".q-freeform", ".transcript{", ".perm-actions", ".identity-hex"]) {
-      expect(mine, `${cls} is not inside @layer remote-claw`).toContain(cls);
-    }
+    expect(mine, ".identity-hex is not inside @layer remote-claw").toContain(".identity-hex");
+  });
+
+  it("ships astryx's own component layer", () => {
+    expect(all).toContain("@layer astryx-base{");
   });
 
   it("puts the brand theme's tokens inside @layer astryx-theme", () => {
     // Checking "an astryx-theme layer exists" and "the brand scope appears somewhere" independently
     // would pass even if the scope were emitted unlayered or into another layer — at which point the
     // palette silently falls back to the neutral defaults.
-    expect(all).toContain("@layer astryx-base{");
     const themed = css
       .flatMap((c) => splitLayers(c.text).blocks)
       .filter((b) => b.name === "astryx-theme")
@@ -181,6 +185,39 @@ describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
     expect(dense, "--color-on-accent must be pinned WITH --color-accent, never alone").toContain(
       "--color-on-accent:light-dark(#ffffff,#ffffff)",
     );
+  });
+
+  it("has no bare element selectors left in @layer remote-claw", () => {
+    // The subtlest failure mode of this migration, and one we shipped for a commit. @layer remote-claw
+    // is declared LAST so hand-written rules keep winning while surfaces migrate — which also means a
+    // BARE ELEMENT selector there (`button { … }`, `code { … }`) silently restyles every Astryx
+    // component built from that element. It cost us a Button rendering at 16px/400 instead of Astryx's
+    // 14px/500, and a <Code> at 10.32px. Both rules were redundant with Astryx's own reset.
+    //
+    // Structural selectors that don't target a component's element are fine, so this allows the
+    // page-frame ones (html/body/:root/*) and anything class- or attribute-qualified.
+    const sheet = css.find((c) => c.text.includes(".identity-hex"));
+    const mine = splitLayers(sheet?.text ?? "")
+      .blocks.filter((b) => b.name === "remote-claw")
+      .map((b) => b.body)
+      .join("");
+    const ALLOWED = new Set(["html", "body", ":root", "*", "*::before", "*::after", "from", "to"]);
+    const offenders = new Set<string>();
+    // Selector lists sit before each `{`, delimited by the end of the previous rule. Group 1 is that
+    // delimiter and group 2 is the selector list — destructure past the delimiter, or this reads `}`
+    // as the selector and never finds anything (which is exactly how the first version of this guard
+    // passed with `button {}` reintroduced).
+    for (const [, , prelude] of mine.matchAll(/(^|[};])([^{};@]+)\{/g)) {
+      for (const sel of (prelude ?? "").split(",")) {
+        const s = sel.trim();
+        // A bare element selector is a lone identifier: no ., #, [, :, >, +, ~ or descendant space.
+        if (/^[a-z][a-z0-9]*$/.test(s) && !ALLOWED.has(s)) offenders.add(s);
+      }
+    }
+    expect(
+      [...offenders],
+      "bare element selectors in @layer remote-claw override Astryx components built from those elements",
+    ).toEqual([]);
   });
 
   it("keeps the shipped CSS within the viewer's CSP (no remote fonts or assets)", () => {

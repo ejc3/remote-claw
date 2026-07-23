@@ -362,26 +362,30 @@ export function entryFromFragment(
  *  sees the pass form flash on reload. */
 export function Reconnecting() {
   return (
-    <main className="connect">
-      <EntryCard>
-        <Brand />
-        {/* Spinner's `label` renders as visible text under it, so the splash still literally says
+    <EntryCard>
+      <Brand />
+      {/* Spinner's `label` renders as visible text under it, so the splash still literally says
             "Connecting…" (SSR-asserted in restore-on-load.test.ts) and now also announces it. */}
-        <Spinner label="Connecting…" />
-      </EntryCard>
-    </main>
+      <Spinner label="Connecting…" />
+    </EntryCard>
   );
 }
 
-/** The shared shell of the three entry screens (Reconnecting / Connect / Pairing): one centred Astryx
- *  Card with a consistent vertical rhythm. `.connect` around it is the only hand-written piece left —
- *  it does the 100dvh viewport centring, which is page-frame layout rather than anything a component
- *  covers. */
+/** The shared shell of all three entry screens (Reconnecting / Connect / Pairing): the centred page
+ *  frame plus one Astryx Card with a consistent vertical rhythm. Owning the `<main className="connect">`
+ *  wrapper here rather than repeating it at each call site means a new entry screen can't forget it and
+ *  silently lose the viewport centring.
+ *
+ *  `.connect` stays hand-written: Astryx's Center covers the centring itself (and takes minHeight), but
+ *  not the 24px viewport inset, and this app has no StyleX build to reach for `xstyle`. So it is one
+ *  rule, not "nothing in the system covers this". */
 function EntryCard({ children }: { children: ReactNode }) {
   return (
-    <Card className="connect-card" width="100%" maxWidth={460} padding={6}>
-      <VStack gap={3}>{children}</VStack>
-    </Card>
+    <main className="connect">
+      <Card width="100%" maxWidth={460} padding={6}>
+        <VStack gap={3}>{children}</VStack>
+      </Card>
+    </main>
   );
 }
 
@@ -401,58 +405,59 @@ export function Connect(props: {
   connecting: boolean;
   error: string | null;
 }) {
-  const disabled = props.connecting || props.pass.trim() === "";
+  // Only the empty-pass case needs stating: Astryx's Button already treats isLoading as disabling
+  // (disabled = isDisabled || isLoading && !isInterruptible), so `|| props.connecting` would be a
+  // second way of saying the same thing.
+  const disabled = props.pass.trim() === "";
   return (
-    <main className="connect">
-      <EntryCard>
-        <Brand />
-        <VStack gap={1}>
-          <Heading level={1}>Drive your claude, remotely.</Heading>
-          {/* `body` + secondary, NOT `supporting`: this is the screen's explanatory copy and needs to
+    <EntryCard>
+      <Brand />
+      <VStack gap={1}>
+        <Heading level={1}>Drive your claude, remotely.</Heading>
+        {/* `body` + secondary, NOT `supporting`: this is the screen's explanatory copy and needs to
               outrank the --rc-pass hint below it. Both were `supporting` at first, which silently
               flattened a deliberate 14px/12.5px hierarchy to a uniform 12px. */}
-          <Text type="body" color="secondary" as="p">
-            Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
-            encrypted.
-          </Text>
-        </VStack>
-        {/* The page's sole input. The label is hidden but real (it was an aria-label before), and
+        <Text type="body" color="secondary" as="p">
+          Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
+          encrypted.
+        </Text>
+      </VStack>
+      {/* The page's sole input. The label is hidden but real (it was an aria-label before), and
             hasAutoFocus lands a pasted pass immediately (#design-pass) — a dedicated single-field gate
             is the canonical autofocus case. TextArea's own ≥16px font size keeps iOS from auto-zooming
             on focus, which is why we can leave pinch-zoom enabled (see layout.tsx's viewport note). */}
-        <TextArea
-          label="Machine pass"
-          isLabelHidden
-          value={props.pass}
-          onChange={props.setPass}
-          placeholder="rcp1_…"
-          rows={2}
-          hasSpellCheck={false}
-          hasAutoFocus
-        />
-        {/* isLoading (spinner + aria-busy + non-interactive) replaces swapping the label to
+      <TextArea
+        label="Machine pass"
+        isLabelHidden
+        value={props.pass}
+        onChange={props.setPass}
+        placeholder="rcp1_…"
+        rows={2}
+        hasSpellCheck={false}
+        hasAutoFocus
+      />
+      {/* isLoading (spinner + aria-busy + non-interactive) replaces swapping the label to
             "Connecting…" — the accessible name stays stable while the state is announced. */}
-        <Button
-          label="Connect"
-          variant="primary"
-          width="100%"
-          isLoading={props.connecting}
-          isDisabled={disabled}
-          onClick={() => props.connect(props.pass)}
-        />
-        {props.error !== null && (
-          <Banner status="error" title={`Couldn’t load that pass: ${props.error}`} />
-        )}
-        {/* No `size` prop here: it is silently INERT on a Text whose `type` the theme styles. The
+      <Button
+        label="Connect"
+        variant="primary"
+        width="100%"
+        isLoading={props.connecting}
+        isDisabled={disabled}
+        onClick={() => props.connect(props.pass)}
+      />
+      {props.error !== null && (
+        <Banner status="error" title={`Couldn’t load that pass: ${props.error}`} />
+      )}
+      {/* No `size` prop here: it is silently INERT on a Text whose `type` the theme styles. The
             theme's generated `.astryx-text.supporting { font-size: var(--text-supporting-size) }` lands
             in @layer astryx-theme, which outranks the size class in @layer astryx-base — the `xsm`
             class is emitted onto the element and changes nothing. `supporting` alone is the 12px this
             wanted anyway. */}
-        <Text type="supporting" as="p">
-          Get one with <Code>remote-claw --rc-pass</Code> on the machine.
-        </Text>
-      </EntryCard>
-    </main>
+      <Text type="supporting" as="p">
+        Get one with <Code>remote-claw --rc-pass</Code> on the machine.
+      </Text>
+    </EntryCard>
   );
 }
 
@@ -488,56 +493,54 @@ export function Pairing(props: {
   }, [props.otk]);
 
   return (
-    <main className="connect">
-      <EntryCard>
-        <Brand />
-        <Heading level={1}>Pair this device</Heading>
-        {revealed === null ? (
-          <>
-            <Text type="body" color="secondary" as="p">
-              A <strong>one-time</strong> pairing link — claim it on this device. The key never
-              leaves your browser.
-            </Text>
-            <Button
-              label="Pair this device"
-              variant="primary"
-              width="100%"
-              isLoading={busy}
-              isDisabled={busy}
-              onClick={reveal}
-            />
-            {error !== null && <Banner status="error" title={error} />}
-            {/* Deliberately a GHOST button, not a second primary: the manual path is the quiet
+    <EntryCard>
+      <Brand />
+      <Heading level={1}>Pair this device</Heading>
+      {revealed === null ? (
+        <>
+          <Text type="body" color="secondary" as="p">
+            A <strong>one-time</strong> pairing link — claim it on this device. The key never leaves
+            your browser.
+          </Text>
+          <Button
+            label="Pair this device"
+            variant="primary"
+            width="100%"
+            isLoading={busy}
+            isDisabled={busy}
+            onClick={reveal}
+          />
+          {error !== null && <Banner status="error" title={error} />}
+          {/* Deliberately a GHOST button, not a second primary: the manual path is the quiet
                 alternative to the one-time link, and two filled buttons would read as equal weight. */}
-            <Button
-              label="Enter a pass manually instead"
-              variant="ghost"
-              width="100%"
-              onClick={props.onCancel}
-            />
-          </>
-        ) : (
-          <>
-            <Text type="body" color="secondary" as="p">
-              Confirm this matches the <Code>identity_id</Code> from{" "}
-              <Code>remote-claw --rc-pass</Code>:
-            </Text>
-            {/* The identity hex is the security-critical comparison the human makes against the
+          <Button
+            label="Enter a pass manually instead"
+            variant="ghost"
+            width="100%"
+            onClick={props.onCancel}
+          />
+        </>
+      ) : (
+        <>
+          <Text type="body" color="secondary" as="p">
+            Confirm this matches the <Code>identity_id</Code> from{" "}
+            <Code>remote-claw --rc-pass</Code>:
+          </Text>
+          {/* The identity hex is the security-critical comparison the human makes against the
                 host's `--rc-pass` output, so it gets its own block treatment (wrapping on any
                 character) rather than an inline code span. */}
-            <Code className="identity-hex" data-testid="identity-hex">
-              {revealed.idHex}
-            </Code>
-            <Button
-              label="Connect"
-              variant="primary"
-              width="100%"
-              onClick={() => props.onConnect(revealed.pass)}
-            />
-          </>
-        )}
-      </EntryCard>
-    </main>
+          <Code className="identity-hex" data-testid="identity-hex">
+            {revealed.idHex}
+          </Code>
+          <Button
+            label="Connect"
+            variant="primary"
+            width="100%"
+            onClick={() => props.onConnect(revealed.pass)}
+          />
+        </>
+      )}
+    </EntryCard>
   );
 }
 
@@ -813,8 +816,8 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
               outage above, and "no live sessions yet" would mislead (it reads as "all good, just waiting"). */}
           {list.length === 0 && busError === null && (
             <p className="empty-pad">
-              No live sessions yet. On a machine, run <code>claude --remote-control</code> through{" "}
-              <code>remote-claw</code>.
+              No live sessions yet. On a machine, run <Code>claude --remote-control</Code> through{" "}
+              <Code>remote-claw</Code>.
             </p>
           )}
           {list.map((s) => {

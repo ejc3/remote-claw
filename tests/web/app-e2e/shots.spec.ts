@@ -22,7 +22,7 @@ async function connect(page: import("@playwright/test").Page, pass: string) {
 test("connect + pass screen", async ({ page, seedHost }) => {
   const { pass } = await seedHost();
   await page.goto(`/#${encodeURIComponent(pass)}`);
-  await expect(page.locator(".connect-card")).toBeVisible();
+  await expect(page.getByLabel("Machine pass")).toBeVisible();
   await page.screenshot({ path: `${OUT()}/01-connect.png` });
 });
 

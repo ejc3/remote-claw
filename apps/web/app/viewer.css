@@ -56,11 +56,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-button {
-  font: inherit;
-  cursor: pointer;
-}
-
 /* Keyboard accessibility (#design-pass): a visible focus ring on every interactive control. Uses
    :focus-visible so it shows for keyboard/AT users without ringing on every mouse click. The outline
    follows each control's OWN border-radius, so we don't set radius here (doing so would square off the
@@ -82,15 +77,6 @@ summary:focus-visible,
 [role="button"]:focus-visible {
   outline: 2px solid var(--accent-text);
   outline-offset: 2px;
-}
-
-code {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 0.86em;
-  background: var(--surface-2);
-  padding: 1px 5px;
-  border-radius: 5px;
-  color: #c9c9d4;
 }
 
 /* ---------- connect screen ---------- */
@@ -1159,7 +1145,9 @@ code {
   margin-inline: auto;
   padding: 9px 13px;
   font-family: inherit;
-  /* ≥16px to suppress iOS Safari focus auto-zoom (we no longer pin maximum-scale) — see .field. */
+  /* ≥16px to suppress iOS Safari focus auto-zoom (we no longer pin maximum-scale). The connect screen's
+     field gets the same protection from Astryx's TextArea, which floors it under
+     `@media (pointer: coarse)`; this composer textarea is still hand-written, so it states it here. */
   font-size: 16px;
   line-height: 1.4;
   background: var(--surface);

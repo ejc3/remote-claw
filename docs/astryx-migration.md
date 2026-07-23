@@ -176,23 +176,40 @@ tells you to avoid. Worth verifying on your side and documenting the Next.js-spe
 We now guard it with a test that asserts on the **emitted** CSS; a source-level assertion passes in both
 the broken and the fixed state.
 
-### C. `astryx theme build` writes `<name>.js` next to `<name>.ts`
+### C. `astryx theme build`'s DEFAULT output location is a trap on a `.ts` source (but `--out` fixes it)
+
+*Corrected during review — an earlier draft of this report called it a defect. It isn't; `--out` covers
+it. The trap is only in the default.*
 
 ```bash
 $ astryx theme build app/theme/remote-claw.ts
 # → app/theme/remote-claw.css, remote-claw.js, remote-claw.d.ts, remote-claw.variants.d.ts
 ```
 
-The built module lands beside its own source with the same basename. Our `next.config.ts` sets
-`extensionAlias: { ".js": [".ts", ".tsx", ".js"] }` (unrelated — it exists so a workspace package's raw-TS
-exports resolve), which tries `.ts` **first**. So `import { remoteClawTheme } from "./theme/remote-claw.js"`
-resolves to the **source** theme — the runtime-`<style>`-injection path — instead of the built one. Silently:
-same export name, same shape, just without `__built: true`. A bare extensionless import has the same
-ambiguity under normal webpack `resolve.extensions` ordering.
+The built module lands beside its own source with the same basename, so `remote-claw.js` and
+`remote-claw.ts` end up in one directory. Our `next.config.ts` sets
+`extensionAlias: { ".js": [".ts", ".tsx", ".js"] }` (unrelated — it exists so a workspace package's
+raw-TypeScript exports resolve), which tries `.ts` **first**. So
+`import { remoteClawTheme } from "./theme/remote-claw.js"` resolves to the **source** theme — the
+runtime-`<style>`-injection path — instead of the built one. Silently: same export name, same shape, just
+without `__built: true`. A bare extensionless import is ambiguous under normal webpack
+`resolve.extensions` ordering too.
 
-**Suggested fix:** an `--out-dir` for all artifacts (today `-o` only controls the CSS), or default the
-built module to a distinguishable name such as `<name>.built.js`. We work around it with a wrapper script
-that moves the four artifacts into `theme/built/`.
+`--out` is the answer, and it does more than its name suggests: it names the CSS path but relocates the
+**entire** artifact set, because the CLI derives the `.js`/`.d.ts`/`.variants.d.ts` paths from its
+dirname. Verified — all four land in the target directory and nothing is left beside the source:
+
+```bash
+$ astryx theme build app/theme/remote-claw.ts --out app/theme/built/remote-claw.css
+$ ls app/theme/built
+remote-claw.css  remote-claw.d.ts  remote-claw.js  remote-claw.variants.d.ts
+```
+
+**Suggested docs change:** `astryx theme build --help` describes `-o, --out` as "Output CSS file path",
+which reads as CSS-only and is why we initially wrote a script to move the other three by hand. Saying
+"output directory for all theme artifacts (named by the CSS path)" would have saved that entirely. A
+line in `astryx docs theme` warning that the default co-locates a `.js` beside a `.ts` source would help
+too — it is fine for a `.js`/`.mjs` theme source and a footgun for a `.ts` one.
 
 ### D. Generated artifacts carry a timestamp, so committed output can't be drift-checked
 
@@ -349,6 +366,22 @@ device is a phone on a hotel network, that is the one number we are watching. Pe
 ---
 
 ## Things we got wrong (not Astryx's fault, recorded so others don't repeat them)
+
+- **Our leftover global element resets silently restyled the design system's components.** The migration
+  layer (`remote-claw`) is declared LAST so hand-written rules keep winning while surfaces migrate — which
+  also means a BARE ELEMENT selector in it hits every Astryx component built from that element. Two rules
+  we had carried for years did real damage:
+
+  | rule (ours, last layer) | effect on Astryx |
+  | --- | --- |
+  | `button { font: inherit; cursor: pointer }` | `Button` rendered at 16px/400 instead of 14px/500 |
+  | `code { font-size: 0.86em; … }` | `<Code>` rendered at **10.32px** with the wrong padding and radius |
+
+  Both were already provided by Astryx's own reset — at zero specificity in `@layer reset`, exactly where
+  a reset belongs — so ours were redundant *and* harmful. Nothing failed; the components simply looked
+  wrong, and we only caught it by diffing `getComputedStyle` with and without our rules. If you adopt
+  Astryx into an app with an existing stylesheet, audit it for bare element selectors first. We now have a
+  test that fails on any bare element selector in the migration layer.
 
 - We initially fanned out ~240 agents to scrape the docs site. The CLI made all of it redundant. **Check
   for `astryx docs` first.**
