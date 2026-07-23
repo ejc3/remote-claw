@@ -2113,22 +2113,25 @@ function PermissionRow({
       {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
       {effective === null ? (
         <div className="perm-actions">
-          <button
-            type="button"
-            className="perm-btn perm-allow"
-            disabled={busy || req.requestId === ""}
+          {/* Astryx has no "constructive"/success Button variant (only primary/secondary/ghost/
+              destructive — see finding J), and the green Allow / red Deny is a deliberate security-UX
+              signal for an irreversible grant. So these are secondary Buttons carrying the semantic
+              tint via .perm-allow / .perm-deny — the chrome (focus ring, press, disabled a11y) comes
+              from Astryx; only the meaning-color stays app CSS. */}
+          <Button
+            variant="secondary"
+            className="perm-allow"
+            label="Allow"
+            isDisabled={busy || req.requestId === ""}
             onClick={() => void decide("allow")}
-          >
-            Allow
-          </button>
-          <button
-            type="button"
-            className="perm-btn perm-deny"
-            disabled={busy || req.requestId === ""}
+          />
+          <Button
+            variant="secondary"
+            className="perm-deny"
+            label="Deny"
+            isDisabled={busy || req.requestId === ""}
             onClick={() => void decide("deny")}
-          >
-            Deny
-          </button>
+          />
         </div>
       ) : (
         <div className="perm-resolved" data-behavior={effective}>
@@ -2340,22 +2343,24 @@ function QuestionCard({
         </div>
       ))}
       <div className="perm-actions">
-        <button
-          type="button"
-          className="perm-btn perm-allow q-submit"
-          disabled={busy || !allAnswered || req.requestId === ""}
+        {/* Submit is the constructive action, so it shares the green .perm-allow tint (see the
+            permission-row note above). isLoading keeps the "Submit answers" accessible name stable
+            through the send instead of swapping to "Sending…". */}
+        <Button
+          variant="secondary"
+          className="perm-allow q-submit"
+          label="Submit answers"
+          isLoading={busy}
+          isDisabled={busy || !allAnswered || req.requestId === ""}
           onClick={() => void submit()}
-        >
-          {busy ? "Sending…" : "Submit answers"}
-        </button>
-        <button
-          type="button"
-          className="perm-btn perm-deny"
-          disabled={busy || req.requestId === ""}
+        />
+        <Button
+          variant="secondary"
+          className="perm-deny"
+          label="Skip / answer in chat"
+          isDisabled={busy || req.requestId === ""}
           onClick={() => void dismiss()}
-        >
-          Skip / answer in chat
-        </button>
+        />
       </div>
       {req.requestId === "" && (
         <div className="perm-hint">No request id — this prompt can’t be answered from here.</div>

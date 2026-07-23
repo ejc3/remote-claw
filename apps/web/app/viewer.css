@@ -915,22 +915,14 @@ summary:focus-visible,
      lines while the secondary stayed on one — inverting their apparent weight. */
   flex-wrap: wrap;
 }
-.perm-btn {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 7px 16px;
-  white-space: nowrap;
-  /* A 44px hit target for an irreversible grant/deny on mobile (#design-pass perm/touch-targets). */
+/* Permission/question actions are Astryx secondary Buttons; the base chrome (border, radius, padding,
+   focus ring, disabled a11y) comes from the component. Two things stay app CSS: the 44px touch floor
+   (Astryx buttons are 32-36px, and an irreversible grant/deny holds this app's touch minimum, #151), and
+   the semantic green Allow / red Deny — a security-UX signal Astryx has no Button variant for (it ships
+   destructive but no constructive; finding J). Labels never wrap (the ROW wraps via .perm-actions). */
+.perm-actions .astryx-button {
   min-height: 44px;
-  font-size: 13.5px;
-  font-weight: 600;
-  background: var(--surface-2);
-  color: var(--text);
-  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
-}
-.perm-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  white-space: nowrap;
 }
 .perm-allow:not(:disabled) {
   border-color: rgba(63, 185, 80, 0.5);

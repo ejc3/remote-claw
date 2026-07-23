@@ -176,10 +176,14 @@ test("permission Allow/Deny buttons meet the 44px minimum touch target", async (
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
-  const allow = page.locator(".perm .perm-btn").first();
-  await expect(allow).toBeVisible();
-  const minH = await allow.evaluate((el) => parseFloat(getComputedStyle(el).minHeight));
-  expect(minH).toBeGreaterThanOrEqual(44);
+  // Measure BOTH — the test name says Allow/Deny, and the floor rule covers both, so a Deny-only
+  // regression must not slip through (codex #174 false-green).
+  for (const name of ["Allow", "Deny"] as const) {
+    const btn = page.locator(".perm").getByRole("button", { name });
+    await expect(btn).toBeVisible();
+    const h = await btn.evaluate((el) => el.getBoundingClientRect().height);
+    expect(h, `${name} button height`).toBeGreaterThanOrEqual(44);
+  }
 });
 
 // #151 mobile a11y: pinch-zoom must not be blocked (no maximum-scale), focusable inputs are ≥16px (so
