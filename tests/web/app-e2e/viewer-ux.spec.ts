@@ -216,9 +216,16 @@ test.describe("mobile a11y (#151)", () => {
       .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(inputFs).toBeGreaterThanOrEqual(16);
 
-    for (const sel of ["button.attach-btn", "button.mode-btn", "button.composer-send"]) {
-      const h = await page.locator(sel).evaluate((el) => el.getBoundingClientRect().height);
-      expect(h, `${sel} height`).toBeGreaterThanOrEqual(44);
+    // The three composer controls are Astryx Button/IconButton now, located the way a user would
+    // find them (accessible name) or by a stable test id where the label varies with the mode.
+    const controls = [
+      page.getByTestId("composer-mode"),
+      page.getByRole("button", { name: "Attach photos" }),
+      page.getByRole("button", { name: "Send", exact: true }),
+    ];
+    for (const c of controls) {
+      const h = await c.evaluate((el) => el.getBoundingClientRect().height);
+      expect(h, "composer control height").toBeGreaterThanOrEqual(44);
     }
   });
 
@@ -295,7 +302,7 @@ test.describe("capability gating (#149)", () => {
     await expect(page.locator(".perms-bypassed")).toBeVisible();
 
     // controls.setMode:false → the composer's permission-mode button is disabled (read-only display).
-    await expect(page.locator("button.mode-btn")).toBeDisabled();
+    await expect(page.getByTestId("composer-mode")).toBeDisabled();
 
     // controls.setModel:false → the ⋯ sheet replaces the model rows with an explanatory note.
     await page.locator("button.chat-menu").click();
@@ -319,7 +326,7 @@ test.describe("capability gating (#149)", () => {
     // structuredPermissions:true → no bypassed badge (tmux mirrors permission gates).
     await expect(page.locator(".perms-bypassed")).toHaveCount(0);
     // controls.setMode:false → mode button disabled …
-    await expect(page.locator("button.mode-btn")).toBeDisabled();
+    await expect(page.getByTestId("composer-mode")).toBeDisabled();
     // … but controls.setModel:true → the model switcher rows are present.
     await page.locator("button.chat-menu").click();
     await expect(page.locator(".sheet .mode-row", { hasText: "Opus" })).toBeVisible();
@@ -335,7 +342,7 @@ test.describe("capability gating (#149)", () => {
     await page.locator("button.row", { hasText: "rc box" }).click();
 
     await expect(page.locator(".perms-bypassed")).toHaveCount(0);
-    await expect(page.locator("button.mode-btn")).toBeEnabled();
+    await expect(page.getByTestId("composer-mode")).toBeEnabled();
     await page.locator("button.chat-menu").click();
     await expect(page.locator(".sheet .mode-row", { hasText: "Opus" })).toBeVisible();
   });

@@ -5,6 +5,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Code } from "@astryxdesign/core/Code";
 import { Heading } from "@astryxdesign/core/Heading";
+import { IconButton } from "@astryxdesign/core/IconButton";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
@@ -1510,33 +1511,39 @@ function Transcript(props: {
           // Match the actual Enter behavior: a "send" return key on desktop, a newline key on touch.
           enterKeyHint={coarsePointer ? "enter" : "send"}
         />
+        {/* The composer INPUT stays a hand-written <textarea>: Astryx's ChatComposerInput is a
+            contentEditable div that hard-codes Enter→submit with no coarse-pointer branch, which would
+            regress the touch behavior (#151: Enter inserts a newline on a phone) and replace our
+            controlled-value + auto-grow + IME model. The three CONTROLS below do map cleanly, so they
+            migrate to Astryx Button/IconButton; the 44px touch floor for them lives on
+            `.composer-row .astryx-button` (Astryx buttons are 32–36px). */}
         <div className="composer-row">
-          <button
-            type="button"
-            className="mode-btn"
+          {/* mode + attach spread props onto their <button>, so aria-haspopup/expanded and the disabled
+              state land on the real element (capability gating asserts `disabled`). The label carries
+              the current mode; the glyph is the icon. */}
+          <Button
+            variant="secondary"
+            data-testid="composer-mode"
+            icon={<span aria-hidden>{modeGlyph(displayedMode)}</span>}
+            label={modeLabel(displayedMode)}
+            isDisabled={!canSetMode}
             aria-haspopup="dialog"
             aria-expanded={modeSheet}
-            disabled={!canSetMode}
-            onClick={() => canSetMode && setModeSheet(true)}
-            title={
+            tooltip={
               canSetMode
                 ? "Permission mode"
                 : "This harness can't switch permission mode — showing the worker's current mode (read-only)"
             }
-          >
-            <span className="mode-glyph">{modeGlyph(displayedMode)}</span>
-            {modeLabel(displayedMode)}
-          </button>
-          <button
-            type="button"
-            className="attach-btn"
-            title="Attach photos"
-            aria-label="Attach photos"
-            disabled={sending}
+            onClick={() => canSetMode && setModeSheet(true)}
+          />
+          <IconButton
+            variant="secondary"
+            icon={<span aria-hidden>📎</span>}
+            label="Attach photos"
+            tooltip="Attach photos"
+            isDisabled={sending}
             onClick={() => fileRef.current?.click()}
-          >
-            📎
-          </button>
+          />
           <input
             ref={fileRef}
             type="file"
@@ -1548,13 +1555,18 @@ function Transcript(props: {
               e.target.value = ""; // allow re-picking the same file(s)
             }}
           />
-          <button
+          {/* isLoading (spinner + aria-busy + non-interactive) rather than swapping the label to
+              "Sending…" — the accessible name stays "Send" so getByRole finds it throughout a send, and
+              the double-send guard reads the native disabled state. `.composer-send` carries only the
+              margin-left:auto that right-pins it (real layout, not a test hook). */}
+          <Button
             type="submit"
-            className="btn composer-send"
-            disabled={sending || (input.trim() === "" && staged.length === 0)}
-          >
-            {sending ? "Sending…" : "Send"}
-          </button>
+            variant="primary"
+            className="composer-send"
+            label="Send"
+            isLoading={sending}
+            isDisabled={sending || (input.trim() === "" && staged.length === 0)}
+          />
         </div>
       </form>
 

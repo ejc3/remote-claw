@@ -194,7 +194,7 @@ test("mode sheet", async ({ page, seedHost }) => {
   await page.goto(`/#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row").click();
-  await page.locator("button.mode-btn").click();
+  await page.getByTestId("composer-mode").click();
   await expect(page.locator('[role="dialog"]')).toBeVisible();
   await shot(page, "30-mode-sheet", '[role="dialog"]');
   await shot(page, "31-mode-row", ".mode-row");

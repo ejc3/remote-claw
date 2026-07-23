@@ -132,15 +132,6 @@ summary:focus-visible,
   color: #fff;
   font-size: 15px;
 }
-.btn {
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: #fff;
-  font-weight: 600;
-  padding: 11px 18px;
-  transition: background 0.15s, opacity 0.15s;
-}
 .btn:hover:not(:disabled) {
   background: var(--accent-hover);
 }
@@ -1160,9 +1151,18 @@ summary:focus-visible,
   margin-inline: auto;
 }
 /* Send is pushed to the right; mode + attach stay on the left. */
+/* Right-pin the Send button. This is the only composer-button styling that survives migration to
+   Astryx: pure layout the component doesn't own. Its touch-target floor is shared with mode + attach
+   on `.composer-row .astryx-button` below. */
 .composer-send {
   margin-left: auto;
-  min-height: 44px; /* ≥44px touch target (#151) */
+}
+/* Astryx's Button/IconButton are 32–36px; this app holds a 44px minimum on every touch control (#151),
+   so raise the floor on the composer's three migrated controls. Same app-level a11y policy as the entry
+   screen — a design system must not silently lower a standard the app already met. Guarded in
+   viewer-ux.spec.ts. */
+.composer-row .astryx-button {
+  min-height: 44px;
 }
 .composer-input {
   width: 100%;
@@ -1289,56 +1289,7 @@ summary:focus-visible,
   opacity: 1;
 }
 
-/* composer mode button (the </> Code affordance) */
-.mode-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  padding: 0 12px;
-  height: 44px; /* ≥44px touch target (#151) */
-  background: var(--surface);
-  color: var(--text-dim);
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  font-size: 13.5px;
-  font-weight: 550;
-  transition: border-color 0.15s, color 0.15s;
-}
-.mode-btn:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--text-faint);
-}
-.mode-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
 
-/* Composer attach-a-photo button (#44). */
-.attach-btn {
-  flex-shrink: 0;
-  /* ≥44px touch target (#151). */
-  width: 44px;
-  height: 44px;
-  background: var(--surface);
-  color: var(--text-dim);
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  font-size: 16px;
-  transition: border-color 0.15s, color 0.15s;
-}
-.attach-btn:hover:not(:disabled) {
-  color: var(--text);
-  border-color: var(--text-faint);
-}
-.attach-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.mode-glyph {
-  font-size: 13px;
-  opacity: 0.9;
-}
 
 /* ---------- bottom sheet (mode picker) ---------- */
 .sheet-layer {

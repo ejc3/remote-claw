@@ -80,7 +80,7 @@ test("composer: staged state + mode sheet + session sheet", async ({ page, seedH
   await page.getByPlaceholder(/Send a prompt/).fill("a drafted prompt that wraps onto a second line");
   await page.locator("form.composer").screenshot({ path: `${OUT()}/08-composer.png` });
 
-  await page.locator("button.mode-btn").click();
+  await page.getByTestId("composer-mode").click();
   await expect(page.locator('[role="dialog"]')).toBeVisible();
   await page.screenshot({ path: `${OUT()}/09-mode-sheet.png` });
   await page.keyboard.press("Escape");
