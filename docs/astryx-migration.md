@@ -24,7 +24,8 @@ hit, with the evidence that proves it, not an impression. Findings are added as 
 | Cascade layers, theme, build, CSP | **Done** | `Theme`, `defineTheme`, `astryx theme build` |
 | Entry screens (Connect / Pairing / Reconnecting) | **Done** | `Card` `VStack` `Heading` `Text` `TextArea` `Button` `Banner` `Code` `Spinner` |
 | Transcript (messages, tool rows, prose) | Next | `ChatMessageList` `ChatMessage` `ChatMessageBubble` `ChatSystemMessage` `ChatToolCalls` `Markdown` `CodeBlock` `Collapsible` |
-| Composer | Planned | `ChatComposer` `ChatComposerInput` `ChatSendButton` |
+| Composer controls | **Done** | `Button` `IconButton` (Send / Mode / attach) |
+| Composer input | **Stays hand-written** | see finding I — `ChatComposerInput` isn't a faithful host |
 | Bottom sheets / dropdowns | Planned | `Dialog` `Popover` `RadioList` |
 | Session list + app frame | Planned | `AppShell` `Layout` `LayoutPanel` `List` `Item` `StatusDot` `Badge` |
 
@@ -342,7 +343,31 @@ flattened a deliberate 14px/12.5px hierarchy into a uniform 12px on our entry sc
 `size` set a custom property the theme rule reads (`font-size: var(--text-size-override, var(--text-…-size))`).
 Failing that, document that `size` and a themed `type` don't compose.
 
-### I. Small surprises worth a line in the docs
+### I. `ChatComposerInput` can't host a composer with platform-specific Enter behavior
+
+We migrated the composer's three CONTROLS (Send / Mode / attach) to `Button` / `IconButton` cleanly, but
+kept the text input a hand-written `<textarea>`. `ChatComposerInput` is a **contentEditable** `<div>` whose
+key handler is (verified in `dist/Chat/ChatComposerInput.js`):
+
+```js
+if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); … onSubmit?.(text); }
+```
+
+That is unconditional — there is no branch for pointer type. Our composer sends on Enter on a **desktop**
+but inserts a **newline** on a touch keyboard (a soft-keyboard Return must not strand a multi-line prompt),
+and guards IME composition. `ChatComposerInput` would send on Enter on a phone — a real regression — with
+no prop to override it. Adopting it would also mean trading our controlled-`value` + auto-grow +
+`<textarea>` model for contentEditable + `serialize()`, and fighting its built-in history (ArrowUp/Down)
+and trigger menus.
+
+This isn't a complaint — a contentEditable input with token/mention support is a reasonable default for a
+chat app. It just isn't a host for an input with bespoke platform behavior, and there's no seam to inject
+one. **Suggested fix:** let `ChatComposer` accept a plain controlled `<textarea>` in its `input` slot
+without the contentEditable assumptions (today the shell's click-to-focus and submit wiring assume the
+default input), or expose an `onKeyDown` / `shouldSubmitOnEnter` hook on `ChatComposerInput`. Until then,
+the honest move is what we did: migrate the buttons, keep the input.
+
+### J. Small surprises worth a line in the docs
 
 - **`Button` renders its label inside a nested `<span>`.** Reasonable, but it means a test that walks
   from a label up to "the element that renders it" lands on the span, not the button. Anything asserting
@@ -357,7 +382,7 @@ Failing that, document that `size` and a themed `type` don't compose.
   translation for `<textarea aria-label="…">`, since it changes how tests select the field
   (`getByLabel` rather than a class).
 
-### J. Minor CLI papercuts
+### K. Minor CLI papercuts
 
 - `astryx docs --list` errors with `unknown option '--list'`, even though bare `astryx docs` prints exactly
   that list and `astryx component --list` / `astryx template --list` both exist. The inconsistency sent us
@@ -367,7 +392,7 @@ Failing that, document that `size` and a themed `type` don't compose.
 - `@astryxdesign/cli` declares `@astryxdesign/lab` and `@astryxdesign/charts` as peer dependencies. Neither
   is mentioned in the docs and pnpm warns about both on install.
 
-### K. Weight, for awareness rather than complaint
+### L. Weight, for awareness rather than complaint
 
 `@astryxdesign/core@0.1.8` unpacks to **15.5 MB across 2 440 files**, and `dist/astryx.css` is **127 KB**
 uncompressed and loaded in full regardless of which components a page uses. For a viewer whose primary
