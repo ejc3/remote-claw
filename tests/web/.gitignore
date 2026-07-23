@@ -5,3 +5,7 @@ test-results-turso/
 test-results-drain/
 test-results-temporal/
 playwright-report/
+test-results-shots/
+# Visual-verification artifacts from app-e2e.shots.config.ts — regenerated on demand,
+# compared between commits locally; not a committed baseline.
+shots/
