@@ -14,7 +14,7 @@
     "test:stress": "vitest run test/broker/stress.integration.test.ts",
     "test:stress:heavy": "STRESS_HEAVY=1 vitest run test/broker/stress-local.heavy.test.ts",
     "theme:build": "node scripts/build-theme.mjs",
-    "theme:check": "node scripts/build-theme.mjs && git diff --exit-code -- app/theme/built",
+    "theme:check": "node scripts/build-theme.mjs && git add -N app/theme/built && git diff --exit-code -- app/theme/built",
     "verify:turso-404": "tsx scripts/verify-turso-404.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",

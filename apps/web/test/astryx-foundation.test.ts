@@ -51,6 +51,52 @@ describe("astryx foundation build output", () => {
   });
 });
 
+/** Split a stylesheet into its top-level `@layer NAME { … }` blocks by brace matching, and return what
+ *  is left over once they are removed. `rest` is the load-bearing half: any rule that survives there is
+ *  UNLAYERED, and unlayered CSS beats every cascade layer regardless of specificity. Sampling a few
+ *  class names instead (the first version of this test) proves nothing about the rules it didn't name. */
+function splitLayers(css: string): { blocks: { name: string; body: string }[]; rest: string } {
+  const blocks: { name: string; body: string }[] = [];
+  let rest = "";
+  let i = 0;
+  const OPEN = /@layer\s+([A-Za-z0-9_-]+)\s*\{/g;
+  while (i < css.length) {
+    OPEN.lastIndex = i;
+    const m = OPEN.exec(css);
+    if (m === null) {
+      rest += css.slice(i);
+      break;
+    }
+    rest += css.slice(i, m.index);
+    let depth = 1;
+    let j = OPEN.lastIndex;
+    for (; j < css.length && depth > 0; j++) {
+      if (css[j] === "{") depth++;
+      else if (css[j] === "}") depth--;
+    }
+    blocks.push({ name: m[1] ?? "", body: css.slice(OPEN.lastIndex, j - 1) });
+    i = j;
+  }
+  return { blocks, rest };
+}
+
+/** The stylesheet <link> hrefs of the prerendered route, IN DOCUMENT ORDER. The layer-order declaration
+ *  has to reach the browser before the layers it names are first used; a sheet that merely *starts* with
+ *  the declaration proves nothing if the browser loaded astryx-base first. */
+function linkedStylesheets(): string[] | null {
+  for (const html of ["index.html", "_not-found.html"]) {
+    const p = join(import.meta.dirname, "..", ".next", "server", "app", html);
+    try {
+      const text = readFileSync(p, "utf8");
+      const hrefs = [...text.matchAll(/static\/css\/([a-z0-9]+\.css)/g)].map((m) => m[1] ?? "");
+      if (hrefs.length > 0) return [...new Set(hrefs)];
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null;
+}
+
 describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
   // `describe.skipIf` skips the TESTS but still RUNS this callback during collection, so this body has
   // to survive `sheets === null` rather than assume the guard above already excluded it — asserting
@@ -66,36 +112,75 @@ describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
     expect(decls).toHaveLength(1);
   });
 
-  it("puts the layer-order declaration at the very top of its stylesheet", () => {
-    // If it sorted after any rule, the layers it names would already have been established in source
-    // order and the declaration would be a no-op.
-    const sheet = css.find((c) => /@layer\s+reset\s*,/.test(c.text));
-    expect(sheet).toBeDefined();
-    // biome-ignore lint/style/noNonNullAssertion: asserted defined on the line above
-    expect(sheet!.text.trimStart().startsWith("@layer reset,")).toBe(true);
+  it("loads the layer-order declaration in the FIRST stylesheet the route links", () => {
+    // Not "the declaration starts its own file" — that proves nothing if the browser loaded
+    // astryx-base first, which would establish the order from source order and make the declaration a
+    // no-op. Assert against the document's actual <link> order.
+    const linked = linkedStylesheets();
+    expect(linked, "no prerendered route HTML to read stylesheet order from").not.toBeNull();
+    const first = css.find((c) => c.name === (linked ?? [])[0]);
+    expect(first, `first linked stylesheet ${(linked ?? [])[0]} not found on disk`).toBeDefined();
+    expect(first?.text.trimStart().startsWith("@layer reset,")).toBe(true);
   });
 
-  it("ships every viewer rule INSIDE @layer remote-claw", () => {
-    // `.q-freeform` (the AskUserQuestion free-text box) and `.transcript` are viewer.css-only classes:
-    // if either is emitted before the layer opens, the wrapper was dropped and the whole stylesheet is
-    // unlayered.
-    const sheet = css.find((c) => c.text.includes(".q-freeform"));
-    expect(sheet, "viewer.css must reach the build").toBeDefined();
-    // biome-ignore lint/style/noNonNullAssertion: asserted defined on the line above
-    const text = sheet!.text;
-    const layerAt = text.indexOf("@layer remote-claw{");
-    expect(layerAt, "viewer.css lost its @layer wrapper").toBeGreaterThanOrEqual(0);
-    for (const cls of [".q-freeform", ".transcript{", ".perm-actions"]) {
-      expect(text.indexOf(cls), `${cls} escaped @layer remote-claw`).toBeGreaterThan(layerAt);
+  it("emits NO unlayered rules — not one, anywhere", () => {
+    // The general form of the bug. The previous version sampled three class names and checked they
+    // appeared after an opening `@layer`; that passes for a rule after the layer's CLOSING brace, and
+    // says nothing about the hundreds of rules it didn't name. Strip every balanced `@layer NAME { … }`
+    // block and assert what remains contains no rule at all.
+    for (const sheet of css) {
+      const { rest } = splitLayers(sheet.text);
+      // What may legitimately survive: the bare `@layer a, b, c;` ORDER declaration, @charset, and
+      // whitespace. Anything with a body is an unlayered rule.
+      const leftover = rest
+        .replace(/@layer[^{;]*;/g, "")
+        .replace(/@charset[^;]*;/g, "")
+        .trim();
+      expect(leftover, `unlayered CSS in ${sheet.name}: ${leftover.slice(0, 200)}`).toBe("");
     }
   });
 
-  it("ships the astryx component and theme layers", () => {
+  it("puts the viewer's own rules in the remote-claw layer specifically", () => {
+    // Unlayered is not the only failure — landing in the WRONG layer (e.g. astryx-base, where it would
+    // lose to the theme) is just as silent.
+    const sheet = css.find((c) => c.text.includes(".q-freeform"));
+    expect(sheet, "viewer.css must reach the build").toBeDefined();
+    const { blocks } = splitLayers(sheet?.text ?? "");
+    const mine = blocks
+      .filter((b) => b.name === "remote-claw")
+      .map((b) => b.body)
+      .join("\n");
+    for (const cls of [".q-freeform", ".transcript{", ".perm-actions", ".identity-hex"]) {
+      expect(mine, `${cls} is not inside @layer remote-claw`).toContain(cls);
+    }
+  });
+
+  it("puts the brand theme's tokens inside @layer astryx-theme", () => {
+    // Checking "an astryx-theme layer exists" and "the brand scope appears somewhere" independently
+    // would pass even if the scope were emitted unlayered or into another layer — at which point the
+    // palette silently falls back to the neutral defaults.
     expect(all).toContain("@layer astryx-base{");
-    expect(all).toContain("@layer astryx-theme{");
-    // The brand theme is @scope'd to the attribute <Theme> sets; a mismatch here means the tokens
-    // resolve to the neutral defaults and the whole palette silently shifts.
-    expect(all).toContain('[data-astryx-theme="remote-claw"]');
+    const themed = css
+      .flatMap((c) => splitLayers(c.text).blocks)
+      .filter((b) => b.name === "astryx-theme")
+      .map((b) => b.body)
+      .join("\n");
+    expect(themed, "no @layer astryx-theme content").not.toBe("");
+    expect(themed, "brand @scope is not inside @layer astryx-theme").toContain(
+      '[data-astryx-theme="remote-claw"]',
+    );
+    // The pinned brand pair specifically (finding F in docs/astryx-migration.md): seeding the accent
+    // family alone makes Astryx INVERT it in dark mode into a pale fill carrying dark text. Nothing
+    // else in the suite sees hue — the design guard in viewer-ux.spec.ts asserts the disabled
+    // TREATMENT, and passed happily while the button was lavender. Compared whitespace-insensitively
+    // because the shipped CSS is minified.
+    const dense = themed.replace(/\s+/g, "");
+    expect(dense, "the accent is no longer pinned — dark mode will invert it").toContain(
+      "--color-accent:light-dark(#5457e8,#5457e8)",
+    );
+    expect(dense, "--color-on-accent must be pinned WITH --color-accent, never alone").toContain(
+      "--color-on-accent:light-dark(#ffffff,#ffffff)",
+    );
   });
 
   it("keeps the shipped CSS within the viewer's CSP (no remote fonts or assets)", () => {

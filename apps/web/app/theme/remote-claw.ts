@@ -69,8 +69,16 @@ export const remoteClawTheme = defineTheme({
     "--color-text-primary": ["#0a1317", "#ececee"],
     "--color-text-secondary": ["#4e606f", "#9a9aa3"],
     "--color-text-disabled": ["#a4b0bc", "#6f747c"],
-    // Accent used AS TEXT/border/focus on the dark bg moves the OPPOSITE way from the fill: #7c7ef5
+    // Accent used AS TEXT or an ICON on the dark bg moves the OPPOSITE way from the fill: #7c7ef5
     // measures 5.8:1 on the body and 5.4:1 on a surface, where the #5457e8 fill would be only ~3.4:1.
+    //
+    // NOTE this does NOT cover focus rings. Astryx draws them from `--color-accent`
+    // (`outline: 2px solid var(--color-accent)` in astryx.css), not `--color-text-accent` — so on this
+    // theme a stock Astryx focus ring is the darker FILL colour. It still clears the 3:1 that WCAG 2.2
+    // SC 1.4.11 asks of a non-text indicator, but it is dimmer than the ring this app has always drawn.
+    // The app therefore keeps its own global `:focus-visible` rule in viewer.css deliberately — that
+    // rule is NOT migration debt to be deleted with the rest of the file. Guarded by the focus-ring
+    // assertion in tests/web/app-e2e/viewer-ux.spec.ts so removing it fails loudly.
     "--color-text-accent": ["#4b4ee0", "#7c7ef5"],
     "--color-icon-accent": ["#4b4ee0", "#7c7ef5"],
 

@@ -8,14 +8,20 @@ import Home, { Connect, entryFromFragment, Pairing } from "../app/page.js";
 // and the initial render (the splash), so a returning user never sees the pass form on reload. (Named
 // for what it tests — load-time credential restore — not "reconnect", which is the network-stream
 // re-subscribe exercised by the browser revive spec in tests/web/app-e2e/revive.spec.ts.)
-/** The opening `<button …>` tag that encloses `text` in a static-markup string. Lets an assertion talk
+/** The opening `<button …>` tag that ENCLOSES `text` in a static-markup string. Lets an assertion talk
  *  about "the button labelled X" without a DOM. Astryx's Button renders its label inside a nested
- *  <span>, so this deliberately walks out to the nearest enclosing <button, not the immediate parent. */
+ *  <span>, so this walks out to the nearest preceding `<button`, not the immediate parent — and then
+ *  verifies that button hasn't already closed before the text, so a PRECEDING SIBLING button can't be
+ *  mistaken for the enclosing one (`<button data-variant="ghost"></button><span>text</span>` must not
+ *  satisfy an assertion about the button around `text`). Returns "" when there is no enclosing button,
+ *  which fails the positive assertions at the call site. */
 function enclosingButtonTag(html: string, text: string): string {
   const at = html.indexOf(text);
   if (at < 0) return "";
   const open = html.lastIndexOf("<button", at);
   if (open < 0) return "";
+  const close = html.indexOf("</button>", open);
+  if (close >= 0 && close < at) return ""; // that button closed before the text — not our enclosing one
   return html.slice(open, html.indexOf(">", open) + 1);
 }
 

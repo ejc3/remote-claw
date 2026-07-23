@@ -64,7 +64,16 @@ button {
 /* Keyboard accessibility (#design-pass): a visible focus ring on every interactive control. Uses
    :focus-visible so it shows for keyboard/AT users without ringing on every mouse click. The outline
    follows each control's OWN border-radius, so we don't set radius here (doing so would square off the
-   pill-shaped .jump-latest button on focus). */
+   pill-shaped .jump-latest button on focus).
+
+   KEEP THIS. Unlike everything else in this file it is NOT migration debt waiting for a component to
+   replace it. Astryx draws its own focus rings from `--color-accent`
+   (`outline: 2px solid var(--color-accent)` in astryx.css) — which this theme pins to the darker button
+   FILL (#5457e8) for brand reasons. That clears the 3:1 WCAG 2.2 SC 1.4.11 asks of a non-text
+   indicator, but it is dimmer on a near-black background than the #7c7ef5 ring this app has always
+   drawn (5.8:1). This rule sits in @layer remote-claw, which is declared last, so it wins over the
+   component default and every control — Astryx or hand-written — rings the same bright colour.
+   tests/web/app-e2e/viewer-ux.spec.ts asserts the computed outline colour so deleting this is loud. */
 button:focus-visible,
 a:focus-visible,
 textarea:focus-visible,

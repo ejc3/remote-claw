@@ -260,7 +260,30 @@ hand-writing `--color-accent` alone. It would help to also say, in the same plac
 brand fill. Right now the only warning points the other way, which nudges you toward the scale API and
 away from the thing you actually need.
 
-### G. Small surprises worth a line in the docs
+### G. Focus rings come from `--color-accent`, which fights a pinned brand fill
+
+Following on from **F**: once you pin `--color-accent` to a brand *fill*, you also change every focus
+indicator, because `astryx.css` draws them as:
+
+```css
+:focus-visible { outline: 2px solid var(--color-accent); }
+```
+
+There is no separate focus token. So a theme whose accent is a dark, saturated fill (correct for
+white-on-accent buttons) gets a dark, low-contrast ring on a dark background — for us ~3.4:1 instead of
+the 5.8:1 our `--color-text-accent` would give. It still clears the 3:1 that WCAG 2.2 SC 1.4.11 asks of a
+non-text indicator, so nothing is *broken*; it is just dimmer than intended, and invisible until someone
+tabs through the app on a dark theme.
+
+We keep an app-level `:focus-visible` rule in the last cascade layer to hold the brighter colour, with a
+Playwright assertion on the computed `outline-color` so it can't be deleted as part of "finishing the
+migration".
+
+**Suggested fix:** a dedicated `--color-focus-ring` token defaulting to `--color-accent`. Themes that
+need a fill and a ring to differ (any dark theme with a saturated brand colour) could then set it,
+instead of overriding component styles or re-declaring the rule outside the system.
+
+### H. Small surprises worth a line in the docs
 
 - **`Button` renders its label inside a nested `<span>`.** Reasonable, but it means a test that walks
   from a label up to "the element that renders it" lands on the span, not the button. Anything asserting
@@ -275,7 +298,7 @@ away from the thing you actually need.
   translation for `<textarea aria-label="…">`, since it changes how tests select the field
   (`getByLabel` rather than a class).
 
-### H. Minor CLI papercuts
+### I. Minor CLI papercuts
 
 - `astryx docs --list` errors with `unknown option '--list'`, even though bare `astryx docs` prints exactly
   that list and `astryx component --list` / `astryx template --list` both exist. The inconsistency sent us
@@ -285,7 +308,7 @@ away from the thing you actually need.
 - `@astryxdesign/cli` declares `@astryxdesign/lab` and `@astryxdesign/charts` as peer dependencies. Neither
   is mentioned in the docs and pnpm warns about both on install.
 
-### I. Weight, for awareness rather than complaint
+### J. Weight, for awareness rather than complaint
 
 `@astryxdesign/core@0.1.8` unpacks to **15.5 MB across 2 440 files**, and `dist/astryx.css` is **127 KB**
 uncompressed and loaded in full regardless of which components a page uses. For a viewer whose primary
