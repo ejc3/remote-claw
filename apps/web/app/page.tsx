@@ -382,8 +382,14 @@ export function Reconnecting() {
 function EntryCard({ children }: { children: ReactNode }) {
   return (
     <main className="connect">
-      <Card width="100%" maxWidth={460} padding={6}>
-        <VStack gap={3}>{children}</VStack>
+      {/* `entry-card` carries the drop shadow. Astryx's Card has no elevation prop, and on this
+          near-black palette a card surface sits only 1.14:1 above the body — measured — so with no
+          shadow the screen reads as one flat slab with a button floating on it. */}
+      <Card className="entry-card" width="100%" maxWidth={460} padding={6}>
+        {/* gap={5} (20px) BETWEEN groups; callers nest a tighter VStack around what belongs together.
+            One uniform gap spaced brand, headline, copy, field, button and hint identically, which is
+            what made the stack read as undifferentiated. */}
+        <VStack gap={5}>{children}</VStack>
       </Card>
     </main>
   );
@@ -411,8 +417,8 @@ export function Connect(props: {
   const disabled = props.pass.trim() === "";
   return (
     <EntryCard>
-      <Brand />
-      <VStack gap={1}>
+      <VStack gap={2}>
+        <Brand />
         <Heading level={1}>Drive your claude, remotely.</Heading>
         {/* `body` + secondary, NOT `supporting`: this is the screen's explanatory copy and needs to
               outrank the --rc-pass hint below it. Both were `supporting` at first, which silently
@@ -426,26 +432,31 @@ export function Connect(props: {
             hasAutoFocus lands a pasted pass immediately (#design-pass) — a dedicated single-field gate
             is the canonical autofocus case. TextArea's own ≥16px font size keeps iOS from auto-zooming
             on focus, which is why we can leave pinch-zoom enabled (see layout.tsx's viewport note). */}
-      <TextArea
-        label="Machine pass"
-        isLabelHidden
-        value={props.pass}
-        onChange={props.setPass}
-        placeholder="rcp1_…"
-        rows={2}
-        hasSpellCheck={false}
-        hasAutoFocus
-      />
-      {/* isLoading (spinner + aria-busy + non-interactive) replaces swapping the label to
+      <VStack gap={2}>
+        <TextArea
+          label="Machine pass"
+          isLabelHidden
+          value={props.pass}
+          onChange={props.setPass}
+          placeholder="rcp1_…"
+          rows={2}
+          hasSpellCheck={false}
+          hasAutoFocus
+        />
+        {/* isLoading (spinner + aria-busy + non-interactive) replaces swapping the label to
             "Connecting…" — the accessible name stays stable while the state is announced. */}
-      <Button
-        label="Connect"
-        variant="primary"
-        width="100%"
-        isLoading={props.connecting}
-        isDisabled={disabled}
-        onClick={() => props.connect(props.pass)}
-      />
+        {/* size="lg": the default md Button renders 32px tall here, under the 44px minimum touch
+            target — and this is the screen's only action. Guarded in viewer-ux.spec.ts. */}
+        <Button
+          label="Connect"
+          variant="primary"
+          size="lg"
+          width="100%"
+          isLoading={props.connecting}
+          isDisabled={disabled}
+          onClick={() => props.connect(props.pass)}
+        />
+      </VStack>
       {props.error !== null && (
         <Banner status="error" title={`Couldn’t load that pass: ${props.error}`} />
       )}
@@ -494,8 +505,10 @@ export function Pairing(props: {
 
   return (
     <EntryCard>
-      <Brand />
-      <Heading level={1}>Pair this device</Heading>
+      <VStack gap={2}>
+        <Brand />
+        <Heading level={1}>Pair this device</Heading>
+      </VStack>
       {revealed === null ? (
         <>
           <Text type="body" color="secondary" as="p">
@@ -505,9 +518,9 @@ export function Pairing(props: {
           <Button
             label="Pair this device"
             variant="primary"
+            size="lg"
             width="100%"
             isLoading={busy}
-            isDisabled={busy}
             onClick={reveal}
           />
           {error !== null && <Banner status="error" title={error} />}
@@ -516,6 +529,7 @@ export function Pairing(props: {
           <Button
             label="Enter a pass manually instead"
             variant="ghost"
+            size="lg"
             width="100%"
             onClick={props.onCancel}
           />
@@ -526,15 +540,18 @@ export function Pairing(props: {
             Confirm this matches the <Code>identity_id</Code> from{" "}
             <Code>remote-claw --rc-pass</Code>:
           </Text>
-          {/* The identity hex is the security-critical comparison the human makes against the
-                host's `--rc-pass` output, so it gets its own block treatment (wrapping on any
-                character) rather than an inline code span. */}
+          {/* The identity hex is the security-critical comparison the human makes against the host's
+              `--rc-pass` output, so it gets a block treatment (wrapping on any character) rather than an
+              inline code span. Deliberately NOT CodeBlock, which covers this shape (isWrapped gives the
+              same break-all) but brings a header bar, language label and copy button — chrome that would
+              dominate a 32-byte value on a phone-width card. */}
           <Code className="identity-hex" data-testid="identity-hex">
             {revealed.idHex}
           </Code>
           <Button
             label="Connect"
             variant="primary"
+            size="lg"
             width="100%"
             onClick={() => props.onConnect(revealed.pass)}
           />

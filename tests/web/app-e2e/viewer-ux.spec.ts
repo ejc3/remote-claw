@@ -29,6 +29,19 @@ test("the disabled Connect CTA stays a dimmed primary, not a dead grey slab", as
   expect(style.bg).not.toBe("rgba(0, 0, 0, 0)"); // still carries the accent fill (not transparent)
 });
 
+// The entry screens' actions are full-width primary CTAs on a phone, so they hold the same 44px touch
+// minimum this app already enforces on permission buttons. Astryx's largest Button (size="lg") is 36px
+// — a considered size for the system, but below this app's floor — so viewer.css raises it. Measured on
+// the migrated (Astryx) control, because the whole point is that adopting a design system must not
+// quietly lower an accessibility standard the app already held: the md default rendered 32px.
+test("the entry CTA meets the 44px touch target", async ({ page }) => {
+  await page.goto(`/${qp}`);
+  const cta = page.getByRole("button", { name: "Connect" });
+  await expect(cta).toBeVisible();
+  const box = await cta.boundingBox();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+});
+
 // The keyboard focus ring must stay the BRIGHT accent (#7c7ef5 → rgb(124,126,245)). This is a live
 // regression risk rather than a hypothetical: what draws it is the global :focus-visible rule in
 // viewer.css, and every OTHER rule in that file is migration debt scheduled for deletion as its

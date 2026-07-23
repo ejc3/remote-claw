@@ -86,6 +86,23 @@ summary:focus-visible,
   place-items: center;
   padding: 24px;
 }
+/* The entry card (Connect / Pairing / the reconnect splash) floats on an otherwise empty page. Astryx's
+   Card has no elevation prop, and on this near-black palette a card surface sits only 1.14:1 above the
+   body — so without a shadow the screen reads as one flat slab with a button on it (which is exactly the
+   feedback it got). --shadow-high is Astryx's own token, so it tracks the theme rather than hard-coding
+   the drop shadow the hand-written .connect-card used to carry. */
+.connect .entry-card {
+  box-shadow: var(--shadow-high);
+}
+/* Touch target. Astryx's largest Button (size="lg") is 36px tall, which is the system's considered
+   size — but this app already holds itself to a 44px minimum on every touch control (see the
+   permission-button assertion in viewer-ux.spec.ts), and these are full-width primary actions on a
+   phone. So this is an app-level a11y POLICY on top of the system, not a disagreement with it: raise
+   the floor, change nothing else. Measured and guarded in viewer-ux.spec.ts. */
+.connect .astryx-button {
+  min-height: 44px;
+}
+
 /* The pairing screen's identity_id — the hex the human compares against the host's `--rc-pass` output
    before trusting the pass. Astryx's <Code> is an inline span; this promotes it to a block that wraps on
    ANY character, so a 32-byte hex can't overflow the card or be truncated into a false match. Written

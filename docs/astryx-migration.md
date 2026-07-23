@@ -266,6 +266,10 @@ silently replaced both halves.
 non-transparent fill* rather than a grey slab. That guard passed, because it asserts the treatment, not
 the hue. Only a screenshot showed it.
 
+| before — the generated accent | after — both halves pinned |
+| --- | --- |
+| ![Connect button rendered pale lavender with dark blue label](assets/astryx/accent-inversion-before.png) | ![Connect button rendered indigo with white label](assets/astryx/accent-inversion-after.png) |
+
 The fix is supported and documented ("explicit token overrides always take precedence over
 scale-generated values") — pin **both** halves, never just one:
 
@@ -316,6 +320,13 @@ other type properties". On a themed app it does nothing for any `type` the theme
 // computed: font-size: 12px   ← --text-supporting-size, i.e. `size` had no effect
 ```
 
+Left unnoticed it flattened the entry screen's type hierarchy — the sentence explaining what a pass *is*
+ended up the same size as the footnote under the button:
+
+| before — explanatory copy at footnote size | after — `type="body"` restores the hierarchy |
+| --- | --- |
+| ![card with intro copy and hint at the same 12px size](assets/astryx/type-hierarchy-before.png) | ![card with 14px intro copy above a 12px hint](assets/astryx/type-hierarchy-after.png) |
+
 The reason is cascade layers, not specificity. `astryx theme build` emits
 
 ```css
@@ -365,6 +376,31 @@ device is a phone on a hotel network, that is the one number we are watching. Pe
 
 ---
 
+## The design pass — what a component migration does NOT give you
+
+Composing the right components correctly still produced a screen that read, in the reviewer's words, as
+"poop with two highlights": one flat dark mass with exactly two bright spots. Every test was green and
+every component was the correct one. The problems were all in the SPACE between components, which no
+component owns:
+
+| before | after |
+| --- | --- |
+| ![entry card with no elevation, a 32px button and uniform gaps](assets/astryx/flat-slab-before.png) | ![entry card with elevation, a 44px button and grouped rhythm](assets/astryx/flat-slab-after.png) |
+
+Measured, not eyeballed (`tests/web/zoom/metrics.json`):
+
+| symptom | measurement | fix |
+| --- | --- | --- |
+| The card had no presence | card `#141417` vs page `#0a0a0b` = **1.14:1**, `box-shadow: none` | `--shadow-high` on the entry card. Astryx's Card has no elevation prop, and on a near-black palette a surface step alone is invisible. |
+| The primary CTA was small | **32px** tall (`size="md"`), under the 44px touch minimum | `size="lg"` (36px) plus an app-level `min-height: 44px` floor |
+| The stack read as undifferentiated | gaps `[12, 12, 12, 12]` — brand, headline, copy, field, button and hint all spaced identically | nested `VStack`s: **20px** between groups, **8px** within |
+
+The lesson we'd pass on: a design system gives you correct components and correct tokens. It does not
+give you **elevation choices, touch-target policy, or grouping rhythm** — those stay the app's job, and
+they are exactly what makes the difference between "the components are right" and "the screen is right".
+This is also why the harness measures geometry rather than only capturing pictures: "padding looks fine"
+is not a finding, but `padding: 8px 12px` on a 32px primary CTA is.
+
 ## Things we got wrong (not Astryx's fault, recorded so others don't repeat them)
 
 - **Our leftover global element resets silently restyled the design system's components.** The migration
@@ -376,6 +412,11 @@ device is a phone on a hotel network, that is the one number we are watching. Pe
   | --- | --- |
   | `button { font: inherit; cursor: pointer }` | `Button` rendered at 16px/400 instead of 14px/500 |
   | `code { font-size: 0.86em; … }` | `<Code>` rendered at **10.32px** with the wrong padding and radius |
+
+  | | before — our global rule winning | after — the component's own styling |
+  | --- | --- | --- |
+  | `Button` | ![button label rendered at 16px, weight 400](assets/astryx/reset-leak-button-before.png) | ![button label rendered at 14px, weight 500](assets/astryx/reset-leak-button-after.png) |
+  | `Code` | ![code chip rendered at 10.32px](assets/astryx/reset-leak-code-before.png) | ![code chip rendered at 14px](assets/astryx/reset-leak-code-after.png) |
 
   Both were already provided by Astryx's own reset — at zero specificity in `@layer reset`, exactly where
   a reset belongs — so ours were redundant *and* harmful. Nothing failed; the components simply looked
