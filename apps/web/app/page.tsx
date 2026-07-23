@@ -875,7 +875,11 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                     {harnessLabel(s.harness)}
                   </span>
                   {s.git && <GitChip git={s.git} />}
-                  {presenceWord(s, now, since)}
+                  {/* The presence word is a bare text segment like cwd, so it takes the same ` · `
+                      separator — otherwise it butts against the git chip's ahead count and "↑2 online"
+                      reads as one token ("2 online?"). The separator is dropped when there's no chip
+                      before it, so a session with no git context doesn't open with a stray dot. */}
+                  {`${s.git ? " · " : ""}${presenceWord(s, now, since)}`}
                   {s.cwd !== null ? ` · ${s.cwd}` : ""}
                 </span>
               </button>
