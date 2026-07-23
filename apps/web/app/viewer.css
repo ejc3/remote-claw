@@ -445,6 +445,11 @@ summary:focus-visible,
   font-size: 15px;
   padding: 6px 8px;
   min-height: 44px; /* ≥44px touch target — it's the primary mobile back-nav (#151) */
+  /* Never wrap or shrink. Without these the header's other items (badge, git chip) refused to give up
+     width, so "‹ Sessions" broke onto two lines AND pushed the session title — flex:1, min-width:0 — to
+     zero width, leaving a header that didn't say which session you were in. */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 /* The session ⋯ menu trigger — sits at the right of the mobile chat header (.row-title takes the slack). */
 .chat-menu {
@@ -914,11 +919,16 @@ summary:focus-visible,
   display: flex;
   gap: 8px;
   margin: 10px 0 0 24px;
+  /* Wrap the ROW, never a label. On a phone "Submit answers" and "Skip / answer in chat" don't fit
+     side by side, and sizing to content made the PRIMARY action the narrow one that broke onto two
+     lines while the secondary stayed on one — inverting their apparent weight. */
+  flex-wrap: wrap;
 }
 .perm-btn {
   border: 1px solid var(--line);
   border-radius: 9px;
   padding: 7px 16px;
+  white-space: nowrap;
   /* A 44px hit target for an irreversible grant/deny on mobile (#design-pass perm/touch-targets). */
   min-height: 44px;
   font-size: 13.5px;
@@ -1517,6 +1527,18 @@ summary:focus-visible,
   }
   .panes[data-view="list"] .chat {
     display: none;
+  }
+  /* Drop the git chip from the CHAT header on a phone. Back-nav + harness badge + branch + ⋯ overflow a
+     393px header, and the item that lost was the session TITLE (flex:1, min-width:0 → zero width), so
+     the header stopped saying which session you were looking at. The branch is not lost: the session
+     list row still shows it, and the ⋯ sheet offers "Copy branch". Same reasoning as hiding the back
+     button on desktop — drop the redundant item, keep the identifying one. */
+  .chat-head .git-chip {
+    display: none;
+  }
+  /* Give the title a real floor so it ellipsises instead of collapsing if the header is still tight. */
+  .chat-head .row-title {
+    min-width: 4rem;
   }
 }
 

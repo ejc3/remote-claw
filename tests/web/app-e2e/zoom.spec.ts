@@ -32,9 +32,16 @@ async function shot(page: import("@playwright/test").Page, name: string, sel: st
   ensure();
   const el = page.locator(sel).first();
   await expect(el).toBeVisible();
+  // Scroll it into view FIRST. A region above the fold has a negative y, and clamping that to 0 silently
+  // crops the top of the page instead — which is how an early run produced a "question option" image
+  // showing the topbar. Assert it landed, so a crop can never quietly capture the wrong thing.
+  await el.scrollIntoViewIfNeeded();
   const b = await el.boundingBox();
   if (b === null) throw new Error(`no box for ${sel}`);
   const vp = page.viewportSize() ?? { width: 393, height: 851 };
+  if (b.y < 0 || b.y > vp.height) {
+    throw new Error(`${sel} is off-screen after scrollIntoView (y=${b.y}) — the crop would be wrong`);
+  }
   await page.screenshot({
     path: `${OUT}/${name}.png`,
     clip: {
