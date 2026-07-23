@@ -37,6 +37,22 @@ export const remoteClawTheme = defineTheme({
   },
 
   tokens: {
+    // ---- the accent FILL: pinned, overriding what the accent scale derives ----
+    // The scale above generates `--color-accent: light-dark(#424BDA, #CBBEFF)` — i.e. in dark mode it
+    // INVERTS the accent into a pale lavender surface carrying dark text (`--color-on-accent: #001F9C`).
+    // That's a coherent convention, but it isn't this product: remote-claw's primary action is a solid
+    // indigo fill with white text, and that specific pair was measured at 5.38:1 (the older #6366f1 was
+    // 4.47 — sub-AA). A screenshot caught the flip; no test did, because our design guard asserts the
+    // disabled treatment (dimmed, non-transparent) rather than the hue.
+    //
+    // Pinning BOTH halves is the supported escape hatch ("explicit token overrides always take
+    // precedence over scale-generated values") and specifically avoids the trap `astryx docs migration`
+    // warns about — hand-writing `--color-accent` alone would leave `--color-on-accent` at a derived
+    // value chosen for a completely different background. `--color-accent-muted` is derived from
+    // `--color-accent` via color-mix(), so it follows automatically.
+    "--color-accent": ["#5457e8", "#5457e8"],
+    "--color-on-accent": ["#ffffff", "#ffffff"],
+
     // ---- surfaces: the near-black console stack (bg → surface → raised) ----
     "--color-background-body": ["#f4f5f8", "#0a0a0b"],
     "--color-background-surface": ["#ffffff", "#141417"],

@@ -1,5 +1,14 @@
 "use client";
 
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Code } from "@astryxdesign/core/Code";
+import { Heading } from "@astryxdesign/core/Heading";
+import { Spinner } from "@astryxdesign/core/Spinner";
+import { Text } from "@astryxdesign/core/Text";
+import { TextArea } from "@astryxdesign/core/TextArea";
+import { VStack } from "@astryxdesign/core/VStack";
 import { parsePass, toHex } from "@remote-claw/clawsec";
 import {
   type CSSProperties,
@@ -354,11 +363,25 @@ export function entryFromFragment(
 export function Reconnecting() {
   return (
     <main className="connect">
-      <div className="connect-card">
+      <EntryCard>
         <Brand />
-        <p className="muted">Connecting…</p>
-      </div>
+        {/* Spinner's `label` renders as visible text under it, so the splash still literally says
+            "Connecting…" (SSR-asserted in restore-on-load.test.ts) and now also announces it. */}
+        <Spinner label="Connecting…" />
+      </EntryCard>
     </main>
+  );
+}
+
+/** The shared shell of the three entry screens (Reconnecting / Connect / Pairing): one centred Astryx
+ *  Card with a consistent vertical rhythm. `.connect` around it is the only hand-written piece left —
+ *  it does the 100dvh viewport centring, which is page-frame layout rather than anything a component
+ *  covers. */
+function EntryCard({ children }: { children: ReactNode }) {
+  return (
+    <Card className="connect-card" width="100%" maxWidth={460} padding={6}>
+      <VStack gap={3}>{children}</VStack>
+    </Card>
   );
 }
 
@@ -381,38 +404,46 @@ export function Connect(props: {
   const disabled = props.connecting || props.pass.trim() === "";
   return (
     <main className="connect">
-      <div className="connect-card">
+      <EntryCard>
         <Brand />
-        <h1>Drive your claude, remotely.</h1>
-        <p className="muted">
-          Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
-          encrypted.
-        </p>
-        {/* The page's sole input — autofocus so a pasted pass lands immediately (#design-pass). */}
-        <textarea
-          className="field"
+        <VStack gap={1}>
+          <Heading level={1}>Drive your claude, remotely.</Heading>
+          <Text type="supporting" as="p">
+            Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
+            encrypted.
+          </Text>
+        </VStack>
+        {/* The page's sole input. The label is hidden but real (it was an aria-label before), and
+            hasAutoFocus lands a pasted pass immediately (#design-pass) — a dedicated single-field gate
+            is the canonical autofocus case. TextArea's own ≥16px font size keeps iOS from auto-zooming
+            on focus, which is why we can leave pinch-zoom enabled (see layout.tsx's viewport note). */}
+        <TextArea
+          label="Machine pass"
+          isLabelHidden
           value={props.pass}
-          onChange={(e) => props.setPass(e.target.value)}
-          aria-label="Machine pass"
+          onChange={props.setPass}
           placeholder="rcp1_…"
-          spellCheck={false}
           rows={2}
-          // biome-ignore lint/a11y/noAutofocus: a dedicated single-field gate is the canonical autofocus case
-          autoFocus
+          hasSpellCheck={false}
+          hasAutoFocus
         />
-        <button
-          type="button"
-          className="btn btn-block"
-          disabled={disabled}
+        {/* isLoading (spinner + aria-busy + non-interactive) replaces swapping the label to
+            "Connecting…" — the accessible name stays stable while the state is announced. */}
+        <Button
+          label="Connect"
+          variant="primary"
+          width="100%"
+          isLoading={props.connecting}
+          isDisabled={disabled}
           onClick={() => props.connect(props.pass)}
-        >
-          {props.connecting ? "Connecting…" : "Connect"}
-        </button>
-        {props.error !== null && <p className="error">Couldn’t load that pass: {props.error}</p>}
-        <p className="hint">
-          Get one with <code>remote-claw --rc-pass</code> on the machine.
-        </p>
-      </div>
+        />
+        {props.error !== null && (
+          <Banner status="error" title={`Couldn’t load that pass: ${props.error}`} />
+        )}
+        <Text type="supporting" as="p" size="xsm">
+          Get one with <Code>remote-claw --rc-pass</Code> on the machine.
+        </Text>
+      </EntryCard>
     </main>
   );
 }
@@ -450,42 +481,54 @@ export function Pairing(props: {
 
   return (
     <main className="connect">
-      <div className="connect-card">
+      <EntryCard>
         <Brand />
-        <h1>Pair this device</h1>
+        <Heading level={1}>Pair this device</Heading>
         {revealed === null ? (
           <>
-            <p className="muted">
+            <Text type="supporting" as="p">
               A <strong>one-time</strong> pairing link — claim it on this device. The key never
               leaves your browser.
-            </p>
-            <button type="button" className="btn btn-block" disabled={busy} onClick={reveal}>
-              {busy ? "Pairing…" : "Pair this device"}
-            </button>
-            {error !== null && <p className="error">{error}</p>}
-            <button type="button" className="btn-link" onClick={props.onCancel}>
-              Enter a pass manually instead
-            </button>
+            </Text>
+            <Button
+              label="Pair this device"
+              variant="primary"
+              width="100%"
+              isLoading={busy}
+              isDisabled={busy}
+              onClick={reveal}
+            />
+            {error !== null && <Banner status="error" title={error} />}
+            {/* Deliberately a GHOST button, not a second primary: the manual path is the quiet
+                alternative to the one-time link, and two filled buttons would read as equal weight. */}
+            <Button
+              label="Enter a pass manually instead"
+              variant="ghost"
+              width="100%"
+              onClick={props.onCancel}
+            />
           </>
         ) : (
           <>
-            <p className="muted">
-              Confirm this matches the <code>identity_id</code> from{" "}
-              <code>remote-claw --rc-pass</code>:
-            </p>
-            <code className="field" style={{ wordBreak: "break-all", display: "block" }}>
+            <Text type="supporting" as="p">
+              Confirm this matches the <Code>identity_id</Code> from{" "}
+              <Code>remote-claw --rc-pass</Code>:
+            </Text>
+            {/* The identity hex is the security-critical comparison the human makes against the
+                host's `--rc-pass` output, so it gets its own block treatment (wrapping on any
+                character) rather than an inline code span. */}
+            <Code className="identity-hex" data-testid="identity-hex">
               {revealed.idHex}
-            </code>
-            <button
-              type="button"
-              className="btn btn-block"
+            </Code>
+            <Button
+              label="Connect"
+              variant="primary"
+              width="100%"
               onClick={() => props.onConnect(revealed.pass)}
-            >
-              Connect
-            </button>
+            />
           </>
         )}
-      </div>
+      </EntryCard>
     </main>
   );
 }

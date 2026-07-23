@@ -11,7 +11,7 @@ const qp = BACKEND ? `?backend=${BACKEND}` : "";
 // without a click. Caught in the pass: every connect started with an extra tab/click into the field.
 test("the connect gate autofocuses its pass field", async ({ page }) => {
   await page.goto(`/${qp}`);
-  await expect(page.locator("textarea.field")).toBeFocused();
+  await expect(page.getByLabel("Machine pass")).toBeFocused();
 });
 
 // #design-pass: the disabled primary CTA used to render as a dead grey slab indistinguishable from a
@@ -88,7 +88,7 @@ test("Forget pass is a two-step confirm — one tap arms without dropping the se
   await confirm.click(); // second tap forgets
 
   // Now the credential is wiped and we land back on the connect gate.
-  await expect(page.locator("textarea.field")).toBeVisible();
+  await expect(page.getByLabel("Machine pass")).toBeVisible();
 });
 
 // #design-pass (review follow-up): the transcript must FOLLOW to the foot when the reader is pinned there
@@ -161,7 +161,7 @@ test.describe("mobile a11y (#151)", () => {
   test("the connect field is ≥16px (no iOS focus auto-zoom)", async ({ page }) => {
     await page.goto(`/${qp}`);
     const fs = await page
-      .locator("textarea.field")
+      .getByLabel("Machine pass")
       .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(fs).toBeGreaterThanOrEqual(16);
   });

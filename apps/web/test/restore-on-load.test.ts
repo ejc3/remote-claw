@@ -8,6 +8,17 @@ import Home, { Connect, entryFromFragment, Pairing } from "../app/page.js";
 // and the initial render (the splash), so a returning user never sees the pass form on reload. (Named
 // for what it tests — load-time credential restore — not "reconnect", which is the network-stream
 // re-subscribe exercised by the browser revive spec in tests/web/app-e2e/revive.spec.ts.)
+/** The opening `<button …>` tag that encloses `text` in a static-markup string. Lets an assertion talk
+ *  about "the button labelled X" without a DOM. Astryx's Button renders its label inside a nested
+ *  <span>, so this deliberately walks out to the nearest enclosing <button, not the immediate parent. */
+function enclosingButtonTag(html: string, text: string): string {
+  const at = html.indexOf(text);
+  if (at < 0) return "";
+  const open = html.lastIndexOf("<button", at);
+  if (open < 0) return "";
+  return html.slice(open, html.indexOf(">", open) + 1);
+}
+
 describe("entryFromFragment (load-time routing)", () => {
   it("classifies a legacy bare pass", () => {
     expect(entryFromFragment("rcp1_ABC")).toEqual({ kind: "pass", value: "rcp1_ABC" });
@@ -39,8 +50,14 @@ describe("Pairing screen (decluttered)", () => {
     );
     expect(html).toContain("Pair this device");
     expect(html).toContain("one-time");
-    expect(html).toContain('class="btn-link"'); // the manual-entry is the quiet link, not a primary .btn
     expect(html).toContain("Enter a pass manually instead");
+    // The manual-entry affordance stays the QUIET one — it must not become a second filled button
+    // competing with "Pair this device". Astryx reflects a Button's variant as `data-variant` (its
+    // documented selector surface), so assert that instead of the hand-written `.btn-link` class the
+    // component replaced: the <button> wrapping this label is ghost, not primary.
+    const manual = enclosingButtonTag(html, "Enter a pass manually instead");
+    expect(manual).toContain('data-variant="ghost"');
+    expect(manual).not.toContain('data-variant="primary"');
     expect(html).not.toContain("It can be claimed once and expires shortly"); // verbose copy trimmed
   });
 });
