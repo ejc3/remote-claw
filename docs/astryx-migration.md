@@ -26,6 +26,7 @@ hit, with the evidence that proves it, not an impression. Findings are added as 
 | Transcript (messages, tool rows, prose) | Next | `ChatMessageList` `ChatMessage` `ChatMessageBubble` `ChatSystemMessage` `ChatToolCalls` `Markdown` `CodeBlock` `Collapsible` |
 | Composer controls | **Done** | `Button` `IconButton` (Send / Mode / attach) |
 | Composer input | **Stays hand-written** | see finding I — `ChatComposerInput` isn't a faithful host |
+| Permission / question buttons | **Done** | `Button` (Allow / Deny / Submit / Skip) + semantic tint |
 | Bottom sheets / dropdowns | Planned | `Dialog` `Popover` `RadioList` |
 | Session list + app frame | Planned | `AppShell` `Layout` `LayoutPanel` `List` `Item` `StatusDot` `Badge` |
 
@@ -367,7 +368,25 @@ without the contentEditable assumptions (today the shell's click-to-focus and su
 default input), or expose an `onKeyDown` / `shouldSubmitOnEnter` hook on `ChatComposerInput`. Until then,
 the honest move is what we did: migrate the buttons, keep the input.
 
-### J. Small surprises worth a line in the docs
+### J. `Button` has a `destructive` variant but no constructive/success counterpart
+
+Migrating our permission grant/deny buttons, we hit a semantic gap. `Button`'s variants are
+`primary | secondary | ghost | destructive`. `destructive` gives a red-tinted button for a dangerous
+action — but there is no green/constructive mirror for its opposite. Our permission card colors **Allow**
+green and **Deny** neutral-with-red-hover: a deliberate security-UX signal for an irreversible grant, and
+a common pattern (approve = green, reject = red).
+
+We could make Allow a `primary` (indigo) Button, but that changes the meaning-color to a brand-color, and
+`primary` reads as "the main action" rather than "the safe/affirmative one". So we kept the green/red as a
+small semantic tint (`.perm-allow` / `.perm-deny`) layered over Astryx `secondary` Buttons — the chrome
+(focus ring, press, disabled a11y, the 44px floor) comes from Astryx; only the meaning-color is app CSS.
+
+**Suggested fix:** a `constructive` (or `success`) Button variant to mirror `destructive`, drawing from
+the `--color-success` family the theme already defines. Approve/reject, accept/decline and
+confirm/cancel are common enough that a system with `destructive` but no affirmative counterpart pushes
+every consumer to either recolor `secondary` by hand (what we did) or misuse `primary`.
+
+### K. Small surprises worth a line in the docs
 
 - **`Button` renders its label inside a nested `<span>`.** Reasonable, but it means a test that walks
   from a label up to "the element that renders it" lands on the span, not the button. Anything asserting
@@ -382,7 +401,7 @@ the honest move is what we did: migrate the buttons, keep the input.
   translation for `<textarea aria-label="…">`, since it changes how tests select the field
   (`getByLabel` rather than a class).
 
-### K. Minor CLI papercuts
+### L. Minor CLI papercuts
 
 - `astryx docs --list` errors with `unknown option '--list'`, even though bare `astryx docs` prints exactly
   that list and `astryx component --list` / `astryx template --list` both exist. The inconsistency sent us
@@ -392,7 +411,7 @@ the honest move is what we did: migrate the buttons, keep the input.
 - `@astryxdesign/cli` declares `@astryxdesign/lab` and `@astryxdesign/charts` as peer dependencies. Neither
   is mentioned in the docs and pnpm warns about both on install.
 
-### L. Weight, for awareness rather than complaint
+### M. Weight, for awareness rather than complaint
 
 `@astryxdesign/core@0.1.8` unpacks to **15.5 MB across 2 440 files**, and `dist/astryx.css` is **127 KB**
 uncompressed and loaded in full regardless of which components a page uses. For a viewer whose primary
