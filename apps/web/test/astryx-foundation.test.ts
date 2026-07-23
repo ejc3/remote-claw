@@ -53,7 +53,14 @@ describe("astryx foundation build output", () => {
 /** Split a stylesheet into its top-level `@layer NAME { … }` blocks by brace matching, and return what
  *  is left over once they are removed. `rest` is the load-bearing half: any rule that survives there is
  *  UNLAYERED, and unlayered CSS beats every cascade layer regardless of specificity. Sampling a few
- *  class names instead (the first version of this test) proves nothing about the rules it didn't name. */
+ *  class names instead (the first version of this test) proves nothing about the rules it didn't name.
+ *
+ *  The brace count is deliberately naive — it does not skip `{`/`}` inside a string or `url()`. Verified
+ *  safe two ways: the shipped CSS today contains ZERO braces inside any string/url token (a real
+ *  tokenizer walk confirms it), so the count is exact; and even if a future surface introduced a
+ *  `content: "{"`, a mis-split can only close a layer block EARLY, dumping the real CSS after it into
+ *  `rest` — which turns the "no unlayered rules" assertion RED. It fails CLOSED. Do not "harden" this
+ *  into a string-aware parser that could instead swallow a stray rule and fail open. */
 function splitLayers(css: string): { blocks: { name: string; body: string }[]; rest: string } {
   const blocks: { name: string; body: string }[] = [];
   let rest = "";
