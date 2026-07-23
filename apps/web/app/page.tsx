@@ -408,7 +408,10 @@ export function Connect(props: {
         <Brand />
         <VStack gap={1}>
           <Heading level={1}>Drive your claude, remotely.</Heading>
-          <Text type="supporting" as="p">
+          {/* `body` + secondary, NOT `supporting`: this is the screen's explanatory copy and needs to
+              outrank the --rc-pass hint below it. Both were `supporting` at first, which silently
+              flattened a deliberate 14px/12.5px hierarchy to a uniform 12px. */}
+          <Text type="body" color="secondary" as="p">
             Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
             encrypted.
           </Text>
@@ -440,7 +443,12 @@ export function Connect(props: {
         {props.error !== null && (
           <Banner status="error" title={`Couldn’t load that pass: ${props.error}`} />
         )}
-        <Text type="supporting" as="p" size="xsm">
+        {/* No `size` prop here: it is silently INERT on a Text whose `type` the theme styles. The
+            theme's generated `.astryx-text.supporting { font-size: var(--text-supporting-size) }` lands
+            in @layer astryx-theme, which outranks the size class in @layer astryx-base — the `xsm`
+            class is emitted onto the element and changes nothing. `supporting` alone is the 12px this
+            wanted anyway. */}
+        <Text type="supporting" as="p">
           Get one with <Code>remote-claw --rc-pass</Code> on the machine.
         </Text>
       </EntryCard>
@@ -486,7 +494,7 @@ export function Pairing(props: {
         <Heading level={1}>Pair this device</Heading>
         {revealed === null ? (
           <>
-            <Text type="supporting" as="p">
+            <Text type="body" color="secondary" as="p">
               A <strong>one-time</strong> pairing link — claim it on this device. The key never
               leaves your browser.
             </Text>
@@ -510,7 +518,7 @@ export function Pairing(props: {
           </>
         ) : (
           <>
-            <Text type="supporting" as="p">
+            <Text type="body" color="secondary" as="p">
               Confirm this matches the <Code>identity_id</Code> from{" "}
               <Code>remote-claw --rc-pass</Code>:
             </Text>

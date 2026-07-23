@@ -77,7 +77,12 @@ webfont would fail only on a real device. We now assert it in a test.
 "Messaging / feed → rows and bubbles, no cards in the stream" matched the layout we had already arrived
 at independently, which raised our confidence that adopting the system wouldn't fight the product.
 
-**9. Three of our hand-tuned design/a11y assertions passed against Astryx components unchanged.**
+**9. `TextArea`'s iOS auto-zoom guard is pointer-aware, which is better than what we had.**
+Astryx ships `@media (pointer: coarse) { font-size: max(1rem, var(--text-body-size)) }`. Our own rule
+pinned the field to 16px unconditionally, which is heavier than it needs to be on a desktop. Same
+protection where it matters (iOS only auto-zooms a sub-16px field), denser everywhere else.
+
+**10. Three of our hand-tuned design/a11y assertions passed against Astryx components unchanged.**
 This is the strongest evidence we have that the defaults are considered. All three were written as
 regression guards against real bugs we had shipped, and all three still pass with the hand-written CSS
 deleted:
@@ -283,7 +288,33 @@ migration".
 need a fill and a ring to differ (any dark theme with a saturated brand colour) could then set it,
 instead of overriding component styles or re-declaring the rule outside the system.
 
-### H. Small surprises worth a line in the docs
+### H. `<Text size>` is silently inert whenever the theme styles that `type`
+
+`Text` documents `size` as an "explicit font size override… overrides the size from `type` but preserves
+other type properties". On a themed app it does nothing for any `type` the theme emits a rule for:
+
+```tsx
+<Text type="supporting" size="xsm">…</Text>
+// rendered: class="astryx-text supporting xsm secondary …"
+// computed: font-size: 12px   ← --text-supporting-size, i.e. `size` had no effect
+```
+
+The reason is cascade layers, not specificity. `astryx theme build` emits
+
+```css
+@layer astryx-theme { .astryx-text.supporting { font-size: var(--text-supporting-size) } }
+```
+
+while the `xsm` size class lives in `@layer astryx-base`. A later layer wins regardless of specificity,
+so the theme rule beats the size class every time. The `xsm` class is still on the element, which makes
+this look like it worked. We only found it by measuring `getComputedStyle` during review; it had already
+flattened a deliberate 14px/12.5px hierarchy into a uniform 12px on our entry screen.
+
+**Suggested fix:** emit the size classes into `astryx-theme` too (or into a layer after it), or have
+`size` set a custom property the theme rule reads (`font-size: var(--text-size-override, var(--text-…-size))`).
+Failing that, document that `size` and a themed `type` don't compose.
+
+### I. Small surprises worth a line in the docs
 
 - **`Button` renders its label inside a nested `<span>`.** Reasonable, but it means a test that walks
   from a label up to "the element that renders it" lands on the span, not the button. Anything asserting
@@ -298,7 +329,7 @@ instead of overriding component styles or re-declaring the rule outside the syst
   translation for `<textarea aria-label="…">`, since it changes how tests select the field
   (`getByLabel` rather than a class).
 
-### I. Minor CLI papercuts
+### J. Minor CLI papercuts
 
 - `astryx docs --list` errors with `unknown option '--list'`, even though bare `astryx docs` prints exactly
   that list and `astryx component --list` / `astryx template --list` both exist. The inconsistency sent us
@@ -308,7 +339,7 @@ instead of overriding component styles or re-declaring the rule outside the syst
 - `@astryxdesign/cli` declares `@astryxdesign/lab` and `@astryxdesign/charts` as peer dependencies. Neither
   is mentioned in the docs and pnpm warns about both on install.
 
-### J. Weight, for awareness rather than complaint
+### K. Weight, for awareness rather than complaint
 
 `@astryxdesign/core@0.1.8` unpacks to **15.5 MB across 2 440 files**, and `dist/astryx.css` is **127 KB**
 uncompressed and loaded in full regardless of which components a page uses. For a viewer whose primary
