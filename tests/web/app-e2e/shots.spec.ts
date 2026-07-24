@@ -14,6 +14,20 @@ import { expect, test } from "./fixtures";
 // would have the desktop run silently overwrite the phone run's file.
 const OUT = () => `shots/${test.info().project.name}`;
 
+/** Wait for the bottom-sheet's slide-up + scrim-fade animations to finish before capturing — otherwise
+ *  the shot catches a mid-animation frame (transparent scrim, transcript bleeding through), which makes
+ *  the artifact useless for review. */
+async function settleSheet(page: import("@playwright/test").Page) {
+  await expect(page.locator('[role="dialog"]')).toBeVisible();
+  await page.waitForFunction(() => {
+    const scrim = document.querySelector(".sheet-scrim") as HTMLElement | null;
+    const sheet = document.querySelector(".sheet") as HTMLElement | null;
+    if (!scrim || !sheet) return false;
+    return scrim.getAnimations().every((a) => a.playState !== "running")
+      && sheet.getAnimations().every((a) => a.playState !== "running");
+  });
+}
+
 async function connect(page: import("@playwright/test").Page, pass: string) {
   await page.goto(`/#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
@@ -81,12 +95,12 @@ test("composer: staged state + mode sheet + session sheet", async ({ page, seedH
   await page.locator("form.composer").screenshot({ path: `${OUT()}/08-composer.png` });
 
   await page.getByTestId("composer-mode").click();
-  await expect(page.locator('[role="dialog"]')).toBeVisible();
+  await settleSheet(page);
   await page.screenshot({ path: `${OUT()}/09-mode-sheet.png` });
   await page.keyboard.press("Escape");
 
   await page.locator("button.chat-menu").click();
-  await expect(page.locator('[role="dialog"]')).toBeVisible();
+  await settleSheet(page);
   await page.screenshot({ path: `${OUT()}/10-session-sheet.png` });
 });
 

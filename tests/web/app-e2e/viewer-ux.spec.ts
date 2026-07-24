@@ -311,7 +311,7 @@ test("an open sheet's scrim covers the whole transcript region (the real scroll 
   // Sample the transcript's own rectangle; every point must resolve to the scrim (or the sheet), never
   // an element inside .transcript.
   const b = box!;
-  const pts = [
+  const pts: Array<[number, number]> = [
     [b.x + b.width / 2, b.y + 8],
     [b.x + b.width / 2, b.y + b.height / 2],
     [b.x + b.width / 2, b.y + b.height - 8],

@@ -195,7 +195,12 @@ test("mode sheet", async ({ page, seedHost }) => {
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row").click();
   await page.getByTestId("composer-mode").click();
+  // Wait for the sheet's slide + scrim animations to settle so the crop isn't a mid-animation frame.
   await expect(page.locator('[role="dialog"]')).toBeVisible();
+  await page.waitForFunction(() => {
+    const els = [document.querySelector(".sheet-scrim"), document.querySelector(".sheet")];
+    return els.every((el) => el && (el as HTMLElement).getAnimations().every((a) => a.playState !== "running"));
+  });
   await shot(page, "30-mode-sheet", '[role="dialog"]');
   await shot(page, "31-mode-row", ".mode-row");
   const sheet = await geometry(page, '[role="dialog"]');
