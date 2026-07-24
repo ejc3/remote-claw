@@ -521,10 +521,20 @@ summary:focus-visible,
 }
 
 /* ASSISTANT prose — full width, no bubble; serif body to read as a document. Rendered as GitHub-
- * Flavored Markdown (react-markdown), so block elements carry their own spacing — no `white-space:
- * pre-wrap` (which would double the markdown's own line breaks). */
+ * Flavored Markdown (Astryx's <Markdown>), so block elements carry their own spacing — no `white-space:
+ * pre-wrap` (which would double the markdown's own line breaks).
+ *
+ * The serif family/size/line-height here is the transcript's identity and INHERITS into every element
+ * Astryx renders, so the document look survives the component swap. Block spacing, table chrome and code
+ * blocks are the component's now — we deleted the `.prose p/ul/table/pre/...` rules that used to do that,
+ * because in @layer remote-claw (declared last) they would have overridden it. */
 .prose {
-  font-family: Georgia, "Times New Roman", ui-serif, serif;
+  /* Scope the design system's OWN body-font token to this region instead of overriding font-family on
+     the component. Astryx's markdown elements resolve `font-family: var(--font-family-body)`, so
+     redefining the token here makes the serif flow through the system rather than fight it — a direct
+     `font-family` on .prose would lose anyway, because a rule on the child beats inheritance. */
+  --font-family-body: Georgia, "Times New Roman", ui-serif, serif;
+  font-family: var(--font-family-body);
   font-size: 16.5px;
   line-height: 1.62;
   word-break: break-word;
@@ -541,73 +551,14 @@ summary:focus-visible,
 .prose > :last-child {
   margin-bottom: 0;
 }
-.prose p {
-  margin: 0 0 12px;
-}
-.prose ul,
-.prose ol {
-  margin: 0 0 12px;
-  padding-left: 22px;
-}
-.prose li {
-  margin: 2px 0;
-}
-.prose h1,
-.prose h2,
-.prose h3,
-.prose h4 {
-  font-weight: 600;
-  line-height: 1.3;
-  margin: 16px 0 8px;
-}
-.prose h1 {
-  font-size: 1.35em;
-}
-.prose h2 {
-  font-size: 1.2em;
-}
-.prose h3 {
-  font-size: 1.06em;
-}
-.prose blockquote {
-  margin: 0 0 12px;
-  padding-left: 12px;
-  border-left: 3px solid var(--line-soft);
-  color: var(--text-dim);
-}
-.prose hr {
-  border: 0;
-  border-top: 1px solid var(--line-soft);
-  margin: 14px 0;
-}
+/* Links inside the transcript. KEPT deliberately: --accent-text (#7c7ef5) clears AA on this dark
+   background (5.7 on bg / 5.2 on surface) where the button-fill --accent (#5457e8) only reaches 3.6:1.
+   Astryx's own link colour isn't tuned for this palette, so the contrast rule stays ours. */
 .prose a {
-  /* --accent-text, not --accent: links are text on the dark transcript, where the button-fill --accent
-     (#5457e8) only reaches 3.6:1. --accent-text (#7c7ef5) clears AA (5.7 on bg / 5.2 on surface). */
   color: var(--accent-text, #7c7ef5);
   text-decoration: underline;
 }
-/* GFM tables — bordered, and horizontally scrollable on a narrow phone (the live trigger for this). */
-.prose table {
-  display: block;
-  width: max-content;
-  max-width: 100%;
-  overflow-x: auto;
-  border-collapse: collapse;
-  margin: 4px 0 14px;
-  font-family: system-ui, sans-serif;
-  font-size: 0.9em;
-}
-.prose th,
-.prose td {
-  border: 1px solid var(--line-soft);
-  padding: 6px 10px;
-  text-align: left;
-  vertical-align: top;
-}
-.prose th {
-  background: var(--code-bg);
-  font-weight: 600;
-}
+
 /* Inline code (markdown `code`) — but NOT inside a fenced block, where the <pre> owns the styling. */
 .inline-code,
 .prose :not(pre) > code {

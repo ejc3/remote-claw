@@ -6,6 +6,7 @@ import { Card } from "@astryxdesign/core/Card";
 import { Code } from "@astryxdesign/core/Code";
 import { Heading } from "@astryxdesign/core/Heading";
 import { IconButton } from "@astryxdesign/core/IconButton";
+import { Markdown } from "@astryxdesign/core/Markdown";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
@@ -22,8 +23,6 @@ import {
   useRef,
   useState,
 } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { clearCredential, loadCredential, saveCredential } from "./lib/credential-store";
 import { claimHandoff } from "./lib/handoff-claim";
 import { friendlySendError } from "./lib/send-error";
@@ -1374,7 +1373,13 @@ function Transcript(props: {
       <div className="chat-head">
         {/* `.back` keeps only its layout: flex-shrink:0 + nowrap (so it can't push the session title to
             zero width) and the hidden-on-desktop rule. Chrome is the ghost Button. */}
-        <Button className="back" variant="ghost" size="sm" label="‹ Sessions" onClick={props.onBack} />
+        <Button
+          className="back"
+          variant="ghost"
+          size="sm"
+          label="‹ Sessions"
+          onClick={props.onBack}
+        />
         <span className="row-title">{props.title}</span>
         <span className="agent-badge" data-agent={announce?.harness?.agent ?? "claude-code"}>
           {harnessLabel(announce?.harness)}
@@ -2586,9 +2591,11 @@ function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
 /**
  * Render assistant prose as GitHub-Flavored Markdown — tables, lists, headings, fenced code, bold,
  * inline code, links (the old hand-rolled renderer only did **bold** + `code`, so a model's table came
- * out as raw `| … |` pipes). CSP-safe: react-markdown emits React ELEMENTS, never raw HTML — there is no
- * `dangerouslySetInnerHTML` and `rehype-raw` is NOT enabled, so a model can't inject markup. Links open
- * in a new tab with `noopener` so a transcript link can't navigate the viewer away or reach `window.opener`.
+ * out as raw `| … |` pipes). CSP-safe: Astryx's <Markdown> emits React ELEMENTS, never raw HTML — it has
+ * no `dangerouslySetInnerHTML` and no raw-HTML path, so model output (which is UNTRUSTED) is escaped to
+ * text; and it applies `target="_blank" rel="noopener noreferrer"` itself, so a transcript link can't
+ * navigate the viewer away or reach `window.opener`. Both properties are pinned by
+ * test/prose-markdown.test.ts, which is what proved the react-markdown → Astryx swap faithful.
  *
  * memo'd: a transcript message is immutable once appended (deduped by msgId), but the Console re-renders
  * every 5s to age presence — without memo that would re-parse EVERY message's markdown on each tick.
@@ -2596,16 +2603,12 @@ function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
 export const Prose = memo(function Prose({ text, className }: { text: string; className: string }) {
   return (
     <div className={`prose ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a({ node: _node, ...props }) {
-            return <a {...props} target="_blank" rel="noopener noreferrer" />;
-          },
-        }}
-      >
+      {/* `autolink="gfm"` preserves the bare-URL linking remark-gfm gave us. `contentWidth="100%"` defers
+          to the transcript's own reading column — Astryx defaults to a 680px prose cap, which would
+          double-constrain inside our already-capped column. */}
+      <Markdown autolink="gfm" contentWidth="100%">
         {text}
-      </ReactMarkdown>
+      </Markdown>
     </div>
   );
 });
