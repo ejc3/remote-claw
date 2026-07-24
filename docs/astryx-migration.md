@@ -17,11 +17,13 @@ hit, with the evidence that proves it, not an impression. Findings are added as 
 
 ---
 
-## Status — migration complete
+## Status
 
-Every surface is either **on Astryx** or **deliberately kept**, with the reason recorded. "Kept" here
-never means "not got to": each one is a component that doesn't faithfully host the behaviour or design,
-and each has a finding below plus a suggested upstream seam.
+**A note on an earlier overclaim:** a previous revision called the migration "complete" after the
+buttons, prose and dot. That was premature — a whole class of surfaces hadn't been assessed, and the
+sheet/session rows were written off as "bespoke" without the work. Every remaining surface has since been
+assessed against the SHIPPED package source (not the docs); the results are the KEEP table in finding M
+and the `Dialog` work in finding N. Every "Kept" below names a specific blocking fact.
 
 | Surface | State | Detail |
 | --- | --- | --- |
@@ -32,10 +34,13 @@ and each has a finding below plus a suggested upstream seam.
 | Chrome actions (Forget, back, ⋯, jump, retries, dismiss, remove) | **Astryx** | `Button` `IconButton`; armed Forget → `destructive` |
 | Transcript prose | **Astryx** | `Markdown` — replaced `react-markdown` + `remark-gfm` |
 | Session connection dot | **Astryx** | `StatusDot` (`variant` + `isPulsing`) |
+| Error banners (broker-unreachable, send-failed) | **Astryx** | `Banner` (`status` → `role`, real dismiss) |
+| "needs you" session badge | **Astryx** | `Badge` (`variant="warning"`) |
 | Composer text input | **Kept** | finding I — `ChatComposerInput` hard-codes Enter→send |
 | Question answer options | **Kept** | finding J — `SelectableCard` is a padded card, not a compact toggle |
 | Transcript message rows | **Kept** | finding K — the transcript is an asymmetric document, not symmetric chat |
-| Sheet rows, session row, modal scrim | **Kept** | bespoke layout/behaviour; no component models them |
+| Bottom-sheet SHELL (scrim/focus-trap/scroll-lock) | **Planned** | `Dialog` — real inertness + a working iOS scroll-lock (finding N) |
+| Session row, sheet rows, expandable rows, diff, tool output, other badges, status strip, empty states | **Kept** | hard functional blockers — see the KEEP table in finding M |
 
 **12 Astryx components, 44 usages.** Raw `<button>` in `page.tsx`: **17 → 9**, and the nine left are the
 four sheet rows, one question option, the session row and the scrim — all in the "kept" rows above.
@@ -430,7 +435,43 @@ the `--color-success` family the theme already defines. Approve/reject, accept/d
 confirm/cancel are common enough that a system with `destructive` but no affirmative counterpart pushes
 every consumer to either recolor `secondary` by hand (what we did) or misuse `primary`.
 
-### M. Small surprises worth a line in the docs
+### M. The surfaces we KEPT, each with the shipped-source fact that blocks it
+
+Every remaining hand-written surface was assessed against `@astryxdesign/core/dist` (not the docs). These
+are hard functional blockers, not taste:
+
+| Surface | Blocking fact (from `dist/`) |
+| --- | --- |
+| **Session list row** (`button.row`) | `Item`'s root can only be `div`/`li`/`span`, never `<button>`. Moving the StatusDot + needs-badge to `startContent`/`endContent` drops them from the row's accessible name (connection state becomes colour-only) and shrinks the focus target below the 44px floor. |
+| **Expandable rows** (`<details>`) | `Collapsible` hides collapsed content with `display:none` — no `hidden="until-found"` anywhere in the package — which **kills Ctrl-F find-in-page** on tool output, diffs and thoughts. Its trigger is a baked large/semibold/primary `<button>` with no theming hook. |
+| **Diff viewer** (`.diff` / `.dl-add` / `.dl-del`) | `CodeBlock`'s `highlightLines` collapses to one `Set` → one colour (`--color-accent-muted`), so `+` and `−` lines would tint **identically**. No sign gutter, no path-header slot, no truncation. |
+| **Tool output** (`.tool-output`) | `CodeBlock` emits one `<div>` per line and doesn't cap length, so an 800-line log becomes ~840 elements per **collapsed** row on a phone. Adoptable only behind a `MAX_OUTPUT_LINES` cap we'd have to add first. |
+| **Sheet rows** (`.mode-row`) | No row component (`Item` / `DropdownMenuRadioItem` / `RadioListItem`) puts the selected/pressed state on the *focusable* element — `Item`'s `aria-selected` lands on a role-less `<div>` and is dropped by assistive tech. |
+| **Status strip** (`.chat-status`, `.transcript-gap`) | `Banner` has no neutral/ambient status (`info` forces a blue fill), its status map is type-only so a custom status **silently drops `role`** (an a11y regression), and its header floor is +34% on our ~33px pinned one-line strip. (The error banners, which ARE alerts, did migrate — finding above.) |
+| **Other badges/chips** (`.agent-badge`, `.perms-bypassed`, git chip, `.cmd-chip`, `.pill`) | `Badge` has no border/outline variant; `Token` doesn't rest-spread (drops `title`/`data-*`) and has no tooltip; `ChatMessageBubble` omits `white-space:pre-wrap`, collapsing newlines in multi-line messages. |
+| **Empty hints** (`.empty`, `.empty-pad`) | `EmptyState` requires a `title`, rendered semibold/primary — adopting it would force inventing a heading and brightening the body, i.e. a copy/visual redesign for ~7 lines. A faint one-line hint isn't an empty-state moment. |
+
+Upstream asks implied above, most valuable first: a `<button>`-rootable selectable list item that keeps
+state on the focusable element; `hidden="until-found"` (or a find-in-page-safe collapse) on `Collapsible`;
+per-sign colours (or a diff mode) on `CodeBlock`; a neutral/ambient `Banner` status; a border/outline
+`Badge` variant.
+
+### N. `Dialog` is worth adopting for the sheet SHELL — it fixes a real bug we shipped
+
+The one KEEP-adjacent surface that's genuinely worth migrating later. Our bottom-sheet `Sheet` hand-rolls
+a scrim, a Tab-only focus trap, Escape, and a scroll lock — and the scroll lock is a **no-op**:
+`document.body.style.overflow = "hidden"` does nothing here because the scroller is `.transcript`, not
+`<body>`, so the page still scrolls behind an open sheet on iOS. `Dialog` (via `useScrollLock`, which pins
+`body{position:fixed}`) fixes it, and `showModal()` gives real inertness where ours only traps Tab.
+
+It's deferred, not rejected, because doing it right has real footguns worth writing down first: the sheets
+must stop conditional-mounting or the trigger-focus-restore never runs; the desktop anchor must move into
+the trigger's `onClick` (Dialog captures `activeElement` at open); `role="dialog"` must be passed
+explicitly (Dialog only writes it for `purpose="required"`, and a `[role="dialog"]` test selector depends
+on it); and Astryx's `::backdrop { backdrop-filter: blur(2px) }` must be zeroed for the anchored desktop
+dropdown or it blurs the whole page. The rows inside stay hand-written (finding M).
+
+__INS__Small surprises worth a line in the docs
 
 - **`Button` renders its label inside a nested `<span>`.** Reasonable, but it means a test that walks
   from a label up to "the element that renders it" lands on the span, not the button. Anything asserting
@@ -445,7 +486,7 @@ every consumer to either recolor `secondary` by hand (what we did) or misuse `pr
   translation for `<textarea aria-label="…">`, since it changes how tests select the field
   (`getByLabel` rather than a class).
 
-### N. Minor CLI papercuts
+### O. Minor CLI papercuts
 
 - `astryx docs --list` errors with `unknown option '--list'`, even though bare `astryx docs` prints exactly
   that list and `astryx component --list` / `astryx template --list` both exist. The inconsistency sent us
@@ -455,7 +496,7 @@ every consumer to either recolor `secondary` by hand (what we did) or misuse `pr
 - `@astryxdesign/cli` declares `@astryxdesign/lab` and `@astryxdesign/charts` as peer dependencies. Neither
   is mentioned in the docs and pnpm warns about both on install.
 
-### O. Weight, for awareness rather than complaint
+### P. Weight, for awareness rather than complaint
 
 `@astryxdesign/core@0.1.8` unpacks to **15.5 MB across 2 440 files**, and `dist/astryx.css` is **127 KB**
 uncompressed and loaded in full regardless of which components a page uses. For a viewer whose primary

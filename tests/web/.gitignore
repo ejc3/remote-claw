@@ -16,3 +16,4 @@ playwright-report/
 # git at docs/assets/astryx/, because docs/astryx-migration.md renders them inline.
 shots/
 zoom/
+shots-baseline/
