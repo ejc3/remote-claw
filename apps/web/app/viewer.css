@@ -1142,18 +1142,17 @@ summary:focus-visible,
   min-height: 28px;
   border-radius: 50%;
 }
+/* Banner (status=error) owns the row + red tint. Keep the outer spacing, the Retry action's danger tint
+   (Astryx has no tinted-secondary variant — finding L), and floor Banner's own dismiss button to the
+   app's 44px touch minimum (it ships ~24px). The floor targets Banner's dismiss specifically — NOT the
+   Retry inside endContent, which is our Button and already floored. */
 .send-err {
-  color: var(--danger);
-  font-size: 12px;
-  margin: 0;
-  padding: 6px 14px 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  margin: 6px 14px 0;
 }
-.send-err-msg {
-  flex: 1;
-  min-width: 0;
+.send-err .astryx-banner-dismiss,
+.send-err button[aria-label="Dismiss"] {
+  min-width: 44px;
+  min-height: 44px;
 }
 /* #150: the failed send is RESTORED to the composer; Retry re-sends it (a one-tap shortcut for Send). */
 .send-err-retry {
@@ -1170,16 +1169,6 @@ summary:focus-visible,
 .send-err-retry:disabled {
   opacity: 0.45;
   cursor: default;
-}
-.send-err-dismiss {
-  flex: none;
-  color: var(--danger);
-  /* ≥24×24 (WCAG 2.5.8 AA). */
-  min-width: 24px;
-  min-height: 24px;
-}
-.send-err-dismiss:hover {
-  opacity: 1;
 }
 
 

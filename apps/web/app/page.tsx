@@ -1,5 +1,6 @@
 "use client";
 
+import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
@@ -830,11 +831,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
         <nav className="sessions">
           {/* A persistent bus-transport failure (broker outage / wrong-or-stale pass). role=alert so AT
               announces it; shown ABOVE the list since an outage usually leaves the list empty. */}
-          {busError !== null && (
-            <p className="bus-error" role="alert">
-              {busError}
-            </p>
-          )}
+          {busError !== null && <Banner className="bus-error" status="warning" title={busError} />}
           {/* Only claim "no sessions" when the bus is actually reachable — otherwise the real reason is the
               outage above, and "no live sessions yet" would mislead (it reads as "all good, just waiting"). */}
           {list.length === 0 && busError === null && (
@@ -877,7 +874,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                   />
                   <span className="row-title">{s.title}</span>
                   {connected && s.needs ? (
-                    <span className="needs-badge">needs you</span>
+                    <Badge className="needs-badge" variant="warning" label="needs you" />
                   ) : connected && s.phase === "thinking" ? (
                     <Working />
                   ) : null}
@@ -1454,26 +1451,27 @@ function Transcript(props: {
         />
       )}
       <StatusStrip conn={cs} phase={phase} needs={needs} interrupting={interrupting} />
+      {/* Both this and .bus-error render CONDITIONALLY (on !== null), so Banner's internal isDismissed
+          state can't leak across a re-open — a fresh error mounts a fresh Banner. If either is ever made
+          unconditional, dismiss would hide it permanently: keep the conditional mount. */}
       {sendError !== null && (
-        <div className="send-err" role="alert">
-          <span className="send-err-msg">Couldn’t send: {sendError}</span>
-          <Button
-            className="send-err-retry"
-            variant="secondary"
-            size="sm"
-            label="Retry"
-            isDisabled={sending || (input.trim() === "" && staged.length === 0)}
-            onClick={() => void send()}
-          />
-          <IconButton
-            className="send-err-dismiss"
-            variant="ghost"
-            size="sm"
-            icon={<span aria-hidden>×</span>}
-            label="Dismiss"
-            onClick={() => setSendError(null)}
-          />
-        </div>
+        <Banner
+          className="send-err"
+          status="error"
+          title={`Couldn’t send: ${sendError}`}
+          isDismissable
+          onDismiss={() => setSendError(null)}
+          endContent={
+            <Button
+              className="send-err-retry"
+              variant="secondary"
+              size="sm"
+              label="Retry"
+              isDisabled={sending || (input.trim() === "" && staged.length === 0)}
+              onClick={() => void send()}
+            />
+          }
+        />
       )}
 
       <form
