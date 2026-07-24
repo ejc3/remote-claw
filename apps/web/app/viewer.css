@@ -215,11 +215,6 @@ summary:focus-visible,
 .dot[data-state="reconnecting"] {
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15);
 }
-@keyframes pulse {
-  50% {
-    opacity: 0.35;
-  }
-}
 .row-title {
   font-size: 14.5px;
   font-weight: 550;
