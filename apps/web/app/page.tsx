@@ -8,6 +8,7 @@ import { Heading } from "@astryxdesign/core/Heading";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { Spinner } from "@astryxdesign/core/Spinner";
+import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { VStack } from "@astryxdesign/core/VStack";
@@ -860,11 +861,19 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
               >
                 <span className="row-top">
                   {/* Color-coded dot also carries an accessible name so state isn't conveyed by hue alone. */}
-                  <span
+                  {/* Astryx's StatusDot is a drop-in here: it emits the same role="img" + aria-label
+                      DOM, maps our three connection states onto its semantic variants, and `isPulsing`
+                      replaces the hand-rolled @keyframes (it respects prefers-reduced-motion, which ours
+                      only did via the global reduced-motion block). `.dot` survives for the size and the
+                      state-tinted glow ring, which the variant doesn't imply. */}
+                  <StatusDot
                     className="dot"
                     data-state={cs}
-                    role="img"
-                    aria-label={connStateLabel(cs)}
+                    variant={
+                      cs === "connected" ? "success" : cs === "reconnecting" ? "warning" : "neutral"
+                    }
+                    isPulsing={cs === "reconnecting"}
+                    label={connStateLabel(cs)}
                   />
                   <span className="row-title">{s.title}</span>
                   {connected && s.needs ? (
@@ -2134,7 +2143,7 @@ function PermissionRow({
       {effective === null ? (
         <div className="perm-actions">
           {/* Astryx has no "constructive"/success Button variant (only primary/secondary/ghost/
-              destructive — see finding J), and the green Allow / red Deny is a deliberate security-UX
+              destructive — see finding L), and the green Allow / red Deny is a deliberate security-UX
               signal for an irreversible grant. So these are secondary Buttons carrying the semantic
               tint via .perm-allow / .perm-deny — the chrome (focus ring, press, disabled a11y) comes
               from Astryx; only the meaning-color stays app CSS. */}

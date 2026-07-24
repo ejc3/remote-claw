@@ -201,21 +201,19 @@ summary:focus-visible,
   align-items: center;
   gap: 9px;
 }
+/* The connection dot is an Astryx StatusDot; its `variant` carries the colour and `isPulsing` the
+   animation. What stays ours: the 8px size this dense row needs (the component is larger) and the
+   state-tinted glow ring, which no variant implies. */
 .dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
   flex-shrink: 0;
-  background: #3a3a42; /* disconnected / unknown — a dim grey */
 }
 .dot[data-state="connected"] {
-  background: var(--online);
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
 }
 .dot[data-state="reconnecting"] {
-  background: var(--warn);
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.15);
-  animation: pulse 1.2s ease-in-out infinite;
 }
 @keyframes pulse {
   50% {
@@ -840,7 +838,7 @@ summary:focus-visible,
    focus ring, disabled a11y) comes from the component. Two things stay app CSS: the 44px touch floor
    (Astryx buttons are 32-36px, and an irreversible grant/deny holds this app's touch minimum, #151), and
    the semantic green Allow / red Deny — a security-UX signal Astryx has no Button variant for (it ships
-   destructive but no constructive; finding J). Labels never wrap (the ROW wraps via .perm-actions). */
+   destructive but no constructive; finding L). Labels never wrap (the ROW wraps via .perm-actions). */
 .perm-actions .astryx-button {
   min-height: 44px;
   white-space: nowrap;
@@ -1166,7 +1164,7 @@ summary:focus-visible,
 .send-err-retry {
   flex: none;
   /* The danger tint inside the error banner — Astryx has no such variant for a secondary action
-     (see finding J); the rest of the chrome is the Button's. */
+     (see finding L); the rest of the chrome is the Button's. */
   border-color: color-mix(in srgb, var(--danger) 55%, transparent);
   color: var(--danger);
   min-height: 28px;

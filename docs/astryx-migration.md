@@ -17,18 +17,30 @@ hit, with the evidence that proves it, not an impression. Findings are added as 
 
 ---
 
-## Status
+## Status — migration complete
 
-| Surface | State | Astryx components used |
+Every surface is either **on Astryx** or **deliberately kept**, with the reason recorded. "Kept" here
+never means "not got to": each one is a component that doesn't faithfully host the behaviour or design,
+and each has a finding below plus a suggested upstream seam.
+
+| Surface | State | Detail |
 | --- | --- | --- |
-| Cascade layers, theme, build, CSP | **Done** | `Theme`, `defineTheme`, `astryx theme build` |
-| Entry screens (Connect / Pairing / Reconnecting) | **Done** | `Card` `VStack` `Heading` `Text` `TextArea` `Button` `Banner` `Code` `Spinner` |
-| Transcript (messages, tool rows, prose) | Next | `ChatMessageList` `ChatMessage` `ChatMessageBubble` `ChatSystemMessage` `ChatToolCalls` `Markdown` `CodeBlock` `Collapsible` |
-| Composer controls | **Done** | `Button` `IconButton` (Send / Mode / attach) |
-| Composer input | **Stays hand-written** | see finding I — `ChatComposerInput` isn't a faithful host |
-| Permission / question buttons | **Done** | `Button` (Allow / Deny / Submit / Skip) + semantic tint |
-| Bottom sheets / dropdowns | Planned | `Dialog` `Popover` `RadioList` |
-| Session list + app frame | Planned | `AppShell` `Layout` `LayoutPanel` `List` `Item` `StatusDot` `Badge` |
+| Cascade layers, brand theme, build, CSP | **Astryx** | `Theme`, `defineTheme`, `astryx theme build` |
+| Entry screens (Connect / Pairing / splash) | **Astryx** | `Card` `VStack` `Heading` `Text` `TextArea` `Button` `Banner` `Code` `Spinner` |
+| Composer controls (Send / Mode / attach) | **Astryx** | `Button` `IconButton` |
+| Permission + question actions | **Astryx** | `Button` (green/red tint kept — finding L) |
+| Chrome actions (Forget, back, ⋯, jump, retries, dismiss, remove) | **Astryx** | `Button` `IconButton`; armed Forget → `destructive` |
+| Transcript prose | **Astryx** | `Markdown` — replaced `react-markdown` + `remark-gfm` |
+| Session connection dot | **Astryx** | `StatusDot` (`variant` + `isPulsing`) |
+| Composer text input | **Kept** | finding I — `ChatComposerInput` hard-codes Enter→send |
+| Question answer options | **Kept** | finding J — `SelectableCard` is a padded card, not a compact toggle |
+| Transcript message rows | **Kept** | finding K — the transcript is an asymmetric document, not symmetric chat |
+| Sheet rows, session row, modal scrim | **Kept** | bespoke layout/behaviour; no component models them |
+
+**12 Astryx components, 44 usages.** Raw `<button>` in `page.tsx`: **17 → 9**, and the nine left are the
+four sheet rows, one question option, the session row and the scrim — all in the "kept" rows above.
+`viewer.css` shrank by ~1 100 lines net across the migration.
+
 
 ---
 
@@ -64,11 +76,15 @@ lines of `defineTheme` extending `neutralTheme`, and `astryx theme build` turns 
 that ships the tokens on first paint. The one place it surprised us is how the accent scale behaves in
 dark mode (finding **F**), and even that had a documented escape hatch.
 
-**6. The Chat family is a genuinely close fit for an agent-transcript UI.**
-`ChatMessageList` already ships `role="log"` + `aria-live="polite"` + `aria-busy` via `isStreaming` — we
-had hand-rolled all three. `ChatToolCalls` models status / target / duration / additions+deletions /
-`resultDetail`, which is almost exactly our tool-call row including the diff stat. `Markdown` has
-`isStreaming` and GFM `autolink`, which may let us drop `react-markdown` + `remark-gfm` entirely.
+**6. `Markdown` replaced two dependencies and came with the guarantees we'd hand-wired.**
+We dropped `react-markdown` + `remark-gfm` for Astryx's `Markdown`. It escapes raw HTML to text (no
+`dangerouslySetInnerHTML`, no raw-HTML path) and applies `rel="noopener noreferrer"` itself — the exact
+two properties our transcript needs, since it renders untrusted model output and we'd previously wired
+both by hand. It also wraps tables in a horizontal scroller and renders fenced code as a real `CodeBlock`,
+both of which we'd hand-rolled. The swap was gated on our existing security contract and passed unchanged.
+
+The rest of the Chat family didn't fit our asymmetric transcript (finding **K**) — but `ChatToolCalls` is
+genuinely close to a tool-call row and is worth knowing about on its own.
 
 **7. CSP-clean out of the box.**
 `reset.css`, `astryx.css` and the built theme CSS contain no `@font-face`, no `@import`, and no remote
@@ -368,7 +384,35 @@ without the contentEditable assumptions (today the shell's click-to-focus and su
 default input), or expose an `onKeyDown` / `shouldSubmitOnEnter` hook on `ChatComposerInput`. Until then,
 the honest move is what we did: migrate the buttons, keep the input.
 
-### J. `Button` has a `destructive` variant but no constructive/success counterpart
+### J. `SelectableCard` is a card, not a compact selectable row
+
+Our question card lists answer options as compact toggle buttons (`aria-pressed`, label + optional
+description). `SelectableCard` was the obvious candidate — it takes `isSelected`/`onChange` and reflects
+`data-selected`, which even matched our test selector. But it renders an `astryx-card` **div** with card
+padding, so a three-option question would become three padded cards, roughly tripling the card's height on
+a phone, and it swaps toggle-button semantics for card-selection ones.
+
+Not a defect — it's a card component doing card things. But there's a gap between `SelectableCard` (heavy)
+and `RadioListItem`/`CheckboxListItem` (a radio/checkbox row, which is close but forces a control glyph we
+don't want): **a compact selectable row with a label + description and no radio affordance** has no home.
+`Item`/`ListItem` come closest but aren't selection-aware. Suggest either a density prop on
+`SelectableCard` or a documented recipe for "selectable row" built from `Item`.
+
+### K. The Chat family assumes symmetric chat; an agent transcript is an asymmetric document
+
+Worth stating since the Chat components were the biggest draw. Our transcript deliberately isn't a
+two-sided bubble chat: user turns are small right-aligned pills, assistant turns are full-width prose with
+no bubble, and between them sit tool-call rows, diffs, sub-agent threads, thinking blocks and permission
+cards. `ChatMessage`/`ChatMessageBubble` model sender-aligned bubbles, which would flatten that hierarchy.
+
+`ChatToolCalls` is the closest fit anywhere in the family — it models status / target / duration /
+additions+deletions / `resultDetail`, which is nearly our tool row. We didn't adopt it because our rows
+are individually expandable `<details>` inline in the stream, while `ChatToolCalls` groups an array into
+one collapsible summary — a different information architecture, not a different style. Suggest documenting
+that the Chat family targets messaging-style chat, and that agent/tool transcripts may want `ChatToolCalls`
+standalone (it is genuinely reusable on its own).
+
+### L. `Button` has a `destructive` variant but no constructive/success counterpart
 
 Migrating our permission grant/deny buttons, we hit a semantic gap. `Button`'s variants are
 `primary | secondary | ghost | destructive`. `destructive` gives a red-tinted button for a dangerous
@@ -386,7 +430,7 @@ the `--color-success` family the theme already defines. Approve/reject, accept/d
 confirm/cancel are common enough that a system with `destructive` but no affirmative counterpart pushes
 every consumer to either recolor `secondary` by hand (what we did) or misuse `primary`.
 
-### K. Small surprises worth a line in the docs
+### M. Small surprises worth a line in the docs
 
 - **`Button` renders its label inside a nested `<span>`.** Reasonable, but it means a test that walks
   from a label up to "the element that renders it" lands on the span, not the button. Anything asserting
@@ -401,7 +445,7 @@ every consumer to either recolor `secondary` by hand (what we did) or misuse `pr
   translation for `<textarea aria-label="…">`, since it changes how tests select the field
   (`getByLabel` rather than a class).
 
-### L. Minor CLI papercuts
+### N. Minor CLI papercuts
 
 - `astryx docs --list` errors with `unknown option '--list'`, even though bare `astryx docs` prints exactly
   that list and `astryx component --list` / `astryx template --list` both exist. The inconsistency sent us
@@ -411,7 +455,7 @@ every consumer to either recolor `secondary` by hand (what we did) or misuse `pr
 - `@astryxdesign/cli` declares `@astryxdesign/lab` and `@astryxdesign/charts` as peer dependencies. Neither
   is mentioned in the docs and pnpm warns about both on install.
 
-### M. Weight, for awareness rather than complaint
+### O. Weight, for awareness rather than complaint
 
 `@astryxdesign/core@0.1.8` unpacks to **15.5 MB across 2 440 files**, and `dist/astryx.css` is **127 KB**
 uncompressed and loaded in full regardless of which components a page uses. For a viewer whose primary
