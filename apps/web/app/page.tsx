@@ -1814,15 +1814,24 @@ function Sheet({
       }
     };
     window.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden"; // lock background scroll while modal
+    // NO body scroll-lock here on purpose. `document.body.style.overflow = "hidden"` — the obvious lock,
+    // and what an Astryx <Dialog>'s useScrollLock would do (it pins body{position:fixed}) — is a NO-OP in
+    // this layout: the scroller is `.transcript` / `.sessions` (flex:1; overflow-y:auto), not <body>, so
+    // locking body does nothing AND locking body wouldn't reach a nested scroll container either. What
+    // actually prevents scroll-behind is the full-viewport `.sheet-layer` below (position:fixed;
+    // inset:0; z-index:50) — it sits above the transcript so every wheel/touch over the background hits
+    // the overlay, not the scroller behind it. Verified on Chromium (no scroll leak) and WebKit (the
+    // overlay is the elementFromPoint over the whole transcript region). Guarded by the "overlay covers
+    // the scroller" test in tests/web/app-e2e/viewer-ux.spec.ts so the real mechanism can't silently regress.
     return () => {
       window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
       trigger?.focus?.(); // restore focus to the opener
     };
   }, []);
   // Scrim and sheet are siblings (not nested) so the sheet's own buttons aren't inside another button.
+  // The .sheet-layer (position:fixed; inset:0) is ALSO the scroll barrier: it covers the whole viewport
+  // above the transcript, so a touch/wheel over the background hits the overlay (the scrim → close)
+  // instead of scrolling the transcript behind the sheet.
   // The scrim is mouse-only (tabIndex -1) — keyboard dismiss is Escape; role=dialog sits on the content.
   const anchored = anchorStyle !== null;
   return (

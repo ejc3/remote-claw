@@ -23,7 +23,7 @@ hit, with the evidence that proves it, not an impression. Findings are added as 
 buttons, prose and dot. That was premature — a whole class of surfaces hadn't been assessed, and the
 sheet/session rows were written off as "bespoke" without the work. Every remaining surface has since been
 assessed against the SHIPPED package source (not the docs); the results are the KEEP table in finding M
-and the `Dialog` work in finding N. Every "Kept" below names a specific blocking fact.
+and finding N (where the `Dialog` swap was investigated, reproduced, and dropped). Every "Kept" below names a specific blocking fact.
 
 | Surface | State | Detail |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ and the `Dialog` work in finding N. Every "Kept" below names a specific blocking
 | Composer text input | **Kept** | finding I — `ChatComposerInput` hard-codes Enter→send |
 | Question answer options | **Kept** | finding J — `SelectableCard` is a padded card, not a compact toggle |
 | Transcript message rows | **Kept** | finding K — the transcript is an asymmetric document, not symmetric chat |
-| Bottom-sheet SHELL (scrim/focus-trap/scroll-lock) | **Planned** | `Dialog` — real inertness + a working iOS scroll-lock (finding N) |
+| Bottom-sheet shell (scrim/focus-trap) | **Kept** | finding N — `Dialog`'s benefit (scroll-lock) is a non-bug here; verified on Chromium + WebKit |
 | Session row, sheet rows, expandable rows, diff, tool output, other badges, status strip, empty states | **Kept** | hard functional blockers — see the KEEP table in finding M |
 
 **12 Astryx components, 44 usages.** Raw `<button>` in `page.tsx`: **17 → 9**, and the nine left are the
@@ -456,35 +456,29 @@ state on the focusable element; `hidden="until-found"` (or a find-in-page-safe c
 per-sign colours (or a diff mode) on `CodeBlock`; a neutral/ambient `Banner` status; a border/outline
 `Badge` variant.
 
-### N. `Dialog` is worth adopting for the sheet SHELL — it fixes a real bug we shipped
+### N. `Dialog` for the sheet shell — investigated, then KEPT (the bug it would fix isn't real here)
 
-The one KEEP-adjacent surface that's genuinely worth migrating later. Our bottom-sheet `Sheet` hand-rolls
-a scrim, a Tab-only focus trap, Escape, and a scroll lock — and the scroll lock is a **no-op**:
-`document.body.style.overflow = "hidden"` does nothing here because the scroller is `.transcript`, not
-`<body>`, so the page still scrolls behind an open sheet on iOS. `Dialog` (via `useScrollLock`, which pins
-`body{position:fixed}`) fixes it, and `showModal()` gives real inertness where ours only traps Tab.
+The assessment flagged our bottom-sheet `Sheet` as worth migrating to `Dialog`, on the grounds that our
+scroll-lock is broken: `document.body.style.overflow = "hidden"` is indeed a **no-op**, because the
+scroller in this layout is `.transcript` / `.sessions` (`flex:1; overflow-y:auto`), not `<body>`. So far
+so true — and `Dialog`'s `useScrollLock` (which pins `body{position:fixed}`) looked like the fix.
 
-It's deferred, not rejected, because doing it right has real footguns worth writing down first: the sheets
-must stop conditional-mounting or the trigger-focus-restore never runs; the desktop anchor must move into
-the trigger's `onClick` (Dialog captures `activeElement` at open); `role="dialog"` must be passed
-explicitly (Dialog only writes it for `purpose="required"`, and a `[role="dialog"]` test selector depends
-on it); and Astryx's `::backdrop { backdrop-filter: blur(2px) }` must be zeroed for the anchored desktop
-dropdown or it blurs the whole page. The rows inside stay hand-written (finding M).
+Then we **reproduced it instead of assuming**, and the premise fell apart. With a genuinely tall
+transcript and a sheet open, scrolling the background does **not** leak — on Chromium (a wheel over the
+transcript moves nothing) and on WebKit, the iOS-faithful engine (the `.sheet-layer` overlay —
+`position:fixed; inset:0; z-index:50`, with the scrim as its visible part — is the `elementFromPoint` over
+*every* point of the transcript's rectangle). The overlay already prevents scroll-behind; the body lock
+was a no-op that never mattered, and `Dialog`'s `body{position:fixed}` wouldn't have reached our nested
+scroller either. So `Dialog` would have added a scroll-lock for a non-bug, at medium risk with a long
+footgun list (conditional-mount, anchor-in-onClick, explicit `role`, zeroed `::backdrop` blur), for a
+marginal gain (`showModal()` inertness over a Tab-trap that works and is tested).
 
-__INS__Small surprises worth a line in the docs
-
-- **`Button` renders its label inside a nested `<span>`.** Reasonable, but it means a test that walks
-  from a label up to "the element that renders it" lands on the span, not the button. Anything asserting
-  on `data-variant` has to walk out to the enclosing `<button>`. A sentence in the testing guidance
-  would save the next person the same five minutes.
-- **`Code` is an inline span with no block form.** For a value that must wrap on any character and own
-  its own line (in our case a 32-byte identity hex the user visually compares against a CLI's output),
-  `CodeBlock` is too heavy — it brings a header bar, language label and copy button. We ended up with a
-  small `display: block` class on `Code`. A `display` prop mirroring `Text`'s would cover it.
-- **`TextArea` requires `label`**, which is the right call, and `isLabelHidden` covers the
-  previously-`aria-label`-only case cleanly. Worth calling out in the migration doc as the standard
-  translation for `<textarea aria-label="…">`, since it changes how tests select the field
-  (`getByLabel` rather than a class).
+**Outcome:** KEEP the `Sheet`, and remove the dead no-op body lock (a comment that claimed to "lock
+background scroll" while doing nothing is worse than no code). The real mechanism — the full-viewport
+overlay covering the scroller — is now pinned by a bite-validated test ("an open sheet's scrim covers the
+whole transcript region"): with `pointer-events:none` on the overlay, every sampled point leaks to the
+transcript and the test goes red. This is the honest end of the "reproduce, don't assume" rule — the one
+KEEP-adjacent surface the assessment wanted migrated turned out not to need it.
 
 ### O. Minor CLI papercuts
 
