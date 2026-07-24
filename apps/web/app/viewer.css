@@ -132,16 +132,6 @@ summary:focus-visible,
   color: #fff;
   font-size: 15px;
 }
-.btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-.btn:disabled {
-  /* Keep the primary identity (the base .btn fill + #fff), just dim it — an inactive primary, not a dead
-     grey slab (#design-pass). */
-  background: var(--accent);
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 /* ---------- console layout ---------- */
 .app {
   display: flex;
@@ -164,18 +154,9 @@ summary:focus-visible,
   font-size: 13px;
 }
 .ghost {
+  /* Right-pins the topbar action. Everything else (fill, border, radius, padding, the armed red state)
+     is the Astryx Button's ghost/destructive variant now. */
   margin-left: auto;
-  background: transparent;
-  color: var(--text-dim);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px 12px;
-  font-size: 13px;
-  transition: border-color 0.15s, color 0.15s;
-}
-.ghost:hover {
-  color: var(--text);
-  border-color: var(--text-faint);
 }
 .panes {
   flex: 1;
@@ -430,11 +411,7 @@ summary:focus-visible,
   }
 }
 .back {
-  background: transparent;
-  border: none;
   color: var(--accent-text);
-  font-size: 15px;
-  padding: 6px 8px;
   min-height: 44px; /* ≥44px touch target — it's the primary mobile back-nav (#151) */
   /* Never wrap or shrink. Without these the header's other items (badge, git chip) refused to give up
      width, so "‹ Sessions" broke onto two lines AND pushed the session title — flex:1, min-width:0 — to
@@ -445,16 +422,9 @@ summary:focus-visible,
 /* The session ⋯ menu trigger — sits at the right of the mobile chat header (.row-title takes the slack). */
 .chat-menu {
   flex-shrink: 0;
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  font-size: 20px;
-  line-height: 1;
-  /* ≥44px touch target (#151). */
+  /* ≥44px touch target (#151) — Astryx IconButton is smaller. */
   min-width: 44px;
   min-height: 44px;
-  padding: 6px 10px;
-  transition: color 0.15s;
 }
 .chat-menu:hover {
   color: var(--text);
@@ -1110,9 +1080,8 @@ summary:focus-visible,
   justify-content: space-between;
 }
 .gap-retry {
-  border: 1px solid rgba(251, 191, 36, 0.35);
-  border-radius: 6px;
-  padding: 4px 8px;
+  /* Amber tint matching the out-of-sync banner it sits in; chrome is the Button's. */
+  border-color: rgba(251, 191, 36, 0.35);
   color: var(--warn);
   background: rgba(251, 191, 36, 0.08);
   min-height: 24px; /* WCAG 2.5.8 (AA) minimum target size */
@@ -1225,12 +1194,9 @@ summary:focus-visible,
   /* 28px clears the WCAG 2.5.8 (AA) 24px minimum — a 44px target would overflow the small thumbnail. */
   width: 28px;
   height: 28px;
+  min-width: 28px;
+  min-height: 28px;
   border-radius: 50%;
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--line);
-  font-size: 14px;
-  line-height: 1;
 }
 .send-err {
   color: var(--danger);
@@ -1248,15 +1214,11 @@ summary:focus-visible,
 /* #150: the failed send is RESTORED to the composer; Retry re-sends it (a one-tap shortcut for Send). */
 .send-err-retry {
   flex: none;
-  background: transparent;
-  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  /* The danger tint inside the error banner — Astryx has no such variant for a secondary action
+     (see finding J); the rest of the chrome is the Button's. */
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
   color: var(--danger);
-  border-radius: 8px;
-  padding: 3px 12px;
-  font-size: 12px;
-  font-weight: 600;
   min-height: 28px;
-  transition: background 0.12s;
 }
 .send-err-retry:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
@@ -1267,15 +1229,10 @@ summary:focus-visible,
 }
 .send-err-dismiss {
   flex: none;
-  background: transparent;
-  border: none;
   color: var(--danger);
-  font-size: 16px;
-  line-height: 1;
-  /* ≥24×24 (WCAG 2.5.8 AA) — was ~20×18 from the 2px/4px padding alone. */
+  /* ≥24×24 (WCAG 2.5.8 AA). */
   min-width: 24px;
   min-height: 24px;
-  opacity: 0.7;
 }
 .send-err-dismiss:hover {
   opacity: 1;
@@ -1438,26 +1395,19 @@ summary:focus-visible,
 /* "Jump to latest" pill: shown only when the user has scrolled up and new content arrived, so the
    transcript can stick-to-bottom without yanking a reader down (#design-pass autoscroll). */
 .jump-latest {
+  /* Floating, centred above the composer — pure positioning; the pill chrome is the primary Button.
+     Keeps the pill radius + lift, which the variant doesn't imply. */
   position: absolute;
   left: 50%;
   bottom: 84px;
   transform: translateX(-50%);
   z-index: 5;
-  background: var(--accent);
-  color: #fff;
-  border: none;
   border-radius: 999px;
-  padding: 10px 16px; /* ≥40px touch target for the floating jump pill (#151) */
-  font-size: 13px;
-  font-weight: 600;
+  min-height: 40px; /* floating jump pill target (#151) */
   box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.7);
 }
 
 /* Armed "Forget pass" — the destructive confirm state. */
-.ghost-danger {
-  color: var(--danger);
-  border-color: var(--danger);
-}
 
 /* ---------- mobile: single column with view switching ---------- */
 @media (max-width: 760px) {
