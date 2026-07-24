@@ -6,6 +6,7 @@ import { Card } from "@astryxdesign/core/Card";
 import { Code } from "@astryxdesign/core/Code";
 import { Heading } from "@astryxdesign/core/Heading";
 import { IconButton } from "@astryxdesign/core/IconButton";
+import { Markdown } from "@astryxdesign/core/Markdown";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
@@ -22,8 +23,6 @@ import {
   useRef,
   useState,
 } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { clearCredential, loadCredential, saveCredential } from "./lib/credential-store";
 import { claimHandoff } from "./lib/handoff-claim";
 import { friendlySendError } from "./lib/send-error";
@@ -802,9 +801,16 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
         <span className="count">
           {list.length} session{list.length === 1 ? "" : "s"}
         </span>
-        <button
-          type="button"
-          className={forgetArmed ? "ghost ghost-danger" : "ghost"}
+        {/* Armed maps to Astryx's `destructive` variant — the two-step confirm is exactly what that
+            variant is for, so the red state is now the component's rather than a .ghost-danger override.
+            Idle is `secondary`, not `ghost`: the original was a quiet OUTLINED button, and Astryx's ghost
+            is borderless — it read as plain text in the topbar and lost its affordance (caught in the
+            zoom review). `.ghost` survives only as the `margin-left:auto` that right-pins it. */}
+        <Button
+          className="ghost"
+          variant={forgetArmed ? "destructive" : "secondary"}
+          size="sm"
+          label={forgetArmed ? "Tap again to forget" : "Forget pass"}
           aria-label={forgetArmed ? "Confirm forget pass" : "Forget pass"}
           onClick={() => {
             if (forgetArmed) {
@@ -816,9 +822,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             // the unmount cleanup effect handles the confirm-within-4s case.
             forgetTimer.current = window.setTimeout(() => setForgetArmed(false), 4000);
           }}
-        >
-          {forgetArmed ? "Tap again to forget" : "Forget pass"}
-        </button>
+        />
       </header>
 
       <div className="panes" data-view={selected === null ? "list" : "chat"}>
@@ -1367,9 +1371,15 @@ function Transcript(props: {
   return (
     <section className="chat">
       <div className="chat-head">
-        <button type="button" className="back" onClick={props.onBack}>
-          ‹ Sessions
-        </button>
+        {/* `.back` keeps only its layout: flex-shrink:0 + nowrap (so it can't push the session title to
+            zero width) and the hidden-on-desktop rule. Chrome is the ghost Button. */}
+        <Button
+          className="back"
+          variant="ghost"
+          size="sm"
+          label="‹ Sessions"
+          onClick={props.onBack}
+        />
         <span className="row-title">{props.title}</span>
         <span className="agent-badge" data-agent={announce?.harness?.agent ?? "claude-code"}>
           {harnessLabel(announce?.harness)}
@@ -1383,17 +1393,16 @@ function Transcript(props: {
             ⚠ permissions off
           </span>
         )}
-        <button
-          type="button"
+        <IconButton
           className="chat-menu"
+          variant="ghost"
+          icon={<span aria-hidden>⋯</span>}
+          label="Session actions"
+          tooltip="Session actions"
           aria-haspopup="dialog"
           aria-expanded={sessionSheet}
-          aria-label="Session actions"
-          title="Session actions"
           onClick={() => setSessionSheet(true)}
-        >
-          ⋯
-        </button>
+        />
       </div>
 
       {/* role=log + aria-live so a screen reader announces assistant turns / tool rows as they stream in
@@ -1424,31 +1433,37 @@ function Transcript(props: {
         ))}
       </div>
 
+      {/* `.jump-latest` keeps only its absolute positioning (centred, floating above the composer);
+          the pill chrome is the primary Button. */}
       {showJump && (
-        <button type="button" className="jump-latest" onClick={jumpToLatest}>
-          New messages ↓
-        </button>
+        <Button
+          className="jump-latest"
+          variant="primary"
+          size="sm"
+          label="New messages ↓"
+          onClick={jumpToLatest}
+        />
       )}
       <StatusStrip conn={cs} phase={phase} needs={needs} interrupting={interrupting} />
       {sendError !== null && (
         <div className="send-err" role="alert">
           <span className="send-err-msg">Couldn’t send: {sendError}</span>
-          <button
-            type="button"
+          <Button
             className="send-err-retry"
-            disabled={sending || (input.trim() === "" && staged.length === 0)}
+            variant="secondary"
+            size="sm"
+            label="Retry"
+            isDisabled={sending || (input.trim() === "" && staged.length === 0)}
             onClick={() => void send()}
-          >
-            Retry
-          </button>
-          <button
-            type="button"
+          />
+          <IconButton
             className="send-err-dismiss"
-            aria-label="Dismiss"
+            variant="ghost"
+            size="sm"
+            icon={<span aria-hidden>×</span>}
+            label="Dismiss"
             onClick={() => setSendError(null)}
-          >
-            ×
-          </button>
+          />
         </div>
       )}
 
@@ -1465,14 +1480,14 @@ function Transcript(props: {
               <div className="staged-item" key={s.id}>
                 {/* biome-ignore lint/performance/noImgElement: a local object-URL blob preview — next/image can't optimize a blob: URL */}
                 <img src={s.url} alt={s.name} />
-                <button
-                  type="button"
+                <IconButton
                   className="staged-remove"
-                  aria-label={`Remove ${s.name}`}
+                  variant="secondary"
+                  size="sm"
+                  icon={<span aria-hidden>×</span>}
+                  label={`Remove ${s.name}`}
                   onClick={() => removeStaged(s.id)}
-                >
-                  ×
-                </button>
+                />
               </div>
             ))}
           </div>
@@ -1607,9 +1622,14 @@ function GapRecovery({
       <span>
         Transcript out of sync — retrying… waiting for seq {gap.nextSeq} ({gap.pending} buffered)
       </span>
-      <button type="button" className="gap-retry" disabled={retrying} onClick={onRetry}>
-        Retry
-      </button>
+      <Button
+        className="gap-retry"
+        variant="secondary"
+        size="sm"
+        label="Retry"
+        isDisabled={retrying}
+        onClick={onRetry}
+      />
     </div>
   );
 }
@@ -2571,9 +2591,11 @@ function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
 /**
  * Render assistant prose as GitHub-Flavored Markdown — tables, lists, headings, fenced code, bold,
  * inline code, links (the old hand-rolled renderer only did **bold** + `code`, so a model's table came
- * out as raw `| … |` pipes). CSP-safe: react-markdown emits React ELEMENTS, never raw HTML — there is no
- * `dangerouslySetInnerHTML` and `rehype-raw` is NOT enabled, so a model can't inject markup. Links open
- * in a new tab with `noopener` so a transcript link can't navigate the viewer away or reach `window.opener`.
+ * out as raw `| … |` pipes). CSP-safe: Astryx's <Markdown> emits React ELEMENTS, never raw HTML — it has
+ * no `dangerouslySetInnerHTML` and no raw-HTML path, so model output (which is UNTRUSTED) is escaped to
+ * text; and it applies `target="_blank" rel="noopener noreferrer"` itself, so a transcript link can't
+ * navigate the viewer away or reach `window.opener`. Both properties are pinned by
+ * test/prose-markdown.test.ts, which is what proved the react-markdown → Astryx swap faithful.
  *
  * memo'd: a transcript message is immutable once appended (deduped by msgId), but the Console re-renders
  * every 5s to age presence — without memo that would re-parse EVERY message's markdown on each tick.
@@ -2581,16 +2603,12 @@ function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
 export const Prose = memo(function Prose({ text, className }: { text: string; className: string }) {
   return (
     <div className={`prose ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a({ node: _node, ...props }) {
-            return <a {...props} target="_blank" rel="noopener noreferrer" />;
-          },
-        }}
-      >
+      {/* `autolink="gfm"` preserves the bare-URL linking remark-gfm gave us. `contentWidth="100%"` defers
+          to the transcript's own reading column — Astryx defaults to a 680px prose cap, which would
+          double-constrain inside our already-capped column. */}
+      <Markdown autolink="gfm" contentWidth="100%">
         {text}
-      </ReactMarkdown>
+      </Markdown>
     </div>
   );
 });

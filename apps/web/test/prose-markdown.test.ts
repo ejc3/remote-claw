@@ -3,9 +3,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { Prose } from "../app/page.js";
 
-// The viewer renders assistant prose as GitHub-Flavored Markdown (react-markdown + remark-gfm). The live
-// trigger: a model replied with a markdown table that the old bold+code-only renderer showed as raw `| |`
-// pipes. These assert the GFM features render AND that raw HTML from the model can't inject markup.
+// The viewer renders assistant prose as GitHub-Flavored Markdown (Astryx's <Markdown>). The live trigger:
+// a model replied with a markdown table that the old bold+code-only renderer showed as raw `| |` pipes.
+// These assert the GFM features render AND — the security-critical one — that raw HTML from the model
+// (UNTRUSTED, it's model output) can't inject markup.
+//
+// Assertions match the OPENING TAG (`<strong`), not the exact serialization (`<strong>`): the renderer
+// emits real semantic elements carrying its own classes. The contract is "a real <strong> element", not
+// "an attribute-free one" — this suite is what proved the react-markdown → Astryx swap was faithful.
 const html = (text: string): string =>
   renderToStaticMarkup(createElement(Prose, { text, className: "assistant" }));
 
@@ -13,7 +18,7 @@ describe("Prose markdown rendering", () => {
   it("renders a GFM table as a real <table> (the raw-pipes regression)", () => {
     const md = "| Path | Size |\n|------|------|\n| `/usr/lib` | **11G** |\n| `/var` | **16G** |";
     const out = html(md);
-    expect(out).toContain("<table>");
+    expect(out).toContain("<table");
     expect(out).toContain("<th");
     expect(out).toContain("<td");
     expect(out).toContain("11G");
@@ -21,11 +26,11 @@ describe("Prose markdown rendering", () => {
   });
 
   it("renders bold, inline code, fenced code blocks, and lists", () => {
-    expect(html("**bold**")).toContain("<strong>");
-    expect(html("`code`")).toContain("<code>");
-    expect(html("```\nx = 1\n```")).toContain("<pre>");
-    expect(html("- a\n- b")).toMatch(/<ul>.*<li>/s);
-    expect(html("1. one\n2. two")).toMatch(/<ol>.*<li>/s);
+    expect(html("**bold**")).toContain("<strong");
+    expect(html("`code`")).toContain("<code");
+    expect(html("```\nx = 1\n```")).toContain("<pre");
+    expect(html("- a\n- b")).toMatch(/<ul[^>]*>.*<li/s);
+    expect(html("1. one\n2. two")).toMatch(/<ol[^>]*>.*<li/s);
   });
 
   it("does NOT emit raw HTML from the model (no injection sink)", () => {
@@ -34,6 +39,7 @@ describe("Prose markdown rendering", () => {
     // and no live event-handler attribute — only the harmless escaped forms.
     expect(out).not.toContain("<img");
     expect(out).not.toContain("<b>");
+    expect(out).not.toContain("<b ");
     expect(out).not.toContain('onerror="'); // the live-attribute form; escaped &quot; is fine
     expect(out).toContain("&lt;img");
   });
