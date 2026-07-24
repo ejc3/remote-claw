@@ -287,6 +287,58 @@ test("a failed send restores the draft to the composer and offers Retry, then Re
   await expect(page.locator(".send-err")).toHaveCount(0); // banner cleared on the successful send
 });
 
+// The bottom-sheet has NO body scroll-lock (it would be a no-op — .transcript, not <body>, is the
+// scroller). What actually stops the transcript scrolling behind an open sheet is the full-viewport
+// .sheet-layer (position:fixed; inset:0; z-index:50) sitting above it — the .sheet-scrim is its visible,
+// click-to-close part. This pins that mechanism: with the mode sheet open, every point over the
+// transcript's rectangle must resolve to the overlay (layer/scrim/sheet), never to an element inside
+// .transcript. A future change (the overlay not covering, pointer-events slip, z-index regression) would
+// silently reintroduce scroll-behind — the exact bug an Astryx <Dialog> was considered for, then found
+// unnecessary because the overlay already solves it (finding N; verified on Chromium + WebKit).
+test("an open sheet's scrim covers the whole transcript region (the real scroll barrier)", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost();
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(page.locator(".transcript")).toBeVisible();
+  const box = await page.locator(".transcript").boundingBox();
+  expect(box).not.toBeNull();
+  await page.getByTestId("composer-mode").click();
+  await expect(page.locator('[role="dialog"]')).toBeVisible();
+  // Sample the transcript's own rectangle; every point must resolve to the scrim (or the sheet), never
+  // an element inside .transcript.
+  const b = box!;
+  const pts: Array<[number, number]> = [
+    [b.x + b.width / 2, b.y + 8],
+    [b.x + b.width / 2, b.y + b.height / 2],
+    [b.x + b.width / 2, b.y + b.height - 8],
+  ];
+  const reaches = await page.evaluate(
+    (points) =>
+      points.map(([x, y]) => {
+        let n = document.elementFromPoint(x, y);
+        while (n) {
+          if (
+            n.classList?.contains("sheet-layer") ||
+            n.classList?.contains("sheet-scrim") ||
+            n.classList?.contains("sheet")
+          )
+            return "blocked";
+          if (n.classList?.contains("transcript")) return "LEAKED";
+          n = n.parentElement;
+        }
+        return "other";
+      }),
+    pts,
+  );
+  expect(reaches, "a touch/wheel over the transcript must hit the scrim, never the scroller").not.toContain(
+    "LEAKED",
+  );
+});
+
 // #149 capability-aware viewer: a driver declares (on session_announce) which controls it can
 // faithfully service; the viewer disables + labels the ones it can't, so a permission-mode/model "✓"
 // never lies. Drive the real spine with reduced-capability presets and assert the rendered gating.
