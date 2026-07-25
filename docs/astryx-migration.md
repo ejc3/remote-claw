@@ -470,7 +470,7 @@ are hard functional blockers, not taste:
 | --- | --- |
 | **Session list row** (`button.row`) | `Item`'s root can only be `div`/`li`/`span`, never `<button>`. Moving the StatusDot + needs-badge to `startContent`/`endContent` drops them from the row's accessible name (connection state becomes colour-only) and shrinks the focus target below the 44px floor. |
 | **Expandable rows** (`<details>`) | `Collapsible` hides collapsed content with `display:none` — no `hidden="until-found"` anywhere in the package — which **kills Ctrl-F find-in-page** on tool output, diffs and thoughts. Its trigger is a baked large/semibold/primary `<button>` with no theming hook. |
-| **Diff viewer** (`.diff` / `.dl-add` / `.dl-del`) | `highlightLines` is a flat `number[]` → one internal `Set` → the single `--color-accent-muted` wash for *every* listed line, so `+` and `−` lines tint **identically**, with no per-sign colour and no `+`/`−` marker. (0.1.8 *does* have a `title` string label and a `maxHeight` scroll cap / `isCollapsible` whole-block collapse, so those aren't the blocker — the single highlight class is.) Confirmed upstream, with a live side-by-side: [facebook/astryx#3345](https://github.com/facebook/astryx/issues/3345). |
+| **Diff viewer** (`.diff`) | *Was* kept: `highlightLines` was a flat `number[]` → one `--color-accent-muted` wash for *every* line, so `+`/`−` lines tinted **identically**. We closed that gap **upstream** — per-line `{line, type}` washes + `+`/`−` markers ([facebook/astryx#4328](https://github.com/facebook/astryx/pull/4328), building on #3345/#3351) — and **migrated** the diff body to `CodeBlock` (adopted via a fork override; see §Q). The hand-written `.dl-add`/`.dl-del` line renderer is retired; the `.diff` wrapper still owns the border + path header. |
 | **Tool output** (`.tool-output`) | `CodeBlock` creates one `<div>` per line with no windowing, so a large log still builds every node and tokenizes every line — though once a block reaches 100 lines 0.1.8 lets *offscreen* lines skip layout/paint (`content-visibility:auto` on 20-line chunks) and caps the visible extent (`maxHeight` scroll cap / `isCollapsible` collapse). For raw stdout that needs none of its tokenizer/copy/card, a plain `<pre>` stays lighter. |
 | **Sheet rows** (`.mode-row`) | No row component (`Item` / `DropdownMenuRadioItem` / `RadioListItem`) puts the selected/pressed state on the *focusable* element — `Item`'s `aria-selected` lands on a role-less `<div>` and is dropped by assistive tech. |
 | **Status strip** (`.chat-status`, `.transcript-gap`) | `Banner` has no neutral/ambient status (`info` forces a blue fill), its status map is type-only so a custom status **silently drops `role`** (an a11y regression), and its header floor is +34% on our ~33px pinned one-line strip. (The error banners, which ARE alerts, did migrate — finding above.) |
@@ -479,19 +479,20 @@ are hard functional blockers, not taste:
 
 Upstream asks implied above, most valuable first: a `<button>`-rootable selectable list item that keeps
 state on the focusable element; `hidden="until-found"` (or a find-in-page-safe collapse) on `Collapsible`;
-per-sign colours (or a diff mode) on `CodeBlock` ([facebook/astryx#3345](https://github.com/facebook/astryx/issues/3345));
-a neutral/ambient `Banner` status; a border/outline `Badge` variant.
+~~per-sign colours (or a diff mode) on `CodeBlock`~~ — **delivered**, we contributed it in
+[facebook/astryx#4328](https://github.com/facebook/astryx/pull/4328); a neutral/ambient `Banner` status;
+a border/outline `Badge` variant.
 
-The `CodeBlock` diff limitation is the one that renders as a screenshot. The same config edit, both ways:
-the real `<CodeBlock highlightLines={[3,4,5,6]}>` washes all four changed lines with the one
-`--color-accent-muted`, so the highlight itself doesn't distinguish add from remove (and carries no
-`+`/`−`), while the renderer we kept marks deletions red with `−` and additions green with `+`. This is the visual behind [#3345]:
+The `CodeBlock` diff limitation was the one that rendered as a screenshot — and the one we then fixed
+upstream. Below is the gap that motivated it: the same config edit, both ways — the stock
+`<CodeBlock highlightLines={[3,4,5,6]}>` washes all four changed lines with the one `--color-accent-muted`
+(the highlight can't distinguish add from remove, no `+`/`−`), beside the per-sign renderer we used to
+hand-write. #4328 folds exactly that per-sign behaviour (washes **and** `+`/`−` markers) into `CodeBlock`,
+so the diff body is now the component, not hand-written CSS:
 
-| CodeBlock vs. our diff viewer — light | dark |
+| stock CodeBlock vs. per-sign diff — light | dark |
 | --- | --- |
-| ![top: Astryx CodeBlock washes lines 3–6 with one identical accent colour and no plus/minus marker; bottom: remote-claw diff viewer shows red minus deletions and green plus additions — light mode](assets/astryx/codeblock-diff-light.png) | ![the same comparison in dark mode](assets/astryx/codeblock-diff-dark.png) |
-
-[#3345]: https://github.com/facebook/astryx/issues/3345
+| ![top: Astryx CodeBlock washes lines 3–6 with one identical accent colour and no plus/minus marker; bottom: a per-sign diff viewer shows red minus deletions and green plus additions — light mode](assets/astryx/codeblock-diff-light.png) | ![the same comparison in dark mode](assets/astryx/codeblock-diff-dark.png) |
 
 ### N. `Dialog` for the sheet shell — investigated, then KEPT (the bug it would fix isn't real here)
 
@@ -539,6 +540,23 @@ Measured on the shipped build: the route links **~154 KB of CSS raw / ~30 KB gzi
 the migration the hand-written stylesheet was a few KB gzipped, so first-load CSS grew roughly 5×. In
 absolute terms 30 KB gzipped is still modest, but the whole-library stylesheet is the dominant term and it
 doesn't shrink as we adopt fewer components — which is exactly why subsetting would help.
+
+### Q. Adopting the fork — the CodeBlock diff fix, via a vendored override
+
+The one surface in §M we KEPT for a hard functional reason (the diff viewer) is now MIGRATED, because we
+fixed the reason **upstream**: [facebook/astryx#4328](https://github.com/facebook/astryx/pull/4328) adds
+per-line `{line, type}` diff washes plus `+`/`−` gutter markers to `CodeBlock` (building on the maintainer's
+#3345/#3351). Until that lands in a published release, remote-claw runs the fork: `@astryxdesign/core` is a
+**monorepo subpackage**, so a git dependency can't target it — instead we `pnpm pack` the fork's built
+`core` to `vendor/astryxdesign-core-0.1.8.tgz` and point the root `pnpm.overrides` at that tarball. It's a
+temporary bridge; when #4328 releases we drop the override and bump the version. See `vendor/README.md`.
+
+One trap the migration surfaced, now fixed in #4328: the marker was first drawn with
+`::after { content: attr(data-diff-marker) }`, which works with a raw stylesheet but **Next 16's CSS
+minifier silently drops `attr()` content in `::after`** (it keeps `attr()` in `::before` and keeps literal
+`::after` content) — the marker vanished in the real app while the wash still showed. The fix renders the
+glyphs as literal per-type content (`"+"` / `"\2212"`), which survives the bundler. This is the CSS analogue
+of the layer-drop trap in §B: verify the BUILT/served CSS, never the source.
 
 ---
 

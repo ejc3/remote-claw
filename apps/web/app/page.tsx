@@ -5,6 +5,7 @@ import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Code } from "@astryxdesign/core/Code";
+import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { Heading } from "@astryxdesign/core/Heading";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { Markdown } from "@astryxdesign/core/Markdown";
@@ -2553,31 +2554,51 @@ function TaskRow({ text }: { text: string }) {
 
 const MAX_DIFF_LINES = 200; // cap each side so a large Write/Edit doesn't mount thousands of nodes
 
-/** A diff viewer for a file edit — a path header over the changed lines (removed red / added green),
- *  computed from the tool_use input. See diffOf() for how a hunk is reduced to just its changes. */
+/** A diff viewer for a file edit — a path header over the changed lines. The body is Astryx's
+ *  CodeBlock: removed lines are typed `remove` (red wash + `−` marker), added lines `add` (green wash +
+ *  `+` marker) — the per-sign diff support we contributed upstream (facebook/astryx#4328). The `+`/`−`
+ *  markers keep add-vs-remove legible without relying on colour alone (WCAG 1.4.1). See diffOf() for how
+ *  a hunk is reduced to just its changes. */
 function DiffView({ input }: { input: ToolInput }) {
   const path = input.file_path ?? "file";
   const { rem, add } = diffOf(input);
+  const header = (
+    <div className="diff-path" title={path}>
+      {basename(path)} <span className="diff-dir">{dirname(path)}</span>
+    </div>
+  );
   if (rem.length === 0 && add.length === 0)
     return (
       <div className="diff">
-        <div className="diff-path" title={path}>
-          {basename(path)} <span className="diff-dir">{dirname(path)}</span>
-        </div>
+        {header}
         <div className="diff-empty">no textual changes</div>
       </div>
     );
+  const remShown = rem.slice(0, MAX_DIFF_LINES);
+  const addShown = add.slice(0, MAX_DIFF_LINES);
+  // Removed block then added block (diffOf already groups them this way); type each line so CodeBlock
+  // paints the per-sign wash + marker. CodeBlock substitutes a zero-width space for blank lines itself,
+  // so an empty changed line still renders a row.
+  const code = [...remShown, ...addShown].join("\n");
+  const highlightLines = [
+    ...remShown.map((_, i) => ({ line: i + 1, type: "remove" as const })),
+    ...addShown.map((_, i) => ({ line: remShown.length + i + 1, type: "add" as const })),
+  ];
   return (
     <div className="diff">
-      <div className="diff-path" title={path}>
-        {basename(path)} <span className="diff-dir">{dirname(path)}</span>
-      </div>
-      <pre className="diff-body">
-        {diffLines(rem.slice(0, MAX_DIFF_LINES), "dl-del", "−")}
-        {more(rem.length - MAX_DIFF_LINES, "removed")}
-        {diffLines(add.slice(0, MAX_DIFF_LINES), "dl-add", "+")}
-        {more(add.length - MAX_DIFF_LINES, "added")}
-      </pre>
+      {header}
+      <CodeBlock
+        code={code}
+        language="plaintext"
+        width="100%"
+        size="sm"
+        container="section"
+        hasCopyButton={false}
+        hasLanguageLabel={false}
+        highlightLines={highlightLines}
+      />
+      {more(rem.length - MAX_DIFF_LINES, "removed")}
+      {more(add.length - MAX_DIFF_LINES, "added")}
     </div>
   );
 }
@@ -2585,27 +2606,10 @@ function DiffView({ input }: { input: ToolInput }) {
 function more(n: number, which: string): ReactNode {
   if (n <= 0) return null;
   return (
-    <div className="dl dl-more">
+    <div className="dl-more">
       … {n} more {which} line{n === 1 ? "" : "s"}
     </div>
   );
-}
-
-// Render one side of a diff. Keyed by content + occurrence ordinal (not the array index): for an
-// immutable, never-reordered diff that is a stable identity, and it keeps biome's array-index rule
-// satisfied honestly rather than by suppression.
-function diffLines(lines: string[], cls: string, sign: string): ReactNode[] {
-  const seen = new Map<string, number>();
-  return lines.map((line) => {
-    const n = seen.get(line) ?? 0;
-    seen.set(line, n + 1);
-    return (
-      <div key={`${sign}${n}:${line}`} className={`dl ${cls}`}>
-        <span className="dg">{sign}</span>
-        {line}
-      </div>
-    );
-  });
 }
 
 /**
