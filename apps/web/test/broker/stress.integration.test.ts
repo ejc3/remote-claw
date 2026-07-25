@@ -1,5 +1,5 @@
 import { type Frame, type FrameHeader, type Identity, toHex } from "@remote-claw/clawsec";
-import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
+import { BrokerClient, FrameOrderer, securityProvider } from "@remote-claw/cli/broker";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { brokerFetch } from "../e2e/harness";
@@ -57,8 +57,15 @@ function randomBytes(n: number): Uint8Array {
   return b;
 }
 
-/** Read exactly `n` frames from a session channel (startIndex 0), then stop. */
-async function drain(viewer: BrokerClient, sessionId: string, n: number): Promise<Frame[]> {
+/** Read frames until the production `FrameOrderer` has RELEASED `n` transcript frames — dedup by
+ *  msg_id + reorder by seq, exactly as the real viewer does. The broker is at-least-once and NOT FIFO
+ *  by design (order.ts §12; docs/protocol.md, docs/v2-architecture.md): a raw read can therefore see a
+ *  duplicate (at-least-once) or an out-of-order frame (non-FIFO) — neither is a bug, both are
+ *  reconstructed here. A genuinely LOST frame still fails the caller: the orderer withholds the
+ *  incomplete prefix so this never reaches `n`, and the stream's end (or its SSE idle-watchdog, else the
+ *  60s testTimeout) ends the loop with `frames.length < n` — the exact-count assertion then fails. */
+async function drainOrdered(viewer: BrokerClient, sessionId: string, n: number): Promise<Frame[]> {
+  const orderer = new FrameOrderer(0);
   const out: Frame[] = [];
   const ac = new AbortController();
   for await (const f of viewer.streamFrames({
@@ -66,7 +73,7 @@ async function drain(viewer: BrokerClient, sessionId: string, n: number): Promis
     startIndex: 0,
     signal: ac.signal,
   })) {
-    out.push(f);
+    out.push(...orderer.accept(f));
     if (out.length >= n) break;
   }
   ac.abort();
@@ -88,12 +95,14 @@ describe.each(BACKENDS)("encryption stress — %s backend", (backend) => {
       await host.postFrame(hdr(id, sid, i, `s-${i}`), inputs[i] as Uint8Array);
     }
 
-    const frames = await drain(viewer, sid, inputs.length);
+    // Reconstruct the transcript the way the viewer does (dedup + reorder-by-seq) — the broker is
+    // at-least-once and NOT FIFO, so raw arrival order is not the transcript order.
+    const frames = await drainOrdered(viewer, sid, inputs.length);
     expect(frames.length).toBe(inputs.length);
     for (let i = 0; i < inputs.length; i++) {
       const f = frames[i] as Frame;
       const recovered = await viewer.openFrame(f);
-      expect(toHex(recovered)).toBe(toHex(inputs[i] as Uint8Array)); // exact, in order
+      expect(toHex(recovered)).toBe(toHex(inputs[i] as Uint8Array)); // exact, in transcript (seq) order
       // The broker forwarded CIPHERTEXT: the sealed ct is never the plaintext (and is longer — nonce +
       // AEAD tag), and an unrelated identity cannot open it.
       if ((inputs[i] as Uint8Array).length > 0) {
@@ -117,7 +126,7 @@ describe.each(BACKENDS)("encryption stress — %s backend", (backend) => {
       const input = randomBytes(n);
       await host.postMessage(hdr(id, sid, 0, `c-${n}`), input, maxChunk);
       const parts = Math.max(1, Math.ceil(n / maxChunk));
-      const frames = await drain(viewer, sid, parts);
+      const frames = await drainOrdered(viewer, sid, parts);
       expect(frames.length).toBe(parts);
       const recovered = await viewer.openMessage(frames);
       expect(toHex(recovered)).toBe(toHex(input)); // exact reassembly + decrypt
@@ -134,11 +143,12 @@ describe.each(BACKENDS)("encryption stress — %s backend", (backend) => {
 
     await Promise.all(inputs.map((p, i) => host.postFrame(hdr(id, sid, i, `k-${i}`), p)));
 
-    const frames = await drain(viewer, sid, K);
+    const frames = await drainOrdered(viewer, sid, K);
     expect(frames.length).toBe(K);
     const recovered = new Set<string>();
     for (const f of frames) recovered.add(toHex(await viewer.openFrame(f)));
-    // Every distinct payload came back exactly once — no loss, no corruption (order may interleave).
+    // Every distinct payload came back exactly once — no loss, no corruption. Concurrent publishes can
+    // arrive out of order / duplicated (at-least-once, non-FIFO); the orderer dedups + reorders by seq.
     expect(recovered).toEqual(new Set(inputs.map((p) => toHex(p))));
   }, 60_000);
 
@@ -149,7 +159,7 @@ describe.each(BACKENDS)("encryption stress — %s backend", (backend) => {
     const sid = `stress-tamper-${backend}`;
     await host.postFrame(hdr(id, sid, 0, "t-0"), randomBytes(64));
 
-    const [f] = await drain(viewer, sid, 1);
+    const [f] = await drainOrdered(viewer, sid, 1);
     const frame = f as Frame;
     // openFrame succeeds on the pristine frame...
     await expect(viewer.openFrame(frame)).resolves.toBeDefined();
