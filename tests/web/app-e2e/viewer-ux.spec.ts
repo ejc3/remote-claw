@@ -42,25 +42,44 @@ test("the entry CTA meets the 44px touch target", async ({ page }) => {
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
 });
 
-// The keyboard focus ring must stay the BRIGHT accent (#7c7ef5 → rgb(124,126,245)). This is a live
-// regression risk rather than a hypothetical: what draws it is the global :focus-visible rule in
-// viewer.css, and every OTHER rule in that file is migration debt scheduled for deletion as its
-// component moves to Astryx. Deleting this one along with them silently changes the indicator —
-// bite-checked here, where removing the rule drops this control's outline to rgb(236,236,238) (the
-// inherited text colour). Astryx's own rings would not restore it either: astryx.css draws them as
-// `outline: 2px solid var(--color-accent)`, and this theme pins --color-accent to the darker #5457e8
-// FILL for brand reasons (~3.4:1 on the near-black background vs 5.8:1 for #7c7ef5 — still over the 3:1
-// WCAG 2.2 SC 1.4.11 asks of a non-text indicator, but visibly dimmer). Asserted on a migrated (Astryx
-// TextArea) control specifically, so it covers the components the migration has already replaced.
+// The keyboard focus ring must stay the contrast-tuned accent-as-text (--accent-text: #7c7ef5 on dark,
+// #4b4ee0 on light), NOT the dimmer --color-accent fill (#5457e8). This is a live regression risk rather
+// than a hypothetical: what draws it is the global :focus-visible rule in viewer.css, and every OTHER rule
+// in that file is migration debt scheduled for deletion as its component moves to Astryx. Deleting this
+// one along with them silently changes the indicator — bite-checked here (removing the rule drops the
+// outline to the inherited text colour). Astryx's own rings would not restore it either: astryx.css draws
+// them as `outline: 2px solid var(--color-accent)` (the fill), which is dimmer (~3.4:1 on the near-black
+// background vs 5.8:1 for #7c7ef5 — still over the 3:1 WCAG 2.2 SC 1.4.11 asks of a non-text indicator,
+// but visibly dimmer). The assertion is mode-agnostic (see the probe below): it pins ring == --accent-text
+// and ring != fill in whichever mode the run is in. On a migrated (Astryx TextArea) control specifically.
 test("keyboard focus rings stay the bright accent on Astryx controls", async ({ page }) => {
   await page.goto(`/${qp}`);
   const field = page.getByLabel("Machine pass");
   await field.focus();
   const ring = await field.evaluate((el) => {
     const s = getComputedStyle(el);
-    return { color: s.outlineColor, width: s.outlineWidth, style: s.outlineStyle };
+    // Resolve --accent-text (the contrast-tuned accent-as-text) and --accent (the fill) in the CURRENT
+    // colour mode via probe elements, so the assertion is mode-agnostic: the ring is #7c7ef5 on dark and
+    // #4b4ee0 on light, but in BOTH it must be --accent-text and NOT the fill (#5457e8 = --color-accent,
+    // which is what a stock Astryx ring would use).
+    const probe = (v: string) => {
+      const p = document.createElement("span");
+      p.style.color = `var(${v})`;
+      document.body.appendChild(p);
+      const c = getComputedStyle(p).color;
+      p.remove();
+      return c;
+    };
+    return {
+      color: s.outlineColor,
+      width: s.outlineWidth,
+      style: s.outlineStyle,
+      accentText: probe("--accent-text"),
+      fill: probe("--accent"),
+    };
   });
-  expect(ring.color).toBe("rgb(124, 126, 245)"); // --accent-text, NOT the #5457e8 fill
+  expect(ring.color).toBe(ring.accentText); // the ring IS --accent-text, whatever the mode
+  expect(ring.color).not.toBe(ring.fill); // and NOT the dimmer --color-accent fill
   expect(ring.style).toBe("solid");
   expect(Number.parseFloat(ring.width)).toBeGreaterThanOrEqual(2);
 });
@@ -478,5 +497,110 @@ test.describe("desktop layout (≥761px)", () => {
     if (!sb) return;
     expect(sb.width).toBeLessThanOrEqual(360); // a compact popover, not full-width
     expect(sb.y).toBeLessThan(300); // anchored below the top-right ⋯, not pinned to the bottom edge
+  });
+});
+
+// ── colour mode (light / dark) ──────────────────────────────────────────────────────────────────────
+// Light mode was added after a long dark-only run. Prove all three moving parts, not just that the
+// attribute got set: (1) the rc-theme cookie drives data-theme on <html> at SSR (server-stamped, so
+// flash-free with no hydration mismatch — set the cookie then RELOAD so the value goes through the real
+// server round-trip); (2) BOTH the Astryx component tokens AND the hand-written viewer.css tokens actually
+// invert — a surface colour AND a text colour, not merely the color-scheme attribute; (3) the topbar
+// toggle cycles system→light→dark and persists the cookie. The bite: if the palette didn't invert, the
+// "light" surface stays dark (and vice-versa) and the luminance assertions fail.
+
+/** Resolved colour-mode signals from the running page: <html>'s data-theme + color-scheme, the Astryx card
+ *  surface luminance (proves the theme's light half), and the body text luminance (proves the hand-written
+ *  --text token flipped). Relative luminance runs 0 (black) … 1 (white). */
+async function modeSignals(page: import("@playwright/test").Page) {
+  return page.evaluate(() => {
+    const lum = (rgb: string) => {
+      const [r = 0, g = 0, b = 0] = (rgb.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number);
+      const f = (v: number) => {
+        const x = v / 255;
+        return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    };
+    const html = document.documentElement;
+    const card = document.querySelector(".astryx-card");
+    return {
+      dataTheme: html.getAttribute("data-theme"),
+      colorScheme: getComputedStyle(html).colorScheme,
+      cardLum: card ? lum(getComputedStyle(card).backgroundColor) : null,
+      bodyTextLum: lum(getComputedStyle(document.body).color),
+    };
+  });
+}
+
+test.describe("colour mode (light / dark)", () => {
+  test("the rc-theme=light cookie renders a light surface (SSR data-theme, tokens inverted)", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    // Set the cookie the same way the toggle does, then RELOAD so the server layout reads it and stamps
+    // data-theme on the first paint (not a client mount effect). Origin-agnostic: works against localhost
+    // AND the deployed preview URL.
+    await page.evaluate(() => {
+      document.cookie = "rc-theme=light; path=/; samesite=lax";
+    });
+    await page.reload();
+    await expect(page.getByLabel("Machine pass")).toBeVisible();
+    const s = await modeSignals(page);
+    expect(s.dataTheme).toBe("light");
+    expect(s.colorScheme).toBe("light");
+    expect(s.cardLum ?? 0).toBeGreaterThan(0.7); // Astryx card surface near-white in light
+    expect(s.bodyTextLum).toBeLessThan(0.2); // hand-written --text near-black in light
+  });
+
+  test("the rc-theme=dark cookie renders a dark surface", async ({ page, seedHost }) => {
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.evaluate(() => {
+      document.cookie = "rc-theme=dark; path=/; samesite=lax";
+    });
+    await page.reload();
+    await expect(page.getByLabel("Machine pass")).toBeVisible();
+    const s = await modeSignals(page);
+    expect(s.dataTheme).toBe("dark");
+    expect(s.colorScheme).toBe("dark");
+    expect(s.cardLum ?? 1).toBeLessThan(0.05); // near-black surface
+    expect(s.bodyTextLum).toBeGreaterThan(0.7); // near-white text
+  });
+
+  test("the topbar toggle cycles system → light → dark and persists to the cookie", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost({ harness: "tmux" });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
+
+    const toggle = page.getByRole("button", { name: /^Theme:/ });
+    await expect(toggle).toBeVisible();
+    const cookieValue = async () =>
+      (await page.context().cookies()).find((c) => c.name === "rc-theme")?.value;
+
+    // Default with no cookie: system (follows the OS) — no data-theme attribute on <html>.
+    await expect(toggle).toHaveAttribute("data-theme-mode", "system");
+    await expect(page.locator("html")).not.toHaveAttribute("data-theme");
+
+    await toggle.click(); // → light
+    await expect(toggle).toHaveAttribute("data-theme-mode", "light");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    expect(await cookieValue()).toBe("light");
+
+    await toggle.click(); // → dark
+    await expect(toggle).toHaveAttribute("data-theme-mode", "dark");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    expect(await cookieValue()).toBe("dark");
+
+    await toggle.click(); // → system (attribute removed again)
+    await expect(toggle).toHaveAttribute("data-theme-mode", "system");
+    await expect(page.locator("html")).not.toHaveAttribute("data-theme");
+    expect(await cookieValue()).toBe("system");
   });
 });

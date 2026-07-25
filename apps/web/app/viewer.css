@@ -14,24 +14,39 @@
    test/astryx-foundation.test.ts. */
 @layer remote-claw {
 :root {
-  --bg: #0a0a0b;
-  --surface: #141417;
-  --surface-2: #1b1b1f;
-  --line: #26262b;
-  --line-soft: #1c1c20;
-  --text: #ececee;
-  --text-dim: #9a9aa3;
-  --text-faint: #8a8a94;
+  /* Every mode-dependent token is `light-dark(LIGHT, DARK)`. The DARK half is the palette this app
+     shipped as its only surface; the LIGHT half mirrors the theme file's own light tuples
+     (app/theme/remote-claw.ts) so the hand-written CSS and the Astryx components agree exactly. These
+     resolve off `color-scheme`, which Astryx's reset.css derives from the `data-theme` attribute on
+     <html> — set on first paint by the server layout (from the rc-theme cookie) and kept in sync by
+     <Theme mode>. No separate light/dark selector to maintain: one token, one switch. */
+  --bg: light-dark(#f4f5f8, #0a0a0b);
+  --surface: light-dark(#ffffff, #141417);
+  --surface-2: light-dark(#eaecf1, #1b1b1f); /* recessed grey (code, chips, sheet-row hover) */
+  --line: light-dark(#d6dae2, #26262b);
+  --line-soft: light-dark(#e7eaf0, #1c1c20);
+  --text: light-dark(#0a1317, #ececee);
+  --text-dim: light-dark(#4e606f, #9a9aa3);
+  --text-faint: light-dark(#646d78, #8a8a94); /* still ≥4.5:1 on both surfaces (AA) */
   /* Two accents because white-on-fill and accent-on-dark move in OPPOSITE directions. --accent is the
      button FILL (white text on it): #5457e8 → white-on-fill 5.38 (was #6366f1 = 4.47, sub-AA). --accent-text
-     is accent used AS text/borders/focus on the dark bg: #7c7ef5 → 5.8 on bg / 5.4 on surface (the old
-     #6366f1 was 4.43/4.12 there). Both now clear WCAG AA 4.5:1. (#design-pass contrast) */
+     is accent used AS text/borders/focus: on the DARK bg #7c7ef5 → 5.8 on bg / 5.4 on surface (where the
+     #5457e8 fill would be only ~3.4); on the LIGHT bg it inverts to the darker #4b4ee0 (~6.5:1 on white,
+     where #7c7ef5 would be ~2:1). Both halves clear WCAG AA 4.5:1. (#design-pass contrast) */
   --accent: #5457e8;
   --accent-hover: #5e61ee; /* fill hover — white-on-fill 4.75 (the old #7c7ef5 was 3.41, failed AA) */
-  --accent-text: #7c7ef5;
-  --online: #34d399;
-  --warn: #fbbf24; /* amber — reconnecting / needs-you (#58) */
-  --danger: #fb7185;
+  --accent-text: light-dark(#4b4ee0, #7c7ef5);
+  --online: light-dark(#0d8626, #34d399);
+  /* These are TEXT tokens (labels, statuses, diff signs, semantic button tints), tuned darker on light
+     than the theme's fill tokens (--color-warning/-error) — the same fill-vs-text split as --accent vs
+     --accent-text. The light halves clear WCAG AA 4.5:1 on their worst-case background, the Astryx
+     secondary-button surface ~#e2ded8 (perm Allow/Deny, retry): warn #8a6300 (4.98:1 on the near-white
+     body / 5.4 on white), danger #bd0f2e (4.79 on the button / 6.4 on white). The theme's amber/red FILLS
+     stay bright — darkening them would drop the dark text ON a Badge/Banner below AA. The bright amber
+     "needs you" FILL lives on .needs-badge directly. (measured, not eyeballed — an early #b07d05/#e3193b
+     pass was ~3.5:1 as text.) */
+  --warn: light-dark(#8a6300, #fbbf24);
+  --danger: light-dark(#bd0f2e, #fb7185);
   --radius: 12px;
   --radius-sm: 9px;
   --header-h: 56px;
@@ -50,7 +65,7 @@ body {
 }
 
 body {
-  background: radial-gradient(1200px 600px at 50% -10%, #15151b 0%, var(--bg) 55%) fixed;
+  background: radial-gradient(1200px 600px at 50% -10%, light-dark(#ffffff, #15151b) 0%, var(--bg) 55%) fixed;
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -146,17 +161,19 @@ summary:focus-visible,
   gap: 12px;
   padding: 0 16px;
   border-bottom: 1px solid var(--line-soft);
-  background: rgba(10, 10, 11, 0.7);
+  background: light-dark(rgba(255, 255, 255, 0.72), rgba(10, 10, 11, 0.7));
   backdrop-filter: blur(8px);
+}
+/* Right-pins the theme toggle so it + Forget cluster at the topbar's trailing edge. Floored to a 44px
+   touch target like the other icon-only header control (.chat-menu) — the app's #151 policy. */
+.topbar-theme {
+  margin-left: auto;
+  min-width: 44px;
+  min-height: 44px;
 }
 .topbar .count {
   color: var(--text-faint);
   font-size: 13px;
-}
-.ghost {
-  /* Right-pins the topbar action. Everything else (fill, border, radius, padding, the armed red state)
-     is the Astryx Button's ghost/destructive variant now. */
-  margin-left: auto;
 }
 .panes {
   flex: 1;
@@ -238,8 +255,10 @@ summary:focus-visible,
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
+  /* A loud "needs you" chip: bright amber FILL with near-black text in BOTH modes. It can't use --warn,
+     which darkens to amber-700 on light (where #1a1205 text would then be dark-on-dark). */
   color: #1a1205;
-  background: var(--warn);
+  background: #fbbf24;
 }
 
 /* The working pulse — three dots that fade in sequence (the thinking indicator, #48). */
@@ -447,12 +466,15 @@ summary:focus-visible,
    USER = small right-aligned pill; ASSISTANT = full-width prose, no bubble (reads as authored
    text). Tool calls are compact tappable rows that expand to a Command/Diff detail. (Design spec.) */
 
-/* Diff + code accents, tuned for the dark theme (the app's default palette). */
+/* Diff + code accents. Dark half = GitHub dark diff palette; light half darkened to clear WCAG AA 4.5:1
+   as text on the worst-case background — the Astryx secondary-button surface where the green/red tint the
+   perm Allow/Deny labels (#15702f green = 4.62:1, #bf1b27 red = 4.61:1 there; both higher on the diff
+   tint + transcript body). The low-alpha tints stay bright (they're washes over the surface). */
 :root {
-  --add-fg: #3fb950;
-  --add-bg: rgba(63, 185, 80, 0.14);
-  --del-fg: #f85149;
-  --del-bg: rgba(248, 81, 73, 0.13);
+  --add-fg: light-dark(#15702f, #3fb950);
+  --add-bg: light-dark(rgba(26, 127, 55, 0.12), rgba(63, 185, 80, 0.14));
+  --del-fg: light-dark(#bf1b27, #f85149);
+  --del-bg: light-dark(rgba(207, 34, 46, 0.1), rgba(248, 81, 73, 0.13));
   --code-bg: var(--surface-2);
 }
 
@@ -544,11 +566,12 @@ summary:focus-visible,
 .prose > :last-child {
   margin-bottom: 0;
 }
-/* Links inside the transcript. KEPT deliberately: --accent-text (#7c7ef5) clears AA on this dark
-   background (5.7 on bg / 5.2 on surface) where the button-fill --accent (#5457e8) only reaches 3.6:1.
-   Astryx's own link colour isn't tuned for this palette, so the contrast rule stays ours. */
+/* Links inside the transcript. KEPT deliberately: --accent-text is the contrast-tuned accent for text —
+   #7c7ef5 on dark (5.7 on bg / 5.2 on surface, where the button-fill #5457e8 reaches only 3.6:1) and
+   #4b4ee0 on light (~6.5:1 on white, where #7c7ef5 would be ~2:1). Astryx's own link colour isn't tuned
+   for this palette, so the contrast rule stays ours. */
 .prose a {
-  color: var(--accent-text, #7c7ef5);
+  color: var(--accent-text);
   text-decoration: underline;
 }
 

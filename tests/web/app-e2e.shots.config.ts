@@ -13,13 +13,25 @@ import base from "./app-e2e.config";
 // the change under review.
 //
 // Two viewports because the viewer has two genuinely different layouts: a single column with back-nav on
-// a phone, and the two-pane console (plus ANCHORED dropdowns instead of bottom sheets) above 761px.
+// a phone, and the two-pane console (plus ANCHORED dropdowns instead of bottom sheets) above 761px. Each
+// viewport is captured in BOTH colour modes — the viewer now defaults to `system`, so `colorScheme` is set
+// EXPLICITLY per project (not left to Playwright's implicit 'light') and drives light-dark() via the OS
+// preference. Compare -light against -dark side by side to judge the light palette, and either against the
+// pre-branch shot to judge the change. Shots land in tests/web/shots/<project>/.
 export default defineConfig({
   ...base,
   testMatch: ["shots.spec.ts"],
   outputDir: "./test-results-shots",
   projects: [
-    { name: "phone", use: { ...devices["Pixel 5"] } },
-    { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } } },
+    { name: "phone-dark", use: { ...devices["Pixel 5"], colorScheme: "dark" } },
+    { name: "phone-light", use: { ...devices["Pixel 5"], colorScheme: "light" } },
+    {
+      name: "desktop-dark",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+    },
+    {
+      name: "desktop-light",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 }, colorScheme: "light" },
+    },
   ],
 });

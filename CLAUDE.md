@@ -161,9 +161,25 @@ right while being wrong:
   them. `--color-accent` / `--color-on-accent` are pinned on purpose: seeding the accent family alone
   makes Astryx INVERT the accent in dark mode (pale fill, dark text), which no test catches.
 
-Because the last one is invisible to the test suite, **look at a screenshot before merging any viewer
-change**: `cd tests/web && pnpm exec playwright test -c app-e2e.shots.config.ts` writes 11 surfaces per
-width to `tests/web/shots/<project>/`. Take a set before and after and actually open them.
+**Colour mode is light + dark (default `system`).** Every token is a `[light, dark]` tuple →
+`light-dark()`, resolved off `color-scheme`, which Astryx's `reset.css` derives from `<html data-theme>`.
+The hand-written `viewer.css` `:root` surface/text tokens MIRROR the theme's light/dark pairs as
+`light-dark()` so the two systems flip together — keep those in sync. The semantic TEXT tokens
+(`--warn`/`--danger`/`--add-fg`/`--del-fg`) are deliberately DARKER on light than the theme's amber/red
+FILL tokens: they clear AA 4.5:1 as text (labels, diff signs, perm Allow/Deny tints) on the worst-case
+button surface, where the brighter fill values are ~3.5:1 — the same fill-vs-text split as
+`--accent`/`--accent-text`. Verify contrast with numbers, not eyeballs (codex caught a sub-AA pass here). The preference lives in the
+`rc-theme` cookie, READ server-side in `app/layout.tsx` (which makes the route dynamic — that's expected)
+so the first paint is flash-free; `app/providers.tsx` (`"use client"`) holds the state + `<Theme mode>`,
+and the cookie name/validator live in the directive-free `app/theme-mode.ts` (a client module's exports
+can't be called from the server layout). The topbar `ThemeToggle` cycles system→light→dark. When adding a
+new hardcoded colour to `viewer.css`, wrap it in `light-dark()` or the guard in
+`test/astryx-foundation.test.ts` (core tokens must be `light-dark()`) — and light mode — will regress.
+
+Because the accent-inversion trap is invisible to the test suite, **look at a screenshot before merging
+any viewer change** — in BOTH modes: `cd tests/web && pnpm exec playwright test -c app-e2e.shots.config.ts`
+writes 11 surfaces × `{phone,desktop}`×`{light,dark}` to `tests/web/shots/<project>/`. Take a set before
+and after and actually open them.
 
 ## CLI / clawsec workflow
 

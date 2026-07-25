@@ -86,21 +86,37 @@ function splitLayers(css: string): { blocks: { name: string; body: string }[]; r
   return { blocks, rest };
 }
 
-/** The FIRST stylesheet the prerendered route links. The layer-order declaration has to reach the
- *  browser before the layers it names are first used, so a sheet that merely *starts* with the
- *  declaration proves nothing if the browser loaded astryx-base ahead of it. Returns null when there is
- *  no prerendered HTML to read, which the caller asserts on rather than skipping past. */
+/** The FIRST stylesheet the route links, in the order the browser loads them. The layer-order
+ *  declaration has to reach the browser before the layers it names are first used, so a sheet that merely
+ *  *starts* with the declaration proves nothing if the browser loaded astryx-base ahead of it.
+ *
+ *  Read from Next's client-reference-manifest (`entryCSSFiles`) rather than a prerendered index.html: the
+ *  root layout reads the rc-theme cookie for light/dark, so the route is DYNAMIC and Next emits no static
+ *  route HTML on disk (only _global-error.html survives). The manifest is the exact source Next itself
+ *  uses to emit the <link> tags, so it's authoritative for a dynamic route as much as a static one — and
+ *  it lists the layout's CSS (the globals.css chain) before the page's, each in load order, so the first
+ *  `static/css/*` path in `entryCSSFiles` is the first <link> the browser sees. Returns null when the
+ *  manifest is absent (no build), which the caller asserts on rather than skipping past. */
 function firstLinkedStylesheet(): string | null {
-  for (const html of ["index.html", "_not-found.html"]) {
-    const p = join(import.meta.dirname, "..", ".next", "server", "app", html);
-    try {
-      const m = readFileSync(p, "utf8").match(/static\/css\/([a-z0-9]+\.css)/);
-      if (m?.[1] !== undefined) return m[1];
-    } catch {
-      /* try the next candidate */
-    }
+  const p = join(
+    import.meta.dirname,
+    "..",
+    ".next",
+    "server",
+    "app",
+    "page_client-reference-manifest.js",
+  );
+  let text: string;
+  try {
+    text = readFileSync(p, "utf8");
+  } catch {
+    return null;
   }
-  return null;
+  // Anchor to entryCSSFiles so a future JS chunk named like a css file can't be mistaken for the first
+  // sheet; within it, the first css path is the first-loaded <link>.
+  const section = text.slice(text.indexOf("entryCSSFiles"));
+  const m = section.match(/static\/css\/([a-z0-9]+\.css)/);
+  return m?.[1] ?? null;
 }
 
 describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
@@ -121,9 +137,12 @@ describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
   it("loads the layer-order declaration in the FIRST stylesheet the route links", () => {
     // Not "the declaration starts its own file" — that proves nothing if the browser loaded
     // astryx-base first, which would establish the order from source order and make the declaration a
-    // no-op. Assert against the document's actual <link> order.
+    // no-op. Assert against the route's actual <link> order (from Next's client-reference-manifest).
     const name = firstLinkedStylesheet();
-    expect(name, "no prerendered route HTML to read stylesheet order from").not.toBeNull();
+    expect(
+      name,
+      "no client-reference-manifest to read stylesheet order from — run `pnpm run build`",
+    ).not.toBeNull();
     const first = css.find((c) => c.name === name);
     expect(first, `first linked stylesheet ${name} not found on disk`).toBeDefined();
     expect(first?.text.trimStart().startsWith("@layer reset,")).toBe(true);
@@ -192,6 +211,30 @@ describe.skipIf(sheets === null)("astryx foundation (built CSS)", () => {
     expect(dense, "--color-on-accent must be pinned WITH --color-accent, never alone").toContain(
       "--color-on-accent:light-dark(#ffffff,#ffffff)",
     );
+  });
+
+  it("keeps the viewer's core hand-written tokens mode-aware (light-dark) so light mode can't silently regress", () => {
+    // The hand-written viewer.css tokens carry BOTH halves via light-dark(), which resolves off the
+    // color-scheme reset.css derives from <html data-theme>. Reverting any of these to a single value
+    // breaks one whole mode with no error and no failing render on the OTHER mode — exactly the class of
+    // silent regression this file exists to catch (cf. the accent-inversion that only a screenshot caught).
+    // Asserted on the built, minified CSS (`--bg:light-dark(...)`), not source.
+    const dense = all.replace(/\s+/g, "");
+    for (const tok of [
+      "--bg",
+      "--surface",
+      "--text",
+      "--accent-text",
+      "--warn",
+      "--danger",
+      "--add-fg",
+      "--del-fg",
+    ]) {
+      expect(
+        dense,
+        `${tok} is no longer light-dark() — light or dark mode will render stale colours`,
+      ).toMatch(new RegExp(`${tok.replace(/[-]/g, "\\-")}:light-dark\\(`));
+    }
   });
 
   it("has no bare element selectors left in @layer remote-claw", () => {
