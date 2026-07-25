@@ -60,6 +60,7 @@ import {
   TRANSCRIPT_GAP_STALL_MS,
   Viewer,
 } from "./lib/viewer";
+import { ThemeToggle } from "./theme-toggle";
 
 export interface TranscriptGap {
   nextSeq: number;
@@ -803,13 +804,16 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
         <span className="count">
           {list.length} session{list.length === 1 ? "" : "s"}
         </span>
+        {/* Colour-mode toggle. `.topbar-theme` carries the lone `margin-left:auto`, so it AND Forget
+            after it cluster at the trailing edge (two auto-margins would split the gap and strand the
+            toggle mid-bar). */}
+        <ThemeToggle className="topbar-theme" />
         {/* Armed maps to Astryx's `destructive` variant — the two-step confirm is exactly what that
-            variant is for, so the red state is now the component's rather than a .ghost-danger override.
-            Idle is `secondary`, not `ghost`: the original was a quiet OUTLINED button, and Astryx's ghost
-            is borderless — it read as plain text in the topbar and lost its affordance (caught in the
-            zoom review). `.ghost` survives only as the `margin-left:auto` that right-pins it. */}
+            variant is for, so the red state is now the component's. Idle is `secondary`, not `ghost`: the
+            original was a quiet OUTLINED button, and Astryx's ghost is borderless — it read as plain text
+            in the topbar and lost its affordance (caught in the zoom review). Right-pinning moved to the
+            theme toggle above, so this no longer needs a className. */}
         <Button
-          className="ghost"
           variant={forgetArmed ? "destructive" : "secondary"}
           size="sm"
           label={forgetArmed ? "Tap again to forget" : "Forget pass"}

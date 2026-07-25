@@ -1,8 +1,9 @@
 # Migrating the remote-claw viewer to Astryx
 
-A running, evidence-based log of moving `apps/web` (a Next.js 16 / React 19 dark-only chat-transcript
-viewer for remote Claude Code sessions) onto **[Astryx](https://astryx.atmeta.com)** — Meta's MIT-licensed
-React design system, `@astryxdesign/core@0.1.8` (public beta).
+A running, evidence-based log of moving `apps/web` (a Next.js 16 / React 19 chat-transcript viewer for
+remote Claude Code sessions — dark-only when the migration began, now light **and** dark) onto
+**[Astryx](https://astryx.atmeta.com)** — Meta's MIT-licensed React design system,
+`@astryxdesign/core@0.1.8` (public beta).
 
 It is written to be **shareable with the Astryx developers**: everything below is something we actually
 hit, with the evidence that proves it, not an impression. Findings are added as the migration proceeds.
@@ -28,6 +29,7 @@ and finding N (where the `Dialog` swap was investigated, reproduced, and dropped
 | Surface | State | Detail |
 | --- | --- | --- |
 | Cascade layers, brand theme, build, CSP | **Astryx** | `Theme`, `defineTheme`, `astryx theme build` |
+| Colour mode (light / dark / system) | **Astryx** | `[light, dark]` tuples → `light-dark()`; `<Theme mode>` + `data-theme`; topbar toggle |
 | Entry screens (Connect / Pairing / splash) | **Astryx** | `Card` `VStack` `Heading` `Text` `TextArea` `Button` `Banner` `Code` `Spinner` |
 | Composer controls (Send / Mode / attach) | **Astryx** | `Button` `IconButton` |
 | Permission + question actions | **Astryx** | `Button` (green/red tint kept — finding L) |
@@ -119,6 +121,30 @@ deleted:
 `Button`'s `isLoading` was also a straight upgrade: we used to swap the label to "Connecting…", which
 changes the accessible name mid-flight. `isLoading` keeps the name stable and adds a spinner plus
 `aria-busy`.
+
+**11. Light mode fell out of the theme's `[light, dark]` tuples almost for free.**
+The viewer shipped dark-only for a long time, but `defineTheme` had carried a `[light, dark]` tuple for
+every token all along (kept legible against a future light mode). Turning it on was three things: verify
+the light half (WCAG AA + screenshots in both modes); mirror the same light/dark pairs into the handful of
+hand-written `viewer.css` tokens that Astryx doesn't own, as CSS `light-dark()` — which resolves off the
+very `color-scheme` that Astryx's `reset.css` derives from `<html data-theme>`, so the two systems flip in
+lockstep with **no second switch to maintain**; and add a `system`-default preference with a toggle. Two
+edges worth flagging for the roadmap: (a) `<Theme mode="system">` pins `color-scheme: light dark` on its
+wrapper, so you can't drive a forced mode purely from `<html data-theme>` while leaving `mode="system"` —
+the provider's `mode` prop must be the source of truth, which for flash-free SSR means the server has to
+know the preference (we read a cookie; a documented "SSR the mode" recipe would help). (b) The provider is
+a client component, so its exported helpers can't be called from a server layout — worth a note that
+cookie/`data-theme` plumbing belongs in a directive-free module. Net: the token model is the right shape,
+and the component layer needed zero changes to support a second surface.
+
+| light (the newly-verified surface) | dark (unchanged — the dark half of every `light-dark()`) |
+| --- | --- |
+| ![transcript in light mode: white surface, dark serif prose, muted tool rows, red error, indigo links](assets/astryx/light-transcript.png) | ![the same transcript in dark mode](assets/astryx/dark-transcript.png) |
+
+The semantic tints track the mode too — the permission card keeps its amber "action-required" border and
+warm tint, with a darkened green Allow, on the light surface:
+
+![permission card in light mode with an amber action-required border, warm tint, green Allow and neutral Deny](assets/astryx/light-permission.png)
 
 ---
 
@@ -497,6 +523,12 @@ uncompressed and loaded in full regardless of which components a page uses. For 
 device is a phone on a hotel network, that is the one number we are watching. Per-component CSS splitting
 (or a documented way to subset the stylesheet) would matter to us before we ship this to production.
 
+Measured on the shipped build: the route links **~154 KB of CSS raw / ~30 KB gzipped**, of which
+`astryx.css` is ~119 KB raw / ~22 KB gz — carrying every component's styles while we render ~12. Before
+the migration the hand-written stylesheet was a few KB gzipped, so first-load CSS grew roughly 5×. In
+absolute terms 30 KB gzipped is still modest, but the whole-library stylesheet is the dominant term and it
+doesn't shrink as we adopt fewer components — which is exactly why subsetting would help.
+
 ---
 
 ## The design pass — what a component migration does NOT give you
@@ -564,8 +596,8 @@ is not a finding, but `padding: 8px 12px` on a 32px primary CTA is.
    layers present, the theme's `@scope` attribute matching, and no remote `url()`/`@font-face`.
 3. `playwright test -c app-e2e.config.ts` — the existing browser suite, driving a real Chromium against a
    real Next server, a real broker and a real host process.
-4. `playwright test -c app-e2e.shots.config.ts` — 11 screenshots per surface at phone and desktop widths,
-   captured before and after each step and compared.
+4. `playwright test -c app-e2e.shots.config.ts` — 11 surfaces × {phone, desktop} × {light, dark},
+   captured before and after each step and compared (both colour modes since the light-mode work).
 5. `codex exec` as an independent reviewer on the diff.
 
 Each guard is **bite-validated**: we break the thing on purpose and confirm the test fails before trusting

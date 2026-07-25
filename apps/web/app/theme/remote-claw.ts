@@ -1,13 +1,16 @@
 // The remote-claw brand theme, expressed as an Astryx theme.
 //
-// The viewer is DARK-ONLY (see providers.tsx, which pins `mode="dark"`): it's a console you open on a
-// phone at night to steer a machine, and a light mode would be a second, untested surface. Every token
-// below is therefore a `[light, dark]` tuple whose DARK half is the one that ships — the light half is
-// kept honest (and legible) so a future light mode starts from something sane rather than nothing.
+// The viewer supports BOTH colour modes (see providers.tsx: it defaults to `system` and the topbar toggle
+// forces light/dark, persisted via the rc-theme cookie). Every token below is a `[light, dark]` tuple that
+// Astryx compiles to `light-dark(light, dark)`, resolved off the `color-scheme` reset.css derives from
+// <html data-theme>. It shipped dark-only for a long time; the light half was present-but-dormant all
+// along, then verified (WCAG AA, screenshots in both modes) and turned on.
 //
-// These values are the palette the hand-written stylesheet used before the Astryx migration, carried over
-// verbatim so the migration is a *component* change, not a redesign. The contrast notes are load-bearing:
-// they were measured for WCAG AA and re-checked here.
+// The DARK half is the palette the hand-written stylesheet used before the Astryx migration, carried over
+// verbatim so the migration is a *component* change, not a redesign; the LIGHT half is a cool-neutral
+// surface (near-white bg, dark ink) with the accent-as-text tokens darkened for contrast on it. The
+// contrast notes are load-bearing: they were measured for WCAG AA in BOTH modes. The hand-written
+// viewer.css :root tokens mirror these same light/dark pairs so the two systems agree exactly.
 //
 // Regenerate the built artifacts (remote-claw.css / .js / .d.ts) with:  pnpm run theme:build
 import { defineTheme } from "@astryxdesign/core/theme";
@@ -53,7 +56,7 @@ export const remoteClawTheme = defineTheme({
     "--color-accent": ["#5457e8", "#5457e8"],
     "--color-on-accent": ["#ffffff", "#ffffff"],
 
-    // ---- surfaces: the near-black console stack (bg → surface → raised) ----
+    // ---- surfaces: [cool-neutral light stack, near-black console stack] (bg → surface → raised) ----
     "--color-background-body": ["#f4f5f8", "#0a0a0b"],
     "--color-background-surface": ["#ffffff", "#141417"],
     "--color-background-card": ["#ffffff", "#141417"],
@@ -69,8 +72,9 @@ export const remoteClawTheme = defineTheme({
     "--color-text-primary": ["#0a1317", "#ececee"],
     "--color-text-secondary": ["#4e606f", "#9a9aa3"],
     "--color-text-disabled": ["#a4b0bc", "#6f747c"],
-    // Accent used AS TEXT or an ICON on the dark bg moves the OPPOSITE way from the fill: #7c7ef5
-    // measures 5.8:1 on the body and 5.4:1 on a surface, where the #5457e8 fill would be only ~3.4:1.
+    // Accent used AS TEXT or an ICON moves the OPPOSITE way from the fill, and opposite again by mode: on
+    // dark, #7c7ef5 measures 5.8:1 on the body / 5.4:1 on a surface (the #5457e8 fill would be only ~3.4:1
+    // there); on light, it darkens to #4b4ee0 (~6.5:1 on white, where #7c7ef5 would be ~2:1).
     //
     // NOTE this does NOT cover focus rings. Astryx draws them from `--color-accent`
     // (`outline: 2px solid var(--color-accent)` in astryx.css), not `--color-text-accent` — so on this
