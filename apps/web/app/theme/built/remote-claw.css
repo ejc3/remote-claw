@@ -519,6 +519,28 @@
   .astryx-text.accent { color: var(--color-text-accent); }
 
   .astryx-heading.accent { color: var(--color-text-accent); }
+
+  .astryx-text.size-4xs { font-size: var(--font-size-4xs); }
+
+  .astryx-text.size-3xs { font-size: var(--font-size-3xs); }
+
+  .astryx-text.size-2xs { font-size: var(--font-size-2xs); }
+
+  .astryx-text.xsm { font-size: var(--font-size-xs); }
+
+  .astryx-text.sm { font-size: var(--font-size-sm); }
+
+  .astryx-text.base { font-size: var(--font-size-base); }
+
+  .astryx-text.lg { font-size: var(--font-size-lg); }
+
+  .astryx-text.xl { font-size: var(--font-size-xl); }
+
+  .astryx-text.size-2xl { font-size: var(--font-size-2xl); }
+
+  .astryx-text.size-3xl { font-size: var(--font-size-3xl); }
+
+  .astryx-text.size-4xl { font-size: var(--font-size-4xl); }
 }
 }
 

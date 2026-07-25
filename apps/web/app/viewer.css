@@ -770,32 +770,9 @@ summary:focus-visible,
   color: var(--text-faint);
   font-size: 11px;
 }
-.diff-body {
-  margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.55;
-  overflow-x: auto;
-}
-.dl {
-  display: block;
-  padding: 0 8px 0 2px;
-  white-space: pre;
-}
-.dl .dg {
-  display: inline-block;
-  width: 12px;
-  color: var(--text-faint);
-  user-select: none;
-}
-.dl-add {
-  background: var(--add-bg);
-  color: var(--add-fg);
-}
-.dl-del {
-  background: var(--del-bg);
-  color: var(--del-fg);
-}
+/* The diff BODY is now Astryx's CodeBlock (per-sign washes + +/- markers, contributed upstream in
+   facebook/astryx#4328). The `.diff` wrapper still owns the border, radius and path header; the
+   hand-written `.diff-body`/`.dl`/`.dl-add`/`.dl-del` line renderer was retired with that migration. */
 .dl-more {
   color: var(--text-faint);
   font-style: italic;
