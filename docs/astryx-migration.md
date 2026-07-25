@@ -470,8 +470,8 @@ are hard functional blockers, not taste:
 | --- | --- |
 | **Session list row** (`button.row`) | `Item`'s root can only be `div`/`li`/`span`, never `<button>`. Moving the StatusDot + needs-badge to `startContent`/`endContent` drops them from the row's accessible name (connection state becomes colour-only) and shrinks the focus target below the 44px floor. |
 | **Expandable rows** (`<details>`) | `Collapsible` hides collapsed content with `display:none` — no `hidden="until-found"` anywhere in the package — which **kills Ctrl-F find-in-page** on tool output, diffs and thoughts. Its trigger is a baked large/semibold/primary `<button>` with no theming hook. |
-| **Diff viewer** (`.diff` / `.dl-add` / `.dl-del`) | `CodeBlock`'s `highlightLines` collapses to one `Set` → one colour (`--color-accent-muted`), so `+` and `−` lines would tint **identically**. No sign gutter, no path-header slot, no truncation. |
-| **Tool output** (`.tool-output`) | `CodeBlock` emits one `<div>` per line and doesn't cap length, so an 800-line log becomes ~840 elements per **collapsed** row on a phone. Adoptable only behind a `MAX_OUTPUT_LINES` cap we'd have to add first. |
+| **Diff viewer** (`.diff` / `.dl-add` / `.dl-del`) | `highlightLines` is a flat `number[]` → one internal `Set` → the single `--color-accent-muted` wash for *every* listed line, so `+` and `−` lines tint **identically**, with no per-sign colour and no `+`/`−` marker. (0.1.8 *does* have a `title` string label and a `maxHeight` scroll cap / `isCollapsible` whole-block collapse, so those aren't the blocker — the single highlight class is.) Confirmed upstream, with a live side-by-side: [facebook/astryx#3345](https://github.com/facebook/astryx/issues/3345). |
+| **Tool output** (`.tool-output`) | `CodeBlock` creates one `<div>` per line with no windowing, so a large log still builds every node and tokenizes every line — though once a block reaches 100 lines 0.1.8 lets *offscreen* lines skip layout/paint (`content-visibility:auto` on 20-line chunks) and caps the visible extent (`maxHeight` scroll cap / `isCollapsible` collapse). For raw stdout that needs none of its tokenizer/copy/card, a plain `<pre>` stays lighter. |
 | **Sheet rows** (`.mode-row`) | No row component (`Item` / `DropdownMenuRadioItem` / `RadioListItem`) puts the selected/pressed state on the *focusable* element — `Item`'s `aria-selected` lands on a role-less `<div>` and is dropped by assistive tech. |
 | **Status strip** (`.chat-status`, `.transcript-gap`) | `Banner` has no neutral/ambient status (`info` forces a blue fill), its status map is type-only so a custom status **silently drops `role`** (an a11y regression), and its header floor is +34% on our ~33px pinned one-line strip. (The error banners, which ARE alerts, did migrate — finding above.) |
 | **Other badges/chips** (`.agent-badge`, `.perms-bypassed`, git chip, `.cmd-chip`, `.pill`) | `Badge` has no border/outline variant; `Token` doesn't rest-spread (drops `title`/`data-*`) and has no tooltip; `ChatMessageBubble` omits `white-space:pre-wrap`, collapsing newlines in multi-line messages. |
@@ -479,8 +479,19 @@ are hard functional blockers, not taste:
 
 Upstream asks implied above, most valuable first: a `<button>`-rootable selectable list item that keeps
 state on the focusable element; `hidden="until-found"` (or a find-in-page-safe collapse) on `Collapsible`;
-per-sign colours (or a diff mode) on `CodeBlock`; a neutral/ambient `Banner` status; a border/outline
-`Badge` variant.
+per-sign colours (or a diff mode) on `CodeBlock` ([facebook/astryx#3345](https://github.com/facebook/astryx/issues/3345));
+a neutral/ambient `Banner` status; a border/outline `Badge` variant.
+
+The `CodeBlock` diff limitation is the one that renders as a screenshot. The same config edit, both ways:
+the real `<CodeBlock highlightLines={[3,4,5,6]}>` washes all four changed lines with the one
+`--color-accent-muted`, so the highlight itself doesn't distinguish add from remove (and carries no
+`+`/`−`), while the renderer we kept marks deletions red with `−` and additions green with `+`. This is the visual behind [#3345]:
+
+| CodeBlock vs. our diff viewer — light | dark |
+| --- | --- |
+| ![top: Astryx CodeBlock washes lines 3–6 with one identical accent colour and no plus/minus marker; bottom: remote-claw diff viewer shows red minus deletions and green plus additions — light mode](assets/astryx/codeblock-diff-light.png) | ![the same comparison in dark mode](assets/astryx/codeblock-diff-dark.png) |
+
+[#3345]: https://github.com/facebook/astryx/issues/3345
 
 ### N. `Dialog` for the sheet shell — investigated, then KEPT (the bug it would fix isn't real here)
 
