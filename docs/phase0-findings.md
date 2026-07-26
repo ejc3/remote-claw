@@ -272,11 +272,12 @@ requirement — over supported infrastructure, zero interception.
 
 **Worker/host side** (what `claude --remote-control` does; what a *relay* would
 serve if you went the interception route):
+
 | Method/Path | Purpose |
 | --- | --- |
 | `POST /v1/code/sessions` | register session — body `{title, bridge:{}, tags:["remote-control-repl"], config:{cwd, model, sources:[{type:"git_repository",url,revision}], outcomes, reuse_outcome_branches}}` → returns session `{id:"cse_…", status, environment_kind:"bridge", …}` |
 | `POST /v1/code/sessions/{id}/bridge` | body `{}` → mints `{api_base_url, expires_in:14400, worker_epoch, worker_jwt:"sk-ant-si-…"}` (JWT role=worker, scoped to session) |
-| `GET  /v1/code/sessions/{id}/worker/events/stream` | **SSE downstream** — relay→host. Frames: `event: client_event` with `data:{event_type, source:"client", payload:{…}}`. First frame is `control_request{subtype:"initialize"}`. |
+| `GET  /v1/code/sessions/{id}/worker/events/stream` | **SSE downstream** — relay→host. Frames: `event: client_event` with `data:{event_type, source:"client", payload:{…}}`. This v2.1.168 reference capture begins with `control_request{subtype:"initialize"}`. |
 | `POST /v1/code/sessions/{id}/worker/events/delivery` | host acks delivery of downstream events |
 | `POST /v1/code/sessions/{id}/worker/events` | **host→relay output** — posts user-echo, `assistant`, `result` events upstream |
 | `PUT  /v1/code/sessions/{id}/worker` | host status — `{worker_status:"idle"\|"busy", worker_epoch, external_metadata:{current_branches,…}}` |
@@ -285,6 +286,7 @@ serve if you went the interception route):
 
 **Client/remote side** (what the web app does; **what our custom client calls
 directly — no interception**):
+
 | Method/Path | Purpose |
 | --- | --- |
 | `GET  /v1/code/sessions` | list sessions (`{data:[…], next_cursor, resume_token}`) |
@@ -303,8 +305,12 @@ directly — no interception**):
   "sent_by_account_id":null, "device_attestation_status":"…",
   "payload": { /* type-specific; user → {type:"user", message:{role,content}, uuid, session_id, timestamp} */ } }
 ```
-Verified turn sequence: `control_request(initialize)` → `control_response` →
-`user` (source:client) → `assistant` → `result`.
+In this v2.1.168 reference capture, the verified turn sequence is
+`control_request(initialize)` → `control_response` → `user` (source:client) → `assistant` → `result`.
+That initialize-first ordering is not yet a universal Anthropic guarantee: a separate manual local
+capture did not show initialize before a sequence-1 user event. Our synthetic relay intentionally keeps
+initialize-first, while native passthrough must tolerate either observed shape and reconfirm it in a
+sanitized gated proof.
 
 ### Implication — recommended pivot
 The chosen "RC interception (MITM)" path **works but is unnecessary** for the

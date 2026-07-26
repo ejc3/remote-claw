@@ -75,11 +75,12 @@ catch-up, not on `/bridge` or `/worker/events`. It cannot be used to make a
 fresh wrapper ask Claude to replay worker history. Evidence:
 `lifecycle-findings.md`.
 
-Client catch-up is cursor-based stream replay. The observed compatible shape is
-`/events/stream` with `from_sequence_num` or `lastSequenceNum`/`Last-Event-ID`
-style cursoring; it replays server history after a known cursor. This is the
-reason `rc_events.sequence_num` is the raw catch-up cursor. Evidence:
-`lifecycle-findings.md`, `parallel-findings.md`.
+Client catch-up appears to use cursor-based stream replay. Observed candidate
+shapes include `/events/stream` with `from_sequence_num` or
+`lastSequenceNum`/`Last-Event-ID`, but their exact replay semantics are not yet
+a verified production contract. `rc_events.sequence_num` is therefore the
+candidate raw catch-up cursor to test. Evidence: `lifecycle-findings.md`,
+`parallel-findings.md`.
 
 Q&A upstream persistence is deterministic. Claude mints stable UUID event ids
 before POSTing worker events. The server returns those ids with monotonic
@@ -124,9 +125,9 @@ Passthrough/tap is possible but optional. The parallel trace shows a mode where
 Claude remains bridged to real Anthropic and remote-claw observes/relays a
 sealed copy. Viewer prompts are safest through the real client `POST /events`
 path in that mode; downstream tee injection can desync official history if the
-payload is malformed. Anthropic `/events/stream?from_sequence_num=N` can be a
-read-only redundancy source, not the primary durability plan. Evidence:
-`parallel-findings.md`.
+payload is malformed. Anthropic client history/SSE cursoring is a candidate
+read-only redundancy source, not the primary durability plan; exact cursor
+semantics still require a gated proof. Evidence: `parallel-findings.md`.
 
 ## Design Position
 
@@ -524,8 +525,9 @@ Viewer catch-up after wrapper restart:
 
 Claude client catch-up:
 
-- Any native-compatible `/events/stream` endpoint should use
-  `lastSequenceNum` / `from_sequence_num` against `rc_events.sequence_num`.
+- If gated verification confirms them, a native-compatible `/events/stream`
+  endpoint may map supported cursor forms such as `lastSequenceNum` or
+  `from_sequence_num` to `rc_events.sequence_num`.
 - This is separate from worker `/bridge` recovery and from broker viewer `seq`.
 
 Compaction:
@@ -585,14 +587,17 @@ remote-claw is not the server of record; Anthropic remains the server and
 remote-claw observes:
 
 - `mitm.ts` should run a `tapSink` path that forwards requests/responses to
-  real Anthropic, records sealed copies for remote-claw viewers, and never uses
-  host credentials against human sessions.
+  real Anthropic and records sealed copies for remote-claw viewers. It must not
+  repurpose `worker_jwt` or harvest proxied request authorization; app-side calls
+  use a separately managed OAuth credential with refresh/revocation support and
+  only sessions explicitly created or authorized for the feature.
 - Viewer prompts should go through the real client `POST /events` path, not a
   downstream tee, unless a strict validator can prove the tee body is exactly
   Anthropic-compatible.
-- `/events/stream?from_sequence_num=N` and `Last-Event-ID` can re-fetch
-  official history for test sessions. It is a redundancy and observation tool,
-  not a substitute for relay-mode durable logging.
+- Client history plus SSE reconnect are candidate repair paths for test
+  sessions, but cursor, `from_sequence_num`, and `Last-Event-ID` semantics remain
+  unproven production contracts. This is a redundancy and observation tool, not
+  a substitute for relay-mode durable logging.
 - The raw RC event store in observe mode should be marked `observed`, because
   remote-claw cannot authoritatively answer duplicate POSTs or fence workers
   when Anthropic owns the bridge.
@@ -717,9 +722,10 @@ Phase C - Optional passthrough/tap:
   optional Anthropic history client, projection path.
 - Goal: observe test sessions while Claude remains bridged to real Anthropic.
 - Tests: read-only created test session, real-client `POST /events` viewer
-  prompt, `/events/stream?from_sequence_num=N` re-fetch, malformed tee disabled.
+  prompt, client history/SSE reconnect cursor probe, malformed tee disabled.
 - Gate: read-only tap against created test sessions, real-client viewer prompt
-  path works, downstream tee is disabled by default.
+  path works, supported reconnect/cursor semantics are recorded rather than
+  assumed, and downstream tee is disabled by default.
 
 ## Tests Required
 

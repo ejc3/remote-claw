@@ -9,12 +9,12 @@
 
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
-import { type IncomingMessage, Server, type ServerResponse } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { type ClientRequest, type IncomingMessage, Server, type ServerResponse } from "node:http";
+import { request as httpsRequest, type RequestOptions } from "node:https";
 import { connect as netConnect, type Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { TLSSocket } from "node:tls";
-import { NOOP_TRACER, type Tracer } from "../../trace.js";
+import { NOOP_TRACER, redactJsonTraceBody, type Tracer } from "../../trace.js";
 import { type BedrockConfig, BedrockInference } from "./bedrock/inference.js";
 import { isInferencePath, synthControlPlane } from "./bedrock/synth.js";
 import { MITM_HOST } from "./certs.js";
@@ -29,7 +29,17 @@ const SSE_SEP = /\r?\n\r?\n/;
 const SSE_BUF_CAP = 256 * 1024;
 const JSON_TRACE_CAP = 256 * 1024;
 
+function omittedTraceBody(bytes: number): string {
+  return `<RC_BODY_OMITTED bytes=${bytes} limit=${JSON_TRACE_CAP}>`;
+}
+
 const SESS_RE = /^\/v1\/code\/sessions\/([^/?]+)(\/[^?]*)?/;
+
+/** Injectable only so transparent forwarding can be proved against a loopback fake upstream. */
+export type UpstreamRequest = (
+  options: RequestOptions,
+  callback: (response: IncomingMessage) => void,
+) => ClientRequest;
 
 export interface MitmOptions {
   /** Loopback port the proxy listens on (HTTPS_PROXY points here). */
@@ -49,8 +59,10 @@ export interface MitmOptions {
    *  it on the bus and starts pumping its upstream to the broker. (relay mode only) */
   onSession?: (s: Session) => void;
   /** Optional structured tracer (target "rc.mitm"; defaults to no-op). Local-only sink; in trace mode
-   *  it dumps full RC bodies (no key material — auth headers are never passed to it). */
+   *  it dumps structurally credential-redacted RC bodies. Auth headers are never passed to it. */
   tracer?: Tracer;
+  /** Request transport for the real upstream. Defaults to node:https.request; injectable for tests. */
+  upstreamRequest?: UpstreamRequest;
   /** Where inference (`/v1/messages*`) goes: "anthropic" (default — pass through to the real upstream)
    *  or "bedrock" (translate to Amazon Bedrock and synthesize the rest of the Anthropic control plane,
    *  so NOTHING reaches api.anthropic.com). Only meaningful in "relay" mode. */
@@ -68,6 +80,10 @@ export class MitmProxy {
   readonly #trace: Tracer;
   /** Non-null when inference is routed to Bedrock instead of the real Anthropic upstream. */
   readonly #bedrock: BedrockInference | null;
+  /** Active passthrough requests, including long-lived worker SSE. Owned and destroyed on close. */
+  readonly #upstreamRequests = new Set<ClientRequest>();
+  /** CONNECT sockets are upgraded out of HTTP server ownership, so close() must destroy them itself. */
+  readonly #connectSockets = new Set<Socket>();
   #stopped = false;
   #closePromise: Promise<void> | null = null;
 
@@ -101,18 +117,32 @@ export class MitmProxy {
   async close(): Promise<void> {
     if (this.#closePromise !== null) return this.#closePromise;
     this.#stopped = true;
+    // Stop accepting first. closeAllConnections() is deliberately called only after close() inside
+    // closeServer: doing the sweep first leaves a race where a newly accepted connection is missed.
+    // CONNECT-upgraded sockets are outside Server ownership and are swept explicitly below.
+    this.#closePromise = Promise.all([closeServer(this.#server), closeServer(this.#inner)]).then(
+      () => undefined,
+    );
     // Wake every worker-SSE follower NOW (close() sets #stopped, but a follower parked on the
     // session Gate's heartbeat wait wouldn't re-check it for up to HEARTBEAT_MS). Closing the
     // sessions wakes their gates so #streamWorker loops exit and end their responses immediately.
     this.#opts.core?.closeAll();
-    this.#closePromise = Promise.all([closeServer(this.#server), closeServer(this.#inner)]).then(
-      () => undefined,
-    );
+    for (const request of this.#upstreamRequests) request.destroy();
+    this.#upstreamRequests.clear();
+    for (const socket of this.#connectSockets) socket.destroy();
+    this.#connectSockets.clear();
     return this.#closePromise;
   }
 
   // ---- CONNECT handling ----
   #onConnect(req: IncomingMessage, clientSocket: Socket, head: Buffer): void {
+    // A CONNECT event can already be queued when close() stops the listening server. Reject it
+    // before it is upgraded (and therefore before it leaves Server connection ownership).
+    if (this.#stopped) {
+      clientSocket.destroy();
+      return;
+    }
+    this.#trackConnectSocket(clientSocket);
     const { host, port } = splitAuthority(req.url ?? "");
     // Normalize before matching: a CONNECT authority may be upper/mixed-case or carry one-or-more FQDN
     // trailing dots ("api.anthropic.com." / "api.anthropic.com.."). Without stripping ALL of them, such
@@ -141,11 +171,18 @@ export class MitmProxy {
 
   #blindTunnel(clientSocket: Socket, host: string, port: number, head: Buffer): void {
     const upstream = netConnect(port, host, () => {
+      // DNS/connect completion can race with close() after both sockets have been swept.
+      if (this.#stopped || clientSocket.destroyed) {
+        upstream.destroy();
+        clientSocket.destroy();
+        return;
+      }
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head?.length) upstream.write(head);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
     });
+    this.#trackConnectSocket(upstream);
     const kill = () => {
       upstream.destroy();
       clientSocket.destroy();
@@ -154,11 +191,23 @@ export class MitmProxy {
     clientSocket.on("error", kill);
   }
 
+  #trackConnectSocket(socket: Socket): void {
+    this.#connectSockets.add(socket);
+    socket.once("close", () => this.#connectSockets.delete(socket));
+  }
+
   // ---- request handling (intercept or passthrough) ----
   async #onRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const rawUrl = req.url ?? "";
     const path = rawUrl.split("?", 1)[0] ?? ""; // the path WITHOUT query — only for intercept matching
     const body = await readBody(req);
+    // Never turn an aborted partial upload into a different, apparently complete upstream request.
+    // close() can also run while readBody is parked; do not create a new outbound request after its
+    // ownership sets have already been swept.
+    if (body === null || !req.complete || this.#stopped || res.destroyed) {
+      if (!res.destroyed) res.destroy();
+      return;
+    }
     const rc = rcLabel(path); // an RC worker endpoint (session id masked), or null
     if (
       (this.#opts.mode ?? "relay") === "relay" &&
@@ -199,12 +248,14 @@ export class MitmProxy {
     sendJson(res, synth.json, synth.status);
   }
 
-  /** Trace one client→Anthropic RC request: the verb/path always; the worker event types it carries
-   *  at debug; the full body at trace. Auth headers are never touched (they aren't passed here). */
+  /** Trace one client→Anthropic RC request: the verb/path always; bounded worker event metadata at
+   *  debug; a bounded body copy at trace. Auth headers are never touched (they aren't passed here). */
   #traceRcRequest(method: string, label: string, body: Buffer): void {
     if (!this.#trace.enabled("info")) return;
     const fields: Record<string, string | number> = { dir: "→", method, path: label };
-    if (this.#trace.enabled("debug")) {
+    if (body.length > JSON_TRACE_CAP) {
+      fields.body_bytes = body.length;
+    } else if (this.#trace.enabled("debug")) {
       const json = tryJson(body);
       if (json) {
         if (Array.isArray(json.events))
@@ -215,7 +266,12 @@ export class MitmProxy {
     }
     this.#trace.info("rc →", fields);
     if (this.#trace.enabled("trace") && body.length) {
-      this.#trace.trace("rc → body", { body: body.toString("utf8") });
+      this.#trace.trace("rc → body", {
+        body:
+          body.length > JSON_TRACE_CAP
+            ? omittedTraceBody(body.length)
+            : redactJsonTraceBody(body.toString("utf8")),
+      });
     }
   }
 
@@ -366,6 +422,7 @@ export class MitmProxy {
     res: ServerResponse,
     rc: string | null = null,
   ): void {
+    if (this.#stopped || res.destroyed) return;
     // Forward to the REAL upstream over a fresh TLS connection (default CA validation). Drop
     // hop-by-hop + framing headers; set an exact Content-Length from the fully-read body.
     const headers: Record<string, string> = {};
@@ -378,9 +435,20 @@ export class MitmProxy {
     headers["content-length"] = String(body.length);
     headers["accept-encoding"] = "identity";
 
-    const upstream = httpsRequest(
+    const requestUpstream: UpstreamRequest = this.#opts.upstreamRequest ?? httpsRequest;
+    const upstream = requestUpstream(
       { host: MITM_HOST, port: 443, method: req.method, path, headers, servername: MITM_HOST },
       (up) => {
+        // pipe() does not consume source errors. In particular, destroying ClientRequest after its
+        // response has arrived makes the IncomingMessage emit ECONNRESET; always handle that path,
+        // including the production-default (non-debug) forwarding branch.
+        up.on("error", () => {
+          if (!res.destroyed) res.destroy();
+        });
+        if (this.#stopped || res.destroyed) {
+          up.destroy();
+          return;
+        }
         res.writeHead(up.statusCode ?? 502, up.headers);
         if (rc !== null)
           this.#trace.info("rc ←", { dir: "←", path: rc, status: up.statusCode ?? 0 });
@@ -394,6 +462,11 @@ export class MitmProxy {
         }
       },
     );
+    this.#upstreamRequests.add(upstream);
+    upstream.once("close", () => this.#upstreamRequests.delete(upstream));
+    // If the proxied child disconnects first, tear down the corresponding upstream stream instead of
+    // leaving a worker SSE/socket alive and pinning trace-mode shutdown.
+    res.once("close", () => upstream.destroy());
     upstream.on("error", () => {
       if (!res.headersSent) res.writeHead(502);
       res.end();
@@ -420,9 +493,6 @@ export class MitmProxy {
       }
       if (buf.length > SSE_BUF_CAP) buf = buf.slice(-SSE_BUF_CAP); // never grow without bound
     });
-    up.on("error", () => {
-      if (!res.writableEnded) res.end();
-    });
   }
 
   #traceSseEvent(label: string, raw: string): void {
@@ -435,7 +505,9 @@ export class MitmProxy {
       id,
       type: evType(tryJson(data)),
     });
-    if (this.#trace.enabled("trace") && data !== "") this.#trace.trace("rc ← sse data", { data });
+    if (this.#trace.enabled("trace") && data !== "") {
+      this.#trace.trace("rc ← sse data", { data: redactJsonTraceBody(data) });
+    }
   }
 
   /** Forward a non-SSE response (pipe = backpressure + end) while keeping a CAPPED copy to dump the
@@ -444,21 +516,22 @@ export class MitmProxy {
     up.pipe(res);
     const chunks: Buffer[] = [];
     let kept = 0;
+    let total = 0;
     up.on("data", (c: Buffer) => {
-      if (kept < JSON_TRACE_CAP) {
-        chunks.push(c);
-        kept += c.length;
+      total += c.length;
+      const remaining = JSON_TRACE_CAP - kept;
+      if (remaining > 0) {
+        const copy = c.subarray(0, remaining);
+        chunks.push(copy);
+        kept += copy.length;
       }
     });
     up.on("end", () => {
       const body = Buffer.concat(chunks).toString("utf8");
       this.#trace.trace("rc ← body", {
         path: label,
-        body: kept >= JSON_TRACE_CAP ? `${body}…(truncated)` : body,
+        body: total > JSON_TRACE_CAP ? omittedTraceBody(total) : redactJsonTraceBody(body),
       });
-    });
-    up.on("error", () => {
-      if (!res.writableEnded) res.end();
     });
   }
 }
@@ -492,7 +565,6 @@ export function splitAuthority(authority: string): { host: string; port: number 
 }
 
 function closeServer(server: Server): Promise<void> {
-  server.closeAllConnections?.();
   return new Promise((resolve, reject) => {
     server.close((err?: Error & { code?: string }) => {
       if (err !== undefined && err.code !== "ERR_SERVER_NOT_RUNNING") {
@@ -501,15 +573,28 @@ function closeServer(server: Server): Promise<void> {
       }
       resolve();
     });
+    // Node explicitly requires this order: close() first prevents new connections, then the force
+    // sweep terminates HTTP connections that would otherwise keep the close callback pending.
+    server.closeAllConnections?.();
   });
 }
 
-function readBody(req: IncomingMessage): Promise<Buffer> {
+function readBody(req: IncomingMessage): Promise<Buffer | null> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
+    let settled = false;
+    const settle = (body: Buffer | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(body);
+    };
     req.on("data", (c: Buffer) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", () => resolve(Buffer.concat(chunks)));
+    req.once("end", () => settle(Buffer.concat(chunks)));
+    req.once("aborted", () => settle(null));
+    req.once("error", () => settle(null));
+    req.once("close", () => {
+      if (!req.complete) settle(null);
+    });
   });
 }
 
