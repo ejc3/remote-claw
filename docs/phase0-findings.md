@@ -249,7 +249,11 @@ function gYO(){ /*local*/ return { BASE_API_URL: process.env.CLAUDE_LOCAL_OAUTH_
 - Does interactive `--remote-control` start without a TTY in our harness, and
   does inference still flow through the passthrough?
 
-## 4b. ⭐ BREAKTHROUGH: the client REST API needs no interception
+## 4b. ⭐ Historical breakthrough: the client REST API needs no interception
+
+**Status:** the protocol finding remains valid, but the architecture recommendation recorded below was
+superseded by the §4c decision to own the relay through the MITM. The July 2026 native-passthrough scope
+reopens a distinct observe-first mode as a proposal only; it has not changed current `--rc-app` behavior.
 
 While capturing the worker protocol via MITM, I discovered the **remote-client
 side of Remote Control is a plain, directly-callable REST/SSE API** on
@@ -312,19 +316,23 @@ capture did not show initialize before a sequence-1 user event. Our synthetic re
 initialize-first, while native passthrough must tolerate either observed shape and reconfirm it in a
 sanitized gated proof.
 
-### Implication — recommended pivot
-The chosen "RC interception (MITM)" path **works but is unnecessary** for the
-requirement. The clean architecture is:
+### Historical implication — superseded by §4c
+
+At this point in the investigation, the spike showed that RC interception **worked but was not
+technically required** for the local-TUI-plus-custom-client requirement. The candidate architecture was:
+
 - User runs the normal `claude --remote-control` (real TUI, real session — no
   flags, no system changes).
 - `remote-claw` is a **pure client** of the documented-by-behavior REST/SSE API
   above (oauth token + refresh). It coexists with the TUI and the official app on
   one synced session.
 
-This is option “cloud-relay join” from the earlier menu, but it turned out to be
-the *easiest* path, not the hardest — the client API is a plain REST/SSE surface.
-MITM remains useful only as a protocol-capture tool (how this was mapped) and for
-the worker-side relay if one ever wants to *replace* Anthropic's relay entirely.
+This made option “cloud-relay join” from the earlier menu look technically simpler than expected because
+the client API is a plain REST/SSE surface. The subsequent product decision in §4c rejected that
+architecture for current `--rc-app`: remote traffic stays on our MITM-owned relay, while MITM tracing
+remains the protocol-inspection path. See `docs/v2-architecture.md` §14 for the authoritative decision,
+§17.5 for the implementation mapping, and `docs/native-rc-passthrough-scoping.md` for the later,
+explicitly unadopted passthrough proposal.
 
 ## 4c. ✅ Option 2 BUILT & WORKING — own-relay via MITM
 
