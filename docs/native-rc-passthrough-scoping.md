@@ -1,11 +1,15 @@
 # Native RC passthrough: dual-headed bridge scoping
 
-**Status:** design scope; no implementation commitment
+**Status:** design scope plus an implemented app-side client foundation; the flag, forward-and-tap
+orchestration, projector, and viewer wiring do not exist yet
 
 **Proposed surface:** experimental `--rc-native-passthrough`, valid only with the native MITM driver
 
-**Decision:** feasible, but only as an observe-first feature with writing gated behind an explicit
-controller policy
+**Decision:** feasible as an experimental writable multi-client feature. Remote-claw's viewer submits
+through Anthropic's canonical client API, while accepted events from it, the local TUI, and official
+clients converge in Anthropic's canonical log; Anthropic acceptance and sequencing govern publication. A
+lease is not a prerequisite, but general availability remains gated on the collision, reconnect,
+lifecycle, and control proofs below.
 
 **Relationship to the current architecture:** this proposal reopens, but does not supersede, the
 2026-06-07 decision that current `--rc-app` keeps Anthropic's RC relay out of the loop
@@ -27,8 +31,8 @@ This is technically feasible. The repository already has all three foundations:
 
 The largest risk is **not transport or registration**. It is preserving one coherent event log and one
 Claude worker when several input surfaces can write concurrently: the local TUI, one or more official
-clients, and eventually remote-claw's viewer. The captured protocol exposes a session-wide sequence and
-event UUIDs, but no reliable non-null controller attribution, ownership token, or lease. Current
+clients, and remote-claw's viewer. The captured protocol exposes a session-wide sequence and event UUIDs,
+but no reliable non-null controller attribution, ownership token, or lease. Current
 remote-claw ordering only serializes its own viewer connection. Prompt-while-busy, interrupt/prompt races,
 permission responses, and duplicate worker echoes are not proven across these writers
 (`docs/v2-architecture.md` §17.3, `docs/protocol.md:340-380`,
@@ -36,8 +40,10 @@ permission responses, and duplicate worker echoes are not proven across these wr
 
 Accordingly:
 
-- **GO** for an experimental forward-and-tap mode whose remote-claw viewer is initially read-only.
-- **GO, gated** for an explicit take-control/lease mode after a real-service single-writer proof.
+- **GO** for an experimental forward-and-tap mode whose remote-claw viewer writes as another Anthropic
+  client through canonical `POST /v1/code/sessions/{id}/events`.
+- **No lease prerequisite:** an advisory controller indicator may be useful UX, but it cannot establish
+  exclusivity over the local TUI or directly connected official clients and is not part of correctness.
 - **NO-GO for general availability of unrestricted simultaneous writing** until a real-Claude collision,
   reconnect, and control suite demonstrates deterministic behavior.
 
@@ -64,7 +70,7 @@ the official app cannot drive the resulting session: no real Anthropic RC sessio
 
 The proposed mode combines forwarding from trace mode with the broker projection from relay mode. It is
 not a small switch from “intercept” to “forward”: it also needs a real RC client, upstream identity and
-sequence preservation, deduplication, and an explicit controller policy.
+sequence preservation, deduplication, canonical acceptance semantics, and precise capability policy.
 
 ### 2.2 Parties and exact interposition
 
@@ -91,7 +97,7 @@ sequence preservation, deduplication, and an explicit controller policy.
   | [B] upstream-facing transparent worker proxy/client                 |
   |     forwards registration, bridge, worker REST and worker SSE       |
   | [C] OAuth RC client                                                 |
-  |     reads client history/SSE and, when allowed, POSTs viewer input  |
+  |     reads client history/SSE and POSTs canonical viewer input       |
   | [D] projector + existing Session/HostRcRelay                        |
   |     maps the real canonical log into remote-claw frames             |
   +------------------------------+-------------------------------------+
@@ -104,7 +110,7 @@ sequence preservation, deduplication, and an explicit controller policy.
                                  v
                     +------------+-------------+
                     | our web viewer           |
-                    | observe / request control|
+                    | observe / submit input   |
                     +--------------------------+
 ```
 
@@ -163,26 +169,33 @@ compete with the native worker, exactly the failure this mode must avoid. The pr
 To speak as an app, remote-claw needs the user's OAuth credential. The Phase 0 client obtains
 `claudeAiOauth.accessToken` and successfully uses it for history, SSE, and user-event POST
 (`phase0/spikes/rc_api_bridge.py:26-32`, `phase0/spikes/rc_api_bridge.py:54-92`,
-`phase0/spikes/rc_api_bridge.py:142-169`). Production app-side calls require a separately managed OAuth
-credential provider with refresh/revocation support. Do not repurpose `worker_jwt` or harvest the proxied
-registration `Authorization` header: keeping worker forwarding and app authority separate makes the
-credential lifecycle and zero-persistence boundary explicit. Proxying the official app's own connection
-is neither required nor available in the normal topology.
+`phase0/spikes/rc_api_bridge.py:142-169`). Production app-side calls require a secure credential source,
+but native Claude remains the sole writer and refresher of its credential file. Remote-claw reads the
+current access token, waits for and rereads a safely validated file rotation after a 401, and never writes
+or independently refreshes that shared credential. It must still respect revocation. Do not repurpose
+`worker_jwt` or harvest the proxied registration `Authorization` header: keeping worker forwarding and
+app authority separate makes the credential lifecycle and no-additional-persistence boundary explicit.
+Proxying the official app's own connection is neither required nor available in the normal topology.
+The implemented default file reader is Linux-only and requires ownership checks plus `O_NOFOLLOW`.
+macOS Keychain and Windows ACL-backed credentials need separate secure providers before this client can
+be wired there; callers can inject such a provider without changing the fixed-origin RC transport.
 
 ### 3.3 Event projection and deduplication
 
-Anthropic must be the authoritative sequencer. A viewer prompt should be posted through remote-claw's
+Anthropic must be the authoritative sequencer. A viewer prompt must be posted through remote-claw's
 OAuth client; the native worker and official app should then observe that accepted event through their
 ordinary streams/history. Local injection followed by best-effort mirroring would create split-brain
 ordering and make an event visible locally before it exists in official history. The durable-log design
 already identifies “viewer prompt through real client API” as the coherent passthrough model
-(`docs/durable-log-design.md:581-598`).
+(`docs/durable-log-design.md:588-603`).
 
-Source-based filtering is insufficient. The client event POST returns stable
-`duplicate`/`event_id`/`sequence_num` fields, and the same logical event may subsequently be observed
-through the worker path, client history and client SSE (`docs/phase0-findings.md` §4b).
-Deduplication therefore needs stable upstream UUID/event ID plus sequence/part identity across every
-observation path; the Phase 4 proof must verify the worker-echo behavior rather than assuming it.
+Source-based filtering is insufficient. The client event POST returns
+`duplicate`/`event_id`/`sequence_num` fields, while related observations can arrive through the worker
+path, client history and client SSE (`docs/phase0-findings.md` §4b). The tracked spike proves those
+surfaces independently, not that every path exposes the same stable identity. The projector must treat the
+submitted UUID, returned event ID, sequence and part identity as correlation candidates until the first
+writable release verifies the POST-result/worker/history/SSE relationship. Phase 4 expands that proof to
+collisions, reconnects, and lifecycle changes.
 
 The existing canonical `Session` cannot be used unchanged as the source of truth: it maintains independent
 local counters/logs and mints IDs (`packages/cli/src/host/rc/session.ts:140-161`,
@@ -247,20 +260,21 @@ state may precede it).
    upstream controller intent (`packages/cli/src/broker/order.ts:1-11`,
    `packages/cli/src/broker/order.ts:48-129`).
 
-### 4.3 Policy options
+### 4.3 Writable baseline and optional coordination policies
 
 | Policy | Behavior | Assessment |
 |---|---|---|
-| Read-only second head | Local TUI and official app(s) may write; our viewer observes canonical history/status | Safest first release; proves projection without inventing arbitration |
-| Lease / hand-off | Viewer can request an explicit control lease; remote-claw submits only while leased | Recommended writable experiment, but advisory: remote-claw cannot prevent the local TUI or official app(s) from writing |
+| Writable multiplex | Every enabled input surface may submit; Anthropic acceptance and sequence are authoritative and all echoes are correlated | **Selected experimental baseline.** The first release needs bounded idle/busy proofs; this selection is not a GA stability claim |
+| Read-only viewer | Local TUI and official app(s) may write; our viewer observes canonical history/status | Optional restricted capability, not the initial rollout stage; it requires a real authorization boundary because the current pass grants steer |
+| Advisory coordination / hand-off | The UIs display a preferred controller and remote-claw may warn before submitting while another controller is preferred | Optional UX only; it cannot prevent the local TUI or official app(s) from writing and must not determine ACK, ordering, or correctness |
 | Single-writer hand-off | User explicitly stops writing in one UI before enabling the other | Operationally clear, least convenient, still needs collision recovery |
-| Multiplex | Every enabled input surface may submit; Anthropic sequence is authoritative and all echoes are correlated | Desired end state, but unsafe until prompt-while-busy and control races are proven |
 | Local inject + mirror | Inject into native worker first, later copy to Anthropic | Reject: split ordering, duplicate risk, and official history can disagree |
 
-For an advisory lease, an unexpected canonical input from the local TUI or an official app must not be
-silently dropped. It should revoke or mark the lease contested and be incorporated at its upstream
-sequence. A hard lease is impossible without an Anthropic-supported controller primitive plus control of
-every app connection and local keyboard input.
+No lease or hand-off is a prerequisite for the writable baseline. If an advisory controller indicator is
+added, an unexpected canonical input from the local TUI or an official app must not be silently dropped.
+It may mark the preference contested, but the event must be incorporated at its upstream sequence. A hard
+lease is impossible without an Anthropic-supported controller primitive plus control of every app
+connection and local keyboard input.
 
 ## 5. Security and privacy boundary
 
@@ -288,6 +302,10 @@ handle routing plus opaque ciphertext rather than decrypting content
 `apps/web/workflows/relay.ts:4-9`, `apps/web/workflows/relay.ts:41-50`). `clawsec` binds frame headers in
 AAD and its pass grants read+steer capability (`packages/clawsec/src/aad.ts:87-113`,
 `packages/clawsec/src/pass.ts:44-99`).
+
+Under the writable baseline, possession of the current pass authorizes canonical user-event submission,
+not merely transcript viewing. A UI-only read-only state is not an authorization boundary. A shareable
+read-only viewer would require a separate cryptographic capability and host-side enforcement.
 
 Thus a hybrid is coherent but must be described accurately:
 
@@ -346,9 +364,10 @@ and prevent real Anthropic access (`packages/cli/src/run.ts:304-380`,
 `--rc-trace` mutually exclusive and diagnostic rather than overloading it
 (`packages/cli/src/run.ts:175-190`).
 
-Controller posture should be separate from transport. The initial flag means passthrough plus read-only
-viewer. A later viewer action or explicit experimental option may request a lease; it must not silently
-enable unrestricted multiplexing.
+Controller posture should be separate from transport. The initial flag means passthrough plus writable
+viewer input submitted only through `AnthropicRcClient.postEvent`; it does not enable local injection or
+best-effort mirroring. No lease is required. A future read-only capability or advisory controller
+indicator is a separate policy surface and must not alter canonical acceptance or ordering.
 
 ### 6.2 Reuse versus new driver
 
@@ -371,7 +390,9 @@ injects viewer events directly into the harness, and owns acknowledgements
 session and submits viewer input to that sequencer. Implement a new internal orchestration
 (`runRcNativePassthrough`) with two focused adapters:
 
-1. `AnthropicRcClient`: OAuth list/read/history/SSE/post plus refresh; and
+1. `AnthropicRcClient`: OAuth list/history, a one-connection SSE primitive (with multiple
+   simultaneous calls permitted), user-event POST, and secure credential reread after native-Claude
+   rotation—never an OAuth refresh writer; and
 2. `RcPassthroughProjector`: merge registration, tapped worker traffic, client history/SSE and POST
    results into one deduplicated real-session view.
 
@@ -386,17 +407,24 @@ This is a new internal mode/adapter, not a new user-facing harness driver.
    mode or structured callbacks.
    Registration, bridge, worker POST/ACK/status and worker SSE must all forward; callbacks receive parsed,
    redacted metadata/events. Do not call the existing `MitmProxy.#intercept` local interceptor.
-4. **Upstream client:** add the production TypeScript equivalent of the Phase 0 client, including OAuth
-   refresh, SSE reconnect/cursor behavior, aborts, bounded history repair and secret-safe diagnostics.
+4. **Upstream client (foundation implemented):** the production TypeScript equivalent of the Phase 0
+   client now provides list/history, canonical user-event POST, a secure read-only credential source,
+   bounded wait/reread after native-Claude rotation on 401, a one-connection SSE primitive that permits
+   multiple simultaneous calls, aborts, and secret-safe diagnostics. The SSE primitive promotes only
+   direct canonical `client_event`/unnamed envelopes and preserves every other JSON record as an opaque
+   tagged frame. A sanitized exact client-SSE fixture, full tagged-union semantics, reconnect/cursor
+   behavior, and bounded history repair remain later work until their production behavior is proven.
 5. **Session/projector:** support a real external session ID and raw canonical event identity rather than
    minting everything locally (`packages/cli/src/host/rc/session.ts:140-220`,
    `packages/cli/src/host/rc/session.ts:376-398`).
 6. **Relay:** replace immediate viewer echo/injection with “submit, correlate, then publish accepted
    upstream event”; surface unmatched official-app user events instead of dropping all upstream user text
    (`packages/cli/src/host/rc/relay.ts:186-199`, `packages/cli/src/host/rc/relay.ts:811-885`).
-7. **Control policy:** add read-only/lease state and capability advertisement. A pass currently grants
-   both read and steer (`packages/clawsec/src/pass.ts:44-99`), so viewer UI policy alone is not a strong
-   authorization boundary; a genuinely shareable read-only pass would be a separate security feature.
+7. **Capability and authorization policy:** advertise only the proven writable prompt capability and
+   enforce it on the host. A pass currently grants both read and steer
+   (`packages/clawsec/src/pass.ts:44-99`), so viewer UI policy alone is not a strong authorization
+   boundary; a genuinely shareable read-only pass would be a separate security feature. Any advisory
+   controller indicator is optional UX and must not participate in ACK or ordering decisions.
 8. **Proof:** extend or fork the gated real-Claude harness rather than claiming the current test covers
    passthrough. It currently launches a real logged-in Claude behind the local relay and proves only the
    synthetic remote-claw registration/turn (`apps/web/test/prove/real-rc.prove.test.ts:1-13`,
@@ -417,8 +445,9 @@ Implementation hardening completed 2026-07-26, with a manual local run against C
 - added structural redaction for bridge response tokens, OAuth/recognized token patterns and diagnostics;
 - added transparent-forwarding, leak-scan, bounded-copy, POSIX capture-file safety and shutdown tests.
 
-Still specify the production lifecycle contract for OAuth refresh/revocation, SSE cursors, worker
-epoch/rebridge and archive before Phase 1 is complete.
+Still specify the production lifecycle contract for credential rotation/401/revocation, SSE cursors,
+worker epoch/rebridge, and archive before Phase 1 is complete. Native Claude remains the sole OAuth
+refresher; remote-claw only rereads a validated rotation.
 
 **Manual Real-Claude result (uncommitted captures, deleted after scanning):** native Claude registered
 and bridged a real Anthropic session; a custom OAuth client found it, read history, reconnected client
@@ -426,27 +455,36 @@ SSE and posted events; the worker consumed them and returned assistant events; a
 captures found no bearer/JWT pattern. Re-run this gated proof and retain a sanitized result before using
 it as a release gate.
 
-### Phase 1 — forward, tap and observe
+### Phase 1 — forward, tap and canonical viewer write
 
 - Add forward-and-tap MITM mode and real-session projector.
+- Use the implemented `AnthropicRcClient.postEvent` foundation to submit every viewer prompt with a stable
+  viewer-generated UUID.
 - Reconcile client history with the tapped worker stream and publish exactly-once remote-claw transcript
   frames.
-- Keep our viewer read-only; the local TUI and official app(s) remain the existing input surfaces.
+- Keep a submitted prompt provisional until Anthropic returns its POST result and the projector correlates
+  the accepted canonical event. Never locally inject, mirror, or report acceptance first.
 
-**Real-Claude milestone:** a prompt sent from the official app is handled by native Claude, and the same
-user/assistant/tool/result sequence appears exactly once and in the same order in official history and our
-viewer across a forced SSE reconnect.
+**Real-Claude milestone:** a web-viewer prompt sent while idle drives native Claude through canonical
+`POST /v1/code/sessions/{id}/events`; the local TUI, official history, and our viewer show it exactly once
+with the same `event_id`/`sequence_num` ordering. A following local-TUI or official-app prompt appears in
+that same canonical log without restart, including across a forced SSE reconnect.
 
-### Phase 2 — leased viewer prompt
+### Phase 2 — writable multi-client experimental release gate
 
-- Add `AnthropicRcClient.postEvent`.
-- Add advisory take-control state and change viewer prompt acceptance to wait for the canonical upstream
-  event/result.
-- Correlate the submitted UUID through worker delivery, worker duplicate echo, history and client SSE.
+- Determine and persist the observed mapping among the submitted UUID, POST result identity, worker
+  delivery/echo, history, and client SSE; do not assume one field spans every path before this gate.
+- Exercise viewer, local-TUI, and official/custom-client user prompts both while idle and while a turn is
+  active. Honor Anthropic's observed accept, queue, reject, or timeout result; do not substitute a local
+  queue and do not emit a false accepted ACK.
+- Bound retry and reconnect behavior so one viewer submission cannot become two canonical turns.
+- An advisory controller indicator may be explored as optional UX, but it is not required for submission
+  and cannot establish exclusivity or participate in correctness.
 
-**Real-Claude milestone:** with viewer control explicitly acquired, one web-viewer prompt drives native
-Claude; the official app/history and our viewer show it exactly once; releasing control lets the official
-app or local TUI drive the next turn without restart.
+**Real-Claude milestone:** a repeatable user-prompt matrix across the viewer and at least one other live
+input surface produces canonical FIFO behavior or an explicit upstream rejection for both idle and busy
+cases, with no duplicate rows, lost turns, false acceptance, or lease prerequisite. Passing this milestone
+permits an explicitly experimental writable release; it is not the GA stability claim.
 
 ### Phase 3 — controls and interactive parity
 
@@ -462,11 +500,13 @@ behavior are either proven or explicitly absent.
 
 ### Phase 4 — collision and resilience gate
 
-- Test near-simultaneous local-TUI/app/viewer prompts while idle and while a turn is active.
+- Expand the Phase 2 user-prompt matrix across multiple app clients, reconnects, expiry boundaries, and
+  longer-running turns.
 - Test prompt/interrupt, model/mode, and permission-response races.
-- Test OAuth refresh/revocation, worker JWT expiry/rebridge, worker epoch changes, app and worker SSE
-  reconnect, process restart and history replay.
-- Define whether a contested advisory lease revokes, queues, or rejects a viewer request.
+- Test OAuth credential rotation/401/revocation without remote-claw writes, worker JWT expiry/rebridge,
+  worker epoch changes, app and worker SSE reconnect, process restart, and history replay.
+- If an advisory controller indicator exists, verify that contention never revokes, drops, reorders, or
+  independently ACKs a canonical event.
 
 **Real-Claude milestone:** a repeatable matrix produces canonical FIFO behavior or an explicit rejection
 for every case, with no duplicate transcript rows, lost turns, fenced native worker, false acceptance, or
@@ -494,22 +534,25 @@ secret-bearing logs. Only after this milestone should multiplexing be considered
 - Only user-event POST is proven for the custom client; control and attachment client APIs remain
   reverse-engineering work.
 - `initialize` behavior differs between captures.
-- Worker epoch/rebridge, OAuth refresh, archive and long-lived reconnection paths are unproven.
+- Worker epoch/rebridge, OAuth credential rotation/reload, archive and long-lived reconnection paths are
+  unproven.
 - Real-service tests require a logged-in account, are slower/flakier, and may break on an unannounced
   protocol revision.
 - Product copy must explain that broker E2E encryption remains, but Anthropic now receives the RC
   transcript by design.
 
-### Open questions that block a writable stability claim
+### Open questions that bound the writable experiment or block GA
 
 1. Does Anthropic accept client-side interrupt, model, permission-mode, permission and AskUserQuestion
-   responses through public observed endpoints, and what are their exact ACK/error semantics?
+   responses through public observed endpoints, and what are their exact ACK/error semantics? Until
+   proven, these capabilities remain disabled rather than blocking canonical user prompts.
 2. What happens when a second user event arrives while the worker is busy: queue, reject, interrupt,
-   merge, or undefined behavior?
+   merge, or undefined behavior? The Phase 2 release gate must record and safely surface this result.
 3. Do the local TUI and multiple official clients have an undocumented arbitration or attribution
    mechanism absent from the captured envelope?
-4. How should production code acquire and refresh OAuth without persisting or logging it, and do policy,
-   device-attestation or elevated-auth constraints apply to custom clients?
+4. What secure macOS Keychain and Windows ACL-backed OAuth providers should complement the implemented
+   Linux file reader, and do policy, device-attestation or elevated-auth constraints apply to custom
+   clients?
 5. What cursor/`Last-Event-ID` and history semantics are reliable after client or worker SSE reconnect?
 6. How are `worker_jwt` renewal, bridge replay and `worker_epoch` fencing expected to work?
 7. Will official apps render events created by an unknown custom client identically, including
@@ -520,10 +563,12 @@ secret-bearing logs. Only after this milestone should multiplexing be considered
 
 ## 9. Recommendation
 
-Build `--rc-native-passthrough` as an **experimental, Anthropic-only, forward-and-tap projection**. Reuse
-the native MITM and sealed broker path, add a distinct OAuth RC client and externally sequenced projector,
-leave the official app directly connected, and make our viewer read-only in the first release. Advance to
-an explicit advisory lease only after the real-Claude Phase 2 proof. Do not market or ship unrestricted
-multi-controller multiplexing until the Phase 4 collision matrix, OAuth/JWT lifecycle, controls, reconnect
-repair and mandatory secret-redaction gates all pass. That sequence preserves native official RC early
-without treating an observed single-controller protocol as a proven multi-controller protocol.
+Build `--rc-native-passthrough` as an **experimental, Anthropic-only, writable multi-client
+forward-and-tap projection**. Reuse the native MITM and sealed broker path, add a distinct OAuth RC client
+and externally sequenced projector, leave the official app directly connected, and submit viewer prompts
+only through Anthropic's canonical `POST /v1/code/sessions/{id}/events` path. No lease is a prerequisite;
+any controller indicator is optional UX. Release the writable experiment only after the Phase 2
+prompt/ACK/dedup proof, and do not market it as generally available until the Phase 4 collision matrix,
+OAuth/JWT lifecycle, controls, reconnect repair, and mandatory secret-redaction gates all pass. That
+sequence enables the selected multi-client baseline without pretending the observed protocol already has
+GA-grade arbitration.

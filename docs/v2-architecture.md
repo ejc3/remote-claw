@@ -1714,9 +1714,12 @@ shapes it validated; we serve the same shapes ourselves).
 **Proposal note (2026-07-26; not adopted).** The
 [native RC passthrough scope](native-rc-passthrough-scoping.md) reopens this decision only for a
 distinct experimental `--rc-native-passthrough` mode so the official app could remain attached to
-Anthropic's canonical RC log. It does not describe current behavior and does not supersede the
-MITM-only `--rc-app` decision above. Shipping that proposal requires an explicit decision change and
-another full architecture/doc sync.
+Anthropic's canonical RC log while remote-claw's viewer writes as a peer app-side client through
+canonical `POST /v1/code/sessions/{id}/events`. Anthropic acceptance and sequence would govern viewer
+publication; local injection or best-effort mirroring is explicitly rejected, and no lease is a
+prerequisite for the experimental baseline. This is not a GA stability claim. It does not describe
+current behavior and does not supersede the MITM-only `--rc-app` decision above. Shipping that proposal
+requires an explicit decision change and another full architecture/doc sync.
 
 Consequence for history (supersedes earlier "events-cursor" **and** "worker-backfill"
 wording): since we are **off Anthropic's relay**, history does **not** come from

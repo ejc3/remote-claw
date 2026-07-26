@@ -88,9 +88,10 @@ Agent-SDK stream does not. The only *pixel-literal* remote TUI would be path (B)
 ### The deepest difference — shared live control vs kill-and-fork
 
 The tables above are about *rendering*; this is about *control*, and it is the sharpest distinction.
-**Native RC lets one persistent TUI be driven from the keyboard and the phone concurrently, in the same
-session** — proven this session: three locally-sent messages, then a remote client joined and sent
-another, all into the *same running TUI*, nothing killed or forked.
+**Native RC lets one persistent TUI remain live while the keyboard and a phone/custom client take turns
+driving the same session** — proven this session: three locally-sent messages, then a remote client joined
+and sent another, all into the *same running TUI*, nothing killed or forked. Multiple client connections
+can coexist; this sequential proof does not establish simultaneous busy-turn writes or their arbitration.
 
 **Happier's `local` mode structurally cannot do this** (source-traced on `happier-dev/happier@dev`).
 Because it is bolted onto a TUI it does not control (`stdio:['inherit',…]`, `claudeLocal.ts`), a phone
@@ -137,7 +138,7 @@ three runners, so there are really **four** ways Happier drives Claude:
   `--print`) in tmux (preferred) or zellij, and **injects phone prompts as keystrokes** (`send-keys -l`
   then `C-m`), deferring while you're mid-typing. Critically it **does not kill/fork** — it injects into
   the live TUI, so you and the phone drive the *same running session* (abort = send `Esc`, "keep host
-  alive"), and the session id is **stable**. Tradeoff: ✅ real TUI **+ concurrent shared control +
+  alive"), and the session id is **stable**. Tradeoff: ✅ real TUI **+ shared control across turns +
   provider-agnostic** — the only Happier mode with native-RC-like shared control; ❌ **opt-in** + needs
   tmux/zellij, the write path is **fragile keystroke injection** (timing/mid-typing/bracketed-paste, no
   structured ack), and the **phone still reconstructs from JSONL** (the pane is `tmux attach`-style
@@ -270,11 +271,12 @@ own-relay mode.
 
 The three findings converge on one decision:
 
-- Anthropic-hosted native RC gives **full TUI fidelity**, **concurrent shared control by default** (Happier matches this
-  only in its opt-in `unified terminal` tmux mode, via fragile `send-keys` injection — §1; its default
-  `local` mode kills-and-forks)—but is **Anthropic-API-only** and depends on Anthropic's hosted control
-  plane. Remote-claw's current local RC backend preserves the TUI without that hosted control plane, at
-  the cost of official-app compatibility.
+- Anthropic-hosted native RC gives **full TUI fidelity** and **multi-client shared control across turns
+  without killing the TUI** (simultaneous busy-turn collisions remain unproven; Happier matches the
+  persistent-TUI part only in its opt-in `unified terminal` tmux mode, via fragile `send-keys` injection —
+  §1; its default `local` mode kills-and-forks)—but is **Anthropic-API-only** and depends on Anthropic's
+  hosted control plane. Remote-claw's current local RC backend preserves the TUI without that hosted
+  control plane, at the cost of official-app compatibility.
 - A Bedrock/Vertex/Foundry-compatible remote experience **cannot ride Anthropic-hosted RC**. Bedrock
   users can use remote-claw's synthetic own-relay Bedrock mode. Provider-agnostic alternatives for
   Vertex/Foundry are the other §1 mechanisms: the **SDK-headless** path (but it loses TUI fidelity like
