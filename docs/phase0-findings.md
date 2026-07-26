@@ -253,7 +253,9 @@ function gYO(){ /*local*/ return { BASE_API_URL: process.env.CLAUDE_LOCAL_OAUTH_
 
 **Status:** the protocol finding remains valid, but the architecture recommendation recorded below was
 superseded by the §4c decision to own the relay through the MITM. The July 2026 native-passthrough scope
-reopens a distinct observe-first mode as a proposal only; it has not changed current `--rc-app` behavior.
+reopens a distinct writable multi-client mode as a proposal only: remote-claw's viewer would submit
+through Anthropic's canonical `POST /v1/code/sessions/{id}/events`, with upstream acceptance and sequence
+governing publication. It has not changed current `--rc-app` behavior.
 
 While capturing the worker protocol via MITM, I discovered the **remote-client
 side of Remote Control is a plain, directly-callable REST/SSE API** on
@@ -324,8 +326,8 @@ technically required** for the local-TUI-plus-custom-client requirement. The can
 - User runs the normal `claude --remote-control` (real TUI, real session — no
   flags, no system changes).
 - `remote-claw` is a **pure client** of the documented-by-behavior REST/SSE API
-  above (oauth token + refresh). It coexists with the TUI and the official app on
-  one synced session.
+  above (using the current OAuth token while native Claude owns refresh). It
+  coexists with the TUI and the official app on one synced session.
 
 This made option “cloud-relay join” from the earlier menu look technically simpler than expected because
 the client API is a plain REST/SSE surface. The subsequent product decision in §4c rejected that

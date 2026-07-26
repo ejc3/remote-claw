@@ -1,6 +1,34 @@
 // The Remote-Control MITM host: the real backend behind the wrapper (§14/§17.5). `claude
 // --remote-control` is pointed at MitmProxy via HTTPS_PROXY; the proxy serves the RC worker
 // endpoints from RelayCore/Session; HostRcRelay bridges that session to the E2E-encrypted broker.
+
+export {
+  AnthropicRcClient,
+  type AnthropicRcClientOptions,
+  type AnthropicRcEvent,
+  type RcEventPage,
+  type RcHistoryOptions,
+  type RcListOptions,
+  type RcPostAck,
+  type RcRequestOptions,
+  type RcSequenceNum,
+  type RcSessionPage,
+  type RcSessionSummary,
+  type RcSseEventItem,
+  type RcSseFrameItem,
+  type RcSseItem,
+  type RcUserEventInput,
+} from "./anthropic/client.js";
+export {
+  AnthropicRcError,
+  type AnthropicRcErrorKind,
+} from "./anthropic/errors.js";
+export type {
+  AnthropicRcTransport,
+  AnthropicRcTransportRequest,
+  RcOAuthAccessTokenOptions,
+  RcOAuthProvider,
+} from "./anthropic/transport.js";
 export { type CertPaths, certPaths, ensureCerts, MITM_HOST } from "./certs.js";
 export {
   type ContentBlock,
