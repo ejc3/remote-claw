@@ -75,8 +75,10 @@ opencode driver (--rc-driver=opencode):
 Diagnostics:
   --rc-trace         stand up a MITM that passes through to the REAL api.anthropic.com and traces the
                      Remote-Control protocol both ways, then spawn claude behind it (no broker — a live
-                     protocol inspector). Set RC_LOG=debug for frame shapes, RC_LOG=trace for full
-                     bodies; RC_LOG_FILE=<path> captures to disk, RC_LOG_FORMAT=json emits JSONL. Local.
+                     protocol inspector). RC_LOG=debug shows frame shapes; RC_LOG=trace shows redacted
+                     JSON bodies up to 256 KiB (larger/malformed bodies are omitted). RC_LOG_FILE=<path>
+                     writes only to an owned 0600 regular file on POSIX; unsafe/Windows targets warn and
+                     drop. RC_LOG_FORMAT=json emits JSONL.
 
 Environment-only knobs (no flag):
   RC_CLAUDE_BIN             path to the claude binary to spawn (default: \`claude\` on PATH).

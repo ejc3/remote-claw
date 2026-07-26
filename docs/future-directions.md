@@ -235,7 +235,7 @@ before committing the architecture, which hinges on the store-free trade above.
 
 ---
 
-## 3. Hard constraint — native Remote Control is Anthropic-API-only
+## 3. Hard constraint — Anthropic-hosted native Remote Control is Anthropic-API-only
 
 **Finding (verified two ways, high confidence): Remote Control is totally disabled under Bedrock,
 Vertex, and Foundry.**
@@ -255,10 +255,14 @@ Anthropic's first-party infra (`/v1/code/*` on `api.anthropic.com`). Inference r
 (Bedrock/Vertex/Foundry) is a *separate* axis, and those providers have **no first-party session
 service** to register/poll against — there is nowhere for RC to bridge.
 
-**Implication for remote-claw (load-bearing).** remote-claw works by **MITM-ing the RC protocol to
-`api.anthropic.com`.** If a user is on Bedrock/Vertex/Foundry, **there is no RC session to relay** — so
-remote-claw (and the native phone RC) simply cannot function for them. That is a notable audience gap:
-enterprise/Bedrock shops are exactly the zero-knowledge-conscious crowd remote-claw targets.
+**Implication for remote-claw.** Anthropic-hosted RC—and therefore the proposed native passthrough mode
+that keeps the official app attached to Anthropic's canonical log—cannot function with
+Bedrock/Vertex/Foundry. Current own-relay `--rc-app` is a distinct path: its local MITM supplies the RC
+backend, and `--rc-inference=bedrock` synthesizes the first-party control plane while routing inference
+to Bedrock (`packages/cli/src/host/rc/launch.ts:176-207`). That mode works without Anthropic RC, including
+accountless operation, but the official Claude app cannot attach because no real Anthropic session
+exists. The hard constraint is therefore on native/official passthrough, not on remote-claw's synthetic
+own-relay mode.
 
 ---
 
@@ -266,23 +270,25 @@ enterprise/Bedrock shops are exactly the zero-knowledge-conscious crowd remote-c
 
 The three findings converge on one decision:
 
-- Native RC gives **full TUI fidelity**, **concurrent shared control by default** (Happier matches this
+- Anthropic-hosted native RC gives **full TUI fidelity**, **concurrent shared control by default** (Happier matches this
   only in its opt-in `unified terminal` tmux mode, via fragile `send-keys` injection — §1; its default
-  `local` mode kills-and-forks), and a **store-free** relay (remote-claw's current bet) — but is
-  **Anthropic-API-only** and depends on Anthropic's hosted control plane.
-- A Bedrock/Vertex/Foundry-compatible remote experience **cannot ride native RC**. It must use one of the
-  other §1 mechanisms: the **SDK-headless** path (provider-agnostic, but loses TUI fidelity like
-  Happy/Happier's default), the **tmux-inject** path (provider-agnostic + keeps the real TUI + shared
-  control, but fragile writes and a JSONL-reconstructed phone view — the bet Happier is actively making),
-  or **PTY-streaming the real `claude` TUI** to the phone (tmux + xterm — provider-agnostic *and*
-  pixel-literal, the one path nobody currently ships for `claude`).
+  `local` mode kills-and-forks)—but is **Anthropic-API-only** and depends on Anthropic's hosted control
+  plane. Remote-claw's current local RC backend preserves the TUI without that hosted control plane, at
+  the cost of official-app compatibility.
+- A Bedrock/Vertex/Foundry-compatible remote experience **cannot ride Anthropic-hosted RC**. Bedrock
+  users can use remote-claw's synthetic own-relay Bedrock mode. Provider-agnostic alternatives for
+  Vertex/Foundry are the other §1 mechanisms: the **SDK-headless** path (but it loses TUI fidelity like
+  Happy/Happier's default), the **tmux-inject** path (keeps the real TUI + shared control, but has fragile
+  writes and a JSONL-reconstructed phone view—the bet Happier is actively making), or **PTY-streaming
+  the real `claude` TUI** to the phone (tmux + xterm—pixel-literal, the one path nobody currently ships
+  for `claude`).
 - The **durable-log model** (§2) is orthogonal to fidelity but central to durability/scale, and is
   validated by Anthropic's own backend (§3's persisted `sequence_num` log).
 
 **Candidate directions, in rough priority:**
 
-1. **Keep native RC as the high-fidelity, Anthropic-API path** (status quo — full TUI, store-free) and
-   document the Bedrock exclusion plainly.
+1. **Keep native RC as the high-fidelity, Anthropic-API path** for official-app compatibility, while
+   keeping own-relay Bedrock mode as the zero-Anthropic alternative; document the boundary plainly.
 2. **Spike a PTY-stream transport** (`claude` in tmux → xterm to the viewer) as the *provider-agnostic,
    pixel-literal* option — the only way to serve Bedrock users without losing the TUI. Happier is already
    building the *inject* half (phone prompt → tmux `send-keys` into the real `claude` pane, §1); the

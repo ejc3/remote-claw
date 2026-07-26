@@ -39,8 +39,11 @@ spawning it — e.g. this harness), the launcher's session identity leaks into t
 
 - claude needs a **TTY** or it drops to `--print` mode — launch under a pty:
   `script -qfc "bash launch.sh" pty.log`.
-- Diagnostics: `RC_LOG=debug` (frame shapes) or `RC_LOG=trace` (full bodies); `RC_LOG_FILE=…` captures
-  to a clean file separate from the pty's TUI output.
+- Diagnostics: `RC_LOG=debug` (frame shapes) or `RC_LOG=trace` (JSON bodies up to 256 KiB, with
+  credential-keyed and token-shaped values recursively redacted; larger/malformed/truncated bodies are
+  omitted). On POSIX, `RC_LOG_FILE=…` writes only to an owned `0600` regular non-symlink file separate
+  from the pty's TUI output; unsafe/insecure targets warn and drop records. File capture is disabled on
+  Windows because Node cannot enforce the same owner/mode/no-follow contract.
 - **Verify it's real, not a stub:** the child claude env has **no** `CLAUDE_CODE_CHILD_SESSION`; and —
   broker mode: a fresh `cse_<hex>` is "session created" + announces every ~20s; trace mode:
   `POST …/bridge` returns a `worker_jwt`.

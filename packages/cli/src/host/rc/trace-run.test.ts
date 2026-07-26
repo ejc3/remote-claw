@@ -77,28 +77,46 @@ describe("parseSseBlock", () => {
 });
 
 describe.skipIf(!RUN)("runRcTrace env wiring", () => {
-  it("spawns claude behind the proxy with the MITM env, returning its exit code", async () => {
+  it("spawns claude behind the proxy with a scrubbed MITM env, returning its exit code", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rc-trace-"));
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     const notes: string[] = [];
     let captured: NodeJS.ProcessEnv | undefined;
+    const scrubbed = [
+      "NO_PROXY",
+      "no_proxy",
+      "REMOTE_CLAW_SECRET_FILE",
+      "VERCEL_AUTOMATION_BYPASS_SECRET",
+      "CLAUDE_CODE_CHILD_SESSION",
+      "CLAUDE_CODE_SESSION_ID",
+    ] as const;
+    const saved = Object.fromEntries(scrubbed.map((key) => [key, process.env[key]]));
+    for (const key of scrubbed) process.env[key] = `must-not-reach-child-${key}`;
 
-    const code = await runRcTrace({
-      claudeArgs: ["chat"],
-      certsDir: join(dir, "mitm-certs"),
-      note: (s) => notes.push(s),
-      spawnClaude: async (_bin, _args, env) => {
-        captured = env;
-        return 7;
-      },
-    });
+    let code: number;
+    try {
+      code = await runRcTrace({
+        claudeArgs: ["chat"],
+        certsDir: join(dir, "mitm-certs"),
+        note: (s) => notes.push(s),
+        spawnClaude: async (_bin, _args, env) => {
+          captured = env;
+          return 7;
+        },
+      });
+    } finally {
+      for (const key of scrubbed) {
+        const value = saved[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
 
     expect(code).toBe(7);
     expect(captured?.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(captured?.https_proxy).toBe(captured?.HTTPS_PROXY);
     expect(captured?.NODE_EXTRA_CA_CERTS).toContain("mitm-certs");
-    // A stray NO_PROXY would make the child bypass our MITM — it must be cleared.
-    expect("NO_PROXY" in (captured ?? {})).toBe(false);
+    for (const key of scrubbed) expect(key in (captured ?? {}), `${key} leaked`).toBe(false);
     expect(notes.join("")).toContain("trace MITM → real api.anthropic.com");
   });
 });

@@ -249,7 +249,11 @@ function gYO(){ /*local*/ return { BASE_API_URL: process.env.CLAUDE_LOCAL_OAUTH_
 - Does interactive `--remote-control` start without a TTY in our harness, and
   does inference still flow through the passthrough?
 
-## 4b. ⭐ BREAKTHROUGH: the client REST API needs no interception
+## 4b. ⭐ Historical breakthrough: the client REST API needs no interception
+
+**Status:** the protocol finding remains valid, but the architecture recommendation recorded below was
+superseded by the §4c decision to own the relay through the MITM. The July 2026 native-passthrough scope
+reopens a distinct observe-first mode as a proposal only; it has not changed current `--rc-app` behavior.
 
 While capturing the worker protocol via MITM, I discovered the **remote-client
 side of Remote Control is a plain, directly-callable REST/SSE API** on
@@ -272,11 +276,12 @@ requirement — over supported infrastructure, zero interception.
 
 **Worker/host side** (what `claude --remote-control` does; what a *relay* would
 serve if you went the interception route):
+
 | Method/Path | Purpose |
 | --- | --- |
 | `POST /v1/code/sessions` | register session — body `{title, bridge:{}, tags:["remote-control-repl"], config:{cwd, model, sources:[{type:"git_repository",url,revision}], outcomes, reuse_outcome_branches}}` → returns session `{id:"cse_…", status, environment_kind:"bridge", …}` |
 | `POST /v1/code/sessions/{id}/bridge` | body `{}` → mints `{api_base_url, expires_in:14400, worker_epoch, worker_jwt:"sk-ant-si-…"}` (JWT role=worker, scoped to session) |
-| `GET  /v1/code/sessions/{id}/worker/events/stream` | **SSE downstream** — relay→host. Frames: `event: client_event` with `data:{event_type, source:"client", payload:{…}}`. First frame is `control_request{subtype:"initialize"}`. |
+| `GET  /v1/code/sessions/{id}/worker/events/stream` | **SSE downstream** — relay→host. Frames: `event: client_event` with `data:{event_type, source:"client", payload:{…}}`. This v2.1.168 reference capture begins with `control_request{subtype:"initialize"}`. |
 | `POST /v1/code/sessions/{id}/worker/events/delivery` | host acks delivery of downstream events |
 | `POST /v1/code/sessions/{id}/worker/events` | **host→relay output** — posts user-echo, `assistant`, `result` events upstream |
 | `PUT  /v1/code/sessions/{id}/worker` | host status — `{worker_status:"idle"\|"busy", worker_epoch, external_metadata:{current_branches,…}}` |
@@ -285,6 +290,7 @@ serve if you went the interception route):
 
 **Client/remote side** (what the web app does; **what our custom client calls
 directly — no interception**):
+
 | Method/Path | Purpose |
 | --- | --- |
 | `GET  /v1/code/sessions` | list sessions (`{data:[…], next_cursor, resume_token}`) |
@@ -303,22 +309,30 @@ directly — no interception**):
   "sent_by_account_id":null, "device_attestation_status":"…",
   "payload": { /* type-specific; user → {type:"user", message:{role,content}, uuid, session_id, timestamp} */ } }
 ```
-Verified turn sequence: `control_request(initialize)` → `control_response` →
-`user` (source:client) → `assistant` → `result`.
+In this v2.1.168 reference capture, the verified turn sequence is
+`control_request(initialize)` → `control_response` → `user` (source:client) → `assistant` → `result`.
+That initialize-first ordering is not yet a universal Anthropic guarantee: a separate manual local
+capture did not show initialize before a sequence-1 user event. Our synthetic relay intentionally keeps
+initialize-first, while native passthrough must tolerate either observed shape and reconfirm it in a
+sanitized gated proof.
 
-### Implication — recommended pivot
-The chosen "RC interception (MITM)" path **works but is unnecessary** for the
-requirement. The clean architecture is:
+### Historical implication — superseded by §4c
+
+At this point in the investigation, the spike showed that RC interception **worked but was not
+technically required** for the local-TUI-plus-custom-client requirement. The candidate architecture was:
+
 - User runs the normal `claude --remote-control` (real TUI, real session — no
   flags, no system changes).
 - `remote-claw` is a **pure client** of the documented-by-behavior REST/SSE API
   above (oauth token + refresh). It coexists with the TUI and the official app on
   one synced session.
 
-This is option “cloud-relay join” from the earlier menu, but it turned out to be
-the *easiest* path, not the hardest — the client API is a plain REST/SSE surface.
-MITM remains useful only as a protocol-capture tool (how this was mapped) and for
-the worker-side relay if one ever wants to *replace* Anthropic's relay entirely.
+This made option “cloud-relay join” from the earlier menu look technically simpler than expected because
+the client API is a plain REST/SSE surface. The subsequent product decision in §4c rejected that
+architecture for current `--rc-app`: remote traffic stays on our MITM-owned relay, while MITM tracing
+remains the protocol-inspection path. See `docs/v2-architecture.md` §14 for the authoritative decision,
+§17.5 for the implementation mapping, and `docs/native-rc-passthrough-scoping.md` for the later,
+explicitly unadopted passthrough proposal.
 
 ## 4c. ✅ Option 2 BUILT & WORKING — own-relay via MITM
 

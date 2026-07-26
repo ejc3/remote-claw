@@ -1693,11 +1693,11 @@ tightening. Accepted fixes are already folded into §3–§8 above:
   chat rooms — batch frames; SSE needs heartbeat/reconnect/`startIndex`/polling
   fallback). (§6)
 
-### RESOLVED decision: MITM (not the RC-API bridge)
+### RESOLVED decision for current `--rc-app`: MITM (not the RC-API bridge)
 Both reviewers raised that an RC-API-client bridge could avoid the MITM, and the
-**P0.5 spike confirmed it works** (`phase0/spikes/rc_api_bridge.py` →
-`captures/spike-rc-api-bridge.log`: inject + cursor-history catch-up + live client
-SSE all PASS as a pure client). **But the bridge routes the remote channel through
+**P0.5 spike confirmed it works** (`phase0/spikes/rc_api_bridge.py`; tracked results in
+`docs/phase0-findings.md` §4b: inject + cursor-history catch-up + live client SSE all
+PASS as a pure client). **But the bridge routes the remote channel through
 Anthropic's RC relay, which is exactly what we will NOT do.** Decision (user,
 2026-06-07): **all remote traffic goes through OUR MITM**; Anthropic's RC relay is
 never in the loop — only model inference (`/v1/messages`) passes through to
@@ -1710,6 +1710,13 @@ the RC backend — verified end-to-end in Phase 0, the MANGO test). The wrapper 
 the RC backend, so it sees and logs **every** frame; it then E2E-encrypts to
 Vercel. The bridge is recorded as a **rejected alternative** (keeps the protocol
 shapes it validated; we serve the same shapes ourselves).
+
+**Proposal note (2026-07-26; not adopted).** The
+[native RC passthrough scope](native-rc-passthrough-scoping.md) reopens this decision only for a
+distinct experimental `--rc-native-passthrough` mode so the official app could remain attached to
+Anthropic's canonical RC log. It does not describe current behavior and does not supersede the
+MITM-only `--rc-app` decision above. Shipping that proposal requires an explicit decision change and
+another full architecture/doc sync.
 
 Consequence for history (supersedes earlier "events-cursor" **and** "worker-backfill"
 wording): since we are **off Anthropic's relay**, history does **not** come from
@@ -2260,7 +2267,7 @@ Auth: `Authorization: Bearer <claude.ai OAuth accessToken>` + `anthropic-version
 | --- | --- |
 | `POST /v1/code/sessions` | register a session → `{id:"cse_…", status, environment_kind:"bridge"}` |
 | `POST /v1/code/sessions/{id}/bridge` | mint `{api_base_url, worker_jwt:"sk-ant-si-…", worker_epoch, expires_in:14400}` |
-| `GET  /v1/code/sessions/{id}/worker/events/stream` | **SSE downstream** (relay→host): `event: client_event`, `data:{event_type, source:"client", payload}`; the **first frame** is `control_request{subtype:"initialize"}` |
+| `GET  /v1/code/sessions/{id}/worker/events/stream` | **SSE downstream** (relay→host): `event: client_event`, `data:{event_type, source:"client", payload}`; the v2.1.168 reference capture begins with `control_request{subtype:"initialize"}`, and our synthetic relay guarantees it first |
 | `POST /v1/code/sessions/{id}/worker/events` | host→relay **output** (user-echo, `assistant`, `result`) |
 | `POST /v1/code/sessions/{id}/worker/events/delivery` | host acks downstream delivery |
 | `PUT  /v1/code/sessions/{id}/worker` | host status `{worker_status:"idle"\|"busy", worker_epoch}` |
@@ -2289,10 +2296,16 @@ Every event (from `GET …/events`) shares one envelope:
   "payload": { /* type-specific; user → {type:"user", message:{role,content}, uuid, session_id, timestamp} */ } }
 ```
 
-A turn, verified end-to-end: `control_request(initialize)` → `control_response` → `user`
+In the v2.1.168 reference capture, a turn verified end-to-end is:
+`control_request(initialize)` → `control_response` → `user`
 (`source:"client"`) → `assistant` → `result`. Streaming deltas arrive as raw **Anthropic
 Messages-API** events (`message_start` → `content_block_delta`×N → `message_stop`), wrapped in a
 `stream_event`.
+
+The initialize-first ordering is a reference-capture observation and a current synthetic-relay
+invariant, not a proven universal Anthropic guarantee. A separate manual local capture did not show an
+initialize before a sequence-1 user event. Native passthrough must therefore tolerate either shape and
+reconfirm it in a sanitized gated proof.
 
 ### 17.4 Permissions — RC auto-executes (no approve gate)
 

@@ -6,7 +6,8 @@
 //
 // Drive it from the CLI (it spawns `claude` behind the proxy), or from the native app: run it, then
 // point the app's HTTPS proxy at the printed loopback port and trust the printed CA. Set
-// `RC_LOG=debug` for frame shapes or `RC_LOG=trace` for full bodies (RC_LOG_FILE=… to capture).
+// `RC_LOG=debug` for frame shapes or `RC_LOG=trace` for bounded, credential-redacted JSON bodies.
+// RC_LOG_FILE writes only to an owned 0600 regular file on POSIX; unsafe/Windows targets warn and drop.
 
 import { tracerFromEnv } from "../../trace.js";
 import { ensureCerts } from "./certs.js";
@@ -50,7 +51,7 @@ export async function runRcTrace(opts: RcTraceOptions): Promise<number> {
   note(`  proxy: http://127.0.0.1:${proxy.port}\n`);
   note(`  CA:    ${certs.caPem}\n`);
   note(
-    `  RC traffic is traced both ways. Set RC_LOG=debug (shapes) or RC_LOG=trace (full bodies).\n`,
+    `  RC traffic is traced both ways. RC_LOG=debug shows shapes; RC_LOG=trace shows bounded, credential-redacted JSON bodies.\n`,
   );
 
   const env: NodeJS.ProcessEnv = {
