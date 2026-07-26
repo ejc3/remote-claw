@@ -238,6 +238,95 @@ describe("AnthropicRcClient.postEvent", () => {
     });
     expect(transport.requests).toHaveLength(0);
   });
+
+  it.each([
+    null,
+    undefined,
+    [],
+    "not-an-event",
+  ])("rejects a non-object event before dispatch", async (input) => {
+    const transport = new FakeTransport();
+    const client = new AnthropicRcClient({ transport });
+
+    await expect(
+      client.postEvent("cse_input", input as unknown as RcUserEventInput),
+    ).rejects.toMatchObject({
+      kind: "protocol",
+      operation: "postEvent",
+      retryable: false,
+      outcomeUnknown: false,
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("sanitizes unreadable event objects before dispatch", async () => {
+    const transport = new FakeTransport();
+    const client = new AnthropicRcClient({ transport });
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    const throwingGetter = {
+      get uuid() {
+        throw new Error("private-event-getter-canary");
+      },
+    };
+
+    for (const input of [revoked.proxy, throwingGetter]) {
+      const error = await client
+        .postEvent("cse_input", input as unknown as RcUserEventInput)
+        .catch((caught: unknown) => caught);
+      expect(error).toMatchObject({
+        kind: "protocol",
+        operation: "postEvent",
+        retryable: false,
+        outcomeUnknown: false,
+      });
+      expect(String(error)).not.toContain("private-event-getter-canary");
+    }
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("snapshots validated event fields once before serialization", async () => {
+    const transport = new FakeTransport(
+      json({
+        results: [{ duplicate: false, event_id: "evt_snapshot", sequence_num: "1" }],
+      }),
+    );
+    const client = new AnthropicRcClient({ transport });
+    let uuidReads = 0;
+    let messageReads = 0;
+    const input = {
+      get uuid() {
+        uuidReads += 1;
+        return uuidReads === 1 ? "stable-uuid" : "x".repeat(513);
+      },
+      timestamp: "2026-07-26T04:01:02.003Z",
+      get message() {
+        messageReads += 1;
+        return messageReads === 1
+          ? { role: "user", content: "hello" }
+          : { role: "user", content: "x".repeat(100_001) };
+      },
+      parentToolUseId: null,
+    } as RcUserEventInput;
+
+    await expect(client.postEvent("cse_input", input)).resolves.toEqual({
+      eventId: "evt_snapshot",
+      sequenceNum: "1",
+      duplicate: false,
+    });
+    expect(uuidReads).toBe(1);
+    expect(messageReads).toBe(1);
+    expect(JSON.parse(transport.requests[0]?.body ?? "{}")).toMatchObject({
+      events: [
+        {
+          payload: {
+            uuid: "stable-uuid",
+            message: { role: "user", content: "hello" },
+          },
+        },
+      ],
+    });
+  });
 });
 
 describe("AnthropicRcClient.streamEvents", () => {

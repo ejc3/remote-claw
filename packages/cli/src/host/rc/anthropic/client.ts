@@ -329,7 +329,7 @@ export class AnthropicRcClient {
   ): Promise<RcPostAck> {
     const operation = "postEvent";
     const encodedSession = encodeSessionId(sessionId, operation);
-    validateUserEvent(event, operation);
+    const validatedEvent = validateUserEvent(event, operation);
     const body = JSON.stringify({
       events: [
         {
@@ -337,12 +337,12 @@ export class AnthropicRcClient {
             type: "user",
             message: {
               role: "user",
-              content: event.message.content,
+              content: validatedEvent.message.content,
             },
-            uuid: event.uuid,
+            uuid: validatedEvent.uuid,
             session_id: sessionId,
-            timestamp: event.timestamp,
-            parent_tool_use_id: event.parentToolUseId,
+            timestamp: validatedEvent.timestamp,
+            parent_tool_use_id: validatedEvent.parentToolUseId,
           },
         },
       ],
@@ -807,21 +807,62 @@ async function readBoundedJson(
   }
 }
 
-function validateUserEvent(event: RcUserEventInput, operation: string): void {
-  boundedInputString(event.uuid, operation, "uuid", MAX_EVENT_METADATA_CHARS);
-  boundedInputString(event.timestamp, operation, "timestamp", MAX_EVENT_METADATA_CHARS);
-  if (event.message?.role !== "user") {
+function validateUserEvent(event: RcUserEventInput, operation: string): RcUserEventInput {
+  let eventIsRecord: boolean;
+  try {
+    eventIsRecord = isRecord(event);
+  } catch {
+    throw AnthropicRcError.protocol(operation, "event is not readable");
+  }
+  if (!eventIsRecord) {
+    throw AnthropicRcError.protocol(operation, "event is not an object");
+  }
+
+  let uuid: unknown;
+  let timestamp: unknown;
+  let messageRole: unknown;
+  let messageContent: unknown;
+  let parentToolUseId: unknown;
+  try {
+    uuid = event.uuid;
+    timestamp = event.timestamp;
+    const message = event.message;
+    if (isRecord(message)) {
+      messageRole = message.role;
+      messageContent = message.content;
+    }
+    parentToolUseId = event.parentToolUseId;
+  } catch {
+    throw AnthropicRcError.protocol(operation, "event fields are not readable");
+  }
+
+  const validatedUuid = boundedInputString(uuid, operation, "uuid", MAX_EVENT_METADATA_CHARS);
+  const validatedTimestamp = boundedInputString(
+    timestamp,
+    operation,
+    "timestamp",
+    MAX_EVENT_METADATA_CHARS,
+  );
+  if (messageRole !== "user") {
     throw AnthropicRcError.protocol(operation, "message is not a user text message");
   }
-  boundedInputString(event.message.content, operation, "message.content", MAX_USER_CONTENT_CHARS);
-  if (event.parentToolUseId !== null) {
-    boundedInputString(
-      event.parentToolUseId,
-      operation,
-      "parentToolUseId",
-      MAX_EVENT_METADATA_CHARS,
-    );
-  }
+  const validatedContent = boundedInputString(
+    messageContent,
+    operation,
+    "message.content",
+    MAX_USER_CONTENT_CHARS,
+  );
+  const validatedParentToolUseId =
+    parentToolUseId === null
+      ? null
+      : boundedInputString(parentToolUseId, operation, "parentToolUseId", MAX_EVENT_METADATA_CHARS);
+
+  return {
+    uuid: validatedUuid,
+    timestamp: validatedTimestamp,
+    message: { role: "user", content: validatedContent },
+    parentToolUseId: validatedParentToolUseId,
+  };
 }
 
 function boundedInputString(

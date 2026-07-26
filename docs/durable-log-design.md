@@ -366,8 +366,9 @@ Concrete changes:
 - In `MitmProxy.#intercept`, worker event stream handling should source pending
   downstream events from `Session.followDownstream(workerEpoch)`, which in turn
   reads durable `pending/sent` rows, not only process memory.
-- Add explicit handling for `/v1/sessions/{session_...}/archive` only after the
-  exact archive path is captured in a tracked fixture. It should call
+- Add explicit handling for the tracked
+  `POST /v1/code/sessions/{id}/archive` lifecycle path only after its exact
+  request/response shape is captured in a tracked fixture. It should call
   `Session.archive()` / `RcEventStore.markArchived` and return a successful
   Anthropic-compatible response. Archive must not delete history.
 
