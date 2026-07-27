@@ -6,6 +6,12 @@ verify-everything agent workflow (62 agents, ~3.2 M tokens) — and every existi
 green as a baseline. This document collects the verifications and the triaged findings so the result is
 auditable, and tracks the fixes that close them.
 
+> **Historical identity scope:** this report evaluates the shipped flat-session baseline. Its
+> `cse_*` session ID is a synthetic broker channel/viewer-row key, not the stable remote-claw
+> logical-chat ID targeted by the later client-driven host runtime. The collision and restart fixes
+> below remain valid for that compatibility transport; they do not claim durable logical-chat,
+> native-binding, or outward Anthropic/OpenAI binding recovery.
+
 ## TL;DR
 
 - **The crypto / zero-knowledge core is verified CLEAN.** The broker never sees plaintext: AEAD binds
@@ -138,11 +144,14 @@ pipe: it validates the §8 envelope shape and routes opaque ciphertext, and neve
 
 ## Open design frontier (documented, not a regression)
 
-Full durable cross-restart *resume* (the same session reattaching across `claude --resume`) needs
-stable-resumable session ids + `worker_epoch` lease fencing + a durable inbound ack cursor. The session-id
-fix removes the collision and the restart path is now **safe** (no silent corruption / no re-execution);
-true resume + split-brain fencing remains the design frontier (consistent with the durable-log design
-doc's open decisions).
+Full durable cross-restart *resume* is now an A1 design target, not a property of the `cse_*` channel.
+It needs a separately persisted logical-chat-to-native binding, a fenced coordinator/runtime epoch,
+and a durable inbound acknowledgement cursor. A proven `claude --resume` replacement first reuses the
+known private synthetic RC attachment; if that attachment must rotate, the replacement remains under
+the same native binding and logical chat. A1 uses the stable logical-chat ID for the broker channel
+instead. An unproven or new native conversation must not silently reuse it. The session-ID fix removes
+the compatibility-channel collision and makes the current restart path **safe** (no silent corruption
+/ no re-execution); stable logical-chat and outward-binding recovery remain unimplemented.
 
 ## Reproducing
 

@@ -72,6 +72,7 @@ the real-claude proofs are env-gated so they never gate CI but are run on demand
 26. Sub-agents (Task tool) — ✅ `e2e/rc-spine.integration.test.ts` (a Task `tool_use` + sub-agent output relay through as `tool_use` + `assistant_sub` frames) + ✅ `tests/web/app-e2e/transcript.spec.ts` (sub-agent Task nesting renders in a real browser) + 🔬 real `claude` sub-agent run
 
 ## Known gaps / honest limits
+
 - **Scenarios 25–26** are automated end-to-end: a viewer `permission` frame maps back to the worker's
   RC control-response (`HostRcRelay` → `session.pushControlResponse`), and a Task spawn relays its
   sub-agent frames — both covered by `e2e/rc-spine.integration.test.ts` and rendered in a real browser by
@@ -83,6 +84,29 @@ the real-claude proofs are env-gated so they never gate CI but are run on demand
   demand.
 - Negative-`startIndex` exact last-N semantics are real-Vercel-verified (spike §14A); the in-process
   harness only guarantees an in-order suffix incl. the latest — asserted accordingly.
+
+## Selected host-runtime recovery gates
+
+These are design gates for [Client-driven Host Runtime](client-driven-host-runtime.md), not claims
+about the current A0 implementation:
+
+- persist distinct remote-claw logical-chat, native binding/conversation, private transport, broker
+  channel, and outward-provider IDs, and assert that none is silently aliased;
+- restart Claude, explicitly resume the same native UUID, accept a re-bridge of the persisted private
+  `cse_*`, bind the new worker epoch to the new native/coordinator epochs, and keep one logical
+  chat/web row with continuing RC and broker sequences;
+- when the same proven Claude UUID creates a replacement private `cse_*`, fence the old worker and
+  retain the logical chat, web channel, command order, and outward Anthropic binding without duplicate
+  turns;
+- reject wrong UUID/project/product adoption and stale worker/coordinator/presence writes without
+  matching by title or text;
+- crash before and after binding commit, native write-ahead, native observation, broker cursor
+  advance, outward publish, and provider ingress ACK; assert exactly-once decisions where provable and
+  quarantine every ambiguous delivery;
+- restart one Codex app server with several threads and preserve the paired ChatGPT host, projects,
+  logical-chat mappings, and sibling isolation;
+- restart OpenCode/tmux only into a binding whose server/process/transcript lineage is proven; otherwise
+  expose recovery/quarantine rather than a duplicate or silently repointed chat.
 
 ## How to run
 

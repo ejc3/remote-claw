@@ -13,6 +13,14 @@ coordinator → outside-adapter architecture. A0.1 of that migration is now pres
 sessions register through the neutral, host-scoped lifecycle before their existing `Session` port is
 bridged to the broker. OpenCode and tmux still use the flat compatibility path directly.
 
+**Identity scope.** In this as-built protocol, `Session.id` is a synthetic `cse_*` identifier used as
+the broker channel address and session-list key. It is not a Claude transcript ID, Codex thread ID,
+OpenCode `ses_*`, tmux pane identity, or durable remote-claw logical-chat ID. The A0 `rcb_*`
+registration lease is also process-local. A1 targets a separately persisted logical-chat record whose
+ID becomes the broker channel/session-list key; a private synthetic `cse_*` may then rotate beneath it
+during a proven native transport/runtime replacement. That mapping and recovery behavior are not
+implemented here.
+
 ---
 
 ## 1. Topology
@@ -505,7 +513,8 @@ guarantees.
    a turn but never PUTs `idle`, `phase` shows *thinking* until the next status change. Captured live
    claude always PUTs the final `idle`, so this is a worker-fidelity bound, not a host bug.
 6. **`git` is a launch-time snapshot** (`launch.ts`) — a mid-session branch switch isn't reflected until
-   a new session.
+   the native process is relaunched. Current A0 also creates a new broker-visible session; A1 may retain
+   the logical chat while refreshing this launch snapshot for the new native incarnation.
 
 ### Capture-grounded protocol surfaces (observed via `--rc-trace`)
 

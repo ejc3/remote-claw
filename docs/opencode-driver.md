@@ -5,6 +5,13 @@
 > coordinator-owned OpenCode runtime selected in
 > [client-driven-host-runtime.md](client-driven-host-runtime.md).
 
+**Identity scope.** The current driver has two distinct IDs: OpenCode owns the native `ses_*`, while
+`RelayCore` creates a synthetic `cse_*` for the remote-claw broker channel and viewer row. Neither is
+an implemented durable remote-claw logical-chat ID. A wrapper restart may reattach and backfill the
+same `ses_*` into a fresh compatibility channel, but it does not yet preserve one canonical
+remote-claw chat across that restart. A1 targets a persisted logical-chat-to-native binding and uses
+the logical-chat ID for the broker row/channel; A2 then proves OpenCode-specific adoption and recovery.
+
 ## 1. What exists today
 
 The current path has two independent connections:
@@ -245,7 +252,8 @@ support. A feature is writable only after its setup and proof gate succeed.
 
 Today, OpenCode owns native message history and the driver reconstructs viewer output from
 `GET /session/{id}/message`. A wrapper restart can attach to the same explicit session and backfill
-completed main-session messages into a fresh broker session. It does not yet preserve:
+completed main-session messages into a fresh synthetic `cse_*` broker channel. The native `ses_*`,
+that channel, and the future logical-chat ID remain separate. It does not yet preserve:
 
 - a durable remote-claw logical-chat ↔ OpenCode-session binding;
 - a command journal or definitive multi-writer order;
@@ -271,7 +279,8 @@ In the selected host runtime, authority is divided cleanly:
 Recovery must reattach the exact `runtimeId`/session/incarnation, subscribe before history backfill,
 reconcile journaled attempts against native evidence, and leave ambiguous attempts quarantined. It may
 start a successor session only with an explicit gap and explicit handling of commands that were
-admitted for the old session.
+admitted for the old session. Reattaching a proven same semantic session is the future condition for
+retaining a logical-chat ID; a missing, reused, or unproven `ses_*` cannot silently repoint that chat.
 
 ## 9. Tests
 

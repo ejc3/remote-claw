@@ -16,6 +16,13 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 > legacy RC port during migration; it does not become the neutral schema. In particular, Codex is one
 > persistent multi-project app-server host, not another one-`Session` `DriverName`.
 
+**Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
+the A0 registrar's `rcb_*` is only a process-local lease. Neither is the stable logical-chat ID
+targeted by A1, and neither may stand in for an engine's semantic conversation ID. The future durable
+coordinator must map a logical chat separately to native and outward bindings; a proven transport
+replacement may rotate its runtime/channel incarnation without changing that chat. This document
+does not claim that recovery exists today.
+
 The common relay port is **`Session`** (`packages/cli/src/host/rc/session.ts`). Each current harness
 path produces one or more `Session`s, fills them with Claude-shaped output, and consumes the input the
 relay delivers. `HostRcRelay` and the web frame projection remain shared; harness launch/lifecycle is
@@ -539,7 +546,8 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
    before pumping; a driver must call `relay.serve(signal)` (not hand-roll the pumps). The sampled
    floor prevents replay of older inbound frames but can skip an unprocessed prompt that arrived
    before the sample; it is duplicate-prevention with a documented loss window, not fail-closed
-   command recovery.
+   command recovery. It also does not make the synthetic `cse_*` channel a durable logical chat or
+   recover its native/outward bindings.
 7. **Launch cardinality.** Tmux and OpenCode launch one wrapper `Session`; one MITM launch can accept
    several intercepted Claude RC sessions. The dispatcher still selects one harness mode per wrapper
    process.
@@ -559,6 +567,10 @@ is implemented: each path supplies `DriverCapabilities`, the relay rides them on
 `session_announce`, and the viewer disables/labels declared unsupported controls. Claude MITM waits
 for validated readiness before it starts the bridge. Because OpenCode/tmux currently announce before
 setup is fully known, §8 records cases where those declarations can still overstate support.
+
+Stable host → project → logical-chat identity remains an A1 target above this seam. It must be
+persisted separately from `Session.id`, the `rcb_*` lease, engine-native IDs, and provider/broker
+connection IDs.
 
 Alongside capabilities, each harness path supplies a `HarnessDescriptor` — `{ agent:
 "claude-code" | "opencode"; mode: "rc" | "tmux" | "opencode" }` (the consts `MITM_HARNESS` /

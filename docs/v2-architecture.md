@@ -18,7 +18,10 @@
 > connectors. [Protocol & Runtime](protocol.md) remains the as-built source of truth; this document is
 > the rationale that led to the shipped v2 baseline, not a current implementation inventory. The
 > selected host runtime replaces its flat session identity and changes its authority and recovery
-> model.
+> model. In that shipped baseline, the broker-visible `session_id`, viewer row, channel suffix, and
+> private synthetic Claude RC `cse_*` are the same value. In the selected A1 target they are not:
+> a stable remote-claw `logicalChatId` keys the broker row/channel, while the inner private `cse_*`,
+> Claude conversation UUID, and any outward-provider session ID are separately persisted bindings.
 
 ## 1. What changes and why
 
@@ -346,7 +349,7 @@ security review — §14A.)
   — JSON/quiet output is exactly what leaks into CI logs. `--rc-json` takes precedence
   over the bare-token form.
 
-**What the wrapper does** (otherwise it's just claude):
+**What the shipped v2/A0 wrapper does** (otherwise it's just claude):
 - Runs the **real interactive `claude` TUI** with all your passthrough args. The
   **identity is auto-created on first run** if absent (local only — no network).
 - **Nothing is sent to the broker until you enable remote control.** Running
@@ -539,6 +542,12 @@ keys, so it can forge **nothing**; `dir` is bound into AAD, so an `in` prompt an
 **Presence liveness is timestamp-driven (Design B — §14A).** Recency comes from a **synced wall
 clock**, not a client round-trip, which keeps presence to **one signed frame + one
 client-side fold** (no `identify?`, no challenge, no `beat_seq`).
+
+- **Session identity is baseline-specific.** In the shipped v2/A0 path, `session_id` below is the
+  synthetic Claude RC `cse_*` and also the broker row/channel key. In the selected A1 host runtime,
+  `session_id` on the broker-facing announce is the stable remote-claw `logicalChatId`; the inner
+  `cse_*` and any outward-provider session IDs remain private binding metadata and never select a
+  second viewer row.
 - **Each session announces itself; clients subscribe.** A *session* has its own relay controller,
   **independent of every other session** (§1); one wrapper process may host several controllers, and
   each publishes **its own** announce. While RC is on, a session (every `ANNOUNCE_INTERVAL`, and
@@ -570,11 +579,19 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   `sent_at + FRESH_WINDOW`; a maximally future-skewed clock is accepted out to `now + SKEW`,
   so the **worst observed false-online for a dead session is `FRESH_WINDOW + SKEW`** (≈65 s
   at the defaults) — not exactly one window — after which it greys.
-- **Restart / new session / late client just work in the normal forward-clock case.** A restarted
-  session broadcasts a later `incarnation_started_at` → clients un-grey on the next fresh ordered one.
-  A clock-regressed restart fails stable. Equal starts use opaque-incarnation lexical order, which
-  prevents flips but does not prove the chronological winner; A1 supplies that durable epoch. A
-  newly-started session broadcasts immediately → appears. A late client reads the bus's
+- **Restart / new session / late client.** In current A0, a restarted relay that somehow retains the
+  same `session_id` broadcasts a later `incarnation_started_at` and clients un-grey that row. An
+  ordinary wrapper/Claude restart instead mints a new synthetic RC `session_id`, so an already-open
+  viewer keeps the old row as disconnected and adds a separate row; a cold reload sees only the new
+  fresh row. That is a current implementation fact, not the selected recovery model.
+  A1 persists the `logicalChatId` and uses its durable coordinator epoch for restart ordering. It first
+  resumes the stored Claude conversation UUID and tries the known private `cse_*`; if Claude needs a
+  replacement `cse_*`, that value becomes a new fenced inner transport attachment under the same
+  `logicalChatId`, native binding, broker channel, and viewer row. Either way, the new worker epoch is
+  tied to the current native-process incarnation and coordinator epoch. The RC worker still supplies no
+  historical backfill.
+  A newly-created logical chat broadcasts immediately and appears as a new row. A late client reads the
+  bus's
   **recent resumable-stream window** on subscribe (sized to span ≥ one `ANNOUNCE_INTERVAL`
   of bus events, so each live session's last announce is present); if that window already
   rolled past a session's last announce, that session renders pending/absent and appears
@@ -752,7 +769,7 @@ a `--resume`d worker is streamed **no** prior history, and `historical` appears 
 client `catch_up` — **never** a worker backfill, and **never** Anthropic's cursor API
 (`GET …/events?cursor=`, which the wrapper does **not** call). See §14.)
 
-- **The durable record is claude's on-disk session; the wrapper's log is
+- **In shipped A0, the durable record is claude's on-disk session; the wrapper's log is
   in-memory.** The wrapper sees every frame both directions and keeps an
   **in-memory per-session log** (keyed by `seq`) as the catch-up source. It is
   **not** persisted (both wrapper and CLI are stateless) and it is **not** reseeded
@@ -769,13 +786,16 @@ client `catch_up` — **never** a worker backfill, and **never** Anthropic's cur
   the wrapper joins the bus and broadcasts `session_announce` as soon as it is serving;
   a client racing in with `catch_up{since=0}` gets whatever has accumulated, which is
   the whole session so far.
-  - **Residual gaps the worker genuinely can't fill** (grounded, accepted): a wrapper
-    restart loses the in-memory log, and since the wrapper and `claude` share a process
-    lifecycle a restart is a **new session id**, not a resumable one; and a `--resume`d
-    session's pre-resume turns live only in claude's local `.jsonl`, never on the RC
-    wire — surfacing them would mean the host reading that private on-disk file, not a
-    worker backfill. Deep cross-restart history is therefore **deferred** (§6C), not a
-    capability the worker provides.
+  - **Residual gap the worker genuinely can't fill** (grounded, accepted): a `--resume`d
+    session's pre-resume turns are not replayed on the RC wire. Current A0 also loses its
+    in-memory log and logical-chat binding on wrapper restart, so an ordinary relaunch
+    exposes a new broker-visible session and row. A1 does not ask the worker to repair that:
+    it persists the stable `logicalChatId`, first resumes the stored Claude conversation UUID
+    and known private `cse_*`, and otherwise records a replacement `cse_*` as a new inner
+    transport attachment under the same native binding and broker row/channel. The transport
+    attachment and native-process incarnation advance independently; each worker epoch records which
+    process currently owns it. History repair comes from persisted synthetic RC state and proven native
+    transcript evidence, never worker backfill.
 - **`seq` is allocated solely by the wrapper.** Clients never assign transcript
   order: a web client sends a `client_msg_id`; the wrapper decrypts, commits to its
   in-memory log, assigns the canonical `seq`, then echoes an `accepted{client_msg_id, seq}`.
@@ -1445,10 +1465,11 @@ phase0/            unchanged — the Python reference + protocol findings
     **not** (`POST …/bridge` returns only a `worker_jwt`, the worker SSE carries only
     **new** inputs, and `historical` is in **zero** captures); and **C5** — while
     `claude --continue` does reload the **full transcript into claude's own local TUI**,
-    that history is **not** re-streamed over RC to our relay/viewer (a restart is a
-    **new** RC session, not a resumable one). The grounded model: the wrapper's
-    in-memory log is the **sole** in-session history source (§6). Verdict: *TUI-side
-    live relay verified; cross-(re)connect history does NOT come from the worker.*
+    that history is **not** re-streamed over RC to our relay/viewer. That A0 experiment
+    exposed a new RC session because the wrapper did not restore a prior binding; it did
+    not prove that Claude can never resume its UUID or rebridge a known `cse_*`. The
+    grounded result is narrower: the worker is never a history-repair source. Verdict:
+    *TUI-side live relay verified; cross-(re)connect history does NOT come from the worker.*
 - **P1 — Crypto core.** `packages/clawsec` (TypeScript): secret gen/parse/checksum,
   HKDF hierarchy, AES-256-GCM encrypt/decrypt, AAD, envelope format. Vitest unit
   tests (incl. round-trip + tamper/AAD-rejection). No network. Runs in Node +
@@ -2023,22 +2044,28 @@ rc_api_bridge); others are specs to build/test.
 18. **Network blip mid-turn.** Client SSE drops → reconnect
     `GET /api/stream?identity=id&session=sid` (resolve token → run → resume by `startIndex`);
     at-least-once → dedup by `msg_id`; no missed/dup frames.
-19. **Wrapper/CLI restart (both stateless).** Reboot/crash → relaunch
+19. **Wrapper/CLI restart.** **Current A0:** reboot/crash → relaunch
     `remote-claw --continue` + `/remote-control`. `claude --continue` reloads the prior
     conversation into its **own local TUI**, but the RC wire does **not** re-stream it
-    (grounded §17): this is a **new** RC session whose in-memory log + `msg_id` seen-set
-    start **empty**, covering the conversation **from restart forward**. The wrapper rejoins
-    the bus and broadcasts a fresh `session_announce`; the pre-restart transcript is **not**
-    recoverable over RC (it lives only in claude's `.jsonl`). A still-connected tab greys the
-    old session when announces lapse, then **un-greys on the next ordered fresh broadcast** (the
-    wall-clock incarnation start fences delayed publishes from the retired process but is not a
-    durable epoch/handshake, §4.3; a broker replay of pre-restart
-    announces can't extend liveness past `FRESH_WINDOW + SKEW`); clients reconnect + `catch_up`
-    on the new session. **[V]** C5 (re-scoped: the **local TUI** recovers; RC does not backfill)
+    (grounded §17). The process-local wrapper starts with an empty log/binding and normally
+    exposes a new synthetic RC `session_id`; its announce creates a separate row while an
+    already-open viewer keeps the old row disconnected. A cold reload omits that stale row.
+    Broker replay of pre-restart announces cannot extend the old row's
+    liveness past `FRESH_WINDOW + SKEW`. **[V]** C5 (re-scoped: the **local TUI** recovers;
+    RC does not backfill)
+
+    **Selected A1 target:** reopen the persisted `logicalChatId`, acquire a new durable
+    coordinator epoch, and resume the stored Claude conversation UUID. Try the known private
+    `cse_*` first. Advance the native process through its fenced forward-incarnation transition;
+    if Claude creates a replacement `cse_*`, install it through a separate fenced transport-attachment
+    transition. Bind the resulting worker epoch to the current native/coordinator epochs. Reconcile
+    persisted RC state and proven native transcript evidence without expecting worker backfill, then
+    broadcast the same broker-facing `session_id = logicalChatId`. The existing viewer row/channel
+    un-greys and continues; uncertain pre-crash delivery stays quarantined rather than being resent.
 20. **Host offline → back.** Wrapper exits (never outlives the CLI) → **stops
     broadcasting** → its announces age out of `FRESH_WINDOW` → a client *watching* its
-    spaces **greys them locally**, then drops them; a *fresh* cold open just won't list
-    them (offline *listing* deferred §6C). The bus run **persists either way** (no
+    spaces retains them as disconnected rows; a *fresh* cold open just won't list them
+    (offline *listing* deferred §6C). The bus run **persists either way** (no
     idle-timeout — §6B/§13): with other sessions still broadcasting it stays active; with the
     last one gone it just goes **quiet** (token still resolvable) and a cold open reads the
     recent window, finds no fresh announce, and renders empty — "online = fresh announce," not
@@ -2049,8 +2076,10 @@ rc_api_bridge); others are specs to build/test.
     but once the run idles out and the hook disposes, `POST /api/relay` → `HookNotFound` →
     **`409` and the send is lost** (**no durable server queue** — idempotency only protects a
     frame the wrapper actually receives, not one dropped at a dead hook). The client treats a
-    greyed session as send-disabled and **re-sends after it re-appears**. On return (relaunch
-    + `/remote-control`) → rejoins → broadcasts again; `catch_up` fills the gap.
+    greyed session as send-disabled and **re-sends after it re-appears**. If the same live
+    controller reconnects, its next fresh announce un-greys the row and `catch_up` fills the
+    transport gap. A process relaunch follows scenario 19: A0 creates a separate row, while A1
+    reacquires the stable `logicalChatId` and un-greys the existing row after recovery.
 21. **Bus rolls mid-session (event cap).** The bus run nears 25k events → wrapper(s)
     `start()` a fresh bus run under the same token `bus:${identity_id}` (1:1 token frees
     on the old run completing). A tailing client's bus SSE ends → it reconnects
@@ -2120,6 +2149,9 @@ Channels are addressed by **derived tokens** (§6B): the identity **bus**
 `POST /api/relay` = `resumeHook(token, frame)` (publish);
 `GET /api/stream?identity=|session=` = `getHookByToken(token)→getRun(runId)→getReadable()` over SSE (subscribe).
 No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
+In the shipped A0 sequences below, `session_id` is the private synthetic RC `cse_*`. In the selected
+A1 target, the token and viewer announce use stable `logicalChatId`; the inner `cse_*` is a separately
+persisted transport binding and may change without changing this channel.
 
 **1. Fresh identity bootstrap** (`remote-claw --rc-identity`)
 1. W: gen `S`; derive `identity_id, auth_token, content_root, control_key, K_meta`
@@ -2135,13 +2167,13 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 1. user↔T locally; T→A inference; transcript persists on disk
 2. V sees **nothing** — no bus membership, no content
 
-**4. Enable `/remote-control` mid-session** *(C1 verified; C2 disproven — no backfill)*
+**4. Enable `/remote-control` mid-session — shipped A0** *(C1 verified; C2 disproven — no backfill)*
 1. user types `/remote-control` in T
-2. T→W `POST /v1/code/sessions {title, config{cwd,model}}` *(MITM-intercepted)* → W `200 {session{id:sid}}`
-3. T→W `POST …/{sid}/bridge` → W `200 {worker_jwt, api_base_url}`
-4. T→W `GET …/{sid}/worker/events/stream` (SSE); W→T `control_request{initialize}`
+2. T→W `POST /v1/code/sessions {title, config{cwd,model}}` *(MITM-intercepted)* → W `200 {session{id:rcSid}}`
+3. T→W `POST …/{rcSid}/bridge` → W `200 {worker_jwt, api_base_url}`
+4. T→W `GET …/{rcSid}/worker/events/stream` (SSE); W→T `control_request{initialize}`
 5. **No backfill** — the stream carries only **new** events from here (grounded §17: the worker does **not** re-emit pre-RC turns). W's in-memory log starts effectively empty and covers the conversation **from RC-enable forward**; the prior local turns stay in claude's `.jsonl`.
-6. W **joins the bus immediately**: `resumeHook("bus:"+identity_id, …)` (resume-or-**start** the bus run, bounded-backoff retry on `HookNotFound`/`HookConflictError`); opens the session stream `sess:${identity_id}:${sid}`; **broadcasts** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change). **No completeness gate** is needed — the log is complete from the moment it starts, so a client racing in with `catch_up{since=0}` gets the whole session-so-far.
+6. W **joins the bus immediately**: `resumeHook("bus:"+identity_id, …)` (resume-or-**start** the bus run, bounded-backoff retry on `HookNotFound`/`HookConflictError`); opens the session stream `sess:${identity_id}:${rcSid}`; **broadcasts** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change). **No completeness gate** is needed — the log is complete from the moment it starts, so a client racing in with `catch_up{since=0}` gets the whole session-so-far. The selected A1 path instead binds `rcSid` beneath a stable `logicalChatId` and uses the latter for this stream and announce.
 
 **5. Launch with RC ON** (`remote-claw --remote-control`) — as #4 steps 2–4 + the join-bus/broadcast of step 6, **no backfill** (empty history).
 
@@ -2208,17 +2240,26 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 1. C's SSE drops → C→V `GET /api/stream?identity=id&session=sid` (token→run; resume by `startIndex`)
 2. C dedups by `msg_id`, reorders by `seq` → no gap, no dup
 
-**19. Wrapper/CLI restart (both stateless)** *(C5 re-scoped: local TUI recovers; RC does not backfill)*
+**19. Wrapper/CLI restart** *(C5 re-scoped: local TUI recovers; RC does not backfill)*
+
+**Current A0**
+
 1. both die → operator relaunches `remote-claw --continue` *(passthrough; `claude --continue` reloads the conversation into its **own local TUI**)* → W spawns **T** through the MITM
-2. user `/remote-control` → bridge→stream (as #4) → **no backfill**: the worker streams only **new** events (grounded §17), so this is a **new** RC session whose log starts empty
-3. W **joins the bus and broadcasts** fresh `session_announce`s (re-creating bus/session runs as needed); the pre-restart transcript is **not** recoverable over RC (it lives only in claude's `.jsonl`)
-4. a still-connected C greys the old session when announces lapse, then **un-greys on the next ordered fresh broadcast** (`incarnation_started_at` + `announce_seq`, with `sent_at` fallback; this wall-clock fence is not a durable epoch/handshake, §4.3) + `catch_up` → W replays the **new** session's log → C re-renders *(from RC-enable forward; the local TUI holds the full history)*
+2. user `/remote-control` → bridge→stream (as #4) → **no backfill**: the worker streams only **new** events, and the process-local wrapper exposes a new synthetic RC `session_id` with an empty log/binding
+3. W joins the bus and broadcasts that new id; an already-open C retains the old row as disconnected and adds a separate new row, while a cold reload sees only the new fresh row
+
+**Selected A1 target**
+
+1. W reopens the durable coordinator journal, reacquires the stable `logicalChatId`, and resumes the stored Claude conversation UUID with input closed
+2. W advances the native process through a fenced forward-incarnation transition and tries the known private `cse_*` first; a reusable one starts a new worker epoch, while a replacement `cse_*` uses a separate fenced attachment transition under the same native binding and logical chat
+3. W reconciles persisted RC state plus proven native transcript evidence; the worker contributes no history backfill, and ambiguous pre-crash delivery is not retried
+4. W announces and tails `sess:${identity_id}:${logicalChatId}`; C un-greys the same row and continues its cached chat rather than receiving a second row
 
 **20. Host offline → back**
 1. W/CLI exit → W **stops broadcasting**; its announces age out of `FRESH_WINDOW`
-2. C (tailing the bus) **greys** the session locally, then drops it; a fresh open reads the recent window and finds no fresh announce → empty (the bus run **persists** regardless — no idle-timeout, §6B/§13; `HookNotFound` only if the bus was *never* created or mid-roll)
+2. C (tailing the bus) retains the session as a **disconnected** row; a fresh open reads the recent window and finds no fresh announce → empty (the bus run **persists** regardless — no idle-timeout, §6B/§13; `HookNotFound` only if the bus was *never* created or mid-roll)
 3. send is blocked **client-side** (greyed → disabled); if sent anyway it is **best-effort**: it *may* land if W returns while the run is still alive (deduped by `msg_id`), but once the session run idles out the hook disposes → `POST /api/relay` → `resumeHook` **`HookNotFound`** → **`409`, send lost** (no durable queue; idempotency can't save a frame dropped at a dead hook) → client re-sends after the session re-appears
-4. host returns: relaunch + `/remote-control` → W **rejoins the bus** → broadcasts again; C un-greys on the next fresh announce; `catch_up` fills the gap
+4. if the same live controller returns, its fresh announce un-greys the row and `catch_up` fills the gap; a process relaunch follows #19 (new row in A0, same recovered logical row in A1)
 
 **21. Bus rolls mid-session (event cap)**
 1. a connected W sees the bus run nearing 25k events → **completes** the old run (closes its stream, disposes the hook → frees the 1:1 token) → `start()`s a fresh run re-`createHook("bus:"+identity_id)` (race: loser catches `HookConflictError`, resume-tails the winner)
@@ -2269,7 +2310,7 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 16 | Tool permission | `control_request/response`, `GCM(control_key)`, session `hook`, `worker-SSE` |
 | 17 | Remote control verbs | control frames (`control_key`), session `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`) |
 | 18 | Network blip resume | `/api/stream?identity=&session=` (token→run), `wf-stream` resume(`startIndex`), `seq` reorder, `dedup` |
-| 19 | Wrapper/CLI restart recovery | `--continue` (local TUI only), `/remote-control`, `intercept`, **new RC session** (no backfill — fresh log), **rejoin-bus + resume broadcast**, fresh-announce un-grey, `catch_up` |
+| 19 | Wrapper/CLI restart recovery | **A0:** new synthetic RC id/log; an open viewer retains the old disconnected row + adds a new row, while cold reload sees only the fresh row. **A1 target:** persisted `logicalChatId`, resume UUID + known `cse_*` first, fenced replacement `cse_*` if needed, same broker channel/row, no worker backfill |
 | 20 | Host offline → back | stop-broadcast, announces age out, `grey-local`, `409`(no live session), rejoin + rebroadcast, `catch_up` |
 | 21 | Bus rolls mid-session | cap-roll: complete old run, `start()` new (same token), `HookConflictError` race, client EOF→reconnect→re-tail; sessions untouched |
 | 22 | Client returns cold | `localStorage`/re-derive, bus subscribe (recent window), `catch_up{since=cached}`, IndexedDB delta *(no per-client server state)* |
