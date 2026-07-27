@@ -9,8 +9,9 @@ A custom client + relay for driving a **real `claude --remote-control` session**
 > input, correlates delivery, and translates between native clients, official Anthropic Remote,
 > ChatGPT Remote connections, and remote-claw web. Wrapped inner Claude, Codex, and OpenCode processes
 > never contact their providers directly.
-> This is a design under implementation—the current `--rc-app` path below still replaces Anthropic's
-> RC backend.
+> This is under implementation. A0.1 adds the neutral host registration contract and routes Claude
+> MITM sessions through one process-local registrar; OpenCode/tmux migration, durable coordination,
+> complete inner-provider isolation, Codex, and the official-client connectors remain later phases.
 
 ## What this is
 
@@ -73,6 +74,9 @@ ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `
 - **`packages/cli`** — the `remote-claw` wrapper: identity/pass management (`--rc-identity`,
   `--rc-pass`), the broker transport (`BrokerClient`), and the **RC MITM backend** (`@remote-claw/cli/rc`:
   `MitmProxy` + `RelayCore`/`Session` + `HostRcRelay`) — the Phase-0 interception core ported to TS.
+  Its new `host/native` contract is independent of `Session`; the process-local legacy registrar now
+  assigns a distinct lease to each intercepted Claude conversation and starts its bridge only after
+  validated setup reaches `ready`.
 
 **The RC backend (the real one, §14/§17.5):** you run `remote-claw` like `claude` (`--rc-app <broker>`
 arms it); inside, `/remote-control` lands on **our local TLS MITM of `api.anthropic.com`** (set via
@@ -160,9 +164,9 @@ Anthropic Remote session.
 
 ## Next implementation
 
-The active sequence is A0 registration seam → A1 runtime owner/control journal → A2 OpenCode
-vertical slice → wrapped Claude → wrapped Codex/ChatGPT Remote → tmux recovery. The proof gates and
-per-PR boundaries are in
+The active sequence is A0.2 OpenCode/tmux registration → A1 runtime owner/control journal → A2
+OpenCode vertical slice → wrapped Claude → wrapped Codex/ChatGPT Remote → tmux recovery. A0.1, the
+neutral seam plus Claude MITM migration, is implemented. The proof gates and per-PR boundaries are in
 [Client-driven Host Runtime §13](docs/client-driven-host-runtime.md#13-delivery-plan).
 
 ## ⚠️ Security

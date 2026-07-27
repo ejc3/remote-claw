@@ -1,6 +1,6 @@
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
 import { deriveIdentity } from "@remote-claw/clawsec";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import type { Session } from "../session.js";
 import {
@@ -10,7 +10,13 @@ import {
   type PermissionRule,
   parseSseFrame,
 } from "./client.js";
-import { DEFAULT_OPENCODE_MODEL, errText, mergeAskRules, OpencodeDriver } from "./driver.js";
+import {
+  DEFAULT_OPENCODE_MODEL,
+  errText,
+  mergeAskRules,
+  OPENCODE_TEARDOWN_FLUSH_MS,
+  OpencodeDriver,
+} from "./driver.js";
 
 // Driver-level CAPTURE test. We drive the REAL OpencodeDriver + a REAL HostRcRelay (via bridgeSession),
 // replacing only the two transports with controllable fakes:
@@ -27,6 +33,9 @@ import { DEFAULT_OPENCODE_MODEL, errText, mergeAskRules, OpencodeDriver } from "
  *  aborted. `content` is the durable transcript (seq !== null). */
 class FakeBroker {
   posts: Array<{ recordKind: string; seq: number | null; text: string }> = [];
+  /** Park session-announcement writes forever to model a broker transport that ignores abort. */
+  stallAnnouncements = false;
+  announcementAttempts = 0;
   get content() {
     return this.posts.filter((p) => p.seq !== null);
   }
@@ -51,6 +60,10 @@ class FakeBroker {
     return [{ ok: true }];
   }
   async postFrame(header: FrameHeader, body: Uint8Array): Promise<unknown> {
+    if (header.recordKind === "session_announce") {
+      this.announcementAttempts++;
+      if (this.stallAnnouncements) await new Promise<never>(() => {});
+    }
     this.posts.push({
       recordKind: header.recordKind,
       seq: header.seq,
@@ -76,19 +89,50 @@ class FakeBroker {
 class FakeOpencodeClient extends OpencodeClient {
   prompts: Array<{ text: string; model: { providerID: string; modelID: string } }> = [];
   aborts = 0;
+  abortSignals: AbortSignal[] = [];
+  /** Park native abort forever, including after its deadline signal aborts, to prove the outer bound. */
+  stallAbort = false;
+  /** Whether the active SSE pump's signal was already aborted when native abort began. */
+  captureWasAbortedAtNativeAbort: boolean | null = null;
+  lastEventsSignal: AbortSignal | null = null;
   replies: Array<{ permissionId: string; response: string }> = [];
   /** Sessions returned by listSessions (the auto-pick). Empty ⇒ the driver creates one. */
   sessionList: Array<{ id: string }> = [];
+  listCalls = 0;
+  listSignals: AbortSignal[] = [];
+  /** Park listSessions until its supplied signal aborts, like a hung cancellation-aware fetch. */
+  stallList = false;
+  /** Optional request barriers model an injected client that ignores cancellation and resolves late. */
+  listBarrier: Promise<void> | null = null;
+  createCalls = 0;
+  createSignals: AbortSignal[] = [];
+  createBarrier: Promise<void> | null = null;
   /** History returned by getMessages (the attach backfill). Empty by default. */
   history: HistoryMessage[] = [];
+  /** Optional create failure used to exercise the driver's attach-failure teardown. */
+  createError: Error | null = null;
 
   constructor(private readonly script: OpencodeEvent[]) {
     super({ baseUrl: "http://invalid.invalid" });
   }
-  override async createSession(): Promise<string> {
+  override async createSession(_title?: string, signal?: AbortSignal): Promise<string> {
+    this.createCalls++;
+    if (signal !== undefined) this.createSignals.push(signal);
+    if (this.createBarrier !== null) await this.createBarrier;
+    if (this.createError !== null) throw this.createError;
     return "ses_fake";
   }
-  override async listSessions(): Promise<Array<{ id: string }>> {
+  override async listSessions(signal?: AbortSignal): Promise<Array<{ id: string }>> {
+    this.listCalls++;
+    if (signal !== undefined) this.listSignals.push(signal);
+    if (this.stallList) {
+      await new Promise<void>((_resolve, reject) => {
+        const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
+        if (signal?.aborted) fail();
+        else signal?.addEventListener("abort", fail, { once: true });
+      });
+    }
+    if (this.listBarrier !== null) await this.listBarrier;
     return this.sessionList;
   }
   override async getMessages(): Promise<HistoryMessage[]> {
@@ -100,8 +144,11 @@ class FakeOpencodeClient extends OpencodeClient {
   ): Promise<void> {
     this.prompts.push(args);
   }
-  override async abort(): Promise<void> {
+  override async abort(_sessionId: string, signal?: AbortSignal): Promise<void> {
     this.aborts++;
+    if (signal !== undefined) this.abortSignals.push(signal);
+    this.captureWasAbortedAtNativeAbort = this.lastEventsSignal?.aborted ?? null;
+    if (this.stallAbort) await new Promise<never>(() => {});
   }
   summarizes: string[] = [];
   override async summarize(sessionId: string): Promise<void> {
@@ -116,10 +163,23 @@ class FakeOpencodeClient extends OpencodeClient {
   }
   /** Records each setSessionPermission (the ask-mode PATCH) so tests can assert mirroring on/off. */
   permissionSets: Array<{ sessionId: string; rules: readonly PermissionRule[] }> = [];
+  permissionSetAttempts = 0;
+  permissionSetSignals: AbortSignal[] = [];
+  stallPermissionSet = false;
   override async setSessionPermission(
     sessionId: string,
     rules: readonly PermissionRule[],
+    signal?: AbortSignal,
   ): Promise<void> {
+    this.permissionSetAttempts++;
+    if (signal !== undefined) this.permissionSetSignals.push(signal);
+    if (this.stallPermissionSet) {
+      await new Promise<void>((_resolve, reject) => {
+        const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
+        if (signal?.aborted) fail();
+        else signal?.addEventListener("abort", fail, { once: true });
+      });
+    }
     this.permissionSets.push({ sessionId, rules });
   }
   /** Existing per-session rules getSessionPermission returns (keyed by sessionId; default []). Lets a
@@ -127,7 +187,22 @@ class FakeOpencodeClient extends OpencodeClient {
   existingPermissions = new Map<string, PermissionRule[]>();
   /** When true, getSessionPermission throws — to prove the fail-safe (no PATCH when rules can't be read). */
   failGetPermission = false;
-  override async getSessionPermission(sessionId: string): Promise<PermissionRule[]> {
+  permissionReadCalls = 0;
+  permissionReadSignals: AbortSignal[] = [];
+  stallPermissionRead = false;
+  override async getSessionPermission(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<PermissionRule[]> {
+    this.permissionReadCalls++;
+    if (signal !== undefined) this.permissionReadSignals.push(signal);
+    if (this.stallPermissionRead) {
+      await new Promise<void>((_resolve, reject) => {
+        const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
+        if (signal?.aborted) fail();
+        else signal?.addEventListener("abort", fail, { once: true });
+      });
+    }
     if (this.failGetPermission) throw new Error("getSessionPermission boom");
     return this.existingPermissions.get(sessionId) ?? [];
   }
@@ -143,6 +218,7 @@ class FakeOpencodeClient extends OpencodeClient {
     want: string | ((id: string | undefined) => boolean),
     signal: AbortSignal,
   ): AsyncGenerator<OpencodeEvent> {
+    this.lastEventsSignal = signal;
     const idx = this.connections;
     this.connections++;
     const scripts = this.connectionScripts;
@@ -314,7 +390,199 @@ function up(s: Session | null) {
 
 describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
   let ac: AbortController | null = null;
-  afterEach(() => ac?.abort());
+  afterEach(() => {
+    ac?.abort();
+    vi.useRealTimers();
+  });
+
+  it("does no relay or native attachment work when the parent is already aborted", async () => {
+    const client = new FakeOpencodeClient([]);
+    const broker = new FakeBroker();
+    let sessions = 0;
+    const ctx = await makeCtx(client, broker, () => {
+      sessions++;
+    });
+    ac = new AbortController();
+    ac.abort();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(0);
+    expect(sessions).toBe(0);
+    expect(client.listCalls).toBe(0);
+    expect(client.createCalls).toBe(0);
+    expect(client.permissionSets).toHaveLength(0);
+    expect(client.connections).toBe(0);
+    expect(client.aborts).toBe(0);
+    expect(broker.announcementAttempts).toBe(0);
+  });
+
+  it("cancels a hung attachment request without creating or aborting a native session", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.stallList = true;
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    vi.useFakeTimers();
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.listCalls).toBe(1);
+    expect(client.listSignals).toHaveLength(1);
+    expect(client.listSignals[0]?.aborted).toBe(false);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(run).resolves.toBe(0);
+    expect(client.listSignals[0]?.aborted).toBe(true);
+    expect(client.createCalls).toBe(0);
+    expect(client.permissionSets).toHaveLength(0);
+    expect(client.connections).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("does not commit or abort a borrowed session returned after attachment cancellation", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.sessionList = [{ id: "ses_borrowed" }];
+    let releaseList!: () => void;
+    client.listBarrier = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(client.listCalls).toBe(1);
+    ac.abort();
+    releaseList();
+
+    await expect(run).resolves.toBe(0);
+    expect(client.createCalls).toBe(0);
+    expect(client.permissionSets).toHaveLength(0);
+    expect(client.connections).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("does no setup or native abort when an injected create client resolves after cancellation", async () => {
+    const client = new FakeOpencodeClient([]);
+    let releaseCreate!: () => void;
+    client.createBarrier = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => client.createCalls === 1)).toBe(true);
+    ac.abort();
+    releaseCreate();
+
+    await expect(run).resolves.toBe(0);
+    expect(client.createSignals[0]?.aborted).toBe(true);
+    expect(client.permissionSets).toHaveLength(0);
+    expect(client.connections).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("cancels a hung initial permission read and still reaches startup cleanup", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.stallPermissionRead = true;
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    vi.useFakeTimers();
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.permissionReadCalls).toBe(1);
+    expect(client.permissionReadSignals[0]?.aborted).toBe(false);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(run).resolves.toBe(0);
+    expect(client.permissionReadSignals[0]?.aborted).toBe(true);
+    expect(client.permissionSetAttempts).toBe(0);
+    expect(client.connections).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("cancels a hung initial permission write without starting pumps or native teardown", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.stallPermissionSet = true;
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    vi.useFakeTimers();
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.permissionSetAttempts).toBe(1);
+    expect(client.permissionSetSignals[0]?.aborted).toBe(false);
+    expect(client.permissionSets).toHaveLength(0);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(run).resolves.toBe(0);
+    expect(client.permissionSetSignals[0]?.aborted).toBe(true);
+    expect(client.permissionSets).toHaveLength(0);
+    expect(client.connections).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("bounds bridge teardown when attach fails behind a stalled initial announcement", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.createError = new Error("create failed");
+    const broker = new FakeBroker();
+    broker.stallAnnouncements = true;
+    const ctx = await makeCtx(client, broker, () => {});
+    vi.useFakeTimers();
+    ac = new AbortController();
+
+    let settled = false;
+    const run = new OpencodeDriver(ctx).run(ac.signal).then((code) => {
+      settled = true;
+      return code;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(broker.announcementAttempts).toBe(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(OPENCODE_TEARDOWN_FLUSH_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(run).resolves.toBe(1);
+  });
+
+  it("uses one deadline for a stalled native abort and stalled broker flush, after fencing pumps", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.stallAbort = true;
+    const broker = new FakeBroker();
+    broker.stallAnnouncements = true;
+    const ctx = await makeCtx(client, broker, () => {});
+    vi.useFakeTimers();
+    ac = new AbortController();
+
+    let settled = false;
+    const run = new OpencodeDriver(ctx).run(ac.signal).then((code) => {
+      settled = true;
+      return code;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.connections).toBe(1);
+    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
+
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.aborts).toBe(1);
+    expect(client.captureWasAbortedAtNativeAbort).toBe(true);
+    expect(client.abortSignals).toHaveLength(1);
+    expect(client.abortSignals[0]?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(OPENCODE_TEARDOWN_FLUSH_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(run).resolves.toBe(0);
+    expect(client.abortSignals[0]?.aborted).toBe(true);
+  });
 
   it("coalesces a re-sent assistant part into ONE upstream payload with the model's text", async () => {
     const client = new FakeOpencodeClient(OK_SCRIPT);

@@ -8,6 +8,7 @@ interface Captured {
   url: string;
   method: string | undefined;
   body: string | undefined;
+  signal: AbortSignal | null | undefined;
 }
 
 /** A fetch double recording each call and returning a Response-like with the given ok/status. */
@@ -17,6 +18,7 @@ function fakeFetch(captured: Captured[], ok = true, status = 200): typeof fetch 
       url: String(url),
       method: init?.method,
       body: typeof init?.body === "string" ? init.body : undefined,
+      signal: init?.signal,
     });
     return {
       ok,
@@ -26,6 +28,53 @@ function fakeFetch(captured: Captured[], ok = true, status = 200): typeof fetch 
     } as unknown as Response;
   }) as unknown as typeof fetch;
 }
+
+describe("OpencodeClient cancellation-aware session endpoints", () => {
+  it("threads the caller signal through attach, permission-setup, and abort requests", async () => {
+    const signals: Array<AbortSignal | null | undefined> = [];
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      signals.push(init?.signal);
+      const isCreate = String(url).endsWith("/session") && init?.method === "POST";
+      return {
+        ok: true,
+        status: 200,
+        text: async () => "",
+        json: async () => (isCreate ? { id: "ses_new" } : []),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const client = new OpencodeClient({ baseUrl: "http://oc.test", fetchFn });
+    const ac = new AbortController();
+
+    await client.listSessions(ac.signal);
+    await expect(client.createSession("new", ac.signal)).resolves.toBe("ses_new");
+    await client.getSessionPermission("ses_new", ac.signal);
+    await client.setSessionPermission(
+      "ses_new",
+      [{ permission: "*", pattern: "*", action: "ask" }],
+      ac.signal,
+    );
+    await client.abort("ses_new", ac.signal);
+
+    expect(signals).toEqual([ac.signal, ac.signal, ac.signal, ac.signal, ac.signal]);
+  });
+
+  it("a hung list request rejects promptly when its signal is aborted", async () => {
+    const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) => {
+      await new Promise<never>((_resolve, reject) => {
+        const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
+        if (init?.signal?.aborted) fail();
+        else init?.signal?.addEventListener("abort", fail, { once: true });
+      });
+    }) as unknown as typeof fetch;
+    const client = new OpencodeClient({ baseUrl: "http://oc.test", fetchFn });
+    const ac = new AbortController();
+    const pending = client.listSessions(ac.signal);
+
+    ac.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
 
 describe("OpencodeClient.summarize (/compact native equivalent)", () => {
   it("POSTs /session/{id}/summarize with { providerID, modelID, auto:false }", async () => {

@@ -2,9 +2,11 @@
 
 **Status:** selected next architecture; implementation in progress.
 
-**Current behavior is unchanged:** today `--rc-app` hosts an in-memory `RelayCore` that lazily creates
-and bridges one Claude-shaped `Session` per intercepted Claude RC session. The separate OpenCode and
-tmux launch paths each create and bridge their own wrapper `Session`. No current path persists a
+**Current external behavior remains compatible:** today `--rc-app` hosts an in-memory `RelayCore`
+that lazily creates one Claude-shaped `Session` per intercepted Claude RC session. A host-scoped
+process-local registrar now gives each intercepted session a distinct `rcb_*` lease, waits for
+validated capabilities and `ready`, and only then starts its broker bridge. The separate OpenCode and
+tmux launch paths still create and bridge their wrapper `Session` directly. No current path persists a
 logical-chat/native binding across an ordinary wrapper restart, and Codex is not implemented.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
@@ -140,7 +142,7 @@ dispatcher still branches directly among MITM, OpenCode, and tmux launch paths, 
 create several sessions. That interface cannot be the host-wide contract because Codex needs one host
 runtime that discovers and serves many threads.
 
-The new host-level boundary is:
+The host-level boundary introduced in A0.1 is:
 
 ```ts
 type EngineProduct = "claude-code" | "codex" | "opencode";
@@ -230,7 +232,9 @@ must announce before the native ID is known:
 
 1. `open(...)` creates a host conversation lease without pretending a broker ID is a native ID.
 2. `bindNative(...)` records the real Claude, Codex, OpenCode, or tmux conversation identity.
-3. `update(...)` publishes validated post-setup metadata/capabilities without changing identity.
+3. `update(...)` commits validated post-setup metadata/capabilities without changing identity and
+   projects that snapshot outward. A failed advisory announcement is a delivery gap, not permission to
+   roll local native truth back.
 4. `setPhase(...)` exposes startup, recovery, readiness, and draining without conflating presence
    with writability.
 5. `close(...)` idempotently closes the bridge lease. It does not kill the native runtime unless an
@@ -270,29 +274,38 @@ lineage. A synthetic Claude RC `cse_*` maps to the real transcript/resume identi
 sessions remain nested evidence; Codex create/fork results create distinct thread identities; and
 tmux clear/branch/compact transitions are classified rather than treated as mere file rotation.
 
-The neutral adapter package does not import the current Claude `Session`. During migration, a legacy
-RC registrar specializes the generic port to `Session` and invokes today's `bridgeSession`. This
-preserves current behavior while making the host cardinality correct.
+The neutral adapter package does not import the current Claude `Session`. A0.1 added
+`host/native/adapter.ts` and a legacy RC registrar that specializes the generic port to `Session`.
+Claude MITM creates one registrar per wrapper process and one lease per intercepted conversation; on
+`ready`, the registrar invokes `startBridgeSession`. The older `bridgeSession` entrypoint remains a
+served-promise compatibility wrapper for OpenCode and tmux. This preserves the current data plane
+while making Claude MITM's host cardinality explicit.
 
 The adapter creates and owns `port`; the registrar consumes it for the bridge and returns a lease.
-`open`, late `bindNative`, update, and close can fail asynchronously. On failure the adapter closes its
-lease, keeps or resumes the native runtime according to the runtime-owner policy, and records a gap; it
-does not pretend registration succeeded. A0 implements only this lifecycle and current metadata. The
-capability/evidence fields prevent that behavior-preserving bridge from claiming future guarantees.
-The legacy RC registrar does not start `bridgeSession` or announce the conversation until the adapter
-has published validated capabilities with `update` and moved the lease to `ready`. `Session` buffers
-any earlier upstream events. This prevents broker input from reaching a half-configured native
+`open`, late `bindNative`, update, and close can fail asynchronously. On a validation, binding, or
+lifecycle failure, the adapter closes the lease and applies the runtime-owner policy; it does not
+pretend registration succeeded. The current A0 Claude path logs the registration failure and closes
+that failed `Session`, while A1 adds the persistent recovery gap and keep-alive/resume policy. After a
+validated live `update`, an advisory projection failure is reported and retried by later presence
+publication, but it does not restore stale metadata or capabilities. A0 implements only this lifecycle
+and current metadata. The capability/evidence fields prevent that behavior-preserving bridge from
+claiming future guarantees.
+The legacy RC registrar does not start `startBridgeSession` or announce the conversation until it has
+validated capabilities supplied at `open` or `update` and the adapter has moved the lease to `ready`.
+The current Claude launch begins with null capabilities and supplies them through `update`. `Session`
+buffers any earlier upstream events. This prevents broker input from reaching a half-configured native
 adapter.
 
 An open lease starts in the binding's explicit `starting` or `recovering` phase. Moving to `ready`
 requires validated capabilities. A proven native identity is preferred but not fabricated: an A0
 legacy bridge may be ready with `nativeRef: null`, `liveReattach: false`, and no durable native
 delivery claim. Such a lease preserves current behavior but cannot use A1's fenced mutation or
-reattachment guarantees until a real native reference is bound. Before `ready`, the coordinator queues
-or rejects mutation. Graceful stop moves it to `draining`, fences new writes, settles or marks
-in-flight work, persists cursors and gaps, detaches outside connectors, and only then applies the
-explicit keep-alive or terminate policy. Closing one Codex thread lease never closes the shared
-host-scoped app-server.
+reattachment guarantees until a real native reference is bound. A0 withholds the broker bridge before
+`ready`; moving to `draining` immediately aborts its relay pumps, but does not yet settle or persist
+in-flight outcomes. In A1, the coordinator queues or rejects pre-ready mutation, and graceful stop
+fences new writes, settles or marks in-flight work, persists cursors and gaps, detaches outside
+connectors, and only then applies the explicit keep-alive or terminate policy. That runtime ownership
+must ensure that closing one Codex thread lease never closes the shared host-scoped app-server.
 
 Native process ownership is separate from a conversation lease. A small host runtime owner—an OS
 service, daemon, or per-engine warden—keeps eligible native processes and private protocol endpoints
@@ -865,9 +878,13 @@ Each item lands as a separate reviewed PR.
 
 #### A0.1 — Neutral seam and Claude MITM migration
 
+**Status: implemented.** The seam and registrar are process-local compatibility infrastructure; they
+do not claim A1 persistence, restart adoption, or native delivery fencing.
+
 - Add a native engine adapter package that is independent of Claude `Session`.
 - Add two-phase conversation registration.
-- Add a legacy RC registrar that maps today's `Session` into today's `bridgeSession`.
+- Add a legacy RC registrar that maps today's `Session` into `startBridgeSession` while retaining
+  `bridgeSession` as the direct-driver compatibility entrypoint.
 - Route Claude MITM registration through one host-scoped registrar without changing native command
   flow, and prove that one registrar can serve several intercepted conversations.
 - Accept only first-bind/exact-replay native identity; defer proof-carrying replacement to A1.
@@ -879,6 +896,8 @@ Each item lands as a separate reviewed PR.
   capabilities.
 
 #### A0.2 — OpenCode and tmux migration
+
+**Status: next.**
 
 - Route OpenCode and tmux registration through the same host-wide seam without changing their native
   command flow.

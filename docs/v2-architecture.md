@@ -536,20 +536,20 @@ keys, so it can forge **nothing**; `dir` is bound into AAD, so an `in` prompt an
 `out` echo derive different `K_msg` and can't be confused. **Inbound frames** carry
 `msg_id` (+ `client_msg_id` for a `user` prompt) and are replay-checked.
 
-**Presence is timestamp-driven (Design B — §14A).** Recency comes from a **synced wall
-clock**, not a client round-trip, which collapses presence to **one signed frame + one
-check** (no `identify?`, no challenge, no `beat_seq`, no `wrapper_instance_id`).
-- **Each session announces itself; clients subscribe.** A *session* is one `claude`
-  wrapped 1:1 by its own `remote-claw` process, **independent of every other session**
-  (§1) — there is no per-host aggregator, so each one publishes **its own** announce. While
-  RC is on, a session (every `ANNOUNCE_INTERVAL`, and immediately on any change) broadcasts
-  `session_announce{session_id, title, cwd, identity_label, status, last_activity, sent_at}`
-  on the identity bus — the *whole* payload AEAD under `K_meta`, `sent_at` = the
-  wrapper's wall clock **inside the ciphertext** (broker can't forge a fresh one). No
-  client→wrapper request.
+**Presence liveness is timestamp-driven (Design B — §14A).** Recency comes from a **synced wall
+clock**, not a client round-trip, which keeps presence to **one signed frame + one
+client-side fold** (no `identify?`, no challenge, no `beat_seq`).
+- **Each session announces itself; clients subscribe.** A *session* has its own relay controller,
+  **independent of every other session** (§1); one wrapper process may host several controllers, and
+  each publishes **its own** announce. While RC is on, a session (every `ANNOUNCE_INTERVAL`, and
+  immediately on any change) broadcasts
+  `session_announce{session_id, title, cwd, identity_label, status, last_activity, sent_at, incarnation, incarnation_started_at, announce_seq}`
+  on the identity bus — the *whole* payload AEAD under `K_meta`, `sent_at` and
+  `incarnation_started_at` are the wrapper's wall clock **inside the ciphertext** (broker can't forge a
+  fresh or later one). No client→wrapper request.
 - **Online = a fresh announce.** A client tails the bus, builds its list keyed by
   `session_id` (globally unique, so independent sessions never collide), and treats a
-  session as **online iff its latest announce is fresh** —
+  session as **online iff its latest accepted announce is fresh** —
   `now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`. No fresh announce within the window ⇒ the client **greys** that session
   locally.
 - **Concrete sizing (defaults; the only knobs).** `ANNOUNCE_INTERVAL = 20 s` (capped
@@ -559,17 +559,21 @@ check** (no `identify?`, no challenge, no `beat_seq`, no `wrapper_instance_id`).
   **slow** clock so a live session isn't false-greyed; `SKEW` (the *future* edge) absorbs a
   **fast** clock so its announces aren't false-rejected. Keep `SKEW ≪ FRESH_WINDOW` so the
   worst-case false-online (next bullet) is dominated by `FRESH_WINDOW`.
-- **One check defeats everything.** `AEAD-valid && in-window` rejects **forgery** (no
+- **The liveness check defeats stale replay.** `AEAD-valid && in-window` rejects **forgery** (no
   `K_meta`), **replay/withhold-and-dribble** (a re-sent announce carries an old `sent_at`
   → out of window), and **stale-seeding of a fresh/late client** (same). The two-sided
   window also stops a *fast-clock* session's announces being replayable forever (future-dated
-  beyond `SKEW` → rejected). No ordering/epoch machinery is needed. **Exact false-online
+  beyond `SKEW` → rejected). Inside that window, `incarnation_started_at` and `announce_seq` prevent
+  broker/request reordering from rolling current-host state backward; they are a wall-clock fence, not a
+  durable epoch. **Exact false-online
   bound:** replay/withhold can never *refresh* `sent_at`, so an announce hard-expires at
   `sent_at + FRESH_WINDOW`; a maximally future-skewed clock is accepted out to `now + SKEW`,
   so the **worst observed false-online for a dead session is `FRESH_WINDOW + SKEW`** (≈65 s
   at the defaults) — not exactly one window — after which it greys.
-- **Restart / new session / late client just work.** A restarted session simply resumes
-  broadcasting fresh announces → clients un-grey on the next one (no instance epoch). A
+- **Restart / new session / late client just work in the normal forward-clock case.** A restarted
+  session broadcasts a later `incarnation_started_at` → clients un-grey on the next fresh ordered one.
+  A clock-regressed restart fails stable. Equal starts use opaque-incarnation lexical order, which
+  prevents flips but does not prove the chronological winner; A1 supplies that durable epoch. A
   newly-started session broadcasts immediately → appears. A late client reads the bus's
   **recent resumable-stream window** on subscribe (sized to span ≥ one `ANNOUNCE_INTERVAL`
   of bus events, so each live session's last announce is present); if that window already
@@ -860,7 +864,7 @@ a stale command **rejected** (availability), never a breach (§4.3):
 | `set_mode` | `set_permission_mode` | e.g. bypassPermissions toggle |
 | `set_model` | `set_model` | switch model |
 | `command` | (slash) | `/compact` `/clear` `/context` … |
-| `end` | `end_session` | terminate the session |
+| `end` | no worker verb in the current relay | clear open relay permission gates; native session stays alive |
 
 **Ordering & acknowledgement (control plane is not FIFO).** Each control frame is an
 **independent, idempotent** command applied on arrival (deduped by `msg_id`); the broker may
@@ -877,7 +881,7 @@ Our non-content meta frames (**AEAD under `K_meta`** — broker can't forge them
 | kind | dir | notes |
 | --- | --- | --- |
 | `accepted` | out | wrapper ack of a client frame: `{client_msg_id, seq}` |
-| `session_announce` | out (bus) | the **periodic broadcast** that is *both* discovery and presence: `{session_id, title, cwd, identity_label, status, last_activity, sent_at}`, whole payload AEAD under `K_meta`. Each **independent session** broadcasts **its own**, one per `ANNOUNCE_INTERVAL` (§4.3) + on change; a client keys by `session_id` and treats the session **online iff its latest `sent_at` is within `FRESH_WINDOW`** (timestamp-driven, §4.3). No client request, no challenge/`beat_seq` — a replayed/withheld announce has a stale `sent_at` → ignored. |
+| `session_announce` | out (bus) | the **periodic broadcast** that is *both* discovery and presence: `{session_id, title, cwd, identity_label, status, last_activity, sent_at, incarnation, incarnation_started_at, announce_seq}`, whole payload AEAD under `K_meta`. Each **independent session controller** broadcasts **its own**, one per `ANNOUNCE_INTERVAL` (§4.3) + on change; a client keys by `session_id`, folds by incarnation/generation (legacy `sent_at` fallback), and treats the session **online iff the accepted `sent_at` is within `FRESH_WINDOW`** (§4.3). No client request, no challenge/`beat_seq` — a replayed/withheld announce has a stale `sent_at` → ignored. |
 
 (`catch_up` replay re-posts the original content frames with their `seq`/`msg_id`; the
 client's orderer dedups — there is **no** separate `historical` kind or wire flag. There is
@@ -920,7 +924,7 @@ lost because claude holds the transcript.
 
 The "registry" is **not a stored table** — it's a **per-machine message bus** (one per
 `identity_id`, which is now a machine id). Every
-**connected** session (an independent `remote-claw` process on that machine)
+**connected** session (an independent relay controller; one wrapper process may host several)
 **periodically broadcasts** its own signed `session_announce`; a client tails the bus, keys
 by `session_id`, and renders the live list, treating a session **online iff its latest
 announce is fresh** (`sent_at` within `FRESH_WINDOW`) and **greying it locally** when
@@ -1041,15 +1045,20 @@ exists until a wrapper enables `/remote-control` and starts broadcasting):
    `catch_up{since}` for history. High-volume turn frames flow there, **not** on the bus.
 
 ### Live greying (timestamp-driven, client-local)
-While RC is on, each **independent session** (its own `remote-claw` process) **broadcasts**
+While RC is on, each **independent session controller** **broadcasts**
 `session_announce{…, sent_at}` on the bus every `ANNOUNCE_INTERVAL` (=20 s default, §4.3) +
 immediately on change, AEAD under `K_meta` (`sent_at` = wrapper wall clock, inside the
-ciphertext). A client keeps, per `session_id`, the freshest valid `sent_at` it has seen, and
-shows the session **online iff that `sent_at` is within `FRESH_WINDOW`**
+ciphertext). Current wrappers also include an opaque `incarnation`, its wall-clock
+`incarnation_started_at`, and a strict per-incarnation `announce_seq`. A client folds each
+session by that restart/generation order (legacy frames fall back to `sent_at`), then shows the
+session **online iff the accepted announce's `sent_at` is within `FRESH_WINDOW`**
 (`now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`; `FRESH_WINDOW = 60 s`, `SKEW = 5 s`, §4.3). When broadcasts stop
 (host sleeps/crashes), the freshest `sent_at` ages past the window → the client **greys** it
 — visibly "goes away"; when it resumes, or a new session starts, the next fresh announce
-**un-greys/adds it automatically** — no request, no epoch, no `beat_seq`.
+**un-greys/adds it automatically** — no request and no challenge/`beat_seq`. The incarnation start is
+only a wall-clock restart fence, **not** a durable coordinator epoch: a clock-regressed start fails
+stable, while equal starts use opaque-incarnation lexical order. That order prevents flips but cannot
+prove which process is newer; A1 removes that ambiguity.
 **Replay/withhold-proof:** a re-sent or hoarded announce carries an old `sent_at` → out of
 window → it can neither keep a dead session green (beyond the **`FRESH_WINDOW + SKEW`** fuzz,
 §4.3) nor seed a fresh client (§4.3). **Purely client-side** (no server state); it does
@@ -1341,16 +1350,18 @@ re-serving never corrupts the transcript.
   clock-free `msg_id` seen-set is the actual replay defense.
 - **meta** (AEAD under `K_meta`, `dir:out`): `accepted` `{client_msg_id, seq}`;
   `session_announce` (bus, the **periodic broadcast**)
-  `{session_id, title, cwd, identity_label, status, last_activity, sent_at}` — **the whole payload is inside the
-  ciphertext**, so the broker reads none of it.
+  `{session_id, title, cwd, identity_label, status, last_activity, sent_at, incarnation, incarnation_started_at, announce_seq}`
+  — **the whole payload is inside the ciphertext**, so the broker reads none of it.
 
 AAD binds **every** cleartext header field via a single canonical serialization
 (length-prefixed or CBOR) — no ad-hoc `a|b|c` concatenation (ambiguous). The presence
-fields (`sent_at`, names/titles/status) live **inside** the `K_meta` payload, not the
-cleartext header. Presence replay-protection (§4.3) is **one check**: a `session_announce`
-counts only if AEAD-valid **and** `sent_at` is in-window
+fields (`sent_at`, ordering tags, names/titles/status) live **inside** the `K_meta` payload, not the
+cleartext header. Stale replay protection (§4.3) remains the liveness check: a
+`session_announce` counts as online only if AEAD-valid **and** `sent_at` is in-window
 (`now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`) — a replayed/withheld announce carries a stale `sent_at` and is ignored (worst
-dead-session false-online = `FRESH_WINDOW + SKEW`, §4.3).
+dead-session false-online = `FRESH_WINDOW + SKEW`, §4.3). Separately, clients fold in-window current
+frames by `incarnation_started_at` and `announce_seq` so delivery reordering cannot roll presence or
+transcript-incarnation state backward.
 
 Presence is **not stored on the server**: a session is online iff its own broadcast
 `session_announce` is **fresh** (`sent_at` in-window); a client **greys it locally** when
@@ -1876,8 +1887,9 @@ Beyond §14's plan review, individual decisions are settled with small design pa
     (recompute `identity_id`, route by it), resume-or-`start()` with §6B backoff, and the §6A
     bus-only-`session_announce` guard. No store.
   - **CLI BrokerClient** (PR11) — the host+viewer transport: seal on the way out / open on the way
-    in (via the `SecurityProvider`), the two endpoints, a robust SSE parser, and the `FrameOrderer`
-    (dedup by `msg_id`/`(msg_id,part)`, reorder content by `seq`, deliver control/meta immediately).
+    in (via the `SecurityProvider`), the two endpoints, a robust SSE parser, and the viewer-side
+    `FrameOrderer` (dedup by `msg_id`/`(msg_id,part)`, reorder content by `seq`, deliver control/meta
+    immediately). The host inbound command pump does not use the orderer.
   - **End-to-end harness** (PR12) — the real transport ↔ the real broker ↔ a viewer, only `claude`
     faked: a sealed `session_announce` is discovered on the bus; a `user` prompt (`K_session`) round-
     trips to the host, which runs the fake model and emits `accepted` + echo + `assistant` + `result`;
@@ -2018,8 +2030,9 @@ rc_api_bridge); others are specs to build/test.
     start **empty**, covering the conversation **from restart forward**. The wrapper rejoins
     the bus and broadcasts a fresh `session_announce`; the pre-restart transcript is **not**
     recoverable over RC (it lives only in claude's `.jsonl`). A still-connected tab greys the
-    old session when announces lapse, then **un-greys on the next fresh broadcast** (no
-    epoch/handshake — a fresh `sent_at` is just accepted, §4.3; a broker replay of pre-restart
+    old session when announces lapse, then **un-greys on the next ordered fresh broadcast** (the
+    wall-clock incarnation start fences delayed publishes from the retired process but is not a
+    durable epoch/handshake, §4.3; a broker replay of pre-restart
     announces can't extend liveness past `FRESH_WINDOW + SKEW`); clients reconnect + `catch_up`
     on the new session. **[V]** C5 (re-scoped: the **local TUI** recovers; RC does not backfill)
 20. **Host offline → back.** Wrapper exits (never outlives the CLI) → **stops
@@ -2072,10 +2085,11 @@ reorder/**replay**, no keys)
     at once → both `resumeHook`→`HookNotFound`→`start()`. The 1:1 token lets one win; the
     loser catches `HookConflictError` → resume-tails the winner (bounded backoff, §6B). Both
     end up broadcasting on the one bus; no announce lost.
-26. **Clean session end (vs crash).** `/end` (or the wrapper exiting) stops that session's
-    announces; it greys then drops within `FRESH_WINDOW + SKEW` — same as a crash, since
-    presence is broadcast-driven (no special "left" frame needed). An explicit `end` control
-    frame also tells claude to tear down the RC session.
+26. **Clean session end (vs crash).** The wrapper or local native process exiting stops that
+    session's announces; it greys then drops within `FRESH_WINDOW + SKEW` — same as a crash, since
+    presence is broadcast-driven (no special "left" frame needed). In the current relay an
+    authenticated viewer `end` does **not** stop the native session or announcements: it emits no
+    `end_session` and only clears open relay permission gates.
 27. **Mutation-control reorder / expired control.** The broker reorders or withholds mutation verbs.
     Order-dependent ones are **serialized client-side** (send the next only after the prior's
     effect shows on the out-stream — §6A), so e.g. `interrupt` can't be inverted with a later
@@ -2198,7 +2212,7 @@ No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 1. both die → operator relaunches `remote-claw --continue` *(passthrough; `claude --continue` reloads the conversation into its **own local TUI**)* → W spawns **T** through the MITM
 2. user `/remote-control` → bridge→stream (as #4) → **no backfill**: the worker streams only **new** events (grounded §17), so this is a **new** RC session whose log starts empty
 3. W **joins the bus and broadcasts** fresh `session_announce`s (re-creating bus/session runs as needed); the pre-restart transcript is **not** recoverable over RC (it lives only in claude's `.jsonl`)
-4. a still-connected C greys the old session when announces lapse, then **un-greys on the next fresh broadcast** (a fresh `sent_at` is just accepted — no epoch/handshake, §4.3) + `catch_up` → W replays the **new** session's log → C re-renders *(from RC-enable forward; the local TUI holds the full history)*
+4. a still-connected C greys the old session when announces lapse, then **un-greys on the next ordered fresh broadcast** (`incarnation_started_at` + `announce_seq`, with `sent_at` fallback; this wall-clock fence is not a durable epoch/handshake, §4.3) + `catch_up` → W replays the **new** session's log → C re-renders *(from RC-enable forward; the local TUI holds the full history)*
 
 **20. Host offline → back**
 1. W/CLI exit → W **stops broadcasting**; its announces age out of `FRESH_WINDOW`
@@ -2262,7 +2276,7 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 23 | Two wrappers, one drops | both broadcast on the bus, survivor keeps broadcasting (re-wakes the run), `grey-local` only the dropped wrapper's spaces |
 | 24 | Broker replays stale announce | replayed `session_announce`, `sent_at` out of window → ignored, stays `grey-local` (replay extends a live dot ≤ `FRESH_WINDOW+SKEW`, never resurrects) |
 | 25 | Two wrappers race bus create | `resumeHook`→`HookNotFound`→`start()`, 1:1 token, `HookConflictError`→resume-tail (bounded backoff), no announce lost |
-| 26 | Clean session end (vs crash) | stop-broadcast → `grey-local`+drop within `FRESH_WINDOW+SKEW`; optional `end` control frame tears down RC |
+| 26 | Clean session end (vs crash) | local/wrapper exit → stop-broadcast → `grey-local`+drop within `FRESH_WINDOW+SKEW`; viewer `end` only clears open relay gates |
 | 27 | Control reorder / expired | client-serialized order-dependent controls, `dedup(msg_id)`, `expiry`-reject → timeout+re-send (no hang) |
 
 ## 17. Appendix — Claude's Remote Control protocol (reverse-engineered)
@@ -2358,7 +2372,18 @@ The wrapper runs the **real** `claude --remote-control` behind a TLS MITM of `ap
 it **serves** the worker `/v1/code/sessions*` endpoints itself (becoming the RC backend) and
 in the default Anthropic mode **passes** `/v1/messages` + OAuth through, so inference and auth keep
 working. Bedrock mode translates inference and locally synthesizes the other required
-Anthropic-origin responses. It maps worker events onto its own E2E-encrypted frame types (§6A):
+Anthropic-origin responses.
+
+Current A0.1 launch lifecycle is host-scoped rather than a direct per-session bridge call:
+`launch.ts` opens one `LegacyRcConversationRegistrar` lease per intercepted `Session`, and `ready`
+starts `startBridgeSession` with that lease's own abort controller. OpenCode and tmux still call the
+`bridgeSession` compatibility helper directly. Starting a bridge does not wait for its initial
+announcement as a readiness barrier, but its `served` promise remains pending until every admitted
+initial or refresh announcement settles. Each current launcher bounds that teardown wait: MITM shares
+one deadline across its cleanup stages, tmux uses a driver-local flush window, and OpenCode shares one
+driver-local deadline across its native abort request and broker settlement after stopping local pumps.
+
+The wrapper maps worker events onto its own E2E-encrypted frame types (§6A):
 
 - the SSE `initialize` and client `user` events → inbound (`dir:in`) frames delivered to claude;
 - the host's `assistant` / `result` / `system`·`status` outputs → outbound (`dir:out`) content

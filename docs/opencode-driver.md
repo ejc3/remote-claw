@@ -75,9 +75,23 @@ This means the current bridge can announce optimistic capabilities before native
 permission setup finish. The future registrar must publish only validated, post-setup capabilities
 before it accepts mutations.
 
-On driver teardown the driver best-effort aborts the attached OpenCode run and closes the relay
-session. It does not stop the external `opencode serve` process. A future runtime owner must distinguish
-“close this bridge” from “stop this supervised native runtime.”
+The `bridgeSession` result is not a readiness barrier, but its `served` promise remains pending until
+the admitted initial announcement settles. A parent cancellation that is already set when `run`
+starts returns before creating a relay session or inspecting, selecting, creating, or aborting any
+OpenCode session. Cancellation during automatic attachment is passed to the list/create HTTP requests;
+the initial permission-mirroring read/write uses the same signal. Until attachment and that setup
+finish, cancellation exits through startup cleanup without starting pumps or aborting an unconfirmed
+native session.
+
+On normal driver teardown, the driver first aborts its local capture/injection pumps and closes the
+relay session. It then best-effort aborts the attached OpenCode run. That native abort request and the
+final broker settlement share one bounded two-second deadline, so an unresponsive native server and
+an unresponsive broker cannot hold exit for consecutive timeout windows. The driver does not stop the
+external `opencode serve` process. A future runtime owner must distinguish “close this bridge” from
+“stop this supervised native runtime.”
+
+An authenticated viewer `end` does not take that teardown path: `HostRcRelay` consumes it locally,
+clears open relay permission gates, and sends no `end_session` or native OpenCode abort.
 
 ## 3. HTTP and SSE surface
 
@@ -164,7 +178,7 @@ The injection pump serially drains `Session.followDownstream(...)`.
 | `initialize` | No-op, then acknowledge |
 | `interrupt` | Await native `abort`, then acknowledge |
 | `set_model` | Accept only an explicit `providerID/modelID` string for the next prompt |
-| `set_permission_mode`, `end`, unknown control | Safe no-op, then acknowledge |
+| directly queued `set_permission_mode`, `end`, unknown control | Safe no-op, then acknowledge; viewer `end` never reaches this pump |
 | permission response | For a valid request ID, map explicit allow to `once` and other behavior to `reject`; an invalid ID is a no-op |
 
 If an awaited injection fails, the current pump withholds the relay-session acknowledgement, logs the

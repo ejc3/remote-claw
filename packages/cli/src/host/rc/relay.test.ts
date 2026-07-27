@@ -254,6 +254,37 @@ class FakeClient {
   }
 }
 
+/** Lets a newer announce reach the broker before the first request completes. */
+class DelayedFirstAnnounceClient extends FakeClient {
+  readonly firstAnnounceStarted: Promise<void>;
+  #markFirstAnnounceStarted: () => void = () => {};
+  #releaseFirstAnnounce: () => void = () => {};
+  readonly #firstAnnounceRelease: Promise<void>;
+  #announcePosts = 0;
+
+  constructor() {
+    super();
+    this.firstAnnounceStarted = new Promise<void>((resolve) => {
+      this.#markFirstAnnounceStarted = resolve;
+    });
+    this.#firstAnnounceRelease = new Promise<void>((resolve) => {
+      this.#releaseFirstAnnounce = resolve;
+    });
+  }
+
+  releaseFirstAnnounce(): void {
+    this.#releaseFirstAnnounce();
+  }
+
+  override async postFrame(header: FrameHeader, body: Uint8Array): Promise<unknown> {
+    if (header.recordKind === "session_announce" && this.#announcePosts++ === 0) {
+      this.#markFirstAnnounceStarted();
+      await this.#firstAnnounceRelease;
+    }
+    return super.postFrame(header, body);
+  }
+}
+
 /** A `dir:"in"` client frame the relay's inbound pump will process (plaintext stashed in `ct`). */
 function inFrame(recordKind: string, msgId: string, text: string, clientMsgId?: string): Frame {
   return {
@@ -714,6 +745,65 @@ describe("HostRcRelay capabilities on session_announce", () => {
     const relay = relayOf(session, client, caps);
     await relay.announce("box");
     expect(client.announces.at(-1)?.capabilities).toEqual(caps);
+  });
+
+  it("refreshes metadata and capabilities in one announce without changing the harness", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: session.id,
+      session,
+      capabilities: MITM_CAPABILITIES,
+      harness: OPENCODE_HARNESS,
+    });
+    const caps: DriverCapabilities = {
+      structuredPermissions: false,
+      status: false,
+      controls: { interrupt: true, setModel: false, setMode: false, end: false },
+      attachments: false,
+    };
+    const git = { branch: "feature", sha: "1234abcd", dirty: true, ahead: 2, behind: 1 };
+
+    await relay.announce("starting", "/old", null);
+    await relay.refreshAnnouncement("ready", "/new", git, caps);
+
+    expect(client.announces).toHaveLength(2);
+    expect(client.announces.at(-1)).toMatchObject({
+      title: "ready",
+      cwd: "/new",
+      git,
+      capabilities: caps,
+      harness: OPENCODE_HARNESS,
+    });
+  });
+
+  it("strictly sequences same-millisecond announces when an older publish arrives last", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const session = new Session("s", "t", {});
+      const client = new DelayedFirstAnnounceClient();
+      const relay = relayOf(session, client);
+
+      const initial = relay.announce("starting", "/old", null);
+      await client.firstAnnounceStarted;
+      const refreshed = relay.refreshAnnouncement("ready", "/new", null, MITM_CAPABILITIES);
+      await refreshed;
+      client.releaseFirstAnnounce();
+      await initial;
+
+      // Broker arrival is deliberately reversed. announce_seq, not the equal liveness timestamp,
+      // identifies "ready" as newer; both frames also carry the same explicit incarnation epoch.
+      expect(client.announces.map((a) => a.title)).toEqual(["ready", "starting"]);
+      expect(client.announces.map((a) => a.sent_at)).toEqual([1_000, 1_000]);
+      expect(client.announces.map((a) => a.announce_seq)).toEqual([1, 0]);
+      expect(client.announces[0]?.incarnation_started_at).toBe(
+        client.announces[1]?.incarnation_started_at,
+      );
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 

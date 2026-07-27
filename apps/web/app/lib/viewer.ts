@@ -1,7 +1,8 @@
 // The browser viewer: a thin, framework-free wrapper over the SHARED transport (@remote-claw/cli/broker)
 // for the things a phone/laptop driver does — discover sessions on the bus, tail a session's
-// transcript, ask for history, and send a prompt. It reuses the exact BrokerClient / FrameOrderer /
-// SecurityProvider the host uses, so there is no second protocol implementation to drift.
+// transcript, ask for history, and send a prompt. It reuses the host's exact BrokerClient and
+// SecurityProvider plus the shared FrameOrderer, so there is no second wire/security implementation
+// to drift; the host inbound pump deliberately uses direct command dedup instead of FrameOrderer.
 
 import { type FrameHeader, type Identity, parsePass, utf8 } from "@remote-claw/clawsec";
 import {
@@ -107,10 +108,52 @@ export function connStateLabel(cs: ConnState): string {
   }
 }
 
-/** Presence replay rule: keep the newest announce per session. Equal timestamps are accepted so a
- *  same-millisecond mode/status update from the host can replace the previous body. */
+/** Presence replay rule shared by the bus reader and React state.
+ *
+ * Current hosts give each relay incarnation a wall-clock start and each announce a strict sequence:
+ * sequence wins within one incarnation, and the newer start wins across incarnations. That keeps a
+ * delayed old request from rolling presence (or the transcript restart listener) backward. The start
+ * clock is not a durable epoch: a regressed start fails stable, while equal starts use the opaque
+ * incarnation id as a deterministic tie-break. That total order prevents flips but does not prove
+ * which same-millisecond process actually started later.
+ *
+ * Legacy announces have neither ordering field. Preserve their historical timestamp behavior,
+ * including equal-timestamp replacement, until a current incarnation has been accepted. */
 export function shouldAcceptAnnounce(existing: Announce | undefined, incoming: Announce): boolean {
-  return existing === undefined || incoming.sentAt >= existing.sentAt;
+  if (existing === undefined) return true;
+
+  if (
+    existing.incarnation !== null &&
+    incoming.incarnation !== null &&
+    existing.incarnation === incoming.incarnation
+  ) {
+    if (existing.announceSeq !== null && incoming.announceSeq !== null) {
+      return incoming.announceSeq > existing.announceSeq;
+    }
+    return incoming.sentAt >= existing.sentAt;
+  }
+
+  if (existing.incarnation !== null && incoming.incarnation !== null) {
+    if (
+      existing.incarnationStartedAt !== null &&
+      incoming.incarnationStartedAt !== null &&
+      existing.incarnationStartedAt !== incoming.incarnationStartedAt
+    ) {
+      return incoming.incarnationStartedAt > existing.incarnationStartedAt;
+    }
+    if (
+      existing.incarnationStartedAt !== null &&
+      incoming.incarnationStartedAt === existing.incarnationStartedAt
+    ) {
+      return incoming.incarnation > existing.incarnation;
+    }
+    return incoming.sentAt > existing.sentAt;
+  }
+
+  // A current host supersedes an equal-stamped legacy replay; once current ordering is established,
+  // however, an unversioned frame needs a strictly newer wall-clock value to replace it.
+  if (existing.incarnation === null) return incoming.sentAt >= existing.sentAt;
+  return incoming.sentAt > existing.sentAt;
 }
 
 function parseIncarnation(body: Record<string, unknown>): string | null {
@@ -118,6 +161,10 @@ function parseIncarnation(body: Record<string, unknown>): string | null {
   if (typeof raw === "string" && raw !== "") return raw;
   if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
   return null;
+}
+
+function parseNonNegativeInteger(raw: unknown): number | null {
+  return typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0 ? raw : null;
 }
 
 /** The session's git state, snapshotted by the host at announce time (#49). null outside a repo. */
@@ -139,6 +186,11 @@ export interface Announce {
   sentAt: number;
   /** Per relay-process launch id. A change means non-durable transcript seq may have restarted at 0. */
   incarnation: string | null;
+  /** Wall-clock start of that relay process. Orders normal forward restarts, but is not a durable epoch:
+   * regressed starts fail stable; equal starts use the opaque incarnation id only as a stable tie-break. */
+  incarnationStartedAt: number | null;
+  /** Strictly increasing generation within one relay incarnation. */
+  announceSeq: number | null;
   /** Raw worker_status (idle/running/requires_action/…) — kept verbatim for display/debug. */
   status: string;
   /** Derived activity: "thinking" = actively generating, "idle" = not. Drives the working indicator. */
@@ -265,6 +317,9 @@ export interface Message {
 export class Viewer {
   readonly #client: BrokerClient;
   readonly #identityId: Uint8Array;
+  /** The exact same acceptance state the UI uses. Filtering here is essential: rejected stale
+   * incarnation frames must never reach #rememberIncarnation and reset a live transcript. */
+  readonly #acceptedAnnounces = new Map<string, Announce>();
   readonly #incarnations = new Map<string, string>();
   readonly #incarnationListeners = new Map<string, Set<(incarnation: string) => void>>();
   readonly #durability = new Map<string, boolean>();
@@ -360,8 +415,9 @@ export class Viewer {
   /**
    * Tail the identity bus; yield each fresh session_announce (decrypted under K_meta). Re-subscribes
    * when the stream ends: the bus run may not exist yet (you opened the app before any host
-   * announced) or may have cap-rolled. Consumers key presence by session_id + sent_at, so a
-   * re-yielded announce across a reconnect is harmless. Loops until `signal` aborts.
+   * announced) or may have cap-rolled. The generator applies shouldAcceptAnnounce per session before
+   * yielding or notifying transcript listeners, so a replay or delayed publish cannot roll accepted
+   * presence/incarnation state backward. Loops until `signal` aborts.
    *
    * `onError` reports the bus transport's health so a SUSTAINED outage becomes observable instead of a
    * silent retry-forever: it's called with the error when a subscribe/stream throws (broker down, a
@@ -396,6 +452,8 @@ export class Viewer {
             cwd: typeof body.cwd === "string" ? body.cwd : null,
             sentAt: typeof body.sent_at === "number" ? body.sent_at : 0,
             incarnation: parseIncarnation(body),
+            incarnationStartedAt: parseNonNegativeInteger(body.incarnation_started_at),
+            announceSeq: parseNonNegativeInteger(body.announce_seq),
             // Presence fields (#48/#58). Pre-presence hosts omit them → benign defaults.
             status: typeof body.status === "string" ? body.status : "",
             phase: body.phase === "thinking" ? "thinking" : "idle",
@@ -407,6 +465,9 @@ export class Viewer {
           if (caps) announce.capabilities = caps;
           const harness = parseHarness(body.harness); // agent + mode label; undefined on legacy hosts
           if (harness) announce.harness = harness;
+          const existing = this.#acceptedAnnounces.get(sessionId);
+          if (!shouldAcceptAnnounce(existing, announce)) continue;
+          this.#acceptedAnnounces.set(sessionId, announce);
           this.#rememberIncarnation(sessionId, announce.incarnation);
           yield announce;
         }
@@ -670,7 +731,8 @@ export class Viewer {
     await this.#control(sessionId, "set_mode", { mode });
   }
 
-  /** End the session from the remote. */
+  /** Send the authenticated end intent. Current hosts clear abandoned permission gates but cannot
+   * terminate the native session; capability-aware viewers therefore keep this control disabled. */
   async endSession(sessionId: string): Promise<void> {
     await this.#control(sessionId, "end");
   }

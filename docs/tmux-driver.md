@@ -69,8 +69,10 @@ const served = bridgeSession({
 // finally: ac.abort(); s.close(); await served; tmux.killSession();
 ```
 
-`bridgeSession` starts presence announcement fire-and-forget and starts `relay.serve(...)`
-immediately; the announcement is not a startup/readiness barrier.
+`bridgeSession` starts the presence announcement and `relay.serve(...)` immediately; the
+announcement is not a startup/readiness barrier. Its returned `served` promise nevertheless waits
+for the admitted initial announcement to settle. The driver awaits that promise only within its
+bounded teardown window, so an indefinitely stalled broker still cannot hang exit.
 
 ---
 
@@ -193,7 +195,7 @@ for await (const ev of s.followDownstream(gen, () => signal.aborted)) {
     }
   } else if (ev.eventType === "control_request") {
     // interrupt retries Escape; set_model uses the same two-phase path for `/model <id>`.
-    // initialize, set_permission_mode, and end_session have no pane action but are still ACKed.
+    // initialize, set_permission_mode, and a directly queued end have no pane action but are ACKed.
   } else if (ev.eventType === "control_response") {
     // With permission mirroring on, persist the hook decision, then ACK.
   }
@@ -208,6 +210,10 @@ Prompt/key events are ACKed only after their tmux action succeeds; unsupported/n
 ACKed immediately. A permission response is ACKed after its decision callback returns. The current
 callback logs and swallows a decision-file write failure, so that path is not a durable delivery
 receipt even though it prevents a reclaimed stream from replaying the response.
+
+An authenticated viewer `end` does not enqueue `end_session`, kill the pane, or close this bridge.
+`HostRcRelay` consumes it locally and only clears open relay permission gates; the pane remains under
+the driver's normal local/host teardown policy.
 
 ### 2.4 Status — a quiet-timer debounce
 

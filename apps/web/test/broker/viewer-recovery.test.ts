@@ -35,11 +35,19 @@ async function postAnnounce(
   sid: string,
   incarnation: string,
 ): Promise<void> {
+  const key = `${sid}:${incarnation}`;
+  let incarnationStartedAt = announceIncarnationStarts.get(key);
+  if (incarnationStartedAt === undefined) {
+    incarnationStartedAt = nextAnnounceIncarnationStart++;
+    announceIncarnationStarts.set(key, incarnationStartedAt);
+  }
+  const announceSeq = announceSequences.get(key) ?? 0;
+  announceSequences.set(key, announceSeq + 1);
   await host.postFrame(
     header(id, {
       recordKind: "session_announce",
       sessionId: sid,
-      msgId: `ann-${incarnation}`,
+      msgId: `ann-${incarnation}-${announceSeq}`,
     }),
     utf8(
       JSON.stringify({
@@ -48,10 +56,16 @@ async function postAnnounce(
         cwd: "/work",
         sent_at: Date.now(),
         incarnation,
+        incarnation_started_at: incarnationStartedAt,
+        announce_seq: announceSeq,
       }),
     ),
   );
 }
+
+const announceIncarnationStarts = new Map<string, number>();
+const announceSequences = new Map<string, number>();
+let nextAnnounceIncarnationStart = 1;
 
 async function postOut(
   host: BrokerClient,
@@ -129,9 +143,14 @@ describe("Viewer transcript restart and gap recovery", () => {
       await waitFor(() => seenIncarnations.includes("inc-2"));
       await sleep(250);
       await postOut(host, id, sid, 0, "new-0", "after restart 0");
+      // A delayed publish from the retired incarnation must be filtered before it can notify the
+      // transcript restart listener. Otherwise the orderer resets again and the following seq=1 stalls.
+      await postAnnounce(host, id, sid, "inc-1");
+      await sleep(100);
       await postOut(host, id, sid, 1, "new-1", "after restart 1");
       await waitFor(() => got.some((m) => m.msgId === "new-1"));
 
+      expect(seenIncarnations).toEqual(["inc-1", "inc-2"]);
       expect(got.map((m) => m.text)).toEqual([
         "before restart 0",
         "before restart 1",

@@ -141,6 +141,8 @@ function ann(sentAt: number, mode?: string): Announce {
     cwd: null,
     sentAt,
     incarnation: null,
+    incarnationStartedAt: null,
+    announceSeq: null,
     status: "",
     phase: "idle",
     needs: false,
@@ -151,11 +153,83 @@ function ann(sentAt: number, mode?: string): Announce {
 }
 
 describe("announce freshness merge", () => {
-  it("drops a smaller sent_at announce that arrives after a larger one, but accepts equal timestamps", () => {
+  it("keeps legacy timestamp behavior, including equal-timestamp replacement", () => {
     const newest = ann(200, "plan");
     expect(shouldAcceptAnnounce(newest, ann(199, "default"))).toBe(false);
     expect(shouldAcceptAnnounce(newest, ann(200, "default"))).toBe(true);
     expect(shouldAcceptAnnounce(undefined, ann(1))).toBe(true);
+  });
+
+  it("uses announce_seq to converge when same-incarnation requests arrive in reverse order", () => {
+    const older = {
+      ...ann(200, "default"),
+      incarnation: "inc-1",
+      incarnationStartedAt: 100,
+      announceSeq: 4,
+    };
+    const newer = { ...older, mode: "plan", announceSeq: 5 };
+
+    expect(shouldAcceptAnnounce(older, newer)).toBe(true);
+    expect(shouldAcceptAnnounce(newer, older)).toBe(false);
+  });
+
+  it("accepts a newer incarnation and cannot flip back to an older one", () => {
+    const oldIncarnation = {
+      ...ann(300, "default"),
+      incarnation: "inc-old",
+      incarnationStartedAt: 100,
+      announceSeq: 9,
+    };
+    const newIncarnation = {
+      ...ann(300, "plan"),
+      incarnation: "inc-new",
+      incarnationStartedAt: 200,
+      announceSeq: 0,
+    };
+    const delayedOld = { ...oldIncarnation, sentAt: 400, announceSeq: 10 };
+
+    // Equal sent_at does not block a normal forward restart; once accepted, even an old frame with a
+    // later wall timestamp cannot retire the newer incarnation.
+    expect(shouldAcceptAnnounce(oldIncarnation, newIncarnation)).toBe(true);
+    expect(shouldAcceptAnnounce(newIncarnation, delayedOld)).toBe(false);
+  });
+
+  it("uses a stable incarnation-id tie-break when distinct incarnations have equal starts", () => {
+    const loser = {
+      ...ann(200),
+      incarnation: "inc-a",
+      incarnationStartedAt: 100,
+      announceSeq: 1,
+    };
+    const winner = {
+      ...ann(100),
+      incarnation: "inc-z",
+      incarnationStartedAt: 100,
+      announceSeq: 0,
+    };
+    const delayedLoser = { ...loser, sentAt: 500, announceSeq: 2 };
+
+    // The lexical winner is accepted even with an older sent_at. Once accepted, the loser cannot
+    // flip state back despite a later sent_at; this is a stable order, not proof of chronology.
+    expect(shouldAcceptAnnounce(loser, winner)).toBe(true);
+    expect(shouldAcceptAnnounce(winner, delayedLoser)).toBe(false);
+  });
+
+  it("fails stable on a clock-regressed incarnation even when its sent_at is newer", () => {
+    const accepted = {
+      ...ann(200),
+      incarnation: "inc-a",
+      incarnationStartedAt: 200,
+      announceSeq: 5,
+    };
+    const regressed = {
+      ...ann(300),
+      incarnation: "inc-b",
+      incarnationStartedAt: 100,
+      announceSeq: 0,
+    };
+
+    expect(shouldAcceptAnnounce(accepted, regressed)).toBe(false);
   });
 });
 

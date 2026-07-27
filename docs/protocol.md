@@ -9,8 +9,9 @@ is called out in [§12 Convergence & failure modes](#12-convergence--failure-mod
 Companion docs: [v2 Architecture](v2-architecture.md) for the design rationale (§-numbers below refer to
 its sections), [Phase 0 Findings](phase0-findings.md) for the reverse-engineered RC worker protocol, and
 [Client-driven Host Runtime](client-driven-host-runtime.md) for the selected inside-adapter →
-coordinator → outside-adapter architecture. This document intentionally keeps describing the current
-flat `Driver -> Session` runtime until that migration lands.
+coordinator → outside-adapter architecture. A0.1 of that migration is now present: Claude MITM
+sessions register through the neutral, host-scoped lifecycle before their existing `Session` port is
+bridged to the broker. OpenCode and tmux still use the flat compatibility path directly.
 
 ---
 
@@ -21,18 +22,22 @@ Three parties, one of which (the broker) is untrusted and sees only ciphertext.
 - **Host / wrapper** — `runRcLaunch` (`packages/cli/src/host/rc/launch.ts`) runs the real `claude`
   behind a MITM proxy (`MitmProxy`, `mitm.ts`) pointed at by `HTTPS_PROXY`. The instant a session hits
   `/remote-control`, its worker traffic lands on `RelayCore`/`Session` (`session.ts`) instead of
-  Anthropic. One `HostRcRelay` (`relay.ts`) per RC session bridges that session to the broker.
+  Anthropic. One host-scoped `LegacyRcConversationRegistrar` allocates a distinct process-local lease
+  per intercepted session. Once setup publishes validated capabilities and marks that lease `ready`,
+  one `HostRcRelay` (`relay.ts`) bridges the session to the broker.
 - **Broker** — the pluggable backend (Vercel Workflows, per-session SQLite/libSQL, or local)
   behind `POST /api/relay` and `GET /api/stream`. It is a dumb, append-only, **at-least-once, non-FIFO**
   pipe (§12). It never holds a key; it routes by a cleartext header and stores ciphertext.
-- **Viewer** — the browser client (`apps/web/app/lib/viewer.ts` + `page.tsx`). It reuses the **same**
-  `BrokerClient` / `FrameOrderer` / `SecurityProvider` as the host, so there is exactly one protocol
-  implementation, not two that can drift (`viewer.ts` header comment).
+- **Viewer** — the browser client (`apps/web/app/lib/viewer.ts` + `page.tsx`). It reuses the host's
+  `BrokerClient` and `SecurityProvider`, plus the shared `FrameOrderer`, so the wire and security
+  primitives do not have separate implementations that can drift (`viewer.ts` header comment).
 
-**Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the only
-driver. Every harness produces a `Session`; `bridgeSession` (the one place that turns a `Session` into a
-live broker bridge — `HostRcRelay` + `announce` + `serve`) is the single seam. **The broker, the relay
-(`HostRcRelay`), and the viewer are shared across drivers**. Frames, the two pumps,
+**Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the
+only driver. Every current harness produces a `Session`. Claude MITM registers that port through
+`LegacyRcConversationRegistrar`, which calls `startBridgeSession` only at `ready`; OpenCode and tmux
+still call the `bridgeSession` served-promise compatibility entrypoint directly. Both entrypoints
+construct the same `HostRcRelay` and start the same announce/serve path. **The broker, the relay
+(`HostRcRelay`), and the viewer are shared across drivers.** Frames, the two pumps,
 `seq`/ordering, `catch_up`, and presence therefore use one compatibility path, while the native
 capability behind a frame can differ. Permission and attachment support are only as strong as the
 selected harness; current OpenCode/tmux announcements can overstate post-setup support (see
@@ -60,6 +65,9 @@ the current optimistic capability bit.
         │                                          ▲   │
    default anthropic: non-RC API passes through     │   │ downstream (SSE): user input, control_*
    bedrock: translate inference; synthesize control │   ▼
+                                   host registrar (one lease/session)
+                                                   │ ready
+                                                   ▼
                                         HostRcRelay (2 pumps)
                                           │  seal + POST /api/relay      ▲ GET /api/stream (SSE)
                                           ▼                              │
@@ -137,11 +145,11 @@ of allocating before the durable write is analysed in [§12](#12-convergence--fa
 
 ---
 
-## 5. Delivery discipline: `FrameOrderer`
+## 5. Delivery discipline: viewer `FrameOrderer`, host command dedup
 
-Every subscriber (viewer **and** the host's inbound pump) runs frames through a `FrameOrderer`
-(`packages/cli/src/broker/order.ts`) before acting on them. It turns the at-least-once, non-FIFO stream
-into an exactly-once, in-order transcript:
+Every viewer transcript subscriber runs frames through a `FrameOrderer`
+(`packages/cli/src/broker/order.ts`) before rendering them. It turns the at-least-once, non-FIFO stream
+into an exactly-once, in-order transcript projection:
 
 - **Dedup** by `msgId` (or `msgId:part` for a chunk) in a bounded FIFO window (`DEFAULT_SEEN_CAP = 8192`,
   `#markSeen`). A duplicate returns nothing.
@@ -159,6 +167,12 @@ Why content survives a bounded dedup window even though meta does not need to: f
 `#nextSeq` cursor is the real dedup (anything `< nextSeq` is dropped regardless of the window); the
 bounded window only de-dups the `seq === null` meta frames, which are idempotent to re-render as nothing
 (`order.ts` header). This is the crux of why reconnect-from-index-0 is safe (§8).
+
+The host's inbound pump does **not** use `FrameOrderer`: it consumes the broker stream directly and
+deduplicates client commands by `msgId` in its per-session `#seen` set before acting. That set is
+unbounded for the relay lifetime so a non-durable re-read from index 0 cannot re-inject an evicted
+command; chunked attachments are acted on only after complete reassembly and then mark the same
+message ID seen (`relay.ts` `#tailInbound`).
 
 ---
 
@@ -243,7 +257,11 @@ Presence rides the meta-plane `session_announce` on the identity bus — idempot
 logged, so re-announcing is cheap (`relay.ts` `#sendAnnounce`). The host folds live state onto **every**
 (re-)announce:
 
-- `title`, `cwd`, and a static `git` snapshot (branch / dirty / ahead-behind, `gitinfo.ts`, #49).
+- `title`, `cwd`, and `git` metadata (branch / dirty / ahead-behind, `gitinfo.ts`, #49).
+  `startBridgeSession` exposes a whole-snapshot refresh used by the registrar after setup; the current
+  Claude launch supplies the same launch-time values at `ready`, and no current driver refreshes git
+  after a branch change. A failed advisory refresh reports the delivery failure but retains the latest
+  validated local snapshot, which a later presence update re-announces.
 - `status` (raw `worker_status`), `phase` (`phaseFor`: `running`/`busy` → `thinking`, else `idle`, #48),
   and `needs` (`status === "requires_action" || #openPerms.size > 0`, `#presence`).
 - `mode` — the worker's effective permission mode, present whenever it's known (`session.permissionMode
@@ -262,12 +280,22 @@ logged, so re-announcing is cheap (`relay.ts` `#sendAnnounce`). The host folds l
   "tmux" | "opencode" }`). The viewer labels each session-list row from it — **Claude Code · RC** /
   **Claude Code · TX** / **opencode** — so the three harnesses don't look identical (#164). Absent on a
   legacy host → treated as the MITM harness (native-RC Claude Code, the only pre-#164 driver).
-- `sent_at` — the freshness clock the viewer reads for liveness.
+- `incarnation` and `incarnation_started_at` — the opaque relay-process identity and its wall-clock
+  start. A later start orders the normal restart case and fences delayed publishes from the retired
+  process. This is **not** a durable coordinator epoch: a clock-regressed start fails stable, while
+  equal starts use the opaque `incarnation` id as a deterministic total-order tie-break. That prevents
+  state flips but does not prove which same-millisecond process actually started later; A1 must persist
+  an epoch to remove that ambiguity.
+- `announce_seq` — a strict per-relay generation allocated before the publish await. It orders
+  same-incarnation announces even when two share one wall-clock millisecond or their HTTP requests
+  reach the broker in reverse order.
+- `sent_at` — the wall-clock freshness value the viewer reads for liveness. It remains the ordering
+  fallback for legacy hosts that omit the fields above.
 
 Cadence (`relay.ts` `#maybeAnnounce`): re-announce **immediately** when the presence key
-(`status|needs`) changes, else at the `ANNOUNCE_KEEPALIVE_MS = 20_000` idle floor (driven by
-`followUpstream`'s null tick). Each announce gets a unique `msgId` from `#annCount++` so no two reuse one
-id.
+(`status|needs|mode`) changes, else at the `ANNOUNCE_KEEPALIVE_MS = 20_000` idle floor (driven by
+`followUpstream`'s null tick). The same `#annCount++` value supplies `announce_seq` and a unique
+`msgId`, so no two same-incarnation announces reuse either.
 
 The viewer derives a connection state from announce freshness (`viewer.ts` `connState`): **connected**
 while `age < CONNECTED_WINDOW_MS` (45 s). Once stale it shows **reconnecting** for a full
@@ -282,8 +310,14 @@ instant *disconnected* (#123). Because the anchor is not re-reset by focus, a ge
 reaches *disconnected* and stays there even on a phone, where unlocking/app-switching back is the normal
 sub-`window` interaction. `FRESH_WINDOW_MS` (60 s) is the **separate** control-verb / `catch_up` replay
 bound (§11), **not** the disconnect threshold — decoupled so widening disconnect can't widen replay. The
-console keeps only the **freshest** announce per session (`max sent_at`, `page.tsx` Console), so an
-out-of-order older announce is ignored — presence converges to the latest `sent_at`.
+viewer and console use the same `shouldAcceptAnnounce` fold. Within a current incarnation, greater
+`announce_seq` wins. Across current incarnations, greater `incarnation_started_at` wins, so a delayed
+old-process request cannot flip presence back or falsely reset the transcript. Clock-regressed starts
+cannot be ordered without a durable epoch and are rejected. Equal starts use lexical opaque-incarnation
+order: stable against late frames, but not evidence of the chronological winner. Legacy frames preserve
+the previous `sent_at` behavior (including equal-timestamp replacement when both sides are legacy).
+Filtering occurs inside `Viewer.announces` **before** incarnation listeners run, then the React map
+applies the same pure comparator as a second idempotent fold.
 
 ---
 
@@ -393,8 +427,10 @@ backstop, §12); claude is ended at its own terminal (`/quit`, Ctrl-C). This is 
 → control_response {"subtype":"error","error":"REPL bridge does not handle control_request subtype: end_session"}
 ```
 
-A true remote teardown would need a per-session abort hook in the relay (today `serve()` shares one
-`AbortController` across all of a launch's sessions) — noted as future work, not wired.
+Claude MITM now has a per-session relay controller: each registrar lease owns the `AbortController`
+passed to its bridge, so draining or closing that lease stops only its relay. The viewer's authenticated
+`end` verb is not wired back to that lease, however; it still only clears the relay's open permission
+gates. Viewer-driven teardown would require connecting that admitted verb to the owning lease.
 
 Slash commands (`/compact`, `/clear`, …) deliberately ride the **`user`** path, not a control verb, so
 claude processes them as input and they are acked + echoed + replayable like any prompt (`viewer.ts`
@@ -411,14 +447,16 @@ guarantees.
 
 ### Invariants that give eventual consistency
 
-1. **Single `seq` allocator + orderer** — one counter (§4) plus the per-subscriber `FrameOrderer` (§5)
+1. **Single `seq` allocator + orderer** — one counter (§4) plus each viewer's `FrameOrderer` (§5)
    means every device that reads the same channel reconstructs the *same* gap-free transcript, regardless
    of arrival order or duplication. The orderer keeps **exactly one** frame per `parts=1` seq slot (a
    re-read buffered-behind-a-gap frame whose bounded dedup key evicted is dropped at the slot), so a
    reconnect can't double-render. Proven for multi-client + catch_up by `full-spine`/`rc-spine`, and the
    eviction case by `order.test.ts`.
 2. **Idempotent replay** — `catch_up` re-posts original `seq`+`msgId`; the orderer dedups (§8).
-3. **Freshest-wins presence** — the viewer keeps `max(sent_at)` (§9), so reordered announces converge.
+3. **Ordered presence fold** — the viewer uses incarnation start + per-incarnation `announce_seq`,
+   falling back to `sent_at` for legacy/ambiguous frames (§9), so reordered current-host announces
+   converge and a retired incarnation cannot flip state back after a normal forward restart.
 4. **`needs` cannot stick** — a gate is added before publish, cleared by a delete-gated answer (§10), by
    the worker's `control_cancel_request` (the grounded cancel signal, below), or by the interrupt/end
    verbs (backstop). All paths re-announce, so `needs` reflects the live gate set.

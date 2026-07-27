@@ -10,15 +10,17 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 > MITM can lazily create several `Session`s and has no `Driver` wrapper; OpenCode has its own driver
 > class; tmux exports a `Driver` façade but dispatch calls `runTmuxDriver` directly. `DriverFactory` is
 > exported but unused. The selected
-> [client-driven host runtime](client-driven-host-runtime.md) adds a host-wide native-engine adapter
-> above it. `Session` remains a legacy RC port during migration; it does not become the neutral schema.
-> In particular, Codex is one persistent multi-project app-server host, not another one-`Session`
-> `DriverName`.
+> [client-driven host runtime](client-driven-host-runtime.md) now provides a neutral host-wide
+> native-engine contract above it. A0.1 routes Claude MITM through one process-local registrar and one
+> lease per intercepted conversation; OpenCode and tmux have not migrated yet. `Session` remains a
+> legacy RC port during migration; it does not become the neutral schema. In particular, Codex is one
+> persistent multi-project app-server host, not another one-`Session` `DriverName`.
 
 The common relay port is **`Session`** (`packages/cli/src/host/rc/session.ts`). Each current harness
 path produces one or more `Session`s, fills them with Claude-shaped output, and consumes the input the
 relay delivers. `HostRcRelay` and the web frame projection remain shared; harness launch/lifecycle is
-not yet unified behind the exported `Driver` interface.
+not unified behind the exported `Driver` interface. Claude MITM lifecycle is now mediated by the
+neutral registrar; OpenCode and tmux still bridge `Session` directly.
 
 ---
 
@@ -43,8 +45,9 @@ new HostRcRelay({
   `POST` to the broker session channel.
 - **INBOUND** — tail the broker session channel → for each client frame call back **into the
   session**: a `user` frame → `session.pushUserInput(text)`; a `permission` frame →
-  `session.pushControlResponse(...)`; a control verb (`interrupt`/`set_model`/`set_mode`/`end`) →
-  `session.pushControlRequest(...)`.
+  `session.pushControlResponse(...)`; `interrupt` / `set_model` / `set_mode` →
+  `session.pushControlRequest(...)`. An `end` frame emits no session event; it only clears the relay's
+  open permission gates.
 
 So the relay is *already* a pure function of `(Session, BrokerClient)`. The MITM
 (`mitm.ts`) is the **reference harness path** (three modes ship today: `mitm` / `tmux` / `opencode`): it serves
@@ -160,9 +163,12 @@ export interface DriverCapabilities {
  *      control_request; apply an answer by observing the matching control_response in
  *      followDownstream. The relay's existing permission_request ⇄ permission round-trip does the
  *      broker side — no relay change.
- * It passes the session to bridgeSession(...), which starts relay.announce(...) fire-and-forget and
- * relay.serve(signal) immediately (serve owns all broker I/O AND durable-cursor prepare()), runs its
- * pumps concurrently, and tears the harness + relay down on exit.
+ * The current non-MITM implementations pass the session to bridgeSession(...), which starts
+ * relay.announce(...) and relay.serve(signal) concurrently. Announce performs its presence post
+ * separately; serve owns the two pumps and durable-cursor prepare. The returned served promise tracks
+ * the admitted initial announcement (and any lifecycle refresh when using the full handle) through
+ * settlement during teardown. The driver tears the harness + relay down on exit. Claude MITM instead
+ * registers the Session and starts the same relay at ready.
  */
 export interface Driver {
   readonly capabilities: DriverCapabilities;
@@ -204,9 +210,10 @@ export function mitmDriver(ctx: DriverContext): Driver {
 }
 ```
 
-Had it been implemented, this would have kept `launch.test.ts`'s surface unchanged. All three shipped
-paths now use the shared `bridgeSession` helper. The non-MITM launch functions follow the broad
-lifecycle below:
+Had it been implemented, this would have kept `launch.test.ts`'s surface unchanged. It remains
+historical: current MITM uses `LegacyRcConversationRegistrar`, which calls `startBridgeSession` at
+`ready`. The non-MITM launch functions still call the `bridgeSession` compatibility helper and follow
+the broad lifecycle below:
 
 ```ts
 // shape every non-MITM driver follows (tmux shown):
@@ -234,9 +241,12 @@ const relayDone = bridgeSession({
 //   ac.abort(); session.close(); await relayDone; <harness teardown>
 ```
 
-`bridgeSession` constructs `HostRcRelay`, starts `announce(...)` as fire-and-forget, and starts
-`serve(...)` immediately. The announce is presence, not a readiness barrier; current OpenCode/tmux
-capability timing limitations are recorded in §8.
+`bridgeSession` constructs `HostRcRelay` and starts `announce(...)` and `serve(...)` concurrently.
+That direct call is not a readiness barrier, so current OpenCode/tmux capability timing limitations
+remain as recorded in §8. Its returned `served` promise stays pending until the admitted initial
+announcement settles; the full `startBridgeSession` handle also tracks admitted lifecycle refreshes.
+For MITM, the registrar first validates generic and viewer-facing capabilities, moves the lease to
+`ready`, and only then calls `startBridgeSession`; its announcement is therefore post-setup.
 
 ---
 
@@ -351,7 +361,9 @@ export interface ToolResultBlock {
 
 The relay pushes client input **into** the session; the driver pulls it **out** and drives the
 harness. The driver claims a worker-stream generation token and drains downstream — exactly the
-discipline `mitm.ts#streamWorker` uses, so a reconnect supersedes cleanly:
+discipline `mitm.ts#streamWorker` uses, so a reconnect supersedes cleanly. The relay never emits an
+`end_session` control request; an authenticated viewer `end` is consumed inside the relay to clear
+open permission gates:
 
 ```ts
 const gen = session.claimWorkerStream();          // newest claimer wins → single deliverer
@@ -369,7 +381,6 @@ for await (const ev of session.followDownstream(gen, () => signal.aborted)) {
       if (sub === "interrupt") interruptHarness();        // ESC / SIGINT
       else if (sub === "set_model") setModel(ev.payload); // best-effort
       else if (sub === "set_permission_mode") setMode(ev.payload);
-      else if (sub === "end_session") endHarness();
       break;
     }
     case "control_response":
@@ -451,27 +462,34 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   also exports the currently unused `tmuxDriver(ctx)` façade.
 - `packages/cli/src/host/rc/opencode/driver.ts` — `runOpencodeDriver(ctx)` bridges an `opencode serve`
   HTTP+SSE session by constructing the exported-interface implementation `OpencodeDriver`.
-- `packages/cli/src/host/rc/{launch,mitm}.ts` — the standalone MITM launch path. There is no
-  `drivers/mitm-driver.ts` or `mitmDriver`.
+- `packages/cli/src/host/native/{adapter,index}.ts` — the neutral native-engine descriptors,
+  registration request, conversation lease, lifecycle, capabilities, and adapter/registrar contracts.
+  They do not import `Session`.
+- `packages/cli/src/host/rc/drivers/legacy-registrar.ts` — the process-local A0 registrar. It assigns
+  `rcb_*` bindings, enforces exact attempt replay and active identity uniqueness, validates readiness,
+  owns each bridge lease, and does not own the native `Session`.
+- `packages/cli/src/host/rc/drivers/bridge.ts` — `startBridgeSession` returns a lifecycle handle with a
+  whole-announcement refresh; `bridgeSession` retains the older served-promise API.
+- `packages/cli/src/host/rc/launch.ts` — the standalone MITM launch path and its host-scoped registrar.
+  There is no `drivers/mitm-driver.ts` or `mitmDriver`.
+- `packages/cli/src/host/rc/relay.ts` — the shared relay; its announcement metadata and capabilities
+  can now be replaced as one post-setup snapshot without restarting the pumps. That validated local
+  snapshot survives an advisory publish failure and is retried by later presence publication.
 
 ### Dispatcher
 
 - `packages/cli/src/args.ts` declares `"rc-driver": "value"`.
 - `packages/cli/src/run.ts` validates and directly dispatches each launch path; it builds
   `DriverContext` only for OpenCode and tmux.
-- `packages/cli/src/host/rc/index.ts` re-exports the driver types and tmux façade.
+- `packages/cli/src/host/rc/index.ts` re-exports the neutral lifecycle, legacy registrar, bridge
+  lifecycle, driver types, and tmux façade.
 
-### Explicitly UNCHANGED (and why each is safe)
+### Compatibility surfaces left unchanged
+
 - `packages/cli/src/host/rc/session.ts` — **the seam itself.** Drivers only *use* its public methods
   (`create`, `pushInitialize`, `pushUpstream`, `claimWorkerStream`, `followDownstream`,
   `pushUserInput`/`pushControlResponse`/`pushControlRequest`, `workerStatus`, `wake`, `close`). No new
   capability is required.
-- `packages/cli/src/host/rc/relay.ts` — consumes a `Session` and a `BrokerClient` only. Because every
-  driver emits the **same** `UpstreamPayload` and the broker side is identical, `HostRcRelay` and
-  `mapUpstreamItems` need no driver awareness. Its tests (`relay.test.ts`) feed a mock `Session`,
-  which is exactly what a driver produces.
-- `packages/cli/src/host/rc/launch.ts` — `runRcLaunch` is still called directly by the MITM branch.
-  `launch.test.ts` calls it directly and asserts env-scrub/teardown/round-trip.
 - `packages/cli/src/host/rc/mitm.ts` — only the MITM launch path uses it; other paths don't import it.
 - `packages/cli/src/host/rc/certs.ts`, `gitinfo.ts` — MITM/announce helpers, unaffected.
 - `packages/cli/src/broker/client.ts` — the transport contract is fixed; drivers go *through* the
@@ -535,10 +553,12 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 user/control events (`followDownstream` or the native RC server), reports status where possible, and
 lets the relay own broker-side permissions + attachments. `run.ts` directly selects
 `--rc-driver={mitm|tmux|opencode}`; the exported `Driver`/`DriverFactory` pair does not unify that
-dispatch. The capability-aware part is implemented: each path supplies `DriverCapabilities`, the relay
-rides them on `session_announce`, and the viewer disables/labels declared unsupported controls.
-Because OpenCode/tmux currently announce before setup is fully known, §8 records cases where those
-declarations can still overstate support.
+dispatch. Above this compatibility port, the neutral host contract and process-local registrar now
+mediate Claude MITM sessions; OpenCode and tmux remain the A0.2 migration. The capability-aware part
+is implemented: each path supplies `DriverCapabilities`, the relay rides them on
+`session_announce`, and the viewer disables/labels declared unsupported controls. Claude MITM waits
+for validated readiness before it starts the bridge. Because OpenCode/tmux currently announce before
+setup is fully known, §8 records cases where those declarations can still overstate support.
 
 Alongside capabilities, each harness path supplies a `HarnessDescriptor` — `{ agent:
 "claude-code" | "opencode"; mode: "rc" | "tmux" | "opencode" }` (the consts `MITM_HARNESS` /

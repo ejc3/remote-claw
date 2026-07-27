@@ -733,10 +733,12 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   const [busError, setBusError] = useState<string | null>(null);
   const busFailures = useRef(0);
 
-  // Tail the bus → live session list (keep the freshest sent_at per session: replay-safe presence). The
-  // generator owns its own retry and never throws; it reports transport health via the callback. We count
-  // CONSECUTIVE failures and only raise the banner past a threshold, so a single SSE blip doesn't flash it,
-  // while a sustained outage becomes visible. Any success (a frame, or a clean drain) clears it at once.
+  // Tail the bus → live session list. Viewer.announces and this state fold share the same ordering rule
+  // (incarnation start + per-incarnation sequence, with a legacy sent_at fallback), so replay/reordering
+  // cannot roll presence backward. The generator owns its own retry and never throws; it reports transport
+  // health via the callback. We count CONSECUTIVE failures and only raise the banner past a threshold, so
+  // a single SSE blip doesn't flash it, while a sustained outage becomes visible. Any success (a frame, or
+  // a clean drain) clears it at once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: announceRevive is a re-subscribe TRIGGER.
   useEffect(() => {
     const ac = new AbortController();

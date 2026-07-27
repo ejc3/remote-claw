@@ -37,6 +37,8 @@ transcript completeness or replay.
   be checked against tracked code, tests, and sanitized captures rather than
   treating these unavailable note names as repository sources.
 - Current code: `packages/cli/src/host/rc/{mitm,session,relay,launch}.ts`,
+  `packages/cli/src/host/rc/drivers/{bridge,legacy-registrar}.ts`,
+  `packages/cli/src/host/native/adapter.ts`,
   `packages/cli/src/host/rc/anthropic/*.ts`,
   `packages/cli/src/broker/{client,protocol,order}.ts`, and
   `apps/web/lib/broker/{backend,local,vercel,sqlite-multi,turso-cloud-locator}.ts`.
@@ -124,6 +126,11 @@ later resume/re-bridge on the same `cse_`, bump epoch, and continue. The design
 treats archive as metadata rather than hard delete, subject to the Phase B5
 gate.
 
+The current viewer-facing behavior is narrower and matches that protocol limit: authenticated viewer
+`end` is consumed by `HostRcRelay`, clears open relay permission gates, and emits no `end_session` or
+native-session termination. Claude MITM host teardown instead aborts each registrar lease's own relay
+controller; ordinary lease close does not own or close the native `Session`.
+
 **Historical investigation claim — compact.** Local and remote compact
 experiments showed no server-side reset event; the server saw an empty
 successful result, while the compact summary appeared only in local JSONL as
@@ -166,8 +173,8 @@ The RC event log projects into the broker frame log. Projection is idempotent:
 an accepted RC event can create zero or more rendered viewer parts, each with a
 deterministic broker message id derived from the RC event id and part index.
 The raw RC order remains `(sequence_num, part_index)`; broker `seq` remains a
-dense viewer-order cursor because existing `FrameOrderer` treats `seq` as the
-viewer stream order and chunk parts as fragments of one same-kind message.
+dense viewer-order cursor because the viewer-side `FrameOrderer` treats `seq` as
+the viewer stream order and chunk parts as fragments of one same-kind message.
 
 For the future host runtime, this RC-specific schema remains an adapter-local private-Claude transport
 store alongside the narrow coordinator control journal; it does not become the semantic transcript.
@@ -415,6 +422,12 @@ truth to wrapping durable state:
 
 - Keep `HostRcRelay` as the component that maps accepted RC events to broker
   `WireFrame`s.
+- Preserve the current A0.1 lifecycle boundary: Claude MITM sessions enter through
+  `LegacyRcConversationRegistrar`, which starts `startBridgeSession` only at `ready`; OpenCode and
+  tmux still use the `bridgeSession` compatibility helper directly. Each registrar lease owns its
+  relay abort signal, and the bridge's `served` promise tracks the admitted initial and lifecycle
+  refresh posts through settlement; launchers may still bound how long teardown waits for that
+  promise.
 - Keep the existing branch-A2 idea that durable broker backends do not rely on
   `HostRcRelay.#log` for catch-up. In durable mode, `#log` is not the source of
   truth.
