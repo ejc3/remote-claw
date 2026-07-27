@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>remote-claw — protocol &amp; plan</title>
-<meta name="description" content="Drive a real claude --remote-control session from your own relay + client. Zero-knowledge, end-to-end-encrypted, multi-host. Generated from the design docs.">
+<meta name="description" content="Drive coding-agent sessions from your own zero-knowledge relay: the shipped Claude runtime and the selected client-driven Claude Code, Codex, and OpenCode host design.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css">
 <style>
   :root{
@@ -128,11 +128,11 @@
 </header>
 
 <section class="hero">
-  <h1>Drive a real Claude Code session from your own relay + client</h1>
-  <p>A wrapper makes the real <code>claude</code> TUI remote-controllable on your terms: a host you run is the brain, the cloud is a dumb <b>zero-knowledge</b> pipe, and everything is <b>end-to-end encrypted</b> from one pasteable per-host secret — across many machines, mobile-friendly.</p>
+  <h1>Drive real coding-agent hosts from your own relay + client</h1>
+  <p>Today a wrapper makes the real <code>claude</code> TUI remote-controllable; the selected next design wraps Claude Code, Codex, and OpenCode behind one local coordinator. Native clients keep their conversations, while the remote-claw cloud remains a dumb <b>zero-knowledge</b> pipe with <b>end-to-end encrypted</b> traffic.</p>
   <div class="badges">
     <span class="badge ok">Phase 0 · <b>working + verified</b></span>
-    <span class="badge warn">v2 · <b>design</b></span>
+    <span class="badge ok">v2 core · <b>built + proven</b></span>
     <span class="badge">end-to-end encrypted</span>
     <span class="badge">zero-knowledge broker</span>
     <span class="badge">TUI-side <b>C1–C5 ✓</b></span>
@@ -154,6 +154,7 @@
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
 const DOCS = [
+  {id:"host",     file:"client-driven-host-runtime.md",label:"Client-driven Host Runtime"},
   {id:"v2",       file:"v2-architecture.md",        label:"v2 Architecture"},
   {id:"protocol", file:"protocol.md",               label:"Protocol & Runtime"},
   {id:"phase0",   file:"phase0-findings.md",        label:"Phase 0 Findings"},
@@ -168,15 +169,39 @@ const tabsEl = document.getElementById("tabs");
 const tocEl  = document.getElementById("toc");
 const docEl  = document.getElementById("doc");
 const cache  = {};
+let currentDocId = DOCS[0].id;
 
 marked.setOptions({gfm:true, breaks:false});
 
 function slug(s){return s.toLowerCase().replace(/[^\w\- ]+/g,"").trim().replace(/\s+/g,"-").slice(0,80);}
+function docHash(id,section=""){return "#"+id+(section?":"+section:"");}
+function sectionTarget(section){
+  return document.getElementById(section) ||
+    document.getElementById(slug(section.replace(/-+/g," ")));
+}
+function scrollToSection(section){
+  const scroll=()=>{
+    const target=section&&sectionTarget(section);
+    if(target) target.scrollIntoView();
+    else if(!section) window.scrollTo(0,0);
+  };
+  requestAnimationFrame(scroll);
+  if(document.readyState!=="complete"){
+    window.addEventListener("load",()=>requestAnimationFrame(scroll),{once:true});
+  }
+}
+function parseHash(){
+  const raw=(location.hash||"#host").slice(1);
+  const split=raw.indexOf(":");
+  return split<0 ? {id:raw||"host",section:""} :
+    {id:raw.slice(0,split)||"host",section:raw.slice(split+1)};
+}
 
-async function load(id){
+async function load(id,section=""){
   const d = DOCS.find(x=>x.id===id) || DOCS[0];
+  currentDocId=d.id;
   document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.id===d.id));
-  history.replaceState(null,"","#"+d.id);
+  history.replaceState(null,"",docHash(d.id,section));
   docEl.innerHTML = '<div class="loading">Loading '+d.label+'…</div>';
   try{
     if(!cache[d.id]){
@@ -184,7 +209,7 @@ async function load(id){
       if(!r.ok) throw new Error(r.status+" "+r.statusText);
       cache[d.id] = await r.text();
     }
-    render(cache[d.id]);
+    render(cache[d.id],section);
   }catch(e){
     docEl.innerHTML = '<p style="color:var(--warn)">Could not load <code>'+d.file+'</code> ('+e.message+
       ').<br>If this is a private GitHub Pages site the file should still resolve; otherwise view it on '+
@@ -192,7 +217,7 @@ async function load(id){
   }
 }
 
-function render(md){
+function render(md,section=""){
   docEl.innerHTML = marked.parse(md);
   // anchor ids + highlight
   const heads = docEl.querySelectorAll("h1,h2,h3");
@@ -200,16 +225,20 @@ function render(md){
   heads.forEach(h=>{let s=slug(h.textContent); if(used[s])s+="-"+(++used[s]); else used[s]=1; h.id=s;});
   docEl.querySelectorAll("pre code").forEach(b=>{try{hljs.highlightElement(b);}catch(e){}});
   buildToc();
-  window.scrollTo(0,0);
-  if(location.hash.includes(":")){/*noop*/}
+  scrollToSection(section);
 }
 
 function buildToc(){
   const items = [...docEl.querySelectorAll("h2,h3")];
   tocEl.innerHTML = '<div class="t">On this page</div>' + items.map(h=>
-    '<a class="'+(h.tagName==="H3"?"h3":"")+'" href="#'+h.id+'">'+h.textContent.replace(/</g,"&lt;")+'</a>'
+    '<a class="'+(h.tagName==="H3"?"h3":"")+'" data-section="'+h.id+
+    '" href="'+docHash(currentDocId,h.id)+'">'+h.textContent.replace(/</g,"&lt;")+'</a>'
   ).join("");
-  tocEl.querySelectorAll("a").forEach(a=>a.addEventListener("click",()=>{
+  tocEl.querySelectorAll("a").forEach(a=>a.addEventListener("click",(e)=>{
+    e.preventDefault();
+    const section=a.dataset.section||"";
+    history.replaceState(null,"",docHash(currentDocId,section));
+    sectionTarget(section)?.scrollIntoView();
     document.getElementById("toc").classList.remove("open");
     document.body.classList.remove("nav-open");
   }));
@@ -224,7 +253,7 @@ window.addEventListener("scroll",()=>{
   if(!spyEls.length)return;
   let cur=spyEls[0];
   for(const h of spyEls){ if(h.getBoundingClientRect().top<90) cur=h; else break; }
-  tocEl.querySelectorAll("a").forEach(a=>a.classList.toggle("active",a.getAttribute("href")==="#"+cur.id));
+  tocEl.querySelectorAll("a").forEach(a=>a.classList.toggle("active",a.dataset.section===cur.id));
 },{passive:true});
 
 // tabs
@@ -248,11 +277,19 @@ docEl.addEventListener("click",(e)=>{
   const a = e.target.closest("a"); if(!a) return;
   const href = a.getAttribute("href")||"";
   if(/^[a-z]+:\/\//i.test(href)) return;            // leave external (http(s):) links alone
-  const file = href.split(/[#?]/)[0].split("/").pop();
-  if(file && FILE_TO_ID[file]){ e.preventDefault(); load(FILE_TO_ID[file]); }
+  const [pathPart,fragment=""] = href.split("#",2);
+  if(!pathPart && fragment){
+    e.preventDefault();
+    history.replaceState(null,"",docHash(currentDocId,fragment));
+    sectionTarget(fragment)?.scrollIntoView();
+    return;
+  }
+  const file = pathPart.split("?")[0].split("/").pop();
+  if(file && FILE_TO_ID[file]){ e.preventDefault(); load(FILE_TO_ID[file],fragment); }
 });
 
-load((location.hash||"#v2").slice(1).split(":")[0]);
+const initial=parseHash();
+load(initial.id,initial.section);
 </script>
 </body>
 </html>

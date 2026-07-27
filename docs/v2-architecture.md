@@ -1,8 +1,24 @@
 # remote-claw v2 — cloud-brokered, zero-knowledge, multi-host (many independent machines, each its own secret)
 
-> Status: **design** (researched 2026-06-07; Vercel facts verified against official
-> docs dated 2026-05/06). Supersedes the localhost MITM-relay of Phase 0 for the
-> *transport/UX* layer; **reuses** Phase 0's Claude-interception core unchanged.
+> Status: **historical v2 design and rationale for an implemented baseline** (researched 2026-06-07;
+> Vercel facts verified against official docs dated 2026-05/06). The as-built authority is
+> [Protocol & Runtime](protocol.md). Component, storage, transcript, rollout, and phase-status claims
+> below are planning-era snapshots unless that document or current code confirms them. The shipped v2
+> baseline superseded the localhost MITM-relay of Phase 0 for the *transport/UX* layer and reused its
+> Claude-interception core.
+
+> **Architecture evolution (selected 2026-07-26):**
+> [Client-driven host runtime](client-driven-host-runtime.md) adds a host-wide adapter and coordinator
+> above this document's one-wrapper-per-Claude-chat implementation. It preserves one paired Codex host
+> with many projects/chats and lets official clients participate. Native clients remain authoritative
+> for conversation context and execution; the small coordinator journal owns command admission, order,
+> correlation, and delivery evidence. Inner Claude, Codex, and OpenCode processes have no direct
+> provider connection: remote-claw terminates their provider-shaped traffic, drives each through a
+> separate native control adapter, and independently owns model-inference and official-Remote
+> connectors. [Protocol & Runtime](protocol.md) remains the as-built source of truth; this document is
+> the rationale that led to the shipped v2 baseline, not a current implementation inventory. The
+> selected host runtime replaces its flat session identity and changes its authority and recovery
+> model.
 
 ## 1. What changes and why
 
@@ -693,8 +709,11 @@ wakes the wrapper → wrapper **dedups by `msg_id`**, decrypts, **commits to its
 assigns `seq`**, **injects into Claude via the Phase-0-verified MITM downstream** (a write
 to the worker `/worker/events` path — see [`phase0-findings.md`](phase0-findings.md)), and emits
 `accepted{client_msg_id, seq}` on the out-stream. The frame is **logged before the inject**,
-so an inject that fails after log-commit is simply **re-injected** (the log is authoritative;
-no rollback, `msg_id` keeps it idempotent). Claude replies → the worker→web path above.
+but the current relay does not have a native idempotency key: if delivery may have crossed the
+worker boundary and its acknowledgement is lost, a later legacy retry can execute the prompt twice.
+`msg_id` deduplicates the relay/viewer frame, not Claude execution. The selected host runtime records
+that case as `outcome_unknown` and does not retry automatically. Claude replies → the worker→web path
+above.
 
 **History is wrapper-served, never read from the cloud.** A client gets backlog by
 sending an encrypted `catch_up{since=seq}` control frame (§6), **not** from any
@@ -773,20 +792,24 @@ client `catch_up` — **never** a worker backfill, and **never** Anthropic's cur
   is re-streamed.
 - **Catch-up is an encrypted control frame to the wrapper.** A client sends an
   **AEAD-encrypted** `catch_up{since=<last-seen seq | 0>, msg_id, expiry}` (control
-  frames use a derived control key + replay check — never plaintext the broker
-  could inject); the wrapper serves the delta from its log (re-posting the logged
-  frames with their original `seq`/`msg_id`; the client's orderer dedups), then live.
+   frames use a derived control key + replay check — never plaintext the broker
+   could inject); the wrapper serves the delta from its log (re-posting the logged
+   frames with their original `seq`/`msg_id`; the client's orderer dedups), then live.
+   **As built, `catch_up` is stamped with `expiry` but the host does not validate it**; see
+   [Protocol & Runtime](protocol.md) §11.
 - **The cloud = relay + short live buffer only — no durable store** (§6B). Discovery
   and presence are answered live on the per-identity **bus**, not a store; message
   transport is relay-only. Live ciphertext frames go out over **SSE from a streaming
   Vercel Function**, backed by the **Workflow durable resumable stream**. When the SSE
   connection hits Vercel's duration cap (or drops), the client simply **reconnects and
   resumes by `seq`** — any gap is refilled by the wrapper's `catch_up` (the wrapper is
-  the history source, so we need no provider-side message history). Stream retention
+  the current viewer-frame history source, so this path needs no provider-side message history). Stream retention
   (1–7 d) is irrelevant — it's an in-flight buffer, not the record.
 - **The web client caches what it has seen** (IndexedDB, keyed by `seq`) purely as
   an optimization: a reconnect pulls only the delta; a fresh device asks the TUI
-  for everything. The TUI stays authoritative.
+  for everything. In this historical baseline, the wrapper relay owns viewer-frame order while
+  Claude's native state remains the semantic execution record; the selected host runtime replaces
+  this with the split authority described at the top of this document.
 
 Consequence (accepted): browsing history requires the TUI to be **online** — which
 a live Claude session needs anyway (RC sessions end ~10 min after the worker goes
@@ -800,7 +823,8 @@ nonces / stream reads break replay determinism).
 
 ## 6A. Message types, channels & ephemeral workflow state
 
-The broker stays dumb and the wrapper/claude stay authoritative. Here is every
+For the current baseline, the broker stays dumb, the wrapper owns viewer-frame order, and Claude owns
+native execution state. Here is every
 frame, every channel, and exactly what (little) state the workflow keeps so that
 live delivery + reconnection feel natural without the workflow becoming the record.
 
@@ -1480,8 +1504,10 @@ phase0/            unchanged — the Python reference + protocol findings
     worker-stream supersede, delivery acks. Async generators replace the Python `threading.Condition`.
   - `mitm.ts` — an http/tls CONNECT proxy that TLS-terminates the MITM host, **serves** the worker
     `/v1/code/sessions*` endpoints (register, bridge, worker SSE, events, events/delivery, heartbeat,
-    PUT worker), and **passes** `/v1/messages` + OAuth + everything else (query string intact) through
-    to the real upstream; other hosts blind-tunnel.
+    PUT worker), and in the default `--rc-inference=anthropic` mode **passes** `/v1/messages` + OAuth
+    + everything else (query string intact) through to the real upstream. The later
+    `--rc-inference=bedrock` branch translates inference to Bedrock and locally synthesizes the
+    remaining Anthropic-origin control/API surface; other hosts blind-tunnel.
   - `relay.ts` — `HostRcRelay` bridges one RC session to the broker (the v2 replacement for Phase-0's
     localhost ClientServer): an OUTBOUND pump (worker upstream → sealed content frames: assistant,
     result, `tool_use`/`assistant_sub` for sub-agents, `permission_request`; seq + catch_up log; 409
@@ -1699,9 +1725,11 @@ Both reviewers raised that an RC-API-client bridge could avoid the MITM, and the
 `docs/phase0-findings.md` §4b: inject + cursor-history catch-up + live client SSE all
 PASS as a pure client). **But the bridge routes the remote channel through
 Anthropic's RC relay, which is exactly what we will NOT do.** Decision (user,
-2026-06-07): **all remote traffic goes through OUR MITM**; Anthropic's RC relay is
-never in the loop — only model inference (`/v1/messages`) passes through to
-Anthropic.
+2026-06-07): **all remote-control traffic goes through OUR MITM**; Anthropic's RC relay is
+never in the loop. In the default mode, the MITM intercepts only RC endpoints and passes every other
+`api.anthropic.com` request—model inference, OAuth, telemetry, and unclassified routes—through to
+Anthropic; non-Anthropic hosts are blind-tunnelled. Bedrock mode translates inference and synthesizes
+the remaining Anthropic-origin control/API surface locally.
 
 So the wrapper runs the **real interactive `claude` TUI** and, when the user
 enables remote control, makes it RC-eligible **pointed at our local MITM** (Phase
@@ -1711,25 +1739,27 @@ the RC backend, so it sees and logs **every** frame; it then E2E-encrypts to
 Vercel. The bridge is recorded as a **rejected alternative** (keeps the protocol
 shapes it validated; we serve the same shapes ourselves).
 
-**Proposal note (2026-07-26; not adopted).** The
-[native RC passthrough scope](native-rc-passthrough-scoping.md) reopens this decision only for a
-distinct experimental `--rc-native-passthrough` mode so the official app could remain attached to
-Anthropic's canonical RC log while remote-claw's viewer writes as a peer app-side client through
-canonical `POST /v1/code/sessions/{id}/events`. Anthropic acceptance and sequence would govern viewer
-publication; local injection or best-effort mirroring is explicitly rejected, and no lease is a
-prerequisite for the experimental baseline. This is not a GA stability claim. It does not describe
-current behavior and does not supersede the MITM-only `--rc-app` decision above. Shipping that proposal
-requires an explicit decision change and another full architecture/doc sync.
+**Selected future direction (2026-07-26; not implemented).** The
+[client-driven host runtime](client-driven-host-runtime.md) supersedes the earlier Anthropic-canonical
+proposal whose evidence is retained in the
+[Native Claude Remote investigation](native-rc-passthrough-scoping.md). A distinct experimental Claude
+mode will keep inner Claude on a private synthetic RC/API façade while remote-claw separately owns a
+real outward Anthropic worker/session so official clients can participate. The inner process never
+connects to Anthropic. Provider IDs and sequences are outward positions; the native client owns its
+conversation and execution state, while the coordinator owns command order, admission, correlation,
+and delivery evidence. The current MITM-only `--rc-app` behavior above remains unchanged until that
+phase lands.
 
-Consequence for history (supersedes earlier "events-cursor" **and** "worker-backfill"
-wording): since we are **off Anthropic's relay**, history does **not** come from
+Consequence for **current `--rc-app`** history (supersedes earlier "events-cursor" **and**
+"worker-backfill" wording): because that mode is **off Anthropic's relay**, history does **not** come from
 Anthropic's `/events?cursor=` API (the wrapper never calls it) — and `--rc-trace`
 capture shows it does **not** come from a worker backfill either (no `historical` frames
 on the wire; `POST …/bridge` returns only a `worker_jwt`; a `--resume`d worker is
 streamed no prior history). The **sole** in-session history source is the wrapper's
-**in-memory log**, served on `catch_up`; it accumulates live and is lost on restart (a
-restart is a new RC session). claude's local `.jsonl` is the durable on-host record but
-is **not** re-streamed over RC. No Anthropic cloud history, no worker backfill.
+own relay path: the wrapper's in-memory `#log` on a non-durable backend, or the durable broker's
+persisted sealed frame log. Claude's local `.jsonl` is the durable native on-host record but is **not**
+re-streamed over RC, and neither broker path reconstructs Claude context. No Anthropic cloud history,
+no worker backfill.
 
 ## 14A. Design-review log (multi-agent panels)
 
@@ -2046,7 +2076,7 @@ reorder/**replay**, no keys)
     announces; it greys then drops within `FRESH_WINDOW + SKEW` — same as a crash, since
     presence is broadcast-driven (no special "left" frame needed). An explicit `end` control
     frame also tells claude to tear down the RC session.
-27. **Control reorder / expired control.** The broker reorders or withholds control frames.
+27. **Mutation-control reorder / expired control.** The broker reorders or withholds mutation verbs.
     Order-dependent ones are **serialized client-side** (send the next only after the prior's
     effect shows on the out-stream — §6A), so e.g. `interrupt` can't be inverted with a later
     `set_mode`. A withheld-past-`expiry` control frame is **rejected** (no effect); the client
@@ -2064,7 +2094,9 @@ when the broker returns — nothing lost since claude holds the transcript).
 
 Actors: **C**=web/generic client · **V**=Vercel broker (functions+workflow) ·
 **W**=wrapper/relay (host side: MITM + relay client) · **T**=real claude TUI ·
-**A**=Anthropic API (**inference only**, passthrough). All C↔V↔W payloads are
+**A**=Anthropic API (**non-RC passthrough**, including inference/OAuth). These sequences depict the default
+`--rc-inference=anthropic` mode; Bedrock mode replaces that inference leg and locally answers the
+Anthropic-origin control surface. All C↔V↔W payloads are
 ciphertext (`{…}` = decrypted view); every C/W→V call carries
 `Bearer auth_token` (§4.5; the web app additionally gates human callers on SSO). Frame kinds per §6A. `→` one
 message; steps are ordered.
@@ -2239,8 +2271,9 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 > remote-claw wrapper MITMs to become the RC backend (§3.1, §14). Empirically captured on **Claude
 > Code v2.1.168** (Phase 0 — [`docs/phase0-findings.md`](phase0-findings.md), [`docs/remote-control-research.md`](remote-control-research.md));
 > **undocumented and version-sensitive** — re-verify on any claude upgrade. Inference
-> (`/v1/messages`) and OAuth are **not** part of this; the wrapper passes those straight through to
-> Anthropic untouched.
+> (`/v1/messages`) and OAuth are **not** part of this. The wrapper passes them through in the default
+> Anthropic inference mode; Bedrock mode translates inference and synthesizes the required
+> Anthropic-origin control/API responses locally.
 
 ### 17.1 Two transports — and which one we intercept
 
@@ -2249,8 +2282,9 @@ Claude Code has two distinct RC transports:
 - **Interactive RC = a plain HTTPS sessions API** on `api.anthropic.com` under `/v1/code/sessions*`.
   This is what `claude --remote-control` (and the `/remote-control` slash command) actually use,
   and **what remote-claw intercepts.** It shares the host with inference, so interception is a TLS
-  **MITM of `api.anthropic.com`**: serve `/v1/code/sessions*` ourselves, pass `/v1/messages` + the
-  OAuth/token endpoints through to the real upstream.
+  **MITM of `api.anthropic.com`**: serve `/v1/code/sessions*` ourselves and, in the default Anthropic
+  inference mode, pass `/v1/messages` + the OAuth/token endpoints through to the real upstream.
+  Bedrock mode terminates/translates those remaining inner calls instead.
 - **`--sdk-url` worker WebSocket (CCRv1 — NDJSON over WS):** a *separate* transport for server-mode
   worker fan-out. On v2.1.168 it is locked to a **hardcoded 5-host Anthropic allowlist + wss/https
   only**, rejecting any self-hosted relay *before a socket opens* (with a `tengu_sdk_url_host_rejected`
@@ -2307,7 +2341,7 @@ Messages-API** events (`message_start` → `content_block_delta`×N → `message
 
 The initialize-first ordering is a reference-capture observation and a current synthetic-relay
 invariant, not a proven universal Anthropic guarantee. A separate manual local capture did not show an
-initialize before a sequence-1 user event. Native passthrough must therefore tolerate either shape and
+initialize before a sequence-1 user event. The future outward Claude connector must therefore tolerate either shape and
 reconfirm it in a sanitized gated proof.
 
 ### 17.4 Permissions — RC auto-executes (no approve gate)
@@ -2322,15 +2356,17 @@ RC does not currently gate on it.
 
 The wrapper runs the **real** `claude --remote-control` behind a TLS MITM of `api.anthropic.com`:
 it **serves** the worker `/v1/code/sessions*` endpoints itself (becoming the RC backend) and
-**passes** `/v1/messages` + OAuth through, so inference and auth keep working. It maps these worker
-events onto its own E2E-encrypted frame types (§6A):
+in the default Anthropic mode **passes** `/v1/messages` + OAuth through, so inference and auth keep
+working. Bedrock mode translates inference and locally synthesizes the other required
+Anthropic-origin responses. It maps worker events onto its own E2E-encrypted frame types (§6A):
 
 - the SSE `initialize` and client `user` events → inbound (`dir:in`) frames delivered to claude;
 - the host's `assistant` / `result` / `system`·`status` outputs → outbound (`dir:out`) content
   frames broadcast to subscribers;
-- catch-up is served from the wrapper's **in-memory log** (built live from the frames above),
-  **not** from a worker backfill or the cursor-paginated `GET …/events` API — neither is used
-  (grounded §17): the worker re-emits no history, and we are off Anthropic's relay.
+- catch-up comes from the wrapper's in-memory `#log` on a non-durable backend, or directly from the
+  broker frame log on a durable backend. It does **not** come from a worker backfill or the
+  cursor-paginated `GET …/events` API—the worker re-emits no history, and current `--rc-app` is off
+  Anthropic's relay.
 
 Phase 0 verified this two-surface sync end-to-end on v2.1.168 (the **MANGO** own-relay test, and
 the **KIWI**/**PLUM** bidirectional TUI↔client tests).
@@ -2340,14 +2376,14 @@ the **KIWI**/**PLUM** bidirectional TUI↔client tests).
 > `phase0/` (the capture tooling + `mitm/capture-proxy.py`) to re-verify, and have the wrapper **fail
 > loudly** on an unrecognized RC-API shape rather than guessing (§12).
 
-## 18. Appendix — Happy/Codex (the account-based alternative) & the revocation tradeoff
+## 18. Appendix — Happy's Claude/Codex relay (not official Codex Remote)
 
 **Happy** (`happy.engineering`, open-source `slopus/happy`) is the closest existing system to
 remote-claw: a mobile + web client that drives **Claude Code / Codex** running on your machine
 through an **E2E-encrypted relay**, with realtime + voice. It sits at the *opposite corner* of the
-same design space — **account-based and server-stateful** where remote-claw is **store-free and
-per-machine-secret** — so it is the clearest mirror for what our model gives up (per-viewer
-revocation, §4.4) and what it gains (paste-and-go, no accounts).
+same design space — **account-based and server-stateful** where remote-claw's original ephemeral
+profile is **store-free and per-machine-secret** — so it is the clearest mirror for what that profile
+gives up (per-viewer revocation, §4.4) and what it gains (paste-and-go, no accounts).
 
 > Drawn from Happy's public docs (security / how-it-works); a few protocol details (exact ECDH /
 > derivation) are marked "diagram needed" there, so the crypto specifics below are the **documented
@@ -2388,27 +2424,33 @@ revocation, §4.4) and what it gains (paste-and-go, no accounts).
 
 ### 18.3 The tradeoff vs remote-claw (opposite corners)
 
+This table compares Happy with remote-claw's original ephemeral Vercel Workflow profile. Current
+remote-claw also supports durable SQLite/libSQL ciphertext backends, so “store-free” is a deployment
+choice rather than a universal product property.
+
 remote-claw and Happy answer the same problem with inverted primitives:
 
 | dimension | **remote-claw** | **Happy** |
 |---|---|---|
 | Root of trust | one symmetric `S` **per machine** (a ~52-char paste) | phone-held asymmetric master + content keypair |
 | Per-device keys | the **pass** (§4.2a) — a derived, non-master per-viewer credential (read+steer one machine, **not** `S`) | per-machine DEK, wrapped to the account key |
-| Broker state | **store-free** (self-verifying `identity_id`, no registry) | account + device list + encrypted-DEK store |
-| Durable history | none on the broker (claude's own `.jsonl` on-host; the wrapper's in-memory log serves in-session catch-up) | **server stores** encrypted history (timestamped, replayable) |
+| Broker state | ephemeral profile: **store-free**; durable profile: sealed frame store, still no plaintext | account + device list + encrypted-DEK store |
+| Durable history | optional sealed broker projection; native `.jsonl` remains separate on-host evidence | **server stores** encrypted history (timestamped, replayable) |
 | Onboarding | **paste-and-go** (any device, no account) | scan a QR → pair a device → account |
 | Steal one key | scoped to **one machine**: a stolen pass reads/steers that machine but is **not** `S`; a stolen `S` is full compromise of **that machine only** (others untouched) | scoped: one DEK reads **that machine's** content only |
 | Revoke a leak | **no per-pass revoke** — reset the machine (cuts all its passes; §4.4) | **"remove machine from account"** revokes that DEK server-side |
 | Forward secrecy | none | future-only after a device removal |
 
-The honest summary: **Happy spends a server-side store + a pairing step to buy per-device,
-*revocable* access and a stable account identity; remote-claw spends per-viewer revocability to buy a
-store-free broker and a one-string, account-less, paste-and-go cold start.** (remote-claw already
+The original-profile summary: **Happy spends a server-side store + a pairing step to buy per-device,
+*revocable* access and a stable account identity; remote-claw's ephemeral profile spends per-viewer
+revocability to buy a store-free broker and a one-string, account-less, paste-and-go cold start.**
+(remote-claw already
 gets *scoped compromise* for free — one secret per machine bounds a steal to one machine; what Happy
 buys on top is **per-device revocation**.) Neither is strictly
 better — they are the two ends of the §4.4 impossibility (`{ store-free · stable id · revoke-a-leak
 }`, pick two), applied per machine. Happy picks *stable id + revoke* (and pays with the store);
-remote-claw picks *store-free* (and pays with per-viewer revocation).
+remote-claw's ephemeral profile picks *store-free* (and pays with per-viewer revocation); its durable
+profile stores sealed frames without gaining per-viewer revocation.
 
 ### 18.4 If remote-claw ever needs per-viewer revocation
 
@@ -2419,7 +2461,7 @@ named in §4.4 (`S_server` + `S_paste` = an account half + a paste half), which 
 revocable, per-viewer access at the cost of an account/registry, a broker store, and weakened
 zero-knowledge — i.e. moving toward Happy's corner. It is a deliberate, deferred decision, **not** a
 v1 default. Until a hard need appears (revoke one shared pass while keeping the machine), the
-paste-and-go, store-free, per-machine model stands.
+paste-and-go, per-machine model stands, with either an ephemeral or sealed durable broker profile.
 
 **Sources:** Happy docs — `https://happy.engineering/docs/security/`,
 `https://happy.engineering/docs/how-it-works/`; repo `https://github.com/slopus/happy`.

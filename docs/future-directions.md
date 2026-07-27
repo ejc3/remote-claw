@@ -3,6 +3,12 @@
 Forward-looking notes for remote-claw, captured 2026-06-11. Three findings that bear on where the
 project goes next, and how they connect:
 
+> **Decision update (2026-07-26):** the roadmap question in this historical exploration is now answered
+> by [Client-driven Host Runtime](client-driven-host-runtime.md). Native Claude Code, Codex, and
+> OpenCode sessions keep their conversation/execution state; a small local coordinator owns command
+> order, admission, correlation, and delivery across native, official Remote, and remote-claw clients.
+> Candidate language later in this document is retained as design history.
+
 1. **How the popular remote-Claude clients actually work** (Happy / Happier) and what they cost you in
    Claude Code **TUI fidelity**.
 2. **A durable shared-log ("SQLite") model** — a design direction that would dissolve much of the
@@ -173,8 +179,14 @@ streaming the pane itself).
 
 ## 2. The durable shared-log ("SQLite") model
 
-**Reframe.** Today the wrapper's RAM is the source of truth and the broker is a dumb live relay: the
-wrapper alone allocates `seq`, holds the `#log`, echoes/acks viewer messages, and replays on `catch_up`.
+> **Historical alternative, not the selected design.** In this section, “source of truth” means the
+> order of encrypted relay/viewer frames in the rejected cloud-log model. It does not mean native
+> conversation or execution authority, and it does not replace the selected local coordinator's
+> command journal.
+
+**Reframe.** In the non-durable current relay, the wrapper's RAM is the viewer-frame ordering/history
+source and the broker is a dumb live relay: the wrapper alone allocates `seq`, holds the `#log`,
+echoes/acks viewer messages, and replays on `catch_up`.
 Almost every durability boundary in the gap audit (§12 of `protocol.md`) exists *because* the wrapper is
 a single, in-memory ordering authority.
 
@@ -256,14 +268,14 @@ Anthropic's first-party infra (`/v1/code/*` on `api.anthropic.com`). Inference r
 (Bedrock/Vertex/Foundry) is a *separate* axis, and those providers have **no first-party session
 service** to register/poll against — there is nowhere for RC to bridge.
 
-**Implication for remote-claw.** Anthropic-hosted RC—and therefore the proposed native passthrough mode
-that keeps the official app attached to Anthropic's canonical log—cannot function with
-Bedrock/Vertex/Foundry. Current own-relay `--rc-app` is a distinct path: its local MITM supplies the RC
-backend, and `--rc-inference=bedrock` synthesizes the first-party control plane while routing inference
-to Bedrock (`packages/cli/src/host/rc/launch.ts:176-207`). That mode works without Anthropic RC, including
+**Implication for remote-claw.** Anthropic-hosted RC cannot function with Bedrock/Vertex/Foundry.
+Current own-relay `--rc-app` is a distinct path: its local MITM supplies the RC backend, and
+`--rc-inference=bedrock` synthesizes the first-party control plane while routing inference to Bedrock
+(`packages/cli/src/host/rc/launch.ts:176-207`). That mode works without Anthropic RC, including
 accountless operation, but the official Claude app cannot attach because no real Anthropic session
-exists. The hard constraint is therefore on native/official passthrough, not on remote-claw's synthetic
-own-relay mode.
+exists. In the selected host-runtime design, official Claude participation therefore requires the
+separate outward Anthropic connector; the provider-isolated inner runtime can still use another
+inference backend.
 
 ---
 
@@ -311,4 +323,6 @@ The three findings converge on one decision:
    transport choice; the **Turso** backend sidesteps the *cost* of the gap (no per-run cap, no rolling)
    but not the gap itself (it still accrues unbounded at-rest ciphertext absent the A2 retention sweep).
 
-None of these is committed; they are recorded here so the trade-offs are explicit when the time comes.
+The original candidates above are retained as design history. The
+[client-driven host runtime](client-driven-host-runtime.md) is now the selected next architecture; its
+phased gates determine what ships.

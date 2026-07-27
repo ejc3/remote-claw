@@ -16,6 +16,14 @@ not tracked guarantees. The design therefore makes the durable MITM log the
 primary source of truth for remote-claw relay mode rather than relying on local
 transcript completeness or replay.
 
+> **Scope update (2026-07-26):** this document remains the detailed storage plan for the current
+> synthetic Claude RC server. [Client-driven Host Runtime](client-driven-host-runtime.md) narrows the
+> future coordinator journal to command order, admission, correlation, delivery, and recovery
+> evidence. Native Claude/Codex/OpenCode state owns conversation context and completed execution; the
+> provider transport owns the representation it accepted and can read back, not proof of what a
+> particular device rendered. This document's full RC log remains relevant to the current synthetic
+> server, not a universal semantic authority.
+
 ## Source Map
 
 - Local investigation notes used while drafting this design are **not tracked in
@@ -28,12 +36,13 @@ transcript completeness or replay.
   `parallel-findings.md` (passthrough and history behavior). Claims below must
   be checked against tracked code, tests, and sanitized captures rather than
   treating these unavailable note names as repository sources.
-- Current code on `main`: `packages/cli/src/host/rc/{mitm,session,relay,launch}.ts`,
-  `packages/cli/src/broker/{client,protocol,order}.ts`,
-  `apps/web/lib/broker/{backend,local,vercel}.ts`.
-- Branch evidence inspected with `git show`: `feat-turso-broker-catchup`
-  for A1 Turso frames and `feat-turso-seq-continuity` for A2 durable
-  broker catch-up/sequence continuity.
+- Current code: `packages/cli/src/host/rc/{mitm,session,relay,launch}.ts`,
+  `packages/cli/src/host/rc/anthropic/*.ts`,
+  `packages/cli/src/broker/{client,protocol,order}.ts`, and
+  `apps/web/lib/broker/{backend,local,vercel,sqlite-multi,turso-cloud-locator}.ts`.
+- The A1/A2 branch names and table snapshots later in this document record the
+  historical review basis. The durable broker backends have since landed;
+  re-check current migrations/code before implementing a dependent host schema.
 
 ## Protocol Baseline and Historical Claims
 
@@ -64,9 +73,8 @@ or gated re-verification.
 remote-control turns reportedly wrote only incomplete title/stub rows locally,
 while normal non-RC Claude wrote full local JSONL in real time. The tracked RC
 wire evidence independently establishes that the worker does not backfill
-history (`docs/protocol.md:484-497`), so local JSONL must not be assumed to be
-the remote-claw server log; its exact compact role still needs the Phase B4
-gate.
+history ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), so local JSONL must not
+be assumed to be the remote-claw server log; its exact compact role still needs the Phase B4 gate.
 
 **Historical investigation claim — resume/re-bridge.** When
 `claude --remote-control --resume <U>` reconnects to a server that accepts the
@@ -75,14 +83,14 @@ The bridge body is `{}`, there is no `POST /v1/code/sessions`, and no historical
 payload is sent to the worker server. The wrapper must already have the
 history if gated re-verification confirms this behavior. The narrower tracked
 fact is that worker bridge/SSE does not provide history
-(`docs/protocol.md:484-497`).
+([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)).
 
 **Unverified client reconnect claim.** Historical traces suggested
 `lastSequenceNum`, `from_sequence_num`, or `Last-Event-ID` on client-side
 `/events/stream`, not worker bridge recovery. None is a verified production
 contract. The implemented client therefore sends none of them; caller-driven
-history pagination is the only current primitive, and the Phase C gate must
-establish any reconnect cursor.
+history pagination is the only current primitive, and the outward-connector reconnect gate in
+[Client-driven Host Runtime](client-driven-host-runtime.md) §14 must establish any cursor.
 
 The tracked client POST shape returns `duplicate`, `event_id`, and
 `sequence_num` (`docs/phase0-findings.md` §4b). A historical replay experiment
@@ -95,7 +103,7 @@ Downstream user input and upstream user echo are the same logical event when
 they share an event id. The viewer transcript must merge those records instead
 of rendering the downstream user message and the worker echo as two user turns.
 Delivery acknowledgements are separate durable state, not transcript messages.
-This is a projector invariant to prove in Phase C.
+This is a projector invariant for the selected host-runtime Claude correlation gate.
 
 **Historical investigation claim — interrupt.** Pressing escape during a
 turn produced one empty successful result event after the user event, with no
@@ -123,16 +131,17 @@ an `isCompactSummary:true` row. The wrapper must synthesize its own compact/rese
 record if viewers should truncate to the summary, after Phase B4 re-verifies
 the behavior.
 
-Passthrough/tap is possible but optional relative to relay-mode durability.
+Transparent passthrough/tap was investigated but is no longer the selected topology.
 **Historical investigation claim — parallel tap.** A parallel trace reportedly
 showed a mode where Claude remained bridged to real Anthropic while remote-claw
 observed/relayed a sealed copy. In that mode viewer prompts **must** use the real
 client `POST /v1/code/sessions/{id}/events` path; a downstream tee is
 observation-only and must never inject or mirror viewer input. Anthropic client
-history/SSE is a candidate canonical reconciliation and repair source, not the
-primary relay-mode durability plan; exact cursor semantics still require a
-gated proof. The original `parallel-findings.md` note is unavailable; the
-tracked client API evidence is in `docs/phase0-findings.md` §4b.
+history/SSE is a reconciliation and repair source, not the primary relay-mode
+durability plan or the future logical-chat authority; exact cursor semantics
+still require a gated proof. The original `parallel-findings.md` note is
+unavailable; the tracked client API evidence is in
+`docs/phase0-findings.md` §4b.
 
 ## Design Position
 
@@ -159,6 +168,13 @@ deterministic broker message id derived from the RC event id and part index.
 The raw RC order remains `(sequence_num, part_index)`; broker `seq` remains a
 dense viewer-order cursor because existing `FrameOrderer` treats `seq` as the
 viewer stream order and chunk parts as fragments of one same-kind message.
+
+For the future host runtime, this RC-specific schema remains an adapter-local private-Claude transport
+store alongside the narrow coordinator control journal; it does not become the semantic transcript.
+The journal's `command_seq` is the definitive admitted-command order, while rebuildable projection
+`chat_seq`, Claude `sequence_num`, Codex thread/turn/item IDs, and broker `seq` are mappings/cursors in
+their separate domains. An adapter or provider incarnation may be replaced without changing
+`logical_chat_id`.
 
 ## Data Model
 
@@ -243,6 +259,7 @@ CREATE TABLE rc_events (
   compact_generation  INTEGER NOT NULL DEFAULT 0,
   duplicate_of        TEXT,
   body_json           TEXT NOT NULL,
+  payload_hash        TEXT NOT NULL, -- hash of the canonical body used to validate exact replay
   created_at_ms       INTEGER NOT NULL,
   accepted_at_ms      INTEGER NOT NULL,
   PRIMARY KEY (cse_session_id, event_id),
@@ -326,9 +343,10 @@ interface RcEventStore {
 transaction:
 
 1. Verify the `worker_epoch` is current for the `cse_session_id`.
-2. Extract the Claude-minted `event_id` from the payload.
-3. If `(cse_session_id, event_id)` already exists, return the original
-   `sequence_num` and `duplicate:true`.
+2. Extract the Claude-minted `event_id` and compute a canonical payload hash.
+3. If `(cse_session_id, event_id)` already exists with the same hash or a separately validated
+   downstream/upstream echo tuple, return the original `sequence_num` and `duplicate:true`. Reject a
+   same-ID/different-payload conflict; an event ID alone is not proof of exact replay.
 4. Otherwise allocate `sequence_num = max(sequence_num) + 1`, insert the raw
    event and rendered parts, and return `duplicate:false`.
 
@@ -573,6 +591,11 @@ Worker reconnect and two-worker race:
 - New bridge increments epoch.
 - Writes from stale epochs fail and do not allocate sequence numbers.
 
+That redelivery rule is specific to the proposed synthetic RC transport and is safe only after a
+worker-idempotency/exact-ACK proof. The future coordinator cannot infer “safe to resend” merely from
+missing `processed`: if the worker may have acted before losing its ACK, native delivery is
+`outcome_unknown` and later commands remain quarantined.
+
 Downstream input idempotency:
 
 - Controller/viewer generated event ids must be stable across retries.
@@ -586,42 +609,43 @@ Close/archive:
 - Archive does not delete raw log or broker frames.
 - Resume after close reopens or continues the session with a new epoch.
 
-## Optional Passthrough/Tap Mode
+## Brokered Native Provider Mode
 
-Add this only after relay durability is correct. In passthrough/tap mode,
-remote-claw is not the server of record; Anthropic remains the server and
-remote-claw projects its canonical log while acting as a peer app-side client:
+Add this only on top of the coordinator control journal in
+[Client-driven Host Runtime](client-driven-host-runtime.md). This is not
+passthrough: inner Claude stays on remote-claw's private synthetic RC/API
+façade and never receives a real Anthropic credential, session, bridge, or
+network route. A separate remote-claw-owned connector acts as the real outward
+worker/app:
 
-- `mitm.ts` should run a `tapSink` path that forwards requests/responses to
-  real Anthropic and records sealed copies for remote-claw viewers. It must not
-  repurpose `worker_jwt` or harvest proxied request authorization. App-side calls
-  use a secure read-only credential source and only sessions explicitly created
-  or authorized for the feature. Native Claude remains the sole OAuth credential
-  writer/refresher; after a 401, remote-claw waits for and rereads a safely
-  validated file rotation and never writes or independently refreshes it.
-- Viewer prompts must go through the real client
-  `POST /v1/code/sessions/{id}/events` path. A downstream tee is
-  observation-only and must never inject or mirror viewer input.
-- Viewer submissions remain provisional until Anthropic returns the POST result
-  and the projector correlates the canonical event. The projector must persist
-  the proven mapping among the stable viewer-generated UUID, returned event
-  identity/sequence, worker delivery/echo, client history/SSE, and reconnect
-  replay before publishing one accepted transcript row; no single field is
-  assumed to span every path before the gate proves it.
-- The local TUI, official app clients, and remote-claw viewer are all potential
-  writers. Anthropic acceptance and `sequence_num` are authoritative; a local
-  queue, UI controller indicator, or advisory hand-off must not fabricate an
-  ACK or change canonical order.
-- Client history plus SSE reconnect are candidate repair paths for test
-  sessions, but cursor, `from_sequence_num`, and `Last-Event-ID` semantics remain
-  unproven production contracts. These read paths are redundancy and repair
-  tools, not a substitute for relay-mode durable logging.
-- The raw RC event store in passthrough projection mode should be marked
-  `observed`, because
-  remote-claw cannot authoritatively answer duplicate POSTs or fence workers
-  when Anthropic owns the bridge.
+- The existing `mitm.ts` relay path remains the inner RC server. It reports native observations while
+  the coordinator records only command order, admission, correlation, and delivery evidence. The
+  outward connector separately
+  performs real Anthropic registration, bridge, worker SSE, delivery, worker
+  event, status, heartbeat, history, and app-side operations.
+- Viewer prompts are durable local proposals before any inward delivery or
+  outward app-side `POST /v1/code/sessions/{id}/events`. The resulting provider
+  delivery is correlated to the existing command and never injected twice.
+- Official-client events arrive at the remote-claw-owned worker connector,
+  enter the journal/actor, and only then cross the private inner RC façade.
+- The control journal persists local command/`command_seq`; the projector maps that to `chat_seq` and provider event
+  identity/sequence, inner event identity, delivery, history/SSE, and reconnect
+  mappings. No single field is assumed to span every surface before proof.
+- Provider history/SSE can repair a provider-representation/read-back gap, but it cannot overwrite
+  native execution evidence or cause recovered commands to execute.
+- Inner inference/OAuth/API requests terminate locally and selected inference is re-originated by a
+  separately isolated inference connector, not the outward Remote worker/app connector.
+  Network-policy tests must prove the inner process cannot reach Anthropic directly or obtain real
+  OAuth/worker credentials.
 
-## Phased Implementation Plan
+## Historical Phased Implementation Plan
+
+The A1/A2 branch statuses and file paths below are a preserved planning snapshot, not current
+instructions: those branches were integrated and the broker layout has since moved to
+`apps/web/lib/broker/{sqlite-multi,turso-cloud-locator,vercel}.ts` plus shared interfaces. The unbuilt B
+phases are likewise superseded by the shared/Claude phases in
+[Client-driven Host Runtime](client-driven-host-runtime.md) §13. Keep this section for provenance and
+test intent; re-read current code before implementing any item.
 
 Phase A1 - Durable broker frames:
 
@@ -735,24 +759,6 @@ Phase B5 - Archive/close fidelity:
 - Gate: `/exit` archives, later resume same `cse_` bumps epoch and appends at
   `max(sequence_num)+1`.
 
-Phase C - Optional passthrough/tap:
-
-- Files: CLI flags in launch/run entrypoints, `mitm.ts` tap mode,
-  Anthropic app-side client, projection path.
-- Goal: project and drive explicitly created test sessions while Claude remains
-  bridged to real Anthropic, with the viewer writable from the experimental
-  baseline and no lease prerequisite.
-- Tests: real-client viewer `POST /v1/code/sessions/{id}/events` while idle and
-  busy alongside local-TUI and official/custom-client input,
-  POST/worker/history/SSE exactly-once correlation, client history/SSE
-  reconnect cursor probes, and downstream injection/mirroring prohibited.
-- Gate: against explicitly created test sessions, every viewer prompt produces
-  either a correlated canonical acceptance or an explicit upstream rejection,
-  never a local false ACK; all input surfaces converge in Anthropic order
-  without duplicates; supported reconnect/cursor semantics are recorded rather
-  than assumed. Passing this gate permits an experimental writable release,
-  not a GA stability claim.
-
 ## Tests Required
 
 - Unit test `RcEventStore.appendUpstream`: new insert, exact replay duplicate,
@@ -784,8 +790,8 @@ A durability PR is not complete unless it demonstrates these properties:
 - Stale worker epochs cannot write canonical events.
 - `/compact` does not claim RC wire support for reset; any reset is explicitly
   wrapper-synthesized from local transcript evidence.
-- Passthrough/tap tests use only sessions created for the test and never human
-  live sessions.
+- Outward-provider connector tests use only sessions created for the test and
+  never human live sessions.
 
 ## Open Decisions
 
@@ -797,8 +803,8 @@ A durability PR is not complete unless it demonstrates these properties:
 - Broker sequence mapping: recommended design keeps dense broker `seq` separate
   from RC `sequence_num`. A simpler one-seq design is possible only if the
   projector guarantees one same-kind broker frame per RC event.
-- Compact source: tracked relay protocol describes an assistant compact-summary
-  turn plus `result` (`docs/protocol.md:460-463`), while the unavailable
+- Compact source: tracked relay protocol describes an assistant compact-summary turn plus `result`
+  ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), while the unavailable
   historical native-RC investigation reportedly saw only an empty result on the
   wire and summary text in local JSONL. Treat this as version/mode dependent
   until Phase B4 reconciles it; do not require local transcript watching or
@@ -806,12 +812,12 @@ A durability PR is not complete unless it demonstrates these properties:
 - Retention: raw RC logs are needed for idempotency and audit longer than
   viewer frames. Define separate retention for raw events, compacted visible
   history, and sealed broker frames.
-- Native-passthrough app authority: passthrough/tap must use a separately
-  secured read-only OAuth credential source and explicit test-session
-  guardrails before it can author canonical viewer events. Native Claude is the
-  sole credential writer/refresher; remote-claw only waits for and rereads a
-  validated rotation after 401 and must respect revocation.
+- Outward connector credentials: brokered native mode needs a separately
+  secured OAuth source and explicit test-session guardrails. Remote-claw owns
+  the real worker/app credentials; the isolated inner Claude receives only
+  synthetic/local auth and never refreshes or reads the real provider secret.
+  Rotation and revocation behavior remain a release gate.
 - Native client stream endpoint: decide whether relay mode should expose its
   own `/events/stream` endpoint for native-compatible clients, or keep
-  `/events/stream` support limited to passthrough reads from Anthropic and
-  remote-claw viewers on the E2E broker.
+  `/events/stream` support limited to reads served/reconciled by the outward
+  connector and remote-claw viewers on the E2E broker.
