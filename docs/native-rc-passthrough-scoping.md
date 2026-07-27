@@ -109,6 +109,9 @@ The real outward Claude connector is a remote-claw component, not a mode of inne
 - commit local output before outward worker/app publication;
 - preserve provider event, sequence, delivery, cursor, and epoch mappings without treating them as
   remote-claw primary keys;
+- classify provider ingress under a durable source-event namespace independent of connector
+  incarnation, retaining versioned reset-boundary coordinates, observations, canonical event records,
+  and correlation evidence across reconnect;
 - correlate one host command across local proposal, inner echo/execution, outward submission, provider
   observation, and provider-side read-back;
 - stop ACK/cursor advancement when the coordinator control journal is unavailable;
@@ -135,8 +138,11 @@ reconciliation supplies positive evidence that resolves the result.
 ### 4.1 Official-origin input
 
 1. Anthropic delivers an official-client event to the sole outward worker connector.
-2. The connector commits the credential-stripped provider envelope and stable source identity.
-3. The per-chat actor proposes and admits, queues, or rejects the command.
+2. The connector records the credential-stripped envelope, provider coordinate, capability/epoch
+   pins, and source-namespace classification evidence, then checks canonical source/correlation
+   records across prior connector incarnations.
+3. The per-chat actor creates a proposal only for a proven-new event. A replay links its prior command;
+   collision or ambiguous boundary evidence records a recovery gap and creates no command.
 4. Only an admitted command crosses the private inner RC façade.
 5. Provider ingress transport ACK/cursor advances only after the protocol's required durable decision. It
    proves host receipt, not inner execution.
@@ -208,9 +214,12 @@ These are proof gates, not CLI phases:
 5. **Multi-writer correlation.** Local structured input, remote-claw viewer input, and at least two
    official/custom clients race while idle and busy with one deterministic host admission stream and
    no duplicate execution.
-6. **Controls and attachments.** Add one proven verb family at a time; advertise unsupported
+6. **Source-namespace recovery.** Across connector restart and forced provider-session replacement,
+   old history retains its old namespace/command, only a coordinate proven beyond a versioned reset
+   boundary may reuse a raw ID as new, and ambiguous/colliding ingress advances no ACK or cursor.
+7. **Controls and attachments.** Add one proven verb family at a time; advertise unsupported
    capabilities as absent.
-7. **Crash and lifecycle matrix.** Cover journal/actor, connector, inner process, link, host restart,
+8. **Crash and lifecycle matrix.** Cover journal/actor, connector, inner process, link, host restart,
    OAuth rotation/revocation, worker JWT expiry/rebridge, epoch changes, archive, and history repair.
 
 No real inner/provider-writable release occurs before gates 1–4. Passing the prompt matrix permits an

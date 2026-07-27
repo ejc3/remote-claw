@@ -148,6 +148,7 @@ The durable identity layers are:
 | Native runtime/incarnation | One provably identified process, app server, or server generation | Advances on a cold native replacement; a live reattach may retain it |
 | Native transport attachment | Inner Claude `cse_*`, app-server connection, SSE connection, or tmux attachment | Reused first when the native protocol permits; otherwise replaceable beneath the binding |
 | Outside binding/incarnation | Anthropic Remote session, ChatGPT host/chat, or web transport mapping and connection epoch | Independent of native restart; reconnect or provider-forced replacement does not change `logicalChatId` |
+| Source event namespace | Proven uniqueness domain for one outside source's event IDs | May span connector incarnations; changes only after positive evidence that the provider reset or replaced the ID domain |
 
 `logicalChatId` is allocated durably before the first native or outward mutation. It is never derived
 from a title, working directory, message text, `cse_*`, Codex/OpenCode ID, pane, broker channel, or
@@ -298,9 +299,17 @@ interface NativeTransportLease {
 interface OutsideBindingRecord {
   outsideBindingId: string;
   logicalChatId: string;
-  kind: "anthropic-remote" | "chatgpt-remote" | "web";
+  kind: "anthropic-remote" | "chatgpt-remote" | "web" | "local";
   currentIncarnationId: string | null;
   state: "current" | "closed";
+}
+
+interface SourceEventNamespaceRecord {
+  sourceEventNamespaceId: string;
+  outsideBindingId: string;
+  sourceNativeNamespaceId: string;
+  originTransitionId: string | null;
+  state: "current" | "superseded" | "closed";
 }
 
 interface OutsideBindingIncarnation {
@@ -343,14 +352,82 @@ interface OutsideBindingCapabilityVerification {
   verifiedAtMs: number;
   result: "accepted" | "rejected";
 }
+
+interface SourceEventNamespaceTransitionRecord {
+  namespaceTransitionId: string;
+  outsideBindingId: string;
+  priorSourceEventNamespaceId: string;
+  nextSourceEventNamespaceId: string;
+  priorOutsideIncarnationId: string;
+  nextOutsideIncarnationId: string;
+  schemaVersion: 1;
+  classifierSchemaId: string;
+  coordinateSchemaId: string;
+  priorBoundaryCoordinate: string;
+  nextBoundaryCoordinate: string;
+  capabilitySnapshotId: string;
+  capabilityVerificationId: string;
+  coordinatorEpoch: number;
+  evidenceRef: string;
+  result: "proven-reset";
+}
+
+interface SourceEventObservationRecord {
+  sourceEventObservationId: string;
+  logicalChatId: string;
+  outsideBindingId: string;
+  observedOutsideIncarnationId: string;
+  sourceEventNamespaceId: string | null;
+  sourceEventId: string;
+  sourceReplayIdentity: string | null;
+  coordinateSchemaId: string;
+  sourceCoordinate: string;
+  namespaceTransitionId: string | null;
+  classificationEvidenceRef: string | null;
+  sourceCapabilitySnapshotId: string;
+  sourceCapabilityVerificationId: string;
+  coordinatorEpoch: number;
+  connectionEpoch: number;
+  fingerprintSchemaId: string;
+  fingerprintDigestAlgorithm: string;
+  eventFingerprint: string;
+  fingerprintCapabilitySnapshotId: string;
+  disposition: "pending" | "new" | "duplicate" | "collision" | "ambiguous";
+  canonicalSourceEventId: string | null;
+  commandId: string | null;
+  recoveryGapId: string | null;
+}
+
+interface CanonicalSourceEventRecord {
+  canonicalSourceEventId: string;
+  logicalChatId: string;
+  outsideBindingId: string;
+  sourceEventNamespaceId: string;
+  sourceEventId: string;
+  firstObservationId: string;
+  sourceReplayIdentity: string | null;
+  fingerprintSchemaId: string;
+  fingerprintDigestAlgorithm: string;
+  eventFingerprint: string;
+  fingerprintCapabilitySnapshotId: string;
+  commandId: string;
+}
 ```
 
 The journal also retains every native incarnation, transport attachment and lease, outside-binding
-incarnation, immutable capability snapshot and verification, cursor, correlation tombstone, and
-containment result. An attachment belongs to the durable native binding, not to one process
-incarnation: a new lease ties the same attachment to the current native incarnation and coordinator
-epoch. For Claude, `transportEpoch` is the private RC worker epoch. A1 registration resolves a
-`nativeBindingId` through its durable `logicalChatId`; it never assumes the two IDs are equal.
+incarnation, source-event namespace/transition/observation and canonical deduplication record,
+immutable capability snapshot and verification, cursor, correlation tombstone, and containment result.
+An attachment belongs to the durable native binding, not to one process incarnation: a new lease ties
+the same attachment to the current native incarnation and coordinator epoch. For Claude,
+`transportEpoch` is the private RC worker epoch. A1 registration resolves a `nativeBindingId` through
+its durable `logicalChatId`; it never assumes the two IDs are equal.
+
+A source observation's envelope, coordinate, capability/epoch pins, classification evidence, and
+fingerprint fields are immutable. Its `pending` disposition and nullable result links advance exactly
+once by compare-and-swap, backed by append-only `ingress.changed` facts, to one terminal
+classification. A `CanonicalSourceEventRecord` is immutable and unique on the exact ingress key; it
+exists only for a proven-new event created with `command.proposed`. Duplicate observations link that
+record, while collision/ambiguous observations link only a recovery gap.
 
 An outside capability snapshot is owned by one outside-binding incarnation and records the proven
 ingress command/control families, projection shapes, acknowledgement/cursor behavior, idempotency and
@@ -366,6 +443,18 @@ incarnation, snapshot, coordinator epoch, and connection epoch all match the cur
 revalidation finds different capabilities, the connector creates the replacement snapshot and its
 verification, then atomically advances both current pointers. A failed verification leaves the
 incarnation non-writable and preserves the previous records for recovery and audit.
+
+`sourceEventNamespaceId` is durable independently of an outside-binding incarnation or connection
+epoch. Reconnect, credential rotation, capability revalidation, and connector replacement preserve it
+whenever source event IDs remain in the same proven uniqueness domain. Several successive
+`OutsideBindingIncarnation` records may therefore reference one namespace. A connector allocates a new
+namespace only with a versioned, capability-pinned `SourceEventNamespaceTransitionRecord` that proves
+IDs reset or may be reused. Its classifier and coordinate schemas define how source-protocol
+cursor/sequence values on both sides of the boundary are compared; strings are never compared
+generically. Every ingress observation durably retains its exact source coordinate, selected namespace,
+classification evidence, and transition link before command allocation. If continuity versus reset or
+an event's side of the boundary cannot be proved, the binding stays non-writable and records a recovery
+gap rather than guessing.
 
 An engine registers conversations with the host. Registration is two-phase because some adapters
 must announce before the native ID is known:
@@ -476,8 +565,9 @@ submit_text
 ├── command ID
 ├── logical chat ID
 ├── source surface
+├── outside binding + source event namespace, for structured outside ingress
 ├── source-native event/message ID, when present
-├── source capability snapshot + verification IDs, for provider ingress
+├── source capability snapshot + verification IDs, for structured outside ingress
 ├── text
 ├── received time
 └── expected active turn, when present
@@ -490,16 +580,39 @@ The initial source surfaces are:
 - `anthropic`; and
 - `openai`.
 
-The ingress deduplication key is
-`(logical_chat_id, source_binding_incarnation_id, source_event_id)`. Mutable structured sources must
+The wrapper-owned editor is a `kind: "local"` outside binding. Like web and provider connectors, it
+persists a client command ID in its durable device/editor namespace before retrying submission; raw
+PTY keystrokes are not structured outside ingress.
+
+The exact ingress deduplication key is
+`(logical_chat_id, outside_binding_id, source_event_namespace_id, source_event_id)`.
+`outside_incarnation_id`, capability verification, and connection epoch remain immutable
+provenance on the observation, but none resets semantic deduplication. Mutable structured sources must
 generate and persist their event ID before first send. An adapter-assigned ID is safe only when the
 source receives and retains it before retry. If that acknowledgement is lost, an indistinguishable
 repeat remains `outcome_unknown`; it becomes a new proposal only after explicit user confirmation of
-new intent, never automatically and never by text matching. `outsideBindingId` remains durable across
-reconnects. `source_binding_incarnation_id` remains stable across connection epochs for the same source
-event-ID namespace and changes only when that namespace has a proven new incarnation. Provider/native
-echo correlation is a separate persisted ID mapping; a returning echo points to the existing command
-and never creates another execution.
+new intent, never automatically and never by text matching.
+
+Before allocating any proposal, the coordinator searches canonical source-event records, observations,
+and correlation mappings for the same logical chat and outside binding across every superseded
+connector incarnation. A source-stable object/replay identity or historical mapping that proves the
+event is old links the new observation to the prior command and append-only outcome records without
+allocating `command_seq` or executing native work. A same raw event ID in a proven distinct namespace
+may be new only when its stored source coordinate is classified on the new side of the pinned
+namespace-transition boundary. The new incarnation ID alone is never that proof. Historical overlap
+delivered through a new connector retains its originating namespace identity. If an ID collision or
+replay cannot be classified, the coordinator records a recovery gap, quarantines that ingress, and
+does not semantically ACK it as a new command.
+
+Fingerprint comparisons use the canonical event's stored schema, digest algorithm, and capability
+snapshot—not the reconnecting connector's current defaults. The connector recomputes the incoming
+event under that historical schema and stores the comparison. If the schema implementation is no
+longer available, the event is ambiguous and fails closed. If the same canonical identity produces a
+different digest under the same schema, it is a collision/protocol violation; it never overwrites the
+old record or becomes a new command.
+
+Provider/native echo correlation is a separate persisted ID mapping consulted before source-event
+allocation; a returning echo points to the existing command and never creates another execution.
 
 Every mutation path for a shared logical chat must cross the coordinator before native execution.
 Engine HTTP/app-server endpoints stay private, and a wrapper-owned local UI submits through the same
@@ -529,21 +642,39 @@ The authoritative control journal appends only facts needed to decide or safely 
 Every control record carries a stable record ID, logical chat ID, journal offset, commit time,
 correlation, and source provenance. The exact payload of a queued or uncertain command remains durable
 until its delivery is resolved. A retention policy may later redact or expire the payload, but it must
-retain an immutable deduplication/outcome tombstone, the attempt identity, the binding/incarnation,
-and the unresolved state. Time passing never proves that an old native attempt cannot still execute,
-so retention expiry alone cannot lift quarantine or close `outcome_unknown`. Only recorded
-reconciliation with positive terminal/cancellation evidence, or definitive process stop, freeze, or
-kill of the old incarnation, can do that. An operator may authorize that containment or a successor
-choice; an operator acknowledgement by itself cannot make a still-runnable attempt safe.
+retain the canonical source-event identity→command record; the observation's namespace transition,
+source coordinate, classification evidence, and schema-versioned credential-stripped fingerprint;
+the attempt identity; and append-only ingress, decision, and outcome records. Those records stay
+queryable across every successor connector incarnation while that outside binding can replay old
+history. The canonical source record has no mutable “latest outcome” field: its stable `commandId`
+joins to append-only journal outcomes, while ambiguous/collision observations instead link a
+`recoveryGapId` and allocate no command.
 
-A provider-origin `command.proposed` record has immutable
+Time passing never proves that an old native attempt cannot still execute, so retention expiry alone
+cannot lift quarantine or close `outcome_unknown`. Only recorded reconciliation with positive
+terminal/cancellation evidence, or definitive process stop, freeze, or kill of the old incarnation,
+can do that. An operator may authorize that containment or a successor choice; an operator
+acknowledgement by itself cannot make a still-runnable attempt safe.
+
+A structured outside-origin `command.proposed` record has immutable
 `source_capability_snapshot_id` and `source_capability_verification_id` fields. Every outside
 `outbox.changed` item likewise has immutable `target_capability_snapshot_id` and
 `target_capability_verification_id` fields. Admission and recovery validate those pinned records;
 they never reinterpret an existing command or projection item through an incarnation's later
 `currentCapabilitySnapshotId`.
 
-The source dedup row and `command.proposed` commit atomically. A proposal left without
+Namespace-transition installation is an epoch-fenced compare-and-swap that atomically installs its
+boundary/classifier evidence and advances the namespace pointer before the connector becomes writable.
+For each ingress, one serialized actor turn revalidates that transition, current capability
+verification, and coordinator epoch. One durable transaction then records the observation's
+classification and does exactly one of these:
+
+- proven new: insert the unique canonical source-event row and `command.proposed` together;
+- proven replay: link the observation to the existing canonical row/command without a proposal; or
+- collision/ambiguous: link the observation to a `recovery.gap` without a proposal.
+
+A crash before commit leaves none of those semantic results; a crash after commit resumes the recorded
+one. No semantic ACK or cursor advances until that transaction commits. A proposal left without
 `command.decided` is resumed deterministically after restart; uniqueness constraints and one
 transaction allocate its single decision and `command_seq`. A durable causal outbox item is likewise
 enqueued atomically with the command or native-observation mapping it projects. It retains the exact
@@ -884,12 +1015,13 @@ faithfully; unsupported mutations fail closed rather than being guessed.
 
 Every outside binding has the same lifecycle:
 
-1. Bind a durable `outsideBindingId`, one provider/broker/local event-ID namespace incarnation, its
-   evidence-backed durable capability snapshot, and a separate fenced connection epoch. Reconnect
-   keeps both binding and incarnation when the namespace is unchanged, but must revalidate the
-   capability snapshot before restoring writability. Native restart never rotates either one.
+1. Bind a durable `outsideBindingId`, reference its independently durable provider/broker/local
+   `sourceEventNamespaceId`, install an evidence-backed durable capability snapshot, and acquire a
+   separate fenced connection epoch. Reconnect must revalidate the capability snapshot before
+   restoring writability. Native restart never rotates the binding or event namespace.
 2. Ingest a mutation with a stable source ID and a commit callback; no semantic ACK or cursor advance
-   occurs until that callback durably records the proposal.
+   occurs until that callback durably records its new/replay/collision/ambiguous classification and
+   any resulting proposal.
 3. Consume a durable causal projection outbox ordered by `command_seq`/`chat_seq`.
 4. Before first publish, persist the stable target event/item ID, idempotency identity, and
    `(target binding, target item) → source command/native message/chat_seq` mapping.
@@ -900,10 +1032,15 @@ Every outside binding has the same lifecycle:
 7. Close or supersede the connection without changing the durable binding, logical chat, or native
    conversation.
 
-If a provider forces a new session/chat/event namespace, retain `logicalChatId` and
-`outsideBindingId`, supersede the old namespace incarnation, and keep its
-correlation/deduplication tombstones. Repair the new provider representation only through the durable
-outbox with proven idempotency or read-back; provider history is never replayed into native execution.
+If a provider forces a new session/chat or connector incarnation, retain `logicalChatId` and
+`outsideBindingId`. Preserve `sourceEventNamespaceId` when the provider ID domain is continuous; if
+positive evidence proves a reset/reuse domain, allocate a new namespace while retaining every prior
+canonical source record, observation, and correlation mapping. Before advancing the recovered cursor
+or allocating a command, classify subscribe-first/snapshot overlap against records across all prior
+incarnations using the pinned transition classifier and each item's stored source coordinate. A
+proven replay links to its prior outcome, a proven post-boundary item uses the new namespace, and an
+ambiguous item fails closed. Repair the new provider representation only through the durable outbox
+with proven idempotency or read-back; provider history is never replayed into native execution.
 There is at most one active Anthropic Remote binding per logical chat, and a Codex app-server restart
 does not re-enroll the one paired ChatGPT host or duplicate its projects/chats.
 
@@ -1048,10 +1185,14 @@ entire official projection without blocking native execution.
 
 1. The provider receives the official client's command.
 2. The provider's host/worker transport delivers it to remote-claw.
-3. Atomically commit the provider observation, source dedup identity, and command proposal.
-4. Admit, queue, or reject it.
+3. Run the cross-incarnation source-record/correlation guard and atomically commit the provider
+   observation plus one terminal classification. The proven-new branch inserts its canonical source
+   identity and `command.proposed`; replay links the prior canonical record; collision/ambiguous links a
+   recovery gap and creates no command.
+4. Admit, queue, or reject only a proven-new proposal.
 5. ACK provider ingress at the point proven safe for that protocol, after the required durable
-   decision. This ACK means host receipt only and need not wait for native execution.
+   decision for new input or durable prior-command link for a replay. This ACK means host receipt only
+   and need not wait for native execution; collision/ambiguous input advances no semantic ACK or cursor.
 6. Deliver only an admitted command to the native client; queued input waits and rejected input never
    executes.
 7. Project command status to the local UI and remote-claw web. For an admitted command, publish its
@@ -1129,8 +1270,9 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 
 - Add durable `logical_chat`, `native_binding`, native-incarnation, private-transport-attachment and
   attachment-lease, outside-binding, outside-capability-snapshot, outside-capability-verification, and
-  connection-epoch records. Never alias `logicalChatId` to the A0 `rcb_*`, Claude `cse_*`,
-  Codex/OpenCode ID, broker channel, or provider ID.
+  connection-epoch records, plus source-event namespace/transition/observation, canonical source-event,
+  and cross-incarnation correlation records. Never alias `logicalChatId` to the A0 `rcb_*`, Claude
+  `cse_*`, Codex/OpenCode ID, broker channel, or provider ID.
 - Route web presence, broker channel/key derivation, and normalized command/chat sequences by the
   stable `logicalChatId`; a transport replacement must update one visible row rather than create
   another.
@@ -1199,6 +1341,8 @@ The following remain unproven until a test says otherwise:
 - exact native history completeness and stable IDs for every adapter;
 - non-reusable runtime/incarnation identity and correct new-chat/reconnect/fork classification;
 - subscribe/snapshot ordering without a lost-event gap;
+- provider source-event namespace continuity, cross-incarnation replay classification, and
+  collision-safe canonical records before command allocation;
 - command-to-native correlation and idempotent retry;
 - structural interception of local Claude/Codex/OpenCode submissions before native execution;
 - complete provider-route termination and process-tree network isolation for every inner engine;
@@ -1228,6 +1372,18 @@ The restart matrix must include:
 - Anthropic and ChatGPT connector restart: preserve the logical chat and paired-host/project mappings,
   revalidate the current durable capability snapshot, and rotate only connection credentials/epoch
   unless the provider forces a separately recorded outside-binding incarnation;
+- provider ingress replay before and after connector restart, credential rotation, and forced
+  outside-binding incarnation: preserve a continuous event namespace and allocate exactly one command;
+  deliver old history after a proven namespace reset and still link it to the old command; accept the
+  same raw ID as a second command only for an item whose coordinate is proven post-boundary; fail
+  closed when a canonical ID's body changes; and quarantine ambiguous history overlap before cursor
+  advance;
+- the same source event raced through old/new connector incarnations: retain one canonical command;
+  an old replay raced against a distinct, proven post-boundary reuse of its raw ID: link the old command
+  and allocate exactly one new command;
+- crashes before and after namespace-transition install, cross-incarnation classification, canonical
+  source insertion, and `command.proposed`: resume one recorded branch, and advance neither semantic
+  ACK nor cursor for collision/ambiguous input;
 - crash points before/after binding commit, native `delivery.started`, native observation, projection,
   outward publish, and provider ingress ACK, with quarantine for every unprovable delivery.
 

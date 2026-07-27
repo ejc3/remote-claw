@@ -751,6 +751,14 @@ worker/app:
   delivery is correlated to the existing command and never injected twice.
 - Official-client events arrive at the remote-claw-owned worker connector,
   enter the journal/actor, and only then cross the private inner RC façade.
+- Provider ingress deduplicates by the coordinator's durable logical-chat, outside-binding,
+  source-event-namespace, and event-ID identity, not by connector incarnation. Reconnect or provider
+  replacement must consult canonical source-event, observation, and correlation history across prior
+  incarnations before allocating a command. A reset namespace requires a versioned,
+  capability-pinned transition classifier plus boundary coordinates, and each observation retains its
+  comparable provider coordinate and classification evidence. Proven overlap resolves to its prior
+  command; only a proven post-boundary reuse becomes new, while ambiguity fails closed. The RC-local
+  `(cse_session_id, event_id)` key remains only a private Claude transport key.
 - The control journal persists local command/`command_seq`; the projector maps that to `chat_seq` and provider event
   identity/sequence, inner event identity, delivery, history/SSE, and reconnect
   mappings. No single field is assumed to span every surface before proof.

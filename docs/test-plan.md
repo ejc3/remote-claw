@@ -103,6 +103,20 @@ about the current A0 implementation:
 - crash before and after binding commit, native write-ahead, native observation, broker cursor
   advance, outward publish, and provider ingress ACK; assert exactly-once decisions where provable and
   quarantine every ambiguous delivery;
+- replay one provider event before and after connector restart, credential rotation, forced
+  outside-binding incarnation, and history/cursor overlap; assert one command across a continuous
+  source-event namespace, and deliver old history after a proven namespace reset while still linking
+  it to that one command;
+- create a genuinely post-boundary provider event that reuses an old raw ID in a proven reset
+  namespace and assert exactly two commands; separately assert fail-closed behavior for a changed
+  payload under one canonical identity and quarantine when namespace continuity or event-boundary
+  classification is ambiguous;
+- race the same source event through old/new connector incarnations and assert one canonical command;
+  separately race an old replay against a distinct, proven post-boundary reuse of its raw ID and
+  assert one old-command link plus exactly one new command;
+- crash before/after namespace-transition install, cross-incarnation lookup, observation
+  classification, canonical source-event insertion, and `command.proposed`; assert recovery of one
+  recorded branch and no semantic ACK/cursor advance for collision/ambiguous input;
 - restart one Codex app server with several threads and preserve the paired ChatGPT host, projects,
   logical-chat mappings, and sibling isolation;
 - restart OpenCode/tmux only into a binding whose server/process/transcript lineage is proven; otherwise
