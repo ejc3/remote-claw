@@ -3,6 +3,15 @@
 A custom client + relay for driving a **real `claude --remote-control` session**
 — your own frontend in place of Anthropic's web/mobile app.
 
+> **Selected next architecture:** evolve the per-session Claude wrapper into a
+> [client-driven host runtime](docs/client-driven-host-runtime.md) for Claude Code, Codex, OpenCode,
+> and tmux. Native clients keep their real conversation/context; a small local coordinator orders
+> input, correlates delivery, and translates between native clients, official Anthropic Remote,
+> ChatGPT Remote connections, and remote-claw web. Wrapped inner Claude, Codex, and OpenCode processes
+> never contact their providers directly.
+> This is a design under implementation—the current `--rc-app` path below still replaces Anthropic's
+> RC backend.
+
 ## What this is
 
 Claude Code's official **Remote Control** lets you drive a local Claude Code
@@ -10,17 +19,20 @@ session from claude.ai/code or the Claude mobile app: the session keeps running
 on your machine (your filesystem, MCP servers, tools), and the web/app are thin
 windows that sync conversation **state** (not your terminal screen).
 
-`remote-claw` replicates that — but with **a client you control**. The key is the
-undocumented **`--sdk-url`** flag, which redirects a real `claude --remote-control`
-connection to a relay *you* run instead of Anthropic's cloud:
+`remote-claw` provides the same local-session shape with **a client you control**. Today it runs the
+real Claude Code behind a process-scoped local TLS proxy, answers Claude's
+`/v1/code/sessions/**` Remote Control calls, and sends E2E-encrypted frames through a broker to the
+remote-claw web client:
 
-```
- your client  ◀──CCRv1 (NDJSON/WebSocket)──▶  remote-claw relay  ──spawns──▶  claude --remote-control --sdk-url ws://localhost:PORT
- (web/mobile/TUI)                              (you run this)                  (the real session: your subscription, local FS/MCP/tools)
+```text
+remote-claw web ⇄ ciphertext broker ⇄ host relay ⇄ local RC façade ⇄ real Claude Code
 ```
 
-> **You become the relay.** With `--sdk-url`, Claude connects to *your* server,
-> not Anthropic's — so this is "instead of" the official app, not "alongside" it.
+It does **not** depend on redirecting `--sdk-url`; that route was patched out. The current default
+still passes non-RC traffic, including inference/OAuth, to Anthropic, while the Bedrock/accountless mode
+terminates the Anthropic control plane locally. The selected next runtime makes that boundary strict
+for Claude Code, Codex, and OpenCode: every inner provider-shaped call terminates locally, and
+separate remote-claw-owned connectors handle model inference and official Remote clients.
 
 ## Status
 
@@ -53,10 +65,11 @@ ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `
 
 - **`packages/clawsec`** — the crypto core: the HKDF key hierarchy, per-message AES-256-GCM,
   the §8 wire envelope, the derivable channel tokens, and the `rcp1_` viewer **pass**.
-- **`apps/web`** — the **broker** (two routes on Vercel Workflows — `POST /api/relay`,
-  `GET /api/stream`; a per-identity bus + per-session relay; **no store**) and the
-  mobile-first **web client** (paste a pass → discover sessions → drive them, decrypted
-  in-browser).
+- **`apps/web`** — the pluggable **broker** (`POST /api/relay`, `GET /api/stream`; a per-identity
+  bus + per-session relay) with ephemeral Vercel Workflow and durable SQLite/libSQL backends. The
+  current host and viewer use sealed mode with every backend, so the backend sees only ciphertext and
+  routing metadata. It also serves the mobile-first **web client** (paste a pass → discover sessions →
+  drive them, decrypted in-browser).
 - **`packages/cli`** — the `remote-claw` wrapper: identity/pass management (`--rc-identity`,
   `--rc-pass`), the broker transport (`BrokerClient`), and the **RC MITM backend** (`@remote-claw/cli/rc`:
   `MitmProxy` + `RelayCore`/`Session` + `HostRcRelay`) — the Phase-0 interception core ported to TS.
@@ -64,21 +77,28 @@ ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `
 **The RC backend (the real one, §14/§17.5):** you run `remote-claw` like `claude` (`--rc-app <broker>`
 arms it); inside, `/remote-control` lands on **our local TLS MITM of `api.anthropic.com`** (set via
 `HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`), which serves the `/v1/code/sessions*` worker endpoints itself
-and passes `/v1/messages` + OAuth through. The wrapper *is* the RC backend, so it sees every frame and
-bridges the session E2E-encrypted to the broker. **Proven end to end** by `rc-spine.integration.test.ts`:
-a fake worker speaks the **exact captured `--remote-control` worker protocol** (register → triggers →
-bridge → SSE → delivery-ack → events → heartbeat) through the real MITM, and the browser viewer drives a
-turn, history replay (catch_up), sub-agents (`Task` + nested replies), tool-permission grants, and
-multi-client — all through the real broker on the real Workflow runtime. The real binary's leg is
-covered by the in-repo Phase-0 capture + the gated `real-rc.prove.test.ts` (needs a login + PTY).
+and, with the default `--rc-inference=anthropic`, passes `/v1/messages` + OAuth through. With
+`--rc-inference=bedrock`, it routes inference to Bedrock and synthesizes the remaining
+Anthropic-origin control/API responses locally. The wrapper *is* the RC backend, so it sees every frame
+and bridges the session E2E-encrypted to the broker. **Proven end to end** by
+`rc-spine.integration.test.ts`: a fake worker speaks the **exact captured `--remote-control` worker
+protocol** (register → triggers → bridge → SSE → delivery-ack → events → heartbeat) through the real
+MITM, and the browser viewer drives a turn, history replay (catch_up), sub-agents (`Task` + nested
+replies), tool-permission grants, and multi-client — all through the real broker on the real Workflow
+runtime. The real binary's leg is covered by the in-repo Phase-0 capture + the gated
+`real-rc.prove.test.ts` (needs a login + PTY).
 
-The native **`stream-json` SDK transport** (`HostRelay` + `ClaudeStreamSession`, `--print
+Separately, the native **`stream-json` SDK transport** (`HostRelay` + `ClaudeStreamSession`, `--print
 --input-format stream-json`) remains as the **documented cousin** for cross-checking the protocol and
 for an inference-agnostic headless path — point it at **Amazon Bedrock**/Vertex (`{ bedrock: true }`)
 and claude routes inference via the AWS SDK while remote-claw relays it, never touching the creds.
 
 📐 **Design:** [`docs/v2-architecture.md`](docs/v2-architecture.md) — the full v2 design,
 threat model, key hierarchy, broker, and phased plan.
+
+🧭 **Next host runtime:** [`docs/client-driven-host-runtime.md`](docs/client-driven-host-runtime.md) —
+the selected inside-adapter → coordinator → outside-adapter design for Claude Code, Codex, OpenCode,
+tmux, official Remote clients, and remote-claw web.
 
 🔑 **Credential handoff:** [`docs/ephemeral-handoff.md`](docs/ephemeral-handoff.md) — the one-time-key
 (OTK) ephemeral handoff that replaces the forever pass-in-QR with a single-use, short-TTL bootstrap
@@ -89,22 +109,19 @@ token sealed in a zero-knowledge broker store.
 protocol, the de-minified `--sdk-url` validator, and the build writeup (§4a–4c) ·
 **[`phase0/TEST_PLAN.md`](phase0/TEST_PLAN.md)** — test plan.
 
-🔬 The notes below are the **pre-investigation** research — read Parts 3/5/6 of the
-research doc as history; the verified protocol is in `phase0-findings.md`.
+🔬 The Phase 0 notes are **pre-investigation research**. Read Parts 3/5/6 of the research doc as
+history; the verified current protocol is in `protocol.md` and `phase0-findings.md`.
 
 ## Start here
 
-📄 **[`docs/remote-control-research.md`](docs/remote-control-research.md)** — the
-exhaustive hand-off doc:
+For the current implementation, read:
 
-- How official Remote Control works (state-sync architecture, transport, limits)
-- ⭐ The reverse-engineered **CCRv1** protocol: `--sdk-url`/`--sdk-server`, the
-  `initialize` handshake, control envelope, `can_use_tool` permission flow, and
-  the relay recipe
-- Native `stream-json` reference (the documented cousin) for cross-checking
-- Proposed `remote-claw` architecture + a **phased implementation plan**
-- Security considerations and open questions to verify empirically
-- **§9 — Authentication & Remote Control eligibility** (read before setup)
+- [`docs/protocol.md`](docs/protocol.md) — as-built protocol and runtime.
+- [`docs/client-driven-host-runtime.md`](docs/client-driven-host-runtime.md) — selected next
+  architecture and delivery order.
+- [`docs/phase0-findings.md`](docs/phase0-findings.md) — reverse-engineered Claude RC evidence.
+- [`docs/remote-control-research.md`](docs/remote-control-research.md) — historical research that led
+  to Phase 0.
 
 ## Getting started
 
@@ -119,43 +136,43 @@ cd remote-claw && git checkout main
 gh repo clone ejc3/remote-claw -- --branch main
 ```
 
-Then read the docs and begin at Phase 0:
+Then install dependencies and run the repository gates:
 
 ```bash
-cat README.md
-cat docs/remote-control-research.md
+pnpm install --frozen-lockfile
+pnpm check
+pnpm typecheck
+pnpm test
 ```
 
-**Auth (do this first).** A real end-to-end test needs `claude` authenticated
-with a **full claude.ai login** — an inference-only `CLAUDE_CODE_OAUTH_TOKEN` or
-an `ANTHROPIC_API_KEY` **cannot establish a Remote Control session**:
+**Auth for current default Anthropic inference.** A real end-to-end test needs `claude` authenticated
+with a full claude.ai login. An inference-only `CLAUDE_CODE_OAUTH_TOKEN` or
+`ANTHROPIC_API_KEY` cannot establish an official Remote Control session:
 
 ```bash
 claude auth login      # full-scope; uses your Pro/Max subscription
 claude auth status
 ```
 
-Whether the undocumented `--sdk-url` path relaxes this (Case A vs Case B) is an
-open question — see **§9** of the research doc, and settle it during Phase 0.
+The current `--rc-inference=bedrock --rc-accountless` path is separate: remote-claw supplies the
+private RC/control façade and routes inference to Bedrock, so it does not create an official
+Anthropic Remote session.
 
-## Implementation plan (summary)
+## Next implementation
 
-| Phase | Goal |
-| --- | --- |
-| **0** | Capture the **real** handshake frames against a pinned `claude` version with a logging WebSocket server. **Do this first.** |
-| **1** | Minimal relay: handshake + one user-message → assistant round-trip |
-| **2** | Permission flow (`can_use_tool` allow/deny, `bypassPermissions` toggle) |
-| **3** | First client surface (web recommended) |
-| **4** | Multi-client fan-out + state sync |
-| **5** | Transport + **auth** hardening (tunnel/broker; never expose unauthenticated) |
-| **6** | Reconnect / session resume / process supervision / version pinning |
+The active sequence is A0 registration seam → A1 runtime owner/control journal → A2 OpenCode
+vertical slice → wrapped Claude → wrapped Codex/ChatGPT Remote → tmux recovery. The proof gates and
+per-PR boundaries are in
+[Client-driven Host Runtime §13](docs/client-driven-host-runtime.md#13-delivery-plan).
 
 ## ⚠️ Security
 
-The relay side of this protocol has **no auth, no host allowlist, no cert
-pinning** — it's also a known attack primitive (redirecting Claude to a malicious
-C2). Legitimate use only (your machine, your account, your relay). Any relay we
-build **must** add its own auth and bind to localhost by default.
+The v2 broker authenticates requests and sees only sealed frames plus routing metadata; the host's TLS
+proxy binds to `127.0.0.1`. Keep the machine secret/pass, provider credentials, generated CA key, and
+Vercel bypass secret private. The current default Anthropic inference path intentionally forwards
+non-RC traffic and is not yet the selected runtime's process-isolation boundary. The release target
+requires synthetic inner credentials, separate connector credentials, and a network fence that
+prevents direct provider fallback.
 
 ## License
 

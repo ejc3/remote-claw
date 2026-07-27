@@ -107,3 +107,13 @@ test("a doc-reference link opens that doc in the viewer, not the raw markdown", 
   // crucially we did NOT navigate away to /phase0-findings.md (the raw file)
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
+
+test("a composite doc-and-section hash loads and scrolls the selected design", async ({ page }) => {
+  await page.goto("/index.html#host:13-delivery-plan");
+  await expect(page.locator("article h1")).toContainText("Client-driven host runtime", {
+    timeout: 15000,
+  });
+  await expect(page.locator(".tab.active")).toHaveText("Client-driven Host Runtime");
+  await expect(page).toHaveURL(/#host:13-delivery-plan$/);
+  await expect(page.locator('[id="13-delivery-plan"]')).toBeInViewport();
+});

@@ -251,11 +251,13 @@ function gYO(){ /*local*/ return { BASE_API_URL: process.env.CLAUDE_LOCAL_OAUTH_
 
 ## 4b. ⭐ Historical breakthrough: the client REST API needs no interception
 
-**Status:** the protocol finding remains valid, but the architecture recommendation recorded below was
-superseded by the §4c decision to own the relay through the MITM. The July 2026 native-passthrough scope
-reopens a distinct writable multi-client mode as a proposal only: remote-claw's viewer would submit
-through Anthropic's canonical `POST /v1/code/sessions/{id}/events`, with upstream acceptance and sequence
-governing publication. It has not changed current `--rc-app` behavior.
+**Status:** the protocol finding remains valid, but both the recommendation below and the later
+transparent native-passthrough proposal are superseded. The selected
+[client-driven host runtime](client-driven-host-runtime.md) keeps inner Claude on remote-claw's private
+synthetic RC/API façade and uses the client API only from a separate remote-claw-owned outward
+worker/app connector. Native Claude owns its conversation and execution state; provider event
+IDs/sequences are outward mappings, while the coordinator orders and correlates commands. This has not
+changed current `--rc-app` behavior.
 
 While capturing the worker protocol via MITM, I discovered the **remote-client
 side of Remote Control is a plain, directly-callable REST/SSE API** on
@@ -315,7 +317,7 @@ In this v2.1.168 reference capture, the verified turn sequence is
 `control_request(initialize)` → `control_response` → `user` (source:client) → `assistant` → `result`.
 That initialize-first ordering is not yet a universal Anthropic guarantee: a separate manual local
 capture did not show initialize before a sequence-1 user event. Our synthetic relay intentionally keeps
-initialize-first, while native passthrough must tolerate either observed shape and reconfirm it in a
+initialize-first, while the future outward connector must tolerate either observed shape and reconfirm it in a
 sanitized gated proof.
 
 ### Historical implication — superseded by §4c
@@ -333,8 +335,9 @@ This made option “cloud-relay join” from the earlier menu look technically s
 the client API is a plain REST/SSE surface. The subsequent product decision in §4c rejected that
 architecture for current `--rc-app`: remote traffic stays on our MITM-owned relay, while MITM tracing
 remains the protocol-inspection path. See `docs/v2-architecture.md` §14 for the authoritative decision,
-§17.5 for the implementation mapping, and `docs/native-rc-passthrough-scoping.md` for the later,
-explicitly unadopted passthrough proposal.
+§17.5 for the implementation mapping, and
+[Native Claude Remote investigation](native-rc-passthrough-scoping.md) for the retained protocol
+evidence, rejected passthrough topology, and brokered-connector constraints.
 
 ## 4c. ✅ Option 2 BUILT & WORKING — own-relay via MITM
 

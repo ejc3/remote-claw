@@ -1,21 +1,32 @@
 # Pluggable harness drivers — the `Session` seam
 
 `remote-claw` bridges a coding agent (today: the real `claude --remote-control`) to an
-E2E-encrypted broker, so a phone or laptop can watch and drive that agent. This document records
-the **one clean integration seam** that lets us swap the *agent harness* (claude-behind-MITM, a
-plain `claude` in tmux, OpenCode, …) **without touching the relay, the broker, or the web viewer**.
+E2E-encrypted broker, so a phone or laptop can watch and drive that agent. This document records the
+legacy **per-conversation compatibility port** shared by the current harness paths
+(claude-behind-MITM, a plain `claude` in tmux, and OpenCode).
 
-The seam is the **`Session`** (`packages/cli/src/host/rc/session.ts`). A *driver* is the only new
-concept: an adapter that produces a `Session`, fills it with the agent's output in claude's
-canonical content-block shape, and feeds the agent the user input the relay delivers into that
-`Session`. Everything downstream of the `Session` is invariant.
+> **Scope:** each `Session` is one Claude-shaped compatibility chat, but the abstraction proposed in
+> this document was only partially realized. `run.ts` dispatches directly to three launch functions;
+> MITM can lazily create several `Session`s and has no `Driver` wrapper; OpenCode has its own driver
+> class; tmux exports a `Driver` façade but dispatch calls `runTmuxDriver` directly. `DriverFactory` is
+> exported but unused. The selected
+> [client-driven host runtime](client-driven-host-runtime.md) adds a host-wide native-engine adapter
+> above it. `Session` remains a legacy RC port during migration; it does not become the neutral schema.
+> In particular, Codex is one persistent multi-project app-server host, not another one-`Session`
+> `DriverName`.
+
+The common relay port is **`Session`** (`packages/cli/src/host/rc/session.ts`). Each current harness
+path produces one or more `Session`s, fills them with Claude-shaped output, and consumes the input the
+relay delivers. `HostRcRelay` and the web frame projection remain shared; harness launch/lifecycle is
+not yet unified behind the exported `Driver` interface.
 
 ---
 
 ## 1. Why `Session` is the seam (grounded in the code)
 
-`HostRcRelay` (`relay.ts`) is constructed with exactly four things and never learns how the agent
-runs:
+`HostRcRelay` (`relay.ts`) has four required transport/session inputs and never learns how the agent
+runs. Optional tracer, capability, harness, and attachment-directory fields configure the projection;
+they do not expose harness mechanics:
 
 ```ts
 new HostRcRelay({
@@ -36,11 +47,12 @@ new HostRcRelay({
   `session.pushControlRequest(...)`.
 
 So the relay is *already* a pure function of `(Session, BrokerClient)`. The MITM
-(`mitm.ts`) is the **reference driver** (three ship today: `mitm` / `tmux` / `opencode`): it serves
+(`mitm.ts`) is the **reference harness path** (three modes ship today: `mitm` / `tmux` / `opencode`): it serves
 claude's RC HTTP/SSE endpoints from a
 `RelayCore`, turning claude's `POST /worker/events` into `session.pushUpstream(payload)` and claude's
-`GET /worker/events/stream` into a `session.followDownstream(...)` SSE loop. A second driver replaces
-*that HTTP wiring* with a different capture/inject mechanism — and reuses the relay verbatim.
+`GET /worker/events/stream` into a `session.followDownstream(...)` SSE loop. The non-MITM paths
+replace *that HTTP wiring* with another capture/inject mechanism and reuse the relay verbatim. In the
+shipped code they are separate launch paths, not instances of one dispatcher interface.
 
 The decisive fact for non-MITM drivers: **claude's transcript JSONL
 (`~/.claude/projects/<slug(cwd)>/<sessionId>.jsonl`) `message.content` blocks are byte-identical to
@@ -49,7 +61,7 @@ names). A tmux driver tails that file and `pushUpstream`s it nearly verbatim —
 `parentToolUseID` → `parent_tool_use_id` for sub-agent nesting.
 
 ```
-            ┌──────────────── DRIVER (new, swappable) ─────────────────┐
+            ┌──────────── HARNESS PATH (implemented separately) ──────┐
  harness ──▶│ CAPTURE: native output → canonical payload                │──▶ session.pushUpstream()
  (claude /  │ INJECT:  session.followDownstream() → native input        │◀── session (downstream queue)
   tmux /    │ STATUS:  session.workerStatus = … ; session.wake()        │
@@ -64,11 +76,12 @@ names). A tmux driver tails that file and `pushUpstream`s it nearly verbatim —
 
 ---
 
-## 2. The `Driver` interface
+## 2. The partially used `Driver` interface
 
-A driver is a thin object with one job: run two pumps against a `Session` until a signal aborts.
-The relay (its own `serve()`) runs concurrently and owns all broker I/O; the driver owns all
-*harness* I/O. They communicate only through the `Session`.
+`driver.ts` exports a thin `Driver` contract for two pumps against one `Session`. Tmux and OpenCode
+implement it, but the current dispatcher calls their run helpers directly rather than instantiating
+them through `DriverFactory`; MITM has no `Driver` implementation. The useful shared contract is
+therefore the `Session`/capability/payload shape below, not a polymorphic dispatcher.
 
 ```ts
 // packages/cli/src/host/rc/driver.ts
@@ -90,6 +103,8 @@ export type DriverName = "mitm" | "tmux" | "opencode";
 export interface DriverContext {
   /** Args forwarded verbatim to the harness binary. */
   harnessArgs: string[];
+  /** Optional harness binary override used by child-spawning paths such as tmux. */
+  harnessBin?: string;
   /** This machine's identity (its bus + session keys). identity.identityId feeds HostRcRelay. */
   identity: Identity;
   /** The broker origin (`--rc-app` / RC_APP); its /api is the relay broker. */
@@ -145,9 +160,9 @@ export interface DriverCapabilities {
  *      control_request; apply an answer by observing the matching control_response in
  *      followDownstream. The relay's existing permission_request ⇄ permission round-trip does the
  *      broker side — no relay change.
- * It wires HostRcRelay(session), calls relay.announce(...) then relay.serve(signal) (which owns all
- * broker I/O AND the durable-cursor prepare()), runs its pumps concurrently, and tears the harness +
- * relay down on exit.
+ * It passes the session to bridgeSession(...), which starts relay.announce(...) fire-and-forget and
+ * relay.serve(signal) immediately (serve owns all broker I/O AND durable-cursor prepare()), runs its
+ * pumps concurrently, and tears the harness + relay down on exit.
  */
 export interface Driver {
   readonly capabilities: DriverCapabilities;
@@ -155,19 +170,20 @@ export interface Driver {
   run(signal: AbortSignal): Promise<number>;
 }
 
-/** Factory the dispatcher calls once per wrapper launch. */
+/** Exported factory type; the current dispatcher does not call it. */
 export type DriverFactory = (ctx: DriverContext) => Driver;
 ```
 
-### The MITM driver is a one-line adapter over the existing launch path
+### Historical MITM-adapter proposal — not implemented
 
 `runRcLaunch` (launch.ts) is exported and **directly unit-tested** (`launch.test.ts` constructs it
 with `{ claudeArgs, identity, brokerUrl, certsDir, spawnClaude, … }` and asserts the child env, the
-teardown, and a full broker round-trip). We therefore **do not rewrite its body**. The MITM driver
-is a wrapper that maps `DriverContext` onto `RcLaunchOptions` and calls it:
+teardown, and a full broker round-trip). The proposal was to wrap it in `mitmDriver`, but no
+`drivers/mitm-driver.ts` exists and current `run.ts` calls `runRcLaunchPath` directly. This retained
+sketch explains the intended adapter shape; it is not an implementation inventory:
 
 ```ts
-// packages/cli/src/host/rc/drivers/mitm-driver.ts  (new, ~25 lines)
+// proposed only — this file/function does not exist
 export function mitmDriver(ctx: DriverContext): Driver {
   return {
     capabilities: MITM_CAPABILITIES, // { structuredPermissions, status, attachments: true, controls: { interrupt:true, setModel:true, setMode:true, end:false } }
@@ -188,9 +204,9 @@ export function mitmDriver(ctx: DriverContext): Driver {
 }
 ```
 
-This keeps `launch.test.ts` green by construction (its surface is unchanged) and makes the seam a
-*pure addition*. A non-MITM driver implements `run()` directly, mirroring `runRcLaunch`'s
-`onSession` lifecycle:
+Had it been implemented, this would have kept `launch.test.ts`'s surface unchanged. All three shipped
+paths now use the shared `bridgeSession` helper. The non-MITM launch functions follow the broad
+lifecycle below:
 
 ```ts
 // shape every non-MITM driver follows (tmux shown):
@@ -199,23 +215,32 @@ const session = core.create({ title: ctx.title });
 session.pushInitialize();
 ctx.onSession?.(session);
 
-const relay = new HostRcRelay({
-  client: ctx.newClient(),
-  identityId: ctx.identity.identityId,
-  sessionId: session.id,
+const relays = new Set<Promise<void>>();
+const relayDone = bridgeSession({
   session,
-  ...(ctx.tracer ? { tracer: ctx.tracer } : {}),
+  capabilities,
+  harness,
+  newClient: ctx.newClient,
+  identityId: ctx.identity.identityId,
+  title: ctx.title,
+  cwd: ctx.cwd,
+  git: ctx.git,
+  signal: ac.signal,
+  relays,
+  tracer,
 });
-await relay.announce(ctx.title, ctx.cwd, ctx.git);
-const relayDone = relay.serve(signal).catch(() => {});
 
 // CAPTURE + INJECT + STATUS pumps run concurrently against `session` (see §4), then on exit:
-//   ac.abort(); await relayDone; core.closeAll(); <harness teardown>
+//   ac.abort(); session.close(); await relayDone; <harness teardown>
 ```
+
+`bridgeSession` constructs `HostRcRelay`, starts `announce(...)` as fire-and-forget, and starts
+`serve(...)` immediately. The announce is presence, not a readiness barrier; current OpenCode/tmux
+capability timing limitations are recorded in §8.
 
 ---
 
-## 3. The canonical content-block contract (every driver MUST emit this)
+## 3. The canonical content-block contract (every compatibility path must emit this)
 
 `mapUpstreamItems(ev)` (relay.ts) is the spec. A driver normalizes its harness output to the
 following shape and calls `session.pushUpstream(payload)`. **If the shape drifts, the relay silently
@@ -245,11 +270,16 @@ export interface UpstreamPayload {
    *  JSONL `parentToolUseID` is the tmux driver's only required rename.) */
   parent_tool_use_id?: string | null;
 
-  /** For "assistant" / "user": the message envelope holding the content blocks. */
+  /** For "assistant" / "user": the message envelope. Content is normally blocks, but a
+   *  driver-marked local prompt may use a plain string. */
   message?: {
     role?: "assistant" | "user" | string;
-    content: ContentBlock[];
+    content: ContentBlock[] | string;
   };
+
+  /** A non-MITM driver sets this only for a prompt observed from its local/native UI rather than
+   *  injected from the relay. The relay then surfaces that user text instead of dropping it. */
+  local_prompt?: boolean;
 
   /** For "result": the turn's result (string preferred; non-string is JSON-stringified by relay). */
   result?: string | Record<string, unknown>;
@@ -310,9 +340,10 @@ export interface ToolResultBlock {
   image, `SendUserFile` is the worker→viewer image path.
 - `system` events are surfaced **only** when `subtype` starts with `task_`; everything else
   (including the high-frequency `thinking_tokens` counter) is intentionally dropped.
-- A `user` event's **text is deliberately dropped** by the relay (only `tool_result` blocks are
-  relayed) — because the inbound pump already echoes every viewer prompt. A driver should still
-  pushUpstream user/tool_result events as-is; do not try to "fix" this by re-adding the text.
+- A `user` event's text is normally dropped because the inbound pump already echoes every viewer
+  prompt; `tool_result` blocks still relay. The deliberate exception is a non-MITM driver's
+  `local_prompt:true` event: OpenCode and tmux use an injected-text ledger to mark only prompts
+  observed from their local/native UI, and the relay surfaces that string text once.
 
 ---
 
@@ -352,6 +383,10 @@ for await (const ev of session.followDownstream(gen, () => signal.aborted)) {
 
 Note: `initialize` is a `control_request` queued first by `pushInitialize()`; a driver typically
 ignores it (it has no harness analogue) but must let it pass through the stream.
+Non-MITM drivers acknowledge each event with `session.ack(ev.eventId)` only after its native handling
+has completed successfully, including handled no-ops such as `initialize`. Without that ACK, a later
+`claimWorkerStream()` replays the event. The current OpenCode pump keeps draining after a failed event,
+so replay requires a new claimant; an ordinary OpenCode SSE reconnect does not create one.
 
 ---
 
@@ -361,17 +396,21 @@ ignores it (it has no harness analogue) but must let it pass through the stream.
   in, the `permission_resolved` log frame, AskUserQuestion's `questions` echo, the `q.map` fix) is
   **entirely in the relay**. A driver participates only at the harness boundary: to *raise* a gate it
   `pushUpstream`s a `can_use_tool` control_request; to *apply* an answer it observes the
-  `control_response` in `followDownstream`. All three drivers mirror gates by default
-  (`structuredPermissions: true`): MITM via claude's native RC, **tmux** via an injected **PreToolUse
-  hook**, **opencode** via the **session permission API** (PATCH an ask-all rule ↔ SSE
-  `permission.asked`). Each opts out (flipping `structuredPermissions` to `false`), but the opt-outs are
-  NOT identical: `--rc-tmux-skip-permissions` restores hands-off auto-approve
+  `control_response` in `followDownstream`. All three paths are configured to mirror gates by default:
+  MITM via Claude's native RC, **tmux** via an injected **PreToolUse hook**, and **OpenCode** via the
+  session permission API (PATCH an ask-all rule ↔ SSE `permission.asked`). The opt-outs are not
+  identical: `--rc-tmux-skip-permissions` restores hands-off auto-approve
   (`--dangerously-skip-permissions`), while `--rc-oc-skip-permissions` only skips the ask-PATCH and leaves
-  opencode's **own** session permission config in place (auto-run unless that config already asks).
-- **Attachments.** `relay.#handleAttachment` decrypts the viewer's bytes, writes them under
-  `attachmentsDir`, and **injects a normal `user` prompt** (`@"<path>" …` / a Read directive). The
-  driver never sees an `attachment` frame — only the resulting downstream `user` event. So
-  attachments "just work" for any driver that supports `user` injection; no driver code is needed.
+  OpenCode's own session permission config in place (auto-run unless that config already asks).
+  Current announcements are optimistic: OpenCode continues if its best-effort PATCH fails, and tmux
+  can disable its hook after an unparseable user settings file, after both have already announced
+  `structuredPermissions:true`. This is a known capability-advertisement bug, not a guarantee.
+- **Attachments.** `relay.#handleAttachmentPayload` decrypts the viewer's bytes, writes them under
+  `attachmentsDir`, and **injects a normal `user` prompt** containing `@"<path>"` references. The
+  driver never sees an `attachment` frame — only the resulting downstream `user` event. This is
+  proven for Claude MITM/tmux. OpenCode currently receives the Claude-specific `@"<path>"` text via
+  `prompt_async`; native OpenCode file-part handling is not implemented, so its current
+  `attachments:true` announcement is also optimistic.
 
 This is the central invariant: **the relay handles the broker-facing protocol; the driver handles
 the harness-facing protocol; they meet only at the `Session`.**
@@ -380,21 +419,18 @@ the harness-facing protocol; they meet only at the `Session`.**
 
 ## 6. `--rc-driver` wiring
 
-A new value flag selects the driver; default `mitm` preserves today's behavior exactly.
+The shipped value flag selects a launch path; default `mitm` preserves the original behavior.
 
-- **`args.ts`** — add `"rc-driver": "value"` to `RC_FLAGS`.
-- **`run.ts`** — in `runRcLaunchPath`, read the driver name (`--rc-driver`, else `RC_DRIVER`, else
-  `"mitm"`), validate it against `{mitm, tmux, opencode}`, build the `DriverContext`, and dispatch:
-  - `mitm` (and any default) → today's path (`runRcLaunch`), **unchanged**.
-  - `tmux` → `runTmuxDriver(ctx)`.
-  - `opencode` → `runOpenCodeDriver(ctx)`.
-  Each returns the same exit-code contract. The MITM path stays the literal call we have now, so the
-  default route is byte-for-byte the current behavior.
+- **`args.ts`** contains `"rc-driver": "value"` in `RC_FLAGS`.
+- **`run.ts`** reads `--rc-driver`, then `RC_DRIVER`, then defaults to `"mitm"` and branches directly:
+  - `mitm` → `runRcLaunchPath(...)` → `runRcLaunch(...)`;
+  - `tmux` → `runTmuxDriverPath(...)` → `runTmuxDriver(ctx, ...)`;
+  - `opencode` → `runOpencodeDriverPath(...)` → `runOpencodeDriver(ctx, ...)`.
+  Only the non-MITM branches build the common `DriverContext`; none dispatches through
+  `DriverFactory`.
 
-Validation note: `mitm`/`opencode` use the MITM-or-network path that needs `--rc-app`; `tmux` is
-provider-agnostic and needs no MITM, but still needs `--rc-app` for the broker. Keep the existing
-"`--rc-…` needs `--rc-app`" guard; just add an "unknown `--rc-driver=<x>`" error (exit 2) listing the
-valid names.
+All three still need `--rc-app` for the broker. The current guard warns when RC flags appear without
+it, and an unknown `--rc-driver=<x>` returns exit 2 with the valid names.
 
 ```
 remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
@@ -403,27 +439,27 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 
 ---
 
-## 7. File-by-file change list
+## 7. Current implementation inventory
 
-### New
-- `packages/cli/src/host/rc/driver.ts` — the `Driver` / `DriverContext` / `DriverCapabilities` /
-  `UpstreamPayload` / `ContentBlock` types + `DriverName`. Pure contract, no runtime behavior.
-- `packages/cli/src/host/rc/drivers/mitm-driver.ts` — `mitmDriver(ctx)`: a thin adapter mapping
-  `DriverContext` → `RcLaunchOptions` → `runRcLaunch`. Declares full capabilities.
-- `packages/cli/src/host/rc/tmux/{driver,tmuxctl,transcript,inject}.ts` + a `runTmuxDriver(ctx)`
-  entry — Track B (the tmux track in `docs/future-directions.md`). Spawns plain `claude` in tmux
-  (no MITM, no HTTPS_PROXY), tails the transcript JSONL → `pushUpstream`, injects via send-keys,
-  debounced status.
-- `packages/cli/src/host/rc/opencode/driver.ts` — Track C driver (SHIPPED): bridges an `opencode serve`
-  HTTP+SSE session; declares `controls.setModel:false` (its set_model needs a providerID/modelID, not the
-  viewer's aliases), so the viewer disables the model switcher (#149).
+### Present
 
-### Modified
-- `packages/cli/src/args.ts` — add `"rc-driver": "value"` to `RC_FLAGS`.
-- `packages/cli/src/run.ts` — read/validate `--rc-driver`, build `DriverContext`, dispatch to the
-  selected driver. The `mitm` branch calls the existing `runRcLaunch` unchanged.
-- `packages/cli/src/host/rc/index.ts` — re-export the new `driver.ts` types (so external/test code
-  and the drivers import from one place).
+- `packages/cli/src/host/rc/driver.ts` — the exported `Driver` / `DriverContext` /
+  `DriverCapabilities` / `UpstreamPayload` / `ContentBlock` types + `DriverName`. It is a partial
+  contract, not the dispatch mechanism.
+- `packages/cli/src/host/rc/tmux/{driver,tmuxctl,transcript,inject}.ts` — `runTmuxDriver(ctx)` spawns
+  plain `claude` in tmux, tails transcript JSONL, injects via tmux, and reports heuristic status. It
+  also exports the currently unused `tmuxDriver(ctx)` façade.
+- `packages/cli/src/host/rc/opencode/driver.ts` — `runOpencodeDriver(ctx)` bridges an `opencode serve`
+  HTTP+SSE session by constructing the exported-interface implementation `OpencodeDriver`.
+- `packages/cli/src/host/rc/{launch,mitm}.ts` — the standalone MITM launch path. There is no
+  `drivers/mitm-driver.ts` or `mitmDriver`.
+
+### Dispatcher
+
+- `packages/cli/src/args.ts` declares `"rc-driver": "value"`.
+- `packages/cli/src/run.ts` validates and directly dispatches each launch path; it builds
+  `DriverContext` only for OpenCode and tmux.
+- `packages/cli/src/host/rc/index.ts` re-exports the driver types and tmux façade.
 
 ### Explicitly UNCHANGED (and why each is safe)
 - `packages/cli/src/host/rc/session.ts` — **the seam itself.** Drivers only *use* its public methods
@@ -434,17 +470,16 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   driver emits the **same** `UpstreamPayload` and the broker side is identical, `HostRcRelay` and
   `mapUpstreamItems` need no driver awareness. Its tests (`relay.test.ts`) feed a mock `Session`,
   which is exactly what a driver produces.
-- `packages/cli/src/host/rc/launch.ts` — `runRcLaunch` keeps its exact signature; it *becomes* the
-  MITM driver's `run()` body via the `mitmDriver` adapter. `launch.test.ts` (which calls
-  `runRcLaunch` directly and asserts env-scrub/teardown/round-trip) stays green by construction.
-- `packages/cli/src/host/rc/mitm.ts` — only the MITM driver uses it; other drivers don't import it.
+- `packages/cli/src/host/rc/launch.ts` — `runRcLaunch` is still called directly by the MITM branch.
+  `launch.test.ts` calls it directly and asserts env-scrub/teardown/round-trip.
+- `packages/cli/src/host/rc/mitm.ts` — only the MITM launch path uses it; other paths don't import it.
 - `packages/cli/src/host/rc/certs.ts`, `gitinfo.ts` — MITM/announce helpers, unaffected.
 - `packages/cli/src/broker/client.ts` — the transport contract is fixed; drivers go *through* the
   relay, never around it.
 - `apps/web/lib/broker/**` (router, backends: vercel/local/sqlite), and **all of the web
   viewer** — they consume sealed frames keyed by `(identity, session)`. Since the frame stream is a
-  pure function of the canonical `UpstreamPayload` (which every driver matches), nothing downstream
-  can tell which driver produced the session.
+  pure function of the canonical `UpstreamPayload` (which every compatibility path matches), nothing
+  downstream can tell which path produced the session.
 - `packages/cli/src/security/provider.ts`, `packages/cli/src/trace.ts` — orthogonal (sealing,
   diagnostics).
 
@@ -454,50 +489,60 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 
 1. **Canonical-shape drift.** A driver emitting a slightly-off block (`tool_use` without `name`, a
    `null` content entry, a renamed field) is *silently dropped* by `mapUpstreamItems`. Mitigation:
-   the `UpstreamPayload`/`ContentBlock` types live in `driver.ts` and every driver constructs through
-   them; contract tests tail a **real** claude 2.1.x transcript and assert the emitted frames match
-   the MITM path's frames for the same conversation.
-2. **`runRcLaunch` refactor regressing the MITM path.** Mitigation: do **not** rewrite
-   `runRcLaunch`; wrap it. `launch.test.ts` is the guard and its surface is untouched.
-3. **Injection ordering / send-keys races (tmux).** `followDownstream` is one stream of
-   user + control verbs; a paste+Enter has a ~40ms settle, so a burst of verbs can race. Mitigation:
-   per-driver serialization of the inject loop (process one downstream event fully before the next).
-   tmux maps `interrupt` (→ ESC) and `set_model` (→ `/model <id>` inject); `set_mode`/`end` have no
-   faithful pane analogue (the viewer disables those controls, #149), so they safely no-op.
-4. **Permission fidelity on non-MITM drivers.** SHIPPED (was deferred): both non-MITM drivers now
-   mirror permissions by default. **tmux** injects a **PreToolUse hook** that blocks each tool until the
+   the `UpstreamPayload`/`ContentBlock` types live in `driver.ts`; current transcript tests use reduced
+   captured JSONL fixtures and translation cases. A live transcript-versus-MITM parity test remains a
+   proposed stronger gate.
+2. **`runRcLaunch` changes regressing the MITM path.** Mitigation: keep its direct tests as the guard.
+   The historical `mitmDriver` wrapper proposal was not implemented.
+3. **Injection ambiguity / send-keys failures (tmux).** `runInjectPump` serializes the downstream
+   stream, so a burst cannot interleave prompts. It retries load+paste as one phase, retries Enter
+   separately so a post-paste failure cannot double-paste, uses a length-scaled settle (40 ms base,
+   capped at 1 s), and ACKs prompt/key actions only after they succeed. Tmux command success is still
+   not a structural receipt from Claude. It maps `interrupt` (→ ESC) and `set_model` (→ `/model <id>`
+   inject); `set_mode`/`end` have no faithful pane analogue (the viewer disables those controls,
+   #149), so they safely no-op. Permission-decision persistence is a separate callback; its current
+   logging-only write-failure behavior is not a durable delivery receipt.
+4. **Permission fidelity on non-MITM drivers.** Both non-MITM drivers attempt mirroring by default.
+   **tmux** injects a **PreToolUse hook** that blocks each tool until the
    viewer answers (and pre-seeds claude's folder-trust bit so dropping `--dangerously-skip-permissions`
    doesn't hang a fresh cwd on the startup trust gate); **opencode** PATCHes an ask-all rule on the
    session and answers each SSE `permission.asked`. Opt out with `--rc-tmux-skip-permissions` (→
    `--dangerously-skip-permissions` auto-approve) or `--rc-oc-skip-permissions` (skip the ask-PATCH;
-   opencode keeps its own session permission config) — both flip `structuredPermissions: false`.
+   opencode keeps its own session permission config). Current code announces capabilities before these
+   setup results are known, so a setup failure can leave `structuredPermissions:true` falsely
+   advertised. The host-runtime registration lifecycle must announce/update actual post-setup
+   capabilities before accepting remote controls.
 5. **Status accuracy.** Without ground truth (the MITM reads claude's `PUT /worker` status), tmux
-   infers `running`/`idle` from a transcript-append debounce, which lags a long "think". Mitigation:
-   `capabilities.status = true` only where ground truth exists; document the heuristic; refine later
-   with end-of-turn `result` frames or hooks.
+   infers `running`/`idle` from a transcript-append debounce, which lags a long "think". It currently
+   advertises `status:true` despite the interface saying that bit means real transitions. Treat that
+   as a known overclaim; the new capability model must distinguish heuristic status or advertise it
+   false until a stronger signal exists.
 6. **Durable-restart cursors.** The relay's `serve()` calls `prepare()` to sample broker cursors
-   before pumping; a driver must call `relay.serve(signal)` (not hand-roll the pumps) so this
-   fail-closed path is preserved on durable backends.
-7. **One driver per launch.** The design is single-driver-per-wrapper-process (RelayCore is
-   per-launch). Running two harnesses = two wrapper processes. Documented, not a goal.
+   before pumping; a driver must call `relay.serve(signal)` (not hand-roll the pumps). The sampled
+   floor prevents replay of older inbound frames but can skip an unprocessed prompt that arrived
+   before the sample; it is duplicate-prevention with a documented loss window, not fail-closed
+   command recovery.
+7. **Launch cardinality.** Tmux and OpenCode launch one wrapper `Session`; one MITM launch can accept
+   several intercepted Claude RC sessions. The dispatcher still selects one harness mode per wrapper
+   process.
 
 ---
 
 ## 9. Summary
 
-The `Session` is the seam. A `Driver` is the only new abstraction: it produces a `Session`,
-**captures** harness output into the canonical content-block envelope (`pushUpstream`), **injects**
-the relay's downstream user/control events into the harness (`followDownstream`), reports **status**
-(`workerStatus` + `wake`), and lets the relay own **permissions + attachments** end-to-end. With
-`--rc-driver={mitm|tmux|opencode}` (default `mitm`), the broker router/backends and the per-frame
-transcript contract remain **completely unchanged** — they're already pure functions of
-`(Session, BrokerClient)` and the canonical frame shape. The one capability-aware seam (#149): a driver
-declares `DriverCapabilities`, the relay rides them on `session_announce`, and the viewer disables +
-labels the controls a driver can't faithfully service (so a permission-mode / model "✓" never lies).
+`Session` is the current shared relay port, not a complete host abstraction. Each harness path
+**captures** output into the canonical content-block envelope (`pushUpstream`), **injects** downstream
+user/control events (`followDownstream` or the native RC server), reports status where possible, and
+lets the relay own broker-side permissions + attachments. `run.ts` directly selects
+`--rc-driver={mitm|tmux|opencode}`; the exported `Driver`/`DriverFactory` pair does not unify that
+dispatch. The capability-aware part is implemented: each path supplies `DriverCapabilities`, the relay
+rides them on `session_announce`, and the viewer disables/labels declared unsupported controls.
+Because OpenCode/tmux currently announce before setup is fully known, §8 records cases where those
+declarations can still overstate support.
 
-Alongside capabilities, each driver declares a `HarnessDescriptor` — `{ agent: "claude-code" |
-"opencode"; mode: "rc" | "tmux" | "opencode" }` (the consts `MITM_HARNESS` / `TMUX_HARNESS` /
-`OPENCODE_HARNESS`) — which the relay also rides on every `session_announce` (#164). The viewer labels
-each row in the session list from it (**Claude Code · RC** / **Claude Code · TX** / **opencode**) so the
-three harnesses don't look identical; a legacy host that omits it is treated as the MITM harness
-(native-RC Claude Code, the only pre-#164 driver).
+Alongside capabilities, each harness path supplies a `HarnessDescriptor` — `{ agent:
+"claude-code" | "opencode"; mode: "rc" | "tmux" | "opencode" }` (the consts `MITM_HARNESS` /
+`TMUX_HARNESS` / `OPENCODE_HARNESS`) — which the relay rides on every `session_announce` (#164).
+The viewer labels each row in the session list from it (**Claude Code · RC** / **Claude Code · TX**
+/ **opencode**) so the three harnesses don't look identical; a legacy host that omits it is treated
+as the MITM harness (native-RC Claude Code, the only pre-#164 path).

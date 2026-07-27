@@ -2,11 +2,18 @@
 
 `remote-claw` bridges a coding agent to an E2E-encrypted broker so a phone or laptop can watch and
 drive it. The **default** driver (`mitm`) runs the real `claude --remote-control` behind a local MITM
-and intercepts claude's RC endpoints. That path is **Anthropic-API-only** — native Remote Control is
-disabled under Bedrock / Vertex / Foundry. The **tmux driver** removes that limit: it runs a *plain*
-`claude` in a detached tmux pane (no `HTTPS_PROXY`, no `NODE_EXTRA_CA_CERTS`), so claude talks to
-whatever provider it is configured for, and we bridge the session by **tailing claude's local
-transcript JSONL** (capture) and **typing into the pane via `send-keys`** (inject).
+and intercepts claude's RC endpoints. Native Remote Control is disabled when Claude itself is
+configured directly for Bedrock / Vertex / Foundry (the MITM path separately has a synthesized
+`--rc-inference=bedrock` mode). The **tmux driver** runs a *plain* `claude` in a detached tmux pane and
+adds no remote-claw proxy or CA; user-supplied proxy/CA variables are preserved. Claude therefore
+talks to whichever provider it is configured for, while remote-claw bridges the session by **tailing
+claude's local transcript JSONL** (capture) and **typing into the pane via `send-keys`** (inject).
+
+> **Scope:** this document describes the shipped compatibility driver. In the selected
+> [client-driven host runtime](client-driven-host-runtime.md), tmux remains a lower-fidelity control
+> adapter but composes with the wrapped engine's private provider façade and network fence. A shared
+> coordinator-ordered chat also makes the raw pane read-only; a directly writable/provider-connected
+> pane is a separate compatibility/debug mode, not the release target.
 
 The decisive fact (verified against real transcripts, claude 2.1.63–2.1.177): the
 `message.content` blocks in `~/.claude/projects/<slug(cwd)>/<sessionId>.jsonl` are **byte-identical**
@@ -20,11 +27,11 @@ to what the relay's `mapUpstreamItems` already destructures. So the tmux driver 
 `HostRcRelay` (`relay.ts`) is a pure function of `(Session, BrokerClient)`: it never learns how the
 agent runs. `relay.serve(signal)` runs two pumps — OUTBOUND (`session.followUpstream` → seal → POST)
 and INBOUND (broker frames → `session.pushUserInput` / `pushControlResponse` / `pushControlRequest`).
-The MITM is just *one driver* that fills the `Session` from claude's RC HTTP/SSE. The tmux driver
-fills the **same** `Session` from a different source:
+The MITM harness path fills the `Session` from Claude's RC HTTP/SSE. The tmux driver fills the
+**same** `Session` from a different source:
 
 ```
-            ┌──────────────── tmux DRIVER (new) ───────────────────────┐
+            ┌────────────────────── tmux DRIVER ───────────────────────┐
  plain      │ CAPTURE: tail <sessionId>.jsonl → transcriptToPayload()   │──▶ session.pushUpstream()
  `claude`   │ INJECT:  session.followDownstream() → set-buffer+paste+↵  │◀── session (downstream queue)
  in a tmux  │ STATUS:  append-debounce → session.workerStatus + wake()  │
@@ -37,21 +44,33 @@ fills the **same** `Session` from a different source:
             └──────────────────────────────────────────────────────────┘
 ```
 
-The driver mirrors `launch.ts`'s `onSession` lifecycle exactly, minus the MITM:
+The driver mirrors `launch.ts`'s `Session` registration and shared broker bridge, minus the MITM:
 
 ```ts
 const core = new RelayCore();
 const s = core.create({ title: ctx.title });
 s.pushInitialize();              // guarantees `initialize` is the first downstream event
 ctx.onSession?.(s);              // test parity with launch.ts
-const relay = new HostRcRelay({
-  client: ctx.newClient(), identityId: ctx.identity.identityId, sessionId: s.id, session: s,
+const relays = new Set<Promise<void>>();
+const served = bridgeSession({
+  session: s,
+  capabilities: tmuxCapabilities(mirror),
+  harness: TMUX_HARNESS,
+  newClient: ctx.newClient,
+  identityId: ctx.identity.identityId,
+  title: ctx.title,
+  cwd: ctx.cwd,
+  git: ctx.git,
+  signal: ac.signal,
+  relays,
+  tracer,
 });
-void relay.announce(ctx.title, ctx.cwd, ctx.git).catch(() => {});
-const served = relay.serve(ac.signal).catch(() => {});   // owns ALL broker I/O + prepare()
 // … spawn tmux, run CAPTURE + INJECT + STATUS pumps against `s` …
-// finally: ac.abort(); core.closeAll(); await served; tmux.killSession();
+// finally: ac.abort(); s.close(); await served; tmux.killSession();
 ```
+
+`bridgeSession` starts presence announcement fire-and-forget and starts `relay.serve(...)`
+immediately; the announcement is not a startup/readiness barrier.
 
 ---
 
@@ -70,8 +89,9 @@ tmux new-session -d -s rc-<sessionId> -x 200 -y 50 \
   so every tool waits for a viewer allow/deny (§2.5). The opt-out `--rc-tmux-skip-permissions`
   (or `RC_TMUX_SKIP_PERMISSIONS` truthy) drops the hook and restores
   `claude --dangerously-skip-permissions` (hands-off auto-approve).
-- **No `HTTPS_PROXY` / `NODE_EXTRA_CA_CERTS`** — the whole point. claude reaches its own provider
-  directly, so Bedrock/Vertex work.
+- **No remote-claw `HTTPS_PROXY` / `NODE_EXTRA_CA_CERTS` injection.** The driver preserves proxy/CA
+  variables the user already supplied, but removes stale values inherited only from a pre-existing
+  tmux server. Claude reaches its configured provider directly, so Bedrock/Vertex work.
 - **Same env scrub as `launch.ts`/`trace-run.ts`** (the stub gotcha): strip `CLAUDE_CODE_CHILD_SESSION`,
   `CLAUDE_CODE_SESSION_ID`, `REMOTE_CLAW_SECRET_FILE`, `VERCEL_AUTOMATION_BYPASS_SECRET` from the
   child env (always, via `env -u`, so a stale tmux-server value can't leak). If
@@ -80,21 +100,24 @@ tmux new-session -d -s rc-<sessionId> -x 200 -y 50 \
   coherent (passed through when the wrapper sets it, else `env -u`'d) so the pane reads the **same**
   `.claude.json` the driver pre-seeds folder-trust into (§2.5).
 - Print `tmux attach -t rc-<sessionId>` so the local user can share the live pane.
-- `tmuxctl.ts` shells out with `execFile("tmux", argv)` (the `gitinfo.ts` pattern) — **no shell, argv
-  array, no injection surface, no new dependency.**
+- `tmuxctl.ts` invokes the tmux control binary with `execFile("tmux", argv)` (the `gitinfo.ts`
+  pattern). Prompt text remains an argv element to `set-buffer`, so it is inert data. The pane's
+  startup command is one shell-parsed tmux argument built with `shellQuoteCommand`.
 
 ### 2.2 Capture — tail the transcript JSONL → `pushUpstream`
 
-claude writes a full transcript to `~/.claude/projects/<slug(cwd)>/<sessionId>.jsonl`, where the
-slug is **cwd with every `/` and `.` replaced by `-`** (verified against the real projects dir, e.g.
-`/home/ubuntu/remote-claw` → `-home-ubuntu-remote-claw`). The file is created lazily on the first
-turn; `findNewestTranscript(dir, spawnedAt)` polls for the newest `*.jsonl` whose mtime is at/after
-spawn.
+Claude writes a full transcript under
+`~/.claude/projects/<slug(cwd)>/<sessionId>.jsonl`, where the ordinary slug is **cwd with every `/`
+and `.` replaced by `-`**. The file is created lazily on the first turn. By default the injected
+SessionStart hook reports the exact transcript path and follows rotations. A fresh driver-owned
+session is also pinned with a v4 UUID and can be found by exact ID; only a user-owned picker session
+whose ID is unknown falls back to `findNewestTranscript` after the hook grace period (§7.1).
 
-`tailTranscript` is an append-only **byte-offset reader**: track the read offset, `read()` to EOF on
-each tick, split on `\n`, **buffer the trailing partial line** across reads, emit each complete line,
-and reset to offset 0 if the file shrinks (truncation/rotation). `fs.watch` drives it with a `pollMs`
-fallback (default 120ms).
+`TranscriptTailer.poll()` is an append-only **byte-offset reader**: it opens and stats the same file
+handle, reads to EOF, splits on newline bytes, buffers a trailing partial line and split multibyte
+sequence across reads, and resets to offset 0 if the file shrinks or its inode identity changes.
+The capture loop calls it on the explicit `pollMs` cadence (default 120 ms); there is no `fs.watch`
+path.
 
 Each complete line goes through the **one reshape**, `transcriptToPayload(line)`:
 
@@ -151,32 +174,58 @@ for await (const ev of s.followDownstream(gen, () => signal.aborted)) {
   if (ev === null) continue;                     // heartbeat tick
   if (ev.eventType === "user") {
     const text = ev.payload.message.content;      // pushUserInput sets content: STRING
-    await tmux.setBuffer(text);                   // tmux set-buffer -b rcin -- <text>  (argv-safe)
-    await tmux.pasteBuffer();                     // tmux paste-buffer -d -p -b rcin -t <pane>  (bracketed)
-    await sleep(40);                              // settle, so Enter isn't swallowed by the paste
-    await tmux.sendEnter();                       // tmux send-keys -t <pane> Enter   (what submits)
+    const pasted = await retryUntil(
+      () => loadAndPaste(tmux, pane, text, buffer), // set-buffer + bracketed paste as one retry phase
+      signal,
+      sleep,
+      reportPasteFailure,
+    );
+    if (!pasted) continue;
+    const submitted = await retryUntil(
+      () => submitPrompt(tmux, pane, text, sleep),  // length-scaled settle + Enter; never re-pastes
+      signal,
+      sleep,
+      reportSubmitFailure,
+    );
+    if (submitted) {
+      s.ack(ev.eventId);
+      recordInjected(text);                         // suppress this prompt's transcript echo
+    }
   } else if (ev.eventType === "control_request") {
-    if (ev.payload.request.subtype === "interrupt") await tmux.sendKeys("Escape");
-    // set_model → a `/model <model>` inject (B2). set_permission_mode / end_session: no faithful TUI analogue.
+    // interrupt retries Escape; set_model uses the same two-phase path for `/model <id>`.
+    // initialize, set_permission_mode, and end_session have no pane action but are still ACKed.
+  } else if (ev.eventType === "control_response") {
+    // With permission mirroring on, persist the hook decision, then ACK.
   }
-  // initialize: no pane analogue. A viewer permission ANSWER is applied by the perm pump (it writes the
-  // decision file the injected PreToolUse hook is polling), not by this inject loop — see §2.5.
 }
 ```
 
 `set-buffer` + **bracketed** `paste-buffer` (`-p`) handles multiline / backticks / special chars
-without a premature submit; the **separate** `send-keys Enter` is what actually submits. (This was
-validated against real claude in the design sessions.)
+without a premature submit; the **separate** `send-keys Enter` is what actually submits.
+`settleMs(text)` scales from a 40 ms base with prompt length and caps at 1 s. The paste phase and
+submit phase retry independently until success or abort, so an Enter failure never double-pastes.
+Prompt/key events are ACKed only after their tmux action succeeds; unsupported/no-op controls are
+ACKed immediately. A permission response is ACKed after its decision callback returns. The current
+callback logs and swallows a decision-file write failure, so that path is not a durable delivery
+receipt even though it prevents a reclaimed stream from replaying the response.
 
 ### 2.4 Status — a quiet-timer debounce
 
-There are no `result` lines in interactive mode, so presence is inferred from transcript activity:
+There are no native `result` lines in interactive mode, so presence is inferred from transcript
+activity:
+
 - A new transcript line ⇒ `s.workerStatus = "running"` + `s.wake()`.
-- ~1s after the last append, if no `tool_use` is open and the last block was text (turn finished) ⇒
-  `s.workerStatus = "idle"` + `s.wake()`.
+- ~1s after the last append, if no `tool_use` is open ⇒ `s.workerStatus = "idle"` + `s.wake()`.
+- An orphaned open tool is cleared by a new top-level user turn or a 120 s hard-idle fallback.
 
 `phaseFor` (relay.ts) maps `running → thinking`, everything else → `idle`, so these are exactly the
 values the announce presence already understands — the viewer's thinking/idle indicator just works.
+This is a heuristic, not ground-truth turn state. Current code nevertheless announces `status:true`,
+which overstates the interface's “real transitions” meaning; the host-runtime capability pass must
+advertise heuristic status separately or set it false.
+
+Separately, a top-level assistant line with a terminal `stop_reason` makes the driver emit one
+synthetic empty `result` frame after the assistant content, giving the viewer a turn separator.
 
 ### 2.5 Permissions — mirrored to the viewer (B2, DEFAULT ON)
 
@@ -189,6 +238,12 @@ raises a `can_use_tool` gate through the relay's **existing** `permission_reques
 round-trip (no relay change), and on the viewer's answer writes the decision file the helper is waiting
 on. The decision is **fail-closed**: anything but an explicit `allow` is treated as deny. With mirroring
 on, `capabilities.structuredPermissions = true`.
+
+One current setup edge breaks that claim: the relay announces before the combined settings are parsed.
+If the user's `--settings` cannot be parsed/merged, the driver disables the hook and falls back to
+`--dangerously-skip-permissions`, but the already-published capability remains true. The
+host-runtime registration phase must publish/update the actual post-setup value before remote
+controls are enabled.
 
 **AskUserQuestion answers (#42).** A `can_use_tool` gate whose `tool_name` is `AskUserQuestion` is
 answered with *choices*, not a bare allow/deny: the relay echoes the stashed `questions` and builds
@@ -216,10 +271,11 @@ old v1 trusted single-user posture, now opt-in.
 
 ### 2.6 Attachments — viewer→pane is free; local-paste is NOT captured
 
-The **viewer→pane** direction is relay-owned and works for free: `relay.#handleAttachment` decrypts the
-viewer's bytes, writes the file, and injects a normal `user` prompt with a `Read` directive. The driver
-never sees an `attachment` frame — only the resulting downstream `user` event — so it works for any
-driver that supports `user` injection. No tmux code needed; `capabilities.attachments = true`.
+The **viewer→pane** direction is relay-owned and works for free:
+`relay.#handleAttachmentPayload` decrypts the viewer's bytes, writes each valid image, and injects a
+normal `user` prompt containing `@"<path>"` references. The driver never sees an `attachment` frame —
+only the resulting downstream `user` event — so Claude in tmux handles it without tmux-specific
+attachment code; `capabilities.attachments = true`.
 
 **Caveat (the other direction — confirmed against real transcripts):** an image the human pastes
 **locally** into the tmux pane is written as a top-level `type:"attachment"` line whose content is an
@@ -234,14 +290,15 @@ covers the inbound (viewer) path, not the local-paste outbound path. Surfacing l
 
 ### New
 - `packages/cli/src/host/rc/tmux/tmuxctl.ts` — `TmuxCtl` over `execFile("tmux", …)` with an injectable
-  `TmuxExec`: `newSession`, `hasSession`, `setBuffer`, `pasteBuffer`, `sendEnter`, `sendKeys`,
-  `killSession`. No new dependency.
+  `TmuxExec`: `version`, `newSession`, `hasSession`, `sessionGone`, `setBuffer`, `pasteBuffer`,
+  `sendKeys`, `killSession`. No new dependency.
 - `packages/cli/src/host/rc/tmux/transcript.ts` — `projectSlug` / `projectDir` /
-  `findNewestTranscript` / `tailTranscript` (byte-offset, partial-line buffering, truncation reset) /
-  `transcriptToPayload` (the one reshape).
+  `findTranscriptById` / `findNewestTranscript` / `TranscriptTailer` (polling byte-offset reader,
+  partial-byte/line buffering, truncation and inode-rotation reset) / `transcriptToPayload` (the one
+  reshape) / local-prompt and sub-agent helpers.
 - `packages/cli/src/host/rc/tmux/inject.ts` — `runInjectPump` (serialized drain of
-  `followDownstream`), `injectUserText` (set-buffer → paste → settle → Enter), `downstreamUserText`,
-  interrupt→Escape mapping.
+  `followDownstream`, phase-aware retries, post-success ACK), `injectUserText` (set-buffer → paste →
+  length-scaled settle → Enter), `downstreamUserText`, interrupt→Escape and set-model mappings.
 - `packages/cli/src/host/rc/tmux/status.ts` — `StatusTracker` (append-debounce, open-tool suppression,
   injectable clock/timer).
 - `packages/cli/src/host/rc/tmux/driver.ts` — `runTmuxDriver(ctx)` / `tmuxDriver(ctx)`: the lifecycle
@@ -261,9 +318,10 @@ covers the inbound (viewer) path, not the local-paste outbound path. Surfacing l
 
 ### Modified
 - `packages/cli/src/args.ts` — add `"rc-driver": "value"` to `RC_FLAGS`.
-- `packages/cli/src/run.ts` — allow `--rc-driver` past the stray-flag guard; in `runRcLaunchPath`
-  read/validate the driver (`--rc-driver` → `RC_DRIVER` → `"mitm"`), build a `DriverContext`, dispatch.
-  **The `mitm` branch is the existing `runRcLaunch` call, unchanged.**
+- `packages/cli/src/run.ts` — allow `--rc-driver` past the stray-flag guard; the top-level RC branch
+  reads/validates `--rc-driver` → `RC_DRIVER` → `"mitm"` and dispatches directly to
+  `runRcLaunchPath`, `runTmuxDriverPath`, or `runOpencodeDriverPath`. The tmux path builds its
+  `DriverContext`; **the `mitm` branch still calls the existing `runRcLaunch` path.**
 - `packages/cli/src/host/rc/index.ts` — re-export the contract types + `runTmuxDriver` (and the
   transcript helpers for tests).
 
@@ -272,8 +330,8 @@ covers the inbound (viewer) path, not the local-paste outbound path. Surfacing l
 - `host/rc/relay.ts` — pure function of `(Session, BrokerClient)`; every driver emits the same
   `UpstreamPayload`, so `mapUpstreamItems` needs no driver awareness. `relay.test.ts` feeds a mock
   Session — exactly what the driver produces.
-- `host/rc/launch.ts` — `runRcLaunch` keeps its exact signature; it IS the mitm driver. `launch.test.ts`
-  is green by construction.
+- `host/rc/launch.ts` — `runRcLaunch` keeps its exact signature and remains the standalone MITM
+  harness path. `launch.test.ts` is green by construction.
 - `host/rc/mitm.ts`, `certs.ts` — MITM-only; the tmux driver never imports them.
 - `broker/client.ts`, and all of `apps/web` (router + vercel/local/sqlite backends + the web
   viewer) — they consume sealed frames keyed by `(identity, session)`; the frame stream is a pure
@@ -290,11 +348,11 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 ```
 
 - `args.ts`: `"rc-driver": "value"` (so `--rc-driver=tmux` and `--rc-driver tmux` both parse).
-- `run.ts`: in `runRcLaunchPath`, `const driver = (rc["rc-driver"] || process.env.RC_DRIVER ||
-  "mitm").trim()`; validate against `{mitm, tmux, opencode}` (unknown ⇒ warn
-  `unknown --rc-driver=<x> (valid: mitm, tmux, opencode)`, exit 2). `mitm` calls the existing
-  `runRcLaunch` unchanged; `tmux` builds a `DriverContext` (sharing the already-resolved identity /
-  brokerUrl / backend / `newClient` with the Vercel bypass) and calls `runTmuxDriver(ctx)`.
+- `run.ts`: the top-level RC branch resolves
+  `(rc["rc-driver"] || RC_DRIVER || "mitm").toLowerCase()` and validates
+  `{mitm, tmux, opencode}` (unknown ⇒ warn with the expected values, exit 2). `mitm` calls
+  `runRcLaunchPath`; `tmux` calls `runTmuxDriverPath`, which resolves identity/backend/client/git,
+  builds a `DriverContext`, and calls `runTmuxDriver(ctx, signal)`.
 - Keep the existing "`--rc-*` needs `--rc-app` (or RC_APP)" guard — every driver needs the broker.
   tmux just needs no MITM/certs, so the `DriverContext` carries no `certsDir`.
 
@@ -309,10 +367,11 @@ real tmux and no real claude** — the same discipline as `relay.test.ts` (mock 
 - `transcript.test.ts` — `projectSlug` (`/` and `.` → `-`); `transcriptToPayload` happy/tool_use/
   tool_result against **real captured lines**, then assert `mapUpstreamItems` yields the right items
   (the load-bearing byte-compat test); drop-types → null; `parentToolUseID` rename; bad input → null;
-  `tailTranscript` whole/partial/truncation/abort; `findNewestTranscript` mtime selection.
-- `inject.test.ts` — `injectUserText` records exactly `[setBuffer, pasteBuffer, sleep(40), sendEnter]`;
-  `runInjectPump` against a real Session drains a prompt (paste+Enter) and an interrupt (Escape) in
-  order; ignores `control_response`/`initialize`.
+  `TranscriptTailer.poll()` append/partial/truncation/same-name-inode rotation; pinned-ID and
+  fresh-inode discovery; timestamp merge; local-prompt extraction.
+- `inject.test.ts` — `injectUserText` preserves set-buffer → paste → length-scaled settle → Enter;
+  `runInjectPump` tests prompt/interrupt/set-model/permission handling, post-success ACKs,
+  paste-versus-Enter retry phases, no silent retry give-up, and `settleMs` scaling/cap.
 - `status.test.ts` — running on append; idle after debounce; open `tool_use` suppresses idle;
   re-arm = one transition; `phaseFor("running")==="thinking"`.
 - `tmuxctl.test.ts` — argv shapes for every command via an injected `TmuxExec`; `hasSession` code→bool;
@@ -320,7 +379,8 @@ real tmux and no real claude** — the same discipline as `relay.test.ts` (mock 
 - `driver.test.ts` — MockBroker-backed wiring (like `launch.test.ts`): `onSession` fires a fresh
   `cse_`, announce posts, an appended assistant line round-trips a sealed `assistant` frame to a
   viewer, a viewer `user` frame drives the fake `TmuxCtl` (paste+Enter), the child env is scrubbed and
-  carries **no** proxy vars, and abort runs `killSession`.
+  preserves user proxy/CA variables while scrubbing inherited session/host secrets, local prompts are
+  surfaced without double-echoing injected prompts, and abort runs `killSession`.
 - `args.test.ts` / `run.test.ts` — flag parsing, unknown-driver exit 2, `mitm` dispatches the existing
   path, `tmux` without `--rc-app` still warns and runs plain claude.
 
@@ -339,8 +399,8 @@ Belt-and-suspenders: `unset CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID`.
    --rc-driver=tmux -- --model sonnet` → prints `tmux attach -t rc-cse_<hex>` and stays up. (No pty
    needed: the TUI is inside tmux.)
 2. Verify real, non-stub, no-MITM: `tmux attach -t rc-cse_<hex>` shows the live TUI; a fresh
-   `~/.claude/projects/<slug>/*.jsonl` exists with mtime after launch; `grep HTTPS_PROXY
-   /tmp/tmux-driver.log` is empty.
+   `~/.claude/projects/<slug>/*.jsonl` exists after the first turn. With proxy/CA variables unset in
+   the launch shell, none appears in the child; an intentionally supplied user proxy/CA is preserved.
 3. From a viewer keyed to this identity:
    - "Reply with the single word PINEAPPLE." → pane pastes+submits, viewer shows the assistant frame.
    - "Run `ls`…" → viewer shows a `can_use_tool` gate; allow it → tool_use + tool_result
@@ -348,8 +408,8 @@ Belt-and-suspenders: `unset CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID`.
    - Presence flips thinking → idle ~1s after the turn.
    - Long turn + viewer interrupt → pane gets Escape and stops.
    - Multiline/backtick prompt pastes intact, no premature submit.
-4. Send an image from the viewer → relay writes it and injects a `Read` prompt; pane shows claude
-   reading it (no driver code).
+4. Send an image from the viewer → relay writes it and injects an `@"<path>"` prompt; the pane shows
+   Claude attaching it (no tmux-specific attachment code).
 5. Ctrl-C the wrapper → relay flushes, `tmux has-session -t rc-cse_<hex>` is non-zero (killed).
 
 Negatives: `--rc-driver=bogus` ⇒ exit 2 + valid list; `--rc-driver=tmux` without `--rc-app` ⇒ warns,
@@ -382,20 +442,24 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
 6. **Transcript discovery/rotation** — discovery excludes pre-spawn inodes and gates on creation time;
    the tailer keys on `dev:ino:birthtime` (rotation-safe even under inode reuse) and opens-then-fstats
    (no stat/open race). Two residual limits remain (see below).
-7. **No history backfill** unless the backend is durable (inherited relay boundary, #36).
+7. **Recovery is transcript-backed, but the binding is not durable.** Capture reads the selected
+   native transcript from offset zero, so an attach can project the available Claude JSONL history
+   into its relay session. A wrapper restart still has no durable remote-claw-session ↔ transcript
+   binding, and broker-side history remains subject to the configured backend's durability.
 8. **tmux dependency** — clear error if absent; unit tests need no tmux.
 9. **One driver per wrapper process** (RelayCore is per-launch); pane-liveness ends the bridge when
    claude exits / the pane closes.
 
-### 7.1 Session-id pin (deterministic first attach) + rotation (follow-up)
+### 7.1 Session-id pin (deterministic first attach) + hook-based rotation
 
 The driver mints a fresh **v4 UUID** and spawns `claude --session-id <uuid>` (NO `--resume`), so the
 transcript path — `<uuid>.jsonl` — is known up front. Discovery looks up **our exact id**
 (`findTranscriptById`, which scans across project dirs so it's robust even when claude hashes a very long
-cwd into a suffixed dir name), and only falls back to the newest-fresh heuristic when the *user* passed
-their own session/resume flag. This makes the **first attach deterministic** and a **concurrent sibling
-claude in the same cwd can no longer be mis-attached** — we wait for our id, never guess. (We still scrub
-the inherited `CLAUDE_CODE_SESSION_ID` so the parent's id can't leak; we pass our own fresh one.)
+cwd into a suffixed dir name), and falls back to the newest-fresh heuristic only for a user-owned
+picker (`--continue`/bare `--resume`) whose ID is unknown. This makes the **first attach deterministic**
+and means a **concurrent sibling Claude in the same cwd can no longer be mis-attached** — we wait for
+our id, never guess. (We still scrub the inherited `CLAUDE_CODE_SESSION_ID` so the parent's id can't
+leak; we pass our own fresh one.)
 
 Live-verified behaviour of `--session-id` (claude 2.1.x; full matrix in
 `rc-traces/c-session-id-pin-findings.md`): a non-UUID/ULID is rejected ("must be a valid UUID"); reusing
@@ -408,7 +472,8 @@ When the **user** drives the session (`--resume`/`--session-id`/`--continue`, lo
 don't pin; if they gave an explicit id we still track THAT transcript by id (a `--resume <id>` *appends*
 to `<id>.jsonl`, which the newest-file heuristic would miss), and only a picker (`--continue`/bare
 `--resume`) falls back to newest-file. `findTranscriptById` checks the O(1) direct path every poll and
-only does the cross-project scan on the slow cadence (and only for a real file, never a dir/symlink).
+only does the cross-project scan on the slow cadence. It accepts a path only when `stat()` resolves it
+to a regular file (so directories/FIFOs are excluded; a symlink to a regular file currently resolves).
 
 ### 7.1.1 SessionStart hook (`--rc-session-hook`) — exact discovery + rotation-follow
 
@@ -420,9 +485,10 @@ appended). The hook appends each payload — which carries the **exact, already-
 
 Live-verified (claude 2.1.x): inline `--settings` ingests the hook and it FIRES (even under `-p`),
 delivering the absolute transcript path. So with the hook on, discovery reads the sentinel — **exact, no
-scan, no long-cwd-hash problem** — and a new sentinel line (a `/clear`/`/branch`/`/compact`/resume that
-mints a new transcript) is followed automatically: the driver flushes the old file and switches the
-tailer (an **unambiguous** rotation signal, unlike newest-in-cwd). If the hook never fires (e.g. `--bare`
+scan, no long-cwd-hash problem** — and when a later hook event reports a different transcript path
+(for example `/clear` or `/branch`), the driver flushes the old file and switches the tailer. This is
+an **unambiguous** rotation signal, unlike newest-in-cwd; `/compact` stays in the same transcript. If
+the hook never fires (e.g. `--bare`
 disables hooks — verified: the sentinel stays empty but the pinned `<uuid>.jsonl` is still written), the
 driver **falls back** to the `--session-id` pin discovery above. Tracked in issue #101.
 
@@ -434,13 +500,16 @@ hook** (falling back to the pin) rather than masking claude's own settings error
 passes a `--settings` **file**, the merge inlines the resolved JSON into the spawned argv (visible to
 `ps`); on a shared box with secrets in that file, prefer `--rc-no-session-hook`.
 
-### 7.2 Local-prompt visibility (follow-up)
+### 7.2 Local-prompt visibility (implemented)
 
-A prompt typed into the **local** tmux TUI is upstream `user` text the relay drops, so it won't appear
-in the web transcript. The fix is the **`local_prompt` ledger** already shipped for the opencode driver
-(now on `main` via #97): the driver records the texts it injected; an upstream `user` line that doesn't
-match a recorded injection is tagged `local_prompt:true` and the relay renders it. tmux can adopt the
-same ledger now that the relay support is on `main`.
+The tmux driver uses the same **`local_prompt` ledger** as OpenCode. After a remote prompt is
+successfully submitted, `runInjectPump` records its text; when capture later sees the matching
+top-level transcript `user` line, it consumes the ledger entry and suppresses that duplicate because
+the relay already echoed the remote prompt. An unmatched top-level, non-tool-result, nonblank user
+line was typed locally, so the driver tags it `local_prompt:true` and the relay renders it in the web
+transcript. Nested sub-agent user lines are never promoted to top-level local prompts. The correlation
+is text-based, so a simultaneous identical local and remote prompt can still be misattributed for
+display; it does not change what Claude executes.
 
 ---
 
@@ -451,4 +520,4 @@ canonical `UpstreamPayload`, same relay/broker/viewer — but it captures by **t
 transcript JSONL** and injects by **typing into a tmux pane**, so it works on Bedrock/Vertex where
 native Remote Control is disabled. Because the transcript's content blocks are byte-identical to the
 relay's input and the relay is a pure function of `(Session, BrokerClient)`, the driver is a **pure
-addition** — nothing downstream changes."
+addition** — nothing downstream changes.

@@ -1,359 +1,278 @@
 # OpenCode driver
 
-> **Status:** design (proposed). Lands behind `--rc-driver=opencode`. The default driver stays
-> `mitm` (drive the real `claude --remote-control`). This doc is the durable record of the design
-> decision; the implementation lives under `packages/cli/src/host/rc/opencode/`.
+> **Status:** implemented behind `--rc-driver=opencode`. The current driver attaches remote-claw's
+> existing broker/viewer bridge to an `opencode serve` session. It is not yet the isolated,
+> coordinator-owned OpenCode runtime selected in
+> [client-driven-host-runtime.md](client-driven-host-runtime.md).
 
-## Why this exists
+## 1. What exists today
 
-`remote-claw` bridges a coding agent's session to our E2E-encrypted broker so a phone/laptop can
-read and steer it. Today the only agent we can drive is the **real `claude`**, captured by a MITM
-proxy on its Remote-Control endpoints (`--rc-app`, `--rc-trace`). That couples us to one vendor and
-one transport.
+The current path has two independent connections:
 
-The **driver seam** decouples "where the session frames come from" from "how they reach a viewer".
-A driver produces a `Session` and feeds it canonical content-block frames; everything below the
-seam — `HostRcRelay`, the broker router, and the `apps/web` viewer — stays byte-for-byte unchanged.
-
-The OpenCode driver proves the seam against a *completely different* agent:
-[OpenCode](https://github.com/sst/opencode) runs a headless HTTP+SSE server (`opencode serve`) and
-can run on **AWS Bedrock**. This is also the provider-agnostic proof: native claude RC is *disabled*
-on Bedrock, but **OpenCode-on-Bedrock works**, so remote-claw can drive a session that the official
-Claude app fundamentally cannot.
-
-## The seam (what a driver must satisfy)
-
-The clean integration point is `packages/cli/src/host/rc/session.ts` (`Session` + `RelayCore`).
-`HostRcRelay` (`relay.ts`) only ever touches a `Session` and a `BrokerClient`. It calls exactly:
-
-- `session.pushUpstream(payload)` — feed it a worker event (assistant/user/system/result). The relay
-  runs `mapUpstreamItems` over it and seals content frames to the viewer.
-- `session.followDownstream(session.claimWorkerStream(), stop)` — drain client to agent events
-  (`user` prompts, `control_request`/`control_response`).
-- `session.pushControlResponse(requestId, behavior, extra)` — answer a permission gate.
-- `session.workerStatus` / `session.wake()` — presence (idle/thinking) + heartbeat.
-
-So a **driver** is anything that:
-
-1. **CAPTURE** — translates its agent's native output into claude's canonical content-block envelope
-   and calls `session.pushUpstream(payload)`.
-2. **INJECT** — drains `session.followDownstream(...)`, sends each downstream `user` event's text to
-   its agent, and maps the minimal control verbs (`interrupt`, `set_model`, `end`).
-3. **PERMISSIONS** — turns the agent's permission asks into the relay's existing
-   `can_use_tool` -> `permission_request` -> `pushControlResponse` round-trip.
-4. **STATUS** — keeps `session.workerStatus` current and calls `session.wake()`.
-
-The canonical envelope (what `mapUpstreamItems` already understands, so it must not change):
-
-```jsonc
-{
-  "type": "assistant" | "user" | "system" | "result",
-  "message": { "content": [
-    { "type": "text",        "text": "…" },
-    { "type": "thinking",    "thinking": "…" },
-    { "type": "tool_use",    "name": "Bash", "input": { } , "id": "toolu_…" },
-    { "type": "tool_result", "tool_use_id": "toolu_…", "content": "…|[blocks]", "is_error": false }
-  ] },
-  "uuid": "…",
-  "parent_tool_use_id": "…"
-}
+```text
+configured model provider
+          ▲
+          │ OpenCode provider traffic
+          │
+OpenCode server (`opencode serve`)
+  ├── sessions and native message history
+  ├── GET /event server-wide SSE
+  └── session HTTP commands
+          ▲
+          │ loopback HTTP/SSE
+          │
+OpencodeDriver
+  ├── client.ts       dependency-free fetch/SSE client
+  ├── translate.ts    OpenCode parts → relay content blocks
+  └── driver.ts       capture, inject, permissions, status
+          │
+          ▼
+Session → HostRcRelay → encrypted remote-claw broker → web viewer
 ```
 
-`mapUpstreamItems` keys entirely off `type` + the content-block `type` discriminators. As long as the
-driver emits this shape, the relay produces the same `assistant` / `assistant_thinking` / `tool_use` /
-`tool_result` / `task` / `permission_request` content frames it does for real claude — and the viewer
-renders them identically. **That equivalence is the whole point of the seam.**
+The driver controls OpenCode through its own server API. It does not use the Claude MITM and does not
+spawn Claude. Today, however, the OpenCode server itself can still contact whichever provider its
+configuration selects. That provider path is outside the current driver.
 
-## OpenCode in one paragraph
+The selected host-runtime design changes the top half:
 
-`opencode serve --port 4096 --hostname 127.0.0.1` starts a headless server (Effect `HttpApi`, not
-Express). Sessions: `POST /session` -> `ses_…`. Drive a turn: `POST /session/{id}/prompt_async`
-(body carries `{providerID, modelID}` + the prompt parts; returns immediately, runs in a background
-fiber). Interrupt: `POST /session/{id}/abort`. Live output: a **single server-wide** SSE stream at
-`GET /event` (content-type `text/event-stream`), each frame `data: {id, type, properties}`.
-Permissions: `GET /permission` + `POST /permission/{requestID}/reply {reply: once|always|reject}`.
-Questions (AskUserQuestion equivalent): `GET /question` + `POST /question/{requestID}/reply {answers}`.
-Optional HTTP Basic auth via `OPENCODE_SERVER_PASSWORD` (off when unset). The published
-`@opencode-ai/sdk` (v1.17.5) wraps all of this; the **v2** SDK subpath matches the Effect HttpApi
-exactly and adds dedicated `client.question` and `client.permission` classes — that's the one to use.
-
-## Architecture
-
-```
-                 OpenCode server (opencode serve, Bedrock provider)
-                  |  GET /event (SSE, server-wide)        ^ POST /session/{id}/prompt_async
-                  |  GET/POST /permission, /question      | POST /session/{id}/abort
-                  v                                       | POST /permission/{id}/reply
-        +-------------------------------------------------------+
-        |  OpencodeDriver  (src/host/rc/opencode/driver.ts)     |
-        |   client.ts  - typed HTTP+SSE wrapper (v2 SDK)        |
-        |   translate.ts - Part[] <-> claude content blocks     |
-        |                                                       |
-        |   CAPTURE:  SSE part -> session.pushUpstream(envelope)|
-        |   INJECT:   followDownstream -> prompt_async / abort   |
-        |   PERMS:    permission/question event -> permission_request frame
-        |             <- pushControlResponse -> POST .../reply    |
-        |   STATUS:   session.status -> workerStatus + wake()     |
-        +-------------------------------------------------------+
-                  | Session (UNCHANGED)        ^ followDownstream / pushControlResponse
-                  v pushUpstream               |
-        +-------------------------------------------------------+
-        |  HostRcRelay (relay.ts) - UNCHANGED                   |
-        |  BrokerClient (client.ts) - UNCHANGED                 |
-        +-------------------------------------------------------+
-                  |  E2E-sealed frames (same record_kinds)
-                  v
-        apps/web viewer - UNCHANGED
+```text
+OpenCode process
+  ├── control: private OpenCode HTTP/SSE server
+  └── inference: private provider-shaped façade(s)
+                         │
+                         ▼
+                 isolated inference connector
 ```
 
-`launch.ts`/`run.ts` select the driver with `--rc-driver={mitm|tmux|opencode}` (default `mitm`).
-The OpenCode driver path does **not** stand up the MITM at all — it talks straight to the OpenCode
-server — but it constructs the *same* `HostRcRelay({client, identityId, sessionId, session})` and
-calls `relay.announce(...)` + `relay.serve(signal)` exactly as the MITM path does in `launch.ts`.
+The OpenCode process will be network-fenced so it cannot reach a real provider directly. Its control
+server remains the native engine-control surface; provider façades are a separate model/API brokerage
+surface. Both sit behind the remote-claw host boundary.
 
-## CAPTURE — OpenCode parts to claude content blocks
+## 2. Launch and attachment
 
-OpenCode's SSE stream carries the whole session log incrementally. The load-bearing events:
+The dispatcher calls `runOpencodeDriver` for `--rc-driver=opencode`. Relevant options are:
 
-| OpenCode SSE `type`        | Meaning                                  | Driver action |
-| -------------------------- | ---------------------------------------- | ------------- |
-| `server.connected`         | stream up                                | start-of-stream marker |
-| `server.heartbeat` (~10s)  | keepalive                                | refresh `workerStatus`, `wake()` |
-| `message.updated`          | a message's info changed (role/finish)   | track role + finish; on assistant finish emit `result` boundary |
-| `message.part.updated`     | a **whole part** (re-sent, not a delta)  | translate -> `pushUpstream` (reassemble by part id) |
-| `message.part.removed`     | a part was dropped                       | suppress its prior frame |
-| `session.status` / `idle`  | run state                                | `workerStatus = thinking/idle`; `idle` = turn end |
-| `permission.asked`         | tool permission gate                     | -> `permission_request` (see PERMISSIONS) |
-| `permission.replied`       | gate resolved (e.g. by another client)   | clear local gate state |
-| `session.error`            | run failed                               | emit a `result`/error text so the viewer isn't stuck "working" |
+- `--rc-oc-url` or `OPENCODE_URL`: server origin, default `http://127.0.0.1:4096`;
+- `--rc-oc-session` or `RC_OC_SESSION`: exact `ses_*` to attach;
+- `--rc-oc-model` or `RC_OC_MODEL`: `providerID/modelID` for turns;
+- `OPENCODE_SERVER_PASSWORD`: optional HTTP Basic password, with an empty username; and
+- `--rc-oc-skip-permissions` or `RC_OC_SKIP_PERMISSIONS`: do not add remote-claw's catch-all
+  permission rule.
 
-**Part to content-block mapping** (`translate.ts`, `partToBlocks`). OpenCode's canonical `Part` union
-lives in `@opencode-ai/core` `v1/session.ts`; the mapping mirrors the inverse of OpenCode's own
-`message-v2.ts:toModelMessagesEffect` (which converts the same parts *to* Anthropic blocks via the AI
-SDK), so it is faithful by construction:
+When no session ID is supplied, the driver uses the most recently updated session from
+`GET /session`; if the server has no sessions, it creates one with `POST /session`.
 
-- `TextPart {text}` -> `{ type: "text", text }` (assistant role).
-- `ReasoningPart {text}` -> `{ type: "thinking", thinking: text }`.
-- `ToolPart` `state.status` `pending|running` -> `{ type: "tool_use", name: part.tool, input:
-  state.input, id: part.callID }`.
-- `ToolPart` `completed` -> the `tool_use` (once per `callID`) **and** a user-role `{ type:
-  "tool_result", tool_use_id: callID, content: state.output, is_error: false }`.
-- `ToolPart` `error` -> `tool_use` + `tool_result` with `is_error: true`.
-- `StepStartPart` / `StepFinishPart` -> turn boundaries only; `step-finish` drives the `result` envelope.
-- `CompactionPart` -> a synthetic `system` event (`subtype: "compact"`).
-- `SubtaskPart` -> a `tool_use` named `Task` (see GAPS: subagents).
+The current startup order is:
 
-**Reassembly by part id (no token deltas).** OpenCode re-sends each *whole part* on every
-`message.part.updated` (not a per-token delta). claude's RC worker channel ALSO delivers complete
-messages, never token deltas (deltas ride the inference SSE we don't relay), so this is a *match*, not
-a regression. The driver keeps a `Map<partID, {seq, uuid, lastText}>`: first appearance allocates a
-stable `uuid` and `pushUpstream`s; later updates reuse the same `uuid`/`parent_tool_use_id` and emit
-only when the rendered content is final (coalesce on message-complete / `session.idle`). One assistant
-bubble per message, no relay/viewer change. `message.part.delta` is deliberately ignored — the viewer
-has no streaming-token UI, and per-delta frames would spam the durable transcript log.
+1. Create the relay `Session`, enqueue its `initialize` request, and invoke the optional test hook.
+2. Start `bridgeSession`, including the broker announcement and serve loop.
+3. Attach to or create the native OpenCode session.
+4. Best-effort enable permission mirroring.
+5. Start capture and injection pumps.
 
-`message.part.updated.properties` carries the `sessionID`; the driver filters the server-wide stream
-here (see GAPS: no per-session SSE).
+This means the current bridge can announce optimistic capabilities before native attachment and
+permission setup finish. The future registrar must publish only validated, post-setup capabilities
+before it accepts mutations.
 
-## INJECT — downstream `user` events to OpenCode
+On driver teardown the driver best-effort aborts the attached OpenCode run and closes the relay
+session. It does not stop the external `opencode serve` process. A future runtime owner must distinguish
+“close this bridge” from “stop this supervised native runtime.”
 
-```ts
-const gen = session.claimWorkerStream();
-for await (const ev of session.followDownstream(gen, () => stop.aborted)) {
-  if (ev === null) continue;                       // heartbeat tick
-  if (ev.eventType === "user") {
-    const text = userText(ev.payload);
-    await client.promptAsync(sessionId, {
-      model: activeModel, // the session's active model (default: bedrock sonnet)
-      parts: [{ type: "text", text }],
-    });
-  } else if (ev.eventType === "control_request") {
-    const sub = (ev.payload.request as any)?.subtype;
-    if (sub === "interrupt") await client.abort(sessionId);
-    else if (sub === "set_model") { /* remember for next prompt_async */ }
-    else if (sub === "end_session") { /* mark done; stop the stream */ }
-  }
-}
-```
+## 3. HTTP and SSE surface
 
-**Viewer-facing capabilities (#149).** The opencode driver declares `controls.interrupt: true`
-(`client.abort`) but `controls.setModel: false`: its `set_model` handler only accepts a
-`providerID/modelID` string, while the viewer's model switcher sends bare aliases (`opus`/`sonnet`/…), so
-a viewer-driven switch would silently no-op — the viewer therefore disables the model switcher rather than
-show a "✓" that lies. `set_mode`/`end` have no opencode analogue (false), and with
-`--rc-oc-skip-permissions` (`structuredPermissions: false`) the viewer shows a "permissions off" posture.
+`client.ts` uses Node's global `fetch`; there is no `@opencode-ai/sdk` dependency.
 
-Slash commands ride the `user` path like the claude protocol. `/compact` is routed to its native
-equivalent (`POST /session/{id}/summarize`) **and is implemented + live-verified** — without it the
-literal string `/compact` would be fed to the model. Every other slash command currently passes through
-as a prompt (full `/command` routing via `POST /session/{id}/command` is follow-up). A blank prompt
-(empty OR whitespace-only) is a no-op, not a burned model turn. `/compact` summarizes with the session's
-**active model** (the one prompts use), not a separate small model.
-The model defaults to Bedrock Claude Sonnet via the region-agnostic `global.` inference profile — a
-reliable tool-caller, and `global.` needs no region (configurable via `--rc-oc-model` / `RC_OC_MODEL`).
-Permission answers are NOT handled here — they arrive via the relay calling
-`session.pushControlResponse`, observed by the PERMISSIONS path.
+| Operation | Current route and behavior |
+| --- | --- |
+| Create session | `POST /session` → native session ID |
+| List sessions | `GET /session`, most recently updated first |
+| Read history | `GET /session/{id}/message`, chronological messages with parts |
+| Send prompt | `POST /session/{id}/prompt_async` with `{model, parts}`; success is an empty `204` |
+| Interrupt | `POST /session/{id}/abort` |
+| Compact | `POST /session/{id}/summarize` with `{providerID, modelID, auto:false}` |
+| Read permission rules | `GET /session/{id}`, using its `permission` field |
+| Add permission rules | `PATCH /session/{id}` with `{permission: rules}` |
+| Answer a permission | `POST /session/{id}/permissions/{permissionId}` accepts `once`, `always`, or `reject`; the driver sends only `once`/`reject` |
+| Follow events | `GET /event`, one server-wide SSE stream |
 
-## PERMISSIONS — OpenCode gate to relay round-trip to OpenCode reply
+The driver does not implement OpenCode question APIs. A question capability must remain disabled until
+the exact native request and answer lifecycle is implemented and recovery-tested.
 
-OpenCode blocks the tool on a `Deferred` until an HTTP reply comes back, and publishes
-`permission.asked` (`{id, sessionID, permission, patterns, metadata, tool?{messageID, callID}}`). The
-driver turns it into the **exact** `can_use_tool` shape the relay already handles:
+The SSE client filters session events by the ID found in the event or nested message/part shapes.
+Server-level connected/heartbeat events are global. Predicate subscriptions also receive every
+`session.created` event so the driver can discover child sessions, but the driver follows a child only
+when its `parentID` belongs to an already followed session.
 
-```ts
-session.pushUpstream({
-  type: "control_request",
-  request_id: ev.id,
-  request: {
-    subtype: "can_use_tool",
-    tool_name: ev.tool ?? "tool",
-    input: ev.metadata ?? null,      // relay reads `input` (real-claude shape)
-    tool_use_id: ev.callID ?? "",
-  },
-});
-```
+The SSE generator handles one connection. The driver owns reconnect with capped exponential backoff.
 
-`mapUpstreamItems` emits a `permission_request` content frame; the viewer renders Allow/Deny (or a
-QuestionCard for AskUserQuestion). The viewer's answer rides back as a `permission` inbound frame; the
-relay's `#tailInbound` calls **`session.pushControlResponse(requestId, behavior, extra)`** unchanged.
-The driver observes that control response (it lands on the downstream channel of the Session it owns)
-and maps it out:
+## 4. Capture workflow
 
-| relay behavior              | OpenCode reply (`POST /permission/{id}/reply`) |
-| --------------------------- | ---------------------------------------------- |
-| `allow` (one-off)           | `{reply: "once"}` |
-| `allow` + "always" intent   | `{reply: "always"}` |
-| `deny`                      | `{reply: "reject"}` |
-| `deny` + correction message | `{reply: "reject", message}` |
+For each SSE connection, capture subscribes first. After the first event proves the subscription is
+live, it reads native history and then processes live events. Re-running history after reconnect is
+deduplicated by OpenCode message ID within the driver's bounded 4,096-ID recent window. This avoids
+the obvious snapshot-then-subscribe gap, but it is not a durable event cursor: OpenCode SSE supplies
+no replay token. A history larger than that window can re-emit evicted messages after reconnect; the
+current driver does not promise cross-reconnect exactly-once projection for an unbounded chat.
 
-**AskUserQuestion** maps to OpenCode's `question` API: a gate becomes a `can_use_tool` with
-`tool_name: "AskUserQuestion"` and `input.questions` (so the viewer's existing `QuestionCard`
-renders); the answer (`updatedInput.answers`) is translated to `POST /question/{id}/reply {answers}`
-(chosen labels in question order). **The relay's permission machinery is reused verbatim** — the
-driver only translates the request in and the decision out.
+| OpenCode event | Current action |
+| --- | --- |
+| `message.part.updated` | Replace the whole part in a per-message buffer |
+| `message.part.removed` | Remove that part from the buffer |
+| completed assistant `message.updated` | Flush the complete message once |
+| `session.status` | Update main-session running/idle presence |
+| `session.idle` | Flush that session's buffers; mark only the main session idle |
+| `session.error` | Flush partials, emit a visible warning result, and idle the main session |
+| `permission.asked` | Emit a `can_use_tool` control request |
+| `session.created` | Discover a live child session and try to associate it with a Task anchor |
+| `server.connected` / `server.heartbeat` | Refresh presence |
 
-## STATUS — presence
+OpenCode re-sends whole parts rather than token deltas. The driver buffers parts and emits only a
+completed message, preventing one relay message per update.
 
-- `session.status` "running" / a live assistant `message.part.updated` -> `workerStatus = "running"`
-  (relay reads `thinking`).
-- `session.idle` -> `"idle"` and emit the turn-end `result` boundary.
-- a pending gate -> the relay's own `#openPerms` drives `needs`; nothing extra.
+The current translation is deliberately narrow:
 
-`session.wake()` is called on every SSE frame so `followUpstream`'s heartbeat re-evaluates presence
-promptly.
+- visible text → `text`;
+- reasoning text → `thinking`;
+- a pending/running tool → `tool_use`;
+- a completed/failed tool → `tool_use` followed by a user-role `tool_result`;
+- a subtask part → a `Task` `tool_use` anchor; and
+- step, snapshot, patch, agent, retry, compaction, file, and unknown parts → dropped.
 
-## client_unchanged_proof
+A complete assistant message produces at most two relay payloads: the assistant blocks, then any tool
+results. Stable OpenCode message and call IDs become relay message/tool IDs.
 
-The viewer (`apps/web/app/page.tsx` + `lib/transcript.ts`) is a **pure function of the sealed content
-frames' `record_kind` + JSON body**; it never knows what produced them. `Bubble` switches on
-`message.kind` in {`result`, `user`, `assistant`, `assistant_sub`, `assistant_thinking`,
-`assistant_thinking_sub`, `tool_use`, `tool_result`, `task`, `permission_request`,
-`permission_resolved`} — produced **only** by `relay.ts:mapUpstreamItems` + `#pumpInbound`.
-`lib/transcript.ts` parses fixed body shapes (`parseToolUse {name,input,sub}`, `parseToolResult
-{tool_use_id,is_error,output,sub}`, `parsePermission`+`parseQuestions`, `parseTask`,
-`parsePermissionResolved`).
+For main-session user messages, the driver suppresses the echo of a prompt it injected. Main-session
+text that does not match an injected prompt is surfaced as `local_prompt: true`, so a prompt typed
+through another OpenCode client appears in the remote-claw viewer. A followed child session's internal
+user prompt is always suppressed because its Task anchor already carries that input.
 
-The OpenCode driver emits the canonical envelope, so `mapUpstreamItems` produces the **same kinds with
-the same body JSON** as for real claude (the driver maps `callID`->`tool_use_id`, `part.tool`->`name`,
-`state.output`->`content`, `ev.metadata`->`input` *before* `pushUpstream`). Therefore: (1) no new
-`record_kind` crosses the broker; (2) no new content-body field; (3) the broker router
-(`broker/protocol.ts`) is untouched. Mechanical proof: a parity test runs identical viewer assertions
-against frames from the OpenCode driver and the existing fake-RC worker and asserts identical
-`(kind, parsed-body)`. CI gate:
+Child sessions are followed while live. The parent subtask part does not carry the child session ID,
+so correlation uses `(parent session, agent, FIFO)`. Concurrent same-agent children can therefore be
+mis-nested. Children are unfollowed on `session.idle`; a child `session.error` does not currently
+remove it from the follow set. Historical finished-child discovery is not complete.
+
+## 5. Injection and control workflow
+
+The injection pump serially drains `Session.followDownstream(...)`.
+
+| Relay input | Current OpenCode action |
+| --- | --- |
+| blank user text | No-op, then acknowledge |
+| ordinary user text | Record echo-suppression token, await `prompt_async`, then acknowledge |
+| `/compact` | Dispatch native `summarize` without blocking the pump |
+| `initialize` | No-op, then acknowledge |
+| `interrupt` | Await native `abort`, then acknowledge |
+| `set_model` | Accept only an explicit `providerID/modelID` string for the next prompt |
+| `set_permission_mode`, `end`, unknown control | Safe no-op, then acknowledge |
+| permission response | For a valid request ID, map explicit allow to `once` and other behavior to `reject`; an invalid ID is a no-op |
+
+If an awaited injection fails, the current pump withholds the relay-session acknowledgement, logs the
+failure, and keeps draining. The event remains eligible for replay only if that same `Session` later
+gets a new downstream claimant; an ordinary OpenCode SSE reconnect does not reclaim the downstream
+stream. Any such replay is not safe enough for the authoritative host: if `prompt_async` reached
+OpenCode and only its response was lost, retry can execute the prompt twice. The new coordinator must
+write-ahead `started`, treat that result as `outcome_unknown`, and quarantine later native mutations
+unless OpenCode supplies positive proof that the first attempt did not start.
+
+`/compact` is dispatched without awaiting the long-running summarize request so an interrupt can
+overtake the HTTP response wait. A dispatch error emits an OpenCode warning result and restores idle.
+The authoritative coordinator must still journal compaction as its own mutation and apply the same
+uncertainty rule.
+
+## 6. Permissions
+
+OpenCode normally decides tools from session permission rules. With mirroring enabled, the driver:
+
+1. Reads the existing rules.
+2. Removes only an exact prior remote-claw catch-all ask rule from the payload it prepares.
+3. Prepends `{permission:"*", pattern:"*", action:"ask"}`.
+4. Appends the existing rules, preserving OpenCode's last-match-wins behavior.
+5. Patches the session, and repeats best-effort for newly discovered child sessions.
+
+If the read fails, the driver does not patch because a blind write could drop a deny rule. If the patch
+fails, the session continues without reliable remote gating. The current capability announcement does
+not reflect that failure.
+
+The live OpenCode `PATCH` behavior is append-only: rules concatenate and an empty/null patch does not
+clear them. The driver therefore cannot safely restore a borrowed session's original rules on
+teardown. Once its catch-all ask rule is installed, it persists until the user clears the native
+session policy. The future structured runtime should use an owned session/server or prove a reversible
+permission-policy seam before advertising clean detach.
+
+`permission.asked` becomes the relay's existing `permission_request`. Only an explicit viewer allow
+maps to OpenCode `once`; a deny or malformed behavior with a valid request ID maps to `reject`. An
+absent/invalid request ID is a no-op that the legacy downstream pump still acknowledges. There is no
+implemented “always” choice, question flow, or durable recovery of an answer whose HTTP
+acknowledgement was lost.
+
+The future coordinator must journal permission answers before delivery. On ambiguous delivery it must
+not send a contradictory second answer; it records `outcome_unknown` and waits for positive native
+terminal/cancellation evidence, or definitively stops/freezes the old process before proceeding.
+
+## 7. Capability truth
+
+The current constructor advertises:
+
+| Capability | Advertisement | Actual state |
+| --- | --- | --- |
+| Structured permissions | Mirrors the requested flag | Can be false in practice if post-announce setup fails |
+| Status | `true` | Backed by main-session status/idle events |
+| Interrupt | `true` | Backed by `abort` |
+| Set model | `false` | Internal handler accepts only `providerID/modelID`; viewer aliases are incompatible |
+| Set mode | `false` | No native mapping |
+| End | `false` | No native mapping |
+| Attachments | `true` | Relay-owned path; end-to-end OpenCode fidelity is not yet proven |
+
+The first host-runtime slice must stop announcing optimistic structured-permission and attachment
+support. A feature is writable only after its setup and proof gate succeed.
+
+## 8. Recovery and authority
+
+Today, OpenCode owns native message history and the driver reconstructs viewer output from
+`GET /session/{id}/message`. A wrapper restart can attach to the same explicit session and backfill
+completed main-session messages into a fresh broker session. It does not yet preserve:
+
+- a durable remote-claw logical-chat ↔ OpenCode-session binding;
+- a command journal or definitive multi-writer order;
+- native delivery attempt IDs;
+- permission/question gates across restart;
+- a durable SSE cursor;
+- complete historical child-session lineage; or
+- provider/network isolation.
+
+Text matching for injected-echo suppression is also ambiguous: an identical prompt sent concurrently
+through another OpenCode client can be misattributed.
+
+In the selected host runtime, authority is divided cleanly:
+
+| Fact | Authority |
+| --- | --- |
+| Which mutation is admitted next | remote-claw coordinator journal |
+| Whether a native OpenCode action actually happened | OpenCode native history/status and positive receipts |
+| OpenCode conversation content after wrapper loss | OpenCode native store, with explicit gaps where evidence is absent |
+| Viewer/official-client representation | rebuildable remote-claw projection |
+| Model/provider access | isolated inference connector, never the OpenCode process directly |
+
+Recovery must reattach the exact `runtimeId`/session/incarnation, subscribe before history backfill,
+reconcile journaled attempts against native evidence, and leave ambiguous attempts quarantined. It may
+start a successor session only with an explicit gap and explicit handling of commands that were
+admitted for the old session.
+
+## 9. Tests
+
+The checked-in unit tests cover HTTP/SSE parsing, translation, coalescing, deduplication, attach
+mid-turn, reconnect/backfill, injected-echo rollback, compact routing, visible errors, permissions, and
+child-session nesting/isolation.
+
+The live suite is:
 
 ```bash
-git diff --name-only origin/main..HEAD -- \
-  packages/cli/src/host/rc/relay.ts \
-  packages/cli/src/host/rc/session.ts \
-  packages/cli/src/broker/ \
-  apps/web/   # MUST be empty
+OPENCODE_URL=http://127.0.0.1:4096 \
+pnpm --filter @remote-claw/cli exec vitest run src/host/rc/opencode/driver.e2e.test.ts
 ```
 
-## Gaps & how the design handles them
-
-1. **No per-session SSE.** `GET /event` is server-wide; the driver subscribes once and filters
-   client-side by `properties.sessionID`. One driver = one session.
-2. **No token deltas (whole-part re-send).** Matches claude's complete-message-only RC channel.
-   Reassemble by `partID`, coalesce to one final frame per message. `message.part.delta` ignored.
-3. **Subagents = child sessions via `parentID` — IMPLEMENTED (#102).** OpenCode spawns a sub-agent as a
-   child `ses_…` (a `SubtaskPart` on the parent message + a child `Session` whose `parentID` is the
-   parent), not inline `parent_tool_use_id` blocks. The driver renders the `subtask` part as a `Task`
-   `tool_use` anchor whose `id` is the **subtask part's own `prt_…` id** (no synthetic callID needed),
-   FOLLOWS the child on the same server-wide SSE (added to the follow-set on its `session.created`), and
-   tags the child's messages with `parent_tool_use_id = <the subtask part id>`. The relay nests them
-   `*_sub` and the viewer renders them under the Task row — no relay/viewer change.
-
-   - **The discovery hook:** a child's `session.created` carries the *child's own* (not-yet-followed) id,
-     so the client delivers `session.created` to the follow predicate regardless of the follow-set
-     (gating it by the set it would update is circular). Every other event stays gated.
-   - **The child's internal user prompt** (the Task input) is suppressed — it's already shown via the
-     anchor's `prompt`, so it is not re-surfaced as a top-level `local_prompt`. Suppression keys on "is a
-     followed non-main child" (not on whether we tagged it), so an untagged child can't leak its prompt.
-   - **Presence isolation:** only the MAIN session's `session.status`/`idle`/`error` drive the bridge's
-     `workerStatus`; a child going idle never flips presence while the parent is mid-turn.
-   - **Lifecycle / bounds:** a child is unfollowed on its `session.idle` (after its buffers flush), so the
-     follow-set stays bounded by *in-flight* children, not lifetime children. Only LIVE `subtask` anchors
-     are enqueued for correlation (backfill is excluded — a stale historical anchor would otherwise mis-nest
-     the next same-agent child). The correlation queue is keyed by **(parent session, agent)**, so two
-     parents spawning the same agent never cross-tag. A reconnect re-backfills in-flight children too (SSE
-     has no replay), so child output isn't lost across a transient drop.
-   - **v1 correlation limit (display-only):** the `subtask` part carries no child session id (opencode
-     links the child only via `parentID`), so a child is paired to its Task by (parent, agent, FIFO order).
-     Only CONCURRENT same-agent subtasks **from the same parent** can mis-nest in the viewer; never a
-     dropped message (an unmatched child just stays top-level). Also: attaching to a session whose Tasks
-     ALREADY finished renders the Task anchors from history but does not re-fetch the past child output
-     (no children-discovery on attach yet — `GET /session/{id}/children`). Revisit both if opencode exposes
-     a part→child id link.
-4. **File upload.** v1 keeps relay.ts unchanged: the relay's existing attachment-on-disk + "use Read"
-   flow runs and OpenCode's `read` tool reads the path. A later version sends a native `FilePart`.
-5. **Permission "always" + permission modes.** No exact analog; v1 maps `auto`->`always`,
-   `plan`->`reject` ("planning only"), `default`->pass through. Approximate.
-6. **Auth.** v1 runs unsecured on loopback (same trust boundary as the MITM); Basic auth
-   (`OPENCODE_SERVER_PASSWORD`) documented for non-loopback.
-7. **Bedrock credentials — OpenCode-on-Bedrock PROVEN end-to-end (2026-06-28).** OpenCode's AI-SDK Bedrock
-   client does NOT walk the IMDS instance-role chain (verified on 1.17.5) — it needs STATIC creds in the
-   `opencode serve` process env, so export them from the instance role before launching:
-   `eval "$(aws configure export-credentials --format env)"` (or set `AWS_BEARER_TOKEN_BEDROCK`). The
-   `global.` profile is region-agnostic, so any `AWS_REGION` the SDK picks up works (no "right" region to
-   set). The account grants this role live Anthropic inference on `bedrock-runtime`.
-   The driver's **default** model is `amazon-bedrock/global.anthropic.claude-sonnet-4-6` — the `global.`
-   inference profile is region-agnostic (any `AWS_REGION` works; there is no "right" region to pick). With
-   that, the full live e2e (`driver.e2e.test.ts`) **passes 11/11**, its model-bearing turns driven by
-   Bedrock Claude Sonnet through OpenCode's `amazon-bedrock` (AI-SDK) provider — a real streaming turn
-   end-to-end through the actual driver→relay→broker (frame coalesce, dedup, tool-use, local-vs-injected
-   prompt origin, history/resume with no dup, interrupt, `session.error`, `/compact`→summarize, permission
-   round-trip, two-driver isolation). `(c)` tool-use and `(k)` the permission round-trip are HARD asserted
-   (Sonnet reliably calls tools): `(c)` runs with mirroring OFF so the tool auto-runs and its frames
-   render; `(k)` runs with mirroring ON, raises a gate, and a viewer ALLOW round-trips so the tool runs.
-   `(h)` drives the error path with a deliberately-bad Bedrock model id. Run the suite:
-   `OPENCODE_URL=http://127.0.0.1:4096 pnpm exec vitest run src/host/rc/opencode/driver.e2e.test.ts`
-   against an `opencode serve` started with those creds (the default model needs no `RC_OPENCODE_E2E_MODEL`).
-   (Footgun guarded alongside: `vitest.setup.ts` scrubs **all** `RC_*` vars EXCEPT the e2e's own
-   `RC_OPENCODE_E2E_*` knobs — allowlisted, with a unit guard, since CI skips the live suite and can't
-   catch it.) The native MITM driver (`--rc-inference=bedrock`) reaches Bedrock via the `bedrock-mantle`
-   endpoint, which [AWS's model-access docs](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)
-   state is exempt from the FTU form *and* the Marketplace subscription; both paths work.
-
-## v1 plan
-
-1. **`client.ts`** — typed wrapper over the OpenCode v2 SDK: `createSession`, `promptAsync`, `abort`,
-   `events()` (SSE filtered by sessionID), `replyPermission`, `replyQuestion`, `children`; inject
-   `x-opencode-directory`; optional Basic auth.
-2. **`translate.ts`** — pure + unit-tested: `partToBlocks`, `permissionToControlRequest`,
-   `controlResponseToReply`, `userText`; golden fixtures from a live `opencode serve`.
-3. **`driver.ts`** — `OpencodeDriver` implementing the seam; `start(session, signal)` mirrors
-   `launch.ts` (constructs `HostRcRelay`, `announce` + `serve`); the OpenCode path skips the MITM.
-4. **Wiring** — `--rc-driver={mitm|tmux|opencode}` (default `mitm`) + `--rc-oc-url` / `--rc-oc-model`
-   (default `amazon-bedrock/global.anthropic.claude-sonnet-4-6`) + `RC_OC_*` envs.
-5. **client_unchanged gate** — the empty-diff grep in CI + a parity test.
-6. **e2e against Bedrock — DONE (11/11 live, 2026-06-28).** Start `opencode serve` with the `amazon-bedrock`
-   provider + IMDS-exported static creds (the default model `amazon-bedrock/global.anthropic.claude-sonnet-4-6`
-   needs no `RC_OPENCODE_E2E_MODEL`; the `global.` profile needs no specific region), start the driver
-   against a local broker, drive prompts, assert the frames arrive unchanged. The full `driver.e2e.test.ts`
-   suite (11 scenarios) **passes against real Bedrock** — a real streaming Bedrock turn end-to-end with zero
-   api.anthropic.com (see Gap #7). The e2e **skips (not fails) when the `opencode serve` is unreachable**
-   (server-reachability gate), so CI (which has no server) stays green; a structural live turn may also
-   skip on a slow/contended box (turnGate / `RC_OPENCODE_E2E_TURN_MS`). The model-bearing scenarios
-   `(c)`/`(k)` HARD assert (no skip on model behavior), so a real tool/round-trip regression goes red.
-7. **Per-PR gate** (CLAUDE.md): `pnpm exec biome check .` + `pnpm exec tsc --noEmit` +
-   `pnpm exec vitest run`, `/code-review` + codex, CI green.
+It skips when no OpenCode server is reachable. Provider-backed turn cases also require the configured
+model credentials in the `opencode serve` process. The live cases cover ordered turns, tool
+translation, local and injected prompts, history/restart, interrupt, visible errors, native compact,
+permission round-trip, and two-session isolation.
