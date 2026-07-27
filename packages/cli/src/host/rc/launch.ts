@@ -5,6 +5,7 @@
 // transparent (it passes `/v1/messages` + OAuth through), so a session that never enables RC sends
 // nothing to the broker (lazy registration). One RelayCore owns every RC session the child opens.
 
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,16 +13,27 @@ import type { Identity } from "@remote-claw/clawsec";
 import { BrokerClient } from "../../broker/client.js";
 import { securityProvider } from "../../security/provider.js";
 import { tracerFromEnv } from "../../trace.js";
+import type { NativeConversationCapabilities } from "../native/index.js";
 import { PRETEND_API_KEY, seedAccountlessConfigDir } from "./accountless.js";
 import type { BedrockConfig } from "./bedrock/inference.js";
 import { ensureCerts } from "./certs.js";
 import { MITM_CAPABILITIES, MITM_HARNESS } from "./driver.js";
-import { bridgeSession } from "./drivers/bridge.js";
+import {
+  type LegacyRcConversationMetadata,
+  LegacyRcConversationRegistrar,
+} from "./drivers/legacy-registrar.js";
 import { type GitInfo, gitInfo } from "./gitinfo.js";
 import { MitmProxy } from "./mitm.js";
 import { RelayCore, type Session } from "./session.js";
 
 const RELAY_TEARDOWN_WAIT_MS = 2000;
+const CLAUDE_NATIVE_CAPABILITIES: NativeConversationCapabilities = {
+  version: 1,
+  mutationAdmission: "mixed",
+  history: "none",
+  deliveryEvidence: "structured_receipt",
+  liveReattach: false,
+};
 
 /** How the child claude is launched with the proxy env (injectable for tests). */
 export type SpawnClaudeEnv = (
@@ -84,7 +96,6 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   const provider = securityProvider("sealed", opts.identity);
   const certs = ensureCerts(opts.certsDir);
   const core = new RelayCore();
-  const ac = new AbortController();
   const title = opts.title ?? "remote-claw";
   // Snapshot the session's working dir + git state ONCE at launch for the announce (cwd + #49 chip).
   // Bounded and non-throwing — outside a repo / without git it's just null and no chip shows. Gathered
@@ -96,6 +107,8 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   const mitmTracer = tracerFromEnv("rc.mitm");
   const relayTracer = tracerFromEnv("rc.relay");
   const relays = new Set<Promise<void>>();
+  const registrations = new Set<Promise<void>>();
+  let tearingDown = false;
 
   // If the broker is deployed behind Vercel Deployment Protection (SSO), the host's requests need the
   // automation-bypass secret to get past the edge. Read it from the env on this host; an unprotected
@@ -110,6 +123,69 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
       ...(opts.backend !== undefined ? { backend: opts.backend } : {}),
     });
 
+  // One host-scoped registrar owns the lifecycle of every intercepted conversation. A Session remains
+  // the native port used by today's relay, but neither its synthetic cse_* id nor any other RC transport
+  // value is promoted into the host binding/native identity.
+  const registrar = new LegacyRcConversationRegistrar({
+    newClient,
+    identityId: opts.identity.identityId,
+    relays,
+    tracer: relayTracer,
+  });
+  const registerSession = async (session: Session): Promise<void> => {
+    const metadata: LegacyRcConversationMetadata = {
+      title,
+      cwd,
+      git,
+      capabilities: MITM_CAPABILITIES,
+      harness: MITM_HARNESS,
+    };
+    let lease: Awaited<ReturnType<LegacyRcConversationRegistrar["open"]>> | undefined;
+    try {
+      lease = await registrar.open({
+        bindingId: null,
+        registrationAttemptId: randomUUID(),
+        descriptor: { product: "claude-code", access: "native-rc" },
+        project: null,
+        nativeRef: null,
+        phase: "starting",
+        capabilities: null,
+        port: session,
+        metadata,
+      });
+      if (tearingDown) {
+        await lease.close("host teardown");
+        return;
+      }
+      await lease.update(metadata, CLAUDE_NATIVE_CAPABILITIES);
+      if (tearingDown) {
+        await lease.close("host teardown");
+        return;
+      }
+      await lease.setPhase("ready");
+    } catch (error) {
+      if (lease !== undefined) {
+        await lease.close("registration failed").catch((closeError: unknown) => {
+          relayTracer.error("native conversation lease close failed", {
+            error: String(closeError),
+          });
+        });
+      }
+      throw error;
+    }
+  };
+  const closeRegistrarLeases = async (deadlineMs: number): Promise<void> => {
+    const closing = registrar.closeAll("host teardown").catch((error: unknown) => {
+      relayTracer.error("native conversation registrar teardown failed", {
+        error: String(error),
+      });
+    });
+    // An unresponsive broker post must not keep the wrapper alive forever after the child exits. Every
+    // teardown stage shares one deadline so the same stalled announce cannot consume a fresh grace
+    // period in closeAll(), registration cleanup, and the final relay wait.
+    await waitForTasks([closing], deadlineMs);
+  };
+
   const proxy = new MitmProxy({
     port: 0,
     leafCert: certs.leafPem,
@@ -119,25 +195,19 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     ...(opts.inference !== undefined ? { inference: opts.inference } : {}),
     ...(opts.bedrock !== undefined ? { bedrock: opts.bedrock } : {}),
     onSession: (s) => {
+      // Preserve the existing observability timing: callers see the Session synchronously at MITM
+      // registration, before the asynchronous host registration begins.
       opts.onSession?.(s);
-      // Each RC session the child opens gets its own relay, bridged to the broker until the wrapper
-      // exits. The wiring (announce-now-then-serve — announce must NOT wait on serve()'s durable-cursor
-      // prepare, which would race a viewer's concurrent bus subscribe — tracked in `relays` for the
-      // teardown flush) is shared with every other driver via bridgeSession: the seam keeps the
-      // relay/broker contract identical across harnesses (mitm/tmux/opencode).
-      bridgeSession({
-        session: s,
-        capabilities: MITM_CAPABILITIES,
-        harness: MITM_HARNESS,
-        newClient,
-        identityId: opts.identity.identityId,
-        title,
-        cwd,
-        git,
-        signal: ac.signal,
-        relays,
-        tracer: relayTracer,
+      const registration = registerSession(s).catch((error: unknown) => {
+        // A half-registered Session must not keep accepting native or viewer work. Closing the legacy
+        // Session is the fail-closed error path only; ordinary lease teardown never owns the native port.
+        relayTracer.error("native conversation registration failed", {
+          error: String(error),
+        });
+        s.close();
       });
+      registrations.add(registration);
+      void registration.finally(() => registrations.delete(registration));
     },
   });
   await proxy.listen();
@@ -221,8 +291,15 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     }
     return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
   } finally {
-    ac.abort();
-    await waitForRelays(relays);
+    tearingDown = true;
+    const teardownDeadlineMs = Date.now() + RELAY_TEARDOWN_WAIT_MS;
+    await closeRegistrarLeases(teardownDeadlineMs);
+    await waitForTasks(registrations, teardownDeadlineMs);
+    // Catch a lease whose open raced the first closeAll snapshot. The registration path also observes
+    // tearingDown and closes it, so this second pass is idempotent. Always initiate the second close
+    // even if the shared wait budget is already exhausted.
+    await closeRegistrarLeases(teardownDeadlineMs);
+    await waitForTasks(relays, teardownDeadlineMs);
     await proxy.close();
     // force:true already swallows ENOENT; guard the rest so a cleanup error can't mask the real result.
     if (accountlessDir !== undefined) {
@@ -235,12 +312,14 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   }
 }
 
-async function waitForRelays(relays: Set<Promise<void>>): Promise<void> {
-  const pending = [...relays];
+async function waitForTasks(tasks: Iterable<Promise<void>>, deadlineMs: number): Promise<void> {
+  const pending = [...tasks];
   if (pending.length === 0) return;
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, RELAY_TEARDOWN_WAIT_MS);
+    timer = setTimeout(resolve, remainingMs);
     if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
   });
   try {

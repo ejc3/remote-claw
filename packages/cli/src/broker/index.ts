@@ -1,8 +1,9 @@
 // The browser-safe broker surface, exposed as `@remote-claw/cli/broker`. Everything here imports
 // ONLY clawsec + the Web platform (fetch/SSE) — no node:fs / child_process — so the web client can
-// reuse the exact same transport, FrameOrderer, plane mapping, and SecurityProvider as the host,
-// with zero protocol drift. (The package's "." barrel pulls in the Node-only CLI bits and is not
-// browser-safe; this subpath is.)
+// reuse the host's exact transport, plane mapping, and SecurityProvider, plus the shared
+// FrameOrderer used for viewer transcript projection, with zero wire/security drift. The host's
+// inbound command pump deliberately performs direct msg-id dedup instead of transcript ordering.
+// (The package's "." barrel pulls in the Node-only CLI bits and is not browser-safe; this subpath is.)
 
 export {
   type Level,

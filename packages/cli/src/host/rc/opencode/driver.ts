@@ -184,6 +184,45 @@ export function errText(error: unknown): string {
 const RECONNECT_BACKOFF_MIN_MS = 250;
 const RECONNECT_BACKOFF_MAX_MS = 5000;
 
+/** Let native abort and the bridge's final broker flush settle, but never let either unresponsive
+ * endpoint prevent OpenCode attach-failure or normal driver teardown from returning. */
+export const OPENCODE_TEARDOWN_FLUSH_MS = 2000;
+
+/** Start teardown work with a deadline signal and await it up to `ms`. The timer is unref'd and cleared
+ * on normal settlement so healthy cleanup exits immediately without leaving a process-liveness timer
+ * behind. The deadline aborts cancellation-aware HTTP, while the outer bound still protects against a
+ * transport/test double that ignores its signal. Never rejects. */
+function boundedTeardownWait(
+  start: (deadlineSignal: AbortSignal) => Promise<unknown>,
+  ms: number,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let done = false;
+    let handle: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new AbortController();
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      if (handle !== undefined) clearTimeout(handle);
+      resolve();
+    };
+    handle = setTimeout(() => {
+      deadline.abort();
+      finish();
+    }, ms);
+    if (typeof handle.unref === "function") handle.unref();
+    try {
+      start(deadline.signal).then(finish, finish);
+    } catch {
+      finish();
+    }
+  });
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
+}
+
 /** A Set with a FIFO eviction cap: re-adding a present key refreshes its recency (moves it to newest), and
  *  adding past the cap evicts the OLDEST key. Preserves recent-id dedup across a reconnect's re-backfill
  *  (the relay's bounded-#seen approach) while bounding memory on a long-lived bridge (review #6). A Set in
@@ -324,6 +363,10 @@ export class OpencodeDriver implements Driver {
    *  teardown). Mirrors runRcLaunch's structure: create+initialize the Session, bridge it, run the
    *  pumps, then tear down (abort the OpenCode run, close the session, await the served flush). */
   async run(signal: AbortSignal): Promise<number> {
+    // A dead-on-arrival wrapper owns no OpenCode session. Do not create a relay Session, inspect/select
+    // a native session, or issue a later abort against whatever happens to be active on the server.
+    if (signal.aborted) return 0;
+
     const core = new RelayCore();
     const session = core.create({ title: this.#ctx.title });
     session.pushInitialize(); // guaranteed first downstream event (idempotent)
@@ -356,21 +399,28 @@ export class OpencodeDriver implements Driver {
     // and report non-zero. This is the THIN default: bridge whatever OpenCode session is in use.
     let ocSessionId: string;
     try {
-      ocSessionId = await this.#attach();
+      ocSessionId = await this.#attach(ac.signal);
+      // #attach's HTTP implementation observes this signal, but keep a commit-point check for injected
+      // clients that ignore cancellation and resolve a list/create request after the parent has stopped.
+      throwIfAborted(ac.signal);
+
+      // PERMISSION MIRRORING (default on): flip the bridged session into "ask" mode so every tool raises
+      // a `permission.asked` gate the viewer answers (opencode auto-runs tools otherwise). This is part
+      // of cancellable startup: its GET/PATCH share the parent signal, and the session is not considered
+      // attached until setup finishes. Non-cancellation failures remain best-effort.
+      if (this.#mirror) await this.#enableAskMirroring(ocSessionId, ac.signal);
+      throwIfAborted(ac.signal);
     } catch (e) {
-      this.#tracer.error("opencode attach failed", { error: String(e) });
+      const cancelled = ac.signal.aborted;
+      if (cancelled) this.#tracer.debug("opencode startup cancelled");
+      else this.#tracer.error("opencode attach failed", { error: String(e) });
+      signal.removeEventListener("abort", onAbort);
       ac.abort();
       session.close();
-      await served.catch(() => {});
-      return 1;
+      await boundedTeardownWait(() => served, OPENCODE_TEARDOWN_FLUSH_MS);
+      return cancelled ? 0 : 1;
     }
     this.#tracer.info("opencode session attached", { session: session.id, opencode: ocSessionId });
-
-    // PERMISSION MIRRORING (default on): flip the bridged session into "ask" mode so every tool raises a
-    // `permission.asked` gate the viewer answers (opencode auto-runs tools otherwise — the gate plumbing
-    // below would never fire). Best-effort: a failure must NOT abort the bridge (the session still works,
-    // just without remote gating). Child sub-agent sessions are mirrored in the session.created handler.
-    if (this.#mirror) await this.#enableAskMirroring(ocSessionId);
 
     // HISTORY BACKFILL / RESUME runs INSIDE #capturePump, on the first SSE event (when the subscription
     // is LIVE) — NOT here. Backfilling before subscribing would lose any event arriving in the gap
@@ -387,17 +437,17 @@ export class OpencodeDriver implements Driver {
       return 0;
     } finally {
       signal.removeEventListener("abort", onAbort);
-      // Teardown (review #10): abort the OpenCode run, abort the pumps, close the Session so a final
-      // frame flushes, and await the served promise so the relay's death is observed, not swallowed.
-      try {
-        await this.#client.abort(ocSessionId);
-      } catch {
-        /* best-effort */
-      }
+      // Fence local work before touching the native run: no capture/inject pump may race a teardown
+      // abort. Native abort and relay settlement then share ONE deadline, so neither an unresponsive
+      // OpenCode server nor an unresponsive broker can serially consume another two-second window.
       ac.abort();
       session.workerStatus = "idle";
       session.close();
-      await served.catch(() => {});
+      await boundedTeardownWait(
+        (deadlineSignal) =>
+          Promise.allSettled([this.#client.abort(ocSessionId, deadlineSignal), served]),
+        OPENCODE_TEARDOWN_FLUSH_MS,
+      );
     }
   }
 
@@ -409,23 +459,27 @@ export class OpencodeDriver implements Driver {
    *   3. else (no sessions on the server) → create a fresh one.
    * Returns the chosen `ses_…` id. A list failure falls through to create() so the driver still starts.
    */
-  async #attach(): Promise<string> {
+  async #attach(signal: AbortSignal): Promise<string> {
+    throwIfAborted(signal);
     if (this.#extra.sessionId !== undefined) {
       this.#tracer.debug("attaching to explicit session", { opencode: this.#extra.sessionId });
       return this.#extra.sessionId;
     }
     let sessions: Array<{ id: string }> = [];
     try {
-      sessions = await this.#client.listSessions();
+      sessions = await this.#client.listSessions(signal);
     } catch (e) {
+      throwIfAborted(signal);
       this.#tracer.warn("listSessions failed; creating a fresh session", { error: String(e) });
     }
+    throwIfAborted(signal);
     const first = sessions[0];
     if (first !== undefined) {
       this.#tracer.debug("auto-attaching to most-recent session", { opencode: first.id });
       return first.id;
     }
-    const created = await this.#client.createSession(this.#ctx.title);
+    const created = await this.#client.createSession(this.#ctx.title, signal);
+    throwIfAborted(signal);
     this.#tracer.debug("no existing session; created one", { opencode: created });
     return created;
   }
@@ -973,11 +1027,13 @@ export class OpencodeDriver implements Driver {
    *  if we cannot READ the current rules we do NOT PATCH (a blind replace could silently drop a deny —
    *  better to leave the session ungated than to weaken its policy). A PATCH failure likewise just warns.
    *  The bridge keeps working either way; only remote gating is affected. */
-  async #enableAskMirroring(sessionId: string): Promise<void> {
+  async #enableAskMirroring(sessionId: string, signal?: AbortSignal): Promise<void> {
+    if (signal !== undefined) throwIfAborted(signal);
     let existing: PermissionRule[];
     try {
-      existing = await this.#client.getSessionPermission(sessionId);
+      existing = await this.#client.getSessionPermission(sessionId, signal);
     } catch (e) {
+      if (signal?.aborted) throwIfAborted(signal);
       this.#tracer.warn(
         "could not read opencode session rules — mirroring inactive (policy preserved)",
         {
@@ -987,13 +1043,16 @@ export class OpencodeDriver implements Driver {
       );
       return;
     }
+    if (signal !== undefined) throwIfAborted(signal);
     try {
-      await this.#client.setSessionPermission(sessionId, mergeAskRules(existing));
+      await this.#client.setSessionPermission(sessionId, mergeAskRules(existing), signal);
+      if (signal !== undefined) throwIfAborted(signal);
       this.#tracer.info("opencode permission mirroring on (session set to ask)", {
         sessionId,
         preserved: existing.length,
       });
     } catch (e) {
+      if (signal?.aborted) throwIfAborted(signal);
       this.#tracer.warn("could not set opencode session to ask mode — mirroring inactive", {
         sessionId,
         error: String(e),

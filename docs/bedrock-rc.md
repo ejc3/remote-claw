@@ -262,8 +262,11 @@ A new launch mode parallel to `runRcLaunch`, selected by a flag — e.g.
 2. `launch.ts`: in bedrock mode, **do not** set `CLAUDE_CODE_USE_BEDROCK` (that would disable RC);
    instead inject the pretend `ANTHROPIC_API_KEY` + isolated `CLAUDE_CONFIG_DIR` for the child (mode 1
    above), and keep AWS creds in the *host* env only (never the child).
-3. Everything downstream — `RelayCore`, `HostRcRelay`, `bridgeSession`, the broker, the viewer — is
-   untouched. The viewer drives the native RC TUI exactly as today.
+3. Everything downstream — `RelayCore`, the host-scoped `LegacyRcConversationRegistrar`,
+   `HostRcRelay`, the broker, and the viewer — is untouched by the inference choice. In the current
+   Claude MITM path the registrar gives each intercepted session its own lease and abort controller,
+   then calls `startBridgeSession` when that lease reaches `ready`; OpenCode and tmux retain the direct
+   `bridgeSession` compatibility path. The viewer drives the native RC TUI exactly as today.
 
 ## Risks / open questions
 

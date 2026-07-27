@@ -15,6 +15,13 @@ claude's local transcript JSONL** (capture) and **typing into the pane via `send
 > coordinator-ordered chat also makes the raw pane read-only; a directly writable/provider-connected
 > pane is a separate compatibility/debug mode, not the release target.
 
+**Identity scope.** The shipped driver mints a synthetic remote-claw `Session.id` (`cse_*`) for its
+broker channel and separately controls a tmux pane plus a Claude transcript/session ID. None is an
+implemented durable remote-claw logical-chat ID, and a wrapper restart does not currently preserve
+their binding. A1 uses a persisted logical-chat ID for the broker row/channel only when pane,
+child-process, and native transcript evidence prove reattachment to the same semantic conversation;
+pane name or PID reuse is not enough.
+
 The decisive fact (verified against real transcripts, claude 2.1.63–2.1.177): the
 `message.content` blocks in `~/.claude/projects/<slug(cwd)>/<sessionId>.jsonl` are **byte-identical**
 to what the relay's `mapUpstreamItems` already destructures. So the tmux driver produces the canonical
@@ -69,8 +76,10 @@ const served = bridgeSession({
 // finally: ac.abort(); s.close(); await served; tmux.killSession();
 ```
 
-`bridgeSession` starts presence announcement fire-and-forget and starts `relay.serve(...)`
-immediately; the announcement is not a startup/readiness barrier.
+`bridgeSession` starts the presence announcement and `relay.serve(...)` immediately; the
+announcement is not a startup/readiness barrier. Its returned `served` promise nevertheless waits
+for the admitted initial announcement to settle. The driver awaits that promise only within its
+bounded teardown window, so an indefinitely stalled broker still cannot hang exit.
 
 ---
 
@@ -193,7 +202,7 @@ for await (const ev of s.followDownstream(gen, () => signal.aborted)) {
     }
   } else if (ev.eventType === "control_request") {
     // interrupt retries Escape; set_model uses the same two-phase path for `/model <id>`.
-    // initialize, set_permission_mode, and end_session have no pane action but are still ACKed.
+    // initialize, set_permission_mode, and a directly queued end have no pane action but are ACKed.
   } else if (ev.eventType === "control_response") {
     // With permission mirroring on, persist the hook decision, then ACK.
   }
@@ -208,6 +217,10 @@ Prompt/key events are ACKed only after their tmux action succeeds; unsupported/n
 ACKed immediately. A permission response is ACKed after its decision callback returns. The current
 callback logs and swallows a decision-file write failure, so that path is not a durable delivery
 receipt even though it prevents a reclaimed stream from replaying the response.
+
+An authenticated viewer `end` does not enqueue `end_session`, kill the pane, or close this bridge.
+`HostRcRelay` consumes it locally and only clears open relay permission gates; the pane remains under
+the driver's normal local/host teardown policy.
 
 ### 2.4 Status — a quiet-timer debounce
 
@@ -444,8 +457,11 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
    (no stat/open race). Two residual limits remain (see below).
 7. **Recovery is transcript-backed, but the binding is not durable.** Capture reads the selected
    native transcript from offset zero, so an attach can project the available Claude JSONL history
-   into its relay session. A wrapper restart still has no durable remote-claw-session ↔ transcript
-   binding, and broker-side history remains subject to the configured backend's durability.
+   into a fresh synthetic `cse_*` relay channel. A wrapper restart still has no durable
+   remote-claw-logical-chat ↔ pane/process/transcript binding, and broker-side history remains subject
+   to the configured backend's durability. `/clear` or an unproven replacement must not reuse a future
+   logical-chat ID; `/branch` requires distinct fork lineage, while `/compact` preserves identity only
+   when native evidence proves it.
 8. **tmux dependency** — clear error if absent; unit tests need no tmux.
 9. **One driver per wrapper process** (RelayCore is per-launch); pane-liveness ends the bridge when
    claude exits / the pane closes.

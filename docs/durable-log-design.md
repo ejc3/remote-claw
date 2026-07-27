@@ -1,8 +1,9 @@
 # Durable Log Design for remote-claw
 
-This design treats remote-claw relay mode as the durable remote-control
-server of record. The broker/Turso frame log is still the durable viewer
-transport, but it is not enough to reconstruct Claude remote-control server
+This design treats remote-claw relay mode as the durable private remote-control
+protocol server of record, not as the owner of the semantic native conversation
+or canonical logical-chat identity. The broker/Turso frame log is still the
+durable viewer transport, but it is not enough to reconstruct Claude remote-control server
 state: the wrapper must durably store RC event ids, RC sequence numbers,
 worker epochs, downstream delivery state, and compaction boundaries before it
 can safely accept resume/re-bridge after restart.
@@ -13,8 +14,8 @@ purpose. Historical investigations reported that local Claude JSONL exposed
 a complete local transcript and `--remote-control --resume <U>` did not replay
 prior history to a fresh accepting server. Those behaviors remain gates below,
 not tracked guarantees. The design therefore makes the durable MITM log the
-primary source of truth for remote-claw relay mode rather than relying on local
-transcript completeness or replay.
+primary source of truth for private RC protocol state rather than relying on
+local transcript completeness or replay.
 
 > **Scope update (2026-07-26):** this document remains the detailed storage plan for the current
 > synthetic Claude RC server. [Client-driven Host Runtime](client-driven-host-runtime.md) narrows the
@@ -37,6 +38,8 @@ transcript completeness or replay.
   be checked against tracked code, tests, and sanitized captures rather than
   treating these unavailable note names as repository sources.
 - Current code: `packages/cli/src/host/rc/{mitm,session,relay,launch}.ts`,
+  `packages/cli/src/host/rc/drivers/{bridge,legacy-registrar}.ts`,
+  `packages/cli/src/host/native/adapter.ts`,
   `packages/cli/src/host/rc/anthropic/*.ts`,
   `packages/cli/src/broker/{client,protocol,order}.ts`, and
   `apps/web/lib/broker/{backend,local,vercel,sqlite-multi,turso-cloud-locator}.ts`.
@@ -65,9 +68,11 @@ endpoint surface is summarized in `docs/phase0-findings.md` §4b.
 identity was `cse_<suffix>`, while a live worker registry also used
 `session_<suffix>` with the same suffix; resume/re-bridge reportedly kept the
 same `cse_`. Current `mitm.ts` works in `cse_` terms for
-`/v1/code/sessions/{sid}/...`. Durable storage should keep canonical
-`cse_session_id`; any `session_alias` derivation must wait for a tracked fixture
-or gated re-verification.
+`/v1/code/sessions/{sid}/...`. Durable storage should keep `cse_session_id` as
+the canonical key **inside this private RC transport store only**. It is not the
+remote-claw logical chat ID or Claude's native transcript/resume identity. Any
+`session_alias` derivation must wait for a tracked fixture or gated
+re-verification.
 
 **Historical investigation claim — local transcript completeness.** Fresh
 remote-control turns reportedly wrote only incomplete title/stub rows locally,
@@ -124,6 +129,11 @@ later resume/re-bridge on the same `cse_`, bump epoch, and continue. The design
 treats archive as metadata rather than hard delete, subject to the Phase B5
 gate.
 
+The current viewer-facing behavior is narrower and matches that protocol limit: authenticated viewer
+`end` is consumed by `HostRcRelay`, clears open relay permission gates, and emits no `end_session` or
+native-session termination. Claude MITM host teardown instead aborts each registrar lease's own relay
+controller; ordinary lease close does not own or close the native `Session`.
+
 **Historical investigation claim — compact.** Local and remote compact
 experiments showed no server-side reset event; the server saw an empty
 successful result, while the compact summary appeared only in local JSONL as
@@ -166,8 +176,8 @@ The RC event log projects into the broker frame log. Projection is idempotent:
 an accepted RC event can create zero or more rendered viewer parts, each with a
 deterministic broker message id derived from the RC event id and part index.
 The raw RC order remains `(sequence_num, part_index)`; broker `seq` remains a
-dense viewer-order cursor because existing `FrameOrderer` treats `seq` as the
-viewer stream order and chunk parts as fragments of one same-kind message.
+dense viewer-order cursor because the viewer-side `FrameOrderer` treats `seq` as
+the viewer stream order and chunk parts as fragments of one same-kind message.
 
 For the future host runtime, this RC-specific schema remains an adapter-local private-Claude transport
 store alongside the narrow coordinator control journal; it does not become the semantic transcript.
@@ -175,6 +185,32 @@ The journal's `command_seq` is the definitive admitted-command order, while rebu
 `chat_seq`, Claude `sequence_num`, Codex thread/turn/item IDs, and broker `seq` are mappings/cursors in
 their separate domains. An adapter or provider incarnation may be replaced without changing
 `logical_chat_id`.
+
+The durable identity join is:
+
+```text
+logical_chat_id                     remote-claw's canonical user chat
+└── native_binding_id               binding to the proven semantic Claude conversation
+    ├── native incarnation history  exact Claude process generations
+    └── rc_attachment_id            one private RC transport generation
+        └── cse_session_id           canonical only within the RC event/worker tables below
+            └── worker_epoch         lease to one native incarnation + coordinator epoch
+```
+
+Claude's proven transcript/resume UUID belongs to the native binding's
+`conversationId`; it must never be inferred from or replaced by `cse_session_id`.
+On recovery the coordinator first reuses a known, complete `cse_session_id` and
+starts a new worker epoch tied to the current native incarnation and coordinator
+epoch. The attachment belongs to the native binding, not to one process
+incarnation, so a cold native resume can reuse the same `cse_session_id`. A new
+`cse_session_id` is allowed under the same `logical_chat_id` only through a
+durable, proof-carrying RC-attachment replacement: preserve and supersede the
+old attachment, bind the replacement to the exact logical chat/native binding,
+and record the recovery evidence plus any explicit history gap. A gap records
+missing evidence; it does not by itself prove that the old attachment can no
+longer accept writes. Merely seeing an unknown `cse_*`, losing process memory,
+or reconnecting a client is not replacement proof and never creates a new
+logical chat.
 
 ## Data Model
 
@@ -221,8 +257,8 @@ viewer-frame insertion.
 CREATE TABLE rc_sessions (
   cse_session_id      TEXT PRIMARY KEY,
   session_alias       TEXT NOT NULL UNIQUE,
-  local_session_uuid  TEXT,
-  broker_session_id   TEXT,
+  local_session_uuid  TEXT, -- observed copy; native binding owns this identity
+  broker_session_id   TEXT, -- legacy/denormalized only; not A1 identity authority
   title               TEXT,
   cwd                 TEXT,
   model               TEXT,
@@ -236,17 +272,50 @@ CREATE TABLE rc_sessions (
   metadata_json       TEXT NOT NULL DEFAULT '{}'
 );
 
+-- Coordinator-owned identity mapping. The logical-chat and native-binding
+-- records live in the narrow control journal described by
+-- client-driven-host-runtime.md; these ids are not aliases for cse_session_id.
+CREATE TABLE rc_transport_attachments (
+  rc_attachment_id       TEXT PRIMARY KEY,
+  logical_chat_id        TEXT NOT NULL,
+  native_binding_id      TEXT NOT NULL,
+  rc_generation          INTEGER NOT NULL,
+  cse_session_id         TEXT NOT NULL UNIQUE,
+  replaces_attachment_id TEXT,
+  status                 TEXT NOT NULL, -- active, superseded, closed
+  recovery_evidence_json TEXT NOT NULL DEFAULT '{}',
+  created_at_ms          INTEGER NOT NULL,
+  superseded_at_ms       INTEGER,
+  UNIQUE (native_binding_id, rc_generation),
+  UNIQUE (rc_attachment_id, cse_session_id),
+  FOREIGN KEY (cse_session_id) REFERENCES rc_sessions(cse_session_id),
+  FOREIGN KEY (replaces_attachment_id)
+    REFERENCES rc_transport_attachments(rc_attachment_id)
+);
+
+CREATE UNIQUE INDEX rc_transport_attachments_one_active
+  ON rc_transport_attachments (native_binding_id)
+  WHERE status = 'active';
+
 CREATE TABLE rc_worker_epochs (
   cse_session_id      TEXT NOT NULL,
   worker_epoch        INTEGER NOT NULL,
+  rc_attachment_id    TEXT NOT NULL,
+  native_incarnation  INTEGER NOT NULL,
+  coordinator_epoch   INTEGER NOT NULL,
   bridge_started_at_ms INTEGER NOT NULL,
   last_heartbeat_at_ms INTEGER,
   worker_jwt_id       TEXT,
   status              TEXT NOT NULL DEFAULT 'active',
   metadata_json       TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (cse_session_id, worker_epoch),
-  FOREIGN KEY (cse_session_id) REFERENCES rc_sessions(cse_session_id)
+  FOREIGN KEY (rc_attachment_id, cse_session_id)
+    REFERENCES rc_transport_attachments(rc_attachment_id, cse_session_id)
 );
+
+CREATE UNIQUE INDEX rc_worker_epochs_one_active
+  ON rc_worker_epochs (cse_session_id)
+  WHERE status = 'active';
 
 CREATE TABLE rc_events (
   cse_session_id      TEXT NOT NULL,
@@ -326,7 +395,7 @@ interface RcEventStore {
   createSession(input: CreateSessionInput): Promise<RcSession>;
   getSession(cseSessionId: string): Promise<RcSession | undefined>;
   adoptSession(input: AdoptSessionInput): Promise<RcSession>;
-  beginBridge(cseSessionId: string): Promise<WorkerEpoch>;
+  beginBridge(input: BeginBridgeInput): Promise<WorkerEpoch>;
   heartbeat(cseSessionId: string, workerEpoch: number): Promise<void>;
   appendDownstream(input: AppendDownstreamInput): Promise<AcceptedEvent>;
   appendUpstream(input: AppendUpstreamInput): Promise<AppendResult>;
@@ -342,7 +411,10 @@ interface RcEventStore {
 `appendUpstream` is the central idempotency primitive. It must run in one
 transaction:
 
-1. Verify the `worker_epoch` is current for the `cse_session_id`.
+1. Resolve the exact worker lease and verify that its `(rc_attachment_id, cse_session_id)` pair
+   matches an active attachment, its native incarnation is current for that binding, and its
+   coordinator epoch is current. A numerically current `worker_epoch` on a superseded attachment is
+   rejected.
 2. Extract the Claude-minted `event_id` and compute a canonical payload hash.
 3. If `(cse_session_id, event_id)` already exists with the same hash or a separately validated
    downstream/upstream echo tuple, return the original `sequence_num` and `duplicate:true`. Reject a
@@ -373,9 +445,10 @@ Concrete changes:
   `core.create(data)` and receive a durable `Session`. `core.create` must use
   `RcEventStore.createSession`, not only an in-memory `Map`.
 - In `MitmProxy.#intercept`, `/bridge` should call `Session.beginBridge()`.
-  That method increments or records the durable `worker_epoch`, returns a
-  worker JWT scoped to `(cse_session_id, worker_epoch)`, and fences older
-  workers.
+  That method increments or records the durable `worker_epoch`, binds it to the
+  current native incarnation and coordinator epoch, atomically supersedes the
+  prior active worker lease, returns a worker JWT scoped to
+  `(cse_session_id, worker_epoch)`, and fences older workers.
 - In `MitmProxy.#intercept`, `POST /worker/events` must call
   `Session.pushUpstream(payload, workerEpoch)` and return the durable result:
   `{event_id, sequence_num: String(sequenceNum), duplicate}` for each item.
@@ -415,6 +488,12 @@ truth to wrapping durable state:
 
 - Keep `HostRcRelay` as the component that maps accepted RC events to broker
   `WireFrame`s.
+- Preserve the current A0.1 lifecycle boundary: Claude MITM sessions enter through
+  `LegacyRcConversationRegistrar`, which starts `startBridgeSession` only at `ready`; OpenCode and
+  tmux still use the `bridgeSession` compatibility helper directly. Each registrar lease owns its
+  relay abort signal, and the bridge's `served` promise tracks the admitted initial and lifecycle
+  refresh posts through settlement; launchers may still bound how long teardown waits for that
+  promise.
 - Keep the existing branch-A2 idea that durable broker backends do not rely on
   `HostRcRelay.#log` for catch-up. In durable mode, `#log` is not the source of
   truth.
@@ -457,7 +536,13 @@ event-id idempotency.
 
 `POST /v1/code/sessions/{cse}/bridge`:
 
-- If the durable session exists, start a new bridge epoch and return
+- Resolve the presented `cse_` through `rc_transport_attachments` and verify that
+  its logical chat, native binding, and attachment status match the
+  coordinator's current lease. The `cse_` alone grants no authority to select or
+  create a logical chat.
+- If the durable session exists, start a new bridge epoch tied to the exact
+  current native incarnation and coordinator epoch, atomically supersede any
+  prior active worker lease for that attachment, then return
   `api_base_url`, `expires_in`, `worker_epoch`, and `worker_jwt`.
 - If the session does not exist but the wrapper intentionally supports
   adopting unknown `cse_` ids, insert an `adopted_missing_history` session and
@@ -469,13 +554,19 @@ event-id idempotency.
 `GET /worker/events/stream`:
 
 - Authenticate the worker JWT and extract `(cse_session_id, worker_epoch)`.
+- Before opening or continuing the stream, resolve that epoch through its exact
+  attachment pair and require the attachment, native incarnation, and
+  coordinator epoch all to remain current. Stop the stream when any check
+  becomes stale.
 - Send durable pending downstream events in sequence order.
 - On reconnect for the same epoch, resend events not marked `processed`.
 - Keep heartbeat behavior compatible with current Claude worker expectations.
 
 `POST /worker/events`:
 
-- Authenticate the worker and enforce current epoch.
+- Authenticate the worker and enforce the complete active lease across the
+  attachment, native incarnation, and coordinator epoch, not only the numeric
+  epoch for that `cse_session_id`.
 - For each item, call the idempotent append transaction.
 - Return exactly the durable values:
 
@@ -498,13 +589,15 @@ event-id idempotency.
 `POST /worker/events/delivery`:
 
 - Persist `received` and `processed` state by event id and epoch.
+- Apply the same complete active-lease validation before accepting an
+  acknowledgement.
 - Treat unknown acks as non-fatal but log them; they may come from stale worker
   cleanup or already-compacted local state.
 
 `/worker/heartbeat` and worker registry endpoints:
 
-- Update `rc_worker_epochs.last_heartbeat_at_ms` and return current epoch
-  metadata.
+- Validate the complete active lease, then update
+  `rc_worker_epochs.last_heartbeat_at_ms` and return current epoch metadata.
 - Do not allocate sequence numbers for heartbeat.
 
 Archive/close:
@@ -524,18 +617,48 @@ New remote-control session:
 
 Resume/re-bridge for known `cse_`:
 
-1. `/bridge` looks up `rc_sessions`.
-2. It starts epoch `current_worker_epoch + 1`.
-3. It does not wait for Claude to replay history.
-4. `maxSequence(cse)` seeds the next RC server sequence.
-5. Pending downstream deliveries are computed from durable ack state.
+1. Load the canonical `logical_chat_id`, its current native binding/incarnation,
+   and that binding's active RC attachment.
+2. Reuse its known `cse_session_id`; do not mint a replacement merely because
+   the coordinator or wrapper process restarted.
+3. `/bridge` looks up `rc_sessions` and starts epoch
+   `current_worker_epoch + 1`, recording the current native incarnation and
+   coordinator epoch on that worker lease.
+4. It does not wait for Claude to replay history.
+5. `maxSequence(cse)` seeds the next RC server sequence.
+6. Pending downstream deliveries are computed from durable ack state and the
+   coordinator reconciles their exact native-delivery attempts before any
+   redelivery.
+
+Proven RC attachment replacement for the same logical chat:
+
+1. Stop admission and reconcile or quarantine every delivery attempt tied to
+   the exact old attachment/worker lease and the native incarnation recorded on
+   that lease.
+2. Establish why the known `cse_` cannot be reused. The transition requires
+   positive replacement/containment evidence that the old attachment cannot
+   remain writable; a missing row, timeout, empty process memory, or operator
+   acknowledgement is insufficient. Commit a recovery gap for any missing
+   history, but do not treat that gap as containment.
+3. In one durable transition, mark the old `rc_transport_attachments` row
+   and its active worker lease `superseded`, allocate a new
+   `rc_attachment_id`/`rc_generation` and `cse_session_id`, and map it to the
+   same `logical_chat_id` and native binding.
+4. Start the new RC session at its own transport sequence and a worker epoch
+   tied to the exact current native incarnation and coordinator epoch.
+   Preserve the old RC log for deduplication/audit and continue logical
+   `command_seq`/projection correlation across the attachment boundary.
+5. Never replay an old transcript row or previously attempted command into the
+   replacement merely to reconstruct context.
 
 Resume/re-bridge for unknown `cse_`:
 
 - Recommended default: reject with a clear diagnostic because accepting creates
   a session with no past history and Claude will not fill it in.
 - Debug option: adopt as `adopted_missing_history`, start at sequence 1 or the
-  first accepted sequence, and mark viewer history incomplete.
+  first accepted sequence, mark viewer history incomplete, and require an
+  explicit operator-supplied logical-chat/native-binding target. Debug adoption
+  never derives or creates that authority from the unknown `cse_`.
 
 Viewer catch-up after wrapper restart:
 
@@ -628,6 +751,14 @@ worker/app:
   delivery is correlated to the existing command and never injected twice.
 - Official-client events arrive at the remote-claw-owned worker connector,
   enter the journal/actor, and only then cross the private inner RC façade.
+- Provider ingress deduplicates by the coordinator's durable logical-chat, outside-binding,
+  source-event-namespace, and event-ID identity, not by connector incarnation. Reconnect or provider
+  replacement must consult canonical source-event, observation, and correlation history across prior
+  incarnations before allocating a command. A reset namespace requires a versioned,
+  capability-pinned transition classifier plus boundary coordinates, and each observation retains its
+  comparable provider coordinate and classification evidence. Proven overlap resolves to its prior
+  command; only a proven post-boundary reuse becomes new, while ambiguity fails closed. The RC-local
+  `(cse_session_id, event_id)` key remains only a private Claude transport key.
 - The control journal persists local command/`command_seq`; the projector maps that to `chat_seq` and provider event
   identity/sequence, inner event identity, delivery, history/SSE, and reconnect
   mappings. No single field is assumed to span every surface before proof.
@@ -709,13 +840,18 @@ Phase B1 - Host RC event store:
   `packages/cli/src/host/rc/session.ts`,
   `packages/cli/src/host/rc/mitm.ts`,
   `packages/cli/src/host/rc/launch.ts`.
-- Goal: create durable `rc_sessions`, `rc_events`, `rc_worker_epochs`, and
-  `rc_downstream_delivery`; make `POST /worker/events` idempotent.
-- Tests: append/replay duplicate, stale epoch reject, restart and resume same
-  `cse_`, unknown `cse_` policy, sequence max+1 after restart.
+- Goal: create durable `rc_sessions`, `rc_transport_attachments`, `rc_events`,
+  `rc_worker_epochs`, and `rc_downstream_delivery`; make
+  `POST /worker/events` idempotent and preserve the coordinator's
+  logical-chat/native-binding/RC-attachment mapping.
+- Tests: append/replay duplicate, stale epoch reject, restart and reuse the
+  known `cse_`, unknown `cse_` policy, sequence max+1 after restart, and a
+  proof-carrying replacement `cse_` that remains under the same logical chat.
 - Gate: duplicate upstream POST returns `duplicate:true` with original
   sequence; restart plus `--remote-control --resume <U>` continues from stored
-  history with no replay required.
+  history with no replay required. Recovery must try the known `cse_` first;
+  replacement without recorded containment proof fails closed and cannot mint
+  another logical chat.
 
 Phase B2 - Durable downstream delivery and epoch fencing:
 
@@ -768,10 +904,22 @@ Phase B5 - Archive/close fidelity:
 - Integration test `mitm.ts` worker POST shape: returns real
   `{event_id, sequence_num, duplicate}` values.
 - Integration test resume: start session, append Q&A, restart wrapper, bridge
-  same `cse_`, verify no replay is needed and next event sequence is max+1.
+  same known `cse_`, verify no replacement attachment is allocated, no replay
+  is needed, and next event sequence is max+1.
+- Integration test proven replacement: prove the old attachment contained,
+  explicitly gap any missing history, allocate a replacement `cse_`, and verify
+  both attachments map to the same `logical_chat_id`/native binding while only
+  the replacement is active.
+- Integration test unproven replacement: timeout, missing process memory, or an
+  unknown `cse_` cannot silently replace the active attachment, create a
+  logical chat, or cause an old command to execute again.
 - Integration test interrupt: user event plus empty result renders a completed
   turn without assistant text.
 - Integration test two workers: epoch N accepted, epoch N-1 rejected.
+- Integration test attachment replacement fencing: after the attachment and its
+  active worker lease are superseded, every stream, event, acknowledgement, and
+  heartbeat operation using the old `cse_*`/epoch is rejected even if that
+  epoch remains the old session's numeric maximum.
 - Projection test: raw RC event with multiple render parts maps to stable broker
   frames; reprojection is no-op under `UNIQUE(token, gen, msg_id, part)`.
 - Compact test: JSONL summary row creates compact marker and viewer reset.
@@ -786,8 +934,17 @@ A durability PR is not complete unless it demonstrates these properties:
   duplicate `/worker/events` POSTs with the original sequence numbers.
 - `claude --remote-control --resume <U>` against the restarted wrapper does not
   depend on Claude replaying prior history.
+- Recovery reuses the known `cse_` before considering replacement. A replacement
+  is accepted only after its containment proof and any recovery gap are
+  durable, preserves the same canonical logical chat and native binding, binds
+  its worker epoch to the exact current native incarnation/coordinator epoch,
+  and does not replay prior commands.
+- No code path treats `cse_session_id` as `logical_chat_id` or as Claude's
+  native transcript/resume `conversationId`.
 - Viewer catch-up works without `HostRcRelay.#log`.
 - Stale worker epochs cannot write canonical events.
+- A worker epoch on a superseded attachment, native incarnation, or coordinator
+  epoch cannot stream, write, acknowledge, or heartbeat.
 - `/compact` does not claim RC wire support for reset; any reset is explicitly
   wrapper-synthesized from local transcript evidence.
 - Outward-provider connector tests use only sessions created for the test and
@@ -799,7 +956,9 @@ A durability PR is not complete unless it demonstrates these properties:
   encryption, and the RC event log is never sent to the broker, so there is no host-encryption question.
   The broker holds only sealed frames; RC plaintext stays on the host.
 - Unknown resume policy: production should reject unknown `cse_` resumes by
-  default; debug adoption is useful but must mark history incomplete.
+  default; debug adoption is useful but must mark history incomplete and name
+  an existing logical-chat/native-binding target explicitly. An unknown `cse_`
+  is never sufficient evidence to allocate or select a logical chat.
 - Broker sequence mapping: recommended design keeps dense broker `seq` separate
   from RC `sequence_num`. A simpler one-seq design is possible only if the
   projector guarantees one same-kind broker frame per RC event.

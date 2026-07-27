@@ -112,12 +112,13 @@ export class OpencodeClient {
   }
 
   /** Create a fresh OpenCode session, returning its `ses_…` id. */
-  async createSession(title?: string): Promise<string> {
+  async createSession(title?: string, signal?: AbortSignal): Promise<string> {
     const body = title !== undefined ? JSON.stringify({ title }) : "{}";
     const res = await this.#fetch(`${this.#baseUrl}/session`, {
       method: "POST",
       headers: this.#headers(true),
       body,
+      ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) throw new OpencodeError(res.status, `createSession failed: ${res.status}`);
     const data = (await res.json()) as { id?: unknown };
@@ -131,10 +132,11 @@ export class OpencodeClient {
    * running the wrapper bridges whatever OpenCode session is in use rather than imposing a new one.
    * Returns just the `id` (the field auto-attach needs); the full Session object is server-owned.
    */
-  async listSessions(): Promise<Array<{ id: string }>> {
+  async listSessions(signal?: AbortSignal): Promise<Array<{ id: string }>> {
     const res = await this.#fetch(`${this.#baseUrl}/session`, {
       method: "GET",
       headers: this.#headers(false),
+      ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) throw new OpencodeError(res.status, `listSessions failed: ${res.status}`);
     const data = (await res.json()) as unknown;
@@ -191,10 +193,11 @@ export class OpencodeClient {
   }
 
   /** Interrupt the running turn (maps the relay's `interrupt` verb). Best-effort; ignores the result. */
-  async abort(sessionId: string): Promise<void> {
+  async abort(sessionId: string, signal?: AbortSignal): Promise<void> {
     const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}/abort`, {
       method: "POST",
       headers: this.#headers(false),
+      ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) throw new OpencodeError(res.status, `abort failed: ${res.status}`);
   }
@@ -219,10 +222,11 @@ export class OpencodeClient {
    *  field is absent (a fresh session carries none) or malformed. The driver merges these with its
    *  wildcard ask rule so an existing per-session policy — especially a hard `deny` — is PRESERVED rather
    *  than clobbered by the mirroring PATCH. */
-  async getSessionPermission(sessionId: string): Promise<PermissionRule[]> {
+  async getSessionPermission(sessionId: string, signal?: AbortSignal): Promise<PermissionRule[]> {
     const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}`, {
       method: "GET",
       headers: this.#headers(false),
+      ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) throw new OpencodeError(res.status, `getSessionPermission failed: ${res.status}`);
     const data = (await res.json()) as { permission?: unknown };
@@ -234,11 +238,16 @@ export class OpencodeClient {
    *  ask rules. Verified live against opencode 1.17.5: a per-session `permission` override (PATCH or at
    *  create) makes each tool emit `permission.asked`. opencode is LAST-match-wins, so callers put the
    *  catch-all ask FIRST and any preserved (specific) rules AFTER it. 200 on success; we don't read the body. */
-  async setSessionPermission(sessionId: string, rules: readonly PermissionRule[]): Promise<void> {
+  async setSessionPermission(
+    sessionId: string,
+    rules: readonly PermissionRule[],
+    signal?: AbortSignal,
+  ): Promise<void> {
     const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}`, {
       method: "PATCH",
       headers: this.#headers(true),
       body: JSON.stringify({ permission: rules }),
+      ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");

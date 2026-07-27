@@ -2,10 +2,15 @@
 
 **Status:** selected next architecture; implementation in progress.
 
-**Current behavior is unchanged:** today `--rc-app` hosts an in-memory `RelayCore` that lazily creates
-and bridges one Claude-shaped `Session` per intercepted Claude RC session. The separate OpenCode and
-tmux launch paths each create and bridge their own wrapper `Session`. No current path persists a
-logical-chat/native binding across an ordinary wrapper restart, and Codex is not implemented.
+**Current external behavior remains compatible:** today `--rc-app` hosts an in-memory `RelayCore`
+that lazily creates one Claude-shaped `Session` per intercepted Claude RC session. A host-scoped
+process-local registrar now gives each intercepted session a distinct `rcb_*` lease, waits for
+validated capabilities and `ready`, and only then starts its broker bridge. The separate OpenCode and
+tmux launch paths still create and bridge their wrapper `Session` directly. No current path persists a
+logical-chat/native binding across an ordinary wrapper restart; the current synthetic Claude
+`Session.id` is also used as the broker/web session key, so an ordinary restart can appear as another
+row. Codex is not implemented. The selected A1 design below removes that ID alias and keeps the
+remote-claw logical chat stable across proven native recovery.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
 ## 1. Decision
@@ -133,6 +138,31 @@ IDs from one layer never become IDs for another:
 - one Claude outward Remote session normally represents one logical chat;
 - replacing or resuming a native process updates its binding without silently merging another chat.
 
+The durable identity layers are:
+
+| ID | Meaning | Restart rule |
+| --- | --- | --- |
+| `logicalChatId` | Canonical remote-claw chat and visible web row | Stable across coordinator, wrapper, native-process, inner-transport, and outward-connector restart |
+| `nativeBindingId` | Durable relationship between one logical chat and its current native conversation | Stable while the same semantic native conversation is resumed; explicit replacement retains immutable prior binding history |
+| Native conversation ID | Claude transcript/resume UUID, Codex thread ID, or OpenCode session ID | Native evidence; never a remote-claw routing ID |
+| Native runtime/incarnation | One provably identified process, app server, or server generation | Advances on a cold native replacement; a live reattach may retain it |
+| Native transport attachment | Inner Claude `cse_*`, app-server connection, SSE connection, or tmux attachment | Reused first when the native protocol permits; otherwise replaceable beneath the binding |
+| Outside binding/incarnation | Anthropic Remote session, ChatGPT host/chat, or web transport mapping and connection epoch | Independent of native restart; reconnect or provider-forced replacement does not change `logicalChatId` |
+| Source event namespace | Proven uniqueness domain for one outside source's event IDs | May span connector incarnations; changes only after positive evidence that the provider reset or replaced the ID domain |
+
+`logicalChatId` is allocated durably before the first native or outward mutation. It is never derived
+from a title, working directory, message text, `cse_*`, Codex/OpenCode ID, pane, broker channel, or
+provider ID. `command_seq` and normalized `chat_seq` are scoped to it and do not reset when any
+transport changes. Exactly one native binding/incarnation is writable at a time; superseded records
+remain immutable because delivery attempts name the exact native reference they might have reached.
+
+An infrastructure restart never creates another visible chat. A proven resume of the same semantic
+native conversation keeps both `logicalChatId` and `nativeBindingId`, even if the runtime or private
+transport ID changes. An explicit new/clear creates a new logical chat; a fork creates a new logical
+chat with parent/fork lineage. If recovery cannot prove the expected native identity, remote-claw
+quarantines the old chat instead of matching by title or text. Only an explicit recovery decision may
+either install a successor binding with a visible gap under that chat or create a new logical chat.
+
 ## 4. Host-wide native-client adapters
 
 The current exported `Driver` interface is a partial, one-session, Claude-RC-shaped seam; the CLI
@@ -140,7 +170,7 @@ dispatcher still branches directly among MITM, OpenCode, and tmux launch paths, 
 create several sessions. That interface cannot be the host-wide contract because Codex needs one host
 runtime that discovers and serves many threads.
 
-The new host-level boundary is:
+The host-level boundary introduced in A0.1 is:
 
 ```ts
 type EngineProduct = "claude-code" | "codex" | "opencode";
@@ -225,20 +255,224 @@ interface NativeEngineAdapter<TPort = unknown, TMetadata = unknown> {
 }
 ```
 
+That A0 contract is deliberately lifecycle-only. Its process-local `bindingId` is an `rcb_*` lease
+key, not the canonical chat ID. A1 adds durable records above it:
+
+```ts
+interface LogicalChatRecord {
+  logicalChatId: string;
+  projectId: string;
+  state: "recovering" | "ready" | "quarantined" | "closed";
+  nextCommandSeq: number;
+  currentNativeBindingId: string | null;
+  parentChatId: string | null;
+}
+
+interface NativeBindingRecord {
+  nativeBindingId: string;
+  logicalChatId: string;
+  descriptor: NativeEngineDescriptor;
+  projectId: string;
+  semanticConversationId: string | null;
+  currentIncarnation: number | null;
+  state: "starting" | "current" | "superseded" | "closed";
+}
+
+interface NativeTransportAttachment {
+  attachmentId: string;
+  nativeBindingId: string;
+  kind: "claude-inner-rc" | "app-server" | "server" | "tmux";
+  transportId: string;
+  generation: number;
+  state: "current" | "superseded" | "closed";
+}
+
+interface NativeTransportLease {
+  attachmentLeaseId: string;
+  attachmentId: string;
+  nativeIncarnation: number;
+  coordinatorEpoch: number;
+  transportEpoch: number;
+  state: "current" | "superseded" | "closed";
+}
+
+interface OutsideBindingRecord {
+  outsideBindingId: string;
+  logicalChatId: string;
+  kind: "anthropic-remote" | "chatgpt-remote" | "web" | "local";
+  currentIncarnationId: string | null;
+  state: "current" | "closed";
+}
+
+interface SourceEventNamespaceRecord {
+  sourceEventNamespaceId: string;
+  outsideBindingId: string;
+  sourceNativeNamespaceId: string;
+  originTransitionId: string | null;
+  state: "current" | "superseded" | "closed";
+}
+
+interface OutsideBindingIncarnation {
+  outsideIncarnationId: string;
+  outsideBindingId: string;
+  providerOrChannelId: string;
+  sourceEventNamespaceId: string;
+  currentCapabilitySnapshotId: string | null;
+  currentCapabilityVerificationId: string | null;
+  connectionEpoch: number;
+  state: "current" | "superseded" | "closed";
+}
+
+interface OutsideProtocolCapabilities {
+  ingressFamilies: readonly string[];
+  projectionFamilies: readonly string[];
+  controlFamilies: readonly string[];
+  acknowledgement: "none" | "transport-receipt" | "durable-receipt";
+  cursor: "none" | "connection-scoped" | "namespace-scoped";
+  idempotency: "none" | "stable-key" | "read-back";
+  readBackFamilies: readonly string[];
+}
+
+interface OutsideBindingCapabilitySnapshot {
+  capabilitySnapshotId: string;
+  outsideIncarnationId: string;
+  schemaVersion: 1;
+  capabilityDocument: OutsideProtocolCapabilities;
+  evidenceRef: string;
+  verifiedAtMs: number;
+}
+
+interface OutsideBindingCapabilityVerification {
+  capabilityVerificationId: string;
+  outsideIncarnationId: string;
+  capabilitySnapshotId: string;
+  coordinatorEpoch: number;
+  connectionEpoch: number;
+  evidenceRef: string;
+  verifiedAtMs: number;
+  result: "accepted" | "rejected";
+}
+
+interface SourceEventNamespaceTransitionRecord {
+  namespaceTransitionId: string;
+  outsideBindingId: string;
+  priorSourceEventNamespaceId: string;
+  nextSourceEventNamespaceId: string;
+  priorOutsideIncarnationId: string;
+  nextOutsideIncarnationId: string;
+  schemaVersion: 1;
+  classifierSchemaId: string;
+  coordinateSchemaId: string;
+  priorBoundaryCoordinate: string;
+  nextBoundaryCoordinate: string;
+  capabilitySnapshotId: string;
+  capabilityVerificationId: string;
+  coordinatorEpoch: number;
+  evidenceRef: string;
+  result: "proven-reset";
+}
+
+interface SourceEventObservationRecord {
+  sourceEventObservationId: string;
+  logicalChatId: string;
+  outsideBindingId: string;
+  observedOutsideIncarnationId: string;
+  sourceEventNamespaceId: string | null;
+  sourceEventId: string;
+  sourceReplayIdentity: string | null;
+  coordinateSchemaId: string;
+  sourceCoordinate: string;
+  namespaceTransitionId: string | null;
+  classificationEvidenceRef: string | null;
+  sourceCapabilitySnapshotId: string;
+  sourceCapabilityVerificationId: string;
+  coordinatorEpoch: number;
+  connectionEpoch: number;
+  fingerprintSchemaId: string;
+  fingerprintDigestAlgorithm: string;
+  eventFingerprint: string;
+  fingerprintCapabilitySnapshotId: string;
+  disposition: "pending" | "new" | "duplicate" | "collision" | "ambiguous";
+  canonicalSourceEventId: string | null;
+  commandId: string | null;
+  recoveryGapId: string | null;
+}
+
+interface CanonicalSourceEventRecord {
+  canonicalSourceEventId: string;
+  logicalChatId: string;
+  outsideBindingId: string;
+  sourceEventNamespaceId: string;
+  sourceEventId: string;
+  firstObservationId: string;
+  sourceReplayIdentity: string | null;
+  fingerprintSchemaId: string;
+  fingerprintDigestAlgorithm: string;
+  eventFingerprint: string;
+  fingerprintCapabilitySnapshotId: string;
+  commandId: string;
+}
+```
+
+The journal also retains every native incarnation, transport attachment and lease, outside-binding
+incarnation, source-event namespace/transition/observation and canonical deduplication record,
+immutable capability snapshot and verification, cursor, correlation tombstone, and containment result.
+An attachment belongs to the durable native binding, not to one process incarnation: a new lease ties
+the same attachment to the current native incarnation and coordinator epoch. For Claude,
+`transportEpoch` is the private RC worker epoch. A1 registration resolves a `nativeBindingId` through
+its durable `logicalChatId`; it never assumes the two IDs are equal.
+
+A source observation's envelope, coordinate, capability/epoch pins, classification evidence, and
+fingerprint fields are immutable. Its `pending` disposition and nullable result links advance exactly
+once by compare-and-swap, backed by append-only `ingress.changed` facts, to one terminal
+classification. A `CanonicalSourceEventRecord` is immutable and unique on the exact ingress key; it
+exists only for a proven-new event created with `command.proposed`. Duplicate observations link that
+record, while collision/ambiguous observations link only a recovery gap.
+
+An outside capability snapshot is owned by one outside-binding incarnation and records the proven
+ingress command/control families, projection shapes, acknowledgement/cursor behavior, idempotency and
+read-back guarantees, and the evidence/version that established them. The connector must durably
+install or revalidate that snapshot before the incarnation becomes writable. A protocol or connector
+change creates a new immutable snapshot even when the provider namespace stays the same; commands and
+outbox items retain the snapshot ID used for their decision so later capability changes cannot rewrite
+history.
+
+Each startup or reconnect writes a separate immutable capability-verification record tied to the
+current coordinator and connection epochs. Writability requires an `accepted` verification whose
+incarnation, snapshot, coordinator epoch, and connection epoch all match the current binding lease. If
+revalidation finds different capabilities, the connector creates the replacement snapshot and its
+verification, then atomically advances both current pointers. A failed verification leaves the
+incarnation non-writable and preserves the previous records for recovery and audit.
+
+`sourceEventNamespaceId` is durable independently of an outside-binding incarnation or connection
+epoch. Reconnect, credential rotation, capability revalidation, and connector replacement preserve it
+whenever source event IDs remain in the same proven uniqueness domain. Several successive
+`OutsideBindingIncarnation` records may therefore reference one namespace. A connector allocates a new
+namespace only with a versioned, capability-pinned `SourceEventNamespaceTransitionRecord` that proves
+IDs reset or may be reused. Its classifier and coordinate schemas define how source-protocol
+cursor/sequence values on both sides of the boundary are compared; strings are never compared
+generically. Every ingress observation durably retains its exact source coordinate, selected namespace,
+classification evidence, and transition link before command allocation. If continuity versus reset or
+an event's side of the boundary cannot be proved, the binding stays non-writable and records a recovery
+gap rather than guessing.
+
 An engine registers conversations with the host. Registration is two-phase because some adapters
 must announce before the native ID is known:
 
 1. `open(...)` creates a host conversation lease without pretending a broker ID is a native ID.
 2. `bindNative(...)` records the real Claude, Codex, OpenCode, or tmux conversation identity.
-3. `update(...)` publishes validated post-setup metadata/capabilities without changing identity.
+3. `update(...)` commits validated post-setup metadata/capabilities without changing identity and
+   projects that snapshot outward. A failed advisory announcement is a delivery gap, not permission to
+   roll local native truth back.
 4. `setPhase(...)` exposes startup, recovery, readiness, and draining without conflating presence
    with writability.
 5. `close(...)` idempotently closes the bridge lease. It does not kill the native runtime unless an
    explicit runtime-owner policy says to do so.
 
-`bindingId` is remote-claw's stable mapping key. For a new discovery the adapter passes `null` and the
-registrar allocates it; for resume the adapter presents a persisted key and the registrar validates its
-logical chat, product, project, and prior native identity before adoption. The adapter generates
+The A0 `bindingId` is the registrar's process-local lease key. For a new discovery the adapter passes
+`null` and the registrar allocates it. In A1 the coordinator supplies the persisted
+`nativeBindingId` and independently resolves its `logicalChatId`; for resume the registrar validates
+the chat, product, project, and prior native identity before adoption. The adapter generates
 `registrationAttemptId` before the first `open` call and reuses it for that attempt. A0 retains it only
 within the current host process. A1 persists it before `open`; retrying after a lost reply then returns
 the same binding as an idempotent no-op, with a newly acquired lease fenced to the current coordinator
@@ -255,8 +489,9 @@ prevent that attempt from executing late.
 A fresh adapter never invents native identity. `runtimeId` identifies the supervised native
 service or process tree; `conversationId` identifies its semantic native chat; native `incarnation`
 distinguishes replacements. Synthetic inner RC IDs, panes, app-server connections, provider session
-IDs, cursors, and fork/turn/item IDs remain adapter metadata or outward bindings—not aliases for
-`conversationId`. `coordinatorEpoch` fences stale local writers after restart. Conflicting or
+IDs, broker channels, cursors, and fork/turn/item IDs remain transport attachments, adapter metadata,
+or outward bindings—not aliases for `conversationId`, `nativeBindingId`, or `logicalChatId`.
+`coordinatorEpoch` fences stale local writers after restart. Conflicting or
 concurrent registrations for one `bindingId` fail; a validated resume/reacquire of that binding is
 allowed. A late `bindNative` must match the registered descriptor and either establish the first
 reference or replay the existing one; it never repoints a logical chat. Native replacement uses the
@@ -270,29 +505,38 @@ lineage. A synthetic Claude RC `cse_*` maps to the real transcript/resume identi
 sessions remain nested evidence; Codex create/fork results create distinct thread identities; and
 tmux clear/branch/compact transitions are classified rather than treated as mere file rotation.
 
-The neutral adapter package does not import the current Claude `Session`. During migration, a legacy
-RC registrar specializes the generic port to `Session` and invokes today's `bridgeSession`. This
-preserves current behavior while making the host cardinality correct.
+The neutral adapter package does not import the current Claude `Session`. A0.1 added
+`host/native/adapter.ts` and a legacy RC registrar that specializes the generic port to `Session`.
+Claude MITM creates one registrar per wrapper process and one lease per intercepted conversation; on
+`ready`, the registrar invokes `startBridgeSession`. The older `bridgeSession` entrypoint remains a
+served-promise compatibility wrapper for OpenCode and tmux. This preserves the current data plane
+while making Claude MITM's host cardinality explicit.
 
 The adapter creates and owns `port`; the registrar consumes it for the bridge and returns a lease.
-`open`, late `bindNative`, update, and close can fail asynchronously. On failure the adapter closes its
-lease, keeps or resumes the native runtime according to the runtime-owner policy, and records a gap; it
-does not pretend registration succeeded. A0 implements only this lifecycle and current metadata. The
-capability/evidence fields prevent that behavior-preserving bridge from claiming future guarantees.
-The legacy RC registrar does not start `bridgeSession` or announce the conversation until the adapter
-has published validated capabilities with `update` and moved the lease to `ready`. `Session` buffers
-any earlier upstream events. This prevents broker input from reaching a half-configured native
+`open`, late `bindNative`, update, and close can fail asynchronously. On a validation, binding, or
+lifecycle failure, the adapter closes the lease and applies the runtime-owner policy; it does not
+pretend registration succeeded. The current A0 Claude path logs the registration failure and closes
+that failed `Session`, while A1 adds the persistent recovery gap and keep-alive/resume policy. After a
+validated live `update`, an advisory projection failure is reported and retried by later presence
+publication, but it does not restore stale metadata or capabilities. A0 implements only this lifecycle
+and current metadata. The capability/evidence fields prevent that behavior-preserving bridge from
+claiming future guarantees.
+The legacy RC registrar does not start `startBridgeSession` or announce the conversation until it has
+validated capabilities supplied at `open` or `update` and the adapter has moved the lease to `ready`.
+The current Claude launch begins with null capabilities and supplies them through `update`. `Session`
+buffers any earlier upstream events. This prevents broker input from reaching a half-configured native
 adapter.
 
 An open lease starts in the binding's explicit `starting` or `recovering` phase. Moving to `ready`
 requires validated capabilities. A proven native identity is preferred but not fabricated: an A0
 legacy bridge may be ready with `nativeRef: null`, `liveReattach: false`, and no durable native
 delivery claim. Such a lease preserves current behavior but cannot use A1's fenced mutation or
-reattachment guarantees until a real native reference is bound. Before `ready`, the coordinator queues
-or rejects mutation. Graceful stop moves it to `draining`, fences new writes, settles or marks
-in-flight work, persists cursors and gaps, detaches outside connectors, and only then applies the
-explicit keep-alive or terminate policy. Closing one Codex thread lease never closes the shared
-host-scoped app-server.
+reattachment guarantees until a real native reference is bound. A0 withholds the broker bridge before
+`ready`; moving to `draining` immediately aborts its relay pumps, but does not yet settle or persist
+in-flight outcomes. In A1, the coordinator queues or rejects pre-ready mutation, and graceful stop
+fences new writes, settles or marks in-flight work, persists cursors and gaps, detaches outside
+connectors, and only then applies the explicit keep-alive or terminate policy. That runtime ownership
+must ensure that closing one Codex thread lease never closes the shared host-scoped app-server.
 
 Native process ownership is separate from a conversation lease. A small host runtime owner—an OS
 service, daemon, or per-engine warden—keeps eligible native processes and private protocol endpoints
@@ -308,7 +552,9 @@ Every journal transition, native mutation, inference/outward write, ingress ACK,
 conditional on the current epoch; the runtime owner and connectors reject stale epochs. This prevents
 an old coordinator and its replacement from both delivering. Every future mutating engine-port call
 carries `NativeMutationFence`; its write-ahead `attemptId`, exact native reference, and current epoch
-are validated immediately before the native side effect.
+are validated immediately before the native side effect. A private transport operation also resolves
+its exact attachment lease and rejects it if the attachment, native incarnation, coordinator epoch, or
+transport epoch is no longer current.
 
 ## 5. Normalized command path
 
@@ -319,7 +565,9 @@ submit_text
 ├── command ID
 ├── logical chat ID
 ├── source surface
+├── outside binding + source event namespace, for structured outside ingress
 ├── source-native event/message ID, when present
+├── source capability snapshot + verification IDs, for structured outside ingress
 ├── text
 ├── received time
 └── expected active turn, when present
@@ -332,15 +580,39 @@ The initial source surfaces are:
 - `anthropic`; and
 - `openai`.
 
-The ingress deduplication key is
-`(logical_chat_id, source_binding_id, source_event_id)`. Mutable structured sources must generate and
-persist their event ID before first send. An adapter-assigned ID is safe only when the source receives
-and retains it before retry. If that acknowledgement is lost, an indistinguishable repeat remains
-`outcome_unknown`; it becomes a new proposal only after explicit user confirmation of new intent,
-never automatically and never by text matching. `source_binding_id` is durable across reconnect and
-coordinator epochs for the same source event-ID namespace. It changes only when that namespace has a
-proven new incarnation. Provider/native echo correlation is a separate persisted ID mapping; a
-returning echo points to the existing command and never creates another execution.
+The wrapper-owned editor is a `kind: "local"` outside binding. Like web and provider connectors, it
+persists a client command ID in its durable device/editor namespace before retrying submission; raw
+PTY keystrokes are not structured outside ingress.
+
+The exact ingress deduplication key is
+`(logical_chat_id, outside_binding_id, source_event_namespace_id, source_event_id)`.
+`outside_incarnation_id`, capability verification, and connection epoch remain immutable
+provenance on the observation, but none resets semantic deduplication. Mutable structured sources must
+generate and persist their event ID before first send. An adapter-assigned ID is safe only when the
+source receives and retains it before retry. If that acknowledgement is lost, an indistinguishable
+repeat remains `outcome_unknown`; it becomes a new proposal only after explicit user confirmation of
+new intent, never automatically and never by text matching.
+
+Before allocating any proposal, the coordinator searches canonical source-event records, observations,
+and correlation mappings for the same logical chat and outside binding across every superseded
+connector incarnation. A source-stable object/replay identity or historical mapping that proves the
+event is old links the new observation to the prior command and append-only outcome records without
+allocating `command_seq` or executing native work. A same raw event ID in a proven distinct namespace
+may be new only when its stored source coordinate is classified on the new side of the pinned
+namespace-transition boundary. The new incarnation ID alone is never that proof. Historical overlap
+delivered through a new connector retains its originating namespace identity. If an ID collision or
+replay cannot be classified, the coordinator records a recovery gap, quarantines that ingress, and
+does not semantically ACK it as a new command.
+
+Fingerprint comparisons use the canonical event's stored schema, digest algorithm, and capability
+snapshot—not the reconnecting connector's current defaults. The connector recomputes the incoming
+event under that historical schema and stores the comparison. If the schema implementation is no
+longer available, the event is ambiguous and fails closed. If the same canonical identity produces a
+different digest under the same schema, it is a collision/protocol violation; it never overwrites the
+old record or becomes a new command.
+
+Provider/native echo correlation is a separate persisted ID mapping consulted before source-event
+allocation; a returning echo points to the existing command and never creates another execution.
 
 Every mutation path for a shared logical chat must cross the coordinator before native execution.
 Engine HTTP/app-server endpoints stay private, and a wrapper-owned local UI submits through the same
@@ -370,14 +642,39 @@ The authoritative control journal appends only facts needed to decide or safely 
 Every control record carries a stable record ID, logical chat ID, journal offset, commit time,
 correlation, and source provenance. The exact payload of a queued or uncertain command remains durable
 until its delivery is resolved. A retention policy may later redact or expire the payload, but it must
-retain an immutable deduplication/outcome tombstone, the attempt identity, the binding/incarnation,
-and the unresolved state. Time passing never proves that an old native attempt cannot still execute,
-so retention expiry alone cannot lift quarantine or close `outcome_unknown`. Only recorded
-reconciliation with positive terminal/cancellation evidence, or definitive process stop, freeze, or
-kill of the old incarnation, can do that. An operator may authorize that containment or a successor
-choice; an operator acknowledgement by itself cannot make a still-runnable attempt safe.
+retain the canonical source-event identity→command record; the observation's namespace transition,
+source coordinate, classification evidence, and schema-versioned credential-stripped fingerprint;
+the attempt identity; and append-only ingress, decision, and outcome records. Those records stay
+queryable across every successor connector incarnation while that outside binding can replay old
+history. The canonical source record has no mutable “latest outcome” field: its stable `commandId`
+joins to append-only journal outcomes, while ambiguous/collision observations instead link a
+`recoveryGapId` and allocate no command.
 
-The source dedup row and `command.proposed` commit atomically. A proposal left without
+Time passing never proves that an old native attempt cannot still execute, so retention expiry alone
+cannot lift quarantine or close `outcome_unknown`. Only recorded reconciliation with positive
+terminal/cancellation evidence, or definitive process stop, freeze, or kill of the old incarnation,
+can do that. An operator may authorize that containment or a successor choice; an operator
+acknowledgement by itself cannot make a still-runnable attempt safe.
+
+A structured outside-origin `command.proposed` record has immutable
+`source_capability_snapshot_id` and `source_capability_verification_id` fields. Every outside
+`outbox.changed` item likewise has immutable `target_capability_snapshot_id` and
+`target_capability_verification_id` fields. Admission and recovery validate those pinned records;
+they never reinterpret an existing command or projection item through an incarnation's later
+`currentCapabilitySnapshotId`.
+
+Namespace-transition installation is an epoch-fenced compare-and-swap that atomically installs its
+boundary/classifier evidence and advances the namespace pointer before the connector becomes writable.
+For each ingress, one serialized actor turn revalidates that transition, current capability
+verification, and coordinator epoch. One durable transaction then records the observation's
+classification and does exactly one of these:
+
+- proven new: insert the unique canonical source-event row and `command.proposed` together;
+- proven replay: link the observation to the existing canonical row/command without a proposal; or
+- collision/ambiguous: link the observation to a `recovery.gap` without a proposal.
+
+A crash before commit leaves none of those semantic results; a crash after commit resumes the recorded
+one. No semantic ACK or cursor advances until that transaction commits. A proposal left without
 `command.decided` is resumed deterministically after restart; uniqueness constraints and one
 transaction allocate its single decision and `command_seq`. A durable causal outbox item is likewise
 enqueued atomically with the command or native-observation mapping it projects. It retains the exact
@@ -467,26 +764,39 @@ When the coordinator restarts:
 
 1. Stop admitting new input.
 2. Reopen the small control journal and acquire a new coordinator epoch.
-3. Finish any undecided durable proposals exactly once under the new epoch.
-4. Reacquire the epoch-fenced lease from the native runtime owner.
-5. Locate and adopt the exact native process/session when that adapter has a proven live-reattach
-   primitive; otherwise perform its declared cold-resume/successor flow.
-6. Subscribe to native changes before taking a history snapshot when that native API supports and
+3. Load the exact `logicalChatId` → native binding → semantic conversation → runtime/incarnation →
+   transport-attachment chain. Do not discover a replacement by title, path, or message similarity.
+4. Finish any undecided durable proposals exactly once under the new epoch.
+5. Reacquire the epoch-fenced lease from the native runtime owner.
+6. Recover in this order:
+   - positively reattach the surviving native process and its existing transport;
+   - cold-resume the same semantic native conversation and ask the private transport service to accept
+     its persisted transport ID, advancing the native incarnation only when a replacement process or
+     service was actually started;
+   - if that native client instead creates a replacement transport, prove the same semantic
+     conversation and supersede only the transport attachment; do not advance the native incarnation
+     unless the underlying process or service also changed;
+   - if identity cannot be proved, quarantine the logical chat and require an explicit successor or
+     new-chat decision.
+7. Subscribe to native changes before taking a history snapshot when that native API supports and
    requires that order.
-7. Read the native history, status, pending gates, and cursors that adapter can actually expose.
+8. Read the native history, status, pending gates, and cursors that adapter can actually expose.
    Approval and question responses follow the same write-ahead and uncertainty rules as text
    commands. Deny an orphaned gate only with positive proof that no earlier response crossed the
    boundary. If a response may have crossed but its acknowledgement was lost, record
    `outcome_unknown`/`recovery.gap`; require positive terminal/cancellation evidence or definitively
    stop, freeze, or kill the old process before permitting another answer.
-8. Rebuild normalized viewer messages only from stable native IDs/evidence the adapter has proven.
-9. Reconcile commands:
+9. Rebuild normalized viewer messages only from stable native IDs/evidence the adapter has proven.
+10. Reconcile commands:
    - if the native client proves the command happened, mark it observed and never resend it;
    - if delivery provably never started, send it in coordinator order;
    - if delivery started but cannot be proven, mark it `outcome_unknown` and do not resend
      automatically.
-10. Reconnect outside protocols and resume durable projection outboxes from their stable IDs.
-11. Reopen input only when the next native command cannot overtake an uncertain older attempt. Merely
+11. Reconnect outside protocols, revalidate each current incarnation's durable capability snapshot,
+    and resume durable projection outboxes from their stable IDs.
+12. Announce and route the same `logicalChatId`. A rotated inner/private transport must not allocate a
+    second web row, broker channel, Anthropic session, ChatGPT chat, or command sequence.
+13. Reopen input only when the next native command cannot overtake an uncertain older attempt. Merely
     displaying a gap does not make delivery safe.
 
 The broker stream is the encrypted physical inbox for web commands, but it is not their semantic
@@ -507,11 +817,12 @@ retains the complete encrypted frame until semantic acknowledgement, or the sour
 event ID and exact payload until acknowledgement and retries it after reconnect. A local/web source
 that may discard an unacknowledged payload cannot advertise recoverable shared-chat delivery.
 
-If the native client cannot recover the conversation, remote-claw may start a successor only with an
-explicit gap. Delivery attempts are bound to their original native conversation/incarnation:
-`not_started` commands admitted for the old conversation require explicit abandonment or user
-reauthorization before delivery to a successor. It never manufactures native state by replaying
-historical actions.
+If the native client cannot recover the conversation, remote-claw may install a successor binding
+under the existing logical chat only after an explicit recovery decision and gap, or may create an
+explicit new logical chat with predecessor lineage. Delivery attempts are bound to their original
+native conversation/incarnation: `not_started` commands admitted for the old conversation require
+explicit abandonment or user reauthorization before delivery to a successor. It never manufactures
+native state by replaying historical actions.
 
 ## 9. Native adapter recovery
 
@@ -549,13 +860,42 @@ Synthetic RC worker events are the live source; stable transcript rows repair ga
 native IDs. Where the inner RC protocol has an ACK, remote-claw commits the observation/mapping before
 advancing it. A transcript row never becomes a new command merely because its live RC event was lost.
 
-Recovery uses Claude's native transcript and resume support where complete. Native RC worker streams
-do not backfill history, so the wrapper must also retain the minimum synthetic RC transport state or
-start a new RC incarnation. `--resume` keeps the logical chat but creates a new native incarnation
-unless a surviving process was positively reattached. In-flight work and pending controls become
-uncertain if neither the surviving process nor the transcript proves their result. The independently
-bound outward Anthropic session may survive that inner incarnation change; it is never used as the
-native conversation ID.
+Recovery uses Claude's native transcript and resume support where complete. The persisted recovery
+set includes the `logicalChatId`, `nativeBindingId`, Claude transcript/resume UUID, transcript locator
+and cursor, every private RC `cse_*` attachment and worker epoch, RC event/delivery cursors, exact
+runtime start identity, and independent outward bindings.
+
+The wrapper follows a reuse-first Claude algorithm:
+
+1. If the exact child process survives and a version-pinned live-reattach primitive is proven, reattach
+   it without changing the native incarnation.
+2. Otherwise contain the old process and launch Claude with an explicit, wrapper-owned
+   `--resume <claude-uuid>`. Continue scrubbing ambient inherited
+   `CLAUDE_CODE_CHILD_SESSION`/`CLAUDE_CODE_SESSION_ID`; deliberate recovery comes from the verified
+   binding, not the parent shell.
+3. Start the durable private RC server with the prior `cse_*` registered. If resumed Claude asks to
+   bridge that ID, accept it, advance the worker epoch, bind that epoch to the new native incarnation
+   and coordinator epoch, and continue its RC sequence/delivery state.
+4. If the same proven Claude UUID instead creates a new `cse_*`, record a proof-carrying transport
+   replacement under the same native binding and logical chat. Fence the old worker first, then bind
+   the replacement's first worker epoch to the current native incarnation. The new `cse_*` is a
+   transport generation, not a new chat or web row.
+5. If Claude resumes a different/unprovable UUID, fail closed in `recovering`/`quarantined`; never
+   repoint the binding implicitly.
+
+Native RC worker streams do not backfill history. Reusing the old `cse_*` therefore depends on the
+wrapper's durable RC store, and a replacement `cse_*` may require transcript-backed projection repair
+plus an explicit gap. Neither case replays old prompts into Claude. A cold `--resume` advances the
+runtime/native incarnation while retaining the same semantic Claude UUID, binding, logical chat,
+`command_seq`, and `chat_seq`. Native incarnation and private transport generation advance
+independently: reusing a `cse_*` creates a new worker lease, not a replacement attachment. In-flight
+work and pending controls become uncertain if neither the surviving process nor stable transcript/RC
+evidence proves their result.
+
+The independently bound outward Anthropic session normally survives an inner `cse_*` or native
+incarnation change; it is never used as the native conversation ID. If Anthropic itself forces a new
+outward session, the connector supersedes only that outside-binding incarnation and retains the
+logical chat and correlation tombstones.
 
 ### 9.2 Codex wrapper
 
@@ -580,7 +920,9 @@ app-server, completes initialization, subscribes to notifications, discovers pro
 their stored rollout state, creates one thread-scoped port/binding per chat, and only then marks those
 bindings ready. Deltas are live evidence; final thread/rollout items repair and deduplicate them by
 stable IDs. An app-server restart fences and rebinds every affected thread as one runtime-incarnation
-change.
+change. Each proven Codex thread retains its own `logicalChatId`/native binding, and the outward
+paired host plus project/chat mappings remain unchanged; restarting the shared app server must not
+duplicate official projects or chats.
 
 Thread create/resume/fork/archive are separate typed mutations, not `submit_text`. New thread
 creation is two-phase: reserve the logical binding, invoke the private app-server once under a
@@ -618,7 +960,9 @@ blocked.
 
 Startup subscribes to server-wide SSE first, records the live boundary, snapshots sessions/history,
 registers top-level sessions, classifies child/subagent sessions as nested evidence, merges the
-buffered tail by stable IDs, and then marks bindings ready. Recovery repeats the same overlap.
+buffered tail by stable IDs, and then marks bindings ready. Recovery repeats the same overlap. A
+proven same `ses_*` under the expected server lineage retains `logicalChatId`; a missing/reused
+`ses_*` under another server epoch fails adoption rather than matching history text.
 
 One limitation is load-bearing: `prompt_async` returns HTTP 204 without a native command/message ID.
 A received 204 is HTTP acceptance, but it still supplies no command/message correlation ID. A lost
@@ -671,10 +1015,13 @@ faithfully; unsupported mutations fail closed rather than being guessed.
 
 Every outside binding has the same lifecycle:
 
-1. Bind a durable source/target identity plus capabilities and a separate fenced connection epoch.
-   Reconnect keeps the binding ID when the provider/broker/local event-ID namespace is unchanged.
+1. Bind a durable `outsideBindingId`, reference its independently durable provider/broker/local
+   `sourceEventNamespaceId`, install an evidence-backed durable capability snapshot, and acquire a
+   separate fenced connection epoch. Reconnect must revalidate the capability snapshot before
+   restoring writability. Native restart never rotates the binding or event namespace.
 2. Ingest a mutation with a stable source ID and a commit callback; no semantic ACK or cursor advance
-   occurs until that callback durably records the proposal.
+   occurs until that callback durably records its new/replay/collision/ambiguous classification and
+   any resulting proposal.
 3. Consume a durable causal projection outbox ordered by `command_seq`/`chat_seq`.
 4. Before first publish, persist the stable target event/item ID, idempotency identity, and
    `(target binding, target item) → source command/native message/chat_seq` mapping.
@@ -684,6 +1031,18 @@ Every outside binding has the same lifecycle:
    existing outbox item; it never allocates another command or `chat_seq`.
 7. Close or supersede the connection without changing the durable binding, logical chat, or native
    conversation.
+
+If a provider forces a new session/chat or connector incarnation, retain `logicalChatId` and
+`outsideBindingId`. Preserve `sourceEventNamespaceId` when the provider ID domain is continuous; if
+positive evidence proves a reset/reuse domain, allocate a new namespace while retaining every prior
+canonical source record, observation, and correlation mapping. Before advancing the recovered cursor
+or allocating a command, classify subscribe-first/snapshot overlap against records across all prior
+incarnations using the pinned transition classifier and each item's stored source coordinate. A
+proven replay links to its prior outcome, a proven post-boundary item uses the new namespace, and an
+ambiguous item fails closed. Repair the new provider representation only through the durable outbox
+with proven idempotency or read-back; provider history is never replayed into native execution.
+There is at most one active Anthropic Remote binding per logical chat, and a Codex app-server restart
+does not re-enroll the one paired ChatGPT host or duplicate its projects/chats.
 
 Native execution may precede provider replication, but the causal outbox never publishes
 assistant/tool/result output ahead of that command's provider-native user representation. A fast
@@ -741,6 +1100,12 @@ bridge credentials, heartbeat, delivery ACK, worker SSE, connector-owned login/r
 revocation, archive, reconnect, and uploads are still missing. The existing transport can reread a
 credential rotated by another owner and retry once after 401; it is not the required credential owner.
 
+Recovery first reconnects the existing outward Anthropic session. If that session is unusable,
+remote-claw may create a replacement within provider/policy limits, record it as a new outside-binding
+incarnation under the same `logicalChatId`, and rebuild only the official projection through the
+durable causal outbox. It does not replay that provider history into the inner engine, does not reset
+the coordinator order, and does not create another remote-claw chat.
+
 ### 10.4 ChatGPT Remote connection
 
 remote-claw must preserve one paired outward ChatGPT Remote host presenting Codex-backed
@@ -771,6 +1136,11 @@ host/projects/chats representation that the official client expects.
 The private Codex app-server is never exposed directly. Approval/question responses from several
 official/local clients must first pass through one coordinator decision so only one answer reaches
 private Codex.
+
+Restarting private Codex or the local coordinator preserves the outward paired-host enrollment.
+If OpenAI forces a new outward connection/chat namespace, remote-claw supersedes that outside
+incarnation under the existing host/project/`logicalChatId` mapping and repairs its projection through
+the durable outbox; it never duplicates native execution to make the official view catch up.
 
 ## 11. Core workflows
 
@@ -815,10 +1185,14 @@ entire official projection without blocking native execution.
 
 1. The provider receives the official client's command.
 2. The provider's host/worker transport delivers it to remote-claw.
-3. Atomically commit the provider observation, source dedup identity, and command proposal.
-4. Admit, queue, or reject it.
+3. Run the cross-incarnation source-record/correlation guard and atomically commit the provider
+   observation plus one terminal classification. The proven-new branch inserts its canonical source
+   identity and `command.proposed`; replay links the prior canonical record; collision/ambiguous links a
+   recovery gap and creates no command.
+4. Admit, queue, or reject only a proven-new proposal.
 5. ACK provider ingress at the point proven safe for that protocol, after the required durable
-   decision. This ACK means host receipt only and need not wait for native execution.
+   decision for new input or durable prior-command link for a replay. This ACK means host receipt only
+   and need not wait for native execution; collision/ambiguous input advances no semantic ACK or cursor.
 6. Deliver only an admitted command to the native client; queued input waits and rejected input never
    executes.
 7. Project command status to the local UI and remote-claw web. For an admitted command, publish its
@@ -865,9 +1239,13 @@ Each item lands as a separate reviewed PR.
 
 #### A0.1 — Neutral seam and Claude MITM migration
 
+**Status: implemented.** The seam and registrar are process-local compatibility infrastructure; they
+do not claim A1 persistence, restart adoption, or native delivery fencing.
+
 - Add a native engine adapter package that is independent of Claude `Session`.
 - Add two-phase conversation registration.
-- Add a legacy RC registrar that maps today's `Session` into today's `bridgeSession`.
+- Add a legacy RC registrar that maps today's `Session` into `startBridgeSession` while retaining
+  `bridgeSession` as the direct-driver compatibility entrypoint.
 - Route Claude MITM registration through one host-scoped registrar without changing native command
   flow, and prove that one registrar can serve several intercepted conversations.
 - Accept only first-bind/exact-replay native identity; defer proof-carrying replacement to A1.
@@ -880,6 +1258,8 @@ Each item lands as a separate reviewed PR.
 
 #### A0.2 — OpenCode and tmux migration
 
+**Status: next.**
+
 - Route OpenCode and tmux registration through the same host-wide seam without changing their native
   command flow.
 - Publish actual post-setup capabilities/readiness, correcting current optimistic OpenCode/tmux
@@ -888,6 +1268,14 @@ Each item lands as a separate reviewed PR.
 
 ### A1 — Runtime ownership, control journal, and command actor
 
+- Add durable `logical_chat`, `native_binding`, native-incarnation, private-transport-attachment and
+  attachment-lease, outside-binding, outside-capability-snapshot, outside-capability-verification, and
+  connection-epoch records, plus source-event namespace/transition/observation, canonical source-event,
+  and cross-incarnation correlation records. Never alias `logicalChatId` to the A0 `rcb_*`, Claude
+  `cse_*`, Codex/OpenCode ID, broker channel, or provider ID.
+- Route web presence, broker channel/key derivation, and normalized command/chat sequences by the
+  stable `logicalChatId`; a transport replacement must update one visible row rather than create
+  another.
 - Add an epoch-fenced runtime owner/warden and persist native locators without changing native
   semantic authority.
 - Add the explicit forward-incarnation transition with required terminal/cancellation or process
@@ -904,7 +1292,8 @@ Each item lands as a separate reviewed PR.
 
 ### A2 — OpenCode vertical slice
 
-- Attach a stable OpenCode `ses_*` binding.
+- Persist a stable binding from `logicalChatId` to the native OpenCode `ses_*`; do not use `ses_*` as
+  the remote-claw chat or broker ID.
 - Feed history/live events into normalized text observations.
 - Route web text through the command actor.
 - Make every mutable local OpenCode surface pass through the actor or mark it outside the shared chat.
@@ -917,7 +1306,11 @@ Each item lands as a separate reviewed PR.
 - Keep the current synthetic RC seam as a migration adapter.
 - Terminate all inner Anthropic-origin calls.
 - Separate the private inference connector from the outward Anthropic Remote connector.
-- Add native transcript/resume recovery.
+- Add native transcript/resume recovery that first restores the known Claude UUID plus private
+  `cse_*`, then treats a proven replacement `cse_*` only as a transport generation under the same
+  `logicalChatId`.
+- Persist the private RC event/worker/delivery state needed to accept a known-`cse_*` re-bridge without
+  expecting worker history backfill.
 - Add real outward Anthropic worker/session support.
 - Add controls, permissions, questions, and uploads one proven family at a time.
 
@@ -941,9 +1334,15 @@ Each item lands as a separate reviewed PR.
 
 The following remain unproven until a test says otherwise:
 
+- durable separation of `logicalChatId`, native binding/conversation/incarnation, private transport,
+  broker channel, and outward provider IDs;
+- stable `logicalChatId`, `command_seq`, `chat_seq`, and one visible row across a known-transport
+  re-bridge or a proven replacement private transport;
 - exact native history completeness and stable IDs for every adapter;
 - non-reusable runtime/incarnation identity and correct new-chat/reconnect/fork classification;
 - subscribe/snapshot ordering without a lost-event gap;
+- provider source-event namespace continuity, cross-incarnation replay classification, and
+  collision-safe canonical records before command allocation;
 - command-to-native correlation and idempotent retry;
 - structural interception of local Claude/Codex/OpenCode submissions before native execution;
 - complete provider-route termination and process-tree network isolation for every inner engine;
@@ -956,6 +1355,37 @@ The following remain unproven until a test says otherwise:
 - tmux transcript completeness, rotation, paste/Enter uncertainty, and orphaned permissions;
 - provider-credential non-disclosure for wrapped Claude, Codex, and OpenCode;
 - local wrapper projection reconciliation and any claimed device-local render receipt.
+
+The restart matrix must include:
+
+- known Claude UUID + known `cse_*`: restart, `--resume` the UUID, accept `/bridge` for the old
+  `cse_*`, bump worker epoch, bind it to the new native incarnation/coordinator epoch, and continue the
+  private RC/server sequence while preserving one logical chat;
+- known Claude UUID + replacement `cse_*`: prove and fence the transition, retain the logical
+  chat/web channel/outward Anthropic binding, and project no duplicate row or turn;
+- wrong UUID, project, product, or reused runtime identity: reject adoption without title/text
+  matching;
+- a stale worker/coordinator/presence frame after replacement: reject it without rolling identity,
+  delivery, or liveness backward;
+- broker/web recovery: resume the committed ingress cursor and outbound sequence on the stable logical
+  channel so a crash-boundary command is neither skipped nor executed twice;
+- Anthropic and ChatGPT connector restart: preserve the logical chat and paired-host/project mappings,
+  revalidate the current durable capability snapshot, and rotate only connection credentials/epoch
+  unless the provider forces a separately recorded outside-binding incarnation;
+- provider ingress replay before and after connector restart, credential rotation, and forced
+  outside-binding incarnation: preserve a continuous event namespace and allocate exactly one command;
+  deliver old history after a proven namespace reset and still link it to the old command; accept the
+  same raw ID as a second command only for an item whose coordinate is proven post-boundary; fail
+  closed when a canonical ID's body changes; and quarantine ambiguous history overlap before cursor
+  advance;
+- the same source event raced through old/new connector incarnations: retain one canonical command;
+  an old replay raced against a distinct, proven post-boundary reuse of its raw ID: link the old command
+  and allocate exactly one new command;
+- crashes before and after namespace-transition install, cross-incarnation classification, canonical
+  source insertion, and `command.proposed`: resume one recorded branch, and advance neither semantic
+  ACK nor cursor for collision/ambiguous input;
+- crash points before/after binding commit, native `delivery.started`, native observation, projection,
+  outward publish, and provider ingress ACK, with quarantine for every unprovable delivery.
 
 Capabilities are advertised only after their proof gate passes.
 

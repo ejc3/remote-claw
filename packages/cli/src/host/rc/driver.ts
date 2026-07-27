@@ -3,8 +3,8 @@
 // The CANONICAL pluggable-harness seam. A `Driver` produces a `Session` and bridges a harness's
 // native protocol to the canonical Session contract, so HostRcRelay + the broker router + the web
 // viewer are UNCHANGED. Grounded in the real code: HostRcRelay is a pure function of
-// (Session, BrokerClient); relay.serve() already owns ALL broker I/O bidirectionally; a driver owns
-// only the harness-facing side and the two meet at the Session.
+// (Session, BrokerClient); it owns broker command/content traffic and presence publication, while a
+// driver owns only the harness-facing side and the two meet at the Session.
 
 import type { Identity } from "@remote-claw/clawsec";
 import type { BrokerClient } from "../../broker/client.js";
@@ -126,10 +126,10 @@ export interface DriverContext {
  *      control_request; apply an answer by observing the matching control_response in
  *      followDownstream. The relay's existing permission_request ⇄ permission round-trip does the
  *      broker side — no relay change.
- * It wires HostRcRelay({ client: ctx.newClient(), identityId: ctx.identity.identityId,
- * sessionId: session.id, session }), calls relay.announce(...) then relay.serve(signal) (which owns
- * all broker I/O AND the durable-cursor prepare()), runs its pumps concurrently, and tears the
- * harness + relay down on exit.
+ * Current compatibility drivers pass the Session to bridgeSession(...), which starts
+ * relay.announce(...) and relay.serve(signal) concurrently. Announce performs its presence post;
+ * serve owns the two command/content pumps and durable-cursor prepare. The driver tears the harness
+ * and relay down on exit.
  */
 export interface Driver {
   readonly capabilities: DriverCapabilities;

@@ -93,7 +93,14 @@ const POST_RETRIES = 6;
 const POST_RETRY_BASE_MS = 50;
 const SEQ_RESUME_ATTEMPTS = 3;
 const SEQ_RESUME_RETRY_BASE_MS = 100;
-const RELAY_INCARNATION = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+// One process-wide incarnation orders transcript resets; its wall-clock start plus each relay's
+// announce_seq orders presence frames that race in flight. The start time is deliberately explicit
+// instead of being parsed from the opaque incarnation id. It is not a durable epoch: equal or
+// clock-regressed process starts remain ambiguous until the coordinator owns a persisted epoch (A1).
+const RELAY_INCARNATION_STARTED_AT = Date.now();
+const RELAY_INCARNATION = `${RELAY_INCARNATION_STARTED_AT.toString(36)}-${Math.random()
+  .toString(36)
+  .slice(2)}`;
 // Re-announce presence at least this often while idle so the viewer's freshness check (#58) has a
 // steady signal. Sized UNDER the viewer's ~45s "connected" threshold (≈2× margin) so a single missed
 // announce + jitter doesn't read as a disconnect — but no faster, because each keepalive appends a
@@ -402,13 +409,14 @@ export class HostRcRelay {
    *  title/cwd still keepalives (and an un-announced session never does). */
   #announced = false;
   /** Title/cwd/git captured by announce(), reused by every periodic re-announce (presence refreshes
-   *  status/phase/needs; title/cwd/git are a snapshot taken once at announce time). */
+   *  status/phase/needs). A bridge lifecycle refresh can replace this metadata without restarting the
+   *  relay pumps. */
   #annTitle = "";
   #annCwd: string | null = null;
   #annGit: GitInfo | null = null;
-  /** A per-announce counter → a UNIQUE msg_id for every (re-)announce (announces don't advance #seq,
-   *  so without this every idle keepalive would reuse one msg_id — fine for today's consumer, fragile
-   *  if any future consumer dedups by msg_id). */
+  /** A per-incarnation generation and unique-msg-id counter. Unlike sent_at (a wall-clock liveness
+   *  value), this strictly orders concurrent publishes from this relay even when they share a
+   *  millisecond or reach the broker out of order. */
   #annCount = 0;
   /** Throttle: the last announced presence key + when, so we only re-announce on change or keepalive. */
   #lastPresenceKey = "";
@@ -425,8 +433,9 @@ export class HostRcRelay {
   readonly #trace: Tracer;
   /** Where a viewer attachment is written before claude Reads it (#44). */
   readonly #attachmentsDir: string;
-  /** Declared driver capabilities, broadcast on every announce so the viewer can gate controls. */
-  readonly #capabilities: DriverCapabilities;
+  /** Declared driver capabilities, broadcast on every announce so the viewer can gate controls.
+   *  Mutable only through refreshAnnouncement(), after native setup has established the truthful set. */
+  #capabilities: DriverCapabilities;
   /** Which harness (agent + bridge mode) this session runs; broadcast on every announce for the list label. */
   readonly #harness: HarnessDescriptor;
   /** Monotonic prefix making each on-disk attachment name unique (so a later upload can't overwrite a
@@ -488,6 +497,25 @@ export class HostRcRelay {
     await this.#sendAnnounce();
   }
 
+  /** Replace the bridge-owned announcement snapshot and publish it immediately, without touching the
+   *  running inbound/outbound pumps. Harness identity is deliberately fixed for the relay's lifetime:
+   *  only metadata and capabilities that native setup can refine are refreshable. The validated local
+   *  snapshot remains current if this advisory publish fails, so a later presence update retries truth
+   *  instead of rolling the host back to stale metadata. */
+  async refreshAnnouncement(
+    title: string,
+    cwd: string | null,
+    git: GitInfo | null,
+    capabilities: DriverCapabilities,
+  ): Promise<void> {
+    this.#annTitle = title;
+    this.#annCwd = cwd;
+    this.#annGit = git;
+    this.#capabilities = capabilities;
+    this.#announced = true;
+    await this.#sendAnnounce();
+  }
+
   /** Current presence: phase (idle/thinking) from worker_status, needs (a pending permission or the
    *  worker awaiting a required action), and the effective permission mode when known. A stable string
    *  key lets us re-announce only on change. */
@@ -501,12 +529,17 @@ export class HostRcRelay {
    *  never logs it — re-announcing is cheap and idempotent (the viewer keeps only the freshest). */
   async #sendAnnounce(): Promise<void> {
     const p = this.#presence();
+    // Allocate before the first await. JavaScript runs this section atomically, so every publish
+    // admitted by one relay gets a strict generation even when the HTTP requests overlap.
+    const announceSeq = this.#annCount++;
     const body: Record<string, unknown> = {
       session_id: this.#sessionId,
       title: this.#annTitle,
       cwd: this.#annCwd,
       sent_at: Date.now(),
       incarnation: RELAY_INCARNATION,
+      incarnation_started_at: RELAY_INCARNATION_STARTED_AT,
+      announce_seq: announceSeq,
       status: p.status,
       phase: p.phase,
       needs: p.needs,
@@ -516,7 +549,7 @@ export class HostRcRelay {
     };
     if (p.mode !== null) body.mode = p.mode;
     await this.#client.postFrame(
-      this.#header("session_announce", null, `ann-${this.#sessionId}-${this.#annCount++}`),
+      this.#header("session_announce", null, `ann-${this.#sessionId}-${announceSeq}`),
       utf8(JSON.stringify(body)),
     );
     this.#lastPresenceKey = `${p.status}|${p.needs}|${p.mode ?? ""}`;

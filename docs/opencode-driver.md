@@ -5,6 +5,13 @@
 > coordinator-owned OpenCode runtime selected in
 > [client-driven-host-runtime.md](client-driven-host-runtime.md).
 
+**Identity scope.** The current driver has two distinct IDs: OpenCode owns the native `ses_*`, while
+`RelayCore` creates a synthetic `cse_*` for the remote-claw broker channel and viewer row. Neither is
+an implemented durable remote-claw logical-chat ID. A wrapper restart may reattach and backfill the
+same `ses_*` into a fresh compatibility channel, but it does not yet preserve one canonical
+remote-claw chat across that restart. A1 targets a persisted logical-chat-to-native binding and uses
+the logical-chat ID for the broker row/channel; A2 then proves OpenCode-specific adoption and recovery.
+
 ## 1. What exists today
 
 The current path has two independent connections:
@@ -75,9 +82,23 @@ This means the current bridge can announce optimistic capabilities before native
 permission setup finish. The future registrar must publish only validated, post-setup capabilities
 before it accepts mutations.
 
-On driver teardown the driver best-effort aborts the attached OpenCode run and closes the relay
-session. It does not stop the external `opencode serve` process. A future runtime owner must distinguish
-“close this bridge” from “stop this supervised native runtime.”
+The `bridgeSession` result is not a readiness barrier, but its `served` promise remains pending until
+the admitted initial announcement settles. A parent cancellation that is already set when `run`
+starts returns before creating a relay session or inspecting, selecting, creating, or aborting any
+OpenCode session. Cancellation during automatic attachment is passed to the list/create HTTP requests;
+the initial permission-mirroring read/write uses the same signal. Until attachment and that setup
+finish, cancellation exits through startup cleanup without starting pumps or aborting an unconfirmed
+native session.
+
+On normal driver teardown, the driver first aborts its local capture/injection pumps and closes the
+relay session. It then best-effort aborts the attached OpenCode run. That native abort request and the
+final broker settlement share one bounded two-second deadline, so an unresponsive native server and
+an unresponsive broker cannot hold exit for consecutive timeout windows. The driver does not stop the
+external `opencode serve` process. A future runtime owner must distinguish “close this bridge” from
+“stop this supervised native runtime.”
+
+An authenticated viewer `end` does not take that teardown path: `HostRcRelay` consumes it locally,
+clears open relay permission gates, and sends no `end_session` or native OpenCode abort.
 
 ## 3. HTTP and SSE surface
 
@@ -164,7 +185,7 @@ The injection pump serially drains `Session.followDownstream(...)`.
 | `initialize` | No-op, then acknowledge |
 | `interrupt` | Await native `abort`, then acknowledge |
 | `set_model` | Accept only an explicit `providerID/modelID` string for the next prompt |
-| `set_permission_mode`, `end`, unknown control | Safe no-op, then acknowledge |
+| directly queued `set_permission_mode`, `end`, unknown control | Safe no-op, then acknowledge; viewer `end` never reaches this pump |
 | permission response | For a valid request ID, map explicit allow to `once` and other behavior to `reject`; an invalid ID is a no-op |
 
 If an awaited injection fails, the current pump withholds the relay-session acknowledgement, logs the
@@ -231,7 +252,8 @@ support. A feature is writable only after its setup and proof gate succeed.
 
 Today, OpenCode owns native message history and the driver reconstructs viewer output from
 `GET /session/{id}/message`. A wrapper restart can attach to the same explicit session and backfill
-completed main-session messages into a fresh broker session. It does not yet preserve:
+completed main-session messages into a fresh synthetic `cse_*` broker channel. The native `ses_*`,
+that channel, and the future logical-chat ID remain separate. It does not yet preserve:
 
 - a durable remote-claw logical-chat ↔ OpenCode-session binding;
 - a command journal or definitive multi-writer order;
@@ -257,7 +279,8 @@ In the selected host runtime, authority is divided cleanly:
 Recovery must reattach the exact `runtimeId`/session/incarnation, subscribe before history backfill,
 reconcile journaled attempts against native evidence, and leave ambiguous attempts quarantined. It may
 start a successor session only with an explicit gap and explicit handling of commands that were
-admitted for the old session.
+admitted for the old session. Reattaching a proven same semantic session is the future condition for
+retaining a logical-chat ID; a missing, reused, or unproven `ses_*` cannot silently repoint that chat.
 
 ## 9. Tests
 

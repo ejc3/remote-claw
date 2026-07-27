@@ -506,6 +506,179 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     expect(broker.posts.some((p) => p.frame.record_kind === "assistant")).toBe(true);
   }, 20_000);
 
+  it("spends one shared teardown grace period when a session announce stalls", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(78));
+    const certsDir = tmp();
+    const broker = new MockBroker();
+    broker.requireAuth(id.authToken);
+
+    let resolveAnnounceStarted: () => void = () => {};
+    const announceStarted = new Promise<void>((resolve) => {
+      resolveAnnounceStarted = resolve;
+    });
+    let releaseAnnounce: () => void = () => {};
+    const announceRelease = new Promise<void>((resolve) => {
+      releaseAnnounce = resolve;
+    });
+    let stalled = false;
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (url.pathname === "/api/relay" && !url.searchParams.has("session") && !stalled) {
+        const frame = JSON.parse(String(init?.body ?? "{}")) as { record_kind?: unknown };
+        if (frame.record_kind === "session_announce") {
+          stalled = true;
+          resolveAnnounceStarted();
+          await announceRelease;
+        }
+      }
+      return broker.fetch(input, init);
+    }) as typeof fetch;
+
+    let childExitAt = 0;
+    try {
+      const code = await runRcLaunch({
+        claudeArgs: [],
+        identity: id,
+        brokerUrl: "http://broker.test",
+        certsDir,
+        fetchFn,
+        spawnClaude: async (_bin, _args, env) => {
+          const match = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(env.HTTPS_PROXY ?? "");
+          if (match === null) throw new Error("missing HTTPS_PROXY");
+          const caPath = env.NODE_EXTRA_CA_CERTS;
+          if (caPath === undefined) throw new Error("missing NODE_EXTRA_CA_CERTS");
+          const agent = proxyAgent(Number.parseInt(match[1] as string, 10), readFileSync(caPath));
+          const registration = await rpc(agent, "POST", "/v1/code/sessions", {
+            title: "stalled announce",
+          });
+          const session = registration.session as { id?: unknown };
+          if (typeof session.id !== "string") throw new Error("session registration failed");
+          await announceStarted;
+          childExitAt = performance.now();
+          return 0;
+        },
+      });
+
+      const teardownMs = performance.now() - childExitAt;
+      expect(code).toBe(0);
+      expect(stalled).toBe(true);
+      // One 2 s budget plus generous scheduler/CI headroom. The old per-stage waits took roughly
+      // three budgets (~6 s) for this same unresolved announce.
+      expect(teardownMs).toBeGreaterThanOrEqual(1_500);
+      expect(teardownMs).toBeLessThan(4_500);
+    } finally {
+      releaseAnnounce();
+    }
+  }, 15_000);
+
+  it("registers two intercepted sessions independently and routes a viewer command only to its worker", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(77));
+    const certsDir = tmp();
+    const broker = new MockBroker();
+    broker.requireAuth(id.authToken);
+    const workerEvents: [Record<string, unknown>[], Record<string, unknown>[]] = [[], []];
+    const sessionIds: [string, string] = ["", ""];
+
+    const code = await runRcLaunch({
+      claudeArgs: [],
+      identity: id,
+      brokerUrl: "http://broker.test",
+      certsDir,
+      fetchFn: broker.fetch,
+      spawnClaude: async (_bin, _args, env) => {
+        const match = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(env.HTTPS_PROXY ?? "");
+        if (match === null) throw new Error("missing HTTPS_PROXY");
+        const caPath = env.NODE_EXTRA_CA_CERTS;
+        if (caPath === undefined) throw new Error("missing NODE_EXTRA_CA_CERTS");
+        const agent = proxyAgent(Number.parseInt(match[1] as string, 10), readFileSync(caPath));
+        const abortWorkers: Array<() => void> = [];
+
+        try {
+          for (let index = 0; index < 2; index += 1) {
+            const registration = await rpc(agent, "POST", "/v1/code/sessions", {
+              title: `worker ${index + 1}`,
+            });
+            const session = registration.session as { id?: unknown };
+            if (typeof session.id !== "string") throw new Error("session registration failed");
+            sessionIds[index] = session.id;
+            abortWorkers.push(
+              openWorkerStream(agent, session.id, (event) => workerEvents[index]?.push(event)),
+            );
+          }
+
+          await waitFor(() =>
+            workerEvents.every((events) =>
+              events.some((event) => event.event_type === "control_request"),
+            ),
+          );
+          await waitFor(() => {
+            const announced = new Set(
+              broker.posts
+                .filter((post) => post.frame.record_kind === "session_announce")
+                .map((post) => post.frame.session_id),
+            );
+            return sessionIds.every((sessionId) => announced.has(sessionId));
+          });
+
+          const viewer = new BrokerClient({
+            baseUrl: "http://broker.test",
+            provider: securityProvider("sealed", id),
+            fetchFn: broker.fetch,
+          });
+          await viewer.postFrame(
+            clientHeader(id, sessionIds[0], "user", "two-session-user-1", {
+              clientMsgId: "two-session-client-user-1",
+            }),
+            utf8("only worker one"),
+          );
+          await waitFor(() =>
+            workerEvents[0].some((event) => {
+              const payload = event.payload as { message?: { content?: unknown } } | undefined;
+              return event.event_type === "user" && payload?.message?.content === "only worker one";
+            }),
+          );
+          await viewer.postFrame(
+            clientHeader(id, sessionIds[1], "user", "two-session-user-2", {
+              clientMsgId: "two-session-client-user-2",
+            }),
+            utf8("worker two barrier"),
+          );
+          await waitFor(() =>
+            workerEvents[1].some((event) => {
+              const payload = event.payload as { message?: { content?: unknown } } | undefined;
+              return (
+                event.event_type === "user" && payload?.message?.content === "worker two barrier"
+              );
+            }),
+          );
+
+          expect(workerEvents[1]).not.toContainEqual(
+            expect.objectContaining({
+              event_type: "user",
+              payload: expect.objectContaining({
+                message: expect.objectContaining({ content: "only worker one" }),
+              }),
+            }),
+          );
+          expect(workerEvents[0]).not.toContainEqual(
+            expect.objectContaining({
+              event_type: "user",
+              payload: expect.objectContaining({
+                message: expect.objectContaining({ content: "worker two barrier" }),
+              }),
+            }),
+          );
+          expect(new Set(sessionIds).size).toBe(2);
+          return 0;
+        } finally {
+          for (const abortWorker of abortWorkers) abortWorker();
+        }
+      },
+    });
+
+    expect(code).toBe(0);
+  }, 20_000);
+
   it("keeps root secret and derived keys out of launch traces, child env, and broker plaintext", async () => {
     const secret = new Uint8Array(32).fill("S".charCodeAt(0));
     const id = await deriveIdentity(secret);
