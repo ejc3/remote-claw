@@ -308,17 +308,64 @@ interface OutsideBindingIncarnation {
   outsideBindingId: string;
   providerOrChannelId: string;
   sourceEventNamespaceId: string;
+  currentCapabilitySnapshotId: string | null;
+  currentCapabilityVerificationId: string | null;
   connectionEpoch: number;
   state: "current" | "superseded" | "closed";
+}
+
+interface OutsideProtocolCapabilities {
+  ingressFamilies: readonly string[];
+  projectionFamilies: readonly string[];
+  controlFamilies: readonly string[];
+  acknowledgement: "none" | "transport-receipt" | "durable-receipt";
+  cursor: "none" | "connection-scoped" | "namespace-scoped";
+  idempotency: "none" | "stable-key" | "read-back";
+  readBackFamilies: readonly string[];
+}
+
+interface OutsideBindingCapabilitySnapshot {
+  capabilitySnapshotId: string;
+  outsideIncarnationId: string;
+  schemaVersion: 1;
+  capabilityDocument: OutsideProtocolCapabilities;
+  evidenceRef: string;
+  verifiedAtMs: number;
+}
+
+interface OutsideBindingCapabilityVerification {
+  capabilityVerificationId: string;
+  outsideIncarnationId: string;
+  capabilitySnapshotId: string;
+  coordinatorEpoch: number;
+  connectionEpoch: number;
+  evidenceRef: string;
+  verifiedAtMs: number;
+  result: "accepted" | "rejected";
 }
 ```
 
 The journal also retains every native incarnation, transport attachment and lease, outside-binding
-incarnation, cursor, correlation tombstone, and containment result. An attachment belongs to the
-durable native binding, not to one process incarnation: a new lease ties the same attachment to the
-current native incarnation and coordinator epoch. For Claude, `transportEpoch` is the private RC
-worker epoch. A1 registration resolves a `nativeBindingId` through its durable `logicalChatId`; it
-never assumes the two IDs are equal.
+incarnation, immutable capability snapshot and verification, cursor, correlation tombstone, and
+containment result. An attachment belongs to the durable native binding, not to one process
+incarnation: a new lease ties the same attachment to the current native incarnation and coordinator
+epoch. For Claude, `transportEpoch` is the private RC worker epoch. A1 registration resolves a
+`nativeBindingId` through its durable `logicalChatId`; it never assumes the two IDs are equal.
+
+An outside capability snapshot is owned by one outside-binding incarnation and records the proven
+ingress command/control families, projection shapes, acknowledgement/cursor behavior, idempotency and
+read-back guarantees, and the evidence/version that established them. The connector must durably
+install or revalidate that snapshot before the incarnation becomes writable. A protocol or connector
+change creates a new immutable snapshot even when the provider namespace stays the same; commands and
+outbox items retain the snapshot ID used for their decision so later capability changes cannot rewrite
+history.
+
+Each startup or reconnect writes a separate immutable capability-verification record tied to the
+current coordinator and connection epochs. Writability requires an `accepted` verification whose
+incarnation, snapshot, coordinator epoch, and connection epoch all match the current binding lease. If
+revalidation finds different capabilities, the connector creates the replacement snapshot and its
+verification, then atomically advances both current pointers. A failed verification leaves the
+incarnation non-writable and preserves the previous records for recovery and audit.
 
 An engine registers conversations with the host. Registration is two-phase because some adapters
 must announce before the native ID is known:
@@ -430,6 +477,7 @@ submit_text
 ├── logical chat ID
 ├── source surface
 ├── source-native event/message ID, when present
+├── source capability snapshot + verification IDs, for provider ingress
 ├── text
 ├── received time
 └── expected active turn, when present
@@ -487,6 +535,13 @@ so retention expiry alone cannot lift quarantine or close `outcome_unknown`. Onl
 reconciliation with positive terminal/cancellation evidence, or definitive process stop, freeze, or
 kill of the old incarnation, can do that. An operator may authorize that containment or a successor
 choice; an operator acknowledgement by itself cannot make a still-runnable attempt safe.
+
+A provider-origin `command.proposed` record has immutable
+`source_capability_snapshot_id` and `source_capability_verification_id` fields. Every outside
+`outbox.changed` item likewise has immutable `target_capability_snapshot_id` and
+`target_capability_verification_id` fields. Admission and recovery validate those pinned records;
+they never reinterpret an existing command or projection item through an incarnation's later
+`currentCapabilitySnapshotId`.
 
 The source dedup row and `command.proposed` commit atomically. A proposal left without
 `command.decided` is resumed deterministically after restart; uniqueness constraints and one
@@ -606,7 +661,8 @@ When the coordinator restarts:
    - if delivery provably never started, send it in coordinator order;
    - if delivery started but cannot be proven, mark it `outcome_unknown` and do not resend
      automatically.
-11. Reconnect outside protocols and resume durable projection outboxes from their stable IDs.
+11. Reconnect outside protocols, revalidate each current incarnation's durable capability snapshot,
+    and resume durable projection outboxes from their stable IDs.
 12. Announce and route the same `logicalChatId`. A rotated inner/private transport must not allocate a
     second web row, broker channel, Anthropic session, ChatGPT chat, or command sequence.
 13. Reopen input only when the next native command cannot overtake an uncertain older attempt. Merely
@@ -828,9 +884,10 @@ faithfully; unsupported mutations fail closed rather than being guessed.
 
 Every outside binding has the same lifecycle:
 
-1. Bind a durable `outsideBindingId`, one provider/broker/local event-ID namespace incarnation plus
-   capabilities, and a separate fenced connection epoch. Reconnect keeps both binding and incarnation
-   when the namespace is unchanged. Native restart never rotates either one.
+1. Bind a durable `outsideBindingId`, one provider/broker/local event-ID namespace incarnation, its
+   evidence-backed durable capability snapshot, and a separate fenced connection epoch. Reconnect
+   keeps both binding and incarnation when the namespace is unchanged, but must revalidate the
+   capability snapshot before restoring writability. Native restart never rotates either one.
 2. Ingest a mutation with a stable source ID and a commit callback; no semantic ACK or cursor advance
    occurs until that callback durably records the proposal.
 3. Consume a durable causal projection outbox ordered by `command_seq`/`chat_seq`.
@@ -1071,8 +1128,9 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 ### A1 — Runtime ownership, control journal, and command actor
 
 - Add durable `logical_chat`, `native_binding`, native-incarnation, private-transport-attachment and
-  attachment-lease, outside-binding, and connection-epoch records. Never alias `logicalChatId` to the
-  A0 `rcb_*`, Claude `cse_*`, Codex/OpenCode ID, broker channel, or provider ID.
+  attachment-lease, outside-binding, outside-capability-snapshot, outside-capability-verification, and
+  connection-epoch records. Never alias `logicalChatId` to the A0 `rcb_*`, Claude `cse_*`,
+  Codex/OpenCode ID, broker channel, or provider ID.
 - Route web presence, broker channel/key derivation, and normalized command/chat sequences by the
   stable `logicalChatId`; a transport replacement must update one visible row rather than create
   another.
@@ -1168,8 +1226,8 @@ The restart matrix must include:
 - broker/web recovery: resume the committed ingress cursor and outbound sequence on the stable logical
   channel so a crash-boundary command is neither skipped nor executed twice;
 - Anthropic and ChatGPT connector restart: preserve the logical chat and paired-host/project mappings,
-  rotating only connection credentials/epoch unless the provider forces a separately recorded
-  outside-binding incarnation;
+  revalidate the current durable capability snapshot, and rotate only connection credentials/epoch
+  unless the provider forces a separately recorded outside-binding incarnation;
 - crash points before/after binding commit, native `delivery.started`, native observation, projection,
   outward publish, and provider ingress ACK, with quarantine for every unprovable delivery.
 
