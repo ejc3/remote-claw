@@ -120,6 +120,33 @@ test("the host-runtime reference opens as a rendered viewer tab", async ({ page 
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
+test("the host-runtime source does not hard-wrap prose", async ({ request }) => {
+  const response = await request.get("/client-driven-host-runtime.md");
+  expect(response.ok()).toBe(true);
+
+  const wrappedLines: number[] = [];
+  let inFence = false;
+  let previousLineHadContent = false;
+  for (const [index, line] of (await response.text()).split("\n").entries()) {
+    if (line.startsWith("```")) {
+      inFence = !inFence;
+      previousLineHadContent = false;
+      continue;
+    }
+    if (inFence || line.trim() === "") {
+      previousLineHadContent = false;
+      continue;
+    }
+
+    const startsMarkdownBlock =
+      /^(?:#{1,6}\s|<|>|\||\s*(?:[-+*]|\d+\.)\s)/.test(line);
+    if (previousLineHadContent && !startsMarkdownBlock) wrappedLines.push(index + 1);
+    previousLineHadContent = true;
+  }
+
+  expect(wrappedLines, "iOS Markdown previews render soft source wraps as new lines").toEqual([]);
+});
+
 test("a composite doc-and-section hash loads and scrolls the selected design", async ({ page }) => {
   await page.goto("/index.html#host:delivery-plan");
   await expect(page.locator("article h1")).toContainText("Client-driven host runtime", {

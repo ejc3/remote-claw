@@ -1,47 +1,28 @@
 # Client-driven host runtime
 
+<!-- Keep each prose paragraph and list item on one source line. iOS Markdown previews render soft source wraps as visible line breaks. -->
+
 **Status:** selected architecture; implementation is in progress.
 
-This page explains the design from the user's point of view. The
-[technical reference](client-driven-host-runtime-reference.md) contains the exact adapter contracts,
-durable records, recovery algorithms, and crash-boundary rules. [Protocol & Runtime](protocol.md)
-describes what the current code does today.
+This page explains the design from the user's point of view. The [technical reference](client-driven-host-runtime-reference.md) contains the exact adapter contracts, durable records, recovery algorithms, and crash-boundary rules. [Protocol & Runtime](protocol.md) describes what the current code does today.
 
-Unless a paragraph or status label says otherwise, the behavior below is the target rather than a
-claim about the current wrappers.
+Unless a paragraph or status label says otherwise, the behavior below is the target rather than a claim about the current wrappers.
 
-**Today:** of this migration plan, only the process-local A0.1 registration seam has landed. Claude
-`--rc-app` still intercepts Remote Control traffic while tunneling other Anthropic calls, OpenCode and
-tmux still use their older direct bridge paths, and ordinary wrapper restarts do not preserve a stable
-logical-chat binding. Codex and the outward official-client connectors are not implemented.
+**Today:** of this migration plan, only the process-local A0.1 registration seam has landed. Claude `--rc-app` still intercepts Remote Control traffic while tunneling other Anthropic calls, OpenCode and tmux still use their older direct bridge paths, and ordinary wrapper restarts do not preserve a stable logical-chat binding. Codex and the outward official-client connectors are not implemented.
 
 <a id="1-decision"></a>
 
 ## The design in one minute
 
-In the selected architecture, remote-claw runs beside Claude Code, Codex, or OpenCode, normally in the
-same small VM. Tmux remains a lower-fidelity fallback.
+In the selected architecture, remote-claw runs beside Claude Code, Codex, or OpenCode, normally in the same small VM. Tmux remains a lower-fidelity fallback.
 
-The inner coding engine will be private. It will never connect directly to Anthropic, OpenAI, or
-another model provider. It sends provider-shaped requests to local endpoints owned by remote-claw. A
-separate inference connector may call the configured model service, using credentials and sockets
-that the inner process cannot access.
+The inner coding engine will be private. It will never connect directly to Anthropic, OpenAI, or another model provider. It sends provider-shaped requests to local endpoints owned by remote-claw. A separate inference connector may call the configured model service, using credentials and sockets that the inner process cannot access.
 
-Local input, remote-claw web input, and commands from official Claude or ChatGPT clients will all meet
-at one coordinator when the relevant connector is enabled and its mapping has passed its proof gates.
-The coordinator gives commands a stable order and decides whether each one is admitted, queued, or
-rejected. When the evidence is ambiguous, it records that uncertainty instead of executing the
-command. Only admitted writes may be sent to the coding engine, and every such send goes through its
-native adapter; unsupported actions fail closed.
+Local input, remote-claw web input, and commands from official Claude or ChatGPT clients will all meet at one coordinator when the relevant connector is enabled and its mapping has passed its proof gates. The coordinator gives commands a stable order and decides whether each one is admitted, queued, or rejected. When the evidence is ambiguous, it records that uncertainty instead of executing the command. Only admitted writes may be sent to the coding engine, and every such send goes through its native adapter; unsupported actions fail closed.
 
-The remote-claw logical chat is the stable, user-visible chat. Restarting an inner process, its private
-connection, the coordinator, or an outward official-client connection must not create another visible
-chat. Starting a new chat, clearing one, or forking one remains an explicit operation.
+The remote-claw logical chat is the stable, user-visible chat. Restarting an inner process, its private connection, the coordinator, or an outward official-client connection must not create another visible chat. Starting a new chat, clearing one, or forking one remains an explicit operation.
 
-remote-claw is authoritative for the shared chat's identity and command order. The native coding
-engine and its durable files are the primary evidence of conversation context, tool use, subprocesses,
-and side effects that actually occurred. Recovery uses both facts without maintaining a second,
-competing assistant transcript.
+remote-claw is authoritative for the shared chat's identity and command order. The native coding engine and its durable files are the primary evidence of conversation context, tool use, subprocesses, and side effects that actually occurred. Recovery uses both facts without maintaining a second, competing assistant transcript.
 
 ## Where everything runs
 
@@ -75,11 +56,7 @@ Two paths leave the host, and they have different jobs:
 | Inference connector | Obtains model results for the private coding engine | No |
 | Outward connector | Lets official or web clients participate in the shared chat | No |
 
-An outward connector is not the inner engine's model connection. The official Claude app still talks
-to Anthropic, and the official ChatGPT app still talks to OpenAI. remote-claw will present itself
-through the corresponding host/worker connection, receive official-client commands, and project
-updates back. The wrapped engine behind remote-claw does not get those provider credentials or
-connections.
+An outward connector is not the inner engine's model connection. The official Claude app still talks to Anthropic, and the official ChatGPT app still talks to OpenAI. remote-claw will present itself through the corresponding host/worker connection, receive official-client commands, and project updates back. The wrapped engine behind remote-claw does not get those provider credentials or connections.
 
 ## How one command moves
 
@@ -102,24 +79,16 @@ official app ── provider ─────┘                         │
 For a text command:
 
 1. The local wrapper or outside connector gives it a stable source identity.
-2. The coordinator records the command and decides whether it is admitted, queued, or rejected. If it
-   cannot classify the input safely, it records the uncertainty without executing it.
+2. The coordinator records the command and decides whether it is admitted, queued, or rejected. If it cannot classify the input safely, it records the uncertainty without executing it.
 3. Only an admitted command crosses the native adapter.
 4. The adapter observes the native result and correlates it with the existing command.
-5. The coordinator places supported updates into order and sends translated updates to each outside
-   view.
+5. The coordinator places supported updates into order and sends translated updates to each outside view.
 
-Every shared-chat write follows this path. A writable raw terminal, pane, or unwrapped client that can
-mutate the engine behind the coordinator is outside structured shared-chat mode.
+Every shared-chat write follows this path. A writable raw terminal, pane, or unwrapped client that can mutate the engine behind the coordinator is outside structured shared-chat mode.
 
-Receipt, admission, native execution, provider acceptance, and device rendering are different facts.
-For example, an official app may display its locally submitted text before remote-claw has admitted
-it. A provider ACK proves only what that protocol defines—normally host receipt—not that the native
-engine executed the command.
+Receipt, admission, native execution, provider acceptance, and device rendering are different facts. For example, an official app may display its locally submitted text before remote-claw has admitted it. A provider ACK proves only what that protocol defines—normally host receipt—not that the native engine executed the command.
 
-Commands are deduplicated by stable source IDs and recorded correlations, never by matching message
-text. If a reconnect makes an event's identity ambiguous, remote-claw records a recovery gap and does
-not execute it.
+Commands are deduplicated by stable source IDs and recorded correlations, never by matching message text. If a reconnect makes an event's identity ambiguous, remote-claw records a recovery gap and does not execute it.
 
 ## Who owns which facts
 
@@ -135,14 +104,9 @@ not execute it.
 | Encrypted frames accepted for replay | remote-claw broker |
 | What a client actually rendered | That client device |
 
-The coordinator stores a small control journal: command IDs and order, admission decisions, native and
-outward delivery state, exact correlation mappings, recovery cursors, and explicit gaps. It may cache a
-read model for the UI, but that cache is rebuildable and is not a replacement native transcript.
+The coordinator stores a small control journal: command IDs and order, admission decisions, native and outward delivery state, exact correlation mappings, recovery cursors, and explicit gaps. It may cache a read model for the UI, but that cache is rebuildable and is not a replacement native transcript.
 
-The coordinator never tries to recreate a lost native conversation by replaying old prompts, tool
-calls, approvals, or questions. If native evidence proves a command happened, it is not sent again. If
-evidence proves delivery never began, it may be delivered in order. If delivery may have begun but the
-result is unknown, later writes wait until the old work is contained or reconciled.
+The coordinator never tries to recreate a lost native conversation by replaying old prompts, tool calls, approvals, or questions. If native evidence proves a command happened, it is not sent again. If evidence proves delivery never began, it may be delivered in order. If delivery may have begun but the result is unknown, later writes wait until the old work is contained or reconciled.
 
 ## What stays stable
 
@@ -167,16 +131,11 @@ Each layer has its own identity:
 | Private transport attachment | Claude `cse_*`, app-server connection, SSE connection, or tmux attachment | Reused when possible; replaceable beneath the same binding |
 | Outward binding | Anthropic Remote, ChatGPT Remote, local, or web representation | Reconnects independently without changing the logical chat |
 
-IDs are never aliases. A Claude `cse_*`, Codex thread ID, OpenCode `ses_*`, tmux pane, broker channel,
-and remote-claw logical chat ID remain distinct.
+IDs are never aliases. A Claude `cse_*`, Codex thread ID, OpenCode `ses_*`, tmux pane, broker channel, and remote-claw logical chat ID remain distinct.
 
-Exactly one native binding is writable for a logical chat at a time. Old bindings and delivery
-attempts remain in the journal so a late process or connector cannot act as the current owner.
+Exactly one native binding is writable for a logical chat at a time. Old bindings and delivery attempts remain in the journal so a late process or connector cannot act as the current owner.
 
-A write is valid only when it names the current coordinator generation, native process generation,
-and private connection generation. Revoking an old owner prevents new writes, but it cannot undo work
-already sent to the engine. If an old attempt may still run, remote-claw must contain it or positively
-prove that it finished or was cancelled before a replacement becomes writable.
+A write is valid only when it names the current coordinator generation, native process generation, and private connection generation. Revoking an old owner prevents new writes, but it cannot undo work already sent to the engine. If an old attempt may still run, remote-claw must contain it or positively prove that it finished or was cancelled before a replacement becomes writable.
 
 ## What happens after a restart
 
@@ -187,12 +146,9 @@ Recovery works from the inside out:
 
 1. Stop taking new input and prevent an old coordinator from issuing new native writes.
 2. Load the expected logical chat, native binding, conversation identity, and transport attachments.
-3. Reattach the surviving native process only when its exact identity and a version-pinned live
-   reattachment method have both been proved.
-4. Otherwise, contain the old process, start a replacement runtime, and reopen or resume the exact
-   known native conversation.
-5. Reuse the old private transport when the protocol permits; otherwise record a proven replacement
-   beneath the same binding.
+3. Reattach the surviving native process only when its exact identity and a version-pinned live reattachment method have both been proved.
+4. Otherwise, contain the old process, start a replacement runtime, and reopen or resume the exact known native conversation.
+5. Reuse the old private transport when the protocol permits; otherwise record a proven replacement beneath the same binding.
 6. Reconcile commands and observations from native evidence without replaying old work.
 7. Reconnect Anthropic, ChatGPT, local, and web views independently.
 8. Make the chat writable only when the next ordered command is safe.
@@ -207,9 +163,7 @@ Common outcomes are:
 | User explicitly creates, clears, or forks | Create a new logical chat, with fork lineage when applicable |
 | Expected identity cannot be proved | Keep the old chat visible but non-writable; show a recovery gap |
 
-Recovery never guesses from a title, working directory, or similar text. A successor conversation can
-replace an unrecoverable one under the same visible chat only after an explicit recovery decision that
-records the gap. It is never a silent match.
+Recovery never guesses from a title, working directory, or similar text. A successor conversation can replace an unrecoverable one under the same visible chat only after an explicit recovery decision that records the gap. It is never a silent match.
 
 ## Native engine support
 
@@ -224,20 +178,16 @@ These are target guarantees unless the status column says they are implemented.
 
 - **Control:** a private Remote Control wrapper plus a local Anthropic-shaped API.
 - **Recovery evidence:** the Claude transcript/resume UUID and private RC state.
-- **Key rule:** try the known UUID and old `cse_*` first. A proven replacement `cse_*` remains beneath
-  the same logical chat.
-- **Status:** the process-local registration seam is implemented. Durable recovery and the outward
-  Anthropic worker are not.
+- **Key rule:** try the known UUID and old `cse_*` first. A proven replacement `cse_*` remains beneath the same logical chat.
+- **Status:** the process-local registration seam is implemented. Durable recovery and the outward Anthropic worker are not.
 
 ### Codex
 
 <a id="92-codex-wrapper"></a>
 
-- **Control:** a client-facing proxy around one host-scoped private app-server, plus a local
-  OpenAI-shaped API.
+- **Control:** a client-facing proxy around one host-scoped private app-server, plus a local OpenAI-shaped API.
 - **Recovery evidence:** Codex threads and rollout state.
-- **Key rule:** one named host contains many projects and threads. Restarting app-server must not
-  re-pair the host or duplicate those projects and chats.
+- **Key rule:** one named host contains many projects and threads. Restarting app-server must not re-pair the host or duplicate those projects and chats.
 - **Status:** not implemented.
 
 ### OpenCode
@@ -246,8 +196,7 @@ These are target guarantees unless the status column says they are implemented.
 
 - **Control:** a controlled HTTP/SSE server proxy plus private provider endpoints.
 - **Recovery evidence:** session history and live SSE.
-- **Key rule:** subscribe before taking a history snapshot. A lost `prompt_async` 204 is uncertain
-  unless history proves its outcome.
+- **Key rule:** subscribe before taking a history snapshot. A lost `prompt_async` 204 is uncertain unless history proves its outcome.
 - **Status:** the direct driver exists; migration to the host-wide seam is next.
 
 ### Tmux
@@ -259,9 +208,7 @@ These are target guarantees unless the status column says they are implemented.
 - **Key rule:** the shared pane is read-only. Injection and in-flight recovery remain lower confidence.
 - **Status:** the existing fallback is Claude-specific; migration to the host-wide seam is next.
 
-The [technical reference](client-driven-host-runtime-reference.md#9-native-adapter-recovery) contains the
-per-engine startup and recovery algorithms. Current OpenCode and tmux behavior is documented in
-[OpenCode Driver](opencode-driver.md) and [Tmux Driver](tmux-driver.md).
+The [technical reference](client-driven-host-runtime-reference.md#9-native-adapter-recovery) contains the per-engine startup and recovery algorithms. Current OpenCode and tmux behavior is documented in [OpenCode Driver](opencode-driver.md) and [Tmux Driver](tmux-driver.md).
 
 ## Outside clients
 
@@ -273,42 +220,29 @@ An outside binding is independent of the native engine. Native restart does not 
 
 <a id="101-wrapper-owned-local-ui"></a>
 
-The client-facing proxy or wrapper editor submits through the coordinator. A raw native view may
-remain available as a read-only diagnostic surface. Structural interception is not complete today.
+The client-facing proxy or wrapper editor submits through the coordinator. A raw native view may remain available as a read-only diagnostic surface. Structural interception is not complete today.
 
 ### remote-claw web
 
 <a id="102-remote-claw-web"></a>
 
-The E2E-encrypted broker carries the web view. The target is one stable web chat with separate receipt
-and delivery states. The transport exists today; persistent logical-chat identity does not.
+The E2E-encrypted broker carries the web view. The target is one stable web chat with separate receipt and delivery states. The transport exists today; persistent logical-chat identity does not.
 
 ### Official Claude clients
 
 <a id="103-anthropic-remote"></a>
 
-An outward Anthropic Remote worker/session lets official commands enter the coordinator and projects
-native observations back. An app-side list/history/SSE/text-submission client exists today; outward
-worker/bridge support is missing.
+An outward Anthropic Remote worker/session lets official commands enter the coordinator and projects native observations back. An app-side list/history/SSE/text-submission client exists today; outward worker/bridge support is missing.
 
 ### Official ChatGPT clients
 
 <a id="104-chatgpt-remote-connection"></a>
 
-One outward paired ChatGPT Remote host preserves the product shape of one named host containing many
-projects and chats. That shape is known; the paired transport still needs pinned protocol evidence.
+One outward paired ChatGPT Remote host preserves the product shape of one named host containing many projects and chats. That shape is known; the paired transport still needs pinned protocol evidence.
 
-Every outward connector must verify its current capabilities before becoming writable. Before
-advancing a semantic ACK or cursor, it must durably record both the incoming event's classification
-and either the admission decision for a new command or the prior-command link for a replay. Outgoing
-updates use a durable send queue that keeps them in command order. A connector restart or
-provider-forced replacement never changes the logical chat. Old provider history repairs only that
-outside view; it is never replayed into the native engine.
+Every outward connector must verify its current capabilities before becoming writable. Before advancing a semantic ACK or cursor, it must durably record both the incoming event's classification and either the admission decision for a new command or the prior-command link for a replay. Outgoing updates use a durable send queue that keeps them in command order. A connector restart or provider-forced replacement never changes the logical chat. Old provider history repairs only that outside view; it is never replayed into the native engine.
 
-The technical reference describes the common
-[outside-connector lifecycle](client-driven-host-runtime-reference.md#10-outside-adapters), the
-[Anthropic target](client-driven-host-runtime-reference.md#103-anthropic-remote), and the
-[ChatGPT target](client-driven-host-runtime-reference.md#104-chatgpt-remote-connection).
+The technical reference describes the common [outside-connector lifecycle](client-driven-host-runtime-reference.md#10-outside-adapters), the [Anthropic target](client-driven-host-runtime-reference.md#103-anthropic-remote), and the [ChatGPT target](client-driven-host-runtime-reference.md#104-chatgpt-remote-connection).
 
 ## Security boundary
 
@@ -319,11 +253,9 @@ These are release requirements, not claims about the current wrappers:
 - Inner Claude, Codex, and OpenCode process trees have no real provider credentials.
 - Every provider-shaped request from an inner process terminates at a local façade.
 - Network policy blocks direct provider fallback.
-- Inference connectors and official-client connectors use separately isolated credentials and
-  sockets.
+- Inference connectors and official-client connectors use separately isolated credentials and sockets.
 - Unknown inner routes and unsupported mutations fail closed.
-- Provider credentials never enter argv, logs, normalized payloads, broker frames, or inner
-  environments.
+- Provider credentials never enter argv, logs, normalized payloads, broker frames, or inner environments.
 - User content remains E2E-encrypted while crossing the remote-claw broker.
 
 ## Delivery plan
@@ -350,8 +282,7 @@ Each milestone lands as separate reviewed pull requests.
 | C | Fully brokered Codex wrapper and one outward ChatGPT Remote host with many projects/chats | Planned |
 | D | Durable tmux recovery and unified host/project/chat discovery | Planned |
 
-The exact work items and gates remain in the
-[delivery-plan reference](client-driven-host-runtime-reference.md#13-delivery-plan).
+The exact work items and gates remain in the [delivery-plan reference](client-driven-host-runtime-reference.md#13-delivery-plan).
 
 ## Proof gates
 
@@ -360,8 +291,7 @@ The exact work items and gates remain in the
 The design does not claim a capability until tests establish it. The largest open proofs are:
 
 - stable chat identity and command order across every restart boundary;
-- exact native identity, history completeness, live reattachment, and safe replacement for each
-  engine;
+- exact native identity, history completeness, live reattachment, and safe replacement for each engine;
 - interception of every local shared-chat mutation before native execution;
 - provider-route termination, credential isolation, and process-tree network fencing;
 - delivery correlation and no automatic duplicate execution after an uncertain outcome;
@@ -371,19 +301,16 @@ The design does not claim a capability until tests establish it. The largest ope
 - ChatGPT host enrollment, project grouping, transport, sequence, and ACK behavior;
 - honest lower-confidence behavior for OpenCode 204 delivery and tmux injection.
 
-The exhaustive [proof list and restart matrix](client-driven-host-runtime-reference.md#14-proof-gates)
-defines the release tests.
+The exhaustive [proof list and restart matrix](client-driven-host-runtime-reference.md#14-proof-gates) defines the release tests.
 
 ## Further reading
 
 <a id="15-evidence-baseline"></a>
 
-- [Technical reference](client-driven-host-runtime-reference.md) — exact contracts, records, and
-  algorithms.
+- [Technical reference](client-driven-host-runtime-reference.md) — exact contracts, records, and algorithms.
 - [Protocol & Runtime](protocol.md) — current as-built behavior.
 - [Pluggable Harness](pluggable-harness.md) — current adapter seam.
 - [Phase 0 Findings](phase0-findings.md) — captured Claude Remote Control protocol.
 - [Durable Log Design](durable-log-design.md) — private Claude RC persistence.
-- [Native RC Passthrough Scoping](native-rc-passthrough-scoping.md) — why private native transport and
-  outward official-client transport remain separate.
+- [Native RC Passthrough Scoping](native-rc-passthrough-scoping.md) — why private native transport and outward official-client transport remain separate.
 - [Test Plan](test-plan.md) — current tests and future design gates.
