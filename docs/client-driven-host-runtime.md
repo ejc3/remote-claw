@@ -58,7 +58,9 @@ Two paths leave the host, and they have different jobs:
 
 An outward connector is not the inner engine's model connection. The official Claude app still talks to Anthropic, and the official ChatGPT app still talks to OpenAI. remote-claw will present itself through the corresponding host/worker connection, receive official-client commands, and project updates back. The wrapped engine behind remote-claw does not get those provider credentials or connections.
 
-## How one command moves
+<a id="how-one-command-moves"></a>
+
+## Commands and updates
 
 <a id="5-normalized-command-path"></a>
 <a id="7-delivery-state"></a>
@@ -67,28 +69,45 @@ An outward connector is not the inner engine's model connection. The official Cl
 <a id="113-official-client-text"></a>
 <a id="114-two-writers"></a>
 
+Commands travel toward the wrapped coding client. Replies, tool activity, and status updates travel back from it. remote-claw handles these as two separate flows.
+
+### A command goes in
+
 ```text
-local wrapper ────────────────┐
-remote-claw web ── broker ────┼── coordinator ── native adapter ── private engine
-official app ── provider ─────┘                         │
-                                                       │ observations
-                                                       ▼
-                              translated updates to each enabled view
+one command
+(local, web, or official app)
+              │
+              ▼
+         remote-claw
+    record / check / order
+              │
+              ▼
+       coding client
 ```
 
-For a text command:
+remote-claw records where the command came from and puts it in line with any earlier commands. It then decides whether to run it now, hold it until earlier work finishes, or reject it. Only a command approved to run is translated by the client-specific adapter and sent to Claude Code, Codex, OpenCode, or the tmux fallback.
 
-1. The local wrapper or outside connector gives it a stable source identity.
-2. The coordinator records the command and decides whether it is admitted, queued, or rejected. If it cannot classify the input safely, it records the uncertainty without executing it.
-3. Only an admitted command crosses the native adapter.
-4. The adapter observes the native result and correlates it with the existing command.
-5. The coordinator places supported updates into order and sends translated updates to each outside view.
+Every command is identified by where it came from and the ID assigned there. When those facts prove that an event is a repeat, remote-claw links it to the earlier command instead of running it again. If remote-claw cannot tell whether an event is new or repeated, it records the problem and does not run the command.
 
-Every shared-chat write follows this path. A writable raw terminal, pane, or unwrapped client that can mutate the engine behind the coordinator is outside structured shared-chat mode.
+### Updates come back
 
-Receipt, admission, native execution, provider acceptance, and device rendering are different facts. For example, an official app may display its locally submitted text before remote-claw has admitted it. A provider ACK proves only what that protocol defines—normally host receipt—not that the native engine executed the command.
+```text
+coding client
+      │
+      ▼
+ remote-claw
+match / order / translate
+      │
+      ▼
+connected views
+(local, web, official apps)
+```
 
-Commands are deduplicated by stable source IDs and recorded correlations, never by matching message text. If a reconnect makes an event's identity ambiguous, remote-claw records a recovery gap and does not execute it.
+The client-specific adapter reports replies, tool activity, and completion to remote-claw. remote-claw links an update to its command when there is one, keeps the updates in order, and sends each connected view the form it understands. A view can reconnect and catch up without sending an old command to the coding client again.
+
+Seeing submitted text in an app does not prove that remote-claw accepted it. Acceptance does not prove that the coding client ran it, and starting work does not prove that the work finished. The [technical reference](client-driven-host-runtime-reference.md#5-normalized-command-path) defines those exact delivery states.
+
+No supported client writes around the coordinator. A raw terminal, pane, or private server connection that can change the coding client directly is outside this shared-chat mode.
 
 ## Who owns which facts
 
