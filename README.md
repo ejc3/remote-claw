@@ -167,7 +167,7 @@ Anthropic Remote session.
 The active sequence is A0.2 OpenCode/tmux registration → A1 runtime owner/control journal → A2
 OpenCode vertical slice → wrapped Claude → wrapped Codex/ChatGPT Remote → tmux recovery. A0.1, the
 neutral seam plus Claude MITM migration, is implemented. The proof gates and per-PR boundaries are in
-[Client-driven Host Runtime §13](docs/client-driven-host-runtime.md#13-delivery-plan).
+[Client-driven Host Runtime delivery plan](docs/client-driven-host-runtime.md#delivery-plan).
 
 ## ⚠️ Security
 

@@ -95,7 +95,8 @@ fact is that worker bridge/SSE does not provide history
 `/events/stream`, not worker bridge recovery. None is a verified production
 contract. The implemented client therefore sends none of them; caller-driven
 history pagination is the only current primitive, and the outward-connector reconnect gate in
-[Client-driven Host Runtime](client-driven-host-runtime.md) §14 must establish any cursor.
+[Client-driven Host Runtime proof gates](client-driven-host-runtime.md#proof-gates) must establish any
+cursor.
 
 The tracked client POST shape returns `duplicate`, `event_id`, and
 `sequence_num` (`docs/phase0-findings.md` §4b). A historical replay experiment
@@ -775,7 +776,8 @@ The A1/A2 branch statuses and file paths below are a preserved planning snapshot
 instructions: those branches were integrated and the broker layout has since moved to
 `apps/web/lib/broker/{sqlite-multi,turso-cloud-locator,vercel}.ts` plus shared interfaces. The unbuilt B
 phases are likewise superseded by the shared/Claude phases in
-[Client-driven Host Runtime](client-driven-host-runtime.md) §13. Keep this section for provenance and
+[Client-driven Host Runtime delivery plan](client-driven-host-runtime.md#delivery-plan). Keep this
+section for provenance and
 test intent; re-read current code before implementing any item.
 
 Phase A1 - Durable broker frames:

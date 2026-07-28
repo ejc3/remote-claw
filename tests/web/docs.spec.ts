@@ -108,12 +108,24 @@ test("a doc-reference link opens that doc in the viewer, not the raw markdown", 
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
+test("the host-runtime reference opens as a rendered viewer tab", async ({ page }) => {
+  await page.goto("/index.html#host");
+  await expect(page.locator("article h1")).toContainText("Client-driven host runtime", {
+    timeout: 15000,
+  });
+  await page.locator('article a[href="client-driven-host-runtime-reference.md"]').first().click();
+  await expect(page.locator("article h1")).toContainText("technical reference");
+  await expect(page.locator(".tab.active")).toHaveText("Host Runtime Reference");
+  await expect(page).toHaveURL(/#host-ref$/);
+  expect(new URL(page.url()).pathname).toBe("/index.html");
+});
+
 test("a composite doc-and-section hash loads and scrolls the selected design", async ({ page }) => {
-  await page.goto("/index.html#host:13-delivery-plan");
+  await page.goto("/index.html#host:delivery-plan");
   await expect(page.locator("article h1")).toContainText("Client-driven host runtime", {
     timeout: 15000,
   });
   await expect(page.locator(".tab.active")).toHaveText("Client-driven Host Runtime");
-  await expect(page).toHaveURL(/#host:13-delivery-plan$/);
-  await expect(page.locator('[id="13-delivery-plan"]')).toBeInViewport();
+  await expect(page).toHaveURL(/#host:delivery-plan$/);
+  await expect(page.locator('[id="delivery-plan"]')).toBeInViewport();
 });

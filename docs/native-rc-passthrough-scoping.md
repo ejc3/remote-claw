@@ -244,4 +244,5 @@ explicitly experimental release, not a general-availability claim.
    inward?
 10. What compatibility policy is acceptable for an undocumented, version-sensitive protocol?
 
-The actionable delivery order is in [Client-driven Host Runtime](client-driven-host-runtime.md) §13.
+The actionable delivery order is in the
+[Client-driven Host Runtime delivery plan](client-driven-host-runtime.md#delivery-plan).
