@@ -14,7 +14,8 @@
 //                  re-emit one (covers an SSE reconnect re-delivering a finished message).
 //   #5 ACK       — followDownstream only suppresses replay for ids in #acked; a non-MITM driver has no
 //                  /worker/events/delivery, so we call session.ack(ev.eventId) after EVERY successful
-//                  inject, INCLUDING the leading `initialize` control_request.
+//                  transport inject, INCLUDING the leading `initialize` control_request. This ACK does
+//                  not prove OpenCode applied or ordered the native action.
 //
 // SUB-AGENTS (Task) ARE BRIDGED (#102). OpenCode spawns a Task/subagent as a CHILD session
 // (Session.parentID → the parent) and emits a `subtask` part on the parent message. translate.ts renders

@@ -10,18 +10,62 @@
 > **Architecture evolution (selected 2026-07-26):**
 > [Client-driven host runtime](client-driven-host-runtime.md) adds a host-wide adapter and coordinator
 > above this document's one-wrapper-per-Claude-chat implementation. It preserves one paired Codex host
-> with many projects/chats and lets official clients participate. Native clients remain authoritative
-> for conversation context and execution; the small coordinator journal owns command admission, order,
-> correlation, and delivery evidence. Inner Claude, Codex, and OpenCode processes have no direct
-> provider connection: remote-claw terminates their provider-shaped traffic, drives each through a
-> separate native control adapter, and independently owns model-inference and official-Remote
-> connectors. [Protocol & Runtime](protocol.md) remains the as-built source of truth; this document is
-> the rationale that led to the shipped v2 baseline, not a current implementation inventory. The
-> selected host runtime replaces its flat session identity and changes its authority and recovery
-> model. In that shipped baseline, the broker-visible `session_id`, viewer row, channel suffix, and
-> private synthetic Claude RC `cse_*` are the same value. In the selected A1 target they are not:
-> a stable remote-claw `logicalChatId` keys the broker row/channel, while the inner private `cse_*`,
-> Claude conversation UUID, and any outward-provider session ID are separately persisted bindings.
+> with many projects/chats and lets official clients participate. At the innermost boundary, one person
+> uses the real native TUI while remote-claw occupies one native collaborator attachment. Claude may
+> realize that as a session connection, Codex as one daemon-wide bridge, and OpenCode as an
+> endpoint-enforced adapter lease over HTTP/SSE; the product's native harness is still the arbiter.
+> Each remote-claw server orders and deduplicates only its own direct collaborators and decides which
+> proposals to offer inward; the native harness owns final TUI/remote interleaving, acceptance,
+> execution, and mutation. A whole remote-claw server may itself be one collaborator of another server,
+> recursively and without reflection loops, but only the innermost end contains Claude Code, Codex, or
+> OpenCode. The native-client-facing boundary is a drop-in compatibility contract: changing only the
+> Codex/OpenCode server endpoint or launching Claude inside the wrapper must preserve the pinned native
+> product's supported protocol and behavior. The retained Codex proofs cover two independently
+> initialized clients on one native thread, a real TUI plus raw peer on one thread, and three raw
+> connections where the two top-level creators own the native subscriptions while non-owners remain
+> `notSubscribed` and lack the selected correlated detailed events until one host observer explicitly
+> resumes both.
+> Pinned `0.146.0` separately best-effort attaches every initialized connection for core child-agent
+> thread notifications. The target preserves and differentially proves those native subscription,
+> broadcast, and routing semantics for trusted direct TUIs plus exactly one remote-claw bridge; it
+> does not replace them with another attachment policy or a second Codex-server implementation.
+> Pinned Codex source also shows that normal official Remote streams and local socket clients enter one
+> daemon through the same transport-event/`MessageProcessor` seam and that each physical connection
+> owns native initialization and lifecycle state. That is the outward fidelity oracle, not the selected
+> inward topology. The target keeps one daemon, moves official Remote transport/enrollment outside its
+> isolation boundary, retains each official stream's protocol and subscription state in the gateway,
+> and routes admitted semantic native mutations through exactly one native remote-claw bridge with a
+> logical binding and aggregate subscription per managed top-level chat thread. Stream-local lifecycle
+> changes reconcile the union of current host/collaborator demand to zero or one fenced native
+> subscription transition. A child-thread notification remains nested native evidence until lineage proof explicitly
+> establishes a different outward mapping. Official
+> streams never become native connections or writers. Only compatibility or source-lease metadata that
+> differential proof requires may accompany an admitted bridge request, without independent authority.
+>
+> The same evidence standard applies to the other adapters. Claude worker delivery ACK is private-RC
+> replay bookkeeping, not native acceptance; permission/question resolution closes only from proved
+> native terminal evidence, and the exact RC/transcript/provider/turn join remains a retained-fixture
+> gate. OpenCode's retained [model-free proof](opencode-native-proof.md) establishes its exact metadata marker and caller-message-ID
+> read-back, while a second same-ID `noReply:true` send in one server incarnation appends another part;
+> model-bearing behavior, TUI coexistence, controls, permissions, SSE recovery, and takeover remain
+> gated. Tmux is lower fidelity because person
+> and injector share one editor keystream, so simultaneous drafts can merge and terminal-control
+> receipt cannot prove native application.
+>
+> Inner Claude, Codex, and OpenCode processes have no direct provider connection: remote-claw terminates
+> their provider-shaped traffic, drives each through its native control boundary, and independently owns
+> model-inference and official-Remote connectors. The local runtime owner, native endpoint, façade, and
+> inference connector remain usable without the collaboration coordinator; remote mutations fail closed
+> until its journal and epoch recover. [Protocol & Runtime](protocol.md) remains the as-built
+> source of truth; this document is the rationale that led to the shipped v2 baseline, not a current
+> implementation inventory. The selected host runtime replaces its flat session identity and changes its
+> authority and recovery model. In that shipped baseline, the broker-visible `session_id`, viewer row,
+> channel suffix, and private synthetic Claude RC `cse_*` are the same value. In the selected target they
+> are not: `(collaborationServerId, logicalChatId)` is the server-scoped chat identity, nested edges map
+> distinct server/chat pairs, and inner `cse_*`, Claude conversation UUID, Codex/OpenCode IDs, and
+> outward-provider session IDs remain separate bindings. Detailed A1 Claude resume/`cse_*` recovery
+> passages later in this historical document describe only the terminal Claude edge; outer layers
+> reconnect server/chat edges and never create another native app.
 
 ## 1. What changes and why
 
@@ -215,7 +259,7 @@ never a silent default).
   discovery document, plus SAML 2.0 / OAuth2), while the **broker** authorizes each
   `/api/*` request off the per-identity **`auth_token`** alone — self-verifying
   (`identity_id = trunc(SHA256(auth_token))`), so the unguessable 128-bit `identity_id`
-  + required `auth_token` *is* the anti-scanning gate (no separate app-key). Neither adds
+  and required `auth_token` together form the anti-scanning gate (no separate app-key). Neither adds
   confidentiality. Future: mTLS client identities for per-client, revocable admission.
 
 ## 2A. Trust modes (one seam, three policies)
@@ -362,7 +406,8 @@ security review — §14A.)
 - Relay logic (Node/TS, reimplementing the Phase-0 interception knowledge): on each
   worker→relay event, log it, allocate `seq`, encrypt with the per-session key, and
   `POST /api/relay`; subscribe (SSE) to its inbound channel, **dedup by `msg_id`**,
-  decrypt, and deliver to Claude **after log commit**, then echo `accepted`.
+  decrypt, allocate `seq`, emit `accepted`, echo and record the user frame, and only
+  then enqueue it for Claude. `accepted` is relay receipt/order, not native acceptance.
 - **Joins the identity bus** (§6B): on first `/remote-control` it resume-or-starts the
   per-identity bus run (`bus:${identity_id}`) and **periodically broadcasts** its own signed
   `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change) — that *is* both
@@ -531,7 +576,7 @@ without per-message HKDF: XChaCha20-Poly1305 — heavier; not needed.)
 
 **Which key encrypts what (three planes).** (1) **Content** (transcript) → `K_session`,
 **including an inbound `user` prompt** (`dir:in`); a `user` frame is content in *both*
-directions (web→wrapper prompt and worker→web echo). (2) **Control** → `control_key`:
+directions (web→wrapper prompt and wrapper→web echo). (2) **Control** → `control_key`:
 `catch_up`, `permission`, `interrupt`, `set_mode`, `set_model`, `command`, `end`. (3)
 **Meta** → `K_meta`: `accepted`, `session_announce` (so the broker **can't forge
 presence/announce** — AEAD-authenticated, not plaintext). The broker holds none of these
@@ -545,9 +590,10 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
 
 - **Session identity is baseline-specific.** In the shipped v2/A0 path, `session_id` below is the
   synthetic Claude RC `cse_*` and also the broker row/channel key. In the selected A1 host runtime,
-  `session_id` on the broker-facing announce is the stable remote-claw `logicalChatId`; the inner
-  `cse_*` and any outward-provider session IDs remain private binding metadata and never select a
-  second viewer row.
+  `session_id` on one server's broker-facing announce is its stable `logicalChatId`; the globally
+  meaningful identity is `(collaborationServerId, logicalChatId)`, and nested edges map distinct pairs.
+  The inner `cse_*` and any outward-provider session IDs remain private binding metadata and never
+  select a second viewer row on that server.
 - **Each session announces itself; clients subscribe.** A *session* has its own relay controller,
   **independent of every other session** (§1); one wrapper process may host several controllers, and
   each publishes **its own** announce. While RC is on, a session (every `ANNOUNCE_INTERVAL`, and
@@ -557,7 +603,7 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   `incarnation_started_at` are the wrapper's wall clock **inside the ciphertext** (broker can't forge a
   fresh or later one). No client→wrapper request.
 - **Online = a fresh announce.** A client tails the bus, builds its list keyed by
-  `session_id` (globally unique, so independent sessions never collide), and treats a
+  `session_id` (globally unique in the shipped baseline and server-scoped in the selected target), and treats a
   session as **online iff its latest accepted announce is fresh** —
   `now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`. No fresh announce within the window ⇒ the client **greys** that session
   locally.
@@ -597,7 +643,7 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   rolled past a session's last announce, that session renders pending/absent and appears
   within ≤ `ANNOUNCE_INTERVAL` (+jitter) on its next broadcast.
 - **The one assumption, and its blast radius.** This trusts wrapper & client clocks to
-  agree within ~`FRESH_WINDOW` (NTP, seconds). It is scoped to the **online dot only** —
+  agree within approximately `FRESH_WINDOW` (NTP, seconds). It is scoped to the **online dot only** —
   message **confidentiality and integrity** are fully clock-free (`K_session`/`control_key`
   AEAD), and **replay** defense is `msg_id`-based (also clock-free). The *only* place a
   clock touches the message plane is a control frame's `expiry` (§6A/§8) — a generously
@@ -619,7 +665,7 @@ swapped credential, and **no broker-side revocation** — see the tension below.
 **`--rc-identity --rc-confirm <identity_id>`** (§3.1) — there is no separate `--rc-rotate` verb,
 because in a store-free, single-secret-per-machine model "resetting" *is* re-creating that machine's
 identity. It is guarded (the confirm typo-check
-+ a TTY, unless `--rc-force-noninteractive`) and **securely deletes** the old `S` by default:
+and a TTY, unless `--rc-force-noninteractive`) and **securely deletes** the old `S` by default:
 because the same `S` deterministically re-derives the *same* keys, a retained copy is a **full live
 credential** (it can still decrypt/forge any ciphertext that survives — buffered frames, the web
 IndexedDB cache).
@@ -726,11 +772,12 @@ tailing the stream decrypt & render.
 
 **Web → worker** (your prompt): web encrypts a `user` content frame (`dir:"in"`,
 `client_msg_id`, under `K_session`) → `POST /api/relay` → the workflow **hook**
-wakes the wrapper → wrapper **dedups by `msg_id`**, decrypts, **commits to its log +
-assigns `seq`**, **injects into Claude via the Phase-0-verified MITM downstream** (a write
-to the worker `/worker/events` path — see [`phase0-findings.md`](phase0-findings.md)), and emits
-`accepted{client_msg_id, seq}` on the out-stream. The frame is **logged before the inject**,
-but the current relay does not have a native idempotency key: if delivery may have crossed the
+wakes the wrapper → wrapper **dedups by `msg_id`**, decrypts, assigns `seq`, emits
+`accepted{client_msg_id, seq}` on the out-stream, echoes and records the user frame, and then
+**injects into Claude via the Phase-0-verified MITM downstream** (the worker SSE path — see
+[`phase0-findings.md`](phase0-findings.md)). The user frame is recorded before the inject, but
+`accepted` itself is only relay receipt/order and is deliberately emitted before native delivery.
+The current relay does not have a native idempotency key: if delivery may have crossed the
 worker boundary and its acknowledgement is lost, a later legacy retry can execute the prompt twice.
 `msg_id` deduplicates the relay/viewer frame, not Claude execution. The selected host runtime records
 that case as `outcome_unknown` and does not retry automatically. Claude replies → the worker→web path
@@ -798,22 +845,25 @@ client `catch_up` — **never** a worker backfill, and **never** Anthropic's cur
     transcript evidence, never worker backfill.
 - **`seq` is allocated solely by the wrapper.** Clients never assign transcript
   order: a web client sends a `client_msg_id`; the wrapper decrypts, commits to its
-  in-memory log, assigns the canonical `seq`, then echoes an `accepted{client_msg_id, seq}`.
-  Clients retry until `accepted`; the wrapper forwards a prompt to Claude **only
-  after** its log commit (so POST-accepted-by-broker ≠ delivered).
+  relay path, assigns the canonical `seq`, emits `accepted{client_msg_id, seq}`, then
+  echoes/records the user frame before forwarding it to Claude. Clients retry until
+  `accepted`, but that frame is relay receipt/order rather than proof of native delivery
+  or application.
 - **Replay/idempotency:** delivery is at-least-once and the broker can *replay a
-  valid old ciphertext*, so the wrapper keeps an **in-memory seen-set** (rebuilt on
-  reconnect with the log) and drops duplicates **before** any side effect. The seen-set
+  valid old ciphertext*, so the wrapper keeps an **in-memory seen-set** and drops
+  duplicates **before** any side effect. The seen-set
   key is `msg_id` for whole frames and **`(msg_id, part)`** for chunked ones (so a
   replayed middle chunk is dropped without stalling reassembly, §8). `msg_id` and
   `client_msg_id` are **CSPRNG-unique** per send (never client-local counters), so two
   clients can't collide. **The wrapper is a single process owning one session (§1)**, so
-  for every inbound frame the sequence **dedup-check → record `msg_id` in the seen-set →
-  log → allocate `seq` → side effect** runs as one serial critical section in that process
-  — no distributed lock, no concurrent-hook race. Recording `msg_id` **before** the side
-  effect (true for content *and* control frames) is what lets a post-restart rebuild from
-  the log reject a replay; a replayed `catch_up` is likewise dropped **before** any history
-  is re-streamed.
+  an inbound user frame follows one serialized sequence: **dedup-check → record `msg_id`
+  in the seen-set → decrypt → allocate `seq` → emit `accepted` → echo/record the user
+  frame → `pushUserInput`**. Other controls likewise enter the seen-set before their
+  action, but they do not all allocate transcript `seq` or log content. The in-memory
+  seen-set survives stream reconnects within one relay incarnation. Across a durable
+  wrapper restart, the sampled inbound floor—not a rebuilt seen-set—prevents execution
+  of older frames, with the pre-sample loss gap described in §12; a non-durable restart
+  starts a new relay session/binding.
 - **Catch-up is an encrypted control frame to the wrapper.** A client sends an
   **AEAD-encrypted** `catch_up{since=<last-seen seq | 0>, msg_id, expiry}` (control
    frames use a derived control key + replay check — never plaintext the broker
@@ -839,7 +889,7 @@ Consequence (accepted): browsing history requires the TUI to be **online** — w
 a live Claude session needs anyway (RC sessions end ~10 min after the worker goes
 offline). Offline history-browsing (and any durable store) is **deferred** — §6C.
 
-Invariants either way: **the broker sees ciphertext only**; ordering is by
+Historical baseline invariants across the broker backends discussed here: **the broker sees ciphertext only**; ordering is by
 TUI-assigned `seq`; live delivery is **at-least-once** so clients dedupe by
 `msg_id` and reorder by `seq`; crypto happens in the TUI + browser and in thin
 Functions/steps, **never** inside the deterministic `'use workflow'` body (random
@@ -861,10 +911,11 @@ the broker forges nothing.
 
 Content frames (transcript; encrypted under **`K_session`**; carry `seq`). A `user`
 frame is content in **both** directions — `in` = the typed prompt (carries
-`client_msg_id`), `out` = the worker's echo:
+`client_msg_id`), `out` = the wrapper's echo:
+
 | kind | dir | source | notes |
 | --- | --- | --- | --- |
-| `user` | in / out | client (prompt) / RC (echo) | typed prompt carries `client_msg_id`; `out` echo carries the wrapper-assigned `seq` |
+| `user` | in / out | client (prompt) / wrapper (echo) | typed prompt carries `client_msg_id`; `out` echo carries the wrapper-assigned `seq` |
 | `assistant` | out | RC | model output (+ partial deltas if we enable them) |
 | `result` | out | RC | turn complete (cost / usage) |
 | `system` / `status` / `rate_limit` | out | RC | lifecycle (init, "requesting", limits) |
@@ -932,7 +983,8 @@ makes in-session history correct; the **bus** makes discovery + presence live (n
 RC enabled → the session's wrapper joins the identity **bus** (`bus:${identity_id}`), starts
 **broadcasting its own `session_announce`**, + opens its per-session stream.
 Live turn → `assistant`/`result` flow the session out-stream, `user` arrives via the
-session hook; clients tail; wrapper logs + echoes `accepted`. Brief reconnect (web or
+session hook; clients tail; the wrapper emits `accepted`, then echoes/records the user
+frame before native injection. Brief reconnect (web or
 wrapper) → resume by `seq`/`startIndex`. Gap older than the buffer / cold device →
 `catch_up` → wrapper replays from its log. A client opening cold →
 tails the bus + reads the recent window → sees the latest (fresh) `session_announce`s.
@@ -1094,7 +1146,7 @@ interval generous (§12).
   themselves"; live greying (above) covers a session *leaving* while you watch. Offline
   *listing* across cold starts is **deferred** (§6C).
 - **Presence is timestamp-driven** (§4.3): correctness of the *online dot* assumes
-  wrapper/client clocks within ~`FRESH_WINDOW` (NTP), and a dead session can show online for
+  wrapper/client clocks within approximately `FRESH_WINDOW` (NTP), and a dead session can show online for
   ≤ `FRESH_WINDOW + SKEW` (≈65 s at defaults) before greying. Scoped to the dot only — never
   message security (§12).
 - **Two-call composition** (`getHookByToken`→`getRun`→`getReadable`): each call is
@@ -1153,8 +1205,8 @@ Node, runs once, retried, journaled).
 Two properties make it the right shape for *our* real-time fan-out, both **verified in the 4.3.1 docs
 and proven by our own `vercel.ts`**:
 
-- **Reads are true push, multi-subscriber.** Each viewer opens its own `getRun(runId).getReadable({
-  startIndex })` cursor against the one relay run's persistent (Redis-backed) stream — catch-up then
+- **Reads are true push, multi-subscriber.** Each viewer opens its own
+  `getRun(runId).getReadable({ startIndex })` cursor against the one relay run's persistent (Redis-backed) stream — catch-up then
   live, no polling. The streaming doc confirms concurrent readers/writers on one stream; our
   `subscribe()` *is* this, one cursor per viewer. (Public docs couldn't confirm multi-reader; our
   shipped code is the proof.)
@@ -1205,7 +1257,7 @@ Temporal was prototyped as a backend and rejected; it is the opposite substrate 
   for sustained high-throughput") — self-hosted-but-elastic, not managed-execution.
 
 The supported scalable Temporal design is therefore the **split**: Temporal for durable orchestration
-+ an **external pub/sub** (Redis Streams / NATS / Kafka) for the fan-out — i.e. an admission that
+and an **external pub/sub** (Redis Streams / NATS / Kafka) for the fan-out — i.e. an admission that
 Temporal alone is not a broker. That is strictly more infrastructure than either shipped backend for no
 gain on this workload — so Temporal was dropped rather than kept as an opt-in backend.
 
@@ -1537,7 +1589,7 @@ phase0/            unchanged — the Python reference + protocol findings
   - `mitm.ts` — an http/tls CONNECT proxy that TLS-terminates the MITM host, **serves** the worker
     `/v1/code/sessions*` endpoints (register, bridge, worker SSE, events, events/delivery, heartbeat,
     PUT worker), and in the default `--rc-inference=anthropic` mode **passes** `/v1/messages` + OAuth
-    + everything else (query string intact) through to the real upstream. The later
+    and everything else (query string intact) through to the real upstream. The later
     `--rc-inference=bedrock` branch translates inference to Bedrock and locally synthesizes the
     remaining Anthropic-origin control/API surface; other hosts blind-tunnel.
   - `relay.ts` — `HostRcRelay` bridges one RC session to the broker (the v2 replacement for Phase-0's
@@ -1715,12 +1767,14 @@ The crypto/secret core was judged **sound**; the protocol/reliability layer need
 tightening. Accepted fixes are already folded into §3–§8 above:
 
 - **`seq` is wrapper-allocated, with commit semantics.** Clients never assign
-  transcript order; they send `client_msg_id`, the wrapper logs + assigns `seq` +
-  echoes `accepted{client_msg_id, seq}`; Claude receives a prompt only after log
-  commit. (§6)
+  transcript order; they send `client_msg_id`, the wrapper assigns `seq`, emits
+  `accepted{client_msg_id, seq}`, then echoes/records the user frame before enqueueing
+  it for Claude. The acceptance frame proves relay receipt/order, not native application.
+  (§6)
 - **Replay protection ≠ AEAD.** The broker can replay a valid old ciphertext →
-  in-memory `msg_id` seen-set (rebuilt with the log on reconnect); drop dupes before
-  side effects. (§6)
+  an in-memory `msg_id` seen-set survives stream reconnects within one incarnation;
+  durable restart uses the sampled inbound floor. Drop duplicates before side effects.
+  (§6)
 - **Control frames are encrypted** under a derived `control_key` with `msg_id` +
   `expiry` + replay-check (catch_up/permission can't be server-injected). (§4.2,§8)
 - **Cloud-history contradiction removed.** The broker stores **no message bodies**;
@@ -1777,10 +1831,15 @@ proposal whose evidence is retained in the
 [Native Claude Remote investigation](native-rc-passthrough-scoping.md). A distinct experimental Claude
 mode will keep inner Claude on a private synthetic RC/API façade while remote-claw separately owns a
 real outward Anthropic worker/session so official clients can participate. The inner process never
-connects to Anthropic. Provider IDs and sequences are outward positions; the native client owns its
-conversation and execution state, while the coordinator owns command order, admission, correlation,
-and delivery evidence. The current MITM-only `--rc-app` behavior above remains unchanged until that
-phase lands.
+connects to Anthropic. One person keeps using the real Claude TUI and one private remote-claw RC
+connection is Claude's remote collaborator. A remote-claw server may multiplex many collaborators,
+including another remote-claw server, behind that one connection. Provider IDs and sequences are
+outward positions. Each server owns only its direct-collaborator proposal order, forwarding decisions,
+correlation, and delivery evidence; Claude remains the final arbiter of local/remote interleaving and
+what actually applies. Returned native observations travel outward in the reverse direction but never
+become new inward proposals. The private façade must preserve the pinned Claude Code behavior seen
+against the normal service, while the current MITM-only `--rc-app` behavior above remains unchanged
+until that phase lands.
 
 Consequence for **current `--rc-app`** history (supersedes earlier "events-cursor" **and**
 "worker-backfill" wording): because that mode is **off Anthropic's relay**, history does **not** come from
@@ -2000,11 +2059,13 @@ rc_api_bridge); others are specs to build/test.
 
 11. **Send from client → underlying claude.** Client encrypts a `user` frame
     (`client_msg_id`) → `POST /api/relay` (`resumeHook sess:…`) → wrapper hook → dedup
-    by `msg_id` → log → decrypt → inject into claude via MITM downstream → echo
-    `accepted{client_msg_id, seq}`; claude replies → `assistant`/`result` on the session
-    out-stream → client renders. **[V]** C3
-12. **Type in the local TUI → appears in client.** Worker emits `user`+`assistant`
-    upstream → session out-stream → all clients render (`source=worker`). **[V]** C4
+    by `msg_id` → decrypt → allocate `seq` → emit `accepted{client_msg_id, seq}` → echo
+    and record the user frame → inject into claude via MITM downstream; claude replies →
+    `assistant`/`result` on the session out-stream → client renders. `accepted` is not
+    native-application evidence. **[V]** C3
+12. **The client-driven exchange also appears in the local TUI.** The real TUI renders
+    the remote prompt and its reply in the same native session. Ordinary prompts typed
+    directly at that TUI are not currently projected to clients. **[V]** C4
 13. **Two clients, one session (fan-out).** Phone + laptop both tail the session
     out-stream (each resolves the same `sess:` token → same run → multi-reader); a
     message from either shows on both + the TUI. **Connected at different times:** a
@@ -2201,19 +2262,21 @@ persisted transport binding and may change without changing this channel.
    *(or, if within the buffer window: C→V `GET /api/stream?identity=id&session=sid` resumes by `startIndex`, W untouched)*
 
 **11. Send from client → underlying claude** *(verified C3 — the core loop)*
+
 1. C: encrypt `user{content}` **as a content frame under `K_session`** → C→V `POST /api/relay {kind:user, client_msg_id, msg_id}` → `resumeHook("sess:…",…)`
 2. V `hook.resume(sess token, frame)`
-3. W: hook fires → **dedup by msg_id** → decrypt → **log** → allocate `seq`
-4. W→T inject the user message on the worker SSE *(MITM downstream)*
-5. W→V session out-stream `{kind:accepted, client_msg_id, seq}` → V→C SSE → C clears "pending"
+3. W: hook fires → **dedup by msg_id** → decrypt → allocate `seq`
+4. W→V session out-stream `{kind:accepted, client_msg_id, seq}` → V→C SSE → C clears "pending"; this proves relay receipt/order only
+5. W→V echoes and records the user frame, then W→T injects it on the worker SSE *(MITM downstream)*
 6. T→A `POST /v1/messages` *(inference, passthrough)*
 7. T→W `POST …/worker/events [{assistant},{result}]`
 8. W: log+encrypt → W→V session out-stream `{assistant, seq}` then `{result, seq}`
 9. V→C SSE → C decrypts + renders
 
-**12. Type in the local TUI → appears in client** *(verified C4)*
-1. user↔T; T→A inference; T→W `POST …/worker/events [{user source:worker},{assistant},{result}]`
-2. W log+encrypt → W→V session out-stream → V→C SSE → all clients render
+**12. Client-driven exchange also appears in the local TUI** *(verified C4)*
+
+1. W→T remote prompt from #11; T renders it, calls inference, and renders the reply in the same native session
+2. Ordinary prompts typed directly at T are not currently projected to C
 
 **13. Two clients, one session (fan-out)**
 1. C₁,C₂ each: C→V `GET /api/stream?identity=id&session=sid` (two readers on the session out-stream, via token→run)
@@ -2303,7 +2366,7 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 9 | Cold full history sync | `GCM(control_key)`, `catch_up`, session `hook`, `log-read`, `GCM(content)`, `/api/relay`, `wf-stream/SSE`, `seq` |
 | 10 | Reopen — delta sync | `catch_up`, `log-read(>N)`, `IndexedDB` cache, `wf-stream` resume(`startIndex`) |
 | 11 | Client → claude → back | `GCM(content)`, `resumeHook sess:`, `dedup(msg_id)`, `log`, `seq-alloc`, `intercept`-inject, `passthrough`, `accepted`, `wf-stream/SSE`, `AAD` |
-| 12 | Type in TUI → client | `worker-SSE`(upstream), `log`, `GCM`, session `wf-stream/SSE` |
+| 12 | Client-driven exchange appears in TUI | `intercept`-inject, `passthrough`, native TUI render; ordinary TUI prompts are not projected to clients |
 | 13 | Two clients (fan-out) | `wf-stream` multi-reader (session), `SSE`, `seq`/`dedup` |
 | 14 | Switch machine (replace) | forget prior pass, load machine 2's keys, `sso`, `bearer`, **new** bus subscribe → broadcast `session_announce`s (one pass on client) |
 | 15 | Rename identity/space | client-local `alias` in `localStorage` *(no broker write; cross-device deferred §6C)* |
@@ -2513,8 +2576,8 @@ revocability to buy a store-free broker and a one-string, account-less, paste-an
 (remote-claw already
 gets *scoped compromise* for free — one secret per machine bounds a steal to one machine; what Happy
 buys on top is **per-device revocation**.) Neither is strictly
-better — they are the two ends of the §4.4 impossibility (`{ store-free · stable id · revoke-a-leak
-}`, pick two), applied per machine. Happy picks *stable id + revoke* (and pays with the store);
+better — they are the two ends of the §4.4 impossibility
+(`{ store-free · stable id · revoke-a-leak }`, pick two), applied per machine. Happy picks *stable id + revoke* (and pays with the store);
 remote-claw's ephemeral profile picks *store-free* (and pays with per-viewer revocation); its durable
 profile stores sealed frames without gaining per-viewer revocation.
 

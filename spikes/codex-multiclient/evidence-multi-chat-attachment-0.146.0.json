@@ -1,0 +1,540 @@
+{
+	"capturedAt": "2026-07-29T19:03:28.775Z",
+	"proofScope": "ordinary top-level thread/start behavior on pinned Codex 0.146.0: each requester is subscribed only to its own new thread, two other pre-initialized connections report notSubscribed and receive no correlated selected shellCommand projection, then one host observer explicitly resumes both native thread IDs and receives both while each non-owning direct-client stand-in remains unsubscribed",
+	"scopeBoundary": "the fixture does not exercise core-created ThreadSpawn child threads; those require a model-driven collaboration tool path, while this proof is deliberately model-free",
+	"probe": {
+		"file": "multi-chat-attachment-probe.mjs",
+		"sha256": "aaaa9c633a857c62b6527bb6d5bce3d5bb749b41eb727d02b72f0fa7c53ab5c3",
+		"nodeVersion": "v22.23.1"
+	},
+	"codex": {
+		"version": "codex-cli 0.146.0",
+		"binaryPath": "/home/ubuntu/.codex/packages/standalone/releases/0.146.0-aarch64-unknown-linux-musl/bin/codex",
+		"binarySha256": "cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6",
+		"platform": "linux",
+		"architecture": "arm64",
+		"appServerProcessCount": 1
+	},
+	"isolation": {
+		"mode": "unprivileged-user-net",
+		"parentNamespace": "net:[4026531833]",
+		"probeNamespace": "net:[4026534295]",
+		"distinctNetworkNamespace": true,
+		"interfaces": ["lo"],
+		"defaultRoutePresent": false,
+		"temporaryCodexHomeInitiallyEmpty": true,
+		"temporaryUserHomeInitiallyEmpty": true,
+		"ambientCodexHomeInherited": false,
+		"ambientCredentialEnvironmentInherited": false,
+		"ambientProxyBypassInherited": false,
+		"ambientUserHomeInherited": false,
+		"ambientUserStartupDirectoryInherited": false,
+		"appServerEnvironmentVariableNames": [
+			"ALL_PROXY",
+			"CODEX_HOME",
+			"HOME",
+			"HTTPS_PROXY",
+			"HTTP_PROXY",
+			"LANG",
+			"LC_ALL",
+			"LC_CTYPE",
+			"LOGNAME",
+			"NO_PROXY",
+			"PATH",
+			"RUST_LOG",
+			"TERM",
+			"USER",
+			"ZDOTDIR",
+			"all_proxy",
+			"http_proxy",
+			"https_proxy",
+			"no_proxy"
+		],
+		"localDenyProxyConnectionAttempts": 2,
+		"externalRouteAvailable": false
+	},
+	"clients": {
+		"TUI_A": {
+			"role": "directClientStandIn",
+			"name": "remote-claw-proof-direct-tui-a",
+			"connectionOpenCount": 1,
+			"initializeRequestId": 1,
+			"startedThread": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+			"resumeRequestsSent": 0
+		},
+		"TUI_B": {
+			"role": "directClientStandIn",
+			"name": "remote-claw-proof-direct-tui-b",
+			"connectionOpenCount": 1,
+			"initializeRequestId": 1,
+			"startedThread": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+			"resumeRequestsSent": 0
+		},
+		"HOST": {
+			"role": "hostObserver",
+			"name": "remote-claw-proof-host-observer",
+			"connectionOpenCount": 1,
+			"initializeRequestId": 1,
+			"startedThread": null,
+			"resumeRequestsSent": 2
+		}
+	},
+	"threads": {
+		"threadA": {
+			"id": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+			"startedBy": "TUI_A",
+			"persistent": true
+		},
+		"threadB": {
+			"id": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+			"startedBy": "TUI_B",
+			"persistent": true
+		},
+		"distinctIds": true
+	},
+	"hostJoin": {
+		"resumedThreadIds": [
+			"019faf42-a568-7fe1-b16f-b5323ae8ac45",
+			"019faf42-a5ab-72a3-8ca1-d97c154ebdc5"
+		],
+		"sameNativeThreadIds": true
+	},
+	"commands": [
+		{
+			"label": "thread-A-before-host-join",
+			"sentBy": "TUI_A",
+			"requestedCommand": "printf codex-multi-chat-thread-a-before-host-join",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-before-host-join'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1iZWZvcmUtaG9zdC1qb2lu",
+				"byteLength": 42,
+				"utf8": "codex-multi-chat-thread-a-before-host-join"
+			},
+			"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+			"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
+			"itemId": "ae8cdc88-a424-414b-88aa-879fc6c3170c",
+			"expectedObserverLabels": ["TUI_A"],
+			"absentObserverLabels": ["TUI_B", "HOST"],
+			"orderedExpectedProjectionsEqual": true,
+			"nativeNotSubscribedResponseFences": {
+				"TUI_B": "notSubscribed",
+				"HOST": "notSubscribed"
+			},
+			"observations": {
+				"TUI_A": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
+						"itemId": "ae8cdc88-a424-414b-88aa-879fc6c3170c",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-before-host-join'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
+						"itemId": "ae8cdc88-a424-414b-88aa-879fc6c3170c",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1iZWZvcmUtaG9zdC1qb2lu",
+							"byteLength": 42,
+							"utf8": "codex-multi-chat-thread-a-before-host-join"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
+						"itemId": "ae8cdc88-a424-414b-88aa-879fc6c3170c",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-before-host-join'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1iZWZvcmUtaG9zdC1qb2lu",
+							"byteLength": 42,
+							"utf8": "codex-multi-chat-thread-a-before-host-join"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
+						"status": "completed"
+					}
+				],
+				"TUI_B": [],
+				"HOST": []
+			}
+		},
+		{
+			"label": "thread-B-before-host-join",
+			"sentBy": "TUI_B",
+			"requestedCommand": "printf codex-multi-chat-thread-b-before-host-join",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-before-host-join'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1iZWZvcmUtaG9zdC1qb2lu",
+				"byteLength": 42,
+				"utf8": "codex-multi-chat-thread-b-before-host-join"
+			},
+			"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+			"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
+			"itemId": "50a2aded-92df-4061-a68d-c35b6f8b4458",
+			"expectedObserverLabels": ["TUI_B"],
+			"absentObserverLabels": ["TUI_A", "HOST"],
+			"orderedExpectedProjectionsEqual": true,
+			"nativeNotSubscribedResponseFences": {
+				"TUI_A": "notSubscribed",
+				"HOST": "notSubscribed"
+			},
+			"observations": {
+				"TUI_A": [],
+				"TUI_B": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
+						"itemId": "50a2aded-92df-4061-a68d-c35b6f8b4458",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-before-host-join'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
+						"itemId": "50a2aded-92df-4061-a68d-c35b6f8b4458",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1iZWZvcmUtaG9zdC1qb2lu",
+							"byteLength": 42,
+							"utf8": "codex-multi-chat-thread-b-before-host-join"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
+						"itemId": "50a2aded-92df-4061-a68d-c35b6f8b4458",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-before-host-join'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1iZWZvcmUtaG9zdC1qb2lu",
+							"byteLength": 42,
+							"utf8": "codex-multi-chat-thread-b-before-host-join"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
+						"status": "completed"
+					}
+				],
+				"HOST": []
+			}
+		},
+		{
+			"label": "thread-A-after-host-join",
+			"sentBy": "TUI_A",
+			"requestedCommand": "printf codex-multi-chat-thread-a-after-host-join",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1hZnRlci1ob3N0LWpvaW4=",
+				"byteLength": 41,
+				"utf8": "codex-multi-chat-thread-a-after-host-join"
+			},
+			"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+			"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+			"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+			"expectedObserverLabels": ["TUI_A", "HOST"],
+			"absentObserverLabels": ["TUI_B"],
+			"orderedExpectedProjectionsEqual": true,
+			"nativeNotSubscribedResponseFences": {
+				"TUI_B": "notSubscribed"
+			},
+			"observations": {
+				"TUI_A": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1hZnRlci1ob3N0LWpvaW4=",
+							"byteLength": 41,
+							"utf8": "codex-multi-chat-thread-a-after-host-join"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1hZnRlci1ob3N0LWpvaW4=",
+							"byteLength": 41,
+							"utf8": "codex-multi-chat-thread-a-after-host-join"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"status": "completed"
+					}
+				],
+				"TUI_B": [],
+				"HOST": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1hZnRlci1ob3N0LWpvaW4=",
+							"byteLength": 41,
+							"utf8": "codex-multi-chat-thread-a-after-host-join"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1hZnRlci1ob3N0LWpvaW4=",
+							"byteLength": 41,
+							"utf8": "codex-multi-chat-thread-a-after-host-join"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"status": "completed"
+					}
+				]
+			}
+		},
+		{
+			"label": "thread-B-after-host-join",
+			"sentBy": "TUI_B",
+			"requestedCommand": "printf codex-multi-chat-thread-b-after-host-join",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1hZnRlci1ob3N0LWpvaW4=",
+				"byteLength": 41,
+				"utf8": "codex-multi-chat-thread-b-after-host-join"
+			},
+			"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+			"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+			"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+			"expectedObserverLabels": ["TUI_B", "HOST"],
+			"absentObserverLabels": ["TUI_A"],
+			"orderedExpectedProjectionsEqual": true,
+			"nativeNotSubscribedResponseFences": {
+				"TUI_A": "notSubscribed"
+			},
+			"observations": {
+				"TUI_A": [],
+				"TUI_B": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1hZnRlci1ob3N0LWpvaW4=",
+							"byteLength": 41,
+							"utf8": "codex-multi-chat-thread-b-after-host-join"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1hZnRlci1ob3N0LWpvaW4=",
+							"byteLength": 41,
+							"utf8": "codex-multi-chat-thread-b-after-host-join"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"status": "completed"
+					}
+				],
+				"HOST": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1hZnRlci1ob3N0LWpvaW4=",
+							"byteLength": 41,
+							"utf8": "codex-multi-chat-thread-b-after-host-join"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1hZnRlci1ob3N0LWpvaW4=",
+							"byteLength": 41,
+							"utf8": "codex-multi-chat-thread-b-after-host-join"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"status": "completed"
+					}
+				]
+			}
+		}
+	],
+	"finalNativeAttachmentStatus": {
+		"threadA": {
+			"TUI_A": "unsubscribed",
+			"TUI_B": "notSubscribed",
+			"HOST": "unsubscribed"
+		},
+		"threadB": {
+			"TUI_A": "notSubscribed",
+			"TUI_B": "unsubscribed",
+			"HOST": "unsubscribed"
+		}
+	},
+	"directClientCrossThreadObservations": {
+		"TUI_A_received_threadB_selected_projection": false,
+		"TUI_B_received_threadA_selected_projection": false
+	},
+	"hostObserverReceivedBothThreads": true,
+	"fixtureConclusion": {
+		"ordinaryTopLevelThreadStartAttachedEveryInitializedConnection": false,
+		"nonOwningDirectClientReceivedSelectedEvents": false,
+		"hostObserverCanExplicitlySubscribeToBothNativeThreads": true,
+		"hostAndOwningDirectClientReceivedEqualSelectedProjections": true,
+		"nonOwningDirectClientRemainedUnsubscribedAfterHostJoin": true
+	},
+	"inference": {
+		"directClientsSentNoResume": true,
+		"hostResumeRequestsSent": 2,
+		"turnStartRequestsSent": 0,
+		"probeIssuedModelPrompt": false
+	},
+	"deletion": {
+		"threadA": {
+			"nativeDeleteAcknowledged": true,
+			"readAfterDeleteFailed": true,
+			"error": {
+				"code": -32600,
+				"message": "thread not loaded: <deleted-thread>"
+			}
+		},
+		"threadB": {
+			"nativeDeleteAcknowledged": true,
+			"readAfterDeleteFailed": true,
+			"error": {
+				"code": -32600,
+				"message": "thread not loaded: <deleted-thread>"
+			}
+		}
+	},
+	"cleanup": {
+		"nativeThreadsDeleted": true,
+		"appServerExit": {
+			"code": 0,
+			"signal": null,
+			"forced": false
+		},
+		"allClientSocketsClosed": true,
+		"temporaryRootRemoved": true
+	}
+}

@@ -1,0 +1,405 @@
+{
+	"capturedAt": "2026-07-29T18:04:23.148Z",
+	"proofScope": "a late raw app-server client writes an empty live thread before subscribing but receives no correlated detailed projection for that command; after same-ID resume, two raw clients receive equal selected command-event projections",
+	"probe": {
+		"sha256": "cab2dd56e3ff88bff664c5c58408b5e9848936af66a48252887d6bc3ee613bb5",
+		"nodeVersion": "v22.23.1"
+	},
+	"codex": {
+		"version": "codex-cli 0.146.0",
+		"binaryPath": "/home/ubuntu/.codex/packages/standalone/releases/0.146.0-aarch64-unknown-linux-musl/bin/codex",
+		"binarySha256": "cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6",
+		"platform": "linux",
+		"architecture": "arm64"
+	},
+	"isolation": {
+		"mode": "unprivileged-user-net",
+		"parentNamespace": "net:[4026531833]",
+		"probeNamespace": "net:[4026534295]",
+		"distinctNetworkNamespace": true,
+		"interfaces": ["lo"],
+		"defaultRoutePresent": false,
+		"temporaryCodexHomeInitiallyEmpty": true,
+		"temporaryUserHomeInitiallyEmpty": true,
+		"ambientCodexHomeInherited": false,
+		"ambientCredentialEnvironmentInherited": false,
+		"ambientProxyBypassInherited": false,
+		"ambientUserHomeInherited": false,
+		"ambientUserStartupDirectoryInherited": false,
+		"appServerEnvironmentVariableNames": [
+			"ALL_PROXY",
+			"CODEX_HOME",
+			"HOME",
+			"HTTPS_PROXY",
+			"HTTP_PROXY",
+			"LANG",
+			"LC_ALL",
+			"LC_CTYPE",
+			"LOGNAME",
+			"NO_PROXY",
+			"PATH",
+			"RUST_LOG",
+			"TERM",
+			"USER",
+			"ZDOTDIR",
+			"all_proxy",
+			"http_proxy",
+			"https_proxy",
+			"no_proxy"
+		],
+		"localDenyProxyConnectionAttempts": 1,
+		"externalRouteAvailable": false
+	},
+	"connections": {
+		"A": {
+			"clientName": "remote-claw-probe-a",
+			"initializeRequestId": 1
+		},
+		"B": {
+			"clientName": "remote-claw-probe-b",
+			"initializeRequestId": 1,
+			"initializedAfterThreadStart": true
+		},
+		"independentRequestIdOneAccepted": true
+	},
+	"thread": {
+		"id": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+		"persistent": true,
+		"emptyResumeBeforeMaterialization": {
+			"attemptedBy": "B",
+			"rejected": true,
+			"matchedPinnedNativeError": true,
+			"error": {
+				"code": -32600,
+				"message": "no rollout found for thread id <empty-thread>"
+			}
+		},
+		"preResumeShellCommand": {
+			"sentBy": "B",
+			"requestedCommand": "printf codex-multiclient-pre-resume",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multiclient-pre-resume'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGljbGllbnQtcHJlLXJlc3VtZQ==",
+				"byteLength": 28,
+				"utf8": "codex-multiclient-pre-resume"
+			},
+			"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+			"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
+			"itemId": "92964620-1c00-4eaa-bd18-498d8c751089",
+			"writeAccepted": true,
+			"detailedObservationByA": [
+				{
+					"method": "turn/started",
+					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
+					"status": "inProgress"
+				},
+				{
+					"method": "item/started",
+					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
+					"itemId": "92964620-1c00-4eaa-bd18-498d8c751089",
+					"command": "/usr/bin/zsh -lc 'printf codex-multiclient-pre-resume'",
+					"status": "inProgress"
+				},
+				{
+					"method": "item/commandExecution/outputDelta",
+					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
+					"itemId": "92964620-1c00-4eaa-bd18-498d8c751089",
+					"delta": {
+						"base64": "Y29kZXgtbXVsdGljbGllbnQtcHJlLXJlc3VtZQ==",
+						"byteLength": 28,
+						"utf8": "codex-multiclient-pre-resume"
+					}
+				},
+				{
+					"method": "item/completed",
+					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
+					"itemId": "92964620-1c00-4eaa-bd18-498d8c751089",
+					"command": "/usr/bin/zsh -lc 'printf codex-multiclient-pre-resume'",
+					"status": "completed",
+					"exitCode": 0,
+					"aggregatedOutput": {
+						"base64": "Y29kZXgtbXVsdGljbGllbnQtcHJlLXJlc3VtZQ==",
+						"byteLength": 28,
+						"utf8": "codex-multiclient-pre-resume"
+					}
+				},
+				{
+					"method": "turn/completed",
+					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
+					"status": "completed"
+				}
+			],
+			"unresumedB": {
+				"nativeSubscriptionStatusBeforeWrite": "notSubscribed",
+				"nativeSubscriptionStatusAfterWrite": "notSubscribed",
+				"observedMethodsBeforeResume": [
+					"response:4",
+					"thread/status/changed",
+					"thread/status/changed",
+					"response:5"
+				],
+				"correlatedDetailedProjection": [],
+				"absenceCheckedAfterPostResumeTurnId": "019faf0c-8c83-76a2-92bd-748230a5c14e"
+			}
+		},
+		"resumeAfterMaterialization": {
+			"attemptedBy": "B",
+			"requestedId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+			"returnedId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+			"sameThread": true
+		}
+	},
+	"commands": [
+		{
+			"label": "A-to-B",
+			"sentBy": "A",
+			"requestedCommand": "printf codex-multiclient-a-to-b",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+				"byteLength": 24,
+				"utf8": "codex-multiclient-a-to-b"
+			},
+			"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+			"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+			"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+			"orderedProjectionsEqual": true,
+			"observations": {
+				"A": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-a-to-b"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-a-to-b"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"status": "completed"
+					}
+				],
+				"B": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-a-to-b"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-a-to-b"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"status": "completed"
+					}
+				]
+			}
+		},
+		{
+			"label": "B-to-A",
+			"sentBy": "B",
+			"requestedCommand": "printf codex-multiclient-b-to-a",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+				"byteLength": 24,
+				"utf8": "codex-multiclient-b-to-a"
+			},
+			"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+			"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+			"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+			"orderedProjectionsEqual": true,
+			"observations": {
+				"A": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-b-to-a"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-b-to-a"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"status": "completed"
+					}
+				],
+				"B": [
+					{
+						"method": "turn/started",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-b-to-a"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-b-to-a"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"status": "completed"
+					}
+				]
+			}
+		}
+	],
+	"fixtureConclusion": {
+		"shellCommandAcceptedBetweenNotSubscribedChecksWhileSelectedCorrelatedProjectionAbsent": true
+	},
+	"inference": {
+		"turnStartRequestsSent": 0,
+		"probeIssuedModelPrompt": false
+	},
+	"deletion": {
+		"nativeDeleteAcknowledged": true,
+		"readAfterDeleteFailed": true,
+		"readAfterDeleteError": {
+			"code": -32600,
+			"message": "thread not loaded: <deleted-thread>"
+		}
+	},
+	"cleanup": {
+		"nativeThreadDeleted": true,
+		"appServerExit": {
+			"code": 0,
+			"signal": null,
+			"forced": false
+		},
+		"temporaryRootRemoved": true
+	}
+}

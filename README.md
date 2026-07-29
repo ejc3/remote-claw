@@ -5,10 +5,11 @@ A custom client + relay for driving a **real `claude --remote-control` session**
 
 > **Selected next architecture:** evolve the per-session Claude wrapper into a
 > [client-driven host runtime](docs/client-driven-host-runtime.md) for Claude Code, Codex, OpenCode,
-> and tmux. Native clients keep their real conversation/context; a small local coordinator orders
-> input, correlates delivery, and translates between native clients, official Anthropic Remote,
-> ChatGPT Remote connections, and remote-claw web. Wrapped inner Claude, Codex, and OpenCode processes
-> never contact their providers directly.
+> and tmux. Native clients keep their real conversation/context; a small local coordinator orders only
+> proposals from remote-claw's direct collaborators and correlates delivery across official Anthropic
+> Remote, ChatGPT Remote connections, and remote-claw web. Direct TUI input stays on the native path,
+> and the native harness decides the final local/remote interleaving and mutation. Wrapped inner Claude,
+> Codex, and OpenCode processes never contact their providers directly.
 > This is under implementation. A0.1 adds the neutral host registration contract and routes Claude
 > MITM sessions through one process-local registrar; OpenCode/tmux migration, durable coordination,
 > complete inner-provider isolation, Codex, and the official-client connectors remain later phases.
@@ -92,8 +93,8 @@ replies), tool-permission grants, and multi-client — all through the real brok
 runtime. The real binary's leg is covered by the in-repo Phase-0 capture + the gated
 `real-rc.prove.test.ts` (needs a login + PTY).
 
-Separately, the native **`stream-json` SDK transport** (`HostRelay` + `ClaudeStreamSession`, `--print
---input-format stream-json`) remains as the **documented cousin** for cross-checking the protocol and
+Separately, the native **`stream-json` SDK transport** (`HostRelay` + `ClaudeStreamSession`,
+`--print --input-format stream-json`) remains as the **documented cousin** for cross-checking the protocol and
 for an inference-agnostic headless path — point it at **Amazon Bedrock**/Vertex (`{ bedrock: true }`)
 and claude routes inference via the AWS SDK while remote-claw relays it, never touching the creds.
 
@@ -101,8 +102,9 @@ and claude routes inference via the AWS SDK while remote-claw relays it, never t
 threat model, key hierarchy, broker, and phased plan.
 
 🧭 **Next host runtime:** [`docs/client-driven-host-runtime.md`](docs/client-driven-host-runtime.md) —
-the selected inside-adapter → coordinator → outside-adapter design for Claude Code, Codex, OpenCode,
-tmux, official Remote clients, and remote-claw web.
+the selected design for Claude Code, Codex, OpenCode, tmux, official Remote clients, and remote-claw
+web. A person at the native TUI talks directly to the native harness; remote collaborators enter
+through an adapter and local coordinator, and the native harness decides what actually applies.
 
 🔑 **Credential handoff:** [`docs/ephemeral-handoff.md`](docs/ephemeral-handoff.md) — the one-time-key
 (OTK) ephemeral handoff that replaces the forever pass-in-QR with a single-use, short-TTL bootstrap

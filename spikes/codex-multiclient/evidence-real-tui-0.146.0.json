@@ -1,0 +1,302 @@
+{
+	"capturedAt": "2026-07-29T18:12:56.286Z",
+	"proofScope": "one real Codex TUI and one raw client coexist on one native app-server thread and observe identical bidirectional user-shell turn/item projections",
+	"probe": {
+		"sha256": "014f8bbfcc17ebf25e40598be9117d4fbbc78d83eefbbeeaad189c77bc8e5ae8",
+		"nodeVersion": "v22.23.1"
+	},
+	"codex": {
+		"version": "codex-cli 0.146.0",
+		"binarySha256": "cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6",
+		"expectedBinarySha256": "cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6",
+		"platform": "linux",
+		"architecture": "arm64"
+	},
+	"isolation": {
+		"parentNamespace": "net:[4026531833]",
+		"probeNamespace": "net:[4026534194]",
+		"distinctNetworkNamespace": true,
+		"interfaces": ["lo"],
+		"defaultRoutePresent": false,
+		"denyProxyConnectionAttempts": 25
+	},
+	"temporaryHomes": {
+		"serverCodexHomeInitiallyEmpty": true,
+		"tuiCodexHomeInitiallyEmpty": true,
+		"ambientCredentialsInherited": false,
+		"ambientAuthRead": false,
+		"syntheticAuth": true,
+		"syntheticAuthWrittenOnlyInsideTemporaryServerHome": true,
+		"externalRouteAvailable": false,
+		"appServerEnvironmentVariableNames": [
+			"ALL_PROXY",
+			"CODEX_HOME",
+			"HOME",
+			"HTTPS_PROXY",
+			"HTTP_PROXY",
+			"LANG",
+			"LC_ALL",
+			"LC_CTYPE",
+			"LOGNAME",
+			"NO_PROXY",
+			"PATH",
+			"RUST_LOG",
+			"TERM",
+			"USER",
+			"ZDOTDIR",
+			"all_proxy",
+			"http_proxy",
+			"https_proxy",
+			"no_proxy"
+		],
+		"tuiEnvironmentVariableNames": [
+			"ALL_PROXY",
+			"CODEX_HOME",
+			"HOME",
+			"HTTPS_PROXY",
+			"HTTP_PROXY",
+			"LANG",
+			"LC_ALL",
+			"LC_CTYPE",
+			"LOGNAME",
+			"NO_PROXY",
+			"PATH",
+			"RUST_LOG",
+			"TERM",
+			"USER",
+			"ZDOTDIR",
+			"all_proxy",
+			"http_proxy",
+			"https_proxy",
+			"no_proxy"
+		]
+	},
+	"appServer": {
+		"spawnCount": 1,
+		"pid": 2650331,
+		"transport": "ws://127.0.0.1:35789"
+	},
+	"recorder": {
+		"transparentPassThrough": true,
+		"tuiDownstreamConnectionCount": 1,
+		"appServerUpstreamConnectionCount": 1
+	},
+	"connections": {
+		"rawInitializeRequestId": 1,
+		"tuiInitializeObserved": true,
+		"tuiResumeRequestedThreadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+		"tuiResumeReturnedThreadId": "019faf14-513f-7011-acdc-51a2b33fd14a"
+	},
+	"thread": {
+		"id": "019faf14-513f-7011-acdc-51a2b33fd14a",
+		"materializedTurnId": "019faf14-514a-7543-be5b-c839e2947a6a"
+	},
+	"rawToTui": {
+		"requestedByRaw": true,
+		"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+		"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+		"itemId": "0d438685-ba8c-4627-907e-d1166dbc0ad3",
+		"rawAndTuiNativeProjectionsEqual": true,
+		"rawNativeProjection": [
+			{
+				"method": "turn/started",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"status": "inProgress"
+			},
+			{
+				"method": "item/started",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"itemId": "0d438685-ba8c-4627-907e-d1166dbc0ad3",
+				"command": "/usr/bin/zsh -lc 'printf codex-raw-to-tui'",
+				"status": "inProgress"
+			},
+			{
+				"method": "item/commandExecution/outputDelta",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"itemId": "0d438685-ba8c-4627-907e-d1166dbc0ad3",
+				"delta": "codex-raw-to-tui"
+			},
+			{
+				"method": "item/completed",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"itemId": "0d438685-ba8c-4627-907e-d1166dbc0ad3",
+				"command": "/usr/bin/zsh -lc 'printf codex-raw-to-tui'",
+				"status": "completed",
+				"exitCode": 0,
+				"aggregatedOutput": "codex-raw-to-tui"
+			},
+			{
+				"method": "turn/completed",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"status": "completed"
+			}
+		],
+		"tuiNativeProjection": [
+			{
+				"method": "turn/started",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"status": "inProgress"
+			},
+			{
+				"method": "item/started",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"itemId": "0d438685-ba8c-4627-907e-d1166dbc0ad3",
+				"command": "/usr/bin/zsh -lc 'printf codex-raw-to-tui'",
+				"status": "inProgress"
+			},
+			{
+				"method": "item/commandExecution/outputDelta",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"itemId": "0d438685-ba8c-4627-907e-d1166dbc0ad3",
+				"delta": "codex-raw-to-tui"
+			},
+			{
+				"method": "item/completed",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"itemId": "0d438685-ba8c-4627-907e-d1166dbc0ad3",
+				"command": "/usr/bin/zsh -lc 'printf codex-raw-to-tui'",
+				"status": "completed",
+				"exitCode": 0,
+				"aggregatedOutput": "codex-raw-to-tui"
+			},
+			{
+				"method": "turn/completed",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-5d81-73d3-b5e5-34f1c1bd7dc4",
+				"status": "completed"
+			}
+		],
+		"tuiPaneContainsMarker": true
+	},
+	"tuiToRaw": {
+		"requestObservedFromRealTui": true,
+		"tuiRequestId": 9,
+		"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+		"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+		"itemId": "47e6985d-003e-4570-9860-6c65340bafc1",
+		"rawAndTuiNativeProjectionsEqual": true,
+		"rawNativeProjection": [
+			{
+				"method": "turn/started",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"status": "inProgress"
+			},
+			{
+				"method": "item/started",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"itemId": "47e6985d-003e-4570-9860-6c65340bafc1",
+				"command": "/usr/bin/zsh -lc 'printf codex-tui-to-raw'",
+				"status": "inProgress"
+			},
+			{
+				"method": "item/commandExecution/outputDelta",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"itemId": "47e6985d-003e-4570-9860-6c65340bafc1",
+				"delta": "codex-tui-to-raw"
+			},
+			{
+				"method": "item/completed",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"itemId": "47e6985d-003e-4570-9860-6c65340bafc1",
+				"command": "/usr/bin/zsh -lc 'printf codex-tui-to-raw'",
+				"status": "completed",
+				"exitCode": 0,
+				"aggregatedOutput": "codex-tui-to-raw"
+			},
+			{
+				"method": "turn/completed",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"status": "completed"
+			}
+		],
+		"tuiNativeProjection": [
+			{
+				"method": "turn/started",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"status": "inProgress"
+			},
+			{
+				"method": "item/started",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"itemId": "47e6985d-003e-4570-9860-6c65340bafc1",
+				"command": "/usr/bin/zsh -lc 'printf codex-tui-to-raw'",
+				"status": "inProgress"
+			},
+			{
+				"method": "item/commandExecution/outputDelta",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"itemId": "47e6985d-003e-4570-9860-6c65340bafc1",
+				"delta": "codex-tui-to-raw"
+			},
+			{
+				"method": "item/completed",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"itemId": "47e6985d-003e-4570-9860-6c65340bafc1",
+				"command": "/usr/bin/zsh -lc 'printf codex-tui-to-raw'",
+				"status": "completed",
+				"exitCode": 0,
+				"aggregatedOutput": "codex-tui-to-raw"
+			},
+			{
+				"method": "turn/completed",
+				"threadId": "019faf14-513f-7011-acdc-51a2b33fd14a",
+				"turnId": "019faf14-600a-78e3-8c36-22b13c8d9c6e",
+				"status": "completed"
+			}
+		],
+		"tuiPaneContainsMarker": true
+	},
+	"modelSafety": {
+		"turnStartRequestsObserved": 0,
+		"modelPromptSent": false
+	},
+	"tui": {
+		"processExitStatus": 0,
+		"unsubscribeRequestId": 10,
+		"unsubscribeStatus": "unsubscribed",
+		"sanitizedPaneExcerpt": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"<temp-root>/tui-codex-home\"))\n⚠ Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox\n  prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled\n│ >_ OpenAI Codex (v0.146.0)                            │\n  Tip: New Build faster with Codex.\n⚠ Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox\n  prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled\n• You ran printf codex-raw-to-tui\n  └ codex-raw-to-tui\n• You ran printf codex-tui-to-raw\n  └ codex-tui-to-raw"
+	},
+	"deletion": {
+		"nativeDeleteAcknowledged": true,
+		"readAfterDeleteFailed": true,
+		"readAfterDeleteError": {
+			"code": -32600,
+			"message": "thread not loaded: <deleted-thread>"
+		}
+	},
+	"cleanup": {
+		"nativeThreadDeleted": true,
+		"nativeThreadDeletedDuringCleanup": false,
+		"rawClientClosed": true,
+		"tuiRecorderClosed": true,
+		"tmuxServerStopped": true,
+		"appServerExit": {
+			"code": 0,
+			"signal": null,
+			"forced": false
+		},
+		"denyProxyClosed": true,
+		"denyProxyConnectionAttempts": 25,
+		"temporaryRootRemoved": true,
+		"tmuxSocketDirectoryRemovedWithTemporaryRoot": true,
+		"syntheticAuthRemovedWithTemporaryRoot": true
+	}
+}

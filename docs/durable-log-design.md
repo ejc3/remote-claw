@@ -1,8 +1,9 @@
 # Durable Log Design for remote-claw
 
-This design treats remote-claw relay mode as the durable private remote-control
+This design treats the adapter-local RC store as the durable private remote-control
 protocol server of record, not as the owner of the semantic native conversation
-or canonical logical-chat identity. The broker/Turso frame log is still the
+or canonical logical-chat identity. The remote-claw server remains authoritative for
+stable logical-chat identity and collaborator proposal order. The broker/Turso frame log is still the
 durable viewer transport, but it is not enough to reconstruct Claude remote-control server
 state: the wrapper must durably store RC event ids, RC sequence numbers,
 worker epochs, downstream delivery state, and compaction boundaries before it
@@ -19,11 +20,12 @@ local transcript completeness or replay.
 
 > **Scope update (2026-07-26):** this document remains the detailed storage plan for the current
 > synthetic Claude RC server. [Client-driven Host Runtime](client-driven-host-runtime.md) narrows the
-> future coordinator journal to command order, admission, correlation, delivery, and recovery
-> evidence. Native Claude/Codex/OpenCode state owns conversation context and completed execution; the
-> provider transport owns the representation it accepted and can read back, not proof of what a
-> particular device rendered. This document's full RC log remains relevant to the current synthetic
-> server, not a universal semantic authority.
+> future coordinator journal to its direct remote collaborators' proposal order, forwarding decisions,
+> correlation, delivery, and recovery evidence. Direct TUI input stays on the native path.
+> Native Claude/Codex/OpenCode state owns conversation context, final local/remote interleaving, and
+> completed execution; the provider transport owns the representation it accepted and can read back,
+> not proof of what a particular device rendered. This document's full RC log remains relevant to the
+> current synthetic server, not a universal semantic authority.
 
 ## Source Map
 
@@ -78,7 +80,7 @@ re-verification.
 remote-control turns reportedly wrote only incomplete title/stub rows locally,
 while normal non-RC Claude wrote full local JSONL in real time. The tracked RC
 wire evidence independently establishes that the worker does not backfill
-history ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), so local JSONL must not
+history ([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)), so local JSONL must not
 be assumed to be the remote-claw server log; its exact compact role still needs the Phase B4 gate.
 
 **Historical investigation claim — resume/re-bridge.** When
@@ -88,7 +90,7 @@ The bridge body is `{}`, there is no `POST /v1/code/sessions`, and no historical
 payload is sent to the worker server. The wrapper must already have the
 history if gated re-verification confirms this behavior. The narrower tracked
 fact is that worker bridge/SSE does not provide history
-([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)).
+([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)).
 
 **Unverified client reconnect claim.** Historical traces suggested
 `lastSequenceNum`, `from_sequence_num`, or `Last-Event-ID` on client-side
@@ -182,7 +184,10 @@ the viewer stream order and chunk parts as fragments of one same-kind message.
 
 For the future host runtime, this RC-specific schema remains an adapter-local private-Claude transport
 store alongside the narrow coordinator control journal; it does not become the semantic transcript.
-The journal's `command_seq` is the definitive admitted-command order, while rebuildable projection
+The journal's `command_seq` is the definitive decision order for proposals that remote-claw server
+received from its direct collaborators, including forwarded, queued, and rejected decisions. Only the
+forwarded subset is offered inward in that order; `command_seq` neither orders direct native-TUI
+actions nor replaces the native harness's final applied interleaving. Rebuildable projection
 `chat_seq`, Claude `sequence_num`, Codex thread/turn/item IDs, and broker `seq` are mappings/cursors in
 their separate domains. An adapter or provider incarnation may be replaced without changing
 `logical_chat_id`.
@@ -590,6 +595,8 @@ event-id idempotency.
 `POST /worker/events/delivery`:
 
 - Persist `received` and `processed` state by event id and epoch.
+- Treat `processed` as private-RC replay bookkeeping only, not native Claude acceptance, application,
+  source attribution, or terminal outcome; those require separately correlated native evidence.
 - Apply the same complete active-lease validation before accepting an
   acknowledgement.
 - Treat unknown acks as non-fatal but log them; they may come from stale worker
@@ -743,8 +750,8 @@ network route. A separate remote-claw-owned connector acts as the real outward
 worker/app:
 
 - The existing `mitm.ts` relay path remains the inner RC server. It reports native observations while
-  the coordinator records only command order, admission, correlation, and delivery evidence. The
-  outward connector separately
+  the coordinator records only its direct remote collaborators' proposal order, forwarding decisions,
+  correlation, and delivery evidence. The outward connector separately
   performs real Anthropic registration, bridge, worker SSE, delivery, worker
   event, status, heartbeat, history, and app-side operations.
 - Viewer prompts are durable local proposals before any inward delivery or
@@ -760,7 +767,7 @@ worker/app:
   comparable provider coordinate and classification evidence. Proven overlap resolves to its prior
   command; only a proven post-boundary reuse becomes new, while ambiguity fails closed. The RC-local
   `(cse_session_id, event_id)` key remains only a private Claude transport key.
-- The control journal persists local command/`command_seq`; the projector maps that to `chat_seq` and provider event
+- The control journal persists each received server proposal, its decision, and its `command_seq`; the projector maps that to `chat_seq` and provider event
   identity/sequence, inner event identity, delivery, history/SSE, and reconnect
   mappings. No single field is assumed to span every surface before proof.
 - Provider history/SSE can repair a provider-representation/read-back gap, but it cannot overwrite
@@ -965,7 +972,7 @@ A durability PR is not complete unless it demonstrates these properties:
   from RC `sequence_num`. A simpler one-seq design is possible only if the
   projector guarantees one same-kind broker frame per RC event.
 - Compact source: tracked relay protocol describes an assistant compact-summary turn plus `result`
-  ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), while the unavailable
+  ([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)), while the unavailable
   historical native-RC investigation reportedly saw only an empty result on the
   wire and summary text in local JSONL. Treat this as version/mode dependent
   until Phase B4 reconciles it; do not require local transcript watching or

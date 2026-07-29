@@ -1,0 +1,349 @@
+#!/usr/bin/env node
+
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = dirname(fileURLToPath(import.meta.url));
+const probePath = join(root, "multi-chat-attachment-probe.mjs");
+const evidencePath = join(root, "evidence-multi-chat-attachment-0.146.0.json");
+const EXPECTED_CODEX_BINARY_SHA256 =
+	"cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6";
+const EXPECTED_PROBE_SHA256 =
+	"aaaa9c633a857c62b6527bb6d5bce3d5bb749b41eb727d02b72f0fa7c53ab5c3";
+const EXPECTED_ISOLATED_ENVIRONMENT_NAMES = [
+	"ALL_PROXY",
+	"CODEX_HOME",
+	"HOME",
+	"HTTPS_PROXY",
+	"HTTP_PROXY",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"LOGNAME",
+	"NO_PROXY",
+	"PATH",
+	"RUST_LOG",
+	"TERM",
+	"USER",
+	"ZDOTDIR",
+	"all_proxy",
+	"http_proxy",
+	"https_proxy",
+	"no_proxy",
+];
+const NAMESPACE_ID_PATTERN = /^net:\[\d+\]$/;
+const UUID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const EXPECTED_METHODS = [
+	"turn/started",
+	"item/started",
+	"item/commandExecution/outputDelta",
+	"item/completed",
+	"turn/completed",
+];
+const EXPECTED_COMMANDS = [
+	{
+		absent: ["TUI_B", "HOST"],
+		command: "printf codex-multi-chat-thread-a-before-host-join",
+		expected: ["TUI_A"],
+		label: "thread-A-before-host-join",
+		output: "codex-multi-chat-thread-a-before-host-join",
+		sender: "TUI_A",
+		thread: "threadA",
+	},
+	{
+		absent: ["TUI_A", "HOST"],
+		command: "printf codex-multi-chat-thread-b-before-host-join",
+		expected: ["TUI_B"],
+		label: "thread-B-before-host-join",
+		output: "codex-multi-chat-thread-b-before-host-join",
+		sender: "TUI_B",
+		thread: "threadB",
+	},
+	{
+		absent: ["TUI_B"],
+		command: "printf codex-multi-chat-thread-a-after-host-join",
+		expected: ["TUI_A", "HOST"],
+		label: "thread-A-after-host-join",
+		output: "codex-multi-chat-thread-a-after-host-join",
+		sender: "TUI_A",
+		thread: "threadA",
+	},
+	{
+		absent: ["TUI_A"],
+		command: "printf codex-multi-chat-thread-b-after-host-join",
+		expected: ["TUI_B", "HOST"],
+		label: "thread-B-after-host-join",
+		output: "codex-multi-chat-thread-b-after-host-join",
+		sender: "TUI_B",
+		thread: "threadB",
+	},
+];
+
+const [probeBytes, evidenceBytes] = await Promise.all([
+	readFile(probePath),
+	readFile(evidencePath),
+]);
+const evidence = JSON.parse(evidenceBytes.toString("utf8"));
+const probeSha256 = createHash("sha256").update(probeBytes).digest("hex");
+
+assert.equal(evidence.probe.file, "multi-chat-attachment-probe.mjs");
+assert.equal(probeSha256, EXPECTED_PROBE_SHA256, "multi-chat probe drifted");
+assert.equal(
+	evidence.probe.sha256,
+	EXPECTED_PROBE_SHA256,
+	"multi-chat evidence names a different probe",
+);
+assert.match(evidence.probe.nodeVersion, /^v22\./);
+assert.ok(Number.isFinite(Date.parse(evidence.capturedAt)));
+assert.match(evidence.proofScope, /ordinary top-level thread\/start behavior/);
+assert.match(evidence.scopeBoundary, /does not exercise.*ThreadSpawn/);
+
+assert.deepEqual(
+	{
+		appServerProcessCount: evidence.codex.appServerProcessCount,
+		binarySha256: evidence.codex.binarySha256,
+		version: evidence.codex.version,
+	},
+	{
+		appServerProcessCount: 1,
+		binarySha256: EXPECTED_CODEX_BINARY_SHA256,
+		version: "codex-cli 0.146.0",
+	},
+);
+assert.equal(evidence.codex.platform, "linux");
+assert.equal(evidence.codex.architecture, "arm64");
+
+assert.deepEqual(Object.keys(evidence.clients).sort(), [
+	"HOST",
+	"TUI_A",
+	"TUI_B",
+]);
+for (const [label, client] of Object.entries(evidence.clients)) {
+	assert.equal(client.connectionOpenCount, 1, `${label} connection count`);
+	assert.equal(client.initializeRequestId, 1, `${label} initialize ID`);
+	assert.equal(
+		client.role,
+		label === "HOST" ? "hostObserver" : "directClientStandIn",
+	);
+}
+assert.equal(evidence.clients.TUI_A.name, "remote-claw-proof-direct-tui-a");
+assert.equal(evidence.clients.TUI_B.name, "remote-claw-proof-direct-tui-b");
+assert.equal(evidence.clients.HOST.name, "remote-claw-proof-host-observer");
+assert.equal(
+	new Set(Object.values(evidence.clients).map((client) => client.name)).size,
+	3,
+);
+assert.equal(evidence.clients.TUI_A.resumeRequestsSent, 0);
+assert.equal(evidence.clients.TUI_B.resumeRequestsSent, 0);
+assert.equal(evidence.clients.HOST.resumeRequestsSent, 2);
+
+const threadA = evidence.threads.threadA.id;
+const threadB = evidence.threads.threadB.id;
+assert.match(threadA, UUID_PATTERN);
+assert.match(threadB, UUID_PATTERN);
+assert.equal(evidence.threads.threadA.startedBy, "TUI_A");
+assert.equal(evidence.threads.threadB.startedBy, "TUI_B");
+assert.equal(evidence.threads.threadA.persistent, true);
+assert.equal(evidence.threads.threadB.persistent, true);
+assert.equal(evidence.threads.distinctIds, true);
+assert.notEqual(threadA, threadB);
+assert.equal(evidence.clients.TUI_A.startedThread, threadA);
+assert.equal(evidence.clients.TUI_B.startedThread, threadB);
+assert.equal(evidence.clients.HOST.startedThread, null);
+assert.deepEqual(evidence.hostJoin, {
+	resumedThreadIds: [threadA, threadB],
+	sameNativeThreadIds: true,
+});
+
+assert.equal(evidence.commands.length, EXPECTED_COMMANDS.length);
+for (const [index, expected] of EXPECTED_COMMANDS.entries()) {
+	const command = evidence.commands[index];
+	const threadId = evidence.threads[expected.thread].id;
+	assert.equal(command.label, expected.label);
+	assert.equal(command.sentBy, expected.sender);
+	assert.equal(command.requestedCommand, expected.command);
+	assert.equal(command.nativeCommand, `/usr/bin/zsh -lc '${expected.command}'`);
+	assert.equal(command.threadId, threadId);
+	assert.deepEqual(command.expectedOutput, outputRecord(expected.output));
+	assert.match(command.turnId, UUID_PATTERN);
+	assert.match(command.itemId, UUID_PATTERN);
+	assert.deepEqual(command.expectedObserverLabels, expected.expected);
+	assert.deepEqual(command.absentObserverLabels, expected.absent);
+	assert.equal(command.orderedExpectedProjectionsEqual, true);
+	assert.deepEqual(
+		command.nativeNotSubscribedResponseFences,
+		Object.fromEntries(
+			expected.absent.map((label) => [label, "notSubscribed"]),
+		),
+	);
+	assert.deepEqual(Object.keys(command.observations).sort(), [
+		"HOST",
+		"TUI_A",
+		"TUI_B",
+	]);
+
+	const canonical = command.observations[expected.expected[0]];
+	assert.equal(canonical.length, 5, `${expected.label} canonical projection`);
+	for (const label of expected.expected) {
+		const projection = command.observations[label];
+		assert.deepEqual(projection, canonical, `${expected.label} ${label}`);
+		verifyProjection(projection, command);
+	}
+	for (const label of expected.absent) {
+		assert.deepEqual(
+			command.observations[label],
+			[],
+			`${expected.label} ${label} absence`,
+		);
+	}
+}
+assertUniqueIdentifiers([
+	threadA,
+	threadB,
+	...evidence.commands.flatMap((command) => [command.turnId, command.itemId]),
+]);
+
+assert.deepEqual(evidence.finalNativeAttachmentStatus, {
+	threadA: {
+		HOST: "unsubscribed",
+		TUI_A: "unsubscribed",
+		TUI_B: "notSubscribed",
+	},
+	threadB: {
+		HOST: "unsubscribed",
+		TUI_A: "notSubscribed",
+		TUI_B: "unsubscribed",
+	},
+});
+assert.deepEqual(evidence.directClientCrossThreadObservations, {
+	TUI_A_received_threadB_selected_projection: false,
+	TUI_B_received_threadA_selected_projection: false,
+});
+assert.equal(evidence.hostObserverReceivedBothThreads, true);
+assert.deepEqual(evidence.fixtureConclusion, {
+	hostAndOwningDirectClientReceivedEqualSelectedProjections: true,
+	hostObserverCanExplicitlySubscribeToBothNativeThreads: true,
+	nonOwningDirectClientReceivedSelectedEvents: false,
+	nonOwningDirectClientRemainedUnsubscribedAfterHostJoin: true,
+	ordinaryTopLevelThreadStartAttachedEveryInitializedConnection: false,
+});
+assert.deepEqual(evidence.inference, {
+	directClientsSentNoResume: true,
+	hostResumeRequestsSent: 2,
+	probeIssuedModelPrompt: false,
+	turnStartRequestsSent: 0,
+});
+
+for (const threadLabel of ["threadA", "threadB"]) {
+	assert.deepEqual(evidence.deletion[threadLabel], {
+		error: {
+			code: -32600,
+			message: "thread not loaded: <deleted-thread>",
+		},
+		nativeDeleteAcknowledged: true,
+		readAfterDeleteFailed: true,
+	});
+}
+
+assert.equal(evidence.isolation.mode, "unprivileged-user-net");
+assert.match(evidence.isolation.parentNamespace, NAMESPACE_ID_PATTERN);
+assert.match(evidence.isolation.probeNamespace, NAMESPACE_ID_PATTERN);
+assert.notEqual(
+	evidence.isolation.parentNamespace,
+	evidence.isolation.probeNamespace,
+);
+assert.equal(evidence.isolation.distinctNetworkNamespace, true);
+assert.deepEqual(evidence.isolation.interfaces, ["lo"]);
+assert.equal(evidence.isolation.defaultRoutePresent, false);
+assert.equal(evidence.isolation.externalRouteAvailable, false);
+assert.equal(evidence.isolation.temporaryCodexHomeInitiallyEmpty, true);
+assert.equal(evidence.isolation.temporaryUserHomeInitiallyEmpty, true);
+assert.equal(evidence.isolation.ambientCodexHomeInherited, false);
+assert.equal(evidence.isolation.ambientCredentialEnvironmentInherited, false);
+assert.equal(evidence.isolation.ambientProxyBypassInherited, false);
+assert.equal(evidence.isolation.ambientUserHomeInherited, false);
+assert.equal(evidence.isolation.ambientUserStartupDirectoryInherited, false);
+assert.equal(evidence.isolation.localDenyProxyConnectionAttempts, 2);
+assert.deepEqual(
+	evidence.isolation.appServerEnvironmentVariableNames,
+	EXPECTED_ISOLATED_ENVIRONMENT_NAMES,
+);
+for (const forbiddenName of [
+	"OPENAI_API_KEY",
+	"CHATGPT_ACCESS_TOKEN",
+	"CODEX_API_KEY",
+]) {
+	assert.ok(
+		!evidence.isolation.appServerEnvironmentVariableNames.includes(
+			forbiddenName,
+		),
+	);
+}
+assert.deepEqual(evidence.cleanup, {
+	allClientSocketsClosed: true,
+	appServerExit: {
+		code: 0,
+		forced: false,
+		signal: null,
+	},
+	nativeThreadsDeleted: true,
+	temporaryRootRemoved: true,
+});
+
+console.log(
+	"PASS multi-chat attachment evidence: non-owners stay notSubscribed and lack selected correlated events until one host observer explicitly resumes both top-level threads",
+);
+
+function verifyProjection(projection, command) {
+	assert.deepEqual(
+		projection.map((event) => event.method),
+		EXPECTED_METHODS,
+	);
+	for (const event of projection) {
+		assert.equal(event.threadId, command.threadId);
+		assert.equal(event.turnId, command.turnId);
+		if (event.itemId !== undefined) {
+			assert.equal(event.itemId, command.itemId);
+		}
+	}
+	assert.equal(projection[0].status, "inProgress");
+	assert.equal(projection[1].command, command.nativeCommand);
+	assert.equal(projection[1].status, "inProgress");
+	verifyEncoding(projection[2].delta);
+	assert.equal(projection[2].delta.utf8, command.expectedOutput.utf8);
+	assert.equal(projection[3].command, command.nativeCommand);
+	assert.equal(projection[3].status, "completed");
+	assert.equal(projection[3].exitCode, 0);
+	verifyEncoding(projection[3].aggregatedOutput);
+	assert.deepEqual(projection[3].aggregatedOutput, command.expectedOutput);
+	assert.equal(projection[4].status, "completed");
+}
+
+function verifyEncoding(encoded) {
+	const bytes = Buffer.from(encoded.base64, "base64");
+	assert.equal(bytes.length, encoded.byteLength);
+	assert.equal(bytes.toString("utf8"), encoded.utf8);
+}
+
+function assertUniqueIdentifiers(identifiers) {
+	for (const identifier of identifiers) {
+		assert.match(identifier, UUID_PATTERN);
+	}
+	assert.equal(
+		new Set(identifiers).size,
+		identifiers.length,
+		"native identifiers must be pairwise distinct",
+	);
+}
+
+function outputRecord(utf8) {
+	return {
+		base64: Buffer.from(utf8).toString("base64"),
+		byteLength: Buffer.byteLength(utf8),
+		utf8,
+	};
+}

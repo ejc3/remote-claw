@@ -1,0 +1,13 @@
+{
+	"name": "@remote-claw/opencode-native-proof",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"check": "biome check .",
+		"proof": "node probe.mjs",
+		"test:run": "node verify-evidence.mjs"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.16"
+	}
+}

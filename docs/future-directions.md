@@ -5,8 +5,10 @@ project goes next, and how they connect:
 
 > **Decision update (2026-07-26):** the roadmap question in this historical exploration is now answered
 > by [Client-driven Host Runtime](client-driven-host-runtime.md). Native Claude Code, Codex, and
-> OpenCode sessions keep their conversation/execution state; a small local coordinator owns command
-> order, admission, correlation, and delivery across native, official Remote, and remote-claw clients.
+> OpenCode sessions keep their conversation/execution state; a small local coordinator owns proposal
+> order, forwarding decisions, correlation, and delivery only for its direct remote collaborators.
+> Direct TUI input stays on the native path, and the native harness owns the final local/remote
+> interleaving and execution.
 > Candidate language later in this document is retained as design history.
 
 1. **How the popular remote-Claude clients actually work** (Happy / Happier) and what they cost you in
@@ -173,7 +175,8 @@ This matters here because that tmux-inject pattern is the **provider-agnostic, s
 real-TUI-ish** path §4 reaches for — the one I'd otherwise have called "nobody ships." Someone is now
 building it; the open gap they leave is exactly the two things native RC does better: a **non-fragile
 control channel** (vs send-keys) and a **richer remote feed** (worker-events vs JSONL reconstruction, or
-streaming the pane itself).
+streaming the pane itself). “Shared control” here means two writers to one terminal editor, not two
+native collaborator identities; a person's partial draft and an injected prompt can merge.
 
 ---
 
@@ -292,8 +295,9 @@ The three findings converge on one decision:
 - A Bedrock/Vertex/Foundry-compatible remote experience **cannot ride Anthropic-hosted RC**. Bedrock
   users can use remote-claw's synthetic own-relay Bedrock mode. Provider-agnostic alternatives for
   Vertex/Foundry are the other §1 mechanisms: the **SDK-headless** path (but it loses TUI fidelity like
-  Happy/Happier's default), the **tmux-inject** path (keeps the real TUI + shared control, but has fragile
-  writes and a JSONL-reconstructed phone view—the bet Happier is actively making), or **PTY-streaming
+  Happy/Happier's default), the **tmux-inject** path (keeps the real TUI + shared editor access, but has
+  fragile writes, possible local/remote draft merging, and a JSONL-reconstructed phone view—the bet
+  Happier is actively making), or **PTY-streaming
   the real `claude` TUI** to the phone (tmux + xterm—pixel-literal, the one path nobody currently ships
   for `claude`).
 - The **durable-log model** (§2) is orthogonal to fidelity but central to durability/scale, and is

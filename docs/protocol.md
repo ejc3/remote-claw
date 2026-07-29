@@ -1,15 +1,16 @@
 # Protocol & Runtime (grounded)
 
 This document describes the **as-built** remote-claw protocol — the wire format, the channels, and the
-runtime discipline that carries a live `claude --remote-control` session to one or more browser viewers
-through a zero-knowledge broker. Every claim cites the source that implements it (path + symbol), so it
-stays honest as the code changes. Where a behaviour is a deliberate boundary rather than a guarantee, it
-is called out in [§12 Convergence & failure modes](#12-convergence--failure-modes).
+runtime discipline that lets a person use a host-side native TUI while one or more browser viewers
+watch and drive the same native session through a zero-knowledge broker. Every claim cites the source
+that implements it (path + symbol), so it stays honest as the code changes. Where a behaviour is a
+deliberate boundary rather than a guarantee, it is called out in
+[§12 Convergence & failure modes](#12-convergence-failure-modes).
 
 Companion docs: [v2 Architecture](v2-architecture.md) for the design rationale (§-numbers below refer to
 its sections), [Phase 0 Findings](phase0-findings.md) for the reverse-engineered RC worker protocol, and
-[Client-driven Host Runtime](client-driven-host-runtime.md) for the selected inside-adapter →
-coordinator → outside-adapter architecture. A0.1 of that migration is now present: Claude MITM
+[Client-driven Host Runtime](client-driven-host-runtime.md) for the selected native-harness ← one
+remote-claw collaborator ← many server collaborators architecture. A0.1 of that migration is now present: Claude MITM
 sessions register through the neutral, host-scoped lifecycle before their existing `Session` port is
 bridged to the broker. OpenCode and tmux still use the flat compatibility path directly.
 
@@ -28,11 +29,11 @@ implemented here.
 Three parties, one of which (the broker) is untrusted and sees only ciphertext.
 
 - **Host / wrapper** — `runRcLaunch` (`packages/cli/src/host/rc/launch.ts`) runs the real `claude`
-  behind a MITM proxy (`MitmProxy`, `mitm.ts`) pointed at by `HTTPS_PROXY`. The instant a session hits
-  `/remote-control`, its worker traffic lands on `RelayCore`/`Session` (`session.ts`) instead of
-  Anthropic. One host-scoped `LegacyRcConversationRegistrar` allocates a distinct process-local lease
-  per intercepted session. Once setup publishes validated capabilities and marks that lease `ready`,
-  one `HostRcRelay` (`relay.ts`) bridges the session to the broker.
+  with its native TUI behind a MITM proxy (`MitmProxy`, `mitm.ts`) pointed at by `HTTPS_PROXY`. The
+  instant a session hits `/remote-control`, its worker traffic lands on `RelayCore`/`Session`
+  (`session.ts`) instead of Anthropic. One host-scoped `LegacyRcConversationRegistrar` allocates a
+  distinct process-local lease per intercepted session. Once setup publishes validated capabilities
+  and marks that lease `ready`, one `HostRcRelay` (`relay.ts`) bridges the session to the broker.
 - **Broker** — the pluggable backend (Vercel Workflows, per-session SQLite/libSQL, or local)
   behind `POST /api/relay` and `GET /api/stream`. It is a dumb, append-only, **at-least-once, non-FIFO**
   pipe (§12). It never holds a key; it routes by a cleartext header and stores ciphertext.
@@ -52,11 +53,79 @@ selected harness; current OpenCode/tmux announcements can overstate post-setup s
 [Pluggable Harness](pluggable-harness.md) §8). Only how the `Session` reaches the native harness
 differs:
 
-| Driver | Inject (downstream → claude) | Capture (claude → upstream) | Permissions | Provider |
-|---|---|---|---|---|
-| **MITM** (`--rc-app`, `launch.ts`) | intercept claude's RC endpoints → worker downstream | worker upstream POSTs (`followUpstream`) | structured `can_use_tool` gates (§10) | default: Anthropic API; `--rc-inference=bedrock`: Bedrock inference + locally synthesized control plane |
-| **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | `set-buffer`/`paste-buffer` + `send-keys` into the pane (`runInjectPump`) | tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **default attempt:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10); an unparseable user settings file disables the hook after the current optimistic announcement. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | any, incl. Bedrock/Vertex |
-| **opencode** (`--rc-driver=opencode`, `opencode/driver.ts`) | POST the prompt to the opencode session → `followDownstream` (+`ack`) | opencode **SSE** event stream → `pushUpstream` | **default attempt:** PATCH an ask-all rule and mirror SSE `permission.asked` (§10); setup is best-effort and currently may fail after `structuredPermissions:true` was announced. **Opt-out** `--rc-oc-skip-permissions` leaves OpenCode's own permission config | any (OpenCode's own provider config) |
+| Driver | Native surface used by the local person | Inject (downstream → native client) | Capture (native client → upstream) | Permissions | Provider |
+|---|---|---|---|---|---|
+| **MITM** (`--rc-app`, `launch.ts`) | Real Claude Code TUI in the wrapped process; local prompt text is not currently projected to viewers | Intercept Claude's RC endpoints → worker downstream | Worker upstream POSTs (`followUpstream`) | Structured `can_use_tool` gates (§10) | Default: Anthropic API; `--rc-inference=bedrock`: Bedrock inference + locally synthesized control plane |
+| **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | Real Claude Code TUI in the attachable pane; unmatched local prompts are projected post-hoc as `local_prompt` | `set-buffer`/`paste-buffer` + `send-keys` into the pane (`runInjectPump`) | Tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **Default attempt:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10); an unparseable user settings file disables the hook after the current optimistic announcement. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | Any, including Bedrock/Vertex |
+| **opencode** (`--rc-driver=opencode`, `opencode/driver.ts`) | A native OpenCode TUI may share the server; the driver does not enforce one attachment, and unmatched local prompts are projected post-hoc as `local_prompt` | POST the prompt to the OpenCode session → `followDownstream` (+`ack`) | OpenCode **SSE** event stream → `pushUpstream` | **Default attempt:** PATCH an ask-all rule and mirror SSE `permission.asked` (§10); setup is best-effort and currently may fail after `structuredPermissions:true` was announced. **Opt-out** `--rc-oc-skip-permissions` leaves OpenCode's own permission config | Any OpenCode provider configuration |
+
+The selected OpenCode runtime replaces that unconstrained current attachment with one epoch-fenced
+adapter lease enforced by the private HTTP endpoint; SSE plus independent HTTP calls expose no
+persistent writer identity, so connection counting cannot provide the fence. It actively drains SSE
+before snapshot, fails closed on discovery, never adopts “most recent,” and reattaches/imports only an
+exact selected session. Automatic creation requires explicit first-bootstrap intent, no existing
+binding, and a positive empty snapshot; explicit **New chat** is a separate operation that may create
+while sessions exist. Both creation paths use a write-ahead metadata marker. A `prompt_async` 204 or
+control response is transport evidence only.
+OpenCode history/events/status and terminal gate state decide native acceptance and order, including
+TUI-versus-remote races. They do not prove which client caused an abort or compaction unless the pinned
+surface supplies a durable causal link; otherwise source remains unknown. Lease replacement also waits
+for or quarantines requests admitted under the old epoch before the new adapter becomes writable.
+Outside disconnect never aborts the shared native run. The retained
+[OpenCode native proof](opencode-native-proof.md) covers only the exact creation marker and
+`noReply:true` caller-message-ID behavior, not those shared-runtime guarantees.
+
+Codex has no as-built driver. The selected host-runtime design adds one real Codex TUI client and one
+remote-claw collaborator connection on the same private app-server/thread. Any client-facing proxy
+must behave like a direct app-server connection; that remains target behavior, not a protocol claim
+here. The target Codex endpoint accepts the native TUI's documented `--remote` connection and preserves
+the pinned app-server initialization, requests, responses, notifications, server requests,
+backpressure, and reconnect behavior. The current Claude-shaped `Session` relay is not on that TUI leg
+and cannot stand in for app-server compatibility. There is no alternate synthetic Codex-server path:
+if the pinned real app-server cannot keep the TUI and bridge coherent, shared writable Codex mode is
+unsupported for that version.
+
+Pinned `codex-cli 0.146.0` source and
+[runtime evidence](codex-app-server-multiclient-proof.md) establish the basic one-daemon seam. Source
+shows that the TUI is an app-server client and normal official Remote streams enter the same daemon as
+ordinary connection IDs; the checked runtime probe shows two independently initialized raw clients
+mutating one materialized thread through that daemon. A second checked fixture attaches one real
+`codex resume <same-id> --remote <transparent-recorder> --no-alt-screen` TUI and one raw client to the
+same app-server/thread and proves deeply equal selected five-event model-free shell-command projections
+in both directions, with both markers rendered in the TUI. This closes the retained real-TUI fixture
+gate only for that narrow path. A third checked fixture uses three raw connections and two distinct
+top-level threads: each requester remains the only subscriber until one host observer explicitly
+resumes both exact IDs, after which the host and owning client receive equal selected projections while
+the non-owner remains `notSubscribed`. All three fixtures use experimental loopback WebSocket.
+Production Unix front-door parity, the complete method/model/server-request surface, races and
+recovery, real-TUI multi-chat, core child-thread routing, schema retention, and all outward
+official-client work remain open.
+
+The pinned source also shows behavior that the one-thread fixtures cannot exercise: ordinary
+top-level `thread/start` subscribes its requester, while a separate core child-agent notification path
+best-effort attaches every initialized connection. The selected target must preserve and
+differentially prove the native subscription, broadcast, and TUI-routing rules for trusted direct TUI
+connections plus exactly one daemon-wide bridge. The retained three-connection fixture closes the
+ordinary top-level shell-command case only; child threads, real-TUI multiplicity, server requests, and
+the full method surface remain gated. The target must not invent selected-thread isolation.
+
+The selected target does not enable official streams directly because that would bypass the future
+coordinator and give the inner daemon an OpenAI socket. It needs a protocol-aware outward gateway plus
+an app-server-runtime-level injected Remote-control service shared by the sole native
+`MessageProcessor` management path and the surrounding startup/status loop. That service covers
+management only. Official streams terminate in the gateway and never become native connections,
+subscribers, or writers. The gateway retains their complete state, including provider
+enrollment/envelopes, sequence, chunks and ACKs, initialization, capabilities, request-ID domains,
+notification preferences, per-stream subscriptions, server-request correlation, backpressure,
+reconnect state, and lifecycle. Stream-local initialize, resume, unsubscribe, close, and reconnect
+update gateway state; a reconciler maps the union of current host/collaborator demand to zero or one
+fenced subscription transition on exactly one authenticated daemon-wide native bridge. Admitted
+semantic native mutations map to one request on that bridge, which has logical bindings for managed top-level chat threads. A child-thread
+notification remains nested evidence under its parent until a retained lineage fixture proves another
+outward mapping. The gateway must also map source-owned handles and cleanup. Where pinned behavior
+depends on the source client's profile or resource lifetime, an admitted bridge request may carry only
+the smallest non-authoritative compatibility or source-lease context proved necessary. remote-claw
+does not start a second app-server or thread store. None of this is implemented by the current relay.
 
 Because the relay owns the attachment write+inject, attachments work across the two Claude paths
 unchanged—the tmux driver never even sees an `attachment` frame
@@ -66,7 +135,9 @@ receives that Claude-specific text, not a native file part; its attachment suppo
 the current optimistic capability bit.
 
 ```
- claude --remote-control
+ person
+   ⇅
+ claude --remote-control (native TUI)
         │  (HTTPS_PROXY → CONNECT → leaf cert)
         ▼
    MitmProxy ── serves /v1/code/sessions* ──► RelayCore / Session
@@ -93,12 +164,13 @@ the current optimistic capability bit.
 
 The unit on the wire is a **frame**: a `FrameHeader` (cleartext routing) plus an AEAD-sealed body. The
 header fields the runtime relies on are `recordKind`, `sessionId`, `dir` (`"in"` client→host / `"out"`
-host→client), `seq` (the transcript order, or `null`), `msgId` (dedup key), and `part`/`parts` (chunking).
+host→client), `seq` (the relayed viewer-projection order, or `null`), `msgId` (dedup key), and
+`part`/`parts` (chunking).
 
 Each `recordKind` is sealed under exactly one **plane** (AEAD key), decided by `planeForKind`
 (`packages/cli/src/broker/protocol.ts`):
 
-- **content** (`K_session`, carries `seq`) — the transcript: `user`, `assistant`, `assistant_sub`,
+- **content** (`K_session`, carries `seq`) — the viewer transcript projection: `user`, `assistant`, `assistant_sub`,
   `assistant_thinking[_sub]`, `result`, `tool_use`, `tool_result`, `task`, `permission_request`,
   plus `system`/`status`/`rate_limit`/`can_use_tool` (`CONTENT_KINDS`).
 - **control** (`control_key`, `dir:"in"`) — client→host verbs: `catch_up`, `permission`, `interrupt`,
@@ -139,17 +211,25 @@ substrate deliver a consistent transcript anyway.
 
 ---
 
-## 4. The transcript timeline (`seq`)
+## 4. The relayed transcript timeline (`seq`)
 
-`seq` is the total order of the transcript and is allocated in **exactly one place**: `HostRcRelay`'s
-`this.#seq++` (`relay.ts`). Clients never assign order (§6). Both relay pumps (§6) share that single
-counter; because JS is single-threaded, `this.#seq++` is atomic between them, so every content frame —
-whether an outbound assistant line or the inbound echo of a prompt — gets a unique, gap-free-by-
-construction `seq`.
+`seq` is the total order of the relayed viewer projection, not a complete order of everything the
+native TUI executes. It is allocated by **exactly one object**: `HostRcRelay` owns the single `#seq`
+counter and advances it at its outbound-item, inbound-user, and inbound-attachment emission paths
+(`relay.ts`). Browser clients never assign order (§6). Both relay pumps (§6) share that single counter;
+because JS is single-threaded, `this.#seq++` is atomic between them, so every emitted content frame —
+whether an outbound assistant line or the inbound echo of a remote prompt — gets a unique, monotone
+`seq`. A burned pre-publish sequence can still leave the dead durable projection gapped (§12).
+
+Current local-TUI ingress does not share a durable native-applied order with remote ingress. Tmux and
+OpenCode mark an unmatched native user message `local_prompt:true` and project it only after the native
+client has received it. The MITM path receives ordinary native user events without that driver marker;
+`mapUpstreamItems` intentionally drops ordinary user echoes, so a prompt typed in the Claude TUI can
+execute while its user text is absent from the viewer projection.
 
 A `seq` is allocated **before** the POST so the frame's `msgId` is deterministic (`${kind}-${seq}`) and a
 retry re-posts the *same* frame, which the viewer dedups (`relay.ts` `#post` / `POST_RETRIES`). The cost
-of allocating before the durable write is analysed in [§12](#12-convergence--failure-modes).
+of allocating before the durable write is analysed in [§12](#12-convergence-failure-modes).
 
 ---
 
@@ -196,6 +276,15 @@ message ID seen (`relay.ts` `#tailInbound`).
   frame, and injected (`Session.pushUserInput`); a `catch_up` replays the log; a `permission` answers a
   gate; a control verb (`interrupt`/`set_model`/`set_mode`/`end`) is forwarded.
 
+The person at the native TUI is a third as-built input path outside these two relay pumps. In MITM
+mode Claude consumes that input itself; in tmux and OpenCode mode the native client/server consumes it
+and the driver may recognize the resulting user record later as `local_prompt`. The selected design
+keeps that direct path and makes remote-claw one native collaborator for the structured Claude,
+Codex, and OpenCode adapters, with the native harness as final arbiter. Tmux is the exception: person
+and injector share one editor keystream, so it cannot claim peer-collaborator semantics without a
+proved exclusive input boundary. Current code lacks the durable source correlation and native-order
+journal needed to model either relationship safely across restart.
+
 `#seen` (inbound dedup) is intentionally **unbounded** for one relay incarnation. A non-durable
 `#tailInbound` re-reads from frame index 0; a durable relay re-reads from its sampled incarnation
 floor. In either case, evicting an already handled `user` `msgId` could re-inject a duplicate prompt
@@ -233,6 +322,11 @@ prove at-most-once delivery across reconnect. Each follower has a fresh in-memor
 lost, a reconnect can redeliver; the future coordinator treats that boundary as uncertain unless
 worker idempotency is separately proven.
 
+For Claude MITM, `/worker/events/delivery` currently advances only this replay bookkeeping. It is a
+structured worker receipt, not proof that Claude applied, ordered, or durably recorded the command.
+The target keeps worker delivery, native acceptance, transcript observation, and terminal outcome
+separate and requires a pinned RC/transcript/provider correlation before upgrading the state.
+
 `worker_status` is updated by the MITM's `PUT …/worker`, which only mutates and `wake()`s the session
 **on an actual change** (`mitm.ts`), so a phase flip propagates promptly to the presence pump without a
 busy-loop of identical announces.
@@ -255,7 +349,7 @@ incarnation's inbound floor, and re-reads only from that floor so an empty post-
 re-execute earlier inbound actions. The viewer maintains its own stream/orderer recovery logic
 (`viewer.ts`; `relay.ts`). The sampled durable floor prevents duplicate old execution, but it is not a
 command inbox: a command published before the sample and not executed before a crash can be skipped.
-See [§12](#12-convergence--failure-modes).
+See [§12](#12-convergence-failure-modes).
 
 ---
 
@@ -272,8 +366,8 @@ logged, so re-announcing is cheap (`relay.ts` `#sendAnnounce`). The host folds l
   validated local snapshot, which a later presence update re-announces.
 - `status` (raw `worker_status`), `phase` (`phaseFor`: `running`/`busy` → `thinking`, else `idle`, #48),
   and `needs` (`status === "requires_action" || #openPerms.size > 0`, `#presence`).
-- `mode` — the worker's effective permission mode, present whenever it's known (`session.permissionMode
-  !== null`: seeded from session config, or updated by an upstream `system/init`). A **viewer-requested**
+- `mode` — the worker's effective permission mode, present whenever it's known
+  (`session.permissionMode !== null`: seeded from session config, or updated by an upstream `system/init`). A **viewer-requested**
   `set_mode`, though, is reflected as a confirmed mode **only when the driver can honor it**
   (`capabilities.controls.setMode`); for a driver that can't (tmux/opencode) the relay still forwards the
   `set_permission_mode` verb but does **not** write/announce the mode — announcing one would be a "✓" the
@@ -284,8 +378,8 @@ logged, so re-announcing is cheap (`relay.ts` `#sendAnnounce`). The host folds l
   controls a driver can't service and shows a "permissions off" posture when `structuredPermissions`
   is false — so a permission-mode / model control never silently no-ops (#149). Absent on a legacy host
   → the viewer assumes full capability (a pre-capability host is always the MITM driver).
-- `harness` — the driver's `HarnessDescriptor` (`{ agent: "claude-code" | "opencode"; mode: "rc" |
-  "tmux" | "opencode" }`). The viewer labels each session-list row from it — **Claude Code · RC** /
+- `harness` — the driver's `HarnessDescriptor`
+  (`{ agent: "claude-code" | "opencode"; mode: "rc" | "tmux" | "opencode" }`). The viewer labels each session-list row from it — **Claude Code · RC** /
   **Claude Code · TX** / **opencode** — so the three harnesses don't look identical (#164). Absent on a
   legacy host → treated as the MITM harness (native-RC Claude Code, the only pre-#164 driver).
 - `incarnation` and `incarnation_started_at` — the opaque relay-process identity and its wall-clock
@@ -348,6 +442,13 @@ A worker `can_use_tool` control_request is surfaced as a `permission_request` co
 The viewer's `PermissionRow` renders `effective = confirmed ?? decision`: the host-logged resolution
 (`confirmed`, folded from the transcript's `permission_resolved` frames) **wins** over the local optimistic
 `decision`, so a granted permission survives a reload (`page.tsx`).
+
+Here `permission_resolved` confirms only that this relay selected and queued a response. It is not a
+native Claude terminal result: the TUI may have answered first, Claude may cancel the request, or tool
+execution may settle it differently. Current interrupt/end paths can also clear relay gates before
+native terminal evidence. The selected runtime persists remote choice, worker delivery, and native
+cancel/tool/gate outcome separately, and closes every outward copy from the proved native terminal
+record rather than treating local deletion as adjudication.
 
 ---
 
@@ -419,8 +520,8 @@ function `LW5`, verified against the 2.1.x binary) switches on `control_request.
 exactly: `initialize`, `set_model`, `set_max_thinking_tokens`, `set_permission_mode`, `rename_session`,
 `set_color`, `file_suggestions`, `read_file`, `get_context_usage`, `get_usage`, `mcp_status`,
 `mcp_authenticate` / `mcp_oauth_callback_url` / `mcp_reconnect`, and `interrupt`. Anything else hits the
-`default` arm and comes back as an **error** control_response: `REPL bridge does not handle
-control_request subtype: <x>`. (An *outbound-only* session — RC not enabled locally — additionally
+`default` arm and comes back as an **error** control_response:
+`REPL bridge does not handle control_request subtype: <x>`. (An *outbound-only* session — RC not enabled locally — additionally
 rejects everything except `initialize` with `This session is outbound-only…`.) So the relay drives only
 the three verbs claude handles: `interrupt`, `set_model`, `set_permission_mode`.
 
@@ -456,11 +557,13 @@ guarantees.
 ### Invariants that give eventual consistency
 
 1. **Single `seq` allocator + orderer** — one counter (§4) plus each viewer's `FrameOrderer` (§5)
-   means every device that reads the same channel reconstructs the *same* gap-free transcript, regardless
-   of arrival order or duplication. The orderer keeps **exactly one** frame per `parts=1` seq slot (a
-   re-read buffered-behind-a-gap frame whose bounded dedup key evicted is dropped at the slot), so a
-   reconnect can't double-render. Proven for multi-client + catch_up by `full-spine`/`rc-spine`, and the
-   eviction case by `order.test.ts`.
+   means every device that reads the same channel reconstructs the *same* relayed projection through
+   the last contiguous sequence, regardless of arrival order or duplication. A burned sequence stalls
+   every viewer at the same gap; this does not make the projection complete or permanently gap-free.
+   The orderer keeps **exactly one** frame per `parts=1` seq slot (a re-read
+   buffered-behind-a-gap frame whose bounded dedup key evicted is dropped at the slot), so a reconnect
+   can't double-render. Proven for multi-client + catch_up by `full-spine`/`rc-spine`, and the eviction
+   case by `order.test.ts`.
 2. **Idempotent replay** — `catch_up` re-posts original `seq`+`msgId`; the orderer dedups (§8).
 3. **Ordered presence fold** — the viewer uses incarnation start + per-incarnation `announce_seq`,
    falling back to `sent_at` for legacy/ambiguous frames (§9), so reordered current-host announces
@@ -518,16 +621,17 @@ guarantees.
 
 ### Capture-grounded protocol surfaces (observed via `--rc-trace`)
 
-These worker↔client shapes were **captured from a real `claude --remote-control` (2.1.x)** through the
-tracing MITM (`--rc-trace`, #46). They are documented here as ground truth; the ones not yet surfaced in
-the UI are scoped features, **not** unknowns.
+These worker↔client shapes were captured from a real `claude --remote-control` (2.1.x) through the
+tracing MITM (`--rc-trace`, #46). They are useful current observations, but the repository does not yet
+retain sanitized exact-version traces with binary/schema/probe hashes. They are therefore not a
+compatibility release proof; every target family remains gated until that fixture exists.
 
 - **`control_cancel_request`** (worker→relay, `POST …/worker/events`) — payload
   `{type:"control_cancel_request", request_id, session_id, uuid}`. The worker cancels a pending gate
   (e.g. on interrupt); the relay clears that `request_id` from `#openPerms` so `needs` drops (§10,
   implemented).
-- **`worker_status`** (worker→relay, `PUT …/worker`) — body `{worker_epoch, worker_status,
-  requires_action_details}`. `worker_status ∈ {running, idle, requires_action}`; `requires_action_details`
+- **`worker_status`** (worker→relay, `PUT …/worker`) — body
+  `{worker_epoch, worker_status, requires_action_details}`. `worker_status ∈ {running, idle, requires_action}`; `requires_action_details`
   is `{tool_name, display_tool_name, action_description, tool_use_id}` or `null`. Drives `phase`/`needs`
   (§9, implemented).
 - **#41 `/compact`** — rides the **`user`** path: an SSE `user` event with
@@ -537,8 +641,8 @@ the UI are scoped features, **not** unknowns.
 - **#42 AskUserQuestion** — surfaced two ways that co-occur: a `can_use_tool` control_request with
   `tool_name:"AskUserQuestion"` (whose `tool_input` holds the questions/options), **and**
   `worker_status:"requires_action"` with `requires_action_details.tool_name == "AskUserQuestion"`. The
-  answer is a **`control_response`** with `response.response = {behavior:"allow", toolUseID,
-  updatedInput:{answers:{"<question>":"<choice>", …}}}`; the worker then posts a `user`/`tool_result`
+  answer is a **`control_response`** with
+  `response.response = {behavior:"allow", toolUseID, updatedInput:{answers:{"<question>":"<choice>", …}}}`; the worker then posts a `user`/`tool_result`
   summarising the answers. So #42 reuses the §10 permission spine — the viewer renders the options and
   returns `updatedInput.answers` instead of a bare allow/deny. An answer value is an **arbitrary string**
   (single-select) or **string array** (multiSelect) — claude's tool runs `call({questions, answers})` with

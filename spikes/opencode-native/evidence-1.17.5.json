@@ -1,0 +1,928 @@
+{
+	"capturedAt": "2026-07-29T19:58:31.145Z",
+	"proofScope": "model-free OpenCode 1.17.5 session-create metadata correlation and prompt_async caller-message-ID behavior on one private native server",
+	"scopeLimits": {
+		"modelReplyRequested": false,
+		"providerCredentialSuppliedViaEnvironmentOrFreshHomes": false,
+		"permissionListRuntimeObservedEmpty": true,
+		"permissionReplyRuntimeExercised": false,
+		"denyProxyTargetsOrProtocolsRetained": false
+	},
+	"probe": {
+		"file": "probe.mjs",
+		"nodeVersion": "v22.23.1",
+		"sha256": "f7bbbecfa7ea7c28eedb4dc7836972f63fdaa03c996a18b9982aa1f0782a2939"
+	},
+	"opencode": {
+		"version": "1.17.5",
+		"launcherPath": "/home/ubuntu/.local/share/pnpm/opencode",
+		"launcherSha256": "d167e30e12cca32cc4a5da0003ee0deb1120b5ca5ee2d64cef23aec44a3c9fa9",
+		"nativeBinaryPath": "/home/ubuntu/.local/share/pnpm/global/5/.pnpm/opencode-ai@1.17.5/node_modules/opencode-ai/bin/opencode.exe",
+		"nativeBinarySha256": "fe1839ac5c417c5fc4a08dd268465907c3e8c6ca15e7ffd93f3a8dc46d63d339",
+		"platform": "linux",
+		"architecture": "arm64",
+		"nativeVersionProbeSpawnCount": 1,
+		"nativeServerSpawnCount": 1
+	},
+	"openApi": {
+		"route": "/doc",
+		"byteLength": 386197,
+		"sha256": "0cded4547ac93d617517419233f08f134eb002dae111534e5c02031803e35721",
+		"selectedSchema": {
+			"create": {
+				"metadataType": "object",
+				"operationId": "session.create",
+				"responseSchema": "#/components/schemas/Session"
+			},
+			"promptAsync": {
+				"messageIdPattern": "^msg",
+				"noReplyType": "boolean",
+				"operationId": "session.prompt_async",
+				"required": ["parts"],
+				"successStatus": 204
+			},
+			"permissionList": {
+				"itemSchema": "#/components/schemas/PermissionRequest",
+				"operationId": "permission.list"
+			},
+			"permissionReply": {
+				"operationId": "permission.reply",
+				"replyEnum": ["once", "always", "reject"],
+				"requestIdPattern": "^per",
+				"required": ["reply"]
+			}
+		}
+	},
+	"isolation": {
+		"mode": "unprivileged-user-net",
+		"parentNamespace": "net:[4026531833]",
+		"proofNamespace": "net:[4026534295]",
+		"distinctNetworkNamespace": true,
+		"interfaces": ["lo"],
+		"defaultRoutePresent": false,
+		"serverBindHost": "127.0.0.1",
+		"temporaryDirectoriesInitiallyEmpty": {
+			"cache": true,
+			"config": true,
+			"data": true,
+			"home": true,
+			"state": true,
+			"temp": true,
+			"workspace": true
+		},
+		"ambientHomeInherited": false,
+		"ambientXdgDirectoriesInherited": false,
+		"ambientProviderCredentialEnvironmentInherited": false,
+		"credentialFilesSeededInFreshHomes": [],
+		"serverEnvironmentVariableNames": [
+			"ALL_PROXY",
+			"HOME",
+			"HTTPS_PROXY",
+			"HTTP_PROXY",
+			"LANG",
+			"LC_ALL",
+			"NO_PROXY",
+			"OPENCODE_DISABLE_AUTOUPDATE",
+			"PATH",
+			"TERM",
+			"TMPDIR",
+			"XDG_CACHE_HOME",
+			"XDG_CONFIG_HOME",
+			"XDG_DATA_HOME",
+			"XDG_STATE_HOME",
+			"all_proxy",
+			"http_proxy",
+			"https_proxy",
+			"no_proxy"
+		],
+		"localDenyProxyConnectionAttempts": 6,
+		"externalRouteAvailable": false,
+		"afterCleanup": {
+			"proofNamespace": "net:[4026534295]",
+			"interfaces": ["lo"],
+			"defaultRoutePresent": false
+		}
+	},
+	"sse": {
+		"decodedEventSequence": [
+			{
+				"id": "evt_faf7505f4001FfWP0BZkT0i27d",
+				"type": "server.connected",
+				"properties": {}
+			},
+			{
+				"id": "evt_faf7506da002YKYHi365ty791C",
+				"type": "session.created",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"info": {
+						"id": "ses_0508af925ffejgfrYahyNo9qB4",
+						"slug": "playful-circuit",
+						"version": "1.17.5",
+						"projectID": "global",
+						"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"path": "tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"title": "remote-claw-native-proof",
+						"metadata": {
+							"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
+						},
+						"cost": 0,
+						"tokens": {
+							"input": 0,
+							"output": 0,
+							"reasoning": 0,
+							"cache": {
+								"read": 0,
+								"write": 0
+							}
+						},
+						"time": {
+							"created": 1785355110106,
+							"updated": 1785355110106
+						}
+					}
+				}
+			},
+			{
+				"id": "evt_faf7507850018d2DNa6olupmwN",
+				"type": "plugin.added",
+				"properties": {
+					"id": "env"
+				}
+			},
+			{
+				"id": "evt_faf750789001ehTXnIDQPsBUu0",
+				"type": "plugin.added",
+				"properties": {
+					"id": "agent"
+				}
+			},
+			{
+				"id": "evt_faf75078a001F1TFVhHrQQYshd",
+				"type": "plugin.added",
+				"properties": {
+					"id": "command"
+				}
+			},
+			{
+				"id": "evt_faf75078c0017J4a1gC6z7pMrJ",
+				"type": "plugin.added",
+				"properties": {
+					"id": "skill"
+				}
+			},
+			{
+				"id": "evt_faf75078d001vP7uRA8GI8oEgH",
+				"type": "plugin.added",
+				"properties": {
+					"id": "alibaba"
+				}
+			},
+			{
+				"id": "evt_faf75078d002kvBp5axKUD0MAR",
+				"type": "plugin.added",
+				"properties": {
+					"id": "amazon-bedrock"
+				}
+			},
+			{
+				"id": "evt_faf75078e001mlI5QcVQA2BAsR",
+				"type": "plugin.added",
+				"properties": {
+					"id": "anthropic"
+				}
+			},
+			{
+				"id": "evt_faf75078f001tmJocJ3LMKGSug",
+				"type": "plugin.added",
+				"properties": {
+					"id": "azure-cognitive-services"
+				}
+			},
+			{
+				"id": "evt_faf750790001FBMPrs9dAIscJ4",
+				"type": "plugin.added",
+				"properties": {
+					"id": "azure"
+				}
+			},
+			{
+				"id": "evt_faf750791001bJbJr9VyU3VnNN",
+				"type": "plugin.added",
+				"properties": {
+					"id": "cerebras"
+				}
+			},
+			{
+				"id": "evt_faf750792001P1tsE37EyJRnsL",
+				"type": "plugin.added",
+				"properties": {
+					"id": "cloudflare-ai-gateway"
+				}
+			},
+			{
+				"id": "evt_faf750792002jkpugBwdMO8B7M",
+				"type": "plugin.added",
+				"properties": {
+					"id": "cloudflare-workers-ai"
+				}
+			},
+			{
+				"id": "evt_faf7507930013Ic87nuYnXjrmn",
+				"type": "plugin.added",
+				"properties": {
+					"id": "cohere"
+				}
+			},
+			{
+				"id": "evt_faf750794001X4YX4PZg2nlI0k",
+				"type": "plugin.added",
+				"properties": {
+					"id": "deepinfra"
+				}
+			},
+			{
+				"id": "evt_faf750795001NNcM2BENk7vH8W",
+				"type": "plugin.added",
+				"properties": {
+					"id": "gateway"
+				}
+			},
+			{
+				"id": "evt_faf750795002f7762Xgjhty7ie",
+				"type": "plugin.added",
+				"properties": {
+					"id": "github-copilot"
+				}
+			},
+			{
+				"id": "evt_faf75079f001pTeLgcZSfwd77J",
+				"type": "plugin.added",
+				"properties": {
+					"id": "gitlab"
+				}
+			},
+			{
+				"id": "evt_faf7507a0001KuhzFFMpZIQsHg",
+				"type": "plugin.added",
+				"properties": {
+					"id": "google"
+				}
+			},
+			{
+				"id": "evt_faf7507a1001Yyw2b29JmbSFyz",
+				"type": "plugin.added",
+				"properties": {
+					"id": "google-vertex-anthropic"
+				}
+			},
+			{
+				"id": "evt_faf7507a10024uIRZoi9PGebtG",
+				"type": "plugin.added",
+				"properties": {
+					"id": "google-vertex"
+				}
+			},
+			{
+				"id": "evt_faf7507a2001V2ylvS3qS6Yc5a",
+				"type": "plugin.added",
+				"properties": {
+					"id": "groq"
+				}
+			},
+			{
+				"id": "evt_faf7507a3001puEiuplIk6cV06",
+				"type": "plugin.added",
+				"properties": {
+					"id": "kilo"
+				}
+			},
+			{
+				"id": "evt_faf7507a3002LSNCU05fq9Aine",
+				"type": "plugin.added",
+				"properties": {
+					"id": "llmgateway"
+				}
+			},
+			{
+				"id": "evt_faf7507a4001lJscimagVq5j9p",
+				"type": "plugin.added",
+				"properties": {
+					"id": "mistral"
+				}
+			},
+			{
+				"id": "evt_faf7507a4002BQ2MFg8Z8qL8BQ",
+				"type": "plugin.added",
+				"properties": {
+					"id": "nvidia"
+				}
+			},
+			{
+				"id": "evt_faf7507a5001zYcFX2X7Lee3GC",
+				"type": "plugin.added",
+				"properties": {
+					"id": "opencode"
+				}
+			},
+			{
+				"id": "evt_faf7507a5002ypE4K66lic2lgI",
+				"type": "plugin.added",
+				"properties": {
+					"id": "snowflake-cortex"
+				}
+			},
+			{
+				"id": "evt_faf7507a600174fItRdYmL2aLj",
+				"type": "plugin.added",
+				"properties": {
+					"id": "openai-compatible"
+				}
+			},
+			{
+				"id": "evt_faf7507a70013eVufKv9CiorFZ",
+				"type": "integration.updated",
+				"properties": {}
+			},
+			{
+				"id": "evt_faf7507a7002gxUbj7oM85k7bq",
+				"type": "plugin.added",
+				"properties": {
+					"id": "openai"
+				}
+			},
+			{
+				"id": "evt_faf7507a7003Txx8VyPnt5d7Bf",
+				"type": "plugin.added",
+				"properties": {
+					"id": "openrouter"
+				}
+			},
+			{
+				"id": "evt_faf7507a8001555tqc3POJMqkl",
+				"type": "plugin.added",
+				"properties": {
+					"id": "perplexity"
+				}
+			},
+			{
+				"id": "evt_faf7507a9001k2N5oBcui49y62",
+				"type": "plugin.added",
+				"properties": {
+					"id": "sap-ai-core"
+				}
+			},
+			{
+				"id": "evt_faf7507af0018B4q0EO8rHKLsy",
+				"type": "plugin.added",
+				"properties": {
+					"id": "togetherai"
+				}
+			},
+			{
+				"id": "evt_faf7507af002uszDdyJiwlTlQJ",
+				"type": "plugin.added",
+				"properties": {
+					"id": "vercel"
+				}
+			},
+			{
+				"id": "evt_faf7507b0001w57imOesWQth5L",
+				"type": "plugin.added",
+				"properties": {
+					"id": "venice"
+				}
+			},
+			{
+				"id": "evt_faf7507b1001dudczG6KWVfmY4",
+				"type": "plugin.added",
+				"properties": {
+					"id": "xai"
+				}
+			},
+			{
+				"id": "evt_faf7507b100279QHpEfG4frPc0",
+				"type": "plugin.added",
+				"properties": {
+					"id": "zenmux"
+				}
+			},
+			{
+				"id": "evt_faf7507b200153oyXQbTkqpTjr",
+				"type": "plugin.added",
+				"properties": {
+					"id": "dynamic-provider"
+				}
+			},
+			{
+				"id": "evt_faf750800001JY4KqjxAXC3kZs",
+				"type": "integration.updated",
+				"properties": {}
+			},
+			{
+				"id": "evt_faf75089a001AyciBoqXLhgdgB",
+				"type": "plugin.added",
+				"properties": {
+					"id": "models-dev"
+				}
+			},
+			{
+				"id": "evt_faf75091c001CjzBz8iSFuIVfK",
+				"type": "plugin.added",
+				"properties": {
+					"id": "config-provider"
+				}
+			},
+			{
+				"id": "evt_faf750928001kdn4J58b6iZpun",
+				"type": "plugin.added",
+				"properties": {
+					"id": "config-agent"
+				}
+			},
+			{
+				"id": "evt_faf75092a001o8pji4R44mOLhE",
+				"type": "plugin.added",
+				"properties": {
+					"id": "config-command"
+				}
+			},
+			{
+				"id": "evt_faf75092b001nWPPwddKaG6qfT",
+				"type": "plugin.added",
+				"properties": {
+					"id": "config-skill"
+				}
+			},
+			{
+				"id": "evt_faf75092d001hihyhTCSlq0srb",
+				"type": "reference.updated",
+				"properties": {}
+			},
+			{
+				"id": "evt_faf75092d002qX7BUzzFLpNRzb",
+				"type": "plugin.added",
+				"properties": {
+					"id": "core/config-reference"
+				}
+			},
+			{
+				"id": "evt_faf7509a1002f8pvusOi0r8aky",
+				"type": "session.next.agent.switched",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"messageID": "msg_faf7509a1001pSAoy6yftfNFTW",
+					"timestamp": "2026-07-29T19:58:30.817Z",
+					"agent": "build"
+				}
+			},
+			{
+				"id": "evt_faf7509a7002CheH0QMK0ifAWZ",
+				"type": "session.next.model.switched",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"messageID": "msg_faf7509a7001C4LG1rvK6vJo52",
+					"timestamp": "2026-07-29T19:58:30.817Z",
+					"model": {
+						"id": "big-pickle",
+						"providerID": "opencode",
+						"variant": "default"
+					}
+				}
+			},
+			{
+				"id": "evt_faf7509ad001mqgPuN7b07ucHf",
+				"type": "message.updated",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"info": {
+						"id": "msg_remoteclaw_native_proof_001",
+						"role": "user",
+						"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+						"time": {
+							"created": 1785355110817
+						},
+						"agent": "build",
+						"model": {
+							"providerID": "opencode",
+							"modelID": "big-pickle"
+						}
+					}
+				}
+			},
+			{
+				"id": "evt_faf7509c90011sFAGoJxDZxQBG",
+				"type": "message.part.updated",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"part": {
+						"type": "text",
+						"text": "remote-claw opencode no-reply proof",
+						"messageID": "msg_remoteclaw_native_proof_001",
+						"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+						"id": "prt_faf7509ac001cCdNzMef2zHig4"
+					},
+					"time": 1785355110857
+				}
+			},
+			{
+				"id": "evt_faf7509cd001slZId4tep0KVr6",
+				"type": "session.updated",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"info": {
+						"id": "ses_0508af925ffejgfrYahyNo9qB4",
+						"slug": "playful-circuit",
+						"projectID": "global",
+						"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"path": "tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"title": "remote-claw-native-proof",
+						"agent": "build",
+						"model": {
+							"id": "big-pickle",
+							"providerID": "opencode",
+							"variant": "default"
+						},
+						"version": "1.17.5",
+						"cost": 0,
+						"tokens": {
+							"input": 0,
+							"output": 0,
+							"reasoning": 0,
+							"cache": {
+								"read": 0,
+								"write": 0
+							}
+						},
+						"metadata": {
+							"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
+						},
+						"time": {
+							"created": 1785355110106,
+							"updated": 1785355110860
+						}
+					}
+				}
+			},
+			{
+				"id": "evt_faf7509ea001tZFFfiVe4mwC9e",
+				"type": "message.updated",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"info": {
+						"id": "msg_remoteclaw_native_proof_001",
+						"role": "user",
+						"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+						"time": {
+							"created": 1785355110889
+						},
+						"agent": "build",
+						"model": {
+							"providerID": "opencode",
+							"modelID": "big-pickle"
+						}
+					}
+				}
+			},
+			{
+				"id": "evt_faf7509ec001jPFmEbYwhnmONM",
+				"type": "message.part.updated",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"part": {
+						"type": "text",
+						"text": "remote-claw opencode no-reply proof",
+						"messageID": "msg_remoteclaw_native_proof_001",
+						"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+						"id": "prt_faf7509e9001PcPbmRddHe2HPf"
+					},
+					"time": 1785355110891
+				}
+			},
+			{
+				"id": "evt_faf7509ee001jC1uKYV0DyEV36",
+				"type": "session.updated",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"info": {
+						"id": "ses_0508af925ffejgfrYahyNo9qB4",
+						"slug": "playful-circuit",
+						"projectID": "global",
+						"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"path": "tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"title": "remote-claw-native-proof",
+						"agent": "build",
+						"model": {
+							"id": "big-pickle",
+							"providerID": "opencode",
+							"variant": "default"
+						},
+						"version": "1.17.5",
+						"cost": 0,
+						"tokens": {
+							"input": 0,
+							"output": 0,
+							"reasoning": 0,
+							"cache": {
+								"read": 0,
+								"write": 0
+							}
+						},
+						"metadata": {
+							"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
+						},
+						"time": {
+							"created": 1785355110106,
+							"updated": 1785355110893
+						}
+					}
+				}
+			},
+			{
+				"id": "evt_faf750a0a001r9ImQF3uS4b6mO",
+				"type": "session.deleted",
+				"properties": {
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"info": {
+						"id": "ses_0508af925ffejgfrYahyNo9qB4",
+						"slug": "playful-circuit",
+						"projectID": "global",
+						"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"path": "tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"title": "remote-claw-native-proof",
+						"agent": "build",
+						"model": {
+							"id": "big-pickle",
+							"providerID": "opencode",
+							"variant": "default"
+						},
+						"version": "1.17.5",
+						"cost": 0,
+						"tokens": {
+							"input": 0,
+							"output": 0,
+							"reasoning": 0,
+							"cache": {
+								"read": 0,
+								"write": 0
+							}
+						},
+						"metadata": {
+							"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
+						},
+						"time": {
+							"created": 1785355110106,
+							"updated": 1785355110893
+						}
+					}
+				}
+			}
+		],
+		"connectedEvent": {
+			"eventId": "evt_faf7505f4001FfWP0BZkT0i27d",
+			"type": "server.connected",
+			"properties": {}
+		},
+		"sessionCreatedEvent": {
+			"eventId": "evt_faf7506da002YKYHi365ty791C",
+			"type": "session.created",
+			"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+			"info": {
+				"id": "ses_0508af925ffejgfrYahyNo9qB4",
+				"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+				"title": "remote-claw-native-proof",
+				"version": "1.17.5",
+				"metadata": {
+					"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
+				},
+				"time": {
+					"created": 1785355110106,
+					"updated": 1785355110106
+				}
+			}
+		},
+		"firstApplication": {
+			"messageUpdated": {
+				"eventId": "evt_faf7509ad001mqgPuN7b07ucHf",
+				"type": "message.updated",
+				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"info": {
+					"id": "msg_remoteclaw_native_proof_001",
+					"role": "user",
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"time": {
+						"created": 1785355110817
+					},
+					"agent": "build",
+					"model": {
+						"providerID": "opencode",
+						"modelID": "big-pickle"
+					}
+				}
+			},
+			"partUpdated": {
+				"eventId": "evt_faf7509c90011sFAGoJxDZxQBG",
+				"type": "message.part.updated",
+				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"part": {
+					"type": "text",
+					"text": "remote-claw opencode no-reply proof",
+					"messageID": "msg_remoteclaw_native_proof_001",
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"id": "prt_faf7509ac001cCdNzMef2zHig4"
+				}
+			}
+		},
+		"secondApplication": {
+			"messageUpdated": {
+				"eventId": "evt_faf7509ea001tZFFfiVe4mwC9e",
+				"type": "message.updated",
+				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"info": {
+					"id": "msg_remoteclaw_native_proof_001",
+					"role": "user",
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"time": {
+						"created": 1785355110889
+					},
+					"agent": "build",
+					"model": {
+						"providerID": "opencode",
+						"modelID": "big-pickle"
+					}
+				}
+			},
+			"partUpdated": {
+				"eventId": "evt_faf7509ec001jPFmEbYwhnmONM",
+				"type": "message.part.updated",
+				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"part": {
+					"type": "text",
+					"text": "remote-claw opencode no-reply proof",
+					"messageID": "msg_remoteclaw_native_proof_001",
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"id": "prt_faf7509e9001PcPbmRddHe2HPf"
+				}
+			}
+		},
+		"sessionDeletedEvent": {
+			"eventId": "evt_faf750a0a001r9ImQF3uS4b6mO",
+			"type": "session.deleted",
+			"sessionID": "ses_0508af925ffejgfrYahyNo9qB4"
+		},
+		"assistantMessageEventsForSession": 0
+	},
+	"sessionCreate": {
+		"initialNativeSessionList": [],
+		"postCount": 1,
+		"blindRetryIssued": false,
+		"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001",
+		"returnedSession": {
+			"id": "ses_0508af925ffejgfrYahyNo9qB4",
+			"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+			"title": "remote-claw-native-proof",
+			"version": "1.17.5",
+			"metadata": {
+				"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
+			},
+			"time": {
+				"created": 1785355110106,
+				"updated": 1785355110106
+			}
+		},
+		"listAfterCreate": [
+			{
+				"id": "ses_0508af925ffejgfrYahyNo9qB4",
+				"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+				"title": "remote-claw-native-proof",
+				"version": "1.17.5",
+				"metadata": {
+					"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
+				},
+				"time": {
+					"created": 1785355110106,
+					"updated": 1785355110106
+				}
+			}
+		],
+		"matchingCreationIdCount": 1
+	},
+	"permissionSurface": {
+		"initialPendingListStatus": 200,
+		"initialPendingList": [],
+		"replyRuntimeExercised": false
+	},
+	"promptAsync": {
+		"postCount": 2,
+		"request": {
+			"messageID": "msg_remoteclaw_native_proof_001",
+			"noReply": true,
+			"parts": [
+				{
+					"type": "text",
+					"text": "remote-claw opencode no-reply proof"
+				}
+			]
+		},
+		"firstReceipt": {
+			"status": 204,
+			"bodyByteLength": 0
+		},
+		"firstHistory": {
+			"info": {
+				"id": "msg_remoteclaw_native_proof_001",
+				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"role": "user",
+				"time": {
+					"created": 1785355110817
+				},
+				"agent": "build",
+				"model": {
+					"providerID": "opencode",
+					"modelID": "big-pickle"
+				}
+			},
+			"parts": [
+				{
+					"id": "prt_faf7509ac001cCdNzMef2zHig4",
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"messageID": "msg_remoteclaw_native_proof_001",
+					"type": "text",
+					"text": "remote-claw opencode no-reply proof"
+				}
+			]
+		},
+		"secondReceipt": {
+			"status": 204,
+			"bodyByteLength": 0
+		},
+		"secondHistory": {
+			"info": {
+				"id": "msg_remoteclaw_native_proof_001",
+				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"role": "user",
+				"time": {
+					"created": 1785355110889
+				},
+				"agent": "build",
+				"model": {
+					"providerID": "opencode",
+					"modelID": "big-pickle"
+				}
+			},
+			"parts": [
+				{
+					"id": "prt_faf7509ac001cCdNzMef2zHig4",
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"messageID": "msg_remoteclaw_native_proof_001",
+					"type": "text",
+					"text": "remote-claw opencode no-reply proof"
+				},
+				{
+					"id": "prt_faf7509e9001PcPbmRddHe2HPf",
+					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"messageID": "msg_remoteclaw_native_proof_001",
+					"type": "text",
+					"text": "remote-claw opencode no-reply proof"
+				}
+			]
+		},
+		"pinnedBehavior": "same caller message ID retained as one user message with a second distinct text part",
+		"nonIdempotent": true
+	},
+	"deletion": {
+		"nativeDeleteAcknowledged": true,
+		"deletedSessionId": "ses_0508af925ffejgfrYahyNo9qB4",
+		"sessionDeletedSseObserved": true,
+		"readAfterDeleteStatus": 404,
+		"readAfterDeleteError": {
+			"name": "NotFoundError",
+			"data": {
+				"message": "Session not found: <session>"
+			}
+		},
+		"historyAfterDeleteStatus": 404,
+		"historyAfterDeleteError": {
+			"name": "NotFoundError",
+			"data": {
+				"message": "Session not found: <session>"
+			}
+		},
+		"listAfterDelete": []
+	},
+	"disposal": {
+		"globalDisposeAcknowledged": true
+	},
+	"cleanup": {
+		"serverExit": {
+			"code": null,
+			"signal": "SIGTERM",
+			"forced": false
+		},
+		"processGroupTerminated": true,
+		"loopbackPortRefused": true,
+		"sseClosed": true,
+		"denyProxyClosed": true,
+		"temporaryRootRemoved": true
+	}
+}

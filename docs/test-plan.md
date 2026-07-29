@@ -9,16 +9,19 @@ What we verify, how, and where. The system is a zero-knowledge, E2E-encrypted re
 | --- | --- | --- | --- |
 | **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking — pure functions, no network | Node + WebCrypto |
 | **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough | Node, mock fetch / fixture |
+| **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
+| **Retained native proof (OpenCode)** | [`spikes/opencode-native/verify-evidence.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, and same-ID `noReply:true` append behavior within one incarnation | Node over checked JSON evidence; no provider/model |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
 | **App e2e (real browser)** | `tests/web/app-e2e/*.spec.ts` (Playwright) | a real **Chromium** drives the BUILT viewer against a real Next server + broker — the full RC turn, the one-time-handoff pairing, the three drivers' capability profiles (mitm/tmux/opencode, via capability presets — not real tmux/opencode hosts), and the bus-unreachable banner; **WebKit** runs the iOS-Safari foreground-revive spec; the RC turn re-runs on the per-session SQLite backend | Playwright (Chromium + WebKit), built prod server |
 | **Proof (real claude)** | `apps/web/test/prove/*.prove.test.ts` (gated `RC_PROVE_REAL_CLAUDE=1`) | a **real, logged-in `claude`** driven end-to-end through the encrypted broker — single turn and stateful multi-turn | spawns real `claude`, network |
 | **Exploratory** | manual real-`claude` runs (`tests/web/cross-mode-verify.mjs`) | a LIVE session driven through the real viewer for any bridged driver: type a prompt, assert a real assistant reply (real LLM round-trip) carrying a needle, screenshot | real, on demand |
 
-CI keeps the unit + integration layers fast and network-free, and on every PR that touches the
+CI keeps the unit + integration layers fast and network-free, verifies retained native evidence when
+its spike or verifier changes, and on every PR that touches the
 web/CLI/crypto paths also runs the **app-e2e** layer (Chromium + WebKit; the RC turn re-runs on
 per-session SQLite) plus the encryption-stress suites (`.github/workflows/web-e2e.yml`, path-filtered);
-the real-claude proofs are env-gated so they never gate CI but are run on demand. Each PR passes
-`biome` + `tsc` + `vitest` + the e2e suite before merge.
+the real-claude proofs are env-gated so they never gate CI but are run on demand. Every PR must pass
+the relevant path-filtered checks plus the repository's `biome`, `tsc`, and `vitest` gate before merge.
 
 ## Coverage map — the 26 scenarios → proof
 
@@ -100,6 +103,16 @@ about the current A0 implementation:
   turns;
 - reject wrong UUID/project/product adoption and stale worker/coordinator/presence writes without
   matching by title or text;
+- retain sanitized exact-version Claude fixtures with binary/schema/probe hashes; cover worker ACK
+  before/no native application, native application followed by lost ACK and reconnect, and the exact
+  join among private-RC command UUID, worker echo/receipt, transcript row/UUID, provider exchange, and
+  resulting native turn;
+- race Claude TUI and remote permission/question answers with native cancellation, interrupt, tool
+  completion, answer-delivery loss, and disconnect; keep remote choice, worker delivery, and native
+  terminal outcome separate and close gates only from native evidence;
+- detach an outside Claude collaborator/connector and replace the private-RC epoch while a child turn,
+  gate, or inference request is active; keep the child/TUI/private RC/inference path alive and hold the
+  replacement non-writable until old work is terminal or unknown, quarantined, and contained;
 - crash before and after binding commit, native write-ahead, native observation, broker cursor
   advance, outward publish, and provider ingress ACK; assert exactly-once decisions where provable and
   quarantine every ambiguous delivery;
@@ -117,10 +130,67 @@ about the current A0 implementation:
 - crash before/after namespace-transition install, cross-incarnation lookup, observation
   classification, canonical source-event insertion, and `command.proposed`; assert recovery of one
   recorded branch and no semantic ACK/cursor advance for collision/ambiguous input;
-- restart one Codex app server with several threads and preserve the paired ChatGPT host, projects,
-  logical-chat mappings, and sibling isolation;
-- restart OpenCode/tmux only into a binding whose server/process/transcript lineage is proven; otherwise
-  expose recovery/quarantine rather than a duplicate or silently repointed chat.
+- restart one Codex app-server with several threads while preserving exactly one native remote-claw
+  bridge, the paired ChatGPT host, projects, managed top-level logical-chat mappings, child lineage,
+  and sibling isolation without duplicating an official chat;
+- crash that Codex bridge while the app-server/TUI survive, require native `ConnectionClosed` handling
+  and subscription cleanup before replacement initialization, reject stale writes/responses, then
+  rebind the managed top-level chats through exactly one new bridge `ConnectionId`;
+- overlap two official Codex streams and another remote-claw collaborator on one managed chat, then
+  exercise first join, non-final leave, last aggregate leaver, reconnect, and cleanup; preserve
+  per-stream lifecycle while emitting zero or one fenced native subscription transition per change;
+- concurrently reuse official request IDs and process/watch handles, then prove bridge-wide remapping,
+  exact response/error routing, tombstones, and source-specific cleanup;
+- restart OpenCode only into a binding whose server/session lineage is proven, subscribe before
+  snapshot, and preserve exactly one remote-claw bridge into the native session; otherwise expose
+  recovery/quarantine rather than a duplicate or silently repointed chat;
+- fail closed on discovery error and never adopt “most recent”; separately test exact existing-binding
+  reattach, missing/wrong-lineage binding quarantine, exact first import of a TUI-created session,
+  explicit first-bootstrap intent plus positive-empty snapshot, and explicit **New chat** while other
+  sessions exist;
+- lose each `POST /session` response and reconcile only the write-ahead namespaced metadata marker and
+  typed creation intent; test zero/one/multiple matches and marker durability across server restart;
+- establish and actively drain the SSE overlap before snapshot; inject slow history, high event rate,
+  stream drop, bounded-buffer overflow, snapshot failure, and pre-merge crash, each becoming an
+  explicit non-writable gap rather than silent loss;
+- prove exact caller `msg_*` history/SSE read-back and the retained `noReply:true`, one-incarnation
+  same-ID append behavior; gate model-bearing, concurrent, TUI, and restart variants separately, and
+  forbid automatic retry after a lost `prompt_async` response;
+- replace the OpenCode adapter while an old request is paused both before native forwarding and after
+  possible native acceptance; the new lease stays non-writable until old work is settled or
+  `outcome_unknown` with the binding quarantined;
+- for OpenCode text, compact, interrupt, permission, and future question actions, assert that
+  coordinator admission is only permission to try, a `prompt_async` `204` is only transport receipt,
+  and native history/events/status decide whether, where, and in what order the action applied; prove
+  response-body semantics and source causality separately, retaining `unknown` for abort/compact when
+  no durable causal seam exists, including direct-TUI races and lost responses;
+- race a direct OpenCode TUI action or permission answer against remote-claw, and prove that the
+  OpenCode session's observed order and terminal gate state win without replay, contradiction, or a
+  second inward collaborator;
+- parse the native permission reply boolean, close every outward copy only from a proved terminal gate
+  record, and race child creation/first tool against policy installation;
+- detach an outside collaborator, crash/replace the adapter, and disconnect the front door without
+  aborting a direct-TUI run; separately test explicit interrupt and owned-server shutdown;
+- kill/restart the real native server with an incomplete assistant message and classify it from server
+  incarnation, status, and history without fabricating running or completion;
+- compare legacy `/event` and v2 `/api/event`, pin event-ID/sequence scope and reset across reconnect
+  and restart, and merge a native status snapshot before readiness;
+- retain a pinned real OpenCode TUI plus adapter PTY fixture on one exact `ses_*`; do not count the
+  current second-API-client stand-in as TUI proof, and cover both directions, simultaneous submit/busy
+  behavior, permission first-winner, adapter/front-door restart, and hard server restart;
+- restart tmux only into a binding whose process/transcript lineage is proven; otherwise expose
+  recovery/quarantine rather than a duplicate or silently repointed chat;
+- lose the tmux response after the server applies paste and after it applies Enter; never blindly
+  retry, and classify the write from a pre-send durable attempt plus a correlated native transcript
+  UUID/row rather than terminal-control receipt or text equality;
+- collide a person's partial pane draft with remote paste/Enter and require a proved
+  quiescent/exclusive input boundary or report simultaneous keyboard-plus-remote fidelity unsupported;
+- race tmux capture before the injection call returns, local versus remote permission decisions, and a
+  failed decision-file write; never mislabel origin, ACK failed persistence, or claim a native
+  first-winner without a local answer seam and terminal observation;
+- detach/restart tmux in keep-pane mode with hooks, decision state, transcript cursor, and orphan gates
+  preserved, and prove outside disconnect does not kill the active TUI turn; then map `/clear` to a new
+  logical chat and `/branch` to explicit fork lineage.
 
 ## How to run
 
@@ -129,6 +199,10 @@ about the current A0 implementation:
 (cd packages/clawsec && pnpm test:run)
 (cd packages/cli && pnpm test:run)
 (cd apps/web && pnpm test:run)
+
+# retained pinned native evidence — also runs in CI when its spike changes
+pnpm --filter @remote-claw/codex-multiclient-proof test:run
+pnpm --filter @remote-claw/opencode-native-proof test:run
 
 # app e2e in a real browser (Chromium + WebKit) — also runs in CI
 pnpm --filter remote-claw-web-tests test:app          # LocalBackend

@@ -11,9 +11,11 @@ claude's local transcript JSONL** (capture) and **typing into the pane via `send
 
 > **Scope:** this document describes the shipped compatibility driver. In the selected
 > [client-driven host runtime](client-driven-host-runtime.md), tmux remains a lower-fidelity control
-> adapter but composes with the wrapped engine's private provider façade and network fence. A shared
-> coordinator-ordered chat also makes the raw pane read-only; a directly writable/provider-connected
-> pane is a separate compatibility/debug mode, not the release target.
+> adapter but composes with the wrapped engine's private provider façade and network fence. One person
+> may keep using the real TUI in the pane while remote clients also inject into it, but both paths share
+> one native editor keystream rather than appearing to Claude as peer collaborators. Local pane
+> submissions are observed only after Claude accepts/records them, so attribution is `post_hoc`, and
+> simultaneous writable fidelity remains unsupported without a proved exclusive editor boundary.
 
 **Identity scope.** The shipped driver mints a synthetic remote-claw `Session.id` (`cse_*`) for its
 broker channel and separately controls a tmux pane plus a Claude transcript/session ID. None is an
@@ -212,15 +214,45 @@ for await (const ev of s.followDownstream(gen, () => signal.aborted)) {
 `set-buffer` + **bracketed** `paste-buffer` (`-p`) handles multiline / backticks / special chars
 without a premature submit; the **separate** `send-keys Enter` is what actually submits.
 `settleMs(text)` scales from a 40 ms base with prompt length and caps at 1 s. The paste phase and
-submit phase retry independently until success or abort, so an Enter failure never double-pastes.
+submit phase retry independently until success or abort. That prevents an Enter retry from deliberately
+re-running the paste phase, but it does not make either retry safe when tmux applied the command and
+only its response was lost.
 Prompt/key events are ACKed only after their tmux action succeeds; unsupported/no-op controls are
 ACKed immediately. A permission response is ACKed after its decision callback returns. The current
 callback logs and swallows a decision-file write failure, so that path is not a durable delivery
 receipt even though it prevents a reclaimed stream from replaying the response.
 
+Those are process-level receipts, not native acceptance. A tmux command can take effect and then lose
+its completion response, so a reported paste, Enter, Escape, or `/model` failure can be
+post-dispatch. Blindly retrying such a failure can paste twice, submit twice, interrupt a later turn,
+or apply a model change twice. The selected runtime must write the remote command ID, source,
+pane/process generation, native Claude session ID, transcript identity, and pre-dispatch transcript
+cursor before the first tmux action. A post-dispatch failure remains `outcome_unknown`; it is never
+retried merely because the tmux call threw. For a prompt, the first positive application evidence is
+the resulting native top-level user record and its stable transcript UUID. The runtime atomically
+binds that UUID to the write-ahead command before advancing native acceptance. Text equality, a
+successful `send-keys`, or the relay ACK is not that proof.
+
+There is also only one native input editor. Strict serialization prevents two remote-claw pastes from
+interleaving with each other, but it does not exclude the person from having a partial draft or typing
+while remote-claw pastes and presses Enter. In that race Claude can receive one merged prompt rather
+than two ordered proposals. Shared writable mode therefore needs an explicit single-editor lease or a
+proved native empty-editor/submit seam that preserves the person's draft. Until then, remote input must
+queue or fail as unavailable whenever exclusive editor ownership cannot be proved; pane scraping and
+timing delays are not proof.
+
 An authenticated viewer `end` does not enqueue `end_session`, kill the pane, or close this bridge.
 `HostRcRelay` consumes it locally and only clears open relay permission gates; the pane remains under
 the driver's normal local/host teardown policy.
+
+Wrapper teardown is different today: an external stop, pane-liveness termination, or pump failure
+eventually calls `kill-session`, so the local TUI and any active native turn are destroyed with the
+bridge. The selected runtime separates collaborator detach from native-runtime termination. Ordinary
+detach first fences remote injection, records the exact pane/process/session/transcript state and every
+uncertain attempt, and leaves the pane usable; only an explicit host terminate action kills it. Hook
+scratch and a blocked permission helper remain owned by the surviving runtime until their native
+operation reaches a terminal state. Reattachment must prove the same pane, child process, Claude
+session, transcript, and cursor before it restores a writable bridge.
 
 ### 2.4 Status — a quiet-timer debounce
 
@@ -267,11 +299,26 @@ the answer writes that `updatedInput` into the decision file. The helper re-emit
 hook's `hookSpecificOutput.updatedInput`, which **replaces** the tool input — so claude proceeds with the
 viewer's answers instead of drawing its in-pane picker, matching the MITM driver.
 
+This viewer-only answer path is an as-built limitation, not the target collaboration model for a
+person using the TUI alongside remote-claw. The helper is blocked on its private decision file; the
+current implementation has not proved that a person can answer the same gate through the native TUI
+or that Claude can choose the first of a local and remote answer. Worse, the decision writer catches
+and logs a file-write failure, after which the inject pump ACKs the response and the relay has already
+closed its gate even though the helper may still be blocked forever.
+
+The selected runtime must choose at most one answer among remote-claw's many remote collaborators,
+write that proposal ahead, and then let Claude's native gate state arbitrate it against any direct TUI
+answer. A decision-file failure leaves the gate open or `outcome_unknown`; it cannot be swallowed or
+ACKed as applied. Recovery must read a proved native pending/terminal gate record, or explicitly mark
+the missing evidence as a gap. If the pinned Claude/tmux combination cannot expose the same gate to the
+TUI and provide positive first-winner evidence, shared structured permissions remain unsupported
+rather than being approximated by the private hook.
+
 **Folder trust (mirror on).** Dropping `--dangerously-skip-permissions` also drops the flag's bypass of
 claude's startup *"Do you trust the files in this folder?"* gate — which the PreToolUse hook does NOT
 cover (it's a startup gate, not a tool) and no one is at the detached pane to answer → a hung pane on a
-fresh cwd. So before spawn the driver pre-seeds `projects["<abs realpath cwd>"].hasTrustDialogAccepted
-= true` in `<CLAUDE_CONFIG_DIR or ~>/.claude.json` (`ensureCwdTrusted`, exactly what claude records on
+fresh cwd. So before spawn the driver pre-seeds
+`projects["<abs realpath cwd>"].hasTrustDialogAccepted = true` in `<CLAUDE_CONFIG_DIR or ~>/.claude.json` (`ensureCwdTrusted`, exactly what claude records on
 "trust"): idempotent, preserving (deep-merge), fail-safe (bails rather than clobber an
 unreadable/malformed config), atomic. The pane's `CLAUDE_CONFIG_DIR` is kept coherent with the writer
 (§2.1) so both read the same file. Skipped when the user forwarded their own
@@ -314,10 +361,10 @@ covers the inbound (viewer) path, not the local-paste outbound path. Surfacing l
   length-scaled settle → Enter), `downstreamUserText`, interrupt→Escape and set-model mappings.
 - `packages/cli/src/host/rc/tmux/status.ts` — `StatusTracker` (append-debounce, open-tool suppression,
   injectable clock/timer).
-- `packages/cli/src/host/rc/tmux/driver.ts` — `runTmuxDriver(ctx)` / `tmuxDriver(ctx)`: the lifecycle
-  + the pumps (capture / inject / status / **perm**) + teardown.
-  `capabilities = tmuxCapabilities(mirror)` = `{ structuredPermissions: mirror, status:true,
-  controls:{ interrupt:true, setModel:true, setMode:false, end:false }, attachments:true }` — `mirror`
+- `packages/cli/src/host/rc/tmux/driver.ts` — `runTmuxDriver(ctx)` / `tmuxDriver(ctx)`: the lifecycle,
+  the pumps (capture / inject / status / **perm**), and teardown.
+  `capabilities = tmuxCapabilities(mirror)` =
+  `{ structuredPermissions: mirror, status:true, controls:{ interrupt:true, setModel:true, setMode:false, end:false }, attachments:true }` — `mirror`
   defaults true, so structured permissions are on unless `--rc-tmux-skip-permissions`. interrupt (ESC)
   and set_model (`/model <id>` inject) are honored; set_mode/end have no pane analogue, so the viewer
   disables those controls (#149).
@@ -408,8 +455,7 @@ Prereqs: `tmux -V`; logged-in `claude` (2.1.x); a reachable `--rc-app`; if the b
 Vercel SSO, export `VERCEL_AUTOMATION_BYPASS_SECRET` (host injects it, scrubbed from the child).
 Belt-and-suspenders: `unset CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID`.
 
-1. `RC_LOG=debug RC_LOG_FILE=/tmp/tmux-driver.log node packages/cli/dist/bin.js --rc-app "$RC_APP"
-   --rc-driver=tmux -- --model sonnet` → prints `tmux attach -t rc-cse_<hex>` and stays up. (No pty
+1. `RC_LOG=debug RC_LOG_FILE=/tmp/tmux-driver.log node packages/cli/dist/bin.js --rc-app "$RC_APP" --rc-driver=tmux -- --model sonnet` → prints `tmux attach -t rc-cse_<hex>` and stays up. (No pty
    needed: the TUI is inside tmux.)
 2. Verify real, non-stub, no-MITM: `tmux attach -t rc-cse_<hex>` shows the live TUI; a fresh
    `~/.claude/projects/<slug>/*.jsonl` exists after the first turn. With proxy/CA variables unset in
@@ -447,11 +493,17 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
 4. **Permissions are mirrored by default** (B2, §2.5): an injected PreToolUse hook raises a
    `can_use_tool` gate per tool (`structuredPermissions:true`), fail-closed, with claude's folder-trust
    bit pre-seeded so the pane doesn't hang. `--rc-tmux-skip-permissions` restores the old auto-approve
-   (`--dangerously-skip-permissions`, `structuredPermissions:false`, single-user-trusted).
+   (`--dangerously-skip-permissions`, `structuredPermissions:false`, single-user-trusted). The shipped
+   hook is remote-answer-only, swallows a decision-write failure before the response is ACKed, and does
+   not prove local-TUI/remote first-winner behavior; shared structured permissions are therefore a
+   target gate, not a current native-adjudication guarantee.
 5. **send-keys timing** — strictly serialized inject; the paste phase (set-buffer+paste-buffer) and the
-   submit (Enter) retry **separately** so a transient post-paste failure never double-pastes; retries
-   until the prompt lands or the pane dies. `interrupt` (→ ESC) and `set_model` (→ `/model <id>` inject)
-   are mapped; `set_mode`/`end` have no faithful pane analogue, so the viewer disables those controls (#149).
+   submit (Enter) retry separately, so a submit retry does not deliberately rerun paste. The shipped
+   code retries until success or the pane dies, but a post-dispatch response loss can still duplicate
+   paste or Enter and is unsafe. `interrupt` (→ ESC) and `set_model` (→ `/model <id>` inject)
+   are mapped; `set_mode`/`end` have no faithful pane analogue, so the viewer disables those controls
+   (#149). This protects only failures proved to occur before dispatch. A lost completion after tmux
+   acted is ambiguous and must not be blindly retried.
 6. **Transcript discovery/rotation** — discovery excludes pre-spawn inodes and gates on creation time;
    the tailer keys on `dev:ino:birthtime` (rotation-safe even under inode reuse) and opens-then-fstats
    (no stat/open race). Two residual limits remain (see below).
@@ -461,10 +513,13 @@ runs plain claude; `tmux` absent ⇒ clear "could not start remote control: tmux
    remote-claw-logical-chat ↔ pane/process/transcript binding, and broker-side history remains subject
    to the configured backend's durability. `/clear` or an unproven replacement must not reuse a future
    logical-chat ID; `/branch` requires distinct fork lineage, while `/compact` preserves identity only
-   when native evidence proves it.
+   when native evidence proves it. Remote origin is currently matched by text after submit; the target
+   writes origin and the exact native binding/cursor before dispatch, then binds the observed native
+   user UUID. Identical text is never correlation evidence.
 8. **tmux dependency** — clear error if absent; unit tests need no tmux.
 9. **One driver per wrapper process** (RelayCore is per-launch); pane-liveness ends the bridge when
-   claude exits / the pane closes.
+   claude exits / the pane closes. Current wrapper teardown also kills a still-live pane. The target
+   keeps the pane on collaborator detach and kills it only through an explicit native-runtime policy.
 
 ### 7.1 Session-id pin (deterministic first attach) + hook-based rotation
 
@@ -496,8 +551,8 @@ to a regular file (so directories/FIFOs are excluded; a symlink to a regular fil
 **On by default** (disable with `--rc-no-session-hook` or `RC_SESSION_HOOK=0`). The driver injects a
 Claude Code **SessionStart hook** via an **inline `--settings`** (no file written to the user's project), MERGED with any
 `--settings` the user already passed (their settings + other hooks preserved; our SessionStart hook
-appended). The hook appends each payload — which carries the **exact, already-resolved `transcript_path`
-+ `session_id` + `source`** — as one NDJSON line to a per-session sentinel file the driver tails.
+appended). The hook appends each payload — which carries the exact, already-resolved
+**`transcript_path`, `session_id`, and `source`** — as one NDJSON line to a per-session sentinel file the driver tails.
 
 Live-verified (claude 2.1.x): inline `--settings` ingests the hook and it FIRES (even under `-p`),
 delivering the absolute transcript path. So with the hook on, discovery reads the sentinel — **exact, no
@@ -507,6 +562,15 @@ an **unambiguous** rotation signal, unlike newest-in-cwd; `/compact` stays in th
 the hook never fires (e.g. `--bare`
 disables hooks — verified: the sentinel stays empty but the pinned `<uuid>.jsonl` is still written), the
 driver **falls back** to the `--session-id` pin discovery above. Tracked in issue #101.
+
+Following a new file is only capture continuity in the shipped driver; it is not permission to keep
+the same future logical chat. The selected runtime durably records the transition's old and new native
+session IDs, transcript identities, source, and last committed cursors before the coordinator relies on
+the new binding. `/clear` creates a new logical chat, `/branch` creates a new logical chat with parent
+lineage, and `/compact` retains the current chat only when the hook/native transcript proves the native
+session identity stayed in place. A missing hook event or ambiguous rotation leaves the new native
+conversation locally usable but unbound until explicit adoption; it never silently repoints the old
+logical chat or receives that chat's queued remote proposals.
 
 **Merging with the user's `--settings` (edge cases).** The merged `--settings` is inserted **before** any
 `--` separator in the user's args (a token after `--` is a literal positional, which would silently drop
@@ -526,6 +590,13 @@ line was typed locally, so the driver tags it `local_prompt:true` and the relay 
 transcript. Nested sub-agent user lines are never promoted to top-level local prompts. The correlation
 is text-based, so a simultaneous identical local and remote prompt can still be misattributed for
 display; it does not change what Claude executes.
+
+This ledger is display-only and cannot support restart or adjudication. The target command journal is
+written before pane injection and names the remote source plus exact native session/transcript/cursor.
+When capture observes the resulting top-level native user UUID, it atomically records that UUID as the
+command's application evidence. A direct-TUI UUID with no proved pending remote attempt remains a local
+native observation. If editor collision, restart, or transport failure prevents unique correlation,
+the remote attempt stays `outcome_unknown` and is not retried or relabeled by text.
 
 ---
 
