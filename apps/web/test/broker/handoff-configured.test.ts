@@ -7,7 +7,7 @@ import { FileDbLocator } from "../../lib/broker/sqlite-multi";
 
 // handoffConfigured() must FAIL CLOSED on Vercel: a file: handoff store is per-instance, so a PUT and its
 // claim would land on different serverless instances and never match. handoffConfig() hard-fails on Vercel
-// EVEN when RC_SQLITE_DIR is set — that env only acknowledges an ephemeral per-SESSION store; the one-time
+// EVEN when RC_SQLITE_DIR is set — that env only acknowledges an ephemeral per-CHANNEL store; the one-time
 // handoff specifically requires a shared cloud (Turso) db. Off-Vercel, a local file: store is fine. The
 // route relies on this: handoffConfigured() false → the endpoint reports unavailable instead of silently
 // storing a blob no claim can ever recover.
@@ -30,7 +30,7 @@ beforeEach(() => {
     delete env[k];
   }
   dir = mkdtempSync(join(tmpdir(), "rc-handoff-cfg-"));
-  // Acknowledge an ephemeral per-session location — this satisfies the FileDbLocator CONSTRUCTOR guard so
+  // Acknowledge an ephemeral per-channel location — this satisfies the FileDbLocator CONSTRUCTOR guard so
   // the tests isolate the handoff-SPECIFIC fail-closed in handoffConfig(), not the per-session one.
   env.RC_SQLITE_DIR = dir;
 });

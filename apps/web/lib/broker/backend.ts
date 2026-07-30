@@ -1,32 +1,33 @@
 import type { WireFrame } from "@remote-claw/clawsec";
 
-// The durable pub/sub backend behind the two broker routes (§3.2/§6A/§6B). A *channel* is addressed
-// by a derived token — the per-identity BUS (`bus:<id>`, session_announce broadcasts) or a
+// The pluggable pub/sub port behind the two broker data-plane routes (§3.2/§6A/§6B). A *channel* is
+// addressed by a derived token — the per-identity BUS (`bus:<id>`, session_announce broadcasts) or a
 // PER-SESSION stream (`sess:<id>:<sid>`, turn/control frames) — and is an ORDERED, RESUMABLE stream
-// of ciphertext frames. The broker is a dumb relay: it validates the §8 envelope shape but never
-// decrypts, so every adapter moves opaque WireFrames and forges nothing.
+// of ciphertext frames. Optional maxSeq/frameCount methods feed the shared durability/sequence cursor
+// and host-only inbound-fence cursor. The broker is a dumb relay: it validates the §8 envelope shape
+// but never decrypts, so every adapter moves opaque WireFrames and forges nothing.
 //
-// This interface is the seam that lets the broker run on different durable runtimes — Vercel
-// Workflows in production, per-session libSQL (local file or Turso Cloud), or an in-process
+// This interface is the seam that lets the broker run on different runtimes — Vercel Workflows in
+// production, durable per-channel libSQL (local file or Turso Cloud), or an in-process
 // LocalBackend for `next dev` / tests — without the routes (or any client, which only ever speaks
 // plain HTTP/SSE) knowing which is underneath.
 
-/** What a publisher may put on a channel: a wire frame, or the teardown sentinel (cap-roll/§6B). */
+/** What a publisher may put on a channel: a wire frame, or the explicit teardown sentinel (§6B). */
 export type RelayPayload = WireFrame | { __close: true };
 
 /** The teardown sentinel narrows a payload: completing a channel closes its stream and frees the
- *  token for a fresh start (the Vercel cap-roll handoff; a no-op end-of-life on other backends). */
+ *  token for a fresh start (an explicit close; a no-op end-of-life on other backends). */
 export function isClose(p: RelayPayload): p is { __close: true } {
   return (p as { __close?: boolean }).__close === true;
 }
 
 /**
  * Thrown by publish() ONLY when the channel completed/disposed BETWEEN resolving it and delivering
- * the frame (a concurrent __close or Vercel cap-roll). The relay route maps this to 409 — the client
- * re-posts the same (deterministic-msg_id) frame, which the fresh channel dedups. Any OTHER publish
- * failure (e.g. the channel never came up) must NOT be a 409: it propagates as a 500 so the client
- * fails fast instead of retry-looping a hard outage. (Keeping these distinct preserves the pre-port
- * behavior, where only the resume step was inside the route's 409 catch.)
+ * the frame (for example, a concurrent explicit close). For Workflow this is the SDK's typed
+ * HookNotFound resume race, not an arbitrary resumeHook exception. The relay route maps this to 409
+ * so the client re-posts the same deterministic-msg_id frame, which the fresh channel dedups. Any
+ * OTHER publish failure must NOT be a 409: it propagates as a 500 so the client fails fast instead of
+ * retry-looping a hard outage.
  */
 export class PublishConflictError extends Error {
   constructor(message: string) {
@@ -39,7 +40,7 @@ export class PublishConflictError extends Error {
 }
 
 /** The result of a publish: whether this call brought the channel into existence, and the adapter's
- *  id for it (a Vercel run id, a LocalBackend channel id, a per-session sqlite db id). Both are surfaced
+ *  id for it (a Vercel run id, a LocalBackend channel id, a per-channel SQLite db id). Both are surfaced
  *  on the relay route's JSON reply (`created`, `runId`) — preserving the client's RelayResult shape. */
 export interface PublishResult {
   created: boolean;
@@ -50,19 +51,23 @@ export interface BrokerBackend {
   /**
    * Resume-or-start the token's channel and deliver one payload (a frame, or the close sentinel).
    * The FIRST publisher to a token brings the channel into existence; later publishes resume it.
-   * Throws if the channel completed/disposed between resolve and deliver (the route maps that to a
-   * 409 so the client retries) — a delivery must never be silently dropped (it would strand a
-   * subscriber's ordered stream on a permanent gap).
+   * Throws PublishConflictError only if the channel completed/disposed between resolve and deliver
+   * (the route maps that typed race to 409 so the client retries). Other publish failures preserve
+   * their hard-failure type. A delivery must never be silently dropped because that would strand a
+   * subscriber's ordered stream on a permanent gap.
    */
   publish(token: string, payload: RelayPayload): Promise<PublishResult>;
 
   /**
-   * The channel's durable frame stream from `startIndex` (default 0 = from the beginning; a negative
-   * value reads the recent window — e.g. -N for the last N frames — then streams new ones, §6B), or
-   * `null` if no channel exists for the token (⇒ the route replies 200-empty, so an absent identity
-   * is indistinguishable from a silent one). Subscribing never CREATES a channel — only publish does.
-   * Frames arrive in publish order; the stream stays open (live) until the channel closes or the
-   * caller cancels.
+   * The channel's ordered, resumable frame stream from `startIndex` (default 0 = from the beginning; a
+   * negative value is resolved relative to the current tail — e.g. -N selects the last N frames
+   * currently present — then streams new ones, §6B), or `null` if no channel exists for the token
+   * (⇒ the route replies 200-empty, so an absent identity is indistinguishable from a silent one).
+   * Subscribing never CREATES a channel — only publish does. Frames arrive in publish order; the
+   * stream stays open (live) until the channel closes or the caller cancels. Retention differs by
+   * backend: an unbounded process-local log, a persistent absolute-index Workflow run stream that
+   * hits a fixed event-cap cliff (the current adapter has no eviction or rollover), or a durable
+   * SQLite log with shared durability/sequence and host-only inbound-fence cursors.
    */
   subscribe(token: string, startIndex?: number): Promise<ReadableStream<WireFrame> | null>;
 
@@ -72,8 +77,10 @@ export interface BrokerBackend {
    * column — never decrypts, so E2E is preserved. Lets a RESTARTED host resume `seq = max + 1` instead
    * of restarting at 0 and colliding with the durable frames (which a viewer's orderer would then drop
    * as duplicates — the durable-backend face of #36). OPTIONAL: only a durable backend (sqlite)
-   * implements it; ephemeral/capped backends omit it, and the host simply starts fresh at 0 (their old
-   * frames have already rolled off, so there is nothing to collide with).
+   * implements it; recovery-cursorless backends omit it, and the host treats that profile as
+   * non-durable and starts fresh at 0 rather than claiming recoverable sequence continuity. In
+   * particular, Workflow's stored stream can still contain old frames even though this host cursor
+   * is unavailable; those frames have not rolled off a bounded window.
    */
   maxSeq?(token: string): Promise<number | null>;
 
@@ -88,7 +95,19 @@ export interface BrokerBackend {
   /** Optional retention hook for durable backends that store sealed frames at rest. */
   sweep?(retainMs: number): Promise<number>;
 
-  /** Optional: drop the retention index/catalog itself, after a short-lived scope's sessions are swept
-   *  (per-session sqlite on a preview deployment). Lets the dev/CI cleanup leave nothing behind. */
+  /** Optional: drop the retention index/catalog itself, after a short-lived scope's channels are swept
+   *  (per-channel SQLite on a preview deployment). Lets the dev/CI cleanup leave nothing behind. */
   dropIndex?(): Promise<void>;
+}
+
+export type DurableRecoveryBackend = BrokerBackend &
+  Required<Pick<BrokerBackend, "maxSeq" | "frameCount">>;
+
+/**
+ * Durable host recovery is one atomic capability: outbound sequence recovery without the matching
+ * inbound publish-order fence could replay historical mutations after a host restart. Keep the two
+ * optional interface methods paired at this boundary so a future partial adapter fails closed.
+ */
+export function hasDurableRecovery(backend: BrokerBackend): backend is DurableRecoveryBackend {
+  return backend.maxSeq !== undefined && backend.frameCount !== undefined;
 }

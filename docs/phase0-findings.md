@@ -256,8 +256,9 @@ transparent native-passthrough proposal are superseded. The selected
 [client-driven host runtime](client-driven-host-runtime.md) keeps inner Claude on remote-claw's private
 synthetic RC/API façade and uses the client API only from a separate remote-claw-owned outward
 worker/app connector. Native Claude owns its conversation and execution state; provider event
-IDs/sequences are outward mappings, while the coordinator orders and correlates commands. This has not
-changed current `--rc-app` behavior.
+IDs/sequences are outward mappings, while each remote-claw server orders and correlates only proposals
+from its own direct remote collaborators. Claude remains the final arbiter of direct-TUI/remote
+interleaving and acceptance. This has not changed current `--rc-app` behavior.
 
 While capturing the worker protocol via MITM, I discovered the **remote-client
 side of Remote Control is a plain, directly-callable REST/SSE API** on

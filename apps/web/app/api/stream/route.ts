@@ -4,8 +4,8 @@ import { channelToken } from "../../../lib/channel";
 import { json, sseEmptyResponse, sseResponse } from "../../../lib/http";
 
 // §3.2 GET /api/stream — subscribe to a channel as Server-Sent Events. Resolves the derived token
-// (bus, or per-session with ?session=<sid>) to its run's durable out-stream and pipes frames back;
-// resume by ?startIndex (negative = recent window, §6B). HookNotFound ⇒ nothing connected ⇒ a 200
+// (bus, or per-session with ?session=<sid>) to its backend's ordered, resumable frame stream and pipes
+// frames back; resume by ?startIndex (negative = tail-relative starting point, §6B). An absent channel yields a 200
 // empty event-stream, so an offline/absent identity is indistinguishable from a silent one.
 export const maxDuration = 300;
 

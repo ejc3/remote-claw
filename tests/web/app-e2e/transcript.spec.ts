@@ -11,7 +11,7 @@ import { expect, test } from "./fixtures";
 //
 // E2E_BACKEND (set by app-e2e.sqlite.config.ts) flips the broker via the ?backend= switch for the
 // browser AND the host (the fixture forwards it), so the IDENTICAL assertions run against LocalBackend
-// (default) or per-session SQLite/Turso — proving the abstraction is swappable per-request.
+// (default) or per-channel SQLite/Turso — proving the abstraction is swappable per-request.
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 

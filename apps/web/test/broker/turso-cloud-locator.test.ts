@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { FileDbLocator } from "../../lib/broker/sqlite-multi";
 import { selectLocatorFromEnv, TursoCloudDbLocator } from "../../lib/broker/turso-cloud-locator";
 
-// The cloud locator is the "storage = Turso Cloud" half of the single per-session backend (the file
+// The cloud locator is the "storage = Turso Cloud" half of the single per-channel backend (the file
 // locator is the other half). It can't be integration-tested without a real Turso account, so its
 // Platform-API logic — name derivation, create-if-absent, exists, and env-based selection — is verified
 // against a mocked fetch. The live path is proven on a real deploy, like the `vercel` backend.
@@ -156,7 +156,7 @@ describe("TursoCloudDbLocator", () => {
   // awaitReady — the create→serve propagation guard. After the Platform-API create returns, the new db's
   // libSQL endpoint can briefly 404 (or its host not resolve) until it propagates; awaitReady probes the
   // just-opened client until it serves. (This is the fix for the production "SERVER_ERROR: HTTP 404" on a
-  // fresh per-session db — verified here with a fake client, like the rest of the cloud locator.)
+  // fresh per-channel db — verified here with a fake client, like the rest of the cloud locator.)
   const fakeClient = (execute: () => Promise<unknown>): Client =>
     ({ execute, close: () => {} }) as unknown as Client;
   // The exact @libsql/client shape: LibsqlError(code SERVER_ERROR) wrapping HttpServerError(status 404).
@@ -228,15 +228,15 @@ describe("TursoCloudDbLocator", () => {
       url: "libsql://rc-prod-index-myorg.turso.io",
       authToken: "group-tok",
     });
-    expect(loc.idFor(TOKEN_A)).not.toBe("rc-prod-index"); // a session db can't collide with the index db
+    expect(loc.idFor(TOKEN_A)).not.toBe("rc-prod-index"); // a channel db can't collide with the index db
   });
 
-  it("the scope namespaces BOTH the session dbs and the index — environments/deployments don't overlap", () => {
+  it("the scope namespaces BOTH the channel dbs and the index — environments/deployments don't overlap", () => {
     const fetchImpl = makeFetch(() => ({ status: 200 })).fetchImpl;
     const prod = new TursoCloudDbLocator(opts(fetchImpl));
     const preview = new TursoCloudDbLocator({ ...opts(fetchImpl), scope: "pr-a1b2c3d" });
     // Same token, different scope ⇒ DIFFERENT db names and DIFFERENT index dbs — the preview deployment's
-    // sweep (walks `rc-pr-a1b2c3d-index`) can never list, let alone drop, prod's `rc-prod-` session db.
+    // sweep (walks `rc-pr-a1b2c3d-index`) can never list, let alone drop, prod's `rc-prod-` channel db.
     expect(preview.idFor(TOKEN_A)).toMatch(/^rc-pr-a1b2c3d-s-[0-9a-f]{16}$/);
     expect(preview.idFor(TOKEN_A)).not.toBe(prod.idFor(TOKEN_A));
     expect(preview.indexConfig().url).toBe("libsql://rc-pr-a1b2c3d-index-myorg.turso.io");

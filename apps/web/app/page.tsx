@@ -733,7 +733,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   const [busError, setBusError] = useState<string | null>(null);
   const busFailures = useRef(0);
 
-  // Tail the bus → live session list. Viewer.announces and this state fold share the same ordering rule
+  // Tail the bus → session list. Viewer.announces and this state fold share the same ordering rule
   // (incarnation start + per-incarnation sequence, with a legacy sent_at fallback), so replay/reordering
   // cannot roll presence backward. The generator owns its own retry and never throws; it reports transport
   // health via the callback. We count CONSECUTIVE failures and only raise the banner past a threshold, so
@@ -962,9 +962,9 @@ function Transcript(props: {
   const phase = connected ? (announce?.phase ?? "idle") : "idle";
   const needs = connected ? (announce?.needs ?? false) : false;
 
-  // Resolved permissions, folded from the LOGGED permission_resolved frames (#56) — this is the source
-  // of truth that survives a reload (PermissionRow's local optimistic decision does not). The host
-  // replays these on catch_up, so a previously-answered request renders resolved, never re-prompting.
+  // Resolved permissions, folded from replayable permission_resolved frames (#56) — this is the source
+  // of truth that survives a reload (PermissionRow's local optimistic decision does not). A durable
+  // broker replays them directly; on a non-durable backend the host replays them on catch_up.
   const resolved = useMemo(() => {
     const m = new Map<string, "allow" | "deny">();
     for (const msg of messages) {
@@ -1079,10 +1079,9 @@ function Transcript(props: {
       streamKey.current = { viewer, sessionId };
     }
     const ac = new AbortController();
-    // Always request the FULL replay: transcript() opens a fresh FrameOrderer (expects seq 0) reading the
-    // run from the start, so on a revive a partial `since` would leave it permanently gapped on a backend
-    // whose live window has rolled past seq 0. The host's #log is the source of truth; msgId dedup makes
-    // the full re-read flash-free.
+    // Always request the FULL replay: transcript() opens a fresh FrameOrderer that expects seq 0. A
+    // durable subscription replays the broker's retained frame history; on a non-durable backend the
+    // request asks the host to replay its process-local #log. msgId dedup makes either re-read flash-free.
     void viewer.requestHistory(sessionId, 0).catch(() => {});
     (async () => {
       try {
@@ -2106,9 +2105,10 @@ function PermissionRow({
   // would both pass a `busy`-based check and send conflicting grants. The ref closes that window.
   const deciding = useRef(false);
 
-  // The host-logged resolution (replayed on catch_up) is the source of truth that survives a reload,
-  // so it WINS over the local optimistic `decision`. On a fresh load `decision` is null but `confirmed`
-  // is set → the row renders resolved instead of re-prompting with live buttons (#56/#57).
+  // The replayed resolution is the source of truth that survives a reload, so it WINS over the local
+  // optimistic `decision`. It comes from broker history on a durable profile or host catch_up on a
+  // non-durable one. On a fresh load `decision` is null but `confirmed` is set → the row renders resolved
+  // instead of re-prompting with live buttons (#56/#57).
   const confirmed = resolved.get(req.requestId) ?? null;
   const effective = confirmed ?? decision;
 
@@ -2201,7 +2201,7 @@ interface ParsedPermission {
  * AskUserQuestion (#42): render each multiple-choice question + options; on submit, send the chosen
  * labels back as `updatedInput.answers` keyed by question text, with the request's `tool_use_id` — the
  * exact shape real claude expects (verified live via --rc-trace). Single-select picks one label;
- * multiSelect toggles an array. Survives reload via the host-logged `resolved` map (#56).
+ * multiSelect toggles an array. Survives reload via the replayed `resolved` map (#56).
  */
 function QuestionCard({
   req,
@@ -2229,7 +2229,7 @@ function QuestionCard({
   const [sentAnswers, setSentAnswers] = useState<Record<string, string | string[]> | null>(null);
   const deciding = useRef(false);
 
-  // host-logged answer survives reload; the local optimistic value covers the gap before it lands.
+  // The replayed answer survives reload; the local optimistic value covers the gap before it lands.
   const resolvedBehavior = resolved.get(req.requestId) ?? sentBehavior;
   const done = resolvedBehavior != null;
   // What was answered, for the resolved card: the logged frame (survives reload) wins, else the local

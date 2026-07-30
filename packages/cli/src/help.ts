@@ -13,14 +13,16 @@ app origin, which uploads a one-time handoff, noted below):
   --rc-identity      ensure this host's secret exists and print it once (create-once, idempotent).
                      Re-run with --rc-confirm <identity_id> to REPLACE it: mint a new, unrelated
                      identity and abandon the old one (DESTRUCTIVE; not a true rotation and NOT a
-                     revocation — a leaked old secret keeps working until you re-onboard every
-                     device). Needs a terminal unless --rc-force-noninteractive; --rc-keep-old
-                     keeps the old secret as a live backup.
+                     revocation — a leaked old secret keeps working on retained old routes).
+                     Stop/restart every running remote-claw process so it stops using the captured
+                     old identity. Needs a terminal unless --rc-force-noninteractive;
+                     --rc-keep-old keeps the old secret as a live backup.
   --rc-show-secret   re-reveal this host's secret (warns first; --rc-yes skips the prompt)
   --rc-pass          print a viewer PASS for this machine: a credential that can read + steer this
                      machine's sessions but is NOT the master secret (can't reveal it or reset the
-                     machine). Hand it to a phone/browser (paste or QR); revoke by resetting the
-                     machine. The pass IS the output here, so it prints in every mode.
+                     machine). Hand it to a phone/browser (paste or QR). There is no per-pass
+                     revocation: reset moves future service to a new identity but copied old passes
+                     remain valid on retained old routes. The pass IS the output in every mode.
   --rc-file <path>   use a specific secret file (default: $XDG_STATE_HOME/remote-claw/secret;
                      or set REMOTE_CLAW_SECRET_FILE)
   --rc-json          machine-readable output for an rc action (never prints the master secret)

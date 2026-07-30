@@ -3,7 +3,7 @@ import { type DbLocator, FileDbLocator } from "./sqlite-multi";
 import { selectLocatorFromEnv } from "./turso-cloud-locator";
 
 // The server half of the ephemeral one-time-handoff (docs/ephemeral-handoff.md). A zero-knowledge,
-// one-time, short-TTL blob store: one small table, SEPARATE from the per-session frame dbs and the cold
+// one-time, short-TTL blob store: one small table, SEPARATE from the per-channel frame dbs and the cold
 // index. It holds ONLY public one-way hashes + an opaque AES-256-GCM blob it cannot read:
 //
 //   handoff(id, proof_hash, ct, expires_at)
@@ -15,7 +15,7 @@ import { selectLocatorFromEnv } from "./turso-cloud-locator";
 // The claim is a SINGLE atomic statement (DELETE ... RETURNING) gated on id AND proof_hash, so (a) exactly
 // one of two concurrent claims wins, (b) a wrong/absent proof deletes nothing (an `id`-only edge/log observer
 // cannot burn it), and (c) the row is burned-on-touch even when expired (then the ct is discarded). This is
-// the per-session-SQLite single-writer/atomic discipline (sqlite-multi.ts) applied to a one-time row.
+// the per-channel-SQLite single-writer/atomic discipline (sqlite-multi.ts) applied to a one-time row.
 //
 // Expiry has THREE reapers (so an unclaimed row's at-rest lifetime tracks its TTL): claim-time burn-on-touch,
 // a dedicated frequent cron (sweepExpired), and an opportunistic DELETE batched into every PUT (put()).

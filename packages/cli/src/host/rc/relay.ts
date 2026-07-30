@@ -5,19 +5,23 @@
 //
 // Two concurrent pumps run for the session's life:
 //   • OUTBOUND — tail the session's upstream (assistant/result the worker POSTs back), allocate a
-//     transcript `seq`, log it (for catch_up), seal, and POST to the session channel.
+//     transcript `seq`, seal, and POST to the session channel; non-durable mode also logs it for
+//     host-served catch_up.
 //   • INBOUND  — tail the session channel for client frames: a `user` prompt is acked + echoed (so
 //     every device's transcript shows it) and injected into claude (pushUserInput); a `catch_up`
-//     replays the log; a `permission` grant answers a worker control_request.
+//     replays the host log only in non-durable mode; a `permission` grant answers a worker
+//     control_request.
 //
-// catch_up has two regimes (see `#durable`): on a capped/ephemeral backend the host keeps an in-memory
-// `#log` and re-posts it on a viewer `catch_up`; on a DURABLE-log backend (per-session SQLite) the broker
-// retains every frame, so a viewer's subscribe(startIndex:0) replays the full history on its own — the host
-// builds no `#log` and ignores `catch_up`. One log, mediated by the broker.
+// catch_up has two regimes (see `#durable`): when the broker reports non-durable (Workflow because it
+// has a fixed run cap with no rollover/recovery cursors; Local because it is process memory), the host
+// keeps an in-memory `#log` and re-posts it on a viewer `catch_up`. On a DURABLE-log backend
+// (per-channel SQLite), the broker retains every frame, so a viewer's subscribe(startIndex:0) replays
+// full history on its own; the host builds no `#log` and ignores `catch_up`.
 //
-// The transcript `seq` is allocated solely here (§6: clients never assign order), and a bounded
-// `#seen` set dedups the at-least-once inbound stream. Mirrors HostRelay's broker discipline, but
-// decoupled into the event-driven shape RC needs (a turn's response is async, tool turns interleave).
+// The transcript `seq` is allocated solely here (§6: clients never assign order), and an
+// incarnation-long, unbounded `#seen` set dedups the at-least-once inbound stream. Mirrors HostRelay's
+// broker discipline, but is decoupled into the event-driven shape RC needs (a turn's response is
+// async, tool turns interleave).
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -85,8 +89,8 @@ const MAX_INFLIGHT_ATTACHMENT_GROUPS = 4;
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
 const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
 
-/** Out-post retry budget for a transient broker error (409 = the run cap-rolled between resolve and
- *  publish — the "window rolling over"). A `seq` is allocated BEFORE the post, so a dropped post would
+/** Out-post retry budget for a transient broker error (409 = the channel was disposed or replaced
+ *  between resolve and publish). A `seq` is allocated BEFORE the post, so a dropped post would
  *  strand the viewer on a permanent gap; retrying the SAME frame (deterministic msg_id → viewer
  *  dedups) closes that hole. */
 const POST_RETRIES = 6;
@@ -378,12 +382,13 @@ export class HostRcRelay {
   #seq = 0;
   /** Inbound at-least-once dedup set (msg_id). Grows with the count of DISTINCT client frames this
    *  session (prompts + catch_ups + permission grants) — modest, human-paced, and freed when the
-   *  session ends. Must NOT be size-bounded: #tailInbound re-reads from index 0 on each reconnect, so
-   *  an evicted-then-re-read `user` msg_id would re-inject a duplicate prompt into claude. */
+   *  session ends. Must NOT be size-bounded: #tailInbound re-reads from this incarnation's fixed
+   *  start index on each reconnect (index 0 in non-durable mode), so an evicted-then-re-read `user`
+   *  msg_id would re-inject a duplicate prompt into claude. */
   readonly #seen = new Set<string>();
   /** In-memory replay log — content frames plus unordered state frames such as permission_resolved,
    *  replayed on a viewer `catch_up` (§6/§16). Left EMPTY when `#durable`: a durable-log backend
-   *  (per-session SQLite) keeps every frame, so its own subscribe(0) replays the full history and the host need not
+   *  (per-channel SQLite) keeps every frame, so its own subscribe(0) replays the full history and the host need not
    *  hold (or re-post) a copy. The "one log, mediated by the broker" model — the broker IS history. */
   readonly #log: { recordKind: string; seq: number | null; msgId: string; text: string }[] = [];
   /** True when the broker reports its EFFECTIVE backend is a durable log: the host skips building `#log`
@@ -422,12 +427,11 @@ export class HostRcRelay {
   #lastPresenceKey = "";
   #lastAnnounceAt = 0;
 
-  /** Latched when a seq-allocating post fails. A failed post has burned a transcript seq that can never
-   *  be filled (it was allocated before the post, and never logged), so retrying the inbound stream
-   *  would only allocate seqs PAST the burned one — widening a permanent mid-stream gap on a STILL-LIVE
-   *  session (the worst adversarial-review finding). Instead, #fatal makes the relay tear down (serve()
-   *  couples the pumps): the session ends and the viewer reads disconnect, rather than limping on behind
-   *  a hole. (A durable gap may remain for a reconnecting viewer — §12 boundary, broker-windowing #36.) */
+  /** Latched when durable cursor recovery fails or a must-succeed publish cannot be recorded. A failed
+   *  sequenced post burns a transcript seq that cannot be filled; a failed unordered
+   *  permission_resolved post must prevent the corresponding worker side effect. In either case
+   *  #fatal makes serve() tear down the coupled pumps instead of retrying into inconsistent state.
+   *  (A durable seq gap may remain for a reconnecting viewer — §12 recovery boundary, #36.) */
   #fatal = false;
 
   readonly #trace: Tracer;
@@ -582,7 +586,7 @@ export class HostRcRelay {
 
   /**
    * POST one out-message (postMessage chunks a large payload into seq-sharing parts, §8). Retries a
-   * transient 409 (the channel run cap-rolled mid-publish) with bounded backoff: the frame's msg_id
+   * transient 409 (the channel was disposed or replaced mid-publish) with bounded backoff: the frame's msg_id
    * is deterministic, so a re-post is deduped by the viewer — but a DROPPED post would leave a seq
    * gap that stalls every viewer's orderer forever, so we must not let one slip.
    */
@@ -594,7 +598,8 @@ export class HostRcRelay {
         await this.#client.postMessage(header, body);
         return;
       } catch (e) {
-        // 409 = run rolled → retry (§6B). Anything else, or out of budget, is terminal.
+        // 409 = typed channel disposal/replacement race → retry. Anything else, or out of budget,
+        // is terminal.
         if (BrokerError.is(e) && e.status === 409 && attempt < POST_RETRIES) {
           this.#trace.debug("post 409 → retry", { kind: recordKind, seq, attempt: attempt + 1 });
           await new Promise((r) => setTimeout(r, POST_RETRY_BASE_MS * 2 ** attempt));
@@ -629,10 +634,10 @@ export class HostRcRelay {
     this.#trace.trace("frame sealed", { kind: recordKind, seq, bytes: text.length });
   }
 
-  /** Run a seq-allocating publish; on failure latch #fatal (a transcript seq is now burned) and
-   *  propagate. serve()'s coupling + #pumpInbound's #fatal check then tear the relay down rather than
-   *  retrying (which would allocate seqs past the hole). Keeps the two pumps' allocate-before-post
-   *  discipline but makes a burned seq end the session instead of silently stranding a live one. */
+  /** Run a must-succeed publish and latch #fatal on failure. For sequenced content, failure burns a
+   *  transcript seq; for unordered permission_resolved state, failure means the worker side effect
+   *  must not proceed without its durable evidence. serve()'s coupling + #pumpInbound's #fatal check
+   *  tear the relay down rather than continuing from inconsistent state. */
   async #fatalOnThrow<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
@@ -843,18 +848,19 @@ export class HostRcRelay {
 
   /** INBOUND: tail the session channel for client frames and drive the worker. Re-subscribes if the
    *  stream ends — the session run may not exist yet (the relay serves before the first client
-   *  prompt) or may have cap-rolled (the "window rolling over"); `#seen` dedups the re-read. */
+   *  prompt) or may have been explicitly closed/replaced; `#seen` dedups the re-read. */
   async #pumpInbound(signal: AbortSignal): Promise<void> {
     this.#trace.debug("pumpInbound start");
     while (!signal.aborted) {
       try {
         await this.#tailInbound(signal);
       } catch (e) {
-        // A seq-burning publish failure latches #fatal; retrying would re-subscribe and allocate seqs
-        // PAST the burned one — widening the mid-stream gap on a live session. So propagate and let
-        // serve() tear the relay down. Only a NON-fatal error (stream not up yet / cap-roll) is the
-        // retryable case the loop exists for. The message is local-only (this machine holds the
-        // transcript), clipped by the formatter.
+        // A must-succeed publish or cursor-recovery failure latches #fatal; continuing could widen a
+        // burned seq gap or apply a permission decision without durable evidence. Propagate and let
+        // serve() tear the relay down. Any other #tailInbound exception restarts the subscription;
+        // lifecycle failures (stream not up yet or explicitly closed/replaced) are the expected case.
+        // The error stays in local diagnostics: the human formatter clips it, while JSON file capture
+        // is intentionally unclipped.
         if (this.#fatal) throw e;
         this.#trace.warn("inbound tail threw → retry", {
           error: (e as Error)?.message ?? String(e),
@@ -1130,7 +1136,8 @@ export class HostRcRelay {
       return; // AEAD open failed or unparseable → reject, never drive a control action
     }
     // Drop a STALE control frame: a malicious broker can withhold a valid frame and replay it much
-    // later. The client stamps `expiry`; past it, the verb is a no-op (matches catch_up's freshness).
+    // later. The client stamps `expiry`; past it, the verb is a no-op. The separate catch_up branch
+    // currently does not enforce its stamped expiry; docs/protocol.md §11 records that boundary.
     if (typeof body.expiry === "number" && body.expiry < Date.now()) {
       this.#trace.warn("control verb dropped (stale)", { kind });
       return;

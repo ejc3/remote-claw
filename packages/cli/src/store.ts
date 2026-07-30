@@ -432,12 +432,14 @@ export interface RotatedIdentity {
  * best-effort scrub the old secret (default) or keep it as a `0600` `<path>.old` backup (still a
  * live credential). The NEW token is durable
  * on disk BEFORE the old is replaced, and the canonical path is only ever the old or the new
- * secret (atomic rename) — never missing or garbage. The old identity and all its spaces are gone.
+ * secret (atomic rename) — never missing or garbage. Legitimate future processes move to the new
+ * identity after restart; copied old credentials remain valid on retained old routes.
  *
  * Secure-delete is best-effort: an in-place overwrite cannot guarantee erasure on CoW / SSD /
- * log-structured / journaling filesystems — the real guarantee is that a new S is a new identity,
- * so the old key set no longer addresses any live bus. Caller must have a verified secret (this
- * calls loadSecret, which rejects symlink/insecure/corrupt/absent up front).
+ * log-structured / journaling filesystems — the guarantee is only that a new S creates a new identity
+ * which does not reveal the old or new key set. It does not revoke the old key set or tear down its
+ * broker routes. Caller must have a verified secret (this calls loadSecret, which rejects
+ * symlink/insecure/corrupt/absent up front).
  */
 export async function rotateIdentity(
   secretPath: string,

@@ -3,7 +3,7 @@ import type { Client } from "@libsql/client";
 // A COLD enumeration index for retention at unlimited scale. Turso's list-databases is a flat,
 // un-paginated response and exposes no last-activity timestamp, so a fleet-wide "list + probe each db"
 // sweep is O(fleet) and can't scale. This index is our own scalable, ordered, paginable catalog of the
-// per-session databases — written ONCE when a session's db is created and deleted when it's dropped, so
+// per-channel databases — written ONCE when a channel db is created and deleted when it is dropped, so
 // it is NEVER on the hot publish path (no per-frame writes, no write hotspot). It stores ONLY public
 // routing metadata (the already-public db id + connection url + a creation timestamp) — no ciphertext,
 // no keys — so it preserves the zero-knowledge model.
@@ -26,7 +26,7 @@ const INDEX_DDL = [
 
 const CURSOR_KEY = "sweep_cursor";
 
-/** A libSQL-backed catalog of per-session databases (id, connection url, created_at) + a sweep cursor. */
+/** A libSQL-backed catalog of per-channel databases (id, connection url, created_at) + a sweep cursor. */
 export class SessionIndex {
   readonly #client: Client;
   #migrated: Promise<void> | undefined;
@@ -57,7 +57,7 @@ export class SessionIndex {
     return this.#migrated;
   }
 
-  /** Record a session's db on create. Idempotent (a reopened gen re-adds harmlessly). */
+  /** Record a channel's db on create. Idempotent (a reopened gen re-adds harmlessly). */
   async add(id: string, url: string, createdAt: number): Promise<void> {
     await this.#ensure();
     await this.#client.execute({
@@ -66,7 +66,7 @@ export class SessionIndex {
     });
   }
 
-  /** Forget a session's db (on drop). */
+  /** Forget a channel's db (on drop). */
   async remove(id: string): Promise<void> {
     await this.#ensure();
     await this.#client.execute({ sql: "DELETE FROM sessions WHERE id = ?", args: [id] });

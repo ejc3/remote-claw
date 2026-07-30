@@ -5,11 +5,13 @@ import { createHook, getWritable } from "workflow";
 // inbound hook and re-emits every published frame onto its durable resumable out-stream. The
 // per-identity BUS (`bus:<id>`, session_announce broadcasts) and a PER-SESSION stream
 // (`sess:<id>:<sid>`, turn/control frames) are the SAME workflow under different tokens — the broker
-// is a dumb ciphertext relay that never holds a key, so it forges nothing. Stream writes bypass the
-// per-run event cap (§12), so high-volume session turn frames stay cheap.
+// is a dumb ciphertext relay that never holds a key, so it forges nothing. Stream payload bytes bypass
+// event-log storage, but every publish still creates a hook receipt and a journaled emit step, so every
+// frame in either direction consumes the run's event budget (§12).
 //
-// __close is a control sentinel for the cap-roll / teardown path (§6B): completing the run closes
-// its stream and disposes the hook, freeing the token for a fresh `start()` under the same name.
+// __close is an internal explicit-close / teardown primitive (§6B): completing the run closes its
+// stream and disposes the hook, freeing the token for a fresh `start()` under the same name. No shipped
+// production component currently invokes it as a pre-cap rollover controller.
 //
 // RelayPayload + isClose are kept LOCAL here (not imported from lib/broker/backend, the canonical
 // home the other adapters use): this file is compiled by the Workflow DevKit into a separate steps
@@ -47,5 +49,5 @@ export async function relayWorkflow(channelToken: string) {
     await emit(payload);
   }
   await closeStream();
-  // Return -> run completes -> hook auto-disposes -> token frees (cap-roll handoff, §6B).
+  // Return -> run completes -> hook auto-disposes -> token frees (explicit-close primitive, §6B).
 }

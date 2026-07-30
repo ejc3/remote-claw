@@ -9,16 +9,19 @@ What we verify, how, and where. The system is a zero-knowledge, E2E-encrypted re
 | --- | --- | --- | --- |
 | **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking — pure functions, no network | Node + WebCrypto |
 | **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough | Node, mock fetch / fixture |
+| **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
+| **Retained native proof (OpenCode)** | [`spikes/opencode-native/verify-evidence.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, and same-ID `noReply:true` append behavior within one incarnation | Node over checked JSON evidence; no provider/model |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
-| **App e2e (real browser)** | `tests/web/app-e2e/*.spec.ts` (Playwright) | a real **Chromium** drives the BUILT viewer against a real Next server + broker — the full RC turn, the one-time-handoff pairing, the three drivers' capability profiles (mitm/tmux/opencode, via capability presets — not real tmux/opencode hosts), and the bus-unreachable banner; **WebKit** runs the iOS-Safari foreground-revive spec; the RC turn re-runs on the per-session SQLite backend | Playwright (Chromium + WebKit), built prod server |
+| **App e2e (real browser)** | `tests/web/app-e2e/*.spec.ts` (Playwright) | a real **Chromium** drives the BUILT viewer against a real Next server + broker — the full RC turn, the one-time-handoff pairing, the three drivers' capability profiles (mitm/tmux/opencode, via capability presets — not real tmux/opencode hosts), and the bus-unreachable banner; **WebKit** runs the iOS-Safari foreground-revive spec; the RC turn re-runs on the per-channel SQLite backend | Playwright (Chromium + WebKit), built prod server |
 | **Proof (real claude)** | `apps/web/test/prove/*.prove.test.ts` (gated `RC_PROVE_REAL_CLAUDE=1`) | a **real, logged-in `claude`** driven end-to-end through the encrypted broker — single turn and stateful multi-turn | spawns real `claude`, network |
 | **Exploratory** | manual real-`claude` runs (`tests/web/cross-mode-verify.mjs`) | a LIVE session driven through the real viewer for any bridged driver: type a prompt, assert a real assistant reply (real LLM round-trip) carrying a needle, screenshot | real, on demand |
 
-CI keeps the unit + integration layers fast and network-free, and on every PR that touches the
+CI keeps the unit + integration layers fast and network-free, verifies retained native evidence when
+its spike or verifier changes, and on every PR that touches the
 web/CLI/crypto paths also runs the **app-e2e** layer (Chromium + WebKit; the RC turn re-runs on
-per-session SQLite) plus the encryption-stress suites (`.github/workflows/web-e2e.yml`, path-filtered);
-the real-claude proofs are env-gated so they never gate CI but are run on demand. Each PR passes
-`biome` + `tsc` + `vitest` + the e2e suite before merge.
+per-channel SQLite) plus the encryption-stress suites (`.github/workflows/web-e2e.yml`, path-filtered);
+the real-claude proofs are env-gated so they never gate CI but are run on demand. Every PR must pass
+the relevant path-filtered checks plus the repository's `biome`, `tsc`, and `vitest` gate before merge.
 
 ## Coverage map — the 26 scenarios → proof
 
@@ -90,19 +93,211 @@ the real-claude proofs are env-gated so they never gate CI but are run on demand
 These are design gates for [Client-driven Host Runtime](client-driven-host-runtime.md), not claims
 about the current A0 implementation:
 
-- persist distinct remote-claw logical-chat, native binding/conversation, private transport, broker
-  channel, and outward-provider IDs, and assert that none is silently aliased;
+- persist a distinct `(collaborationServerId, logicalChatId)` canonical chat, native
+  binding/conversation, private transport, broker channel, and outward-provider IDs, and assert that
+  none is silently aliased; chat route/row/alias/cache keys additionally include `identity_id`, while
+  the separate discovery-bus route/cursor is `(identity_id, collaborationServerId, scope_bus, null)`
+  and typed **New chat** uses the distinct
+  `(identity_id, collaborationServerId, server_control, null)` route;
+- verify byte-exact cross-runtime A1 vectors for canonical field encoding, scope-bus/server-control/chat route hashes,
+  the exact version-2 JSON frame/AAD/base64url/tag contract, normalized transport-frame digest,
+  chat-scoped content/control/meta KDFs plus distinct server-control inbound/outbound KDFs, message encryption, stable part/whole-message digest
+  encodings, exact accepted/action-result/chat-creation-result payloads and key order, exact
+  broker-route IDs and sealed-generation
+  manifest digests, and initial/rotated Ed25519 scope-certificate
+  chains; reject alternative encodings, null rules, algorithms, wrapped keys, padded base64, and A0/A1
+  cross-version opens; reject quote, backslash, control, non-ASCII, and alternative-escape forms in
+  exact result string fields; require exact result `v` token `1`, and reject signed, leading-zero,
+  fractional, exponent, or over-safe-range result number tokens; apply the same
+  sign/leading-zero/fraction/exponent/over-range rejection to all
+  outer-frame JSON numbers before conversion; reject duplicate JSON members before object construction and vector every
+  versioned kind-to-plane mapping, including distinct A1 `action_result` and `permission_resolved`
+  semantics; vector every allowed and rejected kind/direction/sequence/client-ID header combination
+  and its invalid-position cursor/quarantine result; cover cold-chain verification,
+  rollback/fork/skipped-generation/key-ID-rebinding rejection and atomic current-certificate
+  compare-and-swap; also vector the exact broker generation/cursor ordering and successor rules;
+  include the four onboarding key-commitment formulas and exact attestation payload, per-key
+  substitution, canonical bundle wire/checksum, host-output signature preimage/digest/verification,
+  signer key/certificate/generation/sequence AAD fields, unsigned output, route/signature transplant,
+  stale/burned signing reservations, duplicate/equivocating global signer sequences, signed rotation
+  cutoffs, certificate-update order/fork, historical reattestation publication/retrieval/equivocation,
+  and current versus retired/revoked-key behavior;
 - restart Claude, explicitly resume the same native UUID, accept a re-bridge of the persisted private
-  `cse_*`, bind the new worker epoch to the new native/coordinator epochs, and keep one logical
-  chat/web row with continuing RC and broker sequences;
+  `cse_*`, bind the new worker epoch to the new native/coordinator epochs, and keep one server/chat
+  scope and machine-aware web row with continuing RC and broker sequences;
 - when the same proven Claude UUID creates a replacement private `cse_*`, fence the old worker and
-  retain the logical chat, web channel, command order, and outward Anthropic binding without duplicate
-  turns;
+  retain the server/chat scope, machine-aware web channel, command order, and outward Anthropic
+  binding without duplicate turns;
 - reject wrong UUID/project/product adoption and stale worker/coordinator/presence writes without
   matching by title or text;
+- retain sanitized exact-version Claude fixtures with binary/schema/probe hashes; cover worker ACK
+  before/no native application, native application followed by lost ACK and reconnect, and the exact
+  join among private-RC command UUID, worker echo/receipt, transcript row/UUID, provider exchange, and
+  resulting native turn;
+- race Claude TUI and remote permission/question answers with native cancellation, interrupt, tool
+  completion, answer-delivery loss, and disconnect; keep remote choice, worker delivery, and native
+  terminal outcome separate and close gates only from native evidence;
+- detach an outside Claude collaborator/connector and replace the private-RC epoch while a child turn,
+  gate, or inference request is active; keep the child/TUI/private RC/inference path alive and hold the
+  replacement non-writable until old work is terminal or unknown, quarantined, and contained;
 - crash before and after binding commit, native write-ahead, native observation, broker cursor
   advance, outward publish, and provider ingress ACK; assert exactly-once decisions where provable and
   quarantine every ambiguous delivery;
+- lose a web-input `accepted` result, retry the complete exact logical frame with the same semantic
+  `msg_id` and a fresh authenticated `delivery_attempt_id`, and require one command plus delivery of
+  the stored result before and after coordinator restart; race the retry while the first decision is
+  `assembling`, `awaiting_order`, and `deciding` and allocate no second command/projection sequence;
+  redeliver one committed physical cursor across a crash and require the same deterministic
+  observation/result-delivery records and output attempt ID; after part-body compaction, lose and
+  replay the result delivery and require the retained stable result ID/exact payload;
+- request the same stored projection through A1 catch-up twice in one broker generation; require a
+  fresh persisted delivery attempt per catch-up request, reuse that attempt for an exact outbox retry,
+  preserve semantic `msg_id`/`seq`, and fold one viewer projection without broker suppression;
+- reuse one semantic `msg_id` with a changed whole-message digest and require collision quarantine
+  before cursor advance; for multipart input, test partial/exact/full replay, changed sibling parts,
+  candidate and byte/count limits, durable incomplete tombstone expiry, late parts, sealed-generation
+  rollover/empty-generation manifests, and crash at every part/cursor/decision/result-outbox boundary;
+  place complete proposal B after the first position of incomplete proposal A and prove B cannot enter
+  decision/order allocation before A completes or expires; retry one identical delivery attempt within
+  a generation and after rollover and require its one original cursor with no new semantic result;
+  reject changed normalized bytes under that route-wide attempt/part key; retry one part of a formerly
+  complete multipart attempt after rollover and require the same original position with no result
+  delivery or candidate completion; then have the hostile broker replay that valid part at a fabricated
+  new cursor and require one `exact_transport_retry` with no result delivery/candidate change; keep a
+  semantic collision blocked until audited recovery; crash after a generation seals but before its
+  final frame is consumed, then resume the durable cursor,
+  drain through the stored frame count, and only then consume its successor;
+  compact only a checkpointed discovery scope-bus frame body after recovery leases pass, then retry
+  the old attempt/part unchanged and changed; require the retained route-wide tombstone to return the
+  original cursor or a collision, never a new position. Attempt chat- or server-control-body
+  compaction and require rejection because cold semantic/result recovery retains those routes from
+  genesis;
+- interleave announcements for chats A and B on one scope bus across rollover and require one
+  route-wide bus cursor/manifest sequence, distinct from both chat routes; inject a malformed bus
+  position and require only the bus actor to quarantine while both chat actors continue, then clear it
+  only through explicit bus-position recovery;
+- interleave web, official-client, automation, and nested-server `new_chat` sources through the one
+  server-wide common command sequencer; require each proven-new event to receive one command and signed
+  common result before exactly one terminal-native or nested-management effect. Exact replay links the
+  same command/result, changed bytes collide, and direct OpenCode/Codex/Claude adapter calls without an
+  admitted common command composite FK fail;
+- crash after common decision reservation but before signing, and after signature persistence but
+  before signed-result finalization. Abort/burn one signing reservation and require a higher
+  `preparationGeneration` for the same result version and byte-identical frozen decision; race two
+  finalizers. Before finalization there must be no source ACK, protocol result delivery, projection
+  intent, native/nested attempt, or effect gate. After recovery, require exactly one immutable signed
+  common result, one causal source outbox, and exactly one selected terminal-native or
+  nested-management executor arm. The terminal arm must create zero nested-management attempts; the
+  nested arm must create zero outer OpenCode binding, native creation reservation, or OpenCode
+  front-door call;
+- exercise the server-control route from generation-zero genesis with null chat, its distinct address,
+  token, dedicated server-control input/output KDFs, typed `new_chat`/`chat_creation_result` allowlist,
+  and target allocation. Require `new_chat` to be inbound with null `seq`, a client ID, 0/1 chunk
+  shape, and null host-authentication fields. Require `chat_creation_result` to be outbound with
+  `seq=command_seq`, the echoed client ID, stable result `msg_id`, 0/1 chunk shape, and every certified
+  host-output field non-null. Before AEAD open, reject wrong route, machine/server/null-chat scope,
+  direction, header nullability, client-ID presence/correlation, chunk shape, host signature, and
+  bus/chat/control transplant. Require a wrong server-control key to fail at open. After open, reject
+  non-canonical payload bytes/key order, `seq`/`command_seq`, header/payload result-ID, decision/target,
+  or source-result correlation mismatches before semantic dispatch or target allocation. Expire or
+  collide an incomplete server-control candidate and require quarantine with no fabricated command
+  sequence or result;
+- create through a server-scoped nested-management binding before any inner chat edge exists; verify
+  stable target outside-binding namespace/event identity, authenticated acyclic management lineage,
+  one write-ahead physical child, target common result, target-ready/root proof, two-party edge
+  installation, and mutual live lease before the outer chat becomes ready. Race reconnect, reject
+  cycle/hop-limit proposals with an ordered result, and require no second inward send after started or
+  ambiguous delivery. Require hop zero's source command/result/target to equal the origin common
+  result, and every later hop's source tuple to composite-FK the preceding target server's verified
+  command/result; attempt an intermediary command/result splice and reject it before target command
+  allocation. Vector the management live handshake's exact exporter label/context/output digest,
+  source/target nonces and coordinator epochs, transport epoch, live TLS peer certificates,
+  side-specific signed attestations, deterministic handshake/lease IDs, and two current pointer
+  installs. Substitute any transcript field/signature or hold only one pointer current and require
+  non-writability. Replace the management lease/capability snapshot before send and require the exact
+  signed management continuation with unchanged binding, target, request/receipt schemas, semantic
+  request, and `newChatCapabilityDigest`. Substitute an old/new lease, snapshot ID/digest, target,
+  capability, or positive-never-started proof and reject. Create the physical child and its exact
+  `armed@1` nested-dispatch authorization together. Prove that the final send CAS consumes it while
+  moving both child and command-wide gate to `started` before any byte, whereas pre-send abandonment
+  alone may revoke it to `revoked@2`, mark the child `never_started`, and leave the gate
+  `(never_started,null)`. Sign the exact version-one positive-never-started payload with the current
+  certified source-server key and reserved signer purpose, then verify its command/result/decision,
+  semantic/physical/transport attempt, route/target/topology, prior lease/snapshot/capability,
+  request, authorization ID/handle digest, revocation version/journal sequence, and literal assertion.
+  Exercise current-key, permitted retired-key, and historical-reattestation verification; reject a
+  revoked/too-new/unreattested signer, bad purpose/schema/encoding/signature, or any substituted
+  binding. Install the successor only by CASing the still-revoked predecessor, exact signed evidence,
+  still-never-started child/gate, and current successor lease/snapshot, creating one fresh `armed@1`
+  authorization while leaving the gate never-started. Crash/race before and after each CAS and prove
+  at most one child can send; a consumed, started, uncertain, or partially populated evidence tuple
+  can never continue, and no transition rewrites `started` to `never_started`;
+- send ordinary `user_text` through two nested servers and require a common command at each server,
+  one edge capability/semantic attempt, immutable physical transport children, stable source event,
+  verified target result chain, and one terminal OpenCode attempt. Reorder/fork target results,
+  replace the edge lease before/after send, verify the exact signed capability-continuation payload and
+  the same authorization-ledger and signed positive-never-started contract before a replacement
+  child. Require the continuation's evidence schema/digest and the predecessor child/gate's
+  schema/ref/digest tuple to agree, install exactly one fresh armed successor while the common gate
+  remains never-started, and let only that successor's final send CAS name itself on the gate. Reflect the outward observation
+  inward, and require quarantine or deduplication with exactly one native mutation;
+- create every route with generation-zero genesis; require mutating chat cold start to replay from
+  genesis or a retained cursor and reject a broker that starts at `N`, omits genesis, or breaks a
+  manifest successor. For the discovery bus only, prove the separate signed checkpoint over a
+  broker-sealed tip, including non-empty and empty generations, persisted effective successor across
+  restart, stale/open/forked checkpoint rejection, rollover, and the prohibition on using it for chat
+  or semantic state;
+- redeliver one cursor with identical bytes and require its stored disposition; equivocate at that
+  cursor with valid-A/valid-B and valid/malformed bytes across restart and require durable alternate
+  digest evidence, route quarantine, and no parse/mutation/progress; transplant valid frames across
+  machine, server, equal-ID cross-server chat, different chat, bus↔control↔chat routes, and null↔non-null
+  chat coordinates and require invalid positions on the externally selected route before KDF/open;
+- replay an exact sealed-generation manifest, then change its count/state/successor and separately
+  try to reopen it and present an index at or beyond its sealed frame count; require idempotency only
+  for the exact duplicate and a durable manifest-equivocation gap/quarantine with raw observation
+  digest for every changed form across restart, without rewriting the accepted manifest or cursor
+  order;
+- reconnect/replace the web client and coordinator, then reveal unseen pre-boundary ciphertext; require
+  the same deterministic web source namespace; reject an attempted in-place namespace reset while old
+  A1 keys/routes remain live; attempt tombstone GC after ordinary retention, local chat closure, and
+  machine reset, and require all three to fail because selected A1 has no broker-enforced route
+  revocation and copied bearer/key material may remain valid;
+- admit one multipart `attachment` through each supported source path and require the exact common
+  `remote-claw/command-payload/attachment/v1` payload, contiguous ordered version-one item records,
+  item-vector count/digest, strict filename/media/size rules, and every decoded-content ref/length/
+  digest to recompute. Vector absent-caption canonical null separately from a present empty string and
+  reject any adapter that conflates them. Require the target family capability to name that same common schema and its
+  proved translator/read-back contract; adapter-shaped JSON, source-base64 spelling, a substituted
+  item/ref/digest/order/count, or `unsupported_recognized` payload cannot receive an admitted result.
+  For the nested-source path, require the selected edge family to hash both the distinct common
+  payload schema and wire-request schema, then transmit the exact portable payload-transfer bytes:
+  common payload bytes plus every canonical item-record byte and decoded content byte. Make every
+  source-local ref unavailable at the target and require successful target-local rematerialization;
+  omit, reorder, add, or change an item/content byte or either schema and require rejection before
+  target source-event normalization.
+  For the valid A1 case require one viewer-projection sequence, one exact `accepted` result, one user
+  attachment projection, one file-write/native attempt, and native outcome adjudication independent
+  of that result. Replay the full exact attachment under a fresh delivery attempt and require only
+  stored-result redelivery, then change one byte under the same semantic ID and require collision
+  quarantine before any second file write or native attempt;
+- interleave journaled host output and fresh catch-up output before inbound proposals across crash and
+  rollover; require the current fenced signing reservation, certified host signature, exact durable
+  outbox/frame match, and signer-sequence index to advance those physical positions without source
+  adjudication. Forge signed-looking announce/accepted/projection frames with a copied pass, omit the
+  signature, transplant a real signature across bus/chat/server, race key rotation, and conflict a
+  local multipart outbox insert; each must block before render or mutation, while an exact signed replay
+  folds once;
+- for multipart native output, catch-up, accepted, and action-result deliveries, crash after broker
+  acceptance but before the publish response/local receipt; require the outbox retry to reuse the exact
+  persisted header/salt/nonce/ciphertext/tag bytes and original cursor, never re-seal under the same
+  attempt ID;
+- place duplicate/missing/wrong-type header JSON, bad encoding/tag, unknown-kind, and wrong-plane
+  frames before valid input;
+  require one immutable invalid-position gap and terminal no-mutation cursor disposition per frame,
+  keep the valid proposal buffered/non-writable across restart, and release it only through the explicit
+  current-epoch invalid-frame recovery transition;
+  after large part bodies are compacted, replay a changed sibling and the full message to prove the
+  retained per-part digest vector and full-lifetime result/tombstone still prevent a second command;
 - replay one provider event before and after connector restart, credential rotation, forced
   outside-binding incarnation, and history/cursor overlap; assert one command across a continuous
   source-event namespace, and deliver old history after a proven namespace reset while still linking
@@ -117,10 +312,303 @@ about the current A0 implementation:
 - crash before/after namespace-transition install, cross-incarnation lookup, observation
   classification, canonical source-event insertion, and `command.proposed`; assert recovery of one
   recorded branch and no semantic ACK/cursor advance for collision/ambiguous input;
-- restart one Codex app server with several threads and preserve the paired ChatGPT host, projects,
-  logical-chat mappings, and sibling isolation;
-- restart OpenCode/tmux only into a binding whose server/process/transcript lineage is proven; otherwise
-  expose recovery/quarantine rather than a duplicate or silently repointed chat.
+- restart one Codex app-server with several threads while preserving exactly one native remote-claw
+  bridge, the paired ChatGPT host, projects, managed top-level logical-chat mappings, child lineage,
+  and sibling isolation without duplicating an official chat;
+- crash that Codex bridge while the app-server/TUI survive, require native `ConnectionClosed` handling
+  and subscription cleanup before replacement initialization, reject stale writes/responses, then
+  rebind the managed top-level chats through exactly one new bridge `ConnectionId`;
+- overlap two official Codex streams and another remote-claw collaborator on one managed chat, then
+  exercise first join, non-final leave, last aggregate leaver, reconnect, and cleanup; preserve
+  per-stream lifecycle while emitting zero or one fenced native subscription transition per change;
+- concurrently reuse official request IDs and process/watch handles, then prove bridge-wide remapping,
+  exact response/error routing, tombstones, and source-specific cleanup;
+- restart OpenCode only into a binding whose server/session lineage is proven, subscribe before
+  snapshot, and preserve exactly one remote-claw bridge into the native session; otherwise expose
+  recovery/quarantine rather than a duplicate or silently repointed chat;
+- under one constant `identity_id`, create server A/chat X bound to `ses_A` and server B/chat X bound
+  to `ses_B`; deliberately reuse the same source-local semantic `msg_id` but require distinct web
+  namespaces derived from the two server scopes, then require independent
+  adapter leases, ingress/result/native-attempt rows, projection sequences, machine-aware
+  cache/channels, restart recovery, and OpenCode-native adjudication with no cross-binding lookup,
+  delivery, observation, or result. Transplant server A's namespace/frame onto server B and reject it
+  before adjudication;
+- fail closed on discovery error and never adopt “most recent”; separately test exact existing-binding
+  reattach, missing/wrong-lineage binding quarantine, exact first import of a TUI-created session,
+  explicit first-bootstrap intent plus positive-empty snapshot, and explicit **New chat** while other
+  sessions exist. Race first-bootstrap against direct-TUI create/import/switch/clear/fork/archive/
+  unarchive under the one workspace transition barrier and require at most one first session; explicit
+  later creates remain allowed. Crash with the bootstrap claim and dispatch still `not_started` and
+  require recovery to resume only the exact original reservation/authorization. Exercise explicit
+  pre-send abandonment and require one atomic `reserved → quarantined`,
+  `claimed → inapplicable` transition while the dispatch/gate remain never-started; reject a
+  `claimed → available` transition, a successor reservation, and any use of the abandoned
+  authorization. Require the last pre-byte CAS to make `claimed → consumed`, which is irreversible.
+  Reject any unclassified TUI operation that can change top-level
+  identity, active selection, or discovery availability before it reaches the private listener;
+- lose each `POST /session` response and reconcile the exact write-ahead marker plus expected typed
+  creation-intent digest through the retained canonical two-field metadata ref/digest. Enumerate all
+  same-marker candidates before intent filtering: zero remains uncertain; exactly one binds only when
+  its intent equals the reservation and its canonical metadata recomputes; wrong-intent,
+  noncanonical/extra metadata, and multiple matches quarantine. Require the reconciliation record to
+  retain both expected values, and test their durability across server restart. A stale, incomplete,
+  gap, or non-linearly-proved successor discovery snapshot cannot reconcile or bind, while the same
+  marker on distinct session IDs must remain visible for `quarantine_many`; a marker-only match never
+  binds. For a different native incarnation, require the original snapshot's pre-dispatch signed
+  open/read store coordinate plus a typed predecessor-stop/fence and exclusive-successor-open
+  no-reset/no-fork handoff. Clone the store, copy its embedded identity, leave the predecessor handle
+  open, add a parallel writer, reset/fork the continuity registry, and omit or alter each proof field;
+  every case must become `cross_incarnation_unproved`/`lineage_unproved` with no bind;
+- establish and actively drain the SSE overlap before snapshot; inject slow history, high event rate,
+  stream drop, bounded-buffer overflow, snapshot failure, and pre-merge crash, each becoming an
+  explicit non-writable gap rather than silent loss. Delay a pre-snapshot event in transport until
+  after the apparent drain and require a proved sequence watermark, same-stream barrier event, or
+  atomic-store boundary before `complete`; legacy no-cursor SSE alone stays a gap;
+- prove exact caller `msg_*` history/SSE read-back and the retained `noReply:true`, one-incarnation
+  same-ID append behavior; gate model-bearing, concurrent, TUI, and restart variants separately, and
+  forbid automatic retry after a lost `prompt_async` response;
+- run an OpenCode A2 vertical slice through the common A1 ingress actor across
+  decision/outbox/native-attempt crashes, broker rollover, and exact A1-input replay through a fresh
+  broker delivery while native recovery retains the one original `NativeDeliveryAttemptRecord`; a
+  crash before `delivery.started` must eventually permit exactly one `prompt_async`, while every crash
+  after `delivery.started` permits at most one send and must produce either exact caller-`msg_*`
+  read-back of one native user message with the expected part cardinality/fingerprints or
+  `outcome_unknown` plus binding quarantine; stored-result replay must add no native send, and
+  extra/mismatched native parts are a native collision/gap rather than one accepted attempt;
+- explicitly abandon terminal `user_text` before dispatch and require one atomic quarantine of the
+  original native attempt, dispatch, and command gate with one exact abandonment schema/ref/digest
+  triple, no start/receipt/read-back, no native send, and no terminal replacement or continuation.
+  Race dispatch in both orders, crash on both sides, replay exactly, corrupt every precondition, and
+  require all-or-nothing state without downgrade. With no committed record, restart must resume only
+  the same attempt; process exit alone never implies abandonment. Require null terminal
+  `positiveNeverStartedSchemaId`, reject this local record as nested continuation evidence, and prove
+  the otherwise-current binding can still admit a distinct authenticated source event;
+- interleave web, official-client, automation, and nested-server chat proposals against the same
+  OpenCode binding. Every proven-new source event must receive one common command and signed result;
+  only an admitted `{user_text}` command may create one terminal OpenCode attempt, while rejected
+  unsupported families create none. Race those attempts with the direct TUI and require the projected
+  applied order to follow OpenCode history/events rather than coordinator or source arrival order;
+- pin the current immutable OpenCode binding/incarnation/attachment capability snapshot in the A1
+  decision and native attempt; race proof downgrade/withdrawal and adapter upgrade at decision, claim,
+  restart, and replay. Require missing/stale snapshots to reject, preserve a started attempt's
+  historical read-back schema without making it writable for a new command, and forbid generic
+  attachment admission from bypassing the OpenCode family gate;
+- place OpenCode behind four runtime-owned front-door audiences—TUI, binding adapter, server creation,
+  and internal observer—and compare the pinned TUI directly versus through its front door. Generate
+  and attest the complete wrapper allowlist with audience/auth-handler/binary identities; reject every
+  unlisted method/path/query/body/Upgrade before the private listener. Prove exact credential-redacted
+  synthetic reads for every real-TUI startup/active route, and pinned unsupported responses for
+  provider/config mutations. Reject raw access, an unclassified third client, a second TUI,
+  stale/concurrent wrappers, and a valid adapter credential aimed at the wrong `ses_*`, child, or
+  permission. Spawn an OpenCode tool and require exact-process denial of the raw private OpenCode
+  listener plus TUI, adapter, observer, creation, provider-façade control, and inference sockets.
+  Crash before the last-hop dispatch CAS and recover the one stored send. After that CAS, require at
+  most one forward and exact native read-back or `outcome_unknown` quarantine, never a retry; contain
+  old endpoints and forwarded requests before lease replacement;
+- normalize OpenCode slash commands before the common decision. In selected A2, the only candidates
+  for writability are server `{new_chat}` and binding `{user_text}`: typed `/compact`, blank input, `/clear`,
+  `/model`, `/context`, interrupt, permission/question answers, attachments, and every other unproved
+  family receive a stored rejected `action_result` with no generic `accepted`, user projection,
+  native attempt, or `summarize` call. Reject raw-as-user bypass, redeliver only the stored result on
+  exact replay, collide changed bytes, and keep each family unsupported until its own causal/recovery
+  proof lands;
+- replace the OpenCode adapter while an old request is paused both before native forwarding and after
+  possible native acceptance; the new lease stays non-writable until old work is settled or
+  `outcome_unknown` with the binding quarantined;
+- for OpenCode text—and future compact, interrupt, permission, and question capabilities before they
+  are enabled—assert that
+  coordinator admission is only permission to try, a `prompt_async` `204` is only transport receipt,
+  and native history/events/status decide whether, where, and in what order the action applied; prove
+  response-body semantics and source causality separately, retaining `unknown` for abort/compact when
+  no durable causal seam exists, including direct-TUI races and lost responses;
+- keep OpenCode attachments non-writable until a retained native fixture proves exact file-part
+  request, history/event read-back, and replay behavior; before that proof, authenticate/parse the
+  proposal and deterministically reject it with one stored `action_result`, no `accepted`, projection
+  sequence/intent, file write, or native attempt; exact replay only redelivers the rejection and changed
+  bytes collide; once enabled, run the exact common attachment manifest/item/content-digest and
+  accepted/result/collision gate and prove that no OpenCode JSON/file-part translation can bypass the
+  common-schema or adapter-capability checks;
+- race a direct OpenCode TUI action or permission answer against remote-claw, and prove that the
+  OpenCode session's observed order and terminal gate state win without replay, contradiction, or a
+  second inward collaborator;
+- parse the native permission reply boolean, close every outward copy only from a proved terminal gate
+  record, and race child creation/first tool against policy installation;
+- detach an outside collaborator, crash/replace the adapter, and disconnect the front door without
+  aborting a direct-TUI run; separately test explicit interrupt and owned-server shutdown;
+- kill/restart the real native server with an incomplete assistant message and classify it from server
+  incarnation, status, and history without fabricating running or completion;
+- compare legacy `/event` and v2 `/api/event`, pin event-ID/sequence scope and reset across reconnect
+  and restart, and merge a native status snapshot before readiness;
+- retain a pinned real OpenCode TUI plus adapter PTY fixture on one exact `ses_*`; do not count the
+  current second-API-client stand-in as TUI proof, and cover both directions, simultaneous submit/busy
+  behavior, permission first-winner, adapter/front-door restart, and hard server restart;
+- retain a separate sanitized full OpenCode A2 release fixture containing the exact generated
+  front-door manifest/classification/registration-attestation vectors, real-TUI route trace,
+  read/redaction and unsupported-response policies, observer linearization/filter evidence, creation
+  marker/restart evidence, provider/process fence, and canonical bytes behind every digest. Keep the
+  current 1.17.5 marker/message-ID proof labeled narrow;
+- drive the provider façade with a pinned native request-ID extraction schema; replay the same
+  namespace/ID and digest across façade and inference-connector restart and require one inference
+  attempt/response stream, then change bytes under the ID and require collision before upstream send.
+  Prove the coordinate is retry-stable and never reused for distinct requests throughout the native
+  incarnation; a tuple that proves only retry stability remains non-writable. Crash after write-ahead
+  but before first provider byte and require recovery to decrypt the retained exact canonical request,
+  verify its envelope/schema/plaintext digest, and send those bytes rather than reconstructing them.
+  Replace the inference lease before send, after possible upstream receipt, and mid-stream; allow a
+  fresh child only with positive never-started evidence or a proved resume cursor for the same upstream
+  request, never a second model request. Require replacement leases to repeat the incarnation's façade,
+  namespace, extraction schema, and uniqueness-proof digest; a semantics change must close/fence the
+  old incarnation and advance to a new one so an old retry cannot enter a fresh namespace;
+- restart tmux only into a binding whose process/transcript lineage is proven; otherwise expose
+  recovery/quarantine rather than a duplicate or silently repointed chat;
+- lose the tmux response after the server applies paste and after it applies Enter; never blindly
+  retry, and classify the write from a pre-send durable attempt plus a correlated native transcript
+  UUID/row rather than terminal-control receipt or text equality;
+- collide a person's partial pane draft with remote paste/Enter and require a proved
+  quiescent/exclusive input boundary or report simultaneous keyboard-plus-remote fidelity unsupported;
+- race tmux capture before the injection call returns, local versus remote permission decisions, and a
+  failed decision-file write; never mislabel origin, ACK failed persistence, or claim a native
+  first-winner without a local answer seam and terminal observation;
+- detach/restart tmux in keep-pane mode with hooks, decision state, transcript cursor, and orphan gates
+  preserved, and prove outside disconnect does not kill the active TUI turn; then map `/clear` to a new
+  logical chat and `/branch` to explicit fork lineage.
+
+### OpenCode signed-adjudication release matrix
+
+The OpenCode A2 release gate is the following exact matrix. Every pre-dispatch validation or
+substitution failure asserts that no byte reaches the private OpenCode listener. A negative discovered
+after the dispatch CAS asserts no duplicate send and no inferred native effect without the selected
+positive evidence:
+
+- Prove one canonical `user_text` payload vector from each of web A1, official-client, automation, and
+  nested-server input. The source-independent payload bytes/digest must match; the source-specific
+  event, command, decision, and signed-result vectors must recompute exactly. Interleave all four
+  sources at one ready boundary and require the server-wide `(readyAtJournalSeq, commandId)` order.
+  Substitute the source parser/normalizer capability entry, verification digest, source epoch,
+  payload schema, payload digest, or event fingerprint under the same source ID and require collision
+  or rejection before command admission.
+- Exercise the exact effect foreign key
+  `(collaborationServerId, commandId, admittingCommandResultId,
+  canonicalCommandRecordDigest, admittingCommandResultSignedRecordDigest)`. Reject an unsigned
+  result, a `decision_reserved` command, queued/rejected result, altered signature, result version
+  other than one, non-null predecessor, result A with command/payload/decision/executor coordinates
+  from B, and an admitted result transplanted among OpenCode, Claude, Codex, nested-management, or
+  nested-chat executor arms. Only the one signed admitted tuple may create its one effect gate and
+  attempt.
+- Vector the selected binding and server capability snapshots, their runtime-owner signed
+  attestations, family entries, operation coordinates, and translator records. Reject a same-ID
+  snapshot with changed bytes, wrong attestation ref/digest/kind/runtime/incarnation, stale or revoked
+  pointer, family/scope transplant, changed request/response schema, translator
+  schema/implementation/build digest, missing injectivity proof, many-to-one translation, or
+  historical translator unavailable after restart.
+- For selected `user_text`, assert the exact credential-free request: `POST`
+  `/session/{nativeConversationId}/prompt_async`, empty query, headers in the fixed
+  `content-type` then `x-opencode-directory` order, and compact body
+  `{"messageID":"<nativeActionId>","parts":[{"type":"text","text":"<text>"}]}`, where each placeholder
+  denotes the strict JSON-escaped generated string bytes. Reject an altered
+  session, method, route, directory, header name/value/order, query, message ID, text, part ID/type/
+  order/count, alternate JSON escape, extra key, `model`, `noReply`, provider/agent/system field,
+  redirect, absolute URI, or method override. Recompute the request and translation from retained
+  common bytes immediately before dispatch; a matching digest paired with a different retained ref
+  is invalid.
+- For selected `new_chat`, assert exact `POST /session`, empty query, the same fixed headers, and body
+  `{"metadata":{"remoteClawCreationId":"<marker>","remoteClawCreationIntentDigest":"<digest>"}}`, with
+  the same strict JSON-string placeholder convention.
+  Reject titles, caller session IDs, directory/model/provider/parent aliases, extra metadata, changed
+  marker/intent/selector/mapping/workspace transition, or a first-bootstrap/new-chat transition-kind
+  mismatch. Lose the response at every boundary, retain all same-marker candidates, and bind only one
+  candidate whose exact canonical two-field metadata ref/digest recomputes and whose intent digest
+  equals the reservation's `expectedNativeCreationIntentDigest`; quarantine wrong-intent,
+  noncanonical, extra-field, or multiple-marker cases, and never accept marker-only reconciliation.
+- Vector the strict JSON encoder for quotes, backslashes, every C0 scalar, DEL, slash, non-ASCII,
+  U+2028/U+2029, invalid UTF-8, lone surrogates, overlong input, alternate escapes, and normalization.
+  Vector the selected safe absolute POSIX directory grammar, including empty components, dot/dot-dot,
+  symlink identity, percent, backslash, space, colon, non-ASCII, NUL, CR/LF, C0/DEL, and header
+  injection. Keep the same path bytes while changing filesystem identity, allowed root, mount
+  namespace, or workspace generation and require an unchanged path digest but a changed full
+  workspace-binding digest; substitute either digest in a lease, generated coordinate, target, or
+  request join and reject. Allocate `nativeActionId` as persisted `msg_` plus 16 random bytes; reject caller IDs,
+  malformed/duplicate/history-reused IDs, RNG failure, crash-time reallocation, and ID transplant.
+- Attest exactly the four allowed runtime-owned peers—TUI front door, binding adapter front door,
+  server-creation front door, and observer—against the raw listener inode, pidfd/start identity,
+  executable/build identities, typed exhaustive role-manifest and authorization-handler vectors,
+  attach-before-run program, and installed map. Attest the one exact native OpenCode server process
+  allowed to reach the provider façade, including TGID, pidfd/start, cgroup, executable, socket, map
+  entry, and descendant-denial digest. Replace
+  any PID, start time, binary, role, handler, socket/inode, policy map, network namespace, mount
+  namespace, provider façade, or tool/descendant rule and require quarantine. A tool subprocess,
+  unclassified peer, copied credential, second TUI, or inner process direct access to the raw listener,
+  provider control socket, or external network must fail.
+- Sign the exact TUI policy snapshot and require its schema/digest, proof tuple, manifest/isolation/
+  operation vectors, unsupported/read vectors, runtime/incarnation, server attachment, and
+  process-ingress lease to join one current runtime-owner attestation with the TUI-specific signature
+  purpose. Substitute a same-ID policy, attestation kind/ref/digest, signer purpose, path/workspace
+  digest, or stale process lease and require rejection before a TUI request reaches the listener.
+- Build one complete `OpenCodeConversationHistorySnapshotRecord` and typed message/part join for the
+  generated action ID. Vary role, message/part ID, message/part index, part schema/payload/text,
+  cardinality, ordering, expected fingerprint, history snapshot, runtime/incarnation/binding/session,
+  observer epoch, linearization proof/sequence, or filtered SSE coordinate and require mismatch or
+  ambiguity. Cover sequence-watermark, barrier-event, and atomic-store recovery; incomplete history,
+  SSE-only evidence, buffer gaps, stale reconnect events, duplicate parts, and cross-snapshot joins
+  never complete an attempt.
+- Distinguish explicit submit, explicit steer, blank submit, and exact reserved slash commands before
+  decision. Race snapshot/table replacement during normalization; reject raw-as-user fallthrough,
+  prefix/argument aliases, reordered/duplicate table entries, and busy-state inference. In selected
+  A2, only `user_text` and server `new_chat` may become writable; every unsupported recognized family
+  receives one signed ordered rejection and no native attempt.
+- Retain a positive full A2 fixture for the exact selected `user_text` request with `model` absent and
+  `noReply` absent, through the private provider façade to an assistant completion, with the real TUI
+  active. Repeat the positive result across adapter/coordinator restart in the same native
+  incarnation, concurrent direct-TUI input, lost `204`, and history/SSE reconnect. Under the selected
+  version-one oracle, a native-server restart changes incarnation and must produce
+  `outcome_unknown`/quarantine rather than positive completion; make cross-incarnation completion a
+  separate future gate for a lineage-qualified read-back schema. The existing `noReply:true` fixture
+  remains a narrow caller-ID/duplicate-append compatibility proof and cannot satisfy this gate.
+- Crash before/after attempt preparation, action-ID persistence, translation retention, dispatch-row
+  creation, dispatch CAS, socket write, `204`, history snapshot, read-back CAS, and result projection.
+  Before the dispatch CAS, recovery may perform the one stored send; after it, recovery may only prove
+  the existing native outcome or mark `outcome_unknown`. Never reconstruct under a newer translator,
+  capability, workspace, or action ID and never send twice. Require the final pre-write transaction
+  to move attempt, dispatch, and command gate to `started` together; no crash or race may expose a
+  partial started state.
+- Explicitly cancel one terminal `user_text` attempt before its dispatch CAS. Require one atomic
+  `NativeBindingPreSendAbandonmentRecord`; attempt, front-door dispatch, and command gate all
+  `quarantined` with the same exact evidence schema/ref/digest triple; null dispatch-start time, receipt,
+  started-attempt ID, transport receipt, and native read-back; and zero `prompt_async`. Crash on each
+  side of the journal commit and require either the complete quarantine or the original resumable
+  attempt, never a partial state. Exact replay returns the same record; a changed reason, sequence,
+  coordinate, or digest collides. The old handle stays unusable and no replacement, terminal
+  continuation, or successor may start. Assert the selected terminal family has null
+  `positiveNeverStartedSchemaId`; the nested signed continuation fixture remains distinct and rejects
+  this local record as a transplant. Race abandonment against dispatch in both commit orders, and
+  substitute a started attempt, receipt/read-back, started dispatch/time, started gate/attempt ID,
+  stale executor, handle, or digest; abandonment must fail without downgrading any row. A disconnect,
+  process death, signal, or ordinary restart with no committed record follows crash recovery rather
+  than inferred abandonment. Finally, admit a distinct authenticated source event through the same
+  otherwise-current binding to prove the quarantine is command-local.
+- For nested management and ordinary nested chat, crash at every result-first/secondary-signature/
+  joint-finalization boundary and require no partial result, ACK, lineage, attempt, or effect.
+  Substitute a same-ID management capability snapshot, `newChatCapabilityDigest`, request/receipt
+  schema, proof ref/digest, lease/generation/state, or canonical snapshot digest. Exercise readiness
+  `maxWaitMs` at zero, one, 120000, 120001, overflow, stale/current policy replacement, and
+  deadline derivation. Then substitute a same-ID nested-edge capability snapshot or its
+  family/proof/live-lease/topology/
+  namespace digest, then substitute core, hop, wire, request schema, receipt-proof schema, source
+  event, command payload, decision/executor evidence, signed result, target command/result ID, result
+  version/predecessor, ready-attestation result signed-record digest, or readiness policy/deadline. The
+  nested family capability must carry exactly one envelope-schema field, `targetRequestSchemaId`, and
+  the distinct common `canonicalCommandPayloadSchemaId`; both participate in its family digest. Derive
+  the attempt's `canonicalEnvelopeSchemaId` from `targetRequestSchemaId` and require exact equality.
+  Reject any independent second family envelope-schema field, payload-schema substitution, transfer
+  schema/ref/digest substitution, or attempt-level envelope-schema substitution before source
+  normalization. The
+  complete downstream receipt proof must verify as one chain; queued
+  creation is invalid, ordinary queued chat is terminal for that event, exact replay is idempotent,
+  and every fork quarantines without another send.
+- Substitute the native workspace transition classification, provider canonical request schema,
+  provider request-ID extraction/uniqueness proof, or replacement inference lease coordinates after
+  admission. Require exact positive-never-started or proved resume evidence for any provider child;
+  uncertainty never creates a second model request.
 
 ## How to run
 
@@ -130,9 +618,13 @@ about the current A0 implementation:
 (cd packages/cli && pnpm test:run)
 (cd apps/web && pnpm test:run)
 
+# retained pinned native evidence — also runs in CI when its spike changes
+pnpm --filter @remote-claw/codex-multiclient-proof test:run
+pnpm --filter @remote-claw/opencode-native-proof test:run
+
 # app e2e in a real browser (Chromium + WebKit) — also runs in CI
 pnpm --filter remote-claw-web-tests test:app          # LocalBackend
-pnpm --filter remote-claw-web-tests test:app:sqlite   # per-session SQLite (?backend=sqlite)
+pnpm --filter remote-claw-web-tests test:app:sqlite   # per-channel SQLite (?backend=sqlite)
 
 # the real-claude proofs (needs a logged-in claude)
 (cd apps/web && RC_PROVE_REAL_CLAUDE=1 pnpm exec vitest run test/prove)

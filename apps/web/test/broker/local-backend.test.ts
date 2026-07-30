@@ -1,9 +1,15 @@
 import type { WireFrame } from "@remote-claw/clawsec";
 import { describe, expect, it } from "vitest";
+import {
+  type BrokerBackend,
+  hasDurableRecovery,
+  type PublishResult,
+  type RelayPayload,
+} from "../../lib/broker/backend";
 import { LocalBackend } from "../../lib/broker/local";
 
-// The LocalBackend is the in-process fake broker. These tests pin the durable-channel CONTRACT every
-// backend must honour (ordering, resumable replay, recent-window, create-or-resume, subscribe-or-null,
+// The LocalBackend is the in-process fake broker. These tests pin the channel CONTRACT every backend
+// must honour (ordering, resumable replay, tail-relative reads, create-or-resume, subscribe-or-null,
 // close-frees-token, multi-subscriber fan-out) — no Vercel runtime, just the class.
 
 // The backend treats a frame as opaque, so a minimal WireFrame carrying a `seq` marker is enough to
@@ -12,6 +18,30 @@ function frame(seq: number): WireFrame {
   return { seq } as unknown as WireFrame;
 }
 const seqs = (fs: WireFrame[]) => fs.map((f) => (f as unknown as { seq: number }).seq);
+
+function cursorBackend(
+  cursors: Partial<Pick<BrokerBackend, "maxSeq" | "frameCount">>,
+): BrokerBackend {
+  return {
+    publish: async (_token: string, _payload: RelayPayload): Promise<PublishResult> => ({
+      created: false,
+      channelId: "test",
+    }),
+    subscribe: async () => null,
+    ...cursors,
+  };
+}
+
+describe("BrokerBackend durable-recovery capability", () => {
+  it("requires maxSeq and frameCount together", () => {
+    expect(hasDurableRecovery(cursorBackend({}))).toBe(false);
+    expect(hasDurableRecovery(cursorBackend({ maxSeq: async () => null }))).toBe(false);
+    expect(hasDurableRecovery(cursorBackend({ frameCount: async () => null }))).toBe(false);
+    expect(
+      hasDurableRecovery(cursorBackend({ maxSeq: async () => null, frameCount: async () => null })),
+    ).toBe(true);
+  });
+});
 
 /** Assert a subscribe() result is a live stream (not the absent-channel null) and narrow it. */
 function present(stream: ReadableStream<WireFrame> | null): ReadableStream<WireFrame> {

@@ -1,4 +1,4 @@
-// Shared HTTP helpers for the two broker routes: JSON replies and the SSE framing for /api/stream.
+// Shared HTTP helpers for the broker API: JSON replies and the SSE framing for /api/stream.
 
 /** A JSON response with the given status. */
 export function json(body: unknown, status = 200): Response {
@@ -28,10 +28,10 @@ export const SSE_KEEPALIVE_MS = 15_000;
 const SSE_PING = Symbol("sse-ping");
 
 /**
- * Wrap a durable out-stream of frames as a `text/event-stream`. Each frame becomes one
- * `data: <json>\n\n` event; the stream stays open (live) until the relay run closes it or the
- * client disconnects. A leading comment opens the stream so intermediaries flush headers promptly,
- * and a `: ping` is emitted every {@link SSE_KEEPALIVE_MS} while idle (see that constant).
+ * Wrap a broker frame source as a `text/event-stream`. Each frame becomes one `data: <json>\n\n`
+ * event; the stream stays open (live) until the source channel closes it or the client disconnects.
+ * A leading comment opens the stream so intermediaries flush headers promptly, and a `: ping` is
+ * emitted every {@link SSE_KEEPALIVE_MS} while idle (see that constant).
  */
 export function sseResponse(
   source: ReadableStream<unknown>,

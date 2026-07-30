@@ -12,7 +12,7 @@ import { concatBytes, toHex } from "./bytes.js";
 /** A chunk frame's header is the frame header minus part/parts, which chunking assigns. */
 export type ChunkHeader = Omit<FrameHeader, "part" | "parts">;
 
-// A generous ceiling on chunk count: at the ~8 MB chunk target this is far beyond any real
+// A generous ceiling on chunk count: at the ~3 MB transport-safe target this is far beyond any real
 // message, and it fails a hostile/absurd `parts` fast (clear ChunkError, not OOM/RangeError).
 const MAX_PARTS = 100_000;
 

@@ -170,8 +170,10 @@ export class OpencodeClient {
   }
 
   /**
-   * Drive a turn. Returns when the request is ACCEPTED (the turn runs in a background fiber; output
-   * arrives over events()). The server replies 204 with an EMPTY body, so we MUST NOT call res.json().
+   * Drive a turn. Returns after HTTP transport receipt; native application/order must be proved later
+   * from OpenCode events/history. The turn runs in a background fiber. The server replies 204 with an
+   * EMPTY body and no response-assigned ID, so we MUST NOT call res.json(). Pinned OpenCode accepts a
+   * caller-supplied messageID, but this current compatibility client does not yet send one.
    */
   async promptAsync(
     sessionId: string,

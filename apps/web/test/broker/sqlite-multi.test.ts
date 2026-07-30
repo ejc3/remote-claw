@@ -6,11 +6,11 @@ import type { WireFrame } from "@remote-claw/clawsec";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dbFileName, FileDbLocator, SqliteMultiBackend } from "../../lib/broker/sqlite-multi";
 
-// The per-session SQLite backend must honour the SAME durable-channel contract as the local backend
+// The per-channel SQLite backend must honour the SAME durable-channel contract as the local backend
 // (ordering, resumable replay, recent-window, create-or-resume, subscribe-or-null,
 // close-frees-token, multi-subscriber fan-out, idempotent dedup), but with ONE database per channel
 // token. Run against a REAL libSQL backed by local FILES in a temp dir (no cloud, plain CI). Plus the
-// per-session specifics: physical isolation (one file per token), retention = drop the file, and the
+// per-channel specifics: physical isolation (one file per token), retention = drop the file, and the
 // filename-safety guard against a hostile session id.
 
 const dirs: string[] = [];
@@ -294,7 +294,7 @@ describe("SqliteMultiBackend", () => {
     expect(seqs(got).sort((a, b) => a - b)).toEqual(Array.from({ length: N }, (_, i) => i + 1));
   });
 
-  it("sweep drops idle session databases, keeps recent ones, and never drops one with a live subscriber", async () => {
+  it("sweep drops idle channel databases, keeps recent ones, and never drops one with a live subscriber", async () => {
     const { be, dir } = mkBackend();
     await be.publish(A, frame(1));
     await be.publish(B, frame(1));
@@ -339,7 +339,7 @@ describe("SqliteMultiBackend", () => {
 });
 
 describe("FileDbLocator lock semantics", () => {
-  it("opens each session database in WAL mode (reads run concurrently with the writer, like remote libSQL)", async () => {
+  it("opens each channel database in WAL mode (reads run concurrently with the writer, like remote libSQL)", async () => {
     const { be, dir } = mkBackend();
     await be.publish(A, frame(1)); // goes through prepare() on the real create path
     const c = createClient({ url: `file:${join(dir, dbFileName(A))}` });
@@ -430,7 +430,7 @@ describe("FileDbLocator lock semantics", () => {
   });
 });
 
-describe("channel-gone recovery (issue #111: per-session db deleted by retention)", () => {
+describe("channel-gone recovery (issue #111: per-channel db deleted by retention)", () => {
   // Physically remove a session's db files — models the retention sweep / dev dropScope dropping it.
   const deleteDb = (dir: string, token: string): void => {
     for (const suffix of ["", "-wal", "-shm"]) {

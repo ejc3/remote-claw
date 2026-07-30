@@ -1,7 +1,7 @@
 import type { WireFrame } from "@remote-claw/clawsec";
 import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } from "./backend";
 
-// The in-process "fake" broker: a durable pub/sub backend that lives entirely in this Node process's
+// The in-process "fake" broker: a non-durable pub/sub backend that lives entirely in this Node process's
 // memory — no Vercel Workflows runtime, no external service. It makes the whole broker runnable inside
 // `next dev` (and inside a plain test process), which is what lets a real browser drive the real app
 // end-to-end against a real spine. Selected with BROKER_BACKEND=local.
@@ -12,13 +12,16 @@ import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } fr
 //   • publish creates-or-resumes; subscribe resolves-or-null — only a publish brings a channel into
 //     existence, so an absent identity's subscribe returns null (the route replies 200-empty).
 //   • close frees the token — the __close sentinel ends every live stream and drops the channel, so a
-//     later publish re-creates it under the same token (the cap-roll handoff, here a clean teardown).
+//     later publish re-creates it under the same token (an explicit clean teardown).
 //
 // JS is single-threaded, so the synchronous replay-then-register in subscribe() and the synchronous
 // fan-out in publish() never interleave — there is no missed-or-duplicated frame window.
 //
-// The frame log is unbounded (no cap-roll): fine for dev/test sessions, which are short-lived. A
-// long-lived deployment uses the Vercel or per-session sqlite backend, which page/cap the durable history.
+// The frame log is unbounded (no production rollover controller): fine for dev/test sessions, which
+// are short-lived. For comparison, Vercel exposes a persistent absolute-index resumable stream until
+// its one run hits the fixed event cap; the current adapter has no eviction or pre-cap rollover.
+// Per-channel SQLite supplies durable paged frame history plus shared durability/sequence and
+// host-only inbound-fence cursors.
 
 interface Subscriber {
   controller: ReadableStreamDefaultController<WireFrame>;
@@ -51,7 +54,7 @@ export class LocalBackend implements BrokerBackend {
       }
     }
     channel.subscribers.clear();
-    this.#channels.delete(token); // free the token for a fresh publish (cap-roll handoff, §6B)
+    this.#channels.delete(token); // free the token for a fresh publish after explicit teardown
   }
 
   async publish(token: string, payload: RelayPayload): Promise<PublishResult> {
@@ -84,9 +87,10 @@ export class LocalBackend implements BrokerBackend {
     const channel = this.#channels.get(token);
     if (channel === undefined) return null; // subscribing never creates a channel — mirror Vercel
 
-    // Resolve the resume point: undefined → 0 (from the start); negative → the recent window (the
-    // last |n| frames); positive → that absolute index. Clamp both ends into [0, len] so an
-    // out-of-range index degrades to "stream only new frames", matching getReadable's contract.
+    // Resolve the resume point: undefined → 0 (from the start); negative → a tail-relative start
+    // (the last |n| frames currently present); positive → that absolute index. Clamp both ends into
+    // [0, len] so an out-of-range index degrades to "stream only new frames", matching getReadable's
+    // contract.
     const len = channel.frames.length;
     let start = 0;
     if (startIndex !== undefined) {

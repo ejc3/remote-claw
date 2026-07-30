@@ -2,8 +2,8 @@
 // controlKey, kMeta} WITHOUT the root secret S. The secret derives these (HKDF-SHA256, one-way),
 // so a pass can NOT be inverted back to S nor re-mint identity_id; it grants read + steer of ONE
 // machine (and, because the content/control/meta keys are symmetric, can also produce valid frames
-// for that machine — the boundary a pass draws is S/reset, not write-vs-read). Revoke a pass by
-// resetting the machine.
+// for that machine — the boundary a pass draws is possession of S, not write-vs-read). There is no
+// in-place pass revocation: reset moves future service but retained old routes accept copied passes.
 //
 // Format: rcp1_<base64url(authToken||contentRoot||controlKey||kMeta, 128B, no pad)><4-char
 // Crockford checksum of SHA-256(payload)>. QR/file-sized, not hand-typed. identity_id is NOT

@@ -97,11 +97,11 @@ export async function POST(req: Request): Promise<Response> {
   }
   const backend = await getBackend(requested);
 
-  // Resume-or-start the channel and deliver the frame. A PublishConflictError means the channel
-  // disposed between resolve and deliver (a concurrent __close or cap-roll) -> 409, and the client
-  // re-posts the same frame (a dropped delivery would strand a subscriber's ordered stream on a gap).
-  // Any OTHER failure (the channel never came up) propagates -> 500, so the client fails fast on a
-  // hard outage instead of retry-looping it (the host only retries 409).
+  // Resume-or-start the channel and deliver the frame. VercelBackend emits PublishConflictError only
+  // for Workflow's typed HookNotFound race after resolution (concurrent close/replacement) -> 409,
+  // and the client re-posts the same frame. Serialization, event-store, queue, and other publish
+  // failures propagate -> 500, so the host fails fast instead of retry-looping them (it retries only
+  // 409).
   let result: { created: boolean; channelId: string };
   try {
     result = await backend.publish(token, encodeFrame(frame));

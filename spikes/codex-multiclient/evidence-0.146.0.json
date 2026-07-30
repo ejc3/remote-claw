@@ -1,0 +1,405 @@
+{
+	"capturedAt": "2026-07-29T21:21:51.683Z",
+	"proofScope": "a late raw app-server client writes an empty live thread before subscribing but receives no correlated detailed projection for that command; after same-ID resume, two raw clients receive equal selected command-event projections",
+	"probe": {
+		"sha256": "539f92d9e72f3faf9b8abf41746f258cf8dcb346da96e0e6ae606d79fd746090",
+		"nodeVersion": "v22.23.1"
+	},
+	"codex": {
+		"version": "codex-cli 0.146.0",
+		"binaryPath": "<codex-binary>",
+		"binarySha256": "cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6",
+		"platform": "linux",
+		"architecture": "arm64"
+	},
+	"isolation": {
+		"mode": "unprivileged-user-net",
+		"parentNamespace": "net:[4026531833]",
+		"probeNamespace": "net:[4026534295]",
+		"distinctNetworkNamespace": true,
+		"interfaces": ["lo"],
+		"defaultRoutePresent": false,
+		"temporaryCodexHomeInitiallyEmpty": true,
+		"temporaryUserHomeInitiallyEmpty": true,
+		"ambientCodexHomeInherited": false,
+		"ambientCredentialEnvironmentInherited": false,
+		"ambientProxyBypassInherited": false,
+		"ambientUserHomeInherited": false,
+		"ambientUserStartupDirectoryInherited": false,
+		"appServerEnvironmentVariableNames": [
+			"ALL_PROXY",
+			"CODEX_HOME",
+			"HOME",
+			"HTTPS_PROXY",
+			"HTTP_PROXY",
+			"LANG",
+			"LC_ALL",
+			"LC_CTYPE",
+			"LOGNAME",
+			"NO_PROXY",
+			"PATH",
+			"RUST_LOG",
+			"TERM",
+			"USER",
+			"ZDOTDIR",
+			"all_proxy",
+			"http_proxy",
+			"https_proxy",
+			"no_proxy"
+		],
+		"localDenyProxyConnectionAttempts": 1,
+		"externalRouteAvailable": false
+	},
+	"connections": {
+		"A": {
+			"clientName": "remote-claw-probe-a",
+			"initializeRequestId": 1
+		},
+		"B": {
+			"clientName": "remote-claw-probe-b",
+			"initializeRequestId": 1,
+			"initializedAfterThreadStart": true
+		},
+		"independentRequestIdOneAccepted": true
+	},
+	"thread": {
+		"id": "019fafc1-5738-7880-a70e-22b742746641",
+		"persistent": true,
+		"emptyResumeBeforeMaterialization": {
+			"attemptedBy": "B",
+			"rejected": true,
+			"matchedPinnedNativeError": true,
+			"error": {
+				"code": -32600,
+				"message": "no rollout found for thread id <empty-thread>"
+			}
+		},
+		"preResumeShellCommand": {
+			"sentBy": "B",
+			"requestedCommand": "printf codex-multiclient-pre-resume",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multiclient-pre-resume'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGljbGllbnQtcHJlLXJlc3VtZQ==",
+				"byteLength": 28,
+				"utf8": "codex-multiclient-pre-resume"
+			},
+			"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+			"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+			"itemId": "8d887783-eacd-402d-8cb1-b4246173c716",
+			"writeAccepted": true,
+			"detailedObservationByA": [
+				{
+					"method": "turn/started",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+					"status": "inProgress"
+				},
+				{
+					"method": "item/started",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+					"itemId": "8d887783-eacd-402d-8cb1-b4246173c716",
+					"command": "/usr/bin/zsh -lc 'printf codex-multiclient-pre-resume'",
+					"status": "inProgress"
+				},
+				{
+					"method": "item/commandExecution/outputDelta",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+					"itemId": "8d887783-eacd-402d-8cb1-b4246173c716",
+					"delta": {
+						"base64": "Y29kZXgtbXVsdGljbGllbnQtcHJlLXJlc3VtZQ==",
+						"byteLength": 28,
+						"utf8": "codex-multiclient-pre-resume"
+					}
+				},
+				{
+					"method": "item/completed",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+					"itemId": "8d887783-eacd-402d-8cb1-b4246173c716",
+					"command": "/usr/bin/zsh -lc 'printf codex-multiclient-pre-resume'",
+					"status": "completed",
+					"exitCode": 0,
+					"aggregatedOutput": {
+						"base64": "Y29kZXgtbXVsdGljbGllbnQtcHJlLXJlc3VtZQ==",
+						"byteLength": 28,
+						"utf8": "codex-multiclient-pre-resume"
+					}
+				},
+				{
+					"method": "turn/completed",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+					"status": "completed"
+				}
+			],
+			"unresumedB": {
+				"nativeSubscriptionStatusBeforeWrite": "notSubscribed",
+				"nativeSubscriptionStatusAfterWrite": "notSubscribed",
+				"observedMethodsBeforeResume": [
+					"response:4",
+					"thread/status/changed",
+					"thread/status/changed",
+					"response:5"
+				],
+				"correlatedDetailedProjection": [],
+				"absenceCheckedAfterPostResumeTurnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc"
+			}
+		},
+		"resumeAfterMaterialization": {
+			"attemptedBy": "B",
+			"requestedId": "019fafc1-5738-7880-a70e-22b742746641",
+			"returnedId": "019fafc1-5738-7880-a70e-22b742746641",
+			"sameThread": true
+		}
+	},
+	"commands": [
+		{
+			"label": "A-to-B",
+			"sentBy": "A",
+			"requestedCommand": "printf codex-multiclient-a-to-b",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+				"byteLength": 24,
+				"utf8": "codex-multiclient-a-to-b"
+			},
+			"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+			"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+			"itemId": "24727d44-6698-405b-9169-22fc92714a50",
+			"orderedProjectionsEqual": true,
+			"observations": {
+				"A": [
+					{
+						"method": "turn/started",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-a-to-b"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-a-to-b"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"status": "completed"
+					}
+				],
+				"B": [
+					{
+						"method": "turn/started",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-a-to-b"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-a-to-b"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"status": "completed"
+					}
+				]
+			}
+		},
+		{
+			"label": "B-to-A",
+			"sentBy": "B",
+			"requestedCommand": "printf codex-multiclient-b-to-a",
+			"nativeCommand": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+			"expectedOutput": {
+				"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+				"byteLength": 24,
+				"utf8": "codex-multiclient-b-to-a"
+			},
+			"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+			"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+			"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
+			"orderedProjectionsEqual": true,
+			"observations": {
+				"A": [
+					{
+						"method": "turn/started",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-b-to-a"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-b-to-a"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"status": "completed"
+					}
+				],
+				"B": [
+					{
+						"method": "turn/started",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/started",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+						"status": "inProgress"
+					},
+					{
+						"method": "item/commandExecution/outputDelta",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
+						"delta": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-b-to-a"
+						}
+					},
+					{
+						"method": "item/completed",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
+						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
+						"status": "completed",
+						"exitCode": 0,
+						"aggregatedOutput": {
+							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
+							"byteLength": 24,
+							"utf8": "codex-multiclient-b-to-a"
+						}
+					},
+					{
+						"method": "turn/completed",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"status": "completed"
+					}
+				]
+			}
+		}
+	],
+	"fixtureConclusion": {
+		"shellCommandAcceptedBetweenNotSubscribedChecksWhileSelectedCorrelatedProjectionAbsent": true
+	},
+	"inference": {
+		"turnStartRequestsSent": 0,
+		"probeIssuedModelPrompt": false
+	},
+	"deletion": {
+		"nativeDeleteAcknowledged": true,
+		"readAfterDeleteFailed": true,
+		"readAfterDeleteError": {
+			"code": -32600,
+			"message": "thread not loaded: <deleted-thread>"
+		}
+	},
+	"cleanup": {
+		"nativeThreadDeleted": true,
+		"appServerExit": {
+			"code": 0,
+			"signal": null,
+			"forced": false
+		},
+		"temporaryRootRemoved": true
+	}
+}

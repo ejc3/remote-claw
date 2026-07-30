@@ -1,5 +1,6 @@
 import type { WireFrame } from "@remote-claw/clawsec";
 import { getHookByToken, getRun, resumeHook, start } from "workflow/api";
+import { HookNotFoundError } from "workflow/errors";
 import { relayWorkflow } from "../../workflows/relay";
 import {
   type BrokerBackend,
@@ -12,7 +13,7 @@ import {
 // The production backend: Vercel Workflows. Each channel token addresses ONE durable `relayWorkflow`
 // run that owns the token's inbound hook and re-emits every published frame onto its resumable
 // out-stream (§6A/§6B). This file is the adapter — it holds the resume-or-start handshake and the
-// stream resolution that used to live inline in the two routes; the durable loop itself is
+// stream resolution that used to live inline in the two data-plane routes; the durable loop itself is
 // workflows/relay.ts (compiled by withWorkflow).
 
 const BASE_MS = 50;
@@ -36,6 +37,22 @@ function runIdOf(hook: unknown): string {
 }
 
 /**
+ * Workflow lookup errors can contain the full hook URL, including the derived channel token. Next
+ * logs unhandled route errors, so never rethrow that provider object or attach it as a cause. The
+ * channel kind is enough local context while preserving hard-failure behavior.
+ */
+function channelKind(token: string): "bus" | "session" | "unknown" {
+  if (token.startsWith("bus:")) return "bus";
+  if (token.startsWith("sess:")) return "session";
+  return "unknown";
+}
+
+function workflowFailure(operation: "lookup" | "start" | "delivery", token: string): Error {
+  const subject = operation === "lookup" ? "hook lookup" : `channel ${operation}`;
+  return new Error(`workflow ${subject} failed for ${channelKind(token)} channel`);
+}
+
+/**
  * Resolve `token` to its live run, starting a relay run if none holds it yet. Returns the runId and
  * whether this call created the run. Throws if the hook never registers within the deadline.
  *
@@ -51,10 +68,15 @@ function runIdOf(hook: unknown): string {
 async function resolveOrStartChannel(token: string): Promise<{ runId: string; created: boolean }> {
   try {
     return { runId: runIdOf(await getHookByToken(token)), created: false };
-  } catch {
+  } catch (e) {
+    if (!HookNotFoundError.is(e)) throw workflowFailure("lookup", token);
     // No live run holds this token — create one, then wait for its hook to register.
   }
-  await start(relayWorkflow, [token]);
+  try {
+    await start(relayWorkflow, [token]);
+  } catch {
+    throw workflowFailure("start", token);
+  }
   // Observe the registration so a slow COLD START (transient) is distinguishable from a hard broker
   // OUTAGE (the deadline blown) instead of both surfacing as one opaque 500. Log only the channel KIND
   // (`bus`/`sess`) — never the full token, which carries the identity_id.
@@ -73,7 +95,8 @@ async function resolveOrStartChannel(token: string): Promise<{ runId: string; cr
         );
       }
       return { runId, created: true };
-    } catch {
+    } catch (e) {
+      if (!HookNotFoundError.is(e)) throw workflowFailure("lookup", token);
       attempts++;
       await sleep(jittered(delay));
       delay = Math.min(delay * 2, CEIL_MS);
@@ -117,7 +140,8 @@ export class VercelBackend implements BrokerBackend {
       let runId: string;
       try {
         runId = runIdOf(await getHookByToken(token));
-      } catch {
+      } catch (e) {
+        if (!HookNotFoundError.is(e)) throw workflowFailure("lookup", token);
         return { created: false, channelId: "" };
       }
       return { created: false, channelId: await this.#deliver(token, payload, runId) };
@@ -128,14 +152,20 @@ export class VercelBackend implements BrokerBackend {
     return { created, channelId: await this.#deliver(token, payload, runId) };
   }
 
-  /** Deliver one payload to a resolved run; a resume failure (the run disposed between resolve and
-   *  deliver — a concurrent __close/cap-roll) becomes a PublishConflictError → 409 → client re-posts
-   *  the same (deterministic-msg_id) frame. A dropped post would strand a subscriber's ordered stream. */
+  /** Deliver one payload to a resolved run. Workflow 4.4.0 reports a hook that disappeared during
+   *  resume as HookNotFoundError; only that typed channel-turnover race becomes
+   *  PublishConflictError → 409 → client re-posts the same deterministic-msg_id frame. resumeHook
+   *  also performs serialization, event persistence, and queueing, so every other error must
+   *  remain a hard failure rather than being mislabeled retryable. Provider error details are
+   *  replaced because they can include the full derived channel token. */
   async #deliver(token: string, payload: RelayPayload, runId: string): Promise<string> {
     try {
       await resumeHook(token, payload);
     } catch (e) {
-      throw new PublishConflictError(String((e as Error)?.message ?? e));
+      if (HookNotFoundError.is(e)) {
+        throw new PublishConflictError("workflow channel disappeared during publish");
+      }
+      throw workflowFailure("delivery", token);
     }
     return runId;
   }
@@ -149,7 +179,8 @@ export class VercelBackend implements BrokerBackend {
     let runId: string;
     try {
       runId = runIdOf(await getHookByToken(token));
-    } catch {
+    } catch (e) {
+      if (!HookNotFoundError.is(e)) throw workflowFailure("lookup", token);
       return null;
     }
     const run = getRun(runId);

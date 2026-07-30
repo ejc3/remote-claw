@@ -2,7 +2,7 @@ import { getHandoffStore, handoffConfigured } from "../../../../lib/broker/hando
 import { authorized } from "../retention/gate";
 
 // Dedicated, FREQUENT sweep of expired one-time-handoff rows (docs/ephemeral-handoff.md §3.2). Separate
-// from the once-daily session-retention cron so an unclaimed handoff's at-rest lifetime tracks its 10-min
+// from the once-daily channel-retention cron so an unclaimed handoff's at-rest lifetime tracks its 10-min
 // TTL, not 24h. Belt-and-suspenders: claims delete on success and PUT sweeps opportunistically; this
 // reclaims rows that were never claimed. Same CRON_SECRET gate as retention.
 export const dynamic = "force-dynamic";

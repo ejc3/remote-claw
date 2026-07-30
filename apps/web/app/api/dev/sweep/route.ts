@@ -5,8 +5,8 @@ import { gate } from "../_gate";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Dev/CI-only cleanup: reclaims the per-session Turso Cloud dbs the sqlite app-e2e creates, so a
-// preview/CI run CLEANS UP AFTER ITSELF instead of leaking session dbs.
+// Dev/CI-only cleanup: reclaims the per-channel Turso Cloud dbs the sqlite app-e2e creates, so a
+// preview/CI run CLEANS UP AFTER ITSELF instead of leaking channel dbs.
 //
 // It deletes EVERY db in THIS deployment's scope (`rc-<scope>-*`) by name via the Platform API
 // (locator.dropScope) — NOT the cold-index sweep — because an e2e host relay can create a db (via
@@ -17,7 +17,7 @@ export const maxDuration = 300;
 //
 // PROD-SAFE on two independent levels: (1) the dev gate (apps/web/app/api/dev/_gate.ts) — a matching
 // DEV_SEED_TOKEN on a NON-production deploy only; it can NEVER run on production. (2) scope — a preview's
-// scope is `pr-<commit sha>`, so dropScope only ever names `rc-pr-<sha>-…`, never a `rc-prod-` session.
+// scope is `pr-<commit sha>`, so dropScope only ever names `rc-pr-<sha>-…`, never a `rc-prod-` channel db.
 // (Local/file dev has no scope ⇒ falls back to the cold-index sweep.)
 const DIGITS = /^\d+$/;
 

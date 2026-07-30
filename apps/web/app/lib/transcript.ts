@@ -240,12 +240,14 @@ export interface PermissionResolution {
   behavior: "allow" | "deny";
   /** For an AskUserQuestion allow (#42), the answers the client sent, keyed by question text. Present
    *  only when the frame carried them — a plain permission allow/deny has none. Lets the resolved card
-   *  render WHAT was answered (a faithful transcript of the choice), surviving reload via the log. */
+   *  render WHAT was answered (a faithful transcript of the choice), surviving replay from the selected
+   *  host or durable-broker history path. */
   answers?: Record<string, string | string[]>;
 }
 
 /** Parse a `permission_resolved` replay frame — `{request_id, behavior, answers?}` — tolerating bad
- *  JSON. The host LOGS this when a permission is answered, so a reload / catch_up can render the request
+ *  JSON. The relay emits this when a permission is answered. A non-durable host records/replays it via
+ *  `catch_up`; a durable broker retains/replays the sealed frame directly. Either lets reload render the request
  *  as resolved instead of re-prompting (#56). An unknown behavior defaults to "allow" (the relay only
  *  ever emits allow|deny; "" requestId means we couldn't fold it onto a request — caller drops it). */
 export function parsePermissionResolved(text: string): PermissionResolution {

@@ -9,13 +9,16 @@ topology has two independent sides:
 
 - the real inner Claude Code process sees only remote-claw's private synthetic RC/API façades and
   synthetic or no credentials;
+- one person keeps using that process's real native TUI while one remote-claw private RC connection
+  participates as the single remote collaborator; and
 - remote-claw separately owns an inference connector and the real outward Anthropic Remote
   worker/app connector.
 
 The inner process never registers, bridges, or authenticates with Anthropic. Native Claude owns its
-conversation and execution state. A small coordinator journal owns only command admission, order,
-correlation, and delivery evidence; Anthropic session history proves only that the provider-side
-representation is available, not that any particular official device rendered it.
+conversation, final local/remote interleaving, and execution state. A small coordinator journal owns
+only remote-collaborator proposal order, forwarding, correlation, and delivery evidence; Anthropic
+session history proves only that the provider-side representation is available, not that any
+particular official device rendered it.
 
 ## 1. Decision and boundary
 
@@ -24,7 +27,8 @@ observe that traffic, and let remote-claw act as a peer app client. That topolog
 would:
 
 - give the inner process a real provider session and provider-facing worker role;
-- make Anthropic's accepted sequence the practical execution authority;
+- delegate remote session identity, delivery order, and reconnect semantics to Anthropic rather than
+  remote-claw, even though native Claude would still decide what actually applies;
 - couple recovery to a native worker and credential lifecycle remote-claw does not own; and
 - leave no clean journal boundary before official-client input reaches execution.
 
@@ -41,8 +45,9 @@ The connector must keep the two Anthropic roles separate:
 
 Official Claude apps connect directly to Anthropic as usual. They do not connect to the inner Claude
 process and remote-claw does not proxy their device sockets. Their commands arrive through
-remote-claw's sole outward worker connection, are journaled and admitted, and only then cross the
-private inner façade.
+remote-claw's sole outward worker connection, are journaled and optionally forwarded, and only then
+cross the private inner façade as input from remote-claw's one collaborator connection. Native Claude
+remains the final arbiter.
 
 ## 2. Current code baseline
 
@@ -66,6 +71,24 @@ remote-claw only rereads a securely validated Linux file. That assumption does n
 Claude has no real credential. The selected runtime needs a connector-owned credential service, or an
 isolated official credential agent outside the inner runtime, for login, refresh, rotation, revocation,
 and OS-specific secure storage.
+
+The current synthetic private-RC path also has narrower delivery semantics than the selected runtime:
+
+- `POST .../worker/events/delivery` only adds the named downstream event to the in-memory replay
+  suppression set. It proves that the worker acknowledged RC delivery, not that Claude accepted the
+  input into its native conversation, preserved the proposed source, or applied it in that order.
+- The web `accepted` frame is emitted before private-RC injection. It means that the current host
+  assigned a projection sequence and published its acknowledgement, not that Claude accepted the
+  prompt.
+- A viewer permission choice is recorded as `permission_resolved` and removed from the relay's open
+  set before its `control_response` is delivered to Claude. A direct TUI answer or native cancellation
+  may already have won, so that record is the server's choice, not a native terminal result.
+- The current MITM projection drops ordinary native-TUI user text, and the worker stream provides no
+  history backfill. The current path therefore cannot reconstruct or prove the complete native
+  local/remote order after restart.
+
+These distinctions are current code truth. The selected runtime must add correlation and native
+adjudication rather than rename any of those transport receipts as native acceptance.
 
 ## 3. Observed protocol facts
 
@@ -96,6 +119,9 @@ The evidence supports these constraints:
    attribution and a hard exclusive lease have not been observed.
 6. Multiple app-side SSE connections are technically possible. That does not by itself prove ordering,
    deduplication, or busy-turn behavior across multiple writers.
+7. The manual captures do not prove the stable join among a submitted UUID, provider acknowledgement,
+   private worker delivery/echo, transcript row, inner `/v1/messages` request, and resulting native
+   turn. That join is a release blocker, not an implementation detail to infer from matching text.
 
 ## 4. Selected outward-connector requirements
 
@@ -112,8 +138,10 @@ The real outward Claude connector is a remote-claw component, not a mode of inne
 - classify provider ingress under a durable source-event namespace independent of connector
   incarnation, retaining versioned reset-boundary coordinates, observations, canonical event records,
   and correlation evidence across reconnect;
-- correlate one host command across local proposal, inner echo/execution, outward submission, provider
-  observation, and provider-side read-back;
+- correlate one remote proposal or direct native observation across inner echo/execution, outward
+  submission, provider observation, and provider-side read-back;
+- keep private-RC transport delivery, native acceptance, native observation, and provider projection as
+  separate states;
 - stop ACK/cursor advancement when the coordinator control journal is unavailable;
 - fail closed on unknown mutation shapes; and
 - never expose a real provider credential or route to the inner Claude process or its tools.
@@ -121,19 +149,22 @@ The real outward Claude connector is a remote-claw component, not a mode of inne
 The coordinator records command state separately from each delivery:
 
 ```text
-command:           proposed → queued/admitted/rejected
-provider ingress:  received → durable → transport_acked/cursor_advanced
-inner delivery:    not_started → started → accepted → observed/rejected
-                                  └──────────────────→ outcome_unknown
+server proposal:      received → queued/forwarded/rejected
+provider ingress:     received → durable → transport_acked/cursor_advanced
+private RC transport: not_started → started → worker_acked
+                                    └───────────────→ outcome_unknown
+native acceptance:   not_observed → accepted/rejected
+                                  └──────────────→ outcome_unknown
 Anthropic projection:
-                   not_started → started → accepted → observed/rejected
-                                         └──────────→ outcome_unknown
-native turn:       running → completed/failed/interrupted/outcome_unknown
+                      not_started → started → accepted → observed/rejected
+                                            └──────────→ outcome_unknown
+native turn/effects:  not_observed → running → completed/failed/interrupted/outcome_unknown
 ```
 
-Anthropic receipt cannot fabricate host admission, and host admission cannot fabricate provider
-replication. A timeout after a provider write begins is `outcome_unknown` until history/SSE
-reconciliation supplies positive evidence that resolves the result.
+Anthropic receipt cannot fabricate host forwarding, and host forwarding cannot fabricate native
+acceptance or provider replication. A private worker delivery ACK also cannot fabricate native
+acceptance. A timeout after a provider or private-RC write begins is `outcome_unknown` until exact
+native/provider reconciliation supplies positive evidence that resolves the result.
 
 ### 4.1 Official-origin input
 
@@ -143,30 +174,74 @@ reconciliation supplies positive evidence that resolves the result.
    records across prior connector incarnations.
 3. The per-chat actor creates a proposal only for a proven-new event. A replay links its prior command;
    collision or ambiguous boundary evidence records a recovery gap and creates no command.
-4. Only an admitted command crosses the private inner RC façade.
+4. Only a proposal this server chose to forward crosses the private inner RC façade. Native Claude
+   then decides whether and when it applies.
 5. Provider ingress transport ACK/cursor advances only after the protocol's required durable decision. It
    proves host receipt, not inner execution.
-6. The command status projects to the local UI and remote-claw web. Its existing Anthropic user item
-   is not posted back to itself; an admitted user representation may project to enabled non-source
-   provider bindings.
+6. Server forwarding and native-delivery status project to remote-claw web. The real native TUI
+   renders native session state directly. The existing Anthropic user item is not posted back to
+   itself; a forwarded user representation may project to enabled non-source provider bindings.
 7. Later native assistant/tool/result observations project through causal outboxes to every enabled
    binding, including the originating Anthropic binding.
 
-### 4.2 Local or remote-claw-origin input
+### 4.2 Native-TUI and remote-claw-origin input
 
-1. The host commits a stable command, admission result, and causal projection outbox item.
-2. If admitted, it delivers the command inward without waiting for Anthropic; queued/rejected commands
-   do not cross the inner mutation path.
-3. It publishes the Anthropic representation independently when admitted and records that binding's
-   outward delivery state. Other enabled outward bindings receive their own ordered projections.
-4. The private inner echo and every returning provider echo correlate to the existing command rather than
-   becoming new executions.
-5. The local UI and remote-claw web project the complete order/delivery status. Each provider copy
-   includes only facts its protocol can represent.
+1. The person submits through Claude's real TUI and Claude applies its native local-input semantics.
+2. The private RC/transcript observer records that native action when exposed, correlates it against
+   existing remote proposals, and projects it outward. It never reflects it inward as a new command.
+3. A web or other remote-claw collaborator submission enters through its authenticated source binding.
+   The server orders/deduplicates it. It may queue or reject only when that binding can render the
+   outcome faithfully; otherwise a writable binding preserves the typed native intent and forwards it
+   promptly.
+4. A forwarded proposal uses the one private RC collaborator connection. Claude arbitrates it against
+   direct TUI input; positive native evidence, not the forwarding decision, establishes acceptance.
+5. Each provider copy includes only facts its protocol can represent. Returning native/provider echoes
+   correlate to existing proposals or native observations and never become new executions.
 
-In the client-driven structured mode, the inner PTY is display-only and a wrapper-owned local UI uses
-the coordinator command path, so the actor can commit and admit writes before private delivery. A
-separate raw-PTY debugging mode cannot join or mutate the shared logical chat.
+The target experience is Claude's normal keyboard-plus-Remote collaboration, with remote-claw
+occupying the one remote role and multiplexing its server-side collaborators behind it. Draft editing,
+cursor movement, rendering, busy/steer behavior, permissions, questions, controls, and reconnect remain
+native. A second unclassified native writer cannot join until its semantics and source identity are
+proven.
+
+### 4.3 Native acceptance and permission adjudication
+
+The private RC delivery ACK is only replay bookkeeping. The adapter advances a remote proposal to
+native `accepted` only from a version-pinned, stable correlation that joins the proposal's write-ahead
+attempt to Claude's own conversation evidence. The required correlation includes the submitted event
+UUID, any worker delivery/echo, the transcript user row and native session UUID, the inner
+provider-shaped request, and the resulting turn where those surfaces expose identifiers. Missing or
+conflicting links remain `outcome_unknown`; text equality, timing, an RC delivery ACK, or later
+assistant output alone is not sufficient. A reconnect must never redeliver an ACK-lost event merely
+because the private transport cannot prove that Claude applied it.
+
+Permissions and questions have three separate facts:
+
+1. remote-claw chooses at most one response among its own remote collaborators;
+2. that response may or may not cross the private RC boundary; and
+3. Claude decides whether the remote response or a direct native-TUI action wins.
+
+The server's chosen response is journaled before delivery, but every outward gate remains pending until
+Claude emits a version-pinned terminal cancellation, answer, tool result, or equivalent native record.
+A TUI-won or cancelled gate makes a later remote response stale. A lost response acknowledgement
+becomes `outcome_unknown`; remote-claw does not send a contradictory second answer. Interrupt or
+outside-client disconnect must not close a gate merely because remote-claw expects Claude to cancel it.
+The gate closes only from native terminal evidence or after the old native process is positively
+contained.
+
+### 4.4 Detach, takeover, and process lifetime
+
+Outside-client membership is independent of the private Claude attachment and native process. Closing
+an official app stream, web connection, or other remote-claw collaborator removes only that outside
+binding. It does not stop the inner Claude process, detach the real TUI, cancel an accepted local turn,
+close the private RC service, or cancel the separately supervised inference connector.
+
+A replacement private RC or coordinator epoch is not writable merely because it has a newer number.
+Before takeover, every request admitted under the old epoch must be positively terminal, recorded as
+`outcome_unknown` with the chat quarantined, or contained by stopping/fencing the old path so it cannot
+still reach Claude. Only an explicit runtime-owner policy may terminate the inner process. Graceful
+shutdown first fences new remote proposals, settles or records in-flight prompts, controls, gates, and
+inference attempts, and then chooses keep-alive or terminate.
 
 ## 5. Privacy and security
 
@@ -202,27 +277,46 @@ only sanitized fixtures/results.
 
 These are proof gates, not CLI phases:
 
-1. **Fake protocol connector.** Exercise registration, bridge, worker/app streams, ACKs, reconnect,
-   expiry, and ambiguous writes against deterministic services.
-2. **Provider isolation.** Start a real inner Claude with only private RC/API façades. Socket tracing
+1. **Retained pinned evidence.** Record the exact Claude Code version and binary hash, protocol epoch,
+   sanitized request/response/SSE fixtures, and the probe that produced them. The existing 2026-07-26
+   manual run was intentionally deleted and is supporting research only; prose and mocked shapes are
+   not a reproducible release gate.
+2. **Fake protocol connector.** Exercise registration, bridge, worker/app streams, ACKs, reconnect,
+   expiry, and ambiguous writes against deterministic services. Include worker ACK before native
+   application, native application followed by a lost worker ACK, reconnect redelivery, and a write
+   whose response is lost after it may have crossed the boundary.
+3. **Provider isolation.** Start a real inner Claude with only private RC/API façades. Socket tracing
    proves it and its descendants cannot contact Anthropic or read real provider credentials.
-3. **Single explicit real session.** A remote-claw-owned worker connector creates a test `cse_*`; one
+4. **Native-client substitution parity.** Pin Claude Code, capture its normal direct API/RC behavior,
+   and compare the same binary behind the private façades for initialization, local editing/Submit,
+   streaming, busy/steer, permissions, questions, controls, errors, and reconnect. Replay the same
+   provider responses where possible; every unexplained state-machine difference fails.
+5. **Single explicit real session.** A remote-claw-owned worker connector creates a test `cse_*`; one
    official client prompt reaches a fake or isolated inner engine only after journal commit.
-4. **Brokered inference.** A real inner turn completes through the terminating local inference/API
+6. **Brokered inference.** A real inner turn completes through the terminating local inference/API
    façade. Only the separately isolated remote-claw inference and outward Remote connectors open
    provider sockets; the inner process opens none.
-5. **Multi-writer correlation.** Local structured input, remote-claw viewer input, and at least two
-   official/custom clients race while idle and busy with one deterministic host admission stream and
-   no duplicate execution.
-6. **Source-namespace recovery.** Across connector restart and forced provider-session replacement,
+7. **Multi-writer correlation.** One real native TUI and one remote-claw private RC collaborator race
+   on the same Claude session while idle and busy. Behind remote-claw, viewer input and at least two
+   official/custom clients have one deterministic server proposal stream. Claude's observed native
+   order wins, and no echo or projection executes again. The fixture must prove the stable
+   proposal/worker/transcript/inference/turn join without text matching.
+8. **Permission and question first-winner.** Race a native-TUI answer, remote answer, native
+   cancellation, interrupt, response loss, and reconnect in every relevant order. Claude's terminal
+   gate state wins; the losing response is stale, no contradictory answer is sent, and an unresolved
+   gate remains visible or explicitly orphaned rather than being closed by a server-side guess.
+9. **Source-namespace recovery.** Across connector restart and forced provider-session replacement,
    old history retains its old namespace/command, only a coordinate proven beyond a versioned reset
    boundary may reuse a raw ID as new, and ambiguous/colliding ingress advances no ACK or cursor.
-7. **Controls and attachments.** Add one proven verb family at a time; advertise unsupported
+10. **Controls and attachments.** Add one proven verb family at a time; advertise unsupported
    capabilities as absent.
-8. **Crash and lifecycle matrix.** Cover journal/actor, connector, inner process, link, host restart,
-   OAuth rotation/revocation, worker JWT expiry/rebridge, epoch changes, archive, and history repair.
+11. **Crash and lifecycle matrix.** Cover journal/actor, connector, inner process, link, host restart,
+    OAuth rotation/revocation, worker JWT expiry/rebridge, epoch changes, archive, and history repair.
+    Prove that outside disconnect and coordinator restart leave a direct-TUI turn and private inference
+    alive; that old in-flight work is terminal, quarantined, or contained before a replacement epoch
+    writes; and that keep-alive versus terminate is an explicit runtime-owner decision.
 
-No real inner/provider-writable release occurs before gates 1–4. Passing the prompt matrix permits an
+No real inner/provider-writable release occurs before gates 1–7. Passing the prompt matrix permits an
 explicitly experimental release, not a general-availability claim.
 
 ## 7. Open questions
@@ -230,18 +324,21 @@ explicitly experimental release, not a general-availability claim.
 1. Which registration metadata makes a remote-claw-owned worker/session indistinguishable enough for
    official Claude clients?
 2. What exact response represents host queueing or rejection after Anthropic has received an official
-   event?
-3. What is the stable correlation among a submitted UUID, POST result, worker delivery/echo, client
-   history, and client SSE?
+   event? If none is faithfully visible in the official client, that binding cannot accept a hidden
+   queue/reject policy.
+3. What is the stable correlation among a submitted UUID, POST result, worker delivery/echo, transcript
+   row, inner `/v1/messages` request, native turn, client history, and client SSE? This blocks writable
+   prompt release rather than being deferred follow-up.
 4. What are the reliable reconnect cursor and bounded-history-overlap rules?
 5. How do worker JWT renewal, bridge replay, `worker_epoch`, archive, and successor-session lineage
    behave?
 6. Which app-side shapes implement interrupt, model/mode, permission, and AskUserQuestion responses?
 7. What is the upload API and its retention/privacy behavior?
-8. Can the inner Claude `/v1/messages` request be correlated to the structured local command delivered
-   through private RC without parsing ambiguous transcript output?
+8. Which version-pinned native record resolves a private-RC delivery ACK into accepted/rejected
+   application without parsing ambiguous transcript text?
 9. Which secure credential agent and OS stores should own login/refresh without sharing credentials
    inward?
 10. What compatibility policy is acceptable for an undocumented, version-sensitive protocol?
 
-The actionable delivery order is in [Client-driven Host Runtime](client-driven-host-runtime.md) §13.
+The actionable delivery order is in the
+[Client-driven Host Runtime delivery plan](client-driven-host-runtime.md#delivery-plan).

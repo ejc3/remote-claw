@@ -5,10 +5,11 @@ A custom client + relay for driving a **real `claude --remote-control` session**
 
 > **Selected next architecture:** evolve the per-session Claude wrapper into a
 > [client-driven host runtime](docs/client-driven-host-runtime.md) for Claude Code, Codex, OpenCode,
-> and tmux. Native clients keep their real conversation/context; a small local coordinator orders
-> input, correlates delivery, and translates between native clients, official Anthropic Remote,
-> ChatGPT Remote connections, and remote-claw web. Wrapped inner Claude, Codex, and OpenCode processes
-> never contact their providers directly.
+> and tmux. Native clients keep their real conversation/context; a small local coordinator orders only
+> proposals from remote-claw's direct collaborators and correlates delivery across official Anthropic
+> Remote, ChatGPT Remote connections, and remote-claw web. Direct TUI input stays on the native path,
+> and the native harness decides the final local/remote interleaving and mutation. Wrapped inner Claude,
+> Codex, and OpenCode processes never contact their providers directly.
 > This is under implementation. A0.1 adds the neutral host registration contract and routes Claude
 > MITM sessions through one process-local registrar; OpenCode/tmux migration, durable coordination,
 > complete inner-provider isolation, Codex, and the official-client connectors remain later phases.
@@ -67,7 +68,8 @@ ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `
 - **`packages/clawsec`** — the crypto core: the HKDF key hierarchy, per-message AES-256-GCM,
   the §8 wire envelope, the derivable channel tokens, and the `rcp1_` viewer **pass**.
 - **`apps/web`** — the pluggable **broker** (`POST /api/relay`, `GET /api/stream`; a per-identity
-  bus + per-session relay) with ephemeral Vercel Workflow and durable SQLite/libSQL backends. The
+  bus + per-session relay) with capped Vercel Workflow run streams and durable SQLite/libSQL
+  backends. The
   current host and viewer use sealed mode with every backend, so the backend sees only ciphertext and
   routing metadata. It also serves the mobile-first **web client** (paste a pass → discover sessions →
   drive them, decrypted in-browser).
@@ -92,8 +94,8 @@ replies), tool-permission grants, and multi-client — all through the real brok
 runtime. The real binary's leg is covered by the in-repo Phase-0 capture + the gated
 `real-rc.prove.test.ts` (needs a login + PTY).
 
-Separately, the native **`stream-json` SDK transport** (`HostRelay` + `ClaudeStreamSession`, `--print
---input-format stream-json`) remains as the **documented cousin** for cross-checking the protocol and
+Separately, the native **`stream-json` SDK transport** (`HostRelay` + `ClaudeStreamSession`,
+`--print --input-format stream-json`) remains as the **documented cousin** for cross-checking the protocol and
 for an inference-agnostic headless path — point it at **Amazon Bedrock**/Vertex (`{ bedrock: true }`)
 and claude routes inference via the AWS SDK while remote-claw relays it, never touching the creds.
 
@@ -101,8 +103,9 @@ and claude routes inference via the AWS SDK while remote-claw relays it, never t
 threat model, key hierarchy, broker, and phased plan.
 
 🧭 **Next host runtime:** [`docs/client-driven-host-runtime.md`](docs/client-driven-host-runtime.md) —
-the selected inside-adapter → coordinator → outside-adapter design for Claude Code, Codex, OpenCode,
-tmux, official Remote clients, and remote-claw web.
+the selected design for Claude Code, Codex, OpenCode, tmux, official Remote clients, and remote-claw
+web. A person at the native TUI talks directly to the native harness; remote collaborators enter
+through an adapter and local coordinator, and the native harness decides what actually applies.
 
 🔑 **Credential handoff:** [`docs/ephemeral-handoff.md`](docs/ephemeral-handoff.md) — the one-time-key
 (OTK) ephemeral handoff that replaces the forever pass-in-QR with a single-use, short-TTL bootstrap
@@ -167,13 +170,15 @@ Anthropic Remote session.
 The active sequence is A0.2 OpenCode/tmux registration → A1 runtime owner/control journal → A2
 OpenCode vertical slice → wrapped Claude → wrapped Codex/ChatGPT Remote → tmux recovery. A0.1, the
 neutral seam plus Claude MITM migration, is implemented. The proof gates and per-PR boundaries are in
-[Client-driven Host Runtime §13](docs/client-driven-host-runtime.md#13-delivery-plan).
+[Client-driven Host Runtime delivery plan](docs/client-driven-host-runtime.md#delivery-plan).
 
 ## ⚠️ Security
 
-The v2 broker authenticates requests and sees only sealed frames plus routing metadata; the host's TLS
-proxy binds to `127.0.0.1`. Keep the machine secret/pass, provider credentials, generated CA key, and
-Vercel bypass secret private. The current default Anthropic inference path intentionally forwards
+The v2 broker authenticates identity-scoped data and recovery requests and sees only sealed frames plus
+routing metadata. The one-time handoff bootstrap is a separate, unauthenticated high-entropy capability:
+its proof, short TTL, body cap, single-read store, and required edge rate limit are its gate. The host's
+TLS proxy binds to `127.0.0.1`. Keep the machine secret/pass, provider credentials, generated CA key,
+and Vercel bypass secret private. The current default Anthropic inference path intentionally forwards
 non-RC traffic and is not yet the selected runtime's process-isolation boundary. The release target
 requires synthetic inner credentials, separate connector credentials, and a network fence that
 prevents direct provider fallback.

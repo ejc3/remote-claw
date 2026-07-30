@@ -137,9 +137,9 @@ export async function runIdentity(
   err(`  created_at:  ${id.createdAt ?? "unknown"}\n`);
   err(`  secret file: ${id.secretPath}\n`);
   err("  Re-show the secret with --rc-show-secret.\n");
-  err("  To REPLACE it — mint a NEW, unrelated identity and abandon this one (destructive and\n");
-  err("  irreversible; NOT a revocation: a leaked old secret keeps working until you re-onboard\n");
-  err("  every device) — re-run with the confirm guard:\n");
+  err("  To REPLACE it — mint a NEW, unrelated identity and abandon this one (destructive,\n");
+  err("  irreversible, and NOT a revocation: leaked credentials keep working on retained old\n");
+  err("  routes). Stop/restart every relay using it, re-onboard your devices, then run:\n");
   err(`    remote-claw --rc-identity --rc-confirm ${idHex}${keepOld ? " --rc-keep-old" : ""}\n`);
   return 0;
 }
@@ -238,7 +238,9 @@ async function replaceExisting(
 
   err("remote-claw: replaced identity (minted a new, unrelated one; abandoned the old)\n");
   err(`  abandoned:   ${oldHex} — NOT revoked; its bus + keys still work for anyone holding the\n`);
-  err("               old secret. Re-onboard every device now.\n");
+  err(
+    "               old secret. Stop/restart every relay using it, then re-onboard your devices.\n",
+  );
   err(`  new id:      ${newHex}\n`);
   err(`  created_at:  ${result.createdAt}\n`);
   err(`  secret file: ${secretPath}\n`);

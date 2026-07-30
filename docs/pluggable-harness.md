@@ -19,9 +19,11 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 **Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
 the A0 registrar's `rcb_*` is only a process-local lease. Neither is the stable logical-chat ID
 targeted by A1, and neither may stand in for an engine's semantic conversation ID. The future durable
-coordinator must map a logical chat separately to native and outward bindings; a proven transport
-replacement may rotate its runtime/channel incarnation without changing that chat. This document
-does not claim that recovery exists today.
+coordinator must key the canonical chat by `(collaborationServerId, logicalChatId)` and map that pair
+separately to native and outward bindings. Machine-facing route, row, alias, and cache addresses add
+`identity_id` to that pair. A proven transport replacement may rotate its runtime/channel incarnation
+without changing either canonical chat coordinate. This document does not claim that recovery exists
+today.
 
 The common relay port is **`Session`** (`packages/cli/src/host/rc/session.ts`). Each current harness
 path produces one or more `Session`s, fills them with Claude-shaped output, and consumes the input the
@@ -71,18 +73,38 @@ names). A tmux driver tails that file and `pushUpstream`s it nearly verbatim —
 `parentToolUseID` → `parent_tool_use_id` for sub-agent nesting.
 
 ```
-            ┌──────────── HARNESS PATH (implemented separately) ──────┐
- harness ──▶│ CAPTURE: native output → canonical payload                │──▶ session.pushUpstream()
- (claude /  │ INJECT:  session.followDownstream() → native input        │◀── session (downstream queue)
-  tmux /    │ STATUS:  session.workerStatus = … ; session.wake()        │
-  opencode) │ PERMS:   pushUpstream(can_use_tool) ↔ followDownstream(control_response)
-            └──────────────────────────┬───────────────────────────────┘
-                                        │  Session  (THE SEAM — unchanged)
-            ┌───────────────────────────▼──────────────── UNCHANGED ───┐
-            │ HostRcRelay.serve()  →  BrokerClient  →  broker router    │
-            │                       ◀─ web viewer (apps/web)            │
-            └──────────────────────────────────────────────────────────┘
+local path
+  person
+    ⇅
+  native TUI
+    ⇅
+  native harness
+
+remote path
+  same native harness
+    ⇅
+  chosen adapter
+    ├─ capture output
+    ├─ inject input
+    ├─ report status
+    └─ bridge permissions
+    ⇅
+  Session
+    ⇅
+  HostRcRelay
+    ⇅
+  broker + web viewer
 ```
+
+Each current harness can coexist with a person using a native surface: the real Claude TUI in MITM
+mode, the attached Claude pane in tmux mode, or a native OpenCode TUI sharing the server. That direct
+local input does not pass through `Session` before native execution today. Tmux and OpenCode can mark
+the resulting unmatched user record `local_prompt:true` after the fact; the MITM path does not add that
+marker, so the relay drops its ordinary user echo. The selected host runtime keeps that direct TUI path
+and makes remote-claw the one remote collaborator for structured Claude, Codex, and OpenCode adapters.
+Its server may multiplex many remote users behind that one adapter connection; the native harness
+remains the final arbiter. Tmux does not expose two native collaborators: the person and injector share
+one editor keystream and require an exclusive/quiescent input boundary to avoid merged drafts.
 
 ---
 
@@ -359,8 +381,11 @@ export interface ToolResultBlock {
   (including the high-frequency `thinking_tokens` counter) is intentionally dropped.
 - A `user` event's text is normally dropped because the inbound pump already echoes every viewer
   prompt; `tool_result` blocks still relay. The deliberate exception is a non-MITM driver's
-  `local_prompt:true` event: OpenCode and tmux use an injected-text ledger to mark only prompts
-  observed from their local/native UI, and the relay surfaces that string text once.
+  `local_prompt:true` event: OpenCode and tmux use an injected-text ledger to mark unmatched native
+  user records that were not injected by this driver, and the relay surfaces that string text once.
+  For tmux that identifies pane input; for OpenCode it may also be another client or backfilled history.
+- The MITM path does not mark native-TUI prompts `local_prompt`, so their ordinary user echo is
+  dropped even though Claude may execute the action and later output still flows upstream.
 
 ---
 
@@ -401,10 +426,38 @@ for await (const ev of session.followDownstream(gen, () => signal.aborted)) {
 
 Note: `initialize` is a `control_request` queued first by `pushInitialize()`; a driver typically
 ignores it (it has no harness analogue) but must let it pass through the stream.
-Non-MITM drivers acknowledge each event with `session.ack(ev.eventId)` only after its native handling
-has completed successfully, including handled no-ops such as `initialize`. Without that ACK, a later
-`claimWorkerStream()` replays the event. The current OpenCode pump keeps draining after a failed event,
-so replay requires a new claimant; an ordinary OpenCode SSE reconnect does not create one.
+Non-MITM drivers acknowledge each event with `session.ack(ev.eventId)` after adapter dispatch or
+deliberate compatibility handling returns, including handled no-ops such as `initialize`. This is
+replay bookkeeping, not proof that the native harness accepted, ordered, or applied the action:
+OpenCode text is ACKed after a transport-only 204 and `/compact` before summarize settles. Without that
+ACK, a later `claimWorkerStream()` replays the event. The current OpenCode pump keeps draining after a
+failed event, so replay requires a new claimant; an ordinary OpenCode SSE reconnect does not create
+one.
+
+Native-TUI input is not downstream injection in the current harness contract. The native client
+accepts it directly; OpenCode/tmux may project it post-hoc and MITM omits its user text from the viewer.
+Consequently `Session` cannot establish the final native order across TUI and viewer writes. The
+selected design retains the TUI as one native participant and represents remote-claw as the other.
+The future control journal orders remote-claw's server-side collaborators, then records the native
+harness's observed interleaving as the applied order.
+
+The selected neutral host contract does not let a driver decide whether remote work is admissible.
+Every web, official-client, automation, or nested proposal first enters the same server-wide command
+order and receives one signed final result. Only a signed admission may create one adapter attempt;
+queued and rejected results create none. A new submission and a steer of a running turn remain
+different commands even when the harness is busy. The person's direct TUI action bypasses this remote
+decision path, and the native harness—not `Session`—decides the final local/remote order and what was
+actually applied.
+
+For OpenCode, the selected path does not promote this compatibility pump's `/compact`, interrupt, or
+permission behavior. Its first writable A2 vectors are exactly server-scoped `{new_chat}` and
+binding-scoped `{user_text}`. After common admission, the adapter must build the one exact native
+request, use only the current fenced front door, and match the native message and order through
+a complete, ordered history snapshot plus the matching live event only when that snapshot method
+requires one. A 204, an ACK, missing read-back, or a different request shape is not success. Compact,
+interrupt, steer, blank submit, permission, and every other unproved family is stored as rejected
+before native work. Stock `1.17.5` remains unsupported for writable A2 until the real-TUI front door,
+complete route manifest, raw-listener/tool fence, and observer linearization are proved.
 
 ---
 
@@ -568,12 +621,40 @@ is implemented: each path supplies `DriverCapabilities`, the relay rides them on
 for validated readiness before it starts the bridge. Because OpenCode/tmux currently announce before
 setup is fully known, §8 records cases where those declarations can still overstate support.
 
+A person can also use the harness's native TUI directly. That local path is outside the current
+`Session` relay seam: tmux/OpenCode surface unmatched prompts post-hoc, while MITM drops ordinary
+native user echoes. The selected runtime retains one logical remote-claw collaborator attachment per
+structured session. Claude may realize that as a session-scoped physical connection. OpenCode instead
+needs one epoch-fenced adapter lease enforced at its private HTTP endpoint because its server-wide SSE
+plus independent HTTP requests expose no persistent writer connection identity. Replacing that lease
+must also settle or quarantine requests already admitted under the old epoch; checking the epoch only
+when a request arrives cannot retract a mutation forwarded to OpenCode. Codex uses one daemon-wide
+native bridge with a separate logical binding per managed top-level chat thread; child-agent threads
+stay nested native evidence until retained lineage proof establishes another user-visible mapping.
+remote-claw can aggregate web, official-client, automation, or nested-server collaborators behind that
+attachment; the native harness decides what is applied. For Claude, Codex, and OpenCode, any
+native-client-facing façade or proxy sits below the future neutral host contract and must be
+behaviorally indistinguishable from the pinned product's normal service. The current `Session` seam is
+only a Claude-shaped compatibility projection; it is not that common adjudicator and cannot authorize
+native work.
+Native TUI traffic is never translated into the Claude-shaped `Session` schema on its way to the
+native harness. Tmux cannot meet that structured drop-in contract and remains the explicit
+lower-fidelity fallback.
+
+A nested remote-claw server uses the same common decision path as any other collaborator. Before
+sending inward, it jointly finalizes the signed result and signed lineage for that command. It calls
+the nested operation complete only after a full downstream receipt ties the exact source event,
+command, chosen target, and target server's signed result together. A partial ACK cannot release work.
+Each edge carries commands inward and observations outward without converting one direction into the
+other, so recursion cannot feed an echo back as a command. Nesting adds server boundaries only;
+Claude, Codex, or OpenCode appears once, at the innermost end.
+
 Stable host → project → logical-chat identity remains an A1 target above this seam. It must be
 persisted separately from `Session.id`, the `rcb_*` lease, engine-native IDs, and provider/broker
 connection IDs.
 
-Alongside capabilities, each harness path supplies a `HarnessDescriptor` — `{ agent:
-"claude-code" | "opencode"; mode: "rc" | "tmux" | "opencode" }` (the consts `MITM_HARNESS` /
+Alongside capabilities, each harness path supplies a `HarnessDescriptor` —
+`{ agent: "claude-code" | "opencode"; mode: "rc" | "tmux" | "opencode" }` (the consts `MITM_HARNESS` /
 `TMUX_HARNESS` / `OPENCODE_HARNESS`) — which the relay rides on every `session_announce` (#164).
 The viewer labels each row in the session list from it (**Claude Code · RC** / **Claude Code · TX**
 / **opencode**) so the three harnesses don't look identical; a legacy host that omits it is treated
