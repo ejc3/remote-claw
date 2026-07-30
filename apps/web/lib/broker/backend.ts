@@ -11,22 +11,22 @@ import type { WireFrame } from "@remote-claw/clawsec";
 // LocalBackend for `next dev` / tests — without the routes (or any client, which only ever speaks
 // plain HTTP/SSE) knowing which is underneath.
 
-/** What a publisher may put on a channel: a wire frame, or the teardown sentinel (cap-roll/§6B). */
+/** What a publisher may put on a channel: a wire frame, or the explicit teardown sentinel (§6B). */
 export type RelayPayload = WireFrame | { __close: true };
 
 /** The teardown sentinel narrows a payload: completing a channel closes its stream and frees the
- *  token for a fresh start (the Vercel cap-roll handoff; a no-op end-of-life on other backends). */
+ *  token for a fresh start (an explicit close; a no-op end-of-life on other backends). */
 export function isClose(p: RelayPayload): p is { __close: true } {
   return (p as { __close?: boolean }).__close === true;
 }
 
 /**
  * Thrown by publish() ONLY when the channel completed/disposed BETWEEN resolving it and delivering
- * the frame (a concurrent __close or Vercel cap-roll). The relay route maps this to 409 — the client
- * re-posts the same (deterministic-msg_id) frame, which the fresh channel dedups. Any OTHER publish
- * failure (e.g. the channel never came up) must NOT be a 409: it propagates as a 500 so the client
- * fails fast instead of retry-looping a hard outage. (Keeping these distinct preserves the pre-port
- * behavior, where only the resume step was inside the route's 409 catch.)
+ * the frame (for example, a concurrent explicit close). For Workflow this is the SDK's typed
+ * HookNotFound resume race, not an arbitrary resumeHook exception. The relay route maps this to 409
+ * so the client re-posts the same deterministic-msg_id frame, which the fresh channel dedups. Any
+ * OTHER publish failure must NOT be a 409: it propagates as a 500 so the client fails fast instead of
+ * retry-looping a hard outage.
  */
 export class PublishConflictError extends Error {
   constructor(message: string) {
@@ -50,9 +50,10 @@ export interface BrokerBackend {
   /**
    * Resume-or-start the token's channel and deliver one payload (a frame, or the close sentinel).
    * The FIRST publisher to a token brings the channel into existence; later publishes resume it.
-   * Throws if the channel completed/disposed between resolve and deliver (the route maps that to a
-   * 409 so the client retries) — a delivery must never be silently dropped (it would strand a
-   * subscriber's ordered stream on a permanent gap).
+   * Throws PublishConflictError only if the channel completed/disposed between resolve and deliver
+   * (the route maps that typed race to 409 so the client retries). Other publish failures preserve
+   * their hard-failure type. A delivery must never be silently dropped because that would strand a
+   * subscriber's ordered stream on a permanent gap.
    */
   publish(token: string, payload: RelayPayload): Promise<PublishResult>;
 

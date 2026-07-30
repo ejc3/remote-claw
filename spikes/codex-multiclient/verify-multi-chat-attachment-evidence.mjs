@@ -5,45 +5,24 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	assertCapturedAt,
+	assertNoCredentialEnvironmentNames,
+	assertNoHostPaths,
+	assertUniqueIdentifiers,
+	EXPECTED_CODEX_BINARY_SHA256,
+	EXPECTED_ISOLATED_ENVIRONMENT_NAMES,
+	NAMESPACE_ID_PATTERN,
+	outputRecord,
+	SELECTED_PROJECTION_METHODS,
+	UUID_PATTERN,
+} from "./evidence-assertions.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const probePath = join(root, "multi-chat-attachment-probe.mjs");
 const evidencePath = join(root, "evidence-multi-chat-attachment-0.146.0.json");
-const EXPECTED_CODEX_BINARY_SHA256 =
-	"cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6";
 const EXPECTED_PROBE_SHA256 =
-	"aaaa9c633a857c62b6527bb6d5bce3d5bb749b41eb727d02b72f0fa7c53ab5c3";
-const EXPECTED_ISOLATED_ENVIRONMENT_NAMES = [
-	"ALL_PROXY",
-	"CODEX_HOME",
-	"HOME",
-	"HTTPS_PROXY",
-	"HTTP_PROXY",
-	"LANG",
-	"LC_ALL",
-	"LC_CTYPE",
-	"LOGNAME",
-	"NO_PROXY",
-	"PATH",
-	"RUST_LOG",
-	"TERM",
-	"USER",
-	"ZDOTDIR",
-	"all_proxy",
-	"http_proxy",
-	"https_proxy",
-	"no_proxy",
-];
-const NAMESPACE_ID_PATTERN = /^net:\[\d+\]$/;
-const UUID_PATTERN =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const EXPECTED_METHODS = [
-	"turn/started",
-	"item/started",
-	"item/commandExecution/outputDelta",
-	"item/completed",
-	"turn/completed",
-];
+	"f1f6a14c69a1d8650cbc6519c129d7afc50e96c43e968d9866952615569065ba";
 const EXPECTED_COMMANDS = [
 	{
 		absent: ["TUI_B", "HOST"],
@@ -87,9 +66,11 @@ const [probeBytes, evidenceBytes] = await Promise.all([
 	readFile(probePath),
 	readFile(evidencePath),
 ]);
-const evidence = JSON.parse(evidenceBytes.toString("utf8"));
+const evidenceText = evidenceBytes.toString("utf8");
+const evidence = JSON.parse(evidenceText);
 const probeSha256 = createHash("sha256").update(probeBytes).digest("hex");
 
+assertNoHostPaths(evidenceText);
 assert.equal(evidence.probe.file, "multi-chat-attachment-probe.mjs");
 assert.equal(probeSha256, EXPECTED_PROBE_SHA256, "multi-chat probe drifted");
 assert.equal(
@@ -98,7 +79,7 @@ assert.equal(
 	"multi-chat evidence names a different probe",
 );
 assert.match(evidence.probe.nodeVersion, /^v22\./);
-assert.ok(Number.isFinite(Date.parse(evidence.capturedAt)));
+assertCapturedAt(evidence.capturedAt);
 assert.match(evidence.proofScope, /ordinary top-level thread\/start behavior/);
 assert.match(evidence.scopeBoundary, /does not exercise.*ThreadSpawn/);
 
@@ -116,6 +97,7 @@ assert.deepEqual(
 );
 assert.equal(evidence.codex.platform, "linux");
 assert.equal(evidence.codex.architecture, "arm64");
+assert.equal(evidence.codex.binaryPath, "<codex-binary>");
 
 assert.deepEqual(Object.keys(evidence.clients).sort(), [
 	"HOST",
@@ -272,17 +254,9 @@ assert.deepEqual(
 	evidence.isolation.appServerEnvironmentVariableNames,
 	EXPECTED_ISOLATED_ENVIRONMENT_NAMES,
 );
-for (const forbiddenName of [
-	"OPENAI_API_KEY",
-	"CHATGPT_ACCESS_TOKEN",
-	"CODEX_API_KEY",
-]) {
-	assert.ok(
-		!evidence.isolation.appServerEnvironmentVariableNames.includes(
-			forbiddenName,
-		),
-	);
-}
+assertNoCredentialEnvironmentNames(
+	evidence.isolation.appServerEnvironmentVariableNames,
+);
 assert.deepEqual(evidence.cleanup, {
 	allClientSocketsClosed: true,
 	appServerExit: {
@@ -301,7 +275,7 @@ console.log(
 function verifyProjection(projection, command) {
 	assert.deepEqual(
 		projection.map((event) => event.method),
-		EXPECTED_METHODS,
+		SELECTED_PROJECTION_METHODS,
 	);
 	for (const event of projection) {
 		assert.equal(event.threadId, command.threadId);
@@ -327,23 +301,4 @@ function verifyEncoding(encoded) {
 	const bytes = Buffer.from(encoded.base64, "base64");
 	assert.equal(bytes.length, encoded.byteLength);
 	assert.equal(bytes.toString("utf8"), encoded.utf8);
-}
-
-function assertUniqueIdentifiers(identifiers) {
-	for (const identifier of identifiers) {
-		assert.match(identifier, UUID_PATTERN);
-	}
-	assert.equal(
-		new Set(identifiers).size,
-		identifiers.length,
-		"native identifiers must be pairwise distinct",
-	);
-}
-
-function outputRecord(utf8) {
-	return {
-		base64: Buffer.from(utf8).toString("base64"),
-		byteLength: Buffer.byteLength(utf8),
-		utf8,
-	};
 }

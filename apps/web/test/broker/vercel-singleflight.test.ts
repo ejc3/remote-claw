@@ -8,6 +8,7 @@
 // the prior one died (no stale-promise caching).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HookNotFoundError, WorkflowWorldError } from "workflow/errors";
 
 vi.mock("workflow/api", () => ({
   getHookByToken: vi.fn(),
@@ -17,7 +18,7 @@ vi.mock("workflow/api", () => ({
 }));
 
 import { getHookByToken, resumeHook, start } from "workflow/api";
-import type { RelayPayload } from "../../lib/broker/backend";
+import { PublishConflictError, type RelayPayload } from "../../lib/broker/backend";
 import { VercelBackend } from "../../lib/broker/vercel";
 
 const mockStart = vi.mocked(start);
@@ -128,5 +129,40 @@ describe("VercelBackend ensureChannel singleflight", () => {
     const r = await backend.publish("bus:beadbeadbeadbeadbeadbeadbeadbead", FRAME);
     expect(mockStart).toHaveBeenCalledTimes(2);
     expect(r.channelId).toBe("run-1");
+  });
+});
+
+describe("VercelBackend resumeHook error classification", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetHook.mockResolvedValue({ runId: "run-live" } as never);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("classifies Workflow's typed vanished-hook race as a retryable publish conflict", async () => {
+    const token = "bus:facefacefacefacefacefacefaceface";
+    mockResume.mockRejectedValue(new HookNotFoundError(token));
+
+    const publish = new VercelBackend().publish(token, FRAME);
+
+    await expect(publish).rejects.toBeInstanceOf(PublishConflictError);
+    await expect(publish).rejects.toThrow("Hook not found");
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(mockResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates an unrelated resume failure unchanged instead of labeling it retryable", async () => {
+    const failure = new WorkflowWorldError("workflow event store unavailable", { status: 503 });
+    mockResume.mockRejectedValue(failure);
+
+    const publish = new VercelBackend().publish("bus:feedfeedfeedfeedfeedfeedfeedfeed", FRAME);
+
+    await expect(publish).rejects.toBe(failure);
+    expect(PublishConflictError.is(failure)).toBe(false);
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(mockResume).toHaveBeenCalledTimes(1);
   });
 });

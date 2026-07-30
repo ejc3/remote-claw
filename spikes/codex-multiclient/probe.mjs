@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 const EXPECTED_CODEX_VERSION = "codex-cli 0.146.0";
+const EXPECTED_CODEX_BINARY_SHA256 =
+	"cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6";
 const EXPECTED_EMPTY_THREAD_RESUME_ERROR = {
 	code: -32600,
 	message: "no rollout found for thread id <empty-thread>",
@@ -171,6 +173,10 @@ async function runContainedProbe() {
 		sha256File(codexBinary),
 		sha256File(scriptPath),
 	]);
+	assert(
+		codexBinarySha256 === EXPECTED_CODEX_BINARY_SHA256,
+		`Codex binary hash changed: ${codexBinarySha256}`,
+	);
 	await executeProbe({
 		codexBinary,
 		codexBinarySha256,
@@ -397,7 +403,7 @@ async function executeProbe(metadata) {
 			},
 			codex: {
 				version: metadata.codexVersion,
-				binaryPath: metadata.codexBinary,
+				binaryPath: "<codex-binary>",
 				binarySha256: metadata.codexBinarySha256,
 				platform: process.platform,
 				architecture: process.arch,

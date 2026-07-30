@@ -19,9 +19,11 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 **Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
 the A0 registrar's `rcb_*` is only a process-local lease. Neither is the stable logical-chat ID
 targeted by A1, and neither may stand in for an engine's semantic conversation ID. The future durable
-coordinator must map a logical chat separately to native and outward bindings; a proven transport
-replacement may rotate its runtime/channel incarnation without changing that chat. This document
-does not claim that recovery exists today.
+coordinator must key the canonical chat by `(collaborationServerId, logicalChatId)` and map that pair
+separately to native and outward bindings. Machine-facing route, row, alias, and cache addresses add
+`identity_id` to that pair. A proven transport replacement may rotate its runtime/channel incarnation
+without changing either canonical chat coordinate. This document does not claim that recovery exists
+today.
 
 The common relay port is **`Session`** (`packages/cli/src/host/rc/session.ts`). Each current harness
 path produces one or more `Session`s, fills them with Claude-shaped output, and consumes the input the
@@ -439,6 +441,24 @@ selected design retains the TUI as one native participant and represents remote-
 The future control journal orders remote-claw's server-side collaborators, then records the native
 harness's observed interleaving as the applied order.
 
+The selected neutral host contract does not let a driver decide whether remote work is admissible.
+Every web, official-client, automation, or nested proposal first enters the same server-wide command
+order and receives one signed final result. Only a signed admission may create one adapter attempt;
+queued and rejected results create none. A new submission and a steer of a running turn remain
+different commands even when the harness is busy. The person's direct TUI action bypasses this remote
+decision path, and the native harness—not `Session`—decides the final local/remote order and what was
+actually applied.
+
+For OpenCode, the selected path does not promote this compatibility pump's `/compact`, interrupt, or
+permission behavior. Its first writable A2 vectors are exactly server-scoped `{new_chat}` and
+binding-scoped `{user_text}`. After common admission, the adapter must build the one exact native
+request, use only the current fenced front door, and match the native message and order through
+a complete, ordered history snapshot plus the matching live event only when that snapshot method
+requires one. A 204, an ACK, missing read-back, or a different request shape is not success. Compact,
+interrupt, steer, blank submit, permission, and every other unproved family is stored as rejected
+before native work. Stock `1.17.5` remains unsupported for writable A2 until the real-TUI front door,
+complete route manifest, raw-listener/tool fence, and observer linearization are proved.
+
 ---
 
 ## 5. Permissions and attachments are relay-owned — keep drivers transparent
@@ -613,11 +633,21 @@ native bridge with a separate logical binding per managed top-level chat thread;
 stay nested native evidence until retained lineage proof establishes another user-visible mapping.
 remote-claw can aggregate web, official-client, automation, or nested-server collaborators behind that
 attachment; the native harness decides what is applied. For Claude, Codex, and OpenCode, any
-native-client-facing façade or proxy sits below this normalized `Session` seam and must be
-behaviorally indistinguishable from the pinned product's normal service.
+native-client-facing façade or proxy sits below the future neutral host contract and must be
+behaviorally indistinguishable from the pinned product's normal service. The current `Session` seam is
+only a Claude-shaped compatibility projection; it is not that common adjudicator and cannot authorize
+native work.
 Native TUI traffic is never translated into the Claude-shaped `Session` schema on its way to the
 native harness. Tmux cannot meet that structured drop-in contract and remains the explicit
 lower-fidelity fallback.
+
+A nested remote-claw server uses the same common decision path as any other collaborator. Before
+sending inward, it jointly finalizes the signed result and signed lineage for that command. It calls
+the nested operation complete only after a full downstream receipt ties the exact source event,
+command, chosen target, and target server's signed result together. A partial ACK cannot release work.
+Each edge carries commands inward and observations outward without converting one direction into the
+other, so recursion cannot feed an echo back as a command. Nesting adds server boundaries only;
+Claude, Codex, or OpenCode appears once, at the innermost end.
 
 Stable host → project → logical-chat identity remains an A1 target above this seam. It must be
 persisted separately from `Session.id`, the `rcb_*` lease, engine-native IDs, and provider/broker

@@ -1,5 +1,5 @@
 {
-	"capturedAt": "2026-07-29T19:58:31.145Z",
+	"capturedAt": "2026-07-29T21:22:36.747Z",
 	"proofScope": "model-free OpenCode 1.17.5 session-create metadata correlation and prompt_async caller-message-ID behavior on one private native server",
 	"scopeLimits": {
 		"modelReplyRequested": false,
@@ -11,13 +11,13 @@
 	"probe": {
 		"file": "probe.mjs",
 		"nodeVersion": "v22.23.1",
-		"sha256": "f7bbbecfa7ea7c28eedb4dc7836972f63fdaa03c996a18b9982aa1f0782a2939"
+		"sha256": "ebb2ca1ea48a0c86d31bce5746fd30a6913bd4f7ed54fe9928dad69fd8d50b6a"
 	},
 	"opencode": {
 		"version": "1.17.5",
-		"launcherPath": "/home/ubuntu/.local/share/pnpm/opencode",
+		"launcherPath": "<opencode-launcher>",
 		"launcherSha256": "d167e30e12cca32cc4a5da0003ee0deb1120b5ca5ee2d64cef23aec44a3c9fa9",
-		"nativeBinaryPath": "/home/ubuntu/.local/share/pnpm/global/5/.pnpm/opencode-ai@1.17.5/node_modules/opencode-ai/bin/opencode.exe",
+		"nativeBinaryPath": "<opencode-native-binary>",
 		"nativeBinarySha256": "fe1839ac5c417c5fc4a08dd268465907c3e8c6ca15e7ffd93f3a8dc46d63d339",
 		"platform": "linux",
 		"architecture": "arm64",
@@ -106,22 +106,22 @@
 	"sse": {
 		"decodedEventSequence": [
 			{
-				"id": "evt_faf7505f4001FfWP0BZkT0i27d",
+				"id": "evt_fafc2035e0014XRn07nOIggqDt",
 				"type": "server.connected",
 				"properties": {}
 			},
 			{
-				"id": "evt_faf7506da002YKYHi365ty791C",
+				"id": "evt_fafc20444002E4LMzfyxiH5RkZ",
 				"type": "session.created",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"info": {
-						"id": "ses_0508af925ffejgfrYahyNo9qB4",
-						"slug": "playful-circuit",
+						"id": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+						"slug": "brave-moon",
 						"version": "1.17.5",
 						"projectID": "global",
-						"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
-						"path": "tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"directory": "<temp-root>/workspace",
+						"path": "<temp-root>/workspace",
 						"title": "remote-claw-native-proof",
 						"metadata": {
 							"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
@@ -137,352 +137,352 @@
 							}
 						},
 						"time": {
-							"created": 1785355110106,
-							"updated": 1785355110106
+							"created": 1785360155716,
+							"updated": 1785360155716
 						}
 					}
 				}
 			},
 			{
-				"id": "evt_faf7507850018d2DNa6olupmwN",
+				"id": "evt_fafc204f1001h4TeeTFqvVMwwg",
 				"type": "plugin.added",
 				"properties": {
 					"id": "env"
 				}
 			},
 			{
-				"id": "evt_faf750789001ehTXnIDQPsBUu0",
+				"id": "evt_fafc204f5001BEmioeTMyrcMNa",
 				"type": "plugin.added",
 				"properties": {
 					"id": "agent"
 				}
 			},
 			{
-				"id": "evt_faf75078a001F1TFVhHrQQYshd",
+				"id": "evt_fafc204f7001w5vLFVzCuTx10T",
 				"type": "plugin.added",
 				"properties": {
 					"id": "command"
 				}
 			},
 			{
-				"id": "evt_faf75078c0017J4a1gC6z7pMrJ",
+				"id": "evt_fafc204f8001Yw9e2zxqTlYkal",
 				"type": "plugin.added",
 				"properties": {
 					"id": "skill"
 				}
 			},
 			{
-				"id": "evt_faf75078d001vP7uRA8GI8oEgH",
+				"id": "evt_fafc204f90013cgdtcAHM1U7j8",
 				"type": "plugin.added",
 				"properties": {
 					"id": "alibaba"
 				}
 			},
 			{
-				"id": "evt_faf75078d002kvBp5axKUD0MAR",
+				"id": "evt_fafc204f90020WYNDTKmn906Ib",
 				"type": "plugin.added",
 				"properties": {
 					"id": "amazon-bedrock"
 				}
 			},
 			{
-				"id": "evt_faf75078e001mlI5QcVQA2BAsR",
+				"id": "evt_fafc204fa0016gKW0O8B5bqf0A",
 				"type": "plugin.added",
 				"properties": {
 					"id": "anthropic"
 				}
 			},
 			{
-				"id": "evt_faf75078f001tmJocJ3LMKGSug",
+				"id": "evt_fafc204fb0013jEILylh0R9gj4",
 				"type": "plugin.added",
 				"properties": {
 					"id": "azure-cognitive-services"
 				}
 			},
 			{
-				"id": "evt_faf750790001FBMPrs9dAIscJ4",
+				"id": "evt_fafc204fc001hYlEAhxyNTfGU6",
 				"type": "plugin.added",
 				"properties": {
 					"id": "azure"
 				}
 			},
 			{
-				"id": "evt_faf750791001bJbJr9VyU3VnNN",
+				"id": "evt_fafc204fd001vdW6JKQz41qTzO",
 				"type": "plugin.added",
 				"properties": {
 					"id": "cerebras"
 				}
 			},
 			{
-				"id": "evt_faf750792001P1tsE37EyJRnsL",
+				"id": "evt_fafc204fe001Vj8FXo0cdp1TwV",
 				"type": "plugin.added",
 				"properties": {
 					"id": "cloudflare-ai-gateway"
 				}
 			},
 			{
-				"id": "evt_faf750792002jkpugBwdMO8B7M",
+				"id": "evt_fafc204fe002i3xGKvhhvPt4Vr",
 				"type": "plugin.added",
 				"properties": {
 					"id": "cloudflare-workers-ai"
 				}
 			},
 			{
-				"id": "evt_faf7507930013Ic87nuYnXjrmn",
+				"id": "evt_fafc204ff001pI2XjpGG4VTV0e",
 				"type": "plugin.added",
 				"properties": {
 					"id": "cohere"
 				}
 			},
 			{
-				"id": "evt_faf750794001X4YX4PZg2nlI0k",
+				"id": "evt_fafc20500001cT2wswY4JLI1P3",
 				"type": "plugin.added",
 				"properties": {
 					"id": "deepinfra"
 				}
 			},
 			{
-				"id": "evt_faf750795001NNcM2BENk7vH8W",
+				"id": "evt_fafc20501001RFyPPZhdbplTwF",
 				"type": "plugin.added",
 				"properties": {
 					"id": "gateway"
 				}
 			},
 			{
-				"id": "evt_faf750795002f7762Xgjhty7ie",
+				"id": "evt_fafc20501002GKAxPjM9Ynu1YO",
 				"type": "plugin.added",
 				"properties": {
 					"id": "github-copilot"
 				}
 			},
 			{
-				"id": "evt_faf75079f001pTeLgcZSfwd77J",
+				"id": "evt_fafc2050d001ldKqrSIQPiJr3P",
 				"type": "plugin.added",
 				"properties": {
 					"id": "gitlab"
 				}
 			},
 			{
-				"id": "evt_faf7507a0001KuhzFFMpZIQsHg",
+				"id": "evt_fafc2050e0017G3txgvySb3u76",
 				"type": "plugin.added",
 				"properties": {
 					"id": "google"
 				}
 			},
 			{
-				"id": "evt_faf7507a1001Yyw2b29JmbSFyz",
+				"id": "evt_fafc2050e002Gc94vP30UhUUjo",
 				"type": "plugin.added",
 				"properties": {
 					"id": "google-vertex-anthropic"
 				}
 			},
 			{
-				"id": "evt_faf7507a10024uIRZoi9PGebtG",
+				"id": "evt_fafc2050f001emo6ojYFVmLYL7",
 				"type": "plugin.added",
 				"properties": {
 					"id": "google-vertex"
 				}
 			},
 			{
-				"id": "evt_faf7507a2001V2ylvS3qS6Yc5a",
+				"id": "evt_fafc20510001EFv1DvVJjnMltr",
 				"type": "plugin.added",
 				"properties": {
 					"id": "groq"
 				}
 			},
 			{
-				"id": "evt_faf7507a3001puEiuplIk6cV06",
+				"id": "evt_fafc205100020Ln6oOM5JQwW8C",
 				"type": "plugin.added",
 				"properties": {
 					"id": "kilo"
 				}
 			},
 			{
-				"id": "evt_faf7507a3002LSNCU05fq9Aine",
+				"id": "evt_fafc20511001EaTfh9IRZxY3mY",
 				"type": "plugin.added",
 				"properties": {
 					"id": "llmgateway"
 				}
 			},
 			{
-				"id": "evt_faf7507a4001lJscimagVq5j9p",
+				"id": "evt_fafc20511002gFWFEVvRLXbnwm",
 				"type": "plugin.added",
 				"properties": {
 					"id": "mistral"
 				}
 			},
 			{
-				"id": "evt_faf7507a4002BQ2MFg8Z8qL8BQ",
+				"id": "evt_fafc205120014Dzc7ij1bqcZZK",
 				"type": "plugin.added",
 				"properties": {
 					"id": "nvidia"
 				}
 			},
 			{
-				"id": "evt_faf7507a5001zYcFX2X7Lee3GC",
+				"id": "evt_fafc20512002iL6O8EFgeTUojM",
 				"type": "plugin.added",
 				"properties": {
 					"id": "opencode"
 				}
 			},
 			{
-				"id": "evt_faf7507a5002ypE4K66lic2lgI",
+				"id": "evt_fafc20513001UBb138XRuUJyy2",
 				"type": "plugin.added",
 				"properties": {
 					"id": "snowflake-cortex"
 				}
 			},
 			{
-				"id": "evt_faf7507a600174fItRdYmL2aLj",
+				"id": "evt_fafc20513002ym741iTgIrm2Jy",
 				"type": "plugin.added",
 				"properties": {
 					"id": "openai-compatible"
 				}
 			},
 			{
-				"id": "evt_faf7507a70013eVufKv9CiorFZ",
+				"id": "evt_fafc20514001QkVYNCyEVCHi3T",
 				"type": "integration.updated",
 				"properties": {}
 			},
 			{
-				"id": "evt_faf7507a7002gxUbj7oM85k7bq",
+				"id": "evt_fafc20514002gIw73mQ1vcc8rQ",
 				"type": "plugin.added",
 				"properties": {
 					"id": "openai"
 				}
 			},
 			{
-				"id": "evt_faf7507a7003Txx8VyPnt5d7Bf",
+				"id": "evt_fafc20515001BwdBmMeApS2sQ3",
 				"type": "plugin.added",
 				"properties": {
 					"id": "openrouter"
 				}
 			},
 			{
-				"id": "evt_faf7507a8001555tqc3POJMqkl",
+				"id": "evt_fafc20516001IOk5fQqU84sDD8",
 				"type": "plugin.added",
 				"properties": {
 					"id": "perplexity"
 				}
 			},
 			{
-				"id": "evt_faf7507a9001k2N5oBcui49y62",
+				"id": "evt_fafc20516002WClEhkXsD6rgQs",
 				"type": "plugin.added",
 				"properties": {
 					"id": "sap-ai-core"
 				}
 			},
 			{
-				"id": "evt_faf7507af0018B4q0EO8rHKLsy",
+				"id": "evt_fafc2051c001RXL6YsAzvq9JMh",
 				"type": "plugin.added",
 				"properties": {
 					"id": "togetherai"
 				}
 			},
 			{
-				"id": "evt_faf7507af002uszDdyJiwlTlQJ",
+				"id": "evt_fafc2051d00157e9E530ObLdFp",
 				"type": "plugin.added",
 				"properties": {
 					"id": "vercel"
 				}
 			},
 			{
-				"id": "evt_faf7507b0001w57imOesWQth5L",
+				"id": "evt_fafc2051e001u8ig8VKcl09IXg",
 				"type": "plugin.added",
 				"properties": {
 					"id": "venice"
 				}
 			},
 			{
-				"id": "evt_faf7507b1001dudczG6KWVfmY4",
+				"id": "evt_fafc2051e0020HnYR24ch4VY6d",
 				"type": "plugin.added",
 				"properties": {
 					"id": "xai"
 				}
 			},
 			{
-				"id": "evt_faf7507b100279QHpEfG4frPc0",
+				"id": "evt_fafc2051f001Jlz3imWcDUCVrr",
 				"type": "plugin.added",
 				"properties": {
 					"id": "zenmux"
 				}
 			},
 			{
-				"id": "evt_faf7507b200153oyXQbTkqpTjr",
+				"id": "evt_fafc2051f002ytAhMgJ3Elx4k3",
 				"type": "plugin.added",
 				"properties": {
 					"id": "dynamic-provider"
 				}
 			},
 			{
-				"id": "evt_faf750800001JY4KqjxAXC3kZs",
+				"id": "evt_fafc2056d001p6tgBYQOSy0OV3",
 				"type": "integration.updated",
 				"properties": {}
 			},
 			{
-				"id": "evt_faf75089a001AyciBoqXLhgdgB",
+				"id": "evt_fafc206040013jd9GZfRV9mLsa",
 				"type": "plugin.added",
 				"properties": {
 					"id": "models-dev"
 				}
 			},
 			{
-				"id": "evt_faf75091c001CjzBz8iSFuIVfK",
+				"id": "evt_fafc20683001Ot0N0Jo3Sl6iQ4",
 				"type": "plugin.added",
 				"properties": {
 					"id": "config-provider"
 				}
 			},
 			{
-				"id": "evt_faf750928001kdn4J58b6iZpun",
+				"id": "evt_fafc2068f001SMx9uuzVunu9l0",
 				"type": "plugin.added",
 				"properties": {
 					"id": "config-agent"
 				}
 			},
 			{
-				"id": "evt_faf75092a001o8pji4R44mOLhE",
+				"id": "evt_fafc20692001y6cfiIpEzPtlY4",
 				"type": "plugin.added",
 				"properties": {
 					"id": "config-command"
 				}
 			},
 			{
-				"id": "evt_faf75092b001nWPPwddKaG6qfT",
+				"id": "evt_fafc20693001arbD10SYHklUL7",
 				"type": "plugin.added",
 				"properties": {
 					"id": "config-skill"
 				}
 			},
 			{
-				"id": "evt_faf75092d001hihyhTCSlq0srb",
+				"id": "evt_fafc20695001WLraiGWEISl3lw",
 				"type": "reference.updated",
 				"properties": {}
 			},
 			{
-				"id": "evt_faf75092d002qX7BUzzFLpNRzb",
+				"id": "evt_fafc20695002vqnnyxvHfk4kOj",
 				"type": "plugin.added",
 				"properties": {
 					"id": "core/config-reference"
 				}
 			},
 			{
-				"id": "evt_faf7509a1002f8pvusOi0r8aky",
+				"id": "evt_fafc2070b001C2SgDN1w9kVtLJ",
 				"type": "session.next.agent.switched",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
-					"messageID": "msg_faf7509a1001pSAoy6yftfNFTW",
-					"timestamp": "2026-07-29T19:58:30.817Z",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+					"messageID": "msg_fafc2070a0016dU3vU6dGSFH1G",
+					"timestamp": "2026-07-29T21:22:36.426Z",
 					"agent": "build"
 				}
 			},
 			{
-				"id": "evt_faf7509a7002CheH0QMK0ifAWZ",
+				"id": "evt_fafc20711002XBEWn5vm4RXM86",
 				"type": "session.next.model.switched",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
-					"messageID": "msg_faf7509a7001C4LG1rvK6vJo52",
-					"timestamp": "2026-07-29T19:58:30.817Z",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+					"messageID": "msg_fafc20711001U1CL7YK9NoUKET",
+					"timestamp": "2026-07-29T21:22:36.426Z",
 					"model": {
 						"id": "big-pickle",
 						"providerID": "opencode",
@@ -491,16 +491,16 @@
 				}
 			},
 			{
-				"id": "evt_faf7509ad001mqgPuN7b07ucHf",
+				"id": "evt_fafc20717001Evm0XUNnb2G7ku",
 				"type": "message.updated",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"info": {
 						"id": "msg_remoteclaw_native_proof_001",
 						"role": "user",
-						"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+						"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 						"time": {
-							"created": 1785355110817
+							"created": 1785360156426
 						},
 						"agent": "build",
 						"model": {
@@ -511,31 +511,31 @@
 				}
 			},
 			{
-				"id": "evt_faf7509c90011sFAGoJxDZxQBG",
+				"id": "evt_fafc207330015ld68l9jqeHuv5",
 				"type": "message.part.updated",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"part": {
 						"type": "text",
 						"text": "remote-claw opencode no-reply proof",
 						"messageID": "msg_remoteclaw_native_proof_001",
-						"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
-						"id": "prt_faf7509ac001cCdNzMef2zHig4"
+						"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+						"id": "prt_fafc20716001GBbGVvfFqX710a"
 					},
-					"time": 1785355110857
+					"time": 1785360156467
 				}
 			},
 			{
-				"id": "evt_faf7509cd001slZId4tep0KVr6",
+				"id": "evt_fafc20737001q39WrjsXwM0heS",
 				"type": "session.updated",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"info": {
-						"id": "ses_0508af925ffejgfrYahyNo9qB4",
-						"slug": "playful-circuit",
+						"id": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+						"slug": "brave-moon",
 						"projectID": "global",
-						"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
-						"path": "tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"directory": "<temp-root>/workspace",
+						"path": "<temp-root>/workspace",
 						"title": "remote-claw-native-proof",
 						"agent": "build",
 						"model": {
@@ -558,23 +558,23 @@
 							"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
 						},
 						"time": {
-							"created": 1785355110106,
-							"updated": 1785355110860
+							"created": 1785360155716,
+							"updated": 1785360156470
 						}
 					}
 				}
 			},
 			{
-				"id": "evt_faf7509ea001tZFFfiVe4mwC9e",
+				"id": "evt_fafc2074c001wdshwMJh888CSG",
 				"type": "message.updated",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"info": {
 						"id": "msg_remoteclaw_native_proof_001",
 						"role": "user",
-						"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+						"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 						"time": {
-							"created": 1785355110889
+							"created": 1785360156492
 						},
 						"agent": "build",
 						"model": {
@@ -585,31 +585,31 @@
 				}
 			},
 			{
-				"id": "evt_faf7509ec001jPFmEbYwhnmONM",
+				"id": "evt_fafc2074e001LJb0X0s2UDVnhB",
 				"type": "message.part.updated",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"part": {
 						"type": "text",
 						"text": "remote-claw opencode no-reply proof",
 						"messageID": "msg_remoteclaw_native_proof_001",
-						"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
-						"id": "prt_faf7509e9001PcPbmRddHe2HPf"
+						"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+						"id": "prt_fafc2074c001ymmZVWJInHpLRW"
 					},
-					"time": 1785355110891
+					"time": 1785360156494
 				}
 			},
 			{
-				"id": "evt_faf7509ee001jC1uKYV0DyEV36",
+				"id": "evt_fafc20750001q1dsMU4f3etRX1",
 				"type": "session.updated",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"info": {
-						"id": "ses_0508af925ffejgfrYahyNo9qB4",
-						"slug": "playful-circuit",
+						"id": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+						"slug": "brave-moon",
 						"projectID": "global",
-						"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
-						"path": "tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"directory": "<temp-root>/workspace",
+						"path": "<temp-root>/workspace",
 						"title": "remote-claw-native-proof",
 						"agent": "build",
 						"model": {
@@ -632,23 +632,23 @@
 							"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
 						},
 						"time": {
-							"created": 1785355110106,
-							"updated": 1785355110893
+							"created": 1785360155716,
+							"updated": 1785360156496
 						}
 					}
 				}
 			},
 			{
-				"id": "evt_faf750a0a001r9ImQF3uS4b6mO",
+				"id": "evt_fafc2076c001z03xM7UyQxqf1K",
 				"type": "session.deleted",
 				"properties": {
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"info": {
-						"id": "ses_0508af925ffejgfrYahyNo9qB4",
-						"slug": "playful-circuit",
+						"id": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+						"slug": "brave-moon",
 						"projectID": "global",
-						"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
-						"path": "tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+						"directory": "<temp-root>/workspace",
+						"path": "<temp-root>/workspace",
 						"title": "remote-claw-native-proof",
 						"agent": "build",
 						"model": {
@@ -671,47 +671,47 @@
 							"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
 						},
 						"time": {
-							"created": 1785355110106,
-							"updated": 1785355110893
+							"created": 1785360155716,
+							"updated": 1785360156496
 						}
 					}
 				}
 			}
 		],
 		"connectedEvent": {
-			"eventId": "evt_faf7505f4001FfWP0BZkT0i27d",
+			"eventId": "evt_fafc2035e0014XRn07nOIggqDt",
 			"type": "server.connected",
 			"properties": {}
 		},
 		"sessionCreatedEvent": {
-			"eventId": "evt_faf7506da002YKYHi365ty791C",
+			"eventId": "evt_fafc20444002E4LMzfyxiH5RkZ",
 			"type": "session.created",
-			"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+			"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 			"info": {
-				"id": "ses_0508af925ffejgfrYahyNo9qB4",
-				"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+				"id": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+				"directory": "<temp-root>/workspace",
 				"title": "remote-claw-native-proof",
 				"version": "1.17.5",
 				"metadata": {
 					"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
 				},
 				"time": {
-					"created": 1785355110106,
-					"updated": 1785355110106
+					"created": 1785360155716,
+					"updated": 1785360155716
 				}
 			}
 		},
 		"firstApplication": {
 			"messageUpdated": {
-				"eventId": "evt_faf7509ad001mqgPuN7b07ucHf",
+				"eventId": "evt_fafc20717001Evm0XUNnb2G7ku",
 				"type": "message.updated",
-				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 				"info": {
 					"id": "msg_remoteclaw_native_proof_001",
 					"role": "user",
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"time": {
-						"created": 1785355110817
+						"created": 1785360156426
 					},
 					"agent": "build",
 					"model": {
@@ -721,29 +721,29 @@
 				}
 			},
 			"partUpdated": {
-				"eventId": "evt_faf7509c90011sFAGoJxDZxQBG",
+				"eventId": "evt_fafc207330015ld68l9jqeHuv5",
 				"type": "message.part.updated",
-				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 				"part": {
 					"type": "text",
 					"text": "remote-claw opencode no-reply proof",
 					"messageID": "msg_remoteclaw_native_proof_001",
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
-					"id": "prt_faf7509ac001cCdNzMef2zHig4"
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+					"id": "prt_fafc20716001GBbGVvfFqX710a"
 				}
 			}
 		},
 		"secondApplication": {
 			"messageUpdated": {
-				"eventId": "evt_faf7509ea001tZFFfiVe4mwC9e",
+				"eventId": "evt_fafc2074c001wdshwMJh888CSG",
 				"type": "message.updated",
-				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 				"info": {
 					"id": "msg_remoteclaw_native_proof_001",
 					"role": "user",
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"time": {
-						"created": 1785355110889
+						"created": 1785360156492
 					},
 					"agent": "build",
 					"model": {
@@ -753,22 +753,22 @@
 				}
 			},
 			"partUpdated": {
-				"eventId": "evt_faf7509ec001jPFmEbYwhnmONM",
+				"eventId": "evt_fafc2074e001LJb0X0s2UDVnhB",
 				"type": "message.part.updated",
-				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 				"part": {
 					"type": "text",
 					"text": "remote-claw opencode no-reply proof",
 					"messageID": "msg_remoteclaw_native_proof_001",
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
-					"id": "prt_faf7509e9001PcPbmRddHe2HPf"
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+					"id": "prt_fafc2074c001ymmZVWJInHpLRW"
 				}
 			}
 		},
 		"sessionDeletedEvent": {
-			"eventId": "evt_faf750a0a001r9ImQF3uS4b6mO",
+			"eventId": "evt_fafc2076c001z03xM7UyQxqf1K",
 			"type": "session.deleted",
-			"sessionID": "ses_0508af925ffejgfrYahyNo9qB4"
+			"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq"
 		},
 		"assistantMessageEventsForSession": 0
 	},
@@ -778,30 +778,30 @@
 		"blindRetryIssued": false,
 		"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001",
 		"returnedSession": {
-			"id": "ses_0508af925ffejgfrYahyNo9qB4",
-			"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+			"id": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+			"directory": "<temp-root>/workspace",
 			"title": "remote-claw-native-proof",
 			"version": "1.17.5",
 			"metadata": {
 				"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
 			},
 			"time": {
-				"created": 1785355110106,
-				"updated": 1785355110106
+				"created": 1785360155716,
+				"updated": 1785360155716
 			}
 		},
 		"listAfterCreate": [
 			{
-				"id": "ses_0508af925ffejgfrYahyNo9qB4",
-				"directory": "/tmp/remote-claw-opencode-native-OhAVOJ/workspace",
+				"id": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
+				"directory": "<temp-root>/workspace",
 				"title": "remote-claw-native-proof",
 				"version": "1.17.5",
 				"metadata": {
 					"remoteClawCreationId": "rcc_remote_claw_opencode_native_proof_001"
 				},
 				"time": {
-					"created": 1785355110106,
-					"updated": 1785355110106
+					"created": 1785360155716,
+					"updated": 1785360155716
 				}
 			}
 		],
@@ -831,10 +831,10 @@
 		"firstHistory": {
 			"info": {
 				"id": "msg_remoteclaw_native_proof_001",
-				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 				"role": "user",
 				"time": {
-					"created": 1785355110817
+					"created": 1785360156426
 				},
 				"agent": "build",
 				"model": {
@@ -844,8 +844,8 @@
 			},
 			"parts": [
 				{
-					"id": "prt_faf7509ac001cCdNzMef2zHig4",
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"id": "prt_fafc20716001GBbGVvfFqX710a",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"messageID": "msg_remoteclaw_native_proof_001",
 					"type": "text",
 					"text": "remote-claw opencode no-reply proof"
@@ -859,10 +859,10 @@
 		"secondHistory": {
 			"info": {
 				"id": "msg_remoteclaw_native_proof_001",
-				"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+				"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 				"role": "user",
 				"time": {
-					"created": 1785355110889
+					"created": 1785360156492
 				},
 				"agent": "build",
 				"model": {
@@ -872,15 +872,15 @@
 			},
 			"parts": [
 				{
-					"id": "prt_faf7509ac001cCdNzMef2zHig4",
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"id": "prt_fafc20716001GBbGVvfFqX710a",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"messageID": "msg_remoteclaw_native_proof_001",
 					"type": "text",
 					"text": "remote-claw opencode no-reply proof"
 				},
 				{
-					"id": "prt_faf7509e9001PcPbmRddHe2HPf",
-					"sessionID": "ses_0508af925ffejgfrYahyNo9qB4",
+					"id": "prt_fafc2074c001ymmZVWJInHpLRW",
+					"sessionID": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 					"messageID": "msg_remoteclaw_native_proof_001",
 					"type": "text",
 					"text": "remote-claw opencode no-reply proof"
@@ -892,7 +892,7 @@
 	},
 	"deletion": {
 		"nativeDeleteAcknowledged": true,
-		"deletedSessionId": "ses_0508af925ffejgfrYahyNo9qB4",
+		"deletedSessionId": "ses_0503dfbbbffefNRkqNfyRMQ4lq",
 		"sessionDeletedSseObserved": true,
 		"readAfterDeleteStatus": 404,
 		"readAfterDeleteError": {

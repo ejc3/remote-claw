@@ -275,7 +275,10 @@ The durable identity layers are:
 
 | ID | Meaning | Restart rule |
 | --- | --- | --- |
-| `(collaborationServerId, logicalChatId)` | Canonical chat and visible row within one remote-claw server | Stable across that server's coordinator, connector, and proven native-edge restarts; never aliased to another server's chat ID |
+| `(collaborationServerId, logicalChatId)` | Canonical chat within one remote-claw server | Stable across that server's coordinator, connector, and proven native-edge restarts; never aliased to another server's chat ID |
+| `(identity_id, collaborationServerId, routeKind: "scope_bus", logicalChatId: null)` | One machine/server discovery-bus route and cursor | Stable across reconnects; never aliases a chat route |
+| `(identity_id, collaborationServerId, routeKind: "server_control", logicalChatId: null)` | One authenticated machine/server management-ingress route for typed **New chat** | Stable source/dedup scope; never carries chat mutations or discovery announcements |
+| `(identity_id, collaborationServerId, routeKind: "chat", logicalChatId)` | Machine-facing viewer row, chat route, alias, channel, and cache scope | Preserves the canonical server/chat pair while preventing an equal chat ID on another machine or server from colliding |
 | `nativeBindingId` | Durable relationship between the innermost server chat and its current native conversation | Exists only at the terminal inward edge; stable while the same semantic native conversation is resumed |
 | Native conversation ID | Claude transcript/resume UUID, Codex thread ID, or OpenCode session ID | Native evidence; never a remote-claw routing ID |
 | Native runtime/incarnation | One provably identified process, app server, or server generation | Advances on a cold native replacement; a live reattach may retain it |
@@ -290,7 +293,11 @@ history predates remote-claw; adoption does not replay or relabel that history. 
 from a title, working directory, message text, `cse_*`, Codex/OpenCode ID, pane, broker channel, or
 provider ID. `command_seq` orders proposals at one remote-claw server; it is not the native harness's
 final applied order. Normalized `chat_seq` follows correlated native observations where those exist.
-Neither resets when a transport changes. At a terminal edge, exactly one native binding/incarnation is
+`viewerProjectionSeq` is a separate coordinator receipt/provisional-display order used only to fold an
+admitted caller's optimistic row; it is never `chat_seq` and does not claim native application. A
+direct TUI action may therefore receive an earlier final `chat_seq` even when a remote proposal already
+has a projection receipt. Neither sequence resets when a transport changes. At a terminal edge,
+exactly one native binding/incarnation is
 current; an outer chat instead has one current inward server/chat edge. Superseded records remain
 immutable because delivery attempts name the exact target reference they might have reached.
 
@@ -381,12 +388,14 @@ interface NativeMutationFence {
   logicalChatId: string;
   nativeBindingId: string;
   inwardEdgeId: string;
+  inwardLiveLeaseId: string;
   inwardConnectionEpoch: number;
   topologyGeneration: number;
   coordinatorEpoch: number;
   attemptId: string;
   nativeRef: NativeConversationRef;
   attachmentLeaseId: string;
+  capabilitySnapshotId: string;
 }
 
 interface NativeConversationRegistrar<TPort = unknown, TMetadata = unknown> {
@@ -415,16 +424,657 @@ is deliberately lifecycle-only. Its process-local `bindingId` is an `rcb_*` leas
 key, not the canonical chat ID. A1 adds durable records above it:
 
 ```ts
+interface CollaborationServerRecord {
+  collaborationServerId: string; // stable random rcs_<base64url-128-bit>
+  machineIdentityId: string; // 32 lowercase hex characters, decoded to 16 bytes on wire
+  currentKeyGeneration: number; // equals the current certificate's keyGeneration
+  currentIdentityKeyId: string;
+  currentScopeCertificateId: string;
+  nextServerSignatureSeq: number;
+  nextCommandSeq: number;
+  createdAtMs: number;
+  state: "installing" | "current" | "repairing" | "closed";
+}
+
+interface ServerScopeCertificateRecord {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/server-scope-certificate/v1";
+  scopeCertificateId: string;
+  collaborationServerId: string;
+  machineIdentityId: string;
+  subjectIdentityKeyId: string;
+  subjectKeyAlgorithm: "Ed25519";
+  subjectPublicKey: string; // canonical base64url raw public-key bytes
+  keyGeneration: number;
+  issuedAtMs: number;
+  supersedesScopeCertificateId: string | null;
+  signerIdentityKeyId: string;
+  signerSequence: number;
+  supersededSignerMaxSequence: number | null;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface ServerScopeCertificateStatusRecord {
+  scopeCertificateId: string;
+  collaborationServerId: string;
+  state: "current" | "retired" | "revoked";
+  acceptSignaturesThroughSequence: number | null;
+  changedAtMs: number;
+  changeEvidenceRef: string;
+}
+
+interface ViewerOnboardingKeyAttestationV1 {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/viewer-onboarding-keys/v1";
+  collaborationServerId: string;
+  machineIdentityId: string;
+  scopeCertificateId: string;
+  keyGeneration: number;
+  signerIdentityKeyId: string;
+  signerSequence: number;
+  authTokenCommitment: string;
+  contentRootCommitment: string;
+  controlKeyCommitment: string;
+  metaKeyCommitment: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface ViewerOnboardingBundleV2 {
+  version: 2;
+  machineIdentityId: string; // 32 lowercase hex chars
+  collaborationServerId: string;
+  authToken: string; // canonical unpadded base64url of exactly 32 bytes
+  contentRoot: string; // canonical unpadded base64url of exactly 32 bytes
+  controlKey: string; // canonical unpadded base64url of exactly 32 bytes
+  metaKey: string; // canonical unpadded base64url of exactly 32 bytes
+  serverIdentityKey: {
+    identityKeyId: string;
+    algorithm: "Ed25519";
+    publicKey: string; // unpadded base64url of the 32 raw public-key bytes
+  };
+  // Oldest trust anchor first, current certificate last.
+  scopeCertificateChain: ServerScopeCertificateRecord[];
+  keyAttestation: ViewerOnboardingKeyAttestationV1;
+}
+
+interface BrokerScopeCertificateUpdateRecord {
+  certificateUpdateId: string;
+  collaborationServerId: string;
+  scopeCertificateId: string;
+  supersedesScopeCertificateId: string;
+  keyGeneration: number;
+  certificateRef: string;
+  certificateDigest: string;
+}
+
+interface BrokerHistoricalReattestationRecord {
+  collaborationServerId: string;
+  historicalRecordDigest: string;
+  reattesterScopeCertificateId: string;
+  reattesterKeyGeneration: number;
+  historicalReattestationId: string;
+  reattestationRef: string;
+  reattestationDigest: string;
+}
+
 interface LogicalChatRecord {
-  logicalChatId: string;
+  logicalChatId: string; // stable random rcl_<base64url-128-bit>
   collaborationServerId: string;
   projectId: string;
   state: "recovering" | "ready" | "quarantined" | "closed";
-  nextCommandSeq: number;
   topologyGeneration: number;
   currentInwardEdgeId: string | null;
   currentNativeBindingId: string | null;
   parentChatId: string | null;
+}
+
+interface BrokerChannelCursorV1 {
+  version: 1;
+  channelGeneration: number;
+  frameIndex: number;
+}
+
+type BrokerRouteKind = "scope_bus" | "server_control" | "chat";
+
+interface BrokerRouteRecord {
+  brokerRouteId: string;
+  machineIdentityId: string;
+  collaborationServerId: string;
+  routeKind: BrokerRouteKind;
+  logicalChatId: string | null; // null exactly for scope_bus/server_control; required exactly for chat
+  routeToken: string;
+  genesisGeneration: 0;
+  createdAtMs: number;
+  state: "current" | "quarantined" | "closed";
+}
+
+interface BrokerChannelGenerationRecord {
+  brokerRouteId: string;
+  channelGeneration: number;
+  frameCount: number | null;
+  nextGeneration: number | null;
+  state: "open" | "sealed";
+  manifestDigest: string | null;
+}
+
+interface BrokerChannelManifestEquivocationRecord {
+  manifestEquivocationId: string;
+  brokerRouteId: string;
+  channelGeneration: number;
+  acceptedManifestDigest: string;
+  conflictingManifestDigest: string | null;
+  conflictingObservationDigest: string;
+  conflictingFrameCount: number | null;
+  conflictingNextGeneration: number | null;
+  conflictingState: "open" | "sealed";
+  evidenceRef: string;
+  observedAtMs: number;
+}
+
+interface BrokerScopeBusCheckpointRecord {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/a1/scope-bus-checkpoint/v1";
+  scopeBusCheckpointId: string;
+  brokerRouteId: string;
+  throughSealedGeneration: number;
+  successorGeneration: number;
+  sealedFrameCount: number;
+  throughCursor: BrokerChannelCursorV1 | null;
+  throughManifestDigest: string;
+  issuedAtMs: number;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface AppliedScopeBusCheckpointRecord {
+  brokerRouteId: string;
+  scopeBusCheckpointId: string;
+  effectiveStartGeneration: number;
+  appliedAtMs: number;
+}
+
+interface AuthenticatedIngressResultRecord {
+  ingressResultId: string;
+  stableSemanticResultId: string;
+  brokerRouteId: string;
+  collaborationServerId: string;
+  routeKind: "server_control" | "chat";
+  logicalChatId: string | null;
+  targetLogicalChatId: string | null;
+  projectTargetSelectorMappingId: string | null;
+  projectTargetSelectorMappingGeneration: number | null;
+  sourceEventNamespaceId: string;
+  msgId: string;
+  recordKind: string;
+  clientMsgId: string | null;
+  expectedParts: number;
+  sourcePayloadSchemaId: string | null;
+  canonicalMessageDigestAlgorithm: "SHA-256";
+  canonicalMessageDigest: string | null;
+  sourceEventFingerprintSchemaId: "remote-claw/a1/source-event-fingerprint/v1" | null;
+  sourceEventFingerprint: string | null;
+  state: "assembling" | "awaiting_order" | "deciding" | "terminal";
+  disposition:
+    | "admitted"
+    | "queued"
+    | "rejected"
+    | "quarantined_incomplete"
+    | "quarantined_collision"
+    | null;
+  commandId: string | null;
+  commandResultId: string | null;
+  commandSeq: number | null;
+  viewerProjectionSeq: number | null;
+  readyAtJournalSeq: number | null;
+  storedSemanticResultSchemaId: string | null;
+  storedSemanticResultRef: string | null; // exact retained accepted/action-result payload bytes
+  storedSemanticResultDigest: string | null;
+  firstIngressCursor: BrokerChannelCursorV1;
+  lastObservedIngressCursor: BrokerChannelCursorV1;
+  terminalIngressCursor: BrokerChannelCursorV1 | null;
+  assemblyDeadlineAtMs: number;
+  collisionLatchedAtMs: number | null;
+  terminalAtMs: number | null;
+}
+
+interface CollaborationCommandRecord {
+  commandId: string;
+  collaborationServerId: string;
+  scopeKind: "server_control" | "chat";
+  logicalChatId: string | null;
+  targetLogicalChatId: string | null;
+  sourceKind: "a1_ingress" | "official_client" | "automation" | "nested_server";
+  sourceRef: string;
+  sourceEventNamespaceId: string;
+  sourceEventId: string;
+  sourceCommandIdentityDigest: string;
+  canonicalSourceEventDigest: string | null;
+  mutationFamily: NativeMutationFamily;
+  canonicalCommandPayloadSchemaId: string;
+  canonicalCommandPayloadRef: string;
+  canonicalCommandPayloadDigest: string;
+  preDecisionNormalizationEvidenceSchemaId:
+    | "remote-claw/opencode-pre-decision-normalization/v1"
+    | null;
+  preDecisionNormalizationEvidenceRef: string | null;
+  preDecisionNormalizationEvidenceDigest: string | null;
+  readyAtJournalSeq: number;
+  commandSeq: number | null;
+  disposition: "admitted" | "queued" | "rejected" | null;
+  admittedTargetKind:
+    | "native_server"
+    | "native_binding"
+    | "nested_management"
+    | "nested_chat_edge"
+    | null;
+  targetCapabilitySnapshotId: string | null;
+  targetCapabilityFamilyDigest: string | null;
+  currentCommandResultId: string | null;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1" | null;
+  decisionEvidenceRef: string | null;
+  decisionEvidenceDigest: string | null;
+  canonicalCommandRecordDigest: string | null;
+  state: "awaiting_order" | "decision_reserved" | "decided";
+}
+
+interface CollaborationCommandDecisionEvidence {
+  schemaVersion: 1;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  commandId: string;
+  collaborationServerId: string;
+  scopeKind: "server_control" | "chat";
+  projectTargetSelectorMappingId: string | null;
+  projectTargetSelectorMappingGeneration: number | null;
+  projectTargetDigest: string | null;
+  selectedTargetKind:
+    | "native_server"
+    | "native_binding"
+    | "nested_management"
+    | "nested_chat_edge"
+    | null;
+  selectedExecutorEvidenceSchemaId:
+    | "remote-claw/executor-evidence/native-server/v1"
+    | "remote-claw/executor-evidence/native-binding/v1"
+    | "remote-claw/executor-evidence/nested-management/v1"
+    | "remote-claw/executor-evidence/nested-chat-edge/v1"
+    | null;
+  selectedExecutorEvidenceRef: string | null;
+  selectedExecutorEvidenceDigest: string | null;
+  targetCapabilitySnapshotId: string | null;
+  targetCapabilityFamilyDigest: string | null;
+  decisionPolicyId: "remote-claw/common-adjudication-policy/v1";
+}
+
+interface OpenCodePreDecisionNormalizationEvidence {
+  schemaVersion: 1;
+  preDecisionNormalizationEvidenceSchemaId: "remote-claw/opencode-pre-decision-normalization/v1";
+  commandId: string;
+  sourceKind: "a1_ingress" | "official_client" | "automation" | "nested_server";
+  sourceRef: string;
+  sourcePayloadSchemaId: string;
+  sourcePayloadDigest: string;
+  sourceEventFingerprint: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  nativeBindingId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  capabilitySnapshotId: string;
+  capabilitySnapshotAttestationDigest: string;
+  slashCommandNormalizationSchemaId: string;
+  slashCommandNormalizationImplementationDigest: string;
+  slashCommandTableDigest: string;
+  classification: "submit_text" | "reserved_family" | "blank_rejected";
+  normalizedMutationFamily: NativeMutationFamily;
+  canonicalCommandPayloadSchemaId: string;
+  canonicalCommandPayloadDigest: string;
+}
+
+interface NativeSlashCommandNormalizationItem {
+  exactUtf8Text: string;
+  normalizedMutationFamily: NativeMutationFamily;
+}
+
+type CollaborationCommandExecutorEvidence =
+  | {
+      schemaVersion: 1;
+      selectedExecutorEvidenceSchemaId: "remote-claw/executor-evidence/native-server/v1";
+      runtimeId: string;
+      nativeIncarnation: number;
+      nativeServerAttachmentLeaseId: string;
+      serverFrontDoorLeaseId: string;
+      nativeWorkspaceTransitionBarrierId: string;
+      serverCapabilitySnapshotId: string;
+      capabilitySnapshotAttestationDigest: string;
+      projectTargetSelectorMappingId: string;
+      projectTargetSelectorMappingGeneration: number;
+      projectTargetDigest: string;
+    }
+  | {
+      schemaVersion: 1;
+      selectedExecutorEvidenceSchemaId: "remote-claw/executor-evidence/native-binding/v1";
+      nativeBindingId: string;
+      runtimeId: string;
+      nativeIncarnation: number;
+      attachmentLeaseId: string;
+      nativeClientIngressLeaseId: string;
+      capabilitySnapshotId: string;
+      capabilitySnapshotAttestationDigest: string;
+    }
+  | {
+      schemaVersion: 1;
+      selectedExecutorEvidenceSchemaId: "remote-claw/executor-evidence/nested-management/v1";
+      nestedServerManagementBindingId: string;
+      nestedServerManagementLeaseId: string;
+      leaseGeneration: number;
+      sourceCoordinatorEpoch: number;
+      targetCoordinatorEpoch: number;
+      transportEpoch: number;
+      mutualChannelBindingDigest: string;
+      nestedServerManagementCapabilitySnapshotId: string;
+      nestedServerManagementCapabilitySnapshotDigest: string;
+    }
+  | {
+      schemaVersion: 1;
+      selectedExecutorEvidenceSchemaId: "remote-claw/executor-evidence/nested-chat-edge/v1";
+      inwardEdgeId: string;
+      sourceTopologyGeneration: number;
+      targetTopologyGeneration: number;
+      currentConnectionEpoch: number;
+      inwardLiveLeaseId: string;
+      transportChannelBindingDigest: string;
+      nestedChatEdgeCapabilitySnapshotId: string;
+      nestedChatEdgeCapabilitySnapshotDigest: string;
+      targetServerId: string;
+      targetLogicalChatId: string;
+      targetOutsideBindingId: string;
+    };
+
+interface CollaborationCommandCompoundSigningGroupRecord {
+  compoundSigningGroupId: string;
+  collaborationServerId: string;
+  commandId: string;
+  commandResultId: string;
+  preparationGeneration: number;
+  signingLeaseId: string;
+  resultPreparationRef: string;
+  requiredFinalizationArtifactKind:
+    | "none"
+    | "nested_management_lineage_hop"
+    | "nested_chat_event_lineage_hop";
+  secondaryPreparationRef: string | null;
+  state:
+    | "reserved"
+    | "result_signed"
+    | "both_signed"
+    | "finalized"
+    | "aborted";
+}
+
+interface CollaborationCommandResultPreparationRecord {
+  commandResultId: string;
+  collaborationServerId: string;
+  commandId: string;
+  canonicalCommandRecordDigest: string;
+  resultVersion: 1;
+  preparationGeneration: number;
+  supersedesPreparationRef: string | null;
+  canonicalPayloadRef: string;
+  canonicalPayloadDigest: string;
+  signerSequence: number;
+  signatureReservationRef: string;
+  compoundSigningGroupId: string;
+  requiredFinalizationArtifactKind:
+    | "none"
+    | "nested_management_lineage_hop"
+    | "nested_chat_event_lineage_hop";
+  currentFinalizationArtifactPreparationRef: string | null;
+  state: "reserved" | "bound" | "signed" | "aborted";
+}
+
+interface CollaborationCommandResultRecord {
+  commandResultId: string;
+  collaborationServerId: string;
+  commandId: string;
+  canonicalCommandRecordDigest: string;
+  resultVersion: 1;
+  supersedesCommandResultId: null;
+  sourceKind: "a1_ingress" | "official_client" | "automation" | "nested_server";
+  sourceRef: string;
+  scopeKind: "server_control" | "chat";
+  logicalChatId: string | null;
+  targetLogicalChatId: string | null;
+  commandSeq: number;
+  disposition: "admitted" | "queued" | "rejected";
+  canonicalPayloadSchemaId: "remote-claw/collaboration-command-result/v1";
+  canonicalPayloadRef: string;
+  canonicalPayloadDigest: string;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  signature: string;
+  signedRecordDigest: string;
+  createdAtMs: number;
+}
+
+interface CollaborationCommandResultDeliveryRecord {
+  commandResultDeliveryId: string;
+  commandResultId: string;
+  targetKind: "a1_broker" | "official_client" | "automation" | "nested_server";
+  targetBindingId: string;
+  stableTargetResultId: string;
+  targetPayloadRef: string;
+  targetPayloadDigest: string;
+  state: "ready" | "accepted" | "outcome_unknown";
+}
+
+interface CollaborationCommandResultDeliveryAttemptRecord {
+  commandResultDeliveryAttemptId: string;
+  commandResultDeliveryId: string;
+  deliveryAttemptId: string;
+  state: "pending" | "started" | "accepted" | "outcome_unknown";
+  receiptRef: string | null;
+}
+
+interface IngressDeliveryCandidateRecord {
+  ingressCandidateId: string;
+  ingressResultId: string;
+  deliveryAttemptId: string;
+  expectedParts: number;
+  receivedParts: number;
+  firstIngressCursor: BrokerChannelCursorV1;
+  lastObservedIngressCursor: BrokerChannelCursorV1;
+  state: "assembling" | "complete" | "expired" | "collision";
+}
+
+interface IngressTransportAttemptRecord {
+  brokerRouteId: string;
+  machineIdentityId: string;
+  collaborationServerId: string;
+  routeKind: "server_control" | "chat";
+  logicalChatId: string | null;
+  sourceEventNamespaceId: string;
+  deliveryAttemptId: string;
+  ingressResultId: string;
+  stableLogicalHeaderDigest: string;
+  expectedParts: number;
+}
+
+interface AuthenticatedIngressPartRecord {
+  ingressCandidateId: string;
+  part: number;
+  parts: number;
+  authenticatedPartDigest: string;
+  encryptedPartRef: string | null; // null only after retained digest-vector compaction
+  firstIngressCursor: BrokerChannelCursorV1;
+}
+
+interface AuthenticatedChannelPositionRecord {
+  channelPositionObservationId: string;
+  brokerRouteId: string;
+  cursor: BrokerChannelCursorV1;
+  parsedMachineIdentityId: string | null;
+  parsedCollaborationServerId: string | null;
+  parsedLogicalChatId: string | null;
+  dir: "in" | "out" | null;
+  recordKind: string | null;
+  msgId: string | null;
+  deliveryAttemptId: string | null;
+  part: number | null;
+  parts: number | null;
+  receivedFrameDigest: string;
+  normalizedTransportFrameDigest: string | null;
+  validationFailureCode: string | null;
+  classification:
+    | "inbound_ingress"
+    | "known_host_output"
+    | "unknown_outbound"
+    | "invalid";
+  ingressObservationId: string | null;
+  hostOutputDeliveryId: string | null;
+  cursorDisposition: "blocked" | "advanceable";
+  recoveryDecisionId: string | null;
+  recoveryGapId: string | null;
+}
+
+interface ChannelPositionEquivocationRecord {
+  positionEquivocationId: string;
+  channelPositionObservationId: string;
+  acceptedReceivedFrameDigest: string;
+  conflictingReceivedFrameDigest: string;
+  conflictingFrameEvidenceRef: string;
+  observedAtMs: number;
+}
+
+interface BrokerTransportKeyCollisionRecord {
+  transportKeyCollisionId: string;
+  brokerRouteId: string;
+  deliveryAttemptId: string;
+  part: number;
+  originalCursor: BrokerChannelCursorV1;
+  originalNormalizedFrameDigest: string;
+  conflictingNormalizedFrameDigest: string;
+  conflictingFrameEvidenceRef: string;
+  observedAtMs: number;
+}
+
+interface HostOutputPartRecord {
+  hostOutputDeliveryId: string;
+  brokerRouteId: string;
+  machineIdentityId: string;
+  collaborationServerId: string;
+  logicalChatId: string | null;
+  msgId: string;
+  deliveryAttemptId: string;
+  part: number;
+  parts: number;
+  serverKeyGeneration: number;
+  hostSignerIdentityKeyId: string;
+  hostScopeCertificateId: string;
+  hostSignatureSequence: number;
+  hostSignature: string;
+  hostSignedRecordDigest: string;
+  transportFrameDigest: string;
+  sealedFrameRef: string | null;
+  state: "pending" | "published" | "observed";
+}
+
+interface HostOutputDeliveryRecord {
+  hostOutputDeliveryId: string;
+  sourceOutboxIntentRef: string;
+  brokerRouteId: string;
+  machineIdentityId: string;
+  collaborationServerId: string;
+  logicalChatId: string | null;
+  recordKind: string;
+  seq: number | null;
+  msgId: string;
+  deliveryAttemptId: string;
+  clientMsgId: string | null;
+  keyEpoch: 0;
+  parts: number;
+  serverKeyGeneration: number;
+  hostSignerIdentityKeyId: string;
+  hostScopeCertificateId: string;
+  stableLogicalHeaderDigest: string;
+  completePartVectorDigest: string | null;
+  state: "preparing" | "ready" | "publishing" | "published" | "observed" | "quarantined";
+}
+
+interface AuthenticatedIngressObservationRecord {
+  ingressObservationId: string;
+  channelPositionObservationId: string;
+  brokerRouteId: string;
+  machineIdentityId: string;
+  collaborationServerId: string;
+  routeKind: "server_control" | "chat";
+  logicalChatId: string | null;
+  ingressResultId: string;
+  ingressCandidateId: string;
+  ingressCursor: BrokerChannelCursorV1;
+  part: number;
+  parts: number;
+  authenticatedPartDigest: string;
+  disposition:
+    | "new_part"
+    | "exact_duplicate_part"
+    | "exact_transport_retry"
+    | "completed_exact_replay"
+    | "collision"
+    | "late_after_tombstone";
+  cursorDisposition: "blocked" | "advanceable";
+  recoveryDecisionId: string | null;
+}
+
+interface ChannelPositionRecoveryRecord {
+  recoveryDecisionId: string;
+  brokerRouteId: string;
+  channelPositionObservationId: string | null;
+  manifestEquivocationId: string | null;
+  transportKeyCollisionId: string | null;
+  reason:
+    | "semantic_collision"
+    | "transport_collision"
+    | "position_equivocation"
+    | "manifest_equivocation"
+    | "unknown_outbound"
+    | "invalid_frame";
+  decision: "discard_and_close_source" | "proved_safe_discard";
+  evidenceRef: string;
+  coordinatorEpoch: number;
+  decidedAtMs: number;
+}
+
+interface IngressResultDeliveryRecord {
+  resultDeliveryId: string;
+  ingressResultId: string;
+  triggerIngressObservationId: string;
+  deliveryAttemptId: string;
+  stableSemanticResultId: string;
+  semanticResultPayloadSchemaId: string;
+  semanticResultPayloadDigest: string;
+  encryptedResultPayloadRef: string;
+  encryptedResultPayloadDigest: string;
+  state: "pending" | "published" | "superseded";
+}
+
+interface EncryptedChannelCursorRecord {
+  brokerRouteId: string;
+  contiguousThroughCursor: BrokerChannelCursorV1 | null;
 }
 
 interface NativeBindingRecord {
@@ -435,6 +1085,16 @@ interface NativeBindingRecord {
   projectId: string;
   semanticConversationId: string | null;
   currentIncarnation: number | null;
+  state: "starting" | "current" | "superseded" | "closed";
+}
+
+interface OpenCodeBindingWorkspaceRecord {
+  nativeBindingId: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  projectTargetSelectorMappingId: string;
+  projectTargetSelectorMappingGeneration: number;
+  nativeWorkspaceBindingId: string;
   state: "starting" | "current" | "superseded" | "closed";
 }
 
@@ -471,6 +1131,334 @@ interface LocalNativeConversationMappingRecord {
   evidenceRef: string;
 }
 
+interface NativeWorkspaceBindingRecord {
+  nativeWorkspaceBindingId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  projectId: string;
+  nativeWorkspaceId: string | null;
+  directoryNormalizationSchemaId: string;
+  canonicalDirectoryRef: string;
+  canonicalDirectoryPathDigest: string;
+  filesystemIdentitySchemaId: string;
+  filesystemIdentityDigest: string;
+  allowedRootDigest: string;
+  mountNamespaceDigest: string;
+  workspaceGeneration: number;
+  evidenceRef: string;
+  nativeWorkspaceBindingDigest: string;
+  state: "current" | "superseded" | "closed";
+}
+
+interface ProjectTargetSelectorMappingRecord {
+  projectTargetSelectorMappingId: string;
+  collaborationServerId: string;
+  projectId: string;
+  workspaceSelectorId: string;
+  target:
+    | {
+        kind: "terminal_native";
+        descriptor: NativeEngineDescriptor;
+        terminalProjectRef: string;
+        nativeWorkspaceBindingId: string | null;
+      }
+    | {
+        kind: "nested_server";
+        nestedServerManagementBindingId: string;
+        targetServerId: string;
+        targetProjectId: string;
+        targetWorkspaceSelectorId: string;
+      };
+  targetDigest: string;
+  mappingGeneration: number;
+  evidenceRef: string;
+  state: "current" | "superseded" | "closed";
+}
+
+interface OpenCodeDiscoverySessionItem {
+  sessionId: string;
+  parentSessionId: string | null;
+  nativeWorkspaceBindingId: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  metadataDigest: string;
+  statusDigest: string;
+}
+
+interface OpenCodeDiscoveryCreationMarkerItem {
+  schemaVersion: 1;
+  canonicalCreationMetadataSchemaId: "remote-claw/opencode-native-creation-metadata/v1";
+  fullNativeMetadataSchemaId: "remote-claw/opencode-full-native-metadata-evidence/v1";
+  remoteClawCreationId: string;
+  remoteClawCreationIntentDigest: string | null;
+  sessionId: string;
+  creationMetadataClassification: "canonical_two_field" | "noncanonical_or_extra";
+  canonicalCreationMetadataRef: string | null;
+  canonicalCreationMetadataDigest: string | null;
+  fullNativeMetadataRef: string;
+  fullNativeMetadataDigest: string;
+}
+
+interface OpenCodeNativeStoreCoordinateRecord {
+  schemaVersion: 1;
+  nativeStoreCoordinateSchemaId: "remote-claw/opencode-native-store-coordinate/v1";
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeServerAttachmentLeaseId: string;
+  nativeWorkspaceBindingId: string;
+  nativeStoreBackendSchemaId: string;
+  canonicalNativeStoreRootRef: string;
+  canonicalNativeStoreRootPathDigest: string;
+  nativeStoreFilesystemIdentityRef: string;
+  nativeStoreFilesystemIdentityDigest: string;
+  nativeStoreDatabaseIdentityRef: string;
+  nativeStoreDatabaseIdentityDigest: string;
+  stableNativeStoreIdentityDigest: string;
+  nativeStoreAttachmentAttestationSchemaId:
+    "remote-claw/opencode-native-store-attachment-attestation/v1";
+  nativeStoreAttachmentAttestationRef: string;
+  nativeStoreAttachmentAttestationDigest: string;
+  canonicalNativeStoreCoordinateDigest: string;
+}
+
+interface OpenCodeNativeStoreAttachmentAttestationRecord {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/opencode-native-store-attachment-attestation/v1";
+  nativeStoreAttachmentAttestationId: string;
+  assertion: "incarnation_opened_and_read_exact_store";
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeServerAttachmentLeaseId: string;
+  nativeWorkspaceBindingId: string;
+  nativeStoreCoordinateSchemaId: "remote-claw/opencode-native-store-coordinate/v1";
+  nativeStoreCoordinateDigest: string;
+  stableNativeStoreIdentityDigest: string;
+  openedStoreHandleIdentityDigest: string;
+  storeReadWitnessSchemaId: "remote-claw/opencode-native-store-read-witness/v1";
+  storeReadWitnessRef: string;
+  storeReadWitnessDigest: string;
+  continuityRegistrySchemaId: "remote-claw/native-store-continuity-registry/v1";
+  continuityRegistryId: string;
+  currentWriterGeneration: number;
+  currentWriterRegistrationDigest: string;
+  runtimeOwnerTrustAttestationDigest: string;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  issuedAtMs: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+  signedRecordDigest: string;
+}
+
+interface NativeObserverStreamEpochRecord {
+  observerStreamEpochId: string;
+  nativeRuntimeObserverLeaseId: string;
+  observerGeneration: number;
+  eventStreamEpoch: number;
+  nativeWorkspaceBindingId: string;
+  nextObservationSeq: number;
+  openedAtMs: number;
+  state: "open" | "closed" | "gap";
+  recoveryGapId: string | null;
+}
+
+interface NativeObserverObservationRecord {
+  observerStreamEpochId: string;
+  observationSeq: number;
+  nativeEventId: string | null;
+  rawEventDigest: string;
+  rawEventRef: string;
+  classification: "parsed" | "unknown" | "invalid";
+  parsedEventSchemaId: string | null;
+  parsedEventDigest: string | null;
+  validationFailureCode: string | null;
+  recoveryGapId: string | null;
+  receivedAtMs: number;
+}
+
+interface NativeFilteredObserverObservationRecord {
+  filteredObservationId: string;
+  collaborationServerId: string | null;
+  nativeRuntimeObserverLeaseId: string;
+  observerGeneration: number;
+  observerStreamEpochId: string;
+  observationSeq: number;
+  rawEventDigest: string;
+  filteringPolicyRef: string;
+  filteringPolicyDigest: string;
+  nativeWorkspaceBindingId: string;
+  resolvedNativeConversationId: string | null;
+  resolvedChildConversationId: string | null;
+  resolvedNativeBindingId: string | null;
+  resolvedLogicalChatId: string | null;
+  resolvedNativeActionId: string | null;
+  disposition: "projectable" | "internal_only" | "rejected_global" | "gap";
+  decisionEvidenceRef: string;
+  decisionEvidenceDigest: string;
+  canonicalFilteredObservationDigest: string;
+  recoveryGapId: string | null;
+}
+
+interface NativeObserverOverlapBufferRecord {
+  overlapBufferId: string;
+  observerStreamEpochId: string;
+  startObservationSeq: number;
+  endObservationSeqExclusive: number | null;
+  maxEvents: number;
+  maxBytes: number;
+  retainedBytes: number;
+  state: "collecting" | "sealed" | "gap";
+  recoveryGapId: string | null;
+  gapEvidenceRef: string | null;
+}
+
+interface NativeObserverStatusSnapshotRecord {
+  nativeStatusSnapshotId: string;
+  nativeRuntimeObserverLeaseId: string;
+  observerStreamEpochId: string;
+  nativeWorkspaceBindingId: string;
+  canonicalStatusRef: string;
+  statusSnapshotDigest: string;
+  capturedThroughObservationSeq: number | null;
+}
+
+interface OpenCodeDiscoverySnapshotRecord {
+  discoverySnapshotId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeWorkspaceBindingId: string;
+  nativeStoreCoordinateSchemaId: "remote-claw/opencode-native-store-coordinate/v1";
+  nativeStoreCoordinateRef: string;
+  nativeStoreCoordinateDigest: string;
+  stableNativeStoreIdentityDigest: string;
+  nativeStoreAttachmentAttestationSchemaId:
+    "remote-claw/opencode-native-store-attachment-attestation/v1";
+  nativeStoreAttachmentAttestationRef: string;
+  nativeStoreAttachmentAttestationDigest: string;
+  nativeRuntimeObserverLeaseId: string;
+  observerGeneration: number;
+  eventStreamEpoch: number;
+  provedReadOperationVectorDigest: string;
+  linearizationProofKind: "sequence_watermark" | "barrier_event" | "atomic_store_snapshot";
+  linearizationProofRef: string;
+  linearizationProofDigest: string;
+  postSnapshotBarrierObservationSeq: number | null;
+  overlapBufferId: string;
+  overlapStartObservationSeq: number;
+  overlapEndObservationSeqExclusive: number;
+  nativeStatusSnapshotId: string;
+  statusSnapshotDigest: string;
+  orderedSessionVectorRef: string;
+  orderedSessionVectorDigest: string;
+  orderedCreationMarkerVectorRef: string;
+  orderedCreationMarkerVectorDigest: string;
+  canonicalSnapshotDigest: string;
+  capturedAtMs: number;
+  completeness: "complete" | "gap";
+  state: "current" | "superseded";
+}
+
+interface OpenCodeHistoryMessageItem {
+  nativeConversationId: string;
+  nativeMessageId: string;
+  messageIndex: number;
+  role: "user" | "assistant";
+  nativeTimestampDigest: string;
+  metadataDigest: string;
+}
+
+interface OpenCodeHistoryPartItem {
+  nativeConversationId: string;
+  nativeMessageId: string;
+  nativePartId: string;
+  messageIndex: number;
+  partIndex: number;
+  partType: string;
+  canonicalPartPayloadSchemaId: string;
+  canonicalPartPayloadRef: string;
+  canonicalPartPayloadDigest: string;
+}
+
+interface OpenCodeConversationHistorySnapshotRecord {
+  nativeHistorySnapshotId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeBindingId: string;
+  nativeConversationId: string;
+  nativeWorkspaceBindingId: string;
+  nativeRuntimeObserverLeaseId: string;
+  observerGeneration: number;
+  observerStreamEpochId: string;
+  overlapBufferId: string;
+  overlapStartObservationSeq: number;
+  overlapEndObservationSeqExclusive: number;
+  nativeStatusSnapshotId: string;
+  statusSnapshotDigest: string;
+  linearizationProofKind: "sequence_watermark" | "barrier_event" | "atomic_store_snapshot";
+  linearizationProofRef: string;
+  linearizationProofDigest: string;
+  linearizedThroughObservationSeq: number | null;
+  postSnapshotBarrierObservationSeq: number | null;
+  orderedMessageVectorRef: string;
+  orderedMessageVectorDigest: string;
+  orderedPartVectorRef: string;
+  orderedPartVectorDigest: string;
+  canonicalSnapshotDigest: string;
+  capturedAtMs: number;
+  completeness: "complete" | "gap";
+}
+
+interface NativeRuntimeObserverLease {
+  nativeRuntimeObserverLeaseId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeServerAttachmentLeaseId: string;
+  observerGeneration: number;
+  currentObserverStreamEpochId: string | null;
+  serverCapabilitySnapshotId: string;
+  capabilitySnapshotAttestationRef: string;
+  capabilitySnapshotAttestationDigest: string;
+  nativeWorkspaceBindingId: string;
+  endpointRef: string;
+  credentialHandle: string;
+  peerBindingEvidenceRef: string;
+  listenerRouteManifestDigest: string;
+  runtimeIsolationAttestationRef: string;
+  runtimeIsolationAttestationDigest: string;
+  provedReadOperationVectorDigest: string;
+  filteringSchemaId: string;
+  filteringPolicyRef: string;
+  filteringPolicyDigest: string;
+  state: "current" | "superseded" | "closed";
+}
+
+interface NativeObserverFilteringPolicy {
+  schemaVersion: 1;
+  filteringSchemaId: string;
+  nativeWorkspaceBindingId: string;
+  topLevelSessionBindingVectorRef: string;
+  topLevelSessionBindingVectorDigest: string;
+  childLineageClassifierSchemaId: string;
+  childLineagePolicyRef: string;
+  childLineagePolicyDigest: string;
+  actionCorrelationSchemaId: string;
+  actionCorrelationPolicyRef: string;
+  actionCorrelationPolicyDigest: string;
+  globalEventRejectionPolicyRef: string;
+  globalEventRejectionPolicyDigest: string;
+}
+
+interface NativeObserverTopLevelSessionBindingItem {
+  nativeConversationId: string;
+  nativeBindingId: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  nativeWorkspaceBindingId: string;
+}
+
 interface NativeTransportAttachment {
   attachmentId: string;
   nativeBindingId: string;
@@ -486,7 +1474,1480 @@ interface NativeTransportLease {
   nativeIncarnation: number;
   coordinatorEpoch: number;
   transportEpoch: number;
+  currentCapabilitySnapshotId: string | null;
+  currentNativeClientIngressLeaseId: string | null;
   state: "current" | "superseded" | "closed";
+}
+
+type NativeMutationFamily =
+  | "user_text"
+  | "steer_text"
+  | "blank_submit"
+  | "attachment"
+  | "new_chat"
+  | "clear"
+  | "interrupt"
+  | "compact"
+  | "permission_answer"
+  | "question_answer"
+  | "set_model"
+  | "set_mode"
+  | "end"
+  | "fork"
+  | "archive"
+  | "unarchive"
+  | "revert"
+  | "unrevert"
+  | "shell"
+  | "session_command"
+  | "message_mutation"
+  | "part_mutation"
+  | "share"
+  | "rename"
+  | "delete";
+
+type NativeServerMutationFamily = "new_chat";
+type NativeBindingMutationFamily = Exclude<NativeMutationFamily, NativeServerMutationFamily>;
+type CanonicalAttachmentMediaType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp"
+  | "image/gif";
+
+interface CanonicalAttachmentItemRecord {
+  schemaVersion: 1;
+  canonicalItemSchemaId: "remote-claw/command-payload/attachment-item/v1";
+  itemIndex: number;
+  clientFileName: string;
+  mediaType: CanonicalAttachmentMediaType;
+  contentLength: number;
+  contentRef: string;
+  contentDigest: string;
+  canonicalItemDigest: string;
+}
+
+interface CanonicalAttachmentCommandPayloadRecord {
+  schemaVersion: 1;
+  canonicalCommandPayloadSchemaId: "remote-claw/command-payload/attachment/v1";
+  caption: string | null;
+  itemVectorRef: string;
+  itemVectorDigest: string;
+  itemCount: number;
+  canonicalCommandPayloadDigest: string;
+}
+
+type NativeWorkspaceTransitionKind =
+  | "create"
+  | "import"
+  | "switch"
+  | "clear"
+  | "fork"
+  | "archive"
+  | "unarchive"
+  | "first_bootstrap";
+type NativeWorkspaceTransitionClassification =
+  | NativeWorkspaceTransitionKind
+  | "from_creation_intent";
+
+interface NativeMutationFamilyCapability {
+  mutationFamily: NativeMutationFamily;
+  capabilityFamilyDigest: string;
+  capabilityScope: "server" | "binding";
+  canonicalCommandPayloadSchemaId: string;
+  nativeRequestTranslatorSchemaId: string;
+  nativeRequestTranslatorImplementationDigest: string;
+  nativeRequestTranslatorBuildManifestDigest: string;
+  nativeRequestTranslatorDigest: string;
+  translationInjectivityProofRef: string;
+  translationInjectivityProofDigest: string;
+  manifestEntryDigest: string;
+  nativeOperationCoordinateDigest: string;
+  nativeMethod: string;
+  nativeRouteSchemaId: string;
+  canonicalQuerySchemaId: string;
+  canonicalHeaderSchemaId: string;
+  canonicalBodySchemaId: string;
+  targetScope: "runtime" | "server" | "session" | "child" | "permission" | "question";
+  canonicalRequestSchemaId: string;
+  transportReceiptSemantics: "none" | "receipt_only" | "terminal";
+  nativeActionIdRequirement: "required" | "optional" | "unavailable";
+  positiveReadBackSchemaId: string;
+  positiveNeverStartedSchemaId: string | null;
+  sourceCausality: "proved" | "native_outcome_only" | "unproved";
+  proofTupleDigest: string;
+  evidenceDigest: string;
+  evidenceRef: string;
+}
+
+interface NativeOperationClassification {
+  operationCoordinateDigest: string;
+  operationEntryDigest: string;
+  manifestEntryDigest: string;
+  nativeMethod: string;
+  nativeRouteSchemaId: string;
+  canonicalQuerySchemaId: string;
+  canonicalHeaderSchemaId: string;
+  canonicalBodySchemaId: string;
+  targetScope: "runtime" | "server" | "session" | "child" | "permission" | "question";
+  classification:
+    | "proved_read"
+    | "tui_only"
+    | "collaborator_family"
+    | "runtime_management"
+    | "rejected";
+  mutationFamily: NativeMutationFamily | null;
+  familyCapabilityDigest: string | null;
+  tuiPolicy: "pass" | "virtualize" | "reject" | "not_applicable";
+  workspaceTransitionKind: NativeWorkspaceTransitionClassification | null;
+}
+
+interface NativeListenerRouteManifestEntry {
+  manifestEntryDigest: string;
+  frontDoorKind: "tui" | "binding_adapter" | "server_creation" | "observer";
+  frontDoorListenerIdentityDigest: string;
+  authorizationHandlerIdentityDigest: string;
+  source: "openapi" | "raw" | "upgrade" | "fallback";
+  transport: "http" | "websocket" | "stream";
+  nativeMethod: string;
+  canonicalPathTemplate: string;
+  routeParserSchemaId: string;
+  pathNormalizationSchemaId: string;
+  queryParserSchemaId: string;
+  headerParserSchemaId: string;
+  bodyParserSchemaId: string;
+  handlerIdentityDigest: string;
+  registrationOrder: number;
+  matchPriority: number;
+  fallbackOnly: boolean;
+}
+
+interface NativeListenerRouteManifestRecord {
+  nativeListenerRouteManifestDigest: string;
+  descriptor: NativeEngineDescriptor;
+  engineVersion: string;
+  nativeBinaryDigest: string;
+  frontDoorBinaryDigest: string;
+  frontDoorBuildManifestRef: string;
+  frontDoorBuildManifestDigest: string;
+  surfaceSchemaKind: "openapi" | "json_rpc" | "intercept_manifest";
+  generatedSurfaceSchemaDigest: string;
+  buildRouteRegistryDigest: string;
+  routeResolutionSchemaId: string;
+  runtimeRegistrationAttestationRef: string;
+  runtimeRegistrationAttestationDigest: string;
+  orderedEntryDigests: readonly string[];
+}
+
+interface NativeListenerRuntimeRegistrationAttestation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/native-listener-registration-attestation/v1";
+  runtimeId: string;
+  nativeIncarnation: number;
+  descriptor: NativeEngineDescriptor;
+  engineVersion: string;
+  nativeBinaryDigest: string;
+  frontDoorBinaryDigest: string;
+  frontDoorBuildManifestDigest: string;
+  surfaceSchemaKind: "openapi" | "json_rpc" | "intercept_manifest";
+  generatedSurfaceSchemaDigest: string;
+  buildRouteRegistryDigest: string;
+  routeResolutionSchemaId: string;
+  orderedEntryVectorDigest: string;
+  measuredDispatchTableDigest: string;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  issuedAtMs: number;
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+type NativeRuntimeIsolationRole =
+  | "tui_front_door"
+  | "binding_adapter_front_door"
+  | "server_creation_front_door"
+  | "observer_front_door";
+
+interface NativeRuntimeIsolationRoleManifestItem {
+  schemaVersion: 1;
+  canonicalItemSchemaId: "remote-claw/native-runtime-isolation-role-manifest-item/v1";
+  role: NativeRuntimeIsolationRole;
+  manifestPosition: number;
+  manifestEntryDigest: string;
+  operationEntryDigest: string;
+  handlerIdentityDigest: string;
+  canonicalItemDigest: string;
+}
+
+interface NativeRuntimeIsolationAuthorizationHandlerItem {
+  schemaVersion: 1;
+  canonicalItemSchemaId: "remote-claw/native-runtime-isolation-authorization-handler-item/v1";
+  role: NativeRuntimeIsolationRole;
+  manifestPosition: number;
+  operationEntryDigest: string;
+  authorizationHandlerDigest: string;
+  authorizationPolicyDigest: string;
+  canonicalItemDigest: string;
+}
+
+interface NativeRuntimeIsolationPeerItem {
+  role: NativeRuntimeIsolationRole;
+  tgid: number;
+  pidfdIdentityDigest: string;
+  processStartTimeTicks: number;
+  cgroupIdentityDigest: string;
+  executableImageDigest: string;
+  frontDoorBinaryDigest: string;
+  frontDoorBuildManifestDigest: string;
+  runtimeRegistrationAttestationDigest: string;
+  roleManifestEntryVectorRef: string;
+  roleManifestEntryVectorDigest: string;
+  authorizationHandlerVectorRef: string;
+  authorizationHandlerVectorDigest: string;
+}
+
+interface NativeRuntimeIsolationProviderPeer {
+  schemaVersion: 1;
+  canonicalPeerSchemaId: "remote-claw/native-runtime-isolation-provider-peer/v1";
+  runtimeId: string;
+  nativeIncarnation: number;
+  tgid: number;
+  pidfdIdentityDigest: string;
+  processStartTimeTicks: number;
+  cgroupIdentityDigest: string;
+  executableImageDigest: string;
+  providerFacadeSocketIdentityDigest: string;
+  providerFacadePolicyMapEntryDigest: string;
+  descendantDenialPolicyDigest: string;
+  canonicalPeerDigest: string;
+}
+
+interface NativeRuntimeIsolationAttestation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/native-runtime-isolation-attestation/v1";
+  runtimeIsolationAttestationId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  descriptor: NativeEngineDescriptor;
+  rawListenerSocketIdentityDigest: string;
+  rawListenerSocketInode: number;
+  rawListenerSocketEvidenceRef: string;
+  allowedRawListenerPeerVectorRef: string;
+  allowedRawListenerPeerVectorDigest: string;
+  processIdentityPolicySchemaId: "remote-claw/exact-process-socket-policy/v1";
+  attachBeforeRunProgramDigest: string;
+  installedPolicyMapDigest: string;
+  descendantDenialPolicyDigest: string;
+  processIdentityPolicyEvidenceRef: string;
+  toolNamespacePolicyDigest: string;
+  toolNamespacePolicyEvidenceRef: string;
+  providerFacadeSocketIdentityDigest: string;
+  providerFacadeAllowedProcessRef: string;
+  providerFacadeAllowedProcessDigest: string;
+  providerFacadeExactProcessPolicyDigest: string;
+  providerFacadePolicyEvidenceRef: string;
+  networkNamespaceDigest: string;
+  mountNamespaceDigest: string;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  issuedAtMs: number;
+  canonicalPayloadDigest: string;
+  signature: string;
+  signedRecordDigest: string;
+}
+
+interface NativeCapabilitySnapshotAttestation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/native-capability-snapshot-attestation/v1";
+  capabilitySnapshotAttestationId: string;
+  snapshotKind: "server" | "binding" | "tui_policy";
+  snapshotId: string;
+  canonicalSnapshotSchemaId:
+    | "remote-claw/native-server-capability-snapshot/v1"
+    | "remote-claw/native-binding-capability-snapshot/v1"
+    | "remote-claw/native-tui-policy-snapshot/v1";
+  canonicalSnapshotDigest: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  issuedAtMs: number;
+  canonicalPayloadDigest: string;
+  signature: string;
+  signedRecordDigest: string;
+}
+
+interface NativeBindingCapabilitySnapshot {
+  capabilitySnapshotId: string;
+  schemaVersion: 1;
+  canonicalSnapshotSchemaId: "remote-claw/native-binding-capability-snapshot/v1";
+  nativeBindingId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  attachmentLeaseId: string;
+  capabilityGeneration: number;
+  descriptor: NativeEngineDescriptor;
+  engineVersion: string;
+  nativeSurfaceSchemaId: string;
+  nativeSurfaceSchemaDigest: string;
+  nativeListenerRouteManifestRef: string;
+  nativeListenerRouteManifestDigest: string;
+  runtimeIsolationAttestationRef: string;
+  runtimeIsolationAttestationDigest: string;
+  operationClassificationVectorRef: string;
+  operationClassificationVectorDigest: string;
+  familyCapabilities: readonly NativeMutationFamilyCapability[];
+  familyCapabilityVectorDigest: string;
+  slashCommandNormalizationSchemaId: string;
+  slashCommandNormalizationImplementationDigest: string;
+  slashCommandTableRef: string;
+  slashCommandTableDigest: string;
+  proofTupleDigest: string;
+  evidenceRef: string;
+  evidenceDigest: string;
+  runtimeOwnerAttestationRef: string;
+  runtimeOwnerAttestationDigest: string;
+  canonicalSnapshotDigest: string;
+  verifiedAtMs: number;
+  state: "current" | "superseded" | "revoked";
+}
+
+interface NativeServerAttachmentLease {
+  nativeServerAttachmentLeaseId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  descriptor: NativeEngineDescriptor;
+  transportId: string;
+  currentServerCapabilitySnapshotId: string | null;
+  currentTuiPolicySnapshotId: string | null;
+  currentTuiProcessIngressLeaseId: string | null;
+  currentServerFrontDoorLeaseId: string | null;
+  currentWorkspaceTransitionBarrierId: string | null;
+  currentDiscoverySnapshotId: string | null;
+  currentRuntimeObserverLeaseId: string | null;
+  state: "current" | "superseded" | "closed";
+}
+
+interface NativeServerCapabilitySnapshot {
+  serverCapabilitySnapshotId: string;
+  schemaVersion: 1;
+  canonicalSnapshotSchemaId: "remote-claw/native-server-capability-snapshot/v1";
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeServerAttachmentLeaseId: string;
+  capabilityGeneration: number;
+  descriptor: NativeEngineDescriptor;
+  engineVersion: string;
+  nativeSurfaceSchemaId: string;
+  nativeSurfaceSchemaDigest: string;
+  nativeListenerRouteManifestRef: string;
+  nativeListenerRouteManifestDigest: string;
+  runtimeIsolationAttestationRef: string;
+  runtimeIsolationAttestationDigest: string;
+  operationClassificationVectorRef: string;
+  operationClassificationVectorDigest: string;
+  familyCapabilities: readonly NativeMutationFamilyCapability[];
+  familyCapabilityVectorDigest: string;
+  proofTupleDigest: string;
+  evidenceRef: string;
+  evidenceDigest: string;
+  runtimeOwnerAttestationRef: string;
+  runtimeOwnerAttestationDigest: string;
+  canonicalSnapshotDigest: string;
+  verifiedAtMs: number;
+  state: "current" | "superseded" | "revoked";
+}
+
+interface NativeClientIngressLease {
+  nativeClientIngressLeaseId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  sourceKind: "remote-claw-adapter";
+  nativeBindingId: string;
+  nativeConversationId: string;
+  nativeWorkspaceBindingId: string;
+  canonicalDirectoryPathDigest: string;
+  nativeWorkspaceBindingDigest: string;
+  endpointRef: string;
+  credentialHandle: string;
+  peerBindingEvidenceRef: string;
+  attachmentLeaseId: string;
+  allowedMutationFamilies: readonly NativeBindingMutationFamily[];
+  state: "current" | "superseded" | "closed";
+}
+
+interface NativeTuiProcessIngressLease {
+  nativeTuiProcessIngressLeaseId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  descriptor: NativeEngineDescriptor;
+  nativeServerAttachmentLeaseId: string;
+  nativeWorkspaceBindingId: string;
+  canonicalDirectoryPathDigest: string;
+  nativeWorkspaceBindingDigest: string;
+  endpointRef: string;
+  credentialHandle: string;
+  peerBindingEvidenceRef: string;
+  tuiPolicySnapshotId: string;
+  currentTuiSessionIngressBindingId: string | null;
+  state: "current" | "superseded" | "closed";
+}
+
+interface NativeTuiSessionIngressBinding {
+  nativeTuiSessionIngressBindingId: string;
+  nativeTuiProcessIngressLeaseId: string;
+  localNativeConversationId: string;
+  nativeConversationId: string;
+  nativeWorkspaceBindingId: string;
+  importedThroughLocalTransitionSeq: number;
+  state: "current" | "superseded" | "closed";
+}
+
+interface NativeTuiPolicySnapshot {
+  tuiPolicySnapshotId: string;
+  schemaVersion: 1;
+  canonicalSnapshotSchemaId: "remote-claw/native-tui-policy-snapshot/v1";
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeServerAttachmentLeaseId: string;
+  policyGeneration: number;
+  descriptor: NativeEngineDescriptor;
+  engineVersion: string;
+  nativeSurfaceSchemaId: string;
+  nativeSurfaceSchemaDigest: string;
+  nativeListenerRouteManifestRef: string;
+  nativeListenerRouteManifestDigest: string;
+  runtimeIsolationAttestationRef: string;
+  runtimeIsolationAttestationDigest: string;
+  operationClassificationVectorRef: string;
+  operationClassificationVectorDigest: string;
+  virtualizationSchemaId: "none";
+  virtualizationVectorRef: null;
+  virtualizationVectorDigest: null;
+  virtualizationPolicyDigest: string;
+  unsupportedResponseSchemaId: string;
+  unsupportedResponseVectorRef: string;
+  unsupportedResponseVectorDigest: string;
+  tuiReadPolicyVectorRef: string;
+  tuiReadPolicyVectorDigest: string;
+  proofTupleDigest: string;
+  evidenceRef: string;
+  evidenceDigest: string;
+  runtimeOwnerAttestationRef: string;
+  runtimeOwnerAttestationDigest: string;
+  canonicalSnapshotDigest: string;
+  verifiedAtMs: number;
+  state: "current" | "superseded" | "revoked";
+}
+
+interface NativeTuiUnsupportedResponseItem {
+  operationEntryDigest: string;
+  statusCode: number;
+  canonicalHeaderSchemaId: string;
+  canonicalHeaderRef: string;
+  canonicalHeaderDigest: string;
+  canonicalBodySchemaId: string;
+  canonicalBodyRef: string;
+  canonicalBodyDigest: string;
+}
+
+interface NativeTuiReadPolicyItem {
+  operationEntryDigest: string;
+  canonicalQueryScopeSchemaId: string;
+  responseParserSchemaId: string;
+  responseSchemaId: string;
+  redactionSchemaId: string;
+  dataSource: "sealed_synthetic_view" | "proved_native_state";
+  nativeWorkspaceBindingId: string;
+  evidenceRef: string;
+  evidenceDigest: string;
+}
+
+interface NativeServerFrontDoorLease {
+  nativeServerFrontDoorLeaseId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  descriptor: NativeEngineDescriptor;
+  nativeWorkspaceBindingId: string;
+  canonicalDirectoryPathDigest: string;
+  nativeWorkspaceBindingDigest: string;
+  endpointRef: string;
+  credentialHandle: string;
+  peerBindingEvidenceRef: string;
+  nativeServerAttachmentLeaseId: string;
+  allowedMutationFamilies: readonly NativeServerMutationFamily[];
+  state: "current" | "superseded" | "closed";
+}
+
+interface NativeDeliveryAttemptRecord {
+  nativeDeliveryAttemptId: string;
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  nativeBindingId: string;
+  descriptor: NativeEngineDescriptor;
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeConversationId: string;
+  attachmentLeaseId: string;
+  nativeClientIngressLeaseId: string;
+  capabilitySnapshotId: string;
+  capabilitySnapshotAttestationDigest: string;
+  capabilityFamilyDigest: string;
+  mutationFamily: NativeBindingMutationFamily;
+  canonicalCommandPayloadSchemaId: string;
+  canonicalCommandPayloadDigest: string;
+  nativeRequestTranslatorDigest: string;
+  nativeActionId: string | null;
+  nativeMethod: string;
+  nativeRouteSchemaId: string;
+  canonicalRequestSchemaId: string;
+  canonicalRequestRef: string;
+  canonicalRequestDigest: string;
+  nativeRequestTranslationSchemaId: "remote-claw/native-request-translation/v1";
+  nativeRequestTranslationRef: string;
+  nativeRequestTranslationDigest: string;
+  nativeTargetPathDigest: string;
+  positiveReadBackSchemaId: string;
+  expectedNativePartCount: number | null;
+  expectedNativePartFingerprintSchemaId: string | null;
+  expectedNativePartFingerprintVectorRef: string | null;
+  expectedNativePartFingerprintVectorDigest: string | null;
+  state:
+    | "prepared"
+    | "claimed"
+    | "started"
+    | "transport_receipt"
+    | "native_observed"
+    | "completed"
+    | "rejected"
+    | "quarantined"
+    | "outcome_unknown";
+  claimedByCoordinatorEpoch: number | null;
+  transportReceiptRef: string | null;
+  nativeReadBackEvidenceRef: string | null;
+  nativeReadBackEvidenceDigest: string | null;
+  outcomeEvidenceSchemaId: string | null;
+  outcomeEvidenceRef: string | null;
+  outcomeEvidenceDigest: string | null;
+}
+
+interface OpenCodeNativeReadBackPartItem {
+  nativeConversationId: string;
+  nativeActionId: string;
+  nativePartId: string;
+  nativePartIndex: number;
+  role: "user";
+  partType: "text";
+  canonicalTextRef: string;
+  canonicalTextDigest: string;
+  expectedPartFingerprintDigest: string;
+  historySnapshotDigest: string;
+  filteredSseObservationRef: string | null;
+  filteredSseObservationDigest: string | null;
+  nativeOrderCoordinateDigest: string;
+  observedPartFingerprintDigest: string;
+}
+
+interface OpenCodeNativeOrderEvidence {
+  schemaVersion: 1;
+  canonicalOrderEvidenceSchemaId: "remote-claw/opencode-native-order-evidence/v1";
+  nativeHistorySnapshotId: string;
+  historySnapshotDigest: string;
+  nativeMessageId: string;
+  messageIndex: number;
+  nativePartId: string;
+  partIndex: number;
+  linearizationProofKind: "sequence_watermark" | "barrier_event" | "atomic_store_snapshot";
+  linearizationProofDigest: string;
+  linearizedThroughObservationSeq: number | null;
+  filteredSseObservationDigest: string | null;
+  nativeOrderEvidenceDigest: string;
+}
+
+interface OpenCodeNativeReadBackEvidenceRecord {
+  schemaVersion: 1;
+  nativeReadBackSchemaId: "remote-claw/opencode-user-text-read-back/v1";
+  nativeReadBackEvidenceId: string;
+  nativeDeliveryAttemptId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeBindingId: string;
+  nativeConversationId: string;
+  nativeWorkspaceBindingId: string;
+  nativeRuntimeObserverLeaseId: string;
+  observerGeneration: number;
+  nativeActionId: string;
+  nativeHistorySnapshotId: string;
+  historySnapshotRef: string;
+  historySnapshotDigest: string;
+  observerStreamEpochId: string;
+  throughObservationSeq: number | null;
+  sameMessageHistoryPartVectorDigest: string;
+  sameMessageHistoryPartCount: number;
+  observedPartVectorRef: string;
+  observedPartVectorDigest: string;
+  observedPartCount: number;
+  expectedPartFingerprintVectorDigest: string;
+  nativeOrderEvidenceRef: string | null;
+  nativeOrderEvidenceDigest: string | null;
+  canonicalEvidenceDigest: string;
+  outcome: "exactly_one_applied" | "mismatch" | "ambiguous";
+}
+
+interface NativeCommandEffectGateRecord {
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  state: "never_started" | "started" | "completed" | "quarantined" | "outcome_unknown";
+  startedAttemptId: string | null;
+  outcomeEvidenceSchemaId: string | null;
+  outcomeEvidenceRef: string | null;
+  outcomeEvidenceDigest: string | null;
+}
+
+interface NativeFrontDoorDispatchRecord {
+  nativeDeliveryAttemptId: string;
+  nativeClientIngressLeaseId: string;
+  nativeTargetPathDigest: string;
+  canonicalRequestDigest: string;
+  nativeRequestTranslationDigest: string;
+  dispatchAuthorizationHandle: string;
+  canonicalDispatchDigest: string;
+  dispatchState: "not_started" | "started" | "completed" | "quarantined" | "outcome_unknown";
+  dispatchStartedAtMs: number | null;
+  nativeReceiptRef: string | null;
+  outcomeEvidenceSchemaId: string | null;
+  outcomeEvidenceRef: string | null;
+  outcomeEvidenceDigest: string | null;
+}
+
+interface NativeBindingPreSendAbandonmentRecord {
+  schemaVersion: 1;
+  canonicalEvidenceSchemaId: "remote-claw/native-binding-pre-send-abandonment/v1";
+  nativePreSendAbandonmentId: string;
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  nativeBindingId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeDeliveryAttemptId: string;
+  canonicalDispatchDigest: string;
+  dispatchAuthorizationHandleDigest: string;
+  attemptStateBefore: "prepared" | "claimed";
+  dispatchStateBefore: "not_started";
+  gateStateBefore: "never_started";
+  abandonmentReason: "explicit_operator_cancel" | "explicit_runtime_shutdown";
+  abandonedAtJournalSeq: number;
+  assertion: "attempt_dispatch_and_gate_quarantined_before_native_start";
+  canonicalEvidenceDigest: string;
+}
+
+interface NativeConversationCreationReservationRecord {
+  nativeCreationReservationId: string;
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  targetLogicalChatId: string;
+  provisionalNativeBindingId: string;
+  descriptor: NativeEngineDescriptor;
+  projectId: string;
+  workspaceSelectorId: string;
+  projectTargetSelectorMappingId: string;
+  projectTargetSelectorMappingGeneration: number;
+  projectTargetDigest: string;
+  nativeWorkspaceBindingId: string;
+  canonicalDirectoryPathDigest: string;
+  nativeWorkspaceBindingDigest: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeServerAttachmentLeaseId: string;
+  serverFrontDoorLeaseId: string;
+  serverCapabilitySnapshotId: string;
+  serverCapabilitySnapshotAttestationDigest: string;
+  newChatCapabilityDigest: string;
+  positiveReadBackSchemaId: "remote-claw/opencode-new-chat-marker-reconciliation/v1";
+  canonicalCommandPayloadSchemaId: "remote-claw/command-payload/new-chat/v1";
+  canonicalCommandPayloadDigest: string;
+  nativeRequestTranslatorDigest: string;
+  creationIntent: "first_bootstrap" | "new_chat";
+  nativeCreationMarker: string;
+  nativeCreationIntentDigest: string;
+  discoverySnapshotId: string;
+  discoverySnapshotDigest: string;
+  nativeMethod: string;
+  nativeRouteSchemaId: string;
+  canonicalRequestSchemaId: string;
+  canonicalRequestRef: string;
+  canonicalRequestDigest: string;
+  nativeRequestTranslationSchemaId: "remote-claw/native-request-translation/v1";
+  nativeRequestTranslationRef: string;
+  nativeRequestTranslationDigest: string;
+  nativeTargetPathDigest: string;
+  nextReconciliationSeq: number;
+  currentReconciliationId: string | null;
+  state:
+    | "reserved"
+    | "started"
+    | "transport_receipt"
+    | "native_observed"
+    | "bound"
+    | "outcome_unknown"
+    | "quarantined";
+  observedNativeConversationId: string | null;
+  outcomeEvidenceRef: string | null;
+}
+
+interface NativeConversationCreationEffectGateRecord {
+  nativeCreationReservationId: string;
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  targetLogicalChatId: string;
+  state: "never_started" | "started" | "completed" | "outcome_unknown";
+  startedReservationId: string | null;
+  outcomeEvidenceRef: string | null;
+}
+
+interface NativeCreationFrontDoorDispatchRecord {
+  nativeCreationReservationId: string;
+  serverFrontDoorLeaseId: string;
+  canonicalRequestDigest: string;
+  nativeRequestTranslationDigest: string;
+  nativeTargetPathDigest: string;
+  dispatchAuthorizationHandle: string;
+  dispatchState: "not_started" | "started" | "completed" | "outcome_unknown";
+  dispatchStartedAtMs: number | null;
+  nativeReceiptRef: string | null;
+  canonicalDispatchDigest: string;
+}
+
+interface NativeRequestTranslationRecord {
+  schemaVersion: 1;
+  nativeRequestTranslationSchemaId: "remote-claw/native-request-translation/v1";
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceDigest: string;
+  capabilitySnapshotAttestationDigest: string;
+  canonicalCommandPayloadSchemaId: string;
+  canonicalCommandPayloadDigest: string;
+  nativeRequestTranslatorDigest: string;
+  generatedCoordinateSchemaId: string;
+  generatedCoordinateRef: string;
+  generatedCoordinateDigest: string;
+  canonicalRequestSchemaId: string;
+  canonicalRequestDigest: string;
+  nativeTargetPathDigest: string;
+}
+
+type OpenCodeGeneratedRequestCoordinates =
+  | {
+      schemaVersion: 1;
+      generatedCoordinateSchemaId: "remote-claw/opencode-user-text-generated-coordinates/v1";
+      nativeBindingId: string;
+      nativeConversationId: string;
+      nativeWorkspaceBindingId: string;
+      canonicalDirectory: string;
+      canonicalDirectoryPathDigest: string;
+      nativeWorkspaceBindingDigest: string;
+      nativeActionId: string;
+    }
+  | {
+      schemaVersion: 1;
+      generatedCoordinateSchemaId: "remote-claw/opencode-new-chat-generated-coordinates/v1";
+      runtimeId: string;
+      nativeIncarnation: number;
+      nativeWorkspaceBindingId: string;
+      canonicalDirectory: string;
+      canonicalDirectoryPathDigest: string;
+      nativeWorkspaceBindingDigest: string;
+      nativeCreationMarker: string;
+      nativeCreationIntentDigest: string;
+    };
+
+interface NativeCreationMarkerMatchItem {
+  schemaVersion: 1;
+  canonicalCreationMetadataSchemaId: "remote-claw/opencode-native-creation-metadata/v1";
+  fullNativeMetadataSchemaId: "remote-claw/opencode-full-native-metadata-evidence/v1";
+  nativeCreationMarker: string;
+  nativeCreationIntentDigest: string | null;
+  nativeConversationId: string;
+  creationMetadataClassification: "canonical_two_field" | "noncanonical_or_extra";
+  canonicalCreationMetadataRef: string | null;
+  canonicalCreationMetadataDigest: string | null;
+  fullNativeMetadataRef: string;
+  fullNativeMetadataDigest: string;
+}
+
+interface OpenCodeNativeStoreLineageEvidenceRecord {
+  schemaVersion: 1;
+  nativeStoreLineageEvidenceSchemaId: "remote-claw/opencode-native-store-lineage-evidence/v1";
+  nativeStoreLineageEvidenceId: string;
+  nativeCreationReservationId: string;
+  proofKind: "exclusive_continuity_handoff";
+  originalRuntimeId: string;
+  originalNativeIncarnation: number;
+  originalDiscoverySnapshotId: string;
+  originalDiscoverySnapshotDigest: string;
+  originalNativeStoreCoordinateSchemaId: "remote-claw/opencode-native-store-coordinate/v1";
+  originalNativeStoreCoordinateRef: string;
+  originalNativeStoreCoordinateDigest: string;
+  successorRuntimeId: string;
+  successorNativeIncarnation: number;
+  successorDiscoverySnapshotId: string;
+  successorDiscoverySnapshotDigest: string;
+  successorNativeStoreCoordinateSchemaId: "remote-claw/opencode-native-store-coordinate/v1";
+  successorNativeStoreCoordinateRef: string;
+  successorNativeStoreCoordinateDigest: string;
+  stableNativeStoreIdentityDigest: string;
+  nativeStoreContinuityProofSchemaId:
+    "remote-claw/opencode-native-store-continuity-handoff/v1";
+  nativeStoreContinuityProofRef: string;
+  nativeStoreContinuityProofDigest: string;
+  canonicalNativeStoreLineageEvidenceDigest: string;
+}
+
+interface OpenCodeNativeStorePredecessorStopFenceEvidenceRecord {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId:
+    "remote-claw/opencode-native-store-predecessor-stop-fence/v1";
+  predecessorStopFenceEvidenceId: string;
+  assertion: "predecessor_stopped_handle_closed_and_store_fenced";
+  originalRuntimeId: string;
+  originalNativeIncarnation: number;
+  originalNativeServerAttachmentLeaseId: string;
+  originalNativeStoreCoordinateDigest: string;
+  originalNativeStoreAttachmentAttestationDigest: string;
+  stableNativeStoreIdentityDigest: string;
+  stoppedProcessStartIdentityDigest: string;
+  closedStoreHandleIdentityDigest: string;
+  continuityRegistrySchemaId: "remote-claw/native-store-continuity-registry/v1";
+  continuityRegistryId: string;
+  originalCurrentWriterGeneration: number;
+  originalCurrentWriterRegistrationDigest: string;
+  predecessorFenceGeneration: number;
+  continuityRegistryTransitionDigest: string;
+  definitiveStopEvidenceSchemaId: "remote-claw/host-definitive-process-stop/v1";
+  definitiveStopEvidenceRef: string;
+  definitiveStopEvidenceDigest: string;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  fencedAtMs: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+  signedRecordDigest: string;
+}
+
+interface OpenCodeNativeStoreSuccessorExclusiveOpenEvidenceRecord {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId:
+    "remote-claw/opencode-native-store-successor-exclusive-open/v1";
+  successorExclusiveOpenEvidenceId: string;
+  assertion: "successor_exclusively_opened_fenced_store_without_reset_or_fork";
+  successorRuntimeId: string;
+  successorNativeIncarnation: number;
+  successorNativeServerAttachmentLeaseId: string;
+  successorNativeStoreCoordinateDigest: string;
+  successorNativeStoreAttachmentAttestationDigest: string;
+  stableNativeStoreIdentityDigest: string;
+  openedStoreHandleIdentityDigest: string;
+  continuityRegistrySchemaId: "remote-claw/native-store-continuity-registry/v1";
+  continuityRegistryId: string;
+  predecessorStopFenceEvidenceDigest: string;
+  predecessorFenceGeneration: number;
+  successorExclusiveOpenGeneration: number;
+  continuityRegistryTransitionDigest: string;
+  conflictingWriterScanSchemaId: "remote-claw/native-store-conflicting-writer-scan/v1";
+  conflictingWriterScanRef: string;
+  conflictingWriterScanDigest: string;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  openedAtMs: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+  signedRecordDigest: string;
+}
+
+interface OpenCodeNativeStoreContinuityHandoffProofRecord {
+  schemaVersion: 1;
+  nativeStoreContinuityProofSchemaId:
+    "remote-claw/opencode-native-store-continuity-handoff/v1";
+  nativeStoreContinuityProofId: string;
+  proofKind: "exclusive_warden_handoff";
+  continuityAssertion: "same_store_no_reset_no_fork";
+  nativeCreationReservationId: string;
+  originalRuntimeId: string;
+  originalNativeIncarnation: number;
+  originalNativeStoreCoordinateDigest: string;
+  originalNativeStoreAttachmentAttestationDigest: string;
+  successorRuntimeId: string;
+  successorNativeIncarnation: number;
+  successorNativeStoreCoordinateDigest: string;
+  successorNativeStoreAttachmentAttestationDigest: string;
+  stableNativeStoreIdentityDigest: string;
+  continuityRegistrySchemaId: "remote-claw/native-store-continuity-registry/v1";
+  continuityRegistryId: string;
+  predecessorStopFenceEvidenceSchemaId:
+    "remote-claw/opencode-native-store-predecessor-stop-fence/v1";
+  predecessorStopFenceEvidenceRef: string;
+  predecessorStopFenceEvidenceDigest: string;
+  successorExclusiveOpenEvidenceSchemaId:
+    "remote-claw/opencode-native-store-successor-exclusive-open/v1";
+  successorExclusiveOpenEvidenceRef: string;
+  successorExclusiveOpenEvidenceDigest: string;
+  predecessorFenceGeneration: number;
+  successorExclusiveOpenGeneration: number;
+  predecessorRegistryTransitionDigest: string;
+  successorRegistryTransitionDigest: string;
+  canonicalNativeStoreContinuityProofDigest: string;
+}
+
+interface NativeConversationCreationReconciliationRecord {
+  schemaVersion: 1;
+  positiveReadBackSchemaId: "remote-claw/opencode-new-chat-marker-reconciliation/v1";
+  nativeCreationReconciliationId: string;
+  nativeCreationReservationId: string;
+  expectedNativeCreationMarker: string;
+  expectedNativeCreationIntentDigest: string;
+  reconciliationSeq: number;
+  originalRuntimeId: string;
+  originalNativeIncarnation: number;
+  originalDiscoverySnapshotId: string;
+  originalDiscoverySnapshotDigest: string;
+  originalDispatchDigest: string;
+  successorRuntimeId: string;
+  successorNativeIncarnation: number;
+  successorObserverLeaseId: string;
+  successorDiscoverySnapshotId: string;
+  successorDiscoverySnapshotDigest: string;
+  nativeStoreLineageStatus:
+    | "same_incarnation_not_required"
+    | "cross_incarnation_proved"
+    | "cross_incarnation_unproved";
+  nativeStoreLineageEvidenceSchemaId:
+    | "remote-claw/opencode-native-store-lineage-evidence/v1"
+    | null;
+  nativeStoreLineageEvidenceRef: string | null;
+  nativeStoreLineageEvidenceDigest: string | null;
+  markerMatchVectorRef: string;
+  markerMatchVectorDigest: string;
+  markerMatchCount: number;
+  decision:
+    | "zero_uncertain"
+    | "bind_one"
+    | "metadata_mismatch"
+    | "quarantine_many"
+    | "lineage_unproved";
+  observedNativeConversationId: string | null;
+  canonicalReconciliationDigest: string;
+}
+
+interface NativeWorkspaceTransitionBarrierRecord {
+  nativeWorkspaceTransitionBarrierId: string;
+  nativeServerAttachmentLeaseId: string;
+  nativeWorkspaceBindingId: string;
+  barrierGeneration: number;
+  nextTransitionSeq: number;
+  activeTransitionId: string | null;
+  firstBootstrapState: "available" | "claimed" | "consumed" | "inapplicable";
+  state: "current" | "superseded" | "closed";
+}
+
+interface NativeWorkspaceTransitionRecord {
+  nativeWorkspaceTransitionId: string;
+  nativeWorkspaceTransitionBarrierId: string;
+  transitionSeq: number;
+  source: "direct_tui" | "server_control";
+  transitionKind: NativeWorkspaceTransitionKind;
+  commandId: string | null;
+  admittingCommandResultId: string | null;
+  admittingCommandResultSignedRecordDigest: string | null;
+  canonicalCommandRecordDigest: string | null;
+  decisionEvidenceDigest: string | null;
+  nativeCreationReservationId: string | null;
+  operationEntryDigest: string;
+  canonicalRequestRef: string;
+  canonicalRequestDigest: string;
+  observedNativeConversationId: string | null;
+  state: "reserved" | "started" | "completed" | "rejected" | "outcome_unknown" | "quarantined";
+  outcomeEvidenceRef: string | null;
+}
+
+interface NestedServerManagementBindingRecord {
+  nestedServerManagementBindingId: string;
+  collaborationServerId: string;
+  targetServerId: string;
+  targetServerScopeCertificateId: string;
+  targetOutsideBindingId: string;
+  targetSourceEventNamespaceId: string;
+  currentLeaseId: string | null;
+  currentCapabilitySnapshotId: string | null;
+  state: "current" | "closed";
+}
+
+interface NestedManagementLiveHandshakeAttestation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/nested-management-live-handshake/v1";
+  handshakeId: string;
+  side: "source" | "target";
+  nestedServerManagementBindingId: string;
+  leaseGeneration: number;
+  sourceServerId: string;
+  targetServerId: string;
+  targetOutsideBindingId: string;
+  sourceCoordinatorEpoch: number;
+  targetCoordinatorEpoch: number;
+  transportEpoch: number;
+  sourceNonce: string;
+  targetNonce: string;
+  sourceScopeCertificateId: string;
+  targetScopeCertificateId: string;
+  transportBindingSchemaId: "remote-claw/nested-management-tls13-exporter-binding/v1";
+  exporterContextDigest: string;
+  mutualChannelBindingDigest: string;
+  issuedAtMs: number;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface NestedServerManagementLeaseRecord {
+  nestedServerManagementLeaseId: string;
+  nestedServerManagementBindingId: string;
+  leaseGeneration: number;
+  sourceCoordinatorEpoch: number;
+  targetCoordinatorEpoch: number;
+  transportEpoch: number;
+  handshakeId: string;
+  sourceHandshakeAttestationRef: string;
+  sourceHandshakeAttestationDigest: string;
+  targetHandshakeAttestationRef: string;
+  targetHandshakeAttestationDigest: string;
+  mutualChannelBindingDigest: string;
+  state: "current" | "superseded" | "closed";
+}
+
+interface NestedManagementTargetLeasePointerRecord {
+  targetServerId: string;
+  targetOutsideBindingId: string;
+  sourceServerId: string;
+  nestedServerManagementBindingId: string;
+  currentLeaseId: string | null;
+  state: "current" | "closed";
+}
+
+interface NestedServerManagementCapabilitySnapshot {
+  nestedServerManagementCapabilitySnapshotId: string;
+  schemaVersion: 1;
+  canonicalSnapshotSchemaId: "remote-claw/nested-management-capability-snapshot/v1";
+  nestedServerManagementBindingId: string;
+  nestedServerManagementLeaseId: string;
+  capabilityGeneration: number;
+  newChatRequestSchemaId: "remote-claw/nested-management-new-chat-request/v1";
+  newChatReceiptProofSchemaId: "remote-claw/nested-target-command-receipt-proof/v1";
+  newChatCapabilityDigest: string;
+  proofRef: string;
+  proofDigest: string;
+  canonicalSnapshotDigest: string;
+  verifiedAtMs: number;
+  state: "current" | "superseded" | "revoked";
+}
+
+interface NestedReadinessPolicySnapshot {
+  nestedReadinessPolicySnapshotId: string;
+  schemaVersion: 1;
+  canonicalPolicySchemaId: "remote-claw/nested-readiness-policy/v1";
+  collaborationServerId: string;
+  policyGeneration: number;
+  maxWaitMs: number;
+  canonicalPolicyDigest: string;
+  state: "current" | "superseded";
+}
+
+interface NestedManagementLineageHop {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/nested-management-lineage-hop/v1";
+  hopIndex: number;
+  originServerId: string;
+  originCommandId: string;
+  originTargetLogicalChatId: string;
+  sourceServerId: string;
+  sourceCommandId: string;
+  sourceCommandResultId: string;
+  sourceCommandResultDigest: string;
+  sourceTargetLogicalChatId: string;
+  targetServerId: string;
+  nestedServerManagementBindingId: string;
+  projectTargetSelectorMappingId: string;
+  projectTargetSelectorMappingGeneration: number;
+  targetProjectId: string;
+  targetWorkspaceSelectorId: string;
+  creationIntent: "first_bootstrap" | "new_chat";
+  semanticCreationBaseDigest: string;
+  sourceEventNamespaceId: string;
+  sourceEventId: string;
+  priorLineageDigest: string | null;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface NestedManagementLineageHopPreparationRecord {
+  nestedManagementLineageHopPreparationId: string;
+  compoundSigningGroupId: string;
+  compoundPreparationGeneration: number;
+  signingLeaseId: string;
+  commandResultId: string;
+  canonicalCommandRecordDigest: string;
+  hopIndex: number;
+  preparationGeneration: number;
+  supersedesPreparationRef: string | null;
+  canonicalPayloadRef: string | null;
+  canonicalPayloadDigest: string | null;
+  signerSequence: number;
+  signatureReservationRef: string;
+  signedRecordDigest: string | null;
+  state: "reserved" | "bound" | "signed" | "aborted";
+}
+
+interface NestedChatEventLineageHopPreparationRecord {
+  nestedChatEventLineageHopPreparationId: string;
+  compoundSigningGroupId: string;
+  compoundPreparationGeneration: number;
+  signingLeaseId: string;
+  commandId: string;
+  canonicalCommandRecordDigest: string;
+  inwardEdgeId: string;
+  hopIndex: number;
+  preparationGeneration: number;
+  supersedesPreparationRef: string | null;
+  canonicalPayloadRef: string | null;
+  canonicalPayloadDigest: string | null;
+  signerSequence: number;
+  signatureReservationRef: string;
+  signedRecordDigest: string | null;
+  state: "reserved" | "bound" | "signed" | "aborted";
+}
+
+interface NestedManagementTransportAttestation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/nested-management-transport-attestation/v1";
+  nestedChatCreationAttemptId: string;
+  transportAttemptId: string;
+  nestedServerManagementBindingId: string;
+  nestedServerManagementLeaseId: string;
+  sourceCoordinatorEpoch: number;
+  targetCoordinatorEpoch: number;
+  transportEpoch: number;
+  mutualChannelBindingDigest: string;
+  semanticRequestDigest: string;
+  issuedAtMs: number;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface NestedDispatchAuthorizationRecord {
+  nestedDispatchAuthorizationId: string;
+  authorizationKind: "nested_management" | "nested_chat";
+  collaborationServerId: string;
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceDigest: string;
+  semanticAttemptId: string;
+  physicalAttemptId: string;
+  transportAttemptId: string;
+  routingBindingId: string;
+  targetServerId: string;
+  targetLogicalChatId: string | null;
+  targetOutsideBindingId: string;
+  sourceTopologyGeneration: number | null;
+  priorLeaseId: string;
+  priorCapabilitySnapshotId: string;
+  priorCapabilitySnapshotDigest: string;
+  capabilityEntryDigest: string;
+  semanticRequestSchemaId: string;
+  semanticRequestDigest: string;
+  dispatchAuthorizationHandleDigest: string;
+  stateVersion: number;
+  state: "armed" | "consumed" | "revoked";
+  revokedAtJournalSeq: number | null;
+}
+
+interface NestedPositiveNeverStartedAttestation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/nested-positive-never-started-attestation/v1";
+  positiveNeverStartedEvidenceId: string;
+  authorizationKind: "nested_management" | "nested_chat";
+  collaborationServerId: string;
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceDigest: string;
+  semanticAttemptId: string;
+  physicalAttemptId: string;
+  transportAttemptId: string;
+  routingBindingId: string;
+  targetServerId: string;
+  targetLogicalChatId: string | null;
+  targetOutsideBindingId: string;
+  sourceTopologyGeneration: number | null;
+  priorLeaseId: string;
+  priorCapabilitySnapshotId: string;
+  priorCapabilitySnapshotDigest: string;
+  capabilityEntryDigest: string;
+  semanticRequestSchemaId: string;
+  semanticRequestDigest: string;
+  nestedDispatchAuthorizationId: string;
+  dispatchAuthorizationHandleDigest: string;
+  revokedAuthorizationStateVersion: number;
+  revokedAtJournalSeq: number;
+  assertion: "authorization_revoked_unconsumed_before_start";
+  issuedAtMs: number;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface NestedManagementCapabilityContinuation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/nested-management-capability-continuation/v1";
+  nestedChatCreationAttemptId: string;
+  nestedServerManagementBindingId: string;
+  targetServerId: string;
+  priorManagementLeaseId: string;
+  priorManagementCapabilitySnapshotId: string;
+  priorManagementCapabilitySnapshotDigest: string;
+  currentManagementLeaseId: string;
+  currentManagementCapabilitySnapshotId: string;
+  currentManagementCapabilitySnapshotDigest: string;
+  newChatCapabilityDigest: string;
+  targetReceiptProofSchemaId: "remote-claw/nested-target-command-receipt-proof/v1";
+  semanticRequestDigest: string;
+  priorTransportAttemptId: string;
+  nextTransportAttemptId: string;
+  positiveNeverStartedEvidenceSchemaId:
+    "remote-claw/nested-positive-never-started-attestation/v1";
+  positivePriorNeverStartedEvidenceDigest: string;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface NestedChatCreationAttemptRecord {
+  nestedChatCreationAttemptId: string;
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  targetLogicalChatId: string;
+  projectTargetSelectorMappingId: string;
+  projectTargetSelectorMappingGeneration: number;
+  nestedServerManagementBindingId: string;
+  nestedServerManagementLeaseId: string;
+  nestedServerManagementCapabilitySnapshotId: string;
+  nestedServerManagementCapabilitySnapshotDigest: string;
+  newChatCapabilityDigest: string;
+  targetServerId: string;
+  targetProjectId: string;
+  targetWorkspaceSelectorId: string;
+  sourceEventNamespaceId: string;
+  sourceEventId: string;
+  lineageVectorRef: string;
+  lineageVectorDigest: string;
+  semanticCreationBaseSchemaId: "remote-claw/nested-management-creation-base/v1";
+  semanticCreationBaseRef: string;
+  semanticCreationBaseDigest: string;
+  canonicalRequestSchemaId: "remote-claw/nested-management-new-chat-request/v1";
+  canonicalRequestRef: string;
+  canonicalRequestDigest: string;
+  targetReceiptProofSchemaId: "remote-claw/nested-target-command-receipt-proof/v1";
+  dispatchState: "not_started" | "started" | "completed" | "outcome_unknown";
+  targetCommandId: string | null;
+  targetCommandResultId: string | null;
+  targetReceiptProofRef: string | null;
+  targetReceiptProofDigest: string | null;
+  targetDecision: "admitted" | "rejected" | null;
+  targetCommandSeq: number | null;
+  targetReadyAttestationRef: string | null;
+  targetReadyAttestationDigest: string | null;
+  readinessPolicySnapshotId: string;
+  readinessPolicySnapshotDigest: string;
+  attemptCreatedAtMs: number;
+  readinessDeadlineAtMs: number;
+  failureCode: string | null;
+  state:
+    | "prepared"
+    | "started"
+    | "target_observed"
+    | "completed"
+    | "failed"
+    | "outcome_unknown";
+  observedTargetLogicalChatId: string | null;
+  outcomeEvidenceRef: string | null;
+}
+
+interface NestedCreationStatusRecord {
+  nestedCreationStatusId: string;
+  nestedChatCreationAttemptId: string;
+  outerCommandId: string;
+  outerTargetLogicalChatId: string;
+  statusVersion: number;
+  supersedesNestedCreationStatusId: string | null;
+  status: "ready" | "failed" | "outcome_unknown";
+  failureCode: string | null;
+  evidenceRef: string;
+  evidenceDigest: string;
+  canonicalPayloadSchemaId: "remote-claw/nested-creation-status/v1";
+  canonicalPayloadRef: string;
+  canonicalPayloadDigest: string;
+  projectionOutboxRef: string;
+}
+
+interface NestedManagementDeliveryAttemptRecord {
+  nestedManagementDeliveryAttemptId: string;
+  nestedChatCreationAttemptId: string;
+  transportAttemptId: string;
+  nestedServerManagementLeaseId: string;
+  currentManagementCapabilitySnapshotId: string;
+  currentManagementCapabilitySnapshotDigest: string;
+  capabilityContinuationRef: string | null;
+  capabilityContinuationDigest: string | null;
+  nestedDispatchAuthorizationId: string;
+  dispatchAuthorizationHandle: string;
+  transportAttestationRef: string;
+  transportAttestationDigest: string;
+  state: "prepared" | "started" | "completed" | "outcome_unknown" | "never_started";
+  positiveNeverStartedEvidenceSchemaId:
+    | "remote-claw/nested-positive-never-started-attestation/v1"
+    | null;
+  positiveNeverStartedEvidenceRef: string | null;
+  positiveNeverStartedEvidenceDigest: string | null;
+  outcomeEvidenceRef: string | null;
+}
+
+interface NestedTargetReadyAttestation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/nested-target-ready-attestation/v1";
+  targetServerId: string;
+  targetLogicalChatId: string;
+  targetCommandResultId: string;
+  targetCommandResultSignedRecordDigest: string;
+  targetCommandId: string;
+  targetCommandSeq: number;
+  targetTopologyGeneration: number;
+  attestationGeneration: number;
+  supersedesAttestationDigest: string | null;
+  rootPathCertificateId: string;
+  rootPathCertificateDigest: string;
+  readyJournalSeq: number;
+  issuedAtMs: number;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface NestedChatCreationEffectGateRecord {
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  targetLogicalChatId: string;
+  state: "never_started" | "started" | "completed" | "outcome_unknown";
+  startedAttemptId: string | null;
+  positiveNeverStartedEvidenceSchemaId:
+    | "remote-claw/nested-positive-never-started-attestation/v1"
+    | null;
+  positiveNeverStartedEvidenceRef: string | null;
+  positiveNeverStartedEvidenceDigest: string | null;
+  outcomeEvidenceRef: string | null;
+}
+
+interface NativeRuntimeIncarnationRecord {
+  runtimeId: string;
+  nativeIncarnation: number;
+  descriptor: NativeEngineDescriptor;
+  facadeProtocolSchemaId: string;
+  nativeRequestNamespaceId: string;
+  nativeRequestIdExtractionSchemaId: string;
+  nativeRequestIdUniquenessProofRef: string;
+  nativeRequestIdUniquenessProofDigest: string;
+  canonicalProviderRequestSchemaId: string;
+  currentInferenceLeaseId: string | null;
+  state: "starting" | "current" | "draining" | "closed";
 }
 
 interface InferenceConnectorLease {
@@ -494,25 +2955,52 @@ interface InferenceConnectorLease {
   runtimeId: string;
   nativeIncarnation: number;
   connectorGeneration: number;
+  facadeProtocolSchemaId: string;
+  nativeRequestNamespaceId: string;
+  nativeRequestIdExtractionSchemaId: string;
+  nativeRequestIdUniquenessProofDigest: string;
+  canonicalProviderRequestSchemaId: string;
   state: "current" | "superseded" | "closed";
 }
 
 interface InferenceAttemptRecord {
   inferenceAttemptId: string;
-  inferenceLeaseId: string;
   runtimeId: string;
   nativeIncarnation: number;
   localNativeConversationId: string | null;
-  connectorGeneration: number;
+  nativeRequestNamespaceId: string;
   nativeRequestId: string;
+  nativeRequestIdExtractionSchemaId: string;
+  nativeRequestIdEvidenceRef: string;
+  nativeRequestIdEvidenceDigest: string;
+  requestFingerprintSchemaId: string;
+  canonicalProviderRequestSchemaId: string;
+  encryptedCanonicalProviderRequestRef: string;
+  encryptedCanonicalProviderRequestEnvelopeDigest: string;
   requestDigest: string;
   upstreamIdempotencyKey: string | null;
   upstreamRequestId: string | null;
   upstreamRecoveryEvidenceRef: string | null;
   nativeResponseStreamId: string;
+  currentTransportAttemptId: string | null;
+  nextTransportAttemptSeq: number;
   upstreamState: "prepared" | "started" | "accepted" | "streaming" | "completed" | "failed" | "outcome_unknown";
   nativeDeliveryState: "not_started" | "started" | "streaming" | "completed" | "failed" | "outcome_unknown";
   deliveredThroughSequence: number;
+}
+
+interface InferenceConnectorTransportAttemptRecord {
+  inferenceConnectorTransportAttemptId: string;
+  inferenceAttemptId: string;
+  transportAttemptSeq: number;
+  inferenceLeaseId: string;
+  connectorGeneration: number;
+  mode: "initial_send" | "resume_existing";
+  upstreamRequestId: string | null;
+  upstreamCursorRef: string | null;
+  recoveryEvidenceRef: string | null;
+  state: "prepared" | "started" | "streaming" | "completed" | "never_started" | "outcome_unknown";
+  positiveNeverStartedEvidenceRef: string | null;
 }
 
 interface InferenceConversationCorrelationRecord {
@@ -533,13 +3021,49 @@ interface InferenceResponseChunkRecord {
 interface OutsideBindingRecord {
   outsideBindingId: string;
   collaborationServerId: string;
-  logicalChatId: string;
+  scopeKind: "server_control" | "chat";
+  logicalChatId: string | null;
   kind: "anthropic-remote" | "chatgpt-remote" | "web" | "automation" | "nested-remote-claw";
   representedServerId: string | null;
   representedLogicalChatId: string | null;
   representedInwardEdgeId: string | null;
   currentIncarnationId: string | null;
   state: "current" | "closed";
+}
+
+interface ProviderServerControlBindingRecord {
+  providerServerControlBindingId: string;
+  collaborationServerId: string;
+  providerKind: "anthropic-remote" | "chatgpt-remote";
+  anthropicRemoteHostId: string | null;
+  chatGptRemoteHostId: string | null;
+  providerProjectId: string;
+  outsideBindingId: string;
+  sourceEventNamespaceId: string;
+  currentOutsideIncarnationId: string | null;
+  state: "current" | "closed";
+}
+
+interface AnthropicRemoteHostRecord {
+  anthropicRemoteHostId: string;
+  collaborationServerId: string;
+  installationId: string;
+  providerHostId: string | null;
+  displayName: string;
+  currentConnectorLeaseId: string | null;
+  state: "unpaired" | "paired" | "closed";
+}
+
+interface ProviderChatCreationMappingRecord {
+  providerServerControlBindingId: string;
+  canonicalSourceEventId: string;
+  commandId: string;
+  commandResultId: string;
+  targetLogicalChatId: string;
+  providerChatId: string | null;
+  providerResultRef: string;
+  providerResultDigest: string;
+  state: "allocated" | "provider_observed" | "closed";
 }
 
 interface ChatGptRemoteHostRecord {
@@ -595,39 +3119,327 @@ interface InwardCollaborationEdgeRecord {
   targetNativeBindingId: string | null;
   rootPathCertificateId: string;
   currentConnectionEpoch: number;
+  currentLiveLeaseId: string | null;
+  currentCapabilitySnapshotId: string | null;
   state: "installing" | "installed" | "current" | "superseded" | "closed";
 }
 
+interface NestedChatEdgeCapabilitySnapshot {
+  nestedChatEdgeCapabilitySnapshotId: string;
+  schemaVersion: 1;
+  canonicalSnapshotSchemaId: "remote-claw/nested-chat-edge-capability-snapshot/v1";
+  inwardEdgeId: string;
+  inwardLiveLeaseId: string;
+  sourceTopologyGeneration: number;
+  targetTopologyGeneration: number;
+  targetOutsideBindingId: string;
+  targetSourceEventNamespaceId: string;
+  capabilityGeneration: number;
+  familyCapabilitiesRef: string;
+  familyCapabilityVectorDigest: string;
+  proofRef: string;
+  proofDigest: string;
+  canonicalSnapshotDigest: string;
+  verifiedAtMs: number;
+  state: "current" | "superseded" | "revoked";
+}
+
+interface NestedChatEdgeFamilyCapability {
+  mutationFamily: NativeBindingMutationFamily;
+  canonicalCommandPayloadSchemaId: string;
+  targetRequestSchemaId: string;
+  targetReceiptProofSchemaId: "remote-claw/nested-target-command-receipt-proof/v1";
+  acknowledgement: "durable_receipt";
+  capabilityFamilyDigest: string;
+}
+
+interface NestedAttachmentPayloadTransferItemRecord {
+  itemIndex: number;
+  canonicalItemSchemaId: "remote-claw/command-payload/attachment-item/v1";
+  canonicalAttachmentItemBytesRef: string;
+  canonicalAttachmentItemDigest: string;
+  decodedContentBytesRef: string;
+  contentLength: number;
+  contentDigest: string;
+}
+
+interface NestedCommandPayloadTransferBundleRecord {
+  schemaVersion: 1;
+  canonicalPayloadTransferSchemaId: "remote-claw/nested-command-payload-transfer/v1";
+  mutationFamily: NativeBindingMutationFamily;
+  canonicalCommandPayloadSchemaId: string;
+  canonicalCommandPayloadBytesRef: string;
+  canonicalCommandPayloadDigest: string;
+  attachmentTransferItemCount: number;
+  attachmentTransferItemsRef: string | null;
+  canonicalPayloadTransferDigest: string;
+}
+
+interface NestedChatDeliveryAttemptRecord {
+  nestedChatDeliveryAttemptId: string;
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  inwardEdgeId: string;
+  sourceTopologyGeneration: number;
+  nestedChatEdgeCapabilitySnapshotId: string;
+  nestedChatEdgeCapabilitySnapshotDigest: string;
+  capabilityFamilyDigest: string;
+  mutationFamily: NativeBindingMutationFamily;
+  targetServerId: string;
+  targetLogicalChatId: string;
+  targetOutsideBindingId: string;
+  targetSourceEventNamespaceId: string;
+  targetSourceEventId: string;
+  targetRequestSchemaId: string;
+  targetReceiptProofSchemaId: "remote-claw/nested-target-command-receipt-proof/v1";
+  canonicalCommandPayloadSchemaId: string;
+  canonicalCommandPayloadRef: string;
+  canonicalCommandPayloadDigest: string;
+  canonicalPayloadTransferSchemaId: "remote-claw/nested-command-payload-transfer/v1";
+  canonicalPayloadTransferRef: string;
+  canonicalPayloadTransferDigest: string;
+  canonicalEnvelopeCoreSchemaId: "remote-claw/nested-chat-envelope-core/v1";
+  canonicalEnvelopeCoreRef: string;
+  canonicalEnvelopeCoreDigest: string;
+  canonicalEnvelopeSchemaId: string;
+  canonicalEnvelopeRef: string;
+  canonicalEnvelopeDigest: string;
+  eventLineageRef: string;
+  eventLineageDigest: string;
+  currentTargetResultId: string | null;
+  outcomeEvidenceRef: string | null;
+}
+
+interface NestedChatTargetResultRecord {
+  nestedChatDeliveryAttemptId: string;
+  targetReceiptProofSchemaId: "remote-claw/nested-target-command-receipt-proof/v1";
+  targetResultVersion: 1;
+  targetCommandId: string;
+  targetCommandSeq: number;
+  targetCommandResultId: string;
+  supersedesTargetCommandResultId: null;
+  targetReceiptProofRef: string;
+  targetReceiptProofDigest: string;
+  targetDecision: "admitted" | "queued" | "rejected";
+}
+
+interface NestedTargetCommandReceiptProofBundle {
+  schemaVersion: 1;
+  targetReceiptProofSchemaId: "remote-claw/nested-target-command-receipt-proof/v1";
+  targetServerId: string;
+  targetOutsideBindingId: string;
+  targetSourceEventNamespaceId: string;
+  targetSourceEventId: string;
+  targetRequestSchemaId: string;
+  targetRequestDigest: string;
+  targetCommandId: string;
+  targetCommandSeq: number;
+  targetCommandResultId: string;
+  targetDecision: "admitted" | "queued" | "rejected";
+  targetCanonicalSourceEventRef: string;
+  targetCanonicalSourceEventDigest: string;
+  targetCommandPayloadRef: string;
+  targetCommandPayloadDigest: string;
+  targetCommandRecordRef: string;
+  targetCommandRecordDigest: string;
+  targetDecisionEvidenceRef: string;
+  targetDecisionEvidenceDigest: string;
+  targetExecutorEvidenceRef: string | null;
+  targetExecutorEvidenceDigest: string | null;
+  targetCommandResultSchemaId: "remote-claw/collaboration-command-result/v1";
+  targetCommandResultRef: string;
+  targetCommandResultSignedRecordDigest: string;
+  canonicalReceiptProofDigest: string;
+}
+
+interface NestedChatDeliveryTransportAttemptRecord {
+  nestedChatDeliveryTransportAttemptId: string;
+  nestedChatDeliveryAttemptId: string;
+  transportAttemptId: string;
+  inwardLiveLeaseId: string;
+  currentEdgeCapabilitySnapshotId: string;
+  currentEdgeCapabilitySnapshotDigest: string;
+  capabilityContinuationRef: string | null;
+  capabilityContinuationDigest: string | null;
+  mutualChannelBindingDigest: string;
+  nestedDispatchAuthorizationId: string;
+  dispatchAuthorizationHandle: string;
+  state: "prepared" | "started" | "completed" | "never_started" | "outcome_unknown";
+  positiveNeverStartedEvidenceSchemaId:
+    | "remote-claw/nested-positive-never-started-attestation/v1"
+    | null;
+  positiveNeverStartedEvidenceRef: string | null;
+  positiveNeverStartedEvidenceDigest: string | null;
+  outcomeEvidenceRef: string | null;
+}
+
+interface NestedChatEdgeCapabilityContinuation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/nested-chat-edge-capability-continuation/v1";
+  nestedChatDeliveryAttemptId: string;
+  priorEdgeCapabilitySnapshotId: string;
+  priorEdgeCapabilitySnapshotDigest: string;
+  currentEdgeCapabilitySnapshotId: string;
+  currentEdgeCapabilitySnapshotDigest: string;
+  inwardEdgeId: string;
+  sourceTopologyGeneration: number;
+  targetServerId: string;
+  targetLogicalChatId: string;
+  targetOutsideBindingId: string;
+  capabilityFamilyDigest: string;
+  priorTransportAttemptId: string;
+  nextTransportAttemptId: string;
+  positiveNeverStartedEvidenceSchemaId:
+    "remote-claw/nested-positive-never-started-attestation/v1";
+  positivePriorNeverStartedEvidenceDigest: string;
+  signerSequence: number;
+  serverKeyGeneration: number;
+  signerIdentityKeyId: string;
+  signerScopeCertificateId: string;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface NestedChatDeliveryEffectGateRecord {
+  commandId: string;
+  admittingCommandResultId: string;
+  admittingCommandResultSignedRecordDigest: string;
+  canonicalCommandRecordDigest: string;
+  decisionEvidenceSchemaId: "remote-claw/collaboration-command-decision-evidence/v1";
+  decisionEvidenceDigest: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  state: "never_started" | "started" | "completed" | "outcome_unknown";
+  startedAttemptId: string | null;
+  positiveNeverStartedEvidenceSchemaId:
+    | "remote-claw/nested-positive-never-started-attestation/v1"
+    | null;
+  positiveNeverStartedEvidenceRef: string | null;
+  positiveNeverStartedEvidenceDigest: string | null;
+  outcomeEvidenceRef: string | null;
+}
+
 interface TopologyPathHop {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/topology-path-hop/v1";
+  hopIndex: number;
   collaborationServerId: string;
   logicalChatId: string;
   inwardEdgeId: string;
   topologyGeneration: number;
+  predecessorCertificateOrHopDigest: string;
+  rootAnchorExpiresAtMs: number;
+  signerIdentityKeyId: string;
+  signerKeyGeneration: number;
+  signerScopeCertificateId: string;
+  signerSequence: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
 }
 
 interface NativeRootCertificate {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/native-root-certificate/v1";
   rootPathCertificateId: string;
   kind: "native-root";
   terminalNativeBindingId: string;
   terminalServerId: string;
   terminalLogicalChatId: string;
   terminalTopologyGeneration: number;
+  nativeBindingEvidenceDigest: string;
   runtimeOwnerIdentityKeyId: string;
-  signature: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  issuedAtMs: number;
   expiresAtMs: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface RuntimeOwnerIdentityKeyRecord {
+  runtimeId: string;
+  runtimeOwnerIdentityKeyId: string;
+  keyGeneration: number;
+  algorithm: "Ed25519";
+  publicKey: string;
+  nextSignerSequence: number;
+  localTrustEvidenceRef: string;
+  state: "current" | "retired" | "revoked";
+}
+
+interface RuntimeOwnerSignatureReservationRecord {
+  runtimeId: string;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  purpose:
+    | "native_root"
+    | "listener_registration_attestation"
+    | "runtime_isolation_attestation"
+    | "native_capability_snapshot"
+    | "native_tui_policy_snapshot"
+    | "opencode_native_store_attachment_attestation"
+    | "opencode_native_store_predecessor_stop_fence"
+    | "opencode_native_store_successor_exclusive_open";
+  canonicalPayloadSchemaId:
+    | "remote-claw/native-root-certificate/v1"
+    | "remote-claw/native-listener-registration-attestation/v1"
+    | "remote-claw/native-runtime-isolation-attestation/v1"
+    | "remote-claw/native-capability-snapshot-attestation/v1"
+    | "remote-claw/opencode-native-store-attachment-attestation/v1"
+    | "remote-claw/opencode-native-store-predecessor-stop-fence/v1"
+    | "remote-claw/opencode-native-store-successor-exclusive-open/v1"
+    | null;
+  canonicalPayloadRef: string | null;
+  canonicalPayloadDigest: string | null;
+  signedRecordDigest: string | null;
+  signature: string | null;
+  signedArtifactId: string | null;
+  state: "reserved" | "bound" | "signed" | "aborted";
+}
+
+interface RuntimeOwnerSignedRecordAcceptanceRecord {
+  runtimeId: string;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  signedRecordDigest: string;
+  acceptedAtMs: number;
 }
 
 interface ServerRootedTopologyCertificate {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/server-rooted-topology-certificate/v1";
   rootPathCertificateId: string;
   kind: "server-path";
-  terminalNativeBindingId: string;
   targetServerId: string;
   targetLogicalChatId: string;
   targetTopologyGeneration: number;
+  rootAnchorCertificateDigest: string;
+  rootAnchorExpiresAtMs: number;
   path: readonly TopologyPathHop[];
   issuerServerIdentityKeyId: string;
-  signature: string;
+  issuerServerKeyGeneration: number;
+  issuerScopeCertificateId: string;
+  signerSequence: number;
+  issuedAtMs: number;
   expiresAtMs: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
 }
 
 type RootedTopologyCertificate = NativeRootCertificate | ServerRootedTopologyCertificate;
@@ -636,17 +3448,19 @@ interface InwardEdgeInstallReservation {
   reservationId: string;
   sourceServerId: string;
   sourceLogicalChatId: string;
+  sourceInwardEdgeId: string;
   expectedSourceTopologyGeneration: number;
   targetServerId: string;
   targetLogicalChatId: string;
+  targetCollaboratorBindingId: string;
   expectedTargetTopologyGeneration: number;
   rootPathCertificateId: string;
-  sourcePreparedReceipt: string;
-  targetPreparedReceipt: string | null;
-  sourceCommitIntentReceipt: string | null;
-  targetCommitIntentReceipt: string | null;
-  sourceInstalledReceipt: string | null;
-  targetInstalledReceipt: string | null;
+  sourcePreparedReceiptId: string;
+  targetPreparedReceiptId: string | null;
+  sourceCommitIntentReceiptId: string | null;
+  targetCommitIntentReceiptId: string | null;
+  sourceInstalledReceiptId: string | null;
+  targetInstalledReceiptId: string | null;
   state:
     | "source_prepared"
     | "both_prepared"
@@ -659,16 +3473,190 @@ interface InwardEdgeInstallReservation {
     | "expired";
 }
 
+interface InwardEdgeInstallReceiptRecord {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/inward-edge-install-receipt/v1";
+  receiptId: string;
+  reservationId: string;
+  stage: "prepared" | "commit_intent" | "installed";
+  side: "source" | "target";
+  sourceServerId: string;
+  sourceLogicalChatId: string;
+  sourceInwardEdgeId: string;
+  expectedSourceTopologyGeneration: number;
+  targetServerId: string;
+  targetLogicalChatId: string;
+  targetCollaboratorBindingId: string;
+  expectedTargetTopologyGeneration: number;
+  rootPathCertificateId: string;
+  priorReceiptChainDigest: string;
+  issuedAtMs: number;
+  signerServerId: string;
+  signerIdentityKeyId: string;
+  signerKeyGeneration: number;
+  signerScopeCertificateId: string;
+  signerSequence: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface InwardEdgeLiveHandshakeAttestation {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/inward-edge-live-handshake/v1";
+  handshakeId: string;
+  side: "source" | "target";
+  reservationId: string;
+  sourceServerId: string;
+  sourceLogicalChatId: string;
+  sourceInwardEdgeId: string;
+  sourceTopologyGeneration: number;
+  sourceConnectionEpoch: number;
+  sourceNonce: string;
+  targetServerId: string;
+  targetLogicalChatId: string;
+  targetCollaboratorBindingId: string;
+  targetTopologyGeneration: number;
+  targetConnectionEpoch: number;
+  targetNonce: string;
+  rootPathCertificateDigest: string;
+  sourceInstalledReceiptDigest: string;
+  targetInstalledReceiptDigest: string;
+  transportBindingSchemaId: "remote-claw/tls13-exporter-binding/v1";
+  transportChannelBinding: string;
+  issuedAtMs: number;
+  signerIdentityKeyId: string;
+  signerKeyGeneration: number;
+  signerScopeCertificateId: string;
+  signerSequence: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
+}
+
+interface InwardEdgeLiveLeaseRecord {
+  inwardLiveLeaseId: string;
+  handshakeId: string;
+  sourceAttestationDigest: string;
+  targetAttestationDigest: string;
+  sourceConnectionEpoch: number;
+  targetConnectionEpoch: number;
+  transportChannelBinding: string;
+  state: "current" | "superseded" | "closed";
+}
+
 interface ServerIdentityKeyRecord {
   collaborationServerId: string;
   identityKeyId: string;
-  algorithm: string;
-  publicKey: string;
+  algorithm: "Ed25519";
+  publicKey: string; // unpadded base64url of the 32 raw public-key bytes
+  introducedByScopeCertificateId: string;
   trustEvidenceRef: string;
   validFromMs: number;
-  supersedesIdentityKeyId: string | null;
-  rotationSignature: string | null;
-  state: "current" | "retired" | "revoked";
+}
+
+interface ServerIdentityPrivateKeyRecord {
+  collaborationServerId: string;
+  identityKeyId: string;
+  keyGeneration: number;
+  custodyBackend: "os-keystore" | "owned-file" | "hardware";
+  privateKeyHandle: string;
+  state: "current" | "retired" | "destroyed";
+  createdAtMs: number;
+  recoveryEvidenceRef: string;
+}
+
+interface ServerSigningLeaseRecord {
+  signingLeaseId: string;
+  collaborationServerId: string;
+  identityKeyId: string;
+  keyGeneration: number;
+  scopeCertificateId: string;
+  coordinatorEpoch: number;
+  fencingToken: number;
+  state: "current" | "draining" | "superseded" | "closed";
+}
+
+interface ServerBootstrapSigningLeaseRecord {
+  bootstrapSigningLeaseId: string;
+  collaborationServerId: string;
+  purpose: "initial_pair" | "explicit_repair";
+  operatorIntentEvidenceRef: string;
+  expectedPriorScopeCertificateId: string | null;
+  proposedIdentityKeyId: string;
+  proposedKeyGeneration: number;
+  proposedScopeCertificateId: string;
+  privateKeyHandle: string;
+  coordinatorEpoch: number;
+  fencingToken: number;
+  state: "prepared" | "signed" | "installed" | "closed";
+}
+
+interface ServerSignatureReservationRecord {
+  collaborationServerId: string;
+  signerSequence: number;
+  signingLeaseId: string;
+  signingLeaseKind: "current" | "bootstrap";
+  purpose:
+    | "scope_certificate"
+    | "onboarding_keys"
+    | "host_output"
+    | "scope_bus_checkpoint"
+    | "topology_path_hop"
+    | "server_rooted_topology"
+    | "edge_install_receipt"
+    | "edge_live_handshake"
+    | "event_lineage_hop"
+    | "collaboration_command_result"
+    | "nested_management_lineage_hop"
+    | "nested_management_live_handshake"
+    | "nested_management_transport_attestation"
+    | "nested_management_capability_continuation"
+    | "nested_positive_never_started_attestation"
+    | "nested_target_ready_attestation"
+    | "nested_chat_edge_capability_continuation"
+    | "historical_reattestation";
+  canonicalPayloadSchemaId: string | null;
+  canonicalPayloadRef: string | null;
+  canonicalPayloadDigest: string | null;
+  signedRecordDigest: string | null;
+  signature: string | null;
+  signedArtifactType: string | null;
+  signedArtifactId: string | null;
+  state: "reserved" | "bound" | "signed" | "aborted";
+}
+
+interface SignedRecordAcceptanceRecord {
+  signedRecordDigest: string;
+  collaborationServerId: string;
+  signerIdentityKeyId: string;
+  signerKeyGeneration: number;
+  signerScopeCertificateId: string;
+  signerSequence: number;
+  acceptedAtJournalSeq: number;
+  historicalReattestationId: string | null;
+}
+
+interface HistoricalRecordReattestationRecord {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/historical-record-reattestation/v1";
+  historicalReattestationId: string;
+  supersedesHistoricalReattestationId: string | null;
+  collaborationServerId: string;
+  historicalRecordDigest: string;
+  historicalSignerIdentityKeyId: string;
+  historicalSignerScopeCertificateId: string;
+  issuedAtMs: number;
+  signerIdentityKeyId: string;
+  signerKeyGeneration: number;
+  signerScopeCertificateId: string;
+  signerSequence: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  signature: string;
 }
 
 type EventOrigin =
@@ -687,6 +3675,9 @@ type EventOrigin =
     };
 
 interface EventLineageHop {
+  schemaVersion: 1;
+  canonicalPayloadSchemaId: "remote-claw/event-lineage-hop/v1";
+  lineageId: string;
   hopIndex: number;
   collaborationServerId: string;
   logicalChatId: string;
@@ -696,12 +3687,21 @@ interface EventLineageHop {
   canonicalEnvelopeDigest: string;
   priorChainDigest: string;
   signerIdentityKeyId: string;
-  attestation: string;
+  signerKeyGeneration: number;
+  signerScopeCertificateId: string;
+  signerSequence: number;
+  signatureAlgorithm: "Ed25519";
+  canonicalPayloadDigestAlgorithm: "SHA-256";
+  canonicalPayloadDigest: string;
+  chainDigest: string;
+  signature: string;
+  signedRecordDigest: string;
 }
 
 interface EventLineageRecord {
   lineageId: string;
   origin: EventOrigin;
+  originDigest: string;
   direction: "inward-proposal" | "outward-observation";
   hops: readonly EventLineageHop[];
 }
@@ -737,22 +3737,61 @@ interface OutsideBindingIncarnation {
   state: "current" | "superseded" | "closed";
 }
 
+interface OutsideIngressFamilyCapability {
+  capabilityEntryDigest: string;
+  scopeKind: "server_control" | "chat";
+  sourceOperationKind: string;
+  sourcePayloadSchemaId: string;
+  sourcePayloadDigestAlgorithm: "SHA-256";
+  sourceParserSchemaId: string;
+  sourceParserImplementationDigest: string;
+  sourceEventIdExtractionSchemaId: string;
+  sourceEventIdExtractionImplementationDigest: string;
+  sourceCoordinateSchemaId: string;
+  sourceCoordinateImplementationDigest: string;
+  sourceFingerprintSchemaId: string;
+  sourceFingerprintImplementationDigest: string;
+  sourceFingerprintDigestAlgorithm: "SHA-256";
+  namespaceBoundaryClassifierSchemaId: string;
+  namespaceBoundaryClassifierImplementationDigest: string;
+  fingerprintCapabilityRelation: "same_verified_snapshot";
+  normalizationSchemaId: string;
+  normalizationImplementationDigest: string;
+  normalizedMutationFamily: NativeMutationFamily;
+  canonicalCommandPayloadSchemaId: string;
+  acknowledgement: "none" | "transport_receipt" | "durable_receipt";
+  cursor: "none" | "connection_scoped" | "namespace_scoped";
+  replayIdentity: "stable_key" | "namespace_key" | "read_back";
+  evidenceRef: string;
+  evidenceDigest: string;
+}
+
 interface OutsideProtocolCapabilities {
-  ingressFamilies: readonly string[];
-  projectionFamilies: readonly string[];
-  controlFamilies: readonly string[];
-  acknowledgement: "none" | "transport-receipt" | "durable-receipt";
-  cursor: "none" | "connection-scoped" | "namespace-scoped";
-  idempotency: "none" | "stable-key" | "read-back";
-  readBackFamilies: readonly string[];
+  schemaVersion: 1;
+  providerKind: "anthropic_remote" | "chatgpt_remote" | "automation" | "nested_remote_claw";
+  providerProtocolVersion: string;
+  providerProtocolSchemaId: string;
+  connectorBinaryDigest: string;
+  ingressCapabilityVectorRef: string;
+  ingressCapabilityVectorDigest: string;
+  projectionCapabilitySchemaId: string;
+  projectionCapabilityVectorRef: string;
+  projectionCapabilityVectorDigest: string;
+  controlCapabilitySchemaId: string;
+  controlCapabilityVectorRef: string;
+  controlCapabilityVectorDigest: string;
+  canonicalCapabilityDocumentDigest: string;
 }
 
 interface OutsideBindingCapabilitySnapshot {
   capabilitySnapshotId: string;
   outsideIncarnationId: string;
   schemaVersion: 1;
-  capabilityDocument: OutsideProtocolCapabilities;
+  capabilityDocumentRef: string;
+  capabilityDocumentDigest: string;
   evidenceRef: string;
+  evidenceDigest: string;
+  canonicalSnapshotDigest: string;
   verifiedAtMs: number;
 }
 
@@ -760,9 +3799,13 @@ interface OutsideBindingCapabilityVerification {
   capabilityVerificationId: string;
   outsideIncarnationId: string;
   capabilitySnapshotId: string;
+  capabilitySnapshotDigest: string;
   coordinatorEpoch: number;
   connectionEpoch: number;
+  verifierSchemaId: "remote-claw/outside-capability-verification/v1";
   evidenceRef: string;
+  evidenceDigest: string;
+  canonicalVerificationDigest: string;
   verifiedAtMs: number;
   result: "accepted" | "rejected";
 }
@@ -789,25 +3832,40 @@ interface SourceEventNamespaceTransitionRecord {
 interface SourceEventObservationRecord {
   sourceEventObservationId: string;
   collaborationServerId: string;
-  logicalChatId: string;
-  lineageId: string;
+  scopeKind: "server_control" | "chat";
+  logicalChatId: string | null;
+  sourceScopeId: string;
+  lineageKind: "chat" | "server_control_source" | "server_control_management";
+  lineageRef: string;
+  lineageDigest: string;
   outsideBindingId: string;
   observedOutsideIncarnationId: string;
   sourceEventNamespaceId: string | null;
   sourceEventId: string;
   sourceReplayIdentity: string | null;
+  sourcePayloadSchemaId: string;
+  sourcePayloadRef: string;
+  sourcePayloadDigestAlgorithm: "SHA-256";
+  sourcePayloadDigest: string;
   coordinateSchemaId: string;
   sourceCoordinate: string;
   namespaceTransitionId: string | null;
   classificationEvidenceRef: string | null;
+  classificationEvidenceDigest: string | null;
   sourceCapabilitySnapshotId: string;
+  sourceCapabilitySnapshotDigest: string;
   sourceCapabilityVerificationId: string;
+  sourceCapabilityVerificationDigest: string;
+  ingressCapabilityEntryDigest: string;
+  normalizationSchemaId: string;
+  normalizationImplementationDigest: string;
   coordinatorEpoch: number;
   connectionEpoch: number;
   fingerprintSchemaId: string;
-  fingerprintDigestAlgorithm: string;
+  fingerprintDigestAlgorithm: "SHA-256";
   eventFingerprint: string;
   fingerprintCapabilitySnapshotId: string;
+  sourceObservationEvidenceDigest: string;
   disposition: "pending" | "new" | "duplicate" | "collision" | "ambiguous";
   canonicalSourceEventId: string | null;
   commandId: string | null;
@@ -817,24 +3875,2625 @@ interface SourceEventObservationRecord {
 interface CanonicalSourceEventRecord {
   canonicalSourceEventId: string;
   collaborationServerId: string;
-  logicalChatId: string;
+  scopeKind: "server_control" | "chat";
+  logicalChatId: string | null;
+  sourceScopeId: string;
+  lineageKind: "chat" | "server_control_source" | "server_control_management";
+  lineageRef: string;
+  lineageDigest: string;
   outsideBindingId: string;
+  observedOutsideIncarnationId: string;
   sourceEventNamespaceId: string;
   sourceEventId: string;
   firstObservationId: string;
+  firstObservationEvidenceDigest: string;
   sourceReplayIdentity: string | null;
+  sourcePayloadSchemaId: string;
+  sourcePayloadRef: string;
+  sourcePayloadDigestAlgorithm: "SHA-256";
+  sourcePayloadDigest: string;
+  sourceCapabilitySnapshotId: string;
+  sourceCapabilitySnapshotDigest: string;
+  sourceCapabilityVerificationId: string;
+  sourceCapabilityVerificationDigest: string;
+  ingressCapabilityEntryDigest: string;
+  normalizationSchemaId: string;
+  normalizationImplementationDigest: string;
+  coordinatorEpoch: number;
+  connectionEpoch: number;
   fingerprintSchemaId: string;
-  fingerprintDigestAlgorithm: string;
+  fingerprintDigestAlgorithm: "SHA-256";
   eventFingerprint: string;
   fingerprintCapabilitySnapshotId: string;
+  canonicalSourceEventDigest: string;
   commandId: string;
 }
 ```
+
+`ServerScopeCertificateStatusRecord.scopeCertificateId` is a foreign key to the immutable certificate,
+and its `collaborationServerId` must equal that certificate's server ID. A status row cannot move a
+certificate between server scopes. A `subjectIdentityKeyId` is globally unique within one server's
+complete certificate history and is introduced by exactly one certificate; explicit re-pairing must
+use a fresh key ID and fresh key bytes. Signer lookup therefore resolves through
+`ServerIdentityKeyRecord.introducedByScopeCertificateId`, and retiring or revoking that certificate
+also retires or revokes that key for new signatures. Reusing the key under another certificate or
+generation is a hard chain error.
+
+`revoked` is receiver-local operator policy, not a status learned from the onboarding bundle, shared
+keys, or broker metadata. Every statement below that a viewer or nested peer rejects a revoked signer
+means that receiver has an authenticated local revocation/trust-reset decision for that certificate.
+A current key cannot securely announce its own compromise, and selected A1 defines no global
+revocation feed. Compromise of the current key therefore requires an out-of-band operator trust reset
+and re-pair; a broker-delivered “revoked” claim is ignored. A future distributed revocation protocol
+needs its own signed record, ordering, cutoff, delivery, and compromised-current-key recovery design.
+
+The server identity private key never enters a viewer pass, broker request, coordinator row, argv,
+environment, or log. `ServerIdentityPrivateKeyRecord.privateKeyHandle` is an opaque reference into an
+OS keystore, hardware signer, or an owner-only `0600` no-follow file opened by a small signing service;
+it is not raw key material. That service signs only for the unique current
+`ServerSigningLeaseRecord`, after atomically checking its server, key generation, scope certificate,
+coordinator epoch, and monotonically fenced token. Every successful server signature atomically
+uses a durable `ServerSignatureReservationRecord`. The service first reserves and increments the next
+global `signerSequence`, then the caller constructs the canonical payload containing that sequence.
+The service accepts only the closed purpose union above, parses that purpose's exact canonical schema,
+and itself checks the payload server/key/certificate/sequence against the current lease before it
+compare-and-swaps the reservation from `reserved` to `bound` with the exact immutable canonical
+payload bytes/ref, schema ID, SHA-256 `canonicalPayloadDigest`, and target artifact identity. A
+signed-record digest cannot exist yet because it contains the signature. The service signs only those
+validated canonical bytes, then atomically changes `bound → signed` while persisting the canonical
+64-byte signature and purpose-specific `signedRecordDigest` before releasing either the signature or
+artifact. Every result or secondary preparation must match that reservation's bound payload digest.
+A bound crash
+can therefore resume only those exact bytes; a signed crash replays the stored signature. It never
+reconstructs randomized ciphertext, reseals a host frame, or asks a retired key to sign again. It is
+custody and stale-owner fencing, not a security boundary from the current coordinator; that
+coordinator remains trusted for server policy. A crash
+may resume the exact bound intent or mark an unbound reservation `aborted`; either way the sequence is
+burned and never reused. This reserve/bind/sign order is required for host frames because the sequence
+is already inside AEAD AAD before ciphertext and its signature payload exist.
+
+Initial self-signing and explicit re-pair are the only exception to requiring an already current
+certificate, and they use a separate one-shot `ServerBootstrapSigningLeaseRecord`, not a normal
+signing lease. An operator-confirmed transaction first places the server in `installing` or
+`repairing`, creates the protected proposed key handle, pins the proposed server/key/generation/
+self-signed-certificate coordinates and prior certificate expectation, and opens one fenced bootstrap
+lease whose only allowed purpose is `scope_certificate`. It uses the same durable global sequence
+reservation and exact payload/signature persistence. One transaction then verifies that exact
+self-signature, installs the immutable certificate/key/status, advances the current pointers, opens
+the normal current signing lease, and marks the bootstrap lease installed/closed. A crash resumes only
+that exact intent; a different key/certificate requires a new operator action. The bootstrap lease
+cannot sign host output, onboarding attestation, topology, or any other record and cannot exist while
+the server is normally writable. Re-pair uses a fresh key ID/key bytes and is an out-of-band trust
+reset, never a continuity rotation.
+
+Continuity rotation changes the old lease to `draining`, rejects new ordinary signing work, and settles
+or burns every reservation. It then reserves the final old-key sequence and uses the still-accessible old key
+to sign and durably persist the successor certificate; that certificate has
+`supersededSignerMaxSequence === signerSequence`. It durably publishes the public certificate-update
+record while the old pointer remains current. One transaction then advances the current
+certificate/key pointer, records the old status cutoff, supersedes the old lease, and opens the new
+lease. Only after that commit may the old private key become inaccessible and be retired or destroyed.
+A crash before the successor is durable resumes the draining old lease; a crash after durability
+replays the pointer transaction; a crash after the swap can only use the new lease. If the exact
+current private key cannot be recovered after restart, the server is non-writable and requires
+explicit re-pairing; it must not mint a new key under the old key ID or silently replace the current
+certificate.
+
+The signing service's durable sequence ledger and `nextServerSignatureSeq` advance in one transaction.
+Startup compares the counter with the greatest sequence across every durable reservation state
+(`reserved`, `bound`, `signed`, and `aborted`), every accepted signed record, and every installed
+certificate cutoff, then resumes only at exactly `max + 1`; a lower/stale counter, missing burned
+reservation, or missing ledger entry leaves signing non-writable. No crash, key rotation, or
+coordinator replacement may reuse a server-wide sequence.
+
+`BrokerRouteRecord` is the physical ordering scope. Its ID is
+`rcr_${base64url(SHA256(str("remote-claw/a1/broker-route/v1") || bytes(identity_id) ||
+str(collaborationServerId) || str(routeKind) || optionalStr(logicalChatId)))}`. A `scope_bus` row has a
+null chat and exact canonical bus token; a `server_control` row has a null chat and distinct canonical
+management token; a `chat` row has a non-null chat and its exact canonical session token. The complete
+coordinate and `routeToken` are immutable and independently unique. Thus
+announcements for several chats share one scope-bus cursor sequence, while each chat stream has its own
+sequence and server-management ingress has a third sequence.
+
+Every route is created atomically with its open generation-zero
+`BrokerChannelGenerationRecord`; `genesisGeneration` is always exactly `0`. A null local cursor means
+“before `(0,0)`,” never “start at the broker's current generation.” A mutating chat or server-control subscriber must
+either retain its contiguous cursor or replay the complete immutable manifest chain from generation
+zero. If the broker begins at generation `N > 0`, omits genesis, or cannot prove every successor from
+genesis to the requested position, the route is quarantined and non-writable.
+
+The discovery bus has one deliberately narrower cold-start exception. A viewer that will use it only
+for fresh, host-signed `session_announce` liveness may begin from a recent
+`BrokerScopeBusCheckpointRecord` after verifying its current certified host signature and complete
+coordinate. It may not use that checkpoint to infer historical membership, acknowledge a semantic
+mutation, or seed a chat cursor. Any chat opened from an announcement still starts its own chat route
+at genesis or at a previously retained chat cursor.
+
+A checkpoint is separate signed broker metadata, never a frame at a cursor. To create one, the broker
+atomically seals the current bus generation, fixes its manifest/frame count, and opens the unique
+successor. Only after the host observes and verifies that sealed manifest does it allocate a server
+signature and publish this checkpoint under the exact route/generation/digest key. If
+`sealedFrameCount > 0`, `throughCursor` is exactly
+`(throughSealedGeneration, sealedFrameCount - 1)`; if it is zero, `throughCursor` is null. The
+checkpoint payload is:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(scopeBusCheckpointId)
+str(brokerRouteId)
+uint(throughSealedGeneration)
+uint(successorGeneration)
+uint(sealedFrameCount)
+optionalCursor(throughCursor)
+bytes(base64urlDecode(throughManifestDigest))
+uint(issuedAtMs)
+uint(signerSequence)
+uint(serverKeyGeneration)
+str(signerIdentityKeyId)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+`successorGeneration` is exactly `throughSealedGeneration + 1`. `optionalCursor(null)` is `0x00`; a value is `0x01 || uint(version) || uint(generation) ||
+uint(frameIndex)`. The signature/digest rules are the common server-signature rules below. The
+subscribe API may return this metadata plus frames beginning in the successor generation. A cold
+viewer accepts it only for the exact scope-bus route, while the signing certificate is current, and
+within the configured discovery freshness window; it still renders only later individually fresh
+signed announcements. Open-generation claims, wrong empty/non-empty cursor shape, stale checkpoints,
+changed manifests, competing checkpoints for one sealed tip, and missing successors quarantine the
+bus. Checkpoints never appear on a chat route.
+
+Acceptance compare-and-swaps one `AppliedScopeBusCheckpointRecord` and persists
+`effectiveStartGeneration = successorGeneration` before consuming a later frame. That record, not a
+nullable frame cursor, survives restart and distinguishes “trusted through an empty generation” from
+“before genesis.” Exact checkpoint replay is idempotent; another checkpoint or start generation for the
+same applied boundary is equivocation.
+
+`ChannelPositionRecoveryRecord` always names the quarantined route. Exactly one target field is
+non-null: `manifestEquivocationId` for `manifest_equivocation`,
+`transportKeyCollisionId` for `transport_collision`, and `channelPositionObservationId` for every
+other reason. A transport-key collision preserves the original good cursor/bytes and stores the
+conflicting normalized digest/evidence in its own row; recovery never points at the original position
+as though those accepted bytes were bad. Recovery never rewrites the accepted position bytes/digest or
+generation manifest; it only records an audited safe-discard/closure decision and may release the
+route's contiguous cursor when no other gap remains.
+
+`AuthenticatedIngressResultRecord` has a unique key on
+`(brokerRouteId, sourceEventNamespaceId, msgId)`. `brokerRouteId` is always non-null, avoiding
+nullable-SQL uniqueness, and immutably resolves the server/route/chat tuple. `logicalChatId`
+is non-null for `chat` and null for `server_control`.
+Its `stableSemanticResultId` is not random:
+`rrs_${base64url(SHA256(str("remote-claw/a1/semantic-result/v1") || bytes(identity_id) ||
+str(collaborationServerId) || str(routeKind) || optionalStr(logicalChatId) ||
+str(sourceEventNamespaceId) || str(msgId)))}`.
+That full scoped input is immutable and unique. The row ID, every result-frame `msgId`, and the
+payload's `result_id` must be exactly that value; a different scoped input cannot reuse it, and a
+same-scope digest/ID collision quarantines the route rather than selecting either result.
+For a complete A1 proposal,
+`sourceCommandIdentityDigest = SHA256(str("remote-claw/command-source/a1/v1") ||
+bytes(identity_id) || str(collaborationServerId) || str(routeKind) ||
+optionalStr(logicalChatId) || str(sourceEventNamespaceId) || str(msgId))`.
+The common command ID is
+`rcm_${base64url(SHA256(str("remote-claw/collaboration-command/v1") ||
+str(collaborationServerId) || str(sourceKind) ||
+bytes(base64urlDecode(sourceCommandIdentityDigest))))}`. Every complete semantic proposal, including a rejected
+server-control creation, therefore has a stable command before any target chat exists. A normal chat
+command, effect gate, native attempt, and foreign keys retain the same server/chat scope. An admitted
+server-control command additionally and immutably names its once-allocated `targetLogicalChatId`; only
+its creation reservation/effect crosses into that target. Equal source IDs on another route or server
+cannot alias either gate.
+For the shared-key A1 web channel, `sourceEventNamespaceId` is immutable for the route's entire
+lifetime and equals
+`wns_${base64url(SHA256(str("remote-claw/a1/web-source-namespace/v1") || bytes(identity_id) ||
+str(collaborationServerId) || str(routeKind) || optionalStr(logicalChatId)))}`. It is derived from the authenticated route, not
+the current connection, and never resets on reconnect, client replacement, coordinator restart, broker
+generation rollover, local chat closure, or machine reset. Selected A1 defines no namespace transition
+for an existing route; a reset creates a distinct new identity/routes without reclassifying or
+collecting the old one. Thus a withheld unseen ciphertext always re-enters the same namespace.
+Official and nested connectors keep their own separately authenticated source namespaces and
+transition rules.
+
+Official-client, automation, and nested-server events normalize into the same
+`CollaborationCommandRecord`, never an adapter-specific side path. Their source digest is
+`SHA256(str("remote-claw/command-source/outside/v1") || str(collaborationServerId) ||
+str(scopeKind) || optionalStr(logicalChatId) || str(outsideBindingId) ||
+str(sourceEventNamespaceId) || str(sourceEventId) ||
+bytes(base64urlDecode(canonicalSourceEventDigest)))`; their command ID uses the common formula above
+with their exact `sourceKind`. `canonicalSourceEventDigest` is null exactly for `a1_ingress` and
+non-null/equal to the immutable `CanonicalSourceEventRecord` for every official-client, automation, or
+nested-server source. `OutsideBindingRecord`, `SourceEventObservationRecord`, and
+`CanonicalSourceEventRecord` permit null chat only with `scopeKind:"server_control"` and a typed
+`new_chat`; ordinary starts/steers require a chat. Provider event replay/collision is resolved before
+the command row, and an official or nested creation result maps its stored outer target back to the
+exact provider/source event.
+
+The selected common payloads have one byte-level encoding independent of source:
+
+```text
+user_text =
+  str("remote-claw/command-payload/user-text/v1") || uint(1) || str(text)
+
+new_chat =
+  str("remote-claw/command-payload/new-chat/v1") || uint(1) ||
+  str(creationIntent) || str(projectId) || str(workspaceSelectorId)
+
+attachment =
+  str("remote-claw/command-payload/attachment/v1") || uint(1) ||
+  optionalStr(caption) || uint(itemCount) ||
+  bytes(base64urlDecode(itemVectorDigest))
+
+unsupported_recognized =
+  str("remote-claw/command-payload/unsupported-recognized/v1") || uint(1) ||
+  str(normalizedMutationFamily) || str(sourcePayloadSchemaId) ||
+  bytes(base64urlDecode(sourcePayloadDigest)) ||
+  bytes(base64urlDecode(sourceEventFingerprint))
+```
+
+The corresponding `canonicalCommandPayloadSchemaId` is the leading domain string, the payload ref
+retains exactly those bytes plus the typed ref-bearing record needed to resolve any subordinate
+content, and `canonicalCommandPayloadDigest` is SHA-256 of the listed bytes. `creationIntent`
+is exactly `first_bootstrap` or `new_chat`; project/workspace selectors use the A1 safe-ID grammar.
+Text is valid UTF-8 encoded from Unicode scalar values exactly as supplied, with no normalization,
+newline rewrite, slash parsing, or source-specific wrapper. Web, official, automation, and nested
+adapters must produce byte-identical common payloads for the same typed input.
+
+The attachment arm is exact rather than an adapter-shaped JSON pass-through. Its item ref retains
+`CanonicalAttachmentItemRecord` values in contiguous `itemIndex` order starting at zero. Each
+`contentRef` retains the exact decoded file bytes, `contentLength` equals their byte length,
+`contentDigest` is SHA-256 of those bytes, and:
+
+```text
+canonicalItemDigest =
+  SHA256(str(canonicalItemSchemaId) || uint(schemaVersion) || uint(itemIndex) ||
+         str(clientFileName) || str(mediaType) || uint(contentLength) ||
+         bytes(base64urlDecode(contentDigest)))
+
+itemVectorDigest =
+  SHA256(str("remote-claw/command-payload/attachment-item-vector/v1") ||
+         uint(itemCount) ||
+         for item in itemIndex order:
+           bytes(base64urlDecode(item.canonicalItemDigest)))
+```
+
+Selected version one requires 1 through 24 items, one of the four literal media types in
+`CanonicalAttachmentMediaType`, at most 12 MiB of decoded bytes per item, at most 36 MiB in total, a
+1-to-255-byte UTF-8 scalar filename containing no NUL, control, `/`, or `\\`, and either a null caption
+or a scalar caption of at most 16 KiB UTF-8. An absent source caption maps to null; an explicitly
+present empty caption maps to the non-null empty string. Those remain distinct canonical inputs, and
+every source adapter must preserve that distinction. It preserves filename, caption, item order, media type, and bytes exactly; it
+does not apply filesystem sanitization or native path generation. Those are later deterministic
+translator outputs. A source base64 spelling is accepted only if strict canonical decoding succeeds,
+then disappears: the common payload commits the decoded bytes. The payload's count/vector digest and
+every item/content ref must recompute before ordering.
+
+Every admitted `attachment` command, regardless of A1, official, automation, or nested source, must
+have `mutationFamily:"attachment"`,
+`canonicalCommandPayloadSchemaId:"remote-claw/command-payload/attachment/v1"`, and the exact payload
+and item/content chain above. Conversely, that schema is invalid for every other family. A target
+capability may admit attachments only when its family entry names that same common schema and a
+translator/read-back proof for every item. For a nested target, the distinct
+`NestedChatEdgeFamilyCapability.canonicalCommandPayloadSchemaId` names this common schema;
+`targetRequestSchemaId` names the outer nested wire request and cannot stand in for it. An unsupported
+target still orders the source operation as `attachment` but uses `unsupported_recognized` for the
+rejected command payload; it never receives an `accepted` attachment result. Every nested attachment
+source must also transmit the portable common-payload transfer bundle defined in §10.5. A source-local
+payload, item, or content ref is not transferable: the bundle carries the exact common payload bytes,
+canonical item-record bytes, and decoded content bytes so the target can materialize new local refs
+and independently recompute the complete chain.
+
+Any other family needs
+its own versioned common schema before it can be writable. A recognized but unsupported family uses
+the `unsupported_recognized` envelope, whose `canonicalCommandPayloadSchemaId` is its leading domain; it commits the
+normalized family plus the source parser's exact schema, payload digest, and canonical source-event
+fingerprint. It therefore receives a signable ordered rejection without being reinterpreted as
+`user_text`. An unknown/unparseable source operation has no normalized family and fails before common
+command allocation under that source protocol's authenticated error rules.
+For an outside source, `sourcePayloadSchemaId`/`sourcePayloadDigest` and
+`sourceEventFingerprint` are exactly the immutable `CanonicalSourceEventRecord` fields. For A1,
+`sourcePayloadSchemaId` is the selected exact proposal schema,
+`sourcePayloadDigest` is SHA-256 of its retained complete canonical plaintext, and
+`sourceEventFingerprint` is:
+
+```text
+SHA256(str("remote-claw/a1/source-event-fingerprint/v1") || str(brokerRouteId) ||
+       str(sourceEventNamespaceId) || str(msgId) ||
+       bytes(base64urlDecode(canonicalMessageDigest)))
+```
+
+The completed ingress row retains that exact schema in `sourcePayloadSchemaId`;
+`sourcePayloadDigest` is exactly its non-null `canonicalMessageDigest`. Both that digest and the
+fingerprint use canonical SHA-256 with unpadded base64url 32-byte values. For a semantically complete
+row, the schema, message digest, fingerprint schema, and fingerprint are all non-null before
+`awaiting_order`; for an assembling or incomplete row they are all null, and a collision never changes
+the first complete tuple. `OpenCodePreDecisionNormalizationEvidence` repeats those exact schema,
+digest, and fingerprint values. A stored unsupported result can therefore be reconstructed after
+restart without a `recordKind` default or a newer adapter parser.
+`user_text` means an explicit new submit only. A source-native steer operation normalizes to the
+distinct recognized `steer_text` family and uses the signed `unsupported_recognized` envelope until a
+target-specific steer capability and common payload schema land. Busy state, arrival timing, or a
+currently running turn never converts submit into steer or steer into submit.
+
+For an OpenCode-targeted generic text operation, normalization is an immutable pre-decision step. The
+slash table ref retains `NativeSlashCommandNormalizationItem` values ordered by unsigned exact UTF-8
+text bytes; empty, duplicate, prefix/wildcard, reordered, or non-scalar entries are invalid. Its digest
+is:
+
+```text
+SHA256(str("remote-claw/opencode-slash-command-table/v1") ||
+       str(slashCommandNormalizationSchemaId) || uint(count) ||
+       for item in order:
+         str(item.exactUtf8Text) || str(item.normalizedMutationFamily))
+```
+
+Initial A2 maps exact `/compact → compact`, `/clear → clear`, `/model → set_model`, and
+`/context → session_command`; it defines no prefix or argument parser. Blank input maps to the distinct recognized
+`blank_submit` family. Every nonblank nonmatching generic submit remains `user_text`; an explicit
+source steer remains `steer_text` and never enters this submit rule.
+
+The `OpenCodePreDecisionNormalizationEvidence` canonical bytes are:
+
+```text
+str(preDecisionNormalizationEvidenceSchemaId) || uint(schemaVersion) || str(commandId) ||
+str(sourceKind) || str(sourceRef) || str(sourcePayloadSchemaId) ||
+bytes(base64urlDecode(sourcePayloadDigest)) ||
+bytes(base64urlDecode(sourceEventFingerprint)) || str(collaborationServerId) ||
+str(logicalChatId) || str(nativeBindingId) || str(runtimeId) || uint(nativeIncarnation) ||
+str(capabilitySnapshotId) || bytes(base64urlDecode(capabilitySnapshotAttestationDigest)) ||
+str(slashCommandNormalizationSchemaId) ||
+bytes(base64urlDecode(slashCommandNormalizationImplementationDigest)) ||
+bytes(base64urlDecode(slashCommandTableDigest)) || str(classification) ||
+str(normalizedMutationFamily) || str(canonicalCommandPayloadSchemaId) ||
+bytes(base64urlDecode(canonicalCommandPayloadDigest))
+```
+
+Its digest is SHA-256 of those bytes and the command record commits it even when the decision rejects
+and has no admitted target capability. The ref, source payload/event, current binding/runtime,
+runtime-owner-signed snapshot, parser implementation, table, classification, and normalized output
+must all recompute. `/compact` cannot be admitted as literal `user_text`; a snapshot/table race rejects
+that command under its recorded evidence and never re-normalizes it after restart. For non-OpenCode
+explicit typed input this evidence is null; using null for generic text aimed at an OpenCode binding is
+invalid before ordering.
+
+Lineage is also scope-closed. Chat events use `lineageKind:"chat"` and a retained
+`EventLineageRecord`. Official-client or automation creation uses
+`lineageKind:"server_control_source"`; its ref/digest binds the exact server-control outside binding,
+current source capability verification, authenticated provider host/project coordinate, namespace,
+and event ID. Nested creation uses `server_control_management` and the signed management-lineage
+vector. A null-chat event with chat lineage, a provider event with fabricated management lineage, or a
+missing/unresolvable lineage ref is ambiguous and creates no command.
+
+An official start is anchored before a provider chat exists by one
+`ProviderServerControlBindingRecord` for the paired provider host/project. Its
+`outsideBindingId` resolves to that server's null-chat
+`OutsideBindingRecord(scopeKind:"server_control")`; the namespace survives connector reconnect and is
+never derived from a later provider chat ID. The admitted common result's signed-result finalization atomically creates one
+`ProviderChatCreationMappingRecord` from the canonical start event to the allocated remote-claw chat.
+When the provider later assigns or reports its chat ID, a compare-and-swap fills that field and creates
+the ordinary chat-scoped outside binding/mapping. Anthropic Remote and ChatGPT Remote use the same
+shape; neither fabricates a chat-scoped binding to adjudicate the start.
+For `anthropic-remote`, exactly `anthropicRemoteHostId` is non-null and foreign-keys a paired
+`AnthropicRemoteHostRecord`; for `chatgpt-remote`, exactly `chatGptRemoteHostId` is non-null and
+foreign-keys a paired `ChatGptRemoteHostRecord`. A free provider host string or cross-provider host ID
+cannot authorize creation.
+
+Both A1 results and canonical outside events foreign-key one common command. The record owns the typed
+family/payload digest, ready journal position, server-wide `commandSeq`, disposition, target, and
+pinned inward capability entry. The server sequencer considers only these rows, across all source
+kinds, and orders ready rows by `(readyAtJournalSeq, commandId)`. It allocates a unique, gap-free
+`commandSeq` from `CollaborationServerRecord.nextCommandSeq` in the same transaction that fixes the
+disposition. An exact replay links the prior command and receives no second sequence; a collision or
+ambiguous outside event receives no command at all.
+
+The command's scope and capability fields are a closed union:
+
+- A chat command has non-null `logicalChatId`, equal non-null `targetLogicalChatId`, and may admit only
+  `native_binding` for its terminal native harness or `nested_chat_edge` for an already installed
+  inward chat edge.
+- A server-control command has null `logicalChatId`, family `new_chat`, and null target until the
+  deciding transaction admits it and allocates the non-null target; it may admit only
+  `native_server` or `nested_management`. Its decision is terminal `admitted` or `rejected`; selected
+  server-control has no queued creation state.
+- `native_binding` pins one current `NativeBindingCapabilitySnapshot` family entry;
+  `native_server` pins one current `NativeServerCapabilitySnapshot` `new_chat` entry; and
+  `nested_management` pins one current `NestedServerManagementCapabilitySnapshot` `new_chat` entry.
+  `nested_chat_edge` pins one current `NestedChatEdgeCapabilitySnapshot` family entry plus its exact
+  installed edge, topology generation, and live lease.
+- A decided admitted command has exactly one target kind and both capability fields non-null. A queued
+  or rejected command has all three null. Every frozen decision has a non-null decision-evidence
+  schema/ref/digest. An awaiting-order command has null sequence, disposition, target capability,
+  decision evidence, and canonical record digest.
+
+The exact decision-evidence payload is:
+
+```text
+str(decisionEvidenceSchemaId) || uint(schemaVersion) ||
+str(commandId) || str(collaborationServerId) || str(scopeKind) ||
+optionalStr(projectTargetSelectorMappingId) ||
+optionalUint(projectTargetSelectorMappingGeneration) ||
+optionalDigest(projectTargetDigest) || optionalStr(selectedTargetKind) ||
+optionalStr(selectedExecutorEvidenceSchemaId) ||
+optionalDigest(selectedExecutorEvidenceDigest) ||
+optionalStr(targetCapabilitySnapshotId) || optionalDigest(targetCapabilityFamilyDigest) ||
+str(decisionPolicyId)
+```
+
+`decisionPolicyId` is the literal shown in the schema. Version one means: order only through the common
+server sequencer; require a current exact source capability and target executor/capability; fail closed
+on unknown, ambiguous, stale, or unsupported input; and create no effect before a signed admitted
+result. Changing those rules requires a new decision-evidence schema, so there is no opaque policy
+digest an implementation can reinterpret.
+
+`selectedExecutorEvidenceRef` retains exactly one tagged executor-union payload. Its digest is SHA-256
+of the corresponding bytes:
+
+```text
+native_server =
+  str(selectedExecutorEvidenceSchemaId) || uint(schemaVersion) ||
+  str(runtimeId) || uint(nativeIncarnation) || str(nativeServerAttachmentLeaseId) ||
+  str(serverFrontDoorLeaseId) || str(nativeWorkspaceTransitionBarrierId) ||
+  str(serverCapabilitySnapshotId) ||
+  bytes(base64urlDecode(capabilitySnapshotAttestationDigest)) ||
+  str(projectTargetSelectorMappingId) ||
+  uint(projectTargetSelectorMappingGeneration) || bytes(base64urlDecode(projectTargetDigest))
+
+native_binding =
+  str(selectedExecutorEvidenceSchemaId) || uint(schemaVersion) ||
+  str(nativeBindingId) || str(runtimeId) || uint(nativeIncarnation) ||
+  str(attachmentLeaseId) || str(nativeClientIngressLeaseId) || str(capabilitySnapshotId) ||
+  bytes(base64urlDecode(capabilitySnapshotAttestationDigest))
+
+nested_management =
+  str(selectedExecutorEvidenceSchemaId) || uint(schemaVersion) ||
+  str(nestedServerManagementBindingId) || str(nestedServerManagementLeaseId) ||
+  uint(leaseGeneration) || uint(sourceCoordinatorEpoch) || uint(targetCoordinatorEpoch) ||
+  uint(transportEpoch) ||
+  bytes(base64urlDecode(mutualChannelBindingDigest)) ||
+  str(nestedServerManagementCapabilitySnapshotId) ||
+  bytes(base64urlDecode(nestedServerManagementCapabilitySnapshotDigest))
+
+nested_chat_edge =
+  str(selectedExecutorEvidenceSchemaId) || uint(schemaVersion) ||
+  str(inwardEdgeId) || uint(sourceTopologyGeneration) || uint(targetTopologyGeneration) ||
+  uint(currentConnectionEpoch) || str(inwardLiveLeaseId) ||
+  bytes(base64urlDecode(transportChannelBindingDigest)) ||
+  str(nestedChatEdgeCapabilitySnapshotId) ||
+  bytes(base64urlDecode(nestedChatEdgeCapabilitySnapshotDigest)) || str(targetServerId) ||
+  str(targetLogicalChatId) || str(targetOutsideBindingId)
+```
+
+The schema tag and `selectedTargetKind` must select the same arm. Every decoded digest is canonical
+unpadded base64url SHA-256. Each field composite-foreign-keys the named current lease, pointer,
+incarnation, target, and snapshot; refs are parsed and recomputed rather than trusted as locators.
+`native_server` additionally requires its mapping ID, generation, server/project/selector from the
+`new_chat` payload, and `projectTargetDigest` to equal one current
+`ProjectTargetSelectorMappingRecord`. Its target arm must be `terminal_native`.
+`nested_management` requires the corresponding current mapping whose target arm is `nested_server`.
+The three project-mapping fields are all null or all non-null; a partial tuple is invalid. The chat
+arms always have all three null. An admitted server-control decision has one all-non-null tuple that
+resolves its exact current mapping. A rejected server-control decision may keep all three null when no
+unique valid mapping resolved, or all three non-null only when they resolve the exact valid lookup
+that led to rejection. The selected capability ID/family digest in the decision must equal the
+snapshot/family reached through that executor evidence.
+
+`decisionEvidenceDigest` is SHA-256 of the decision-evidence bytes. Every admission has one non-null
+target, executor evidence, and capability. A queued or rejected decision has all three selected target,
+executor, and capability fields null, but retains the fixed policy and any valid mapping lookup
+coordinates that led to rejection. Mapping replacement, a terminal↔nested arm change, a different
+OpenCode binding/session/workspace/lease, a different edge/server, or a readiness/capability fence
+therefore changes the signed command record. Finalization and the last effect boundary revalidate the
+same semantic executor arm and target. Terminal-native evidence is immutable and cannot be replaced.
+For a nested arm, the only transport-specific lease/snapshot replacement is the exact signed
+positive-never-started capability continuation defined for that arm; it preserves the original
+binding/edge, target, command, payload, family/request semantics, and receipt schema. Any other live
+arm or field substitution is invalid.
+
+Once the decision fields are frozen, `canonicalCommandRecordDigest` is SHA-256 of:
+
+```text
+str("remote-claw/collaboration-command-record/v1")
+str(commandId)
+str(collaborationServerId)
+str(scopeKind)
+optionalStr(logicalChatId)
+optionalStr(targetLogicalChatId)
+str(sourceKind)
+str(sourceRef)
+str(sourceEventNamespaceId)
+str(sourceEventId)
+bytes(base64urlDecode(sourceCommandIdentityDigest))
+optionalDigest(canonicalSourceEventDigest)
+str(mutationFamily)
+str(canonicalCommandPayloadSchemaId)
+bytes(base64urlDecode(canonicalCommandPayloadDigest))
+optionalStr(preDecisionNormalizationEvidenceSchemaId)
+optionalDigest(preDecisionNormalizationEvidenceDigest)
+uint(readyAtJournalSeq)
+uint(commandSeq)
+str(disposition)
+optionalStr(admittedTargetKind)
+optionalStr(targetCapabilitySnapshotId)
+optionalDigest(targetCapabilityFamilyDigest)
+str(decisionEvidenceSchemaId)
+bytes(base64urlDecode(decisionEvidenceDigest))
+```
+
+The command payload ref and decision-evidence ref must resolve to bytes that recompute their paired
+digests. This record digest therefore commits the exact typed proposal, ordered decision, selected
+executor, and pinned capability; the source-derived command ID alone intentionally does not.
+
+Every ordered decision reserves one append-only result, but protected-key signing is not performed
+inside the database transaction. The decision transaction allocates `commandSeq`, freezes
+disposition/target/capability/evidence, creates a `CollaborationCommandResultPreparationRecord` with
+the fields needed for the exact canonical payload and one reserved
+`ServerSignatureReservationRecord`, creates a
+`CollaborationCommandCompoundSigningGroupRecord`, and changes the command
+to `decision_reserved`. It creates no source ACK, result delivery, projection-as-accepted, or inward
+effect yet. `requiredFinalizationArtifactKind` is derived, never caller-selected:
+an admitted `nested_management` target requires `nested_management_lineage_hop`; an admitted
+`nested_chat_edge` target requires `nested_chat_event_lineage_hop`; every terminal-native, queued, or
+rejected decision requires `none`. The generic finalizer accepts only derived `none` with a null
+artifact-preparation ref. Each joint nested finalizer requires the exact derived kind plus one current,
+signed preparation whose command/result/decision digest matches. For either nested kind, the decision
+transaction also pre-reserves the secondary signer sequence under the same current signing lease and
+stores the secondary preparation in the compound group. The ordinary chat-hop payload may bind
+immediately; the management-hop payload remains unbound until the signed common-result digest exists.
+Signing order is fixed for both nested kinds: the result reservation signs first and the group
+compare-and-swaps `reserved → result_signed`; only then may the current secondary reservation sign and
+the group compare-and-swap `result_signed → both_signed`. A joint finalizer accepts only
+`both_signed`, parses both current preparation refs, and independently verifies both exact reservation
+signatures and signed-record digests before `both_signed → finalized`. It never infers readiness from
+one enum label or one signature. A non-nested group goes directly from its verified result signature to
+finalization.
+The group ID is deterministic from
+`(collaborationServerId,commandId,commandResultId,preparationGeneration)`, and exactly one current
+group may exist for that tuple. Kind `none` holds if and only if `secondaryPreparationRef` is null;
+either nested kind requires a non-null ref to the one matching-kind current secondary whose
+`compoundPreparationGeneration` equals the group's generation. A parallel same-generation group,
+wrong-kind ref, or missing/extra secondary is invalid.
+Both secondary preparation types carry the group's `compoundSigningGroupId`; their
+`compoundPreparationGeneration` equals the group's and result preparation's
+`preparationGeneration`, and their `signingLeaseId` equals the group plus the result reservation's
+lease. Their refs are unique to that group; composite foreign keys prohibit a stale or cross-group secondary. A
+replacement secondary advances its own preparation generation but remains under the same held group
+and lease after result signing.
+A signing-key rotation cannot retire that lease while any compound group is nonterminal. Before the
+result signature is durable, aborting either reservation aborts the whole group and a higher paired
+`preparationGeneration` reserves both sequences again for the byte-identical frozen decision. After
+the result signature is durable, an aborted secondary preparation may be CAS-replaced inside that same
+rotation-blocking group by a higher secondary preparation generation and a new sequence from the held
+lease; the result signature is reused. The group points only to the current secondary preparation, and
+finalization never mixes preparations from two groups. The result ID is
+`ccr_${base64url(SHA256(str("remote-claw/collaboration-command-result-id/v1") ||
+str(collaborationServerId) || str(commandId) || uint(1)))}`. Selected result version is exactly `1`
+and `supersedesCommandResultId` is null. Every admitted, queued, or rejected decision is terminal for
+that proposal across A1, official, automation, and nested sources. A queued proposal is never mutated
+into admitted behind an acknowledged signature; forwarding later requires a fresh authenticated source
+event and common command.
+
+The canonical result payload is exactly:
+
+```text
+str(canonicalPayloadSchemaId)
+str(commandResultId)
+str(collaborationServerId)
+str(commandId)
+bytes(base64urlDecode(canonicalCommandRecordDigest))
+uint(resultVersion)
+optionalStr(supersedesCommandResultId)
+str(sourceKind)
+str(sourceRef)
+str(scopeKind)
+optionalStr(logicalChatId)
+optionalStr(targetLogicalChatId)
+uint(commandSeq)
+str(disposition)
+uint(createdAtMs)
+uint(signerSequence)
+uint(serverKeyGeneration)
+str(signerIdentityKeyId)
+str(signerScopeCertificateId)
+str(signatureAlgorithm)
+```
+
+`canonicalPayloadDigest` is SHA-256 of those bytes. The current certified server key signs those exact
+bytes through the common sequence-reservation ledger; `signedRecordDigest` is SHA-256 of
+`str("remote-claw/collaboration-command-result-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || str(signerIdentityKeyId) ||
+uint(serverKeyGeneration) || uint(signerSequence) || bytes(base64urlDecode(signature))`.
+The signing service resumes only that bound preparation after a crash and persists the signature in
+its reservation before returning it. For `requiredFinalizationArtifactKind:"none"` only, the generic
+final database transaction rechecks that the command's frozen decision fields and preparation digest
+are unchanged, inserts the immutable `CollaborationCommandResultRecord`, compare-and-swaps its
+current-result pointer, creates the exact source delivery/outbox and terminal-native effect arm when
+admitted, and changes the command to `decided`. For either nested kind, only its `both_signed` joint
+finalizer may atomically insert the result, signed secondary/lineage, source outbox, semantic attempt,
+and effect gate; no generic or partial insert is valid. A crashed or aborted reservation burns
+its sequence; restart either completes the exact bound payload or appends a higher
+`preparationGeneration` for the same undelivered result version, naming the aborted preparation and
+using a new signer sequence, without changing the already frozen decision. Only one preparation
+generation may finalize. Capability/current-target fences are revalidated again
+before any later effect, not silently rewritten during result signing.
+`AuthenticatedIngressResultRecord.commandResultId` foreign-keys this neutral result for A1. Every
+canonical source event remains immutable and resolves the sole result through its stable `commandId`
+and `CollaborationCommandRecord.currentCommandResultId`; official, automation, and nested protocols
+only project that result into their own exact shape and do not create another decision.
+
+Each target projection has one stable
+`CollaborationCommandResultDeliveryRecord` per `(commandResultId,targetKind,targetBindingId)`.
+For A1, `stableTargetResultId` is the ingress row's fixed
+`stableSemanticResultId`. Selected A1 has no result-update wire kind, so an A1 `queued` decision is
+terminal for that proposal; later forwarding requires a new explicit proposal and command rather than
+changing accepted bytes behind the old result. Every other selected target uses
+`ctr_${base64url(SHA256(str("remote-claw/collaboration-result-target/v1") ||
+str(commandResultId) || str(targetKind) || str(targetBindingId)))}`. Thus the original A1 row,
+result-frame `msgId`, and payload `result_id` remain the same `rrs_*`.
+`AuthenticatedIngressResultRecord.commandResultId` names that sole result. The delivery row retains the exact
+protocol payload/ref/digest before send. Each physical envelope gets a child
+`CollaborationCommandResultDeliveryAttemptRecord`, unique on
+`(commandResultDeliveryId,deliveryAttemptId)`. Retries of one started child reuse its stored attempt
+ID; a later source replay may append another child envelope only when that target protocol requires
+it, still carrying the same stable result ID and byte-identical parent payload. Nested peers accept a creation or chat result
+only after verifying this host-signed common result and its exact target mapping.
+
+A native delivery, terminal creation, or nested creation attempt may exist only for an admitted
+command and must repeat that command's exact server/chat target, capability snapshot, family digest,
+and canonical payload digest. The database enforces those composite foreign keys; an adapter cannot
+manufacture an attempt from its own route lookup. Queued and rejected rows have no effect gate,
+projection-as-accepted, native attempt, or nested attempt. Thus web, official clients, automation,
+nested servers, and the local collaboration bridge compete through one enforceable adjudicator before
+OpenCode. The person's direct OpenCode TUI is the intentional exception: it reaches the native harness
+through its separately fenced TUI seam and enters remote-claw only afterward as a native observation,
+because the native harness—not the coordinator—is the final applied-state arbiter.
+
+The `server_control` route accepts exactly one inbound semantic kind, typed `new_chat`, encrypted under
+the server-control scope key. It does not accept ordinary user text, attachments, chat controls, or a
+caller-supplied `logicalChatId`; the scope bus remains outbound-only. The complete authenticated
+server-control proposal first enters the same multipart/digest/collision actor under the null-chat
+route. The server sequencer first gives every complete proposal its stable command ID/sequence. If the
+same deciding transaction resolves the current project-target selector mapping, it then pins the
+capability required by that closed target arm: `native_server` for a terminal runtime or
+`nested_management` for another server. Only if the mapping and selected capability are current,
+unambiguous, and admit `new_chat` does it allocate one random `targetLogicalChatId`, freeze it on the
+command and result preparation, and create that chat in `recovering`. Only signed-result finalization
+creates and arms the selected executor. Mapping lookup/current-generation comparison and capability selection are
+one ordered decision: missing, ambiguous, stale, or unsupported input produces an ordered rejected
+result, not a pre-order drop. The target actor does not decide the proposal a second time. If policy
+rejects it, no target chat is allocated. The random ID is never taken from the caller.
+
+The mapping decides the next inward step. The decision-reservation transaction freezes that arm but
+creates no executor record. On signed-result finalization, `terminal_native` makes only the innermost
+terminal server create a starting `NativeBindingRecord`; OpenCode additionally creates its
+`OpenCodeBindingWorkspaceRecord` and native creation reservation. For `nested_server`, the outer server
+creates no native binding. Finalization creates one `NestedChatCreationAttemptRecord` and command-wide
+effect gate pinned to the selector's current server-scoped
+`NestedServerManagementBindingRecord`, current mutually bound lease, exact `new_chat` capability
+snapshot, mapping generation, target server/project/selector, source namespace/event, and signed
+management lineage. This management binding is deliberately not a chat-scoped inward edge: the target
+chat does not exist yet.
+
+Management writability uses its own exact two-sided live handshake. Each peer contributes one fresh
+canonical unpadded-base64url 32-byte nonce and its current coordinator epoch over the actual mutually
+authenticated TLS 1.3 connection. The source allocates the monotonically increasing
+`leaseGeneration` and `transportEpoch`. The exporter context digest is SHA-256 of:
+
+```text
+str("remote-claw/nested-management-exporter-context/v1") ||
+str(nestedServerManagementBindingId) || uint(leaseGeneration) ||
+str(sourceServerId) || str(targetServerId) || str(targetOutsideBindingId) ||
+uint(sourceCoordinatorEpoch) || uint(targetCoordinatorEpoch) || uint(transportEpoch) ||
+bytes(base64urlDecode(sourceNonce)) || bytes(base64urlDecode(targetNonce)) ||
+str(sourceScopeCertificateId) || str(targetScopeCertificateId)
+```
+
+Both sides call the TLS 1.3 exporter on that one live connection with label
+`EXPORTER-remote-claw-nested-management-v1`, the 32 decoded context-digest bytes as context, and
+output length 32. `mutualChannelBindingDigest` is SHA-256 of
+`str(transportBindingSchemaId) || bytes(base64urlDecode(exporterContextDigest)) ||
+bytes(exporterOutput)`. Both peers require TLS 1.3, the mutually authenticated peer certificates named
+by the two scope-certificate chains, the exact exporter label/context/output above, and the nonce/epoch
+frames on that same connection. Either peer recomputes the context and channel-binding digest directly
+from that live connection; no separately serialized transport-evidence object participates in the
+signed contract.
+
+The handshake ID is
+`nmh_${base64url(SHA256(str("remote-claw/nested-management-handshake-id/v1") ||
+str(nestedServerManagementBindingId) || uint(leaseGeneration) ||
+uint(sourceCoordinatorEpoch) || uint(targetCoordinatorEpoch) || uint(transportEpoch) ||
+bytes(base64urlDecode(sourceNonce)) || bytes(base64urlDecode(targetNonce))))}`. Source and target each
+sign one `NestedManagementLiveHandshakeAttestation` over:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) || str(handshakeId) || str(side) ||
+str(nestedServerManagementBindingId) || uint(leaseGeneration) || str(sourceServerId) ||
+str(targetServerId) || str(targetOutsideBindingId) || uint(sourceCoordinatorEpoch) ||
+uint(targetCoordinatorEpoch) || uint(transportEpoch) ||
+bytes(base64urlDecode(sourceNonce)) || bytes(base64urlDecode(targetNonce)) ||
+str(sourceScopeCertificateId) || str(targetScopeCertificateId) ||
+str(transportBindingSchemaId) || bytes(base64urlDecode(exporterContextDigest)) ||
+bytes(base64urlDecode(mutualChannelBindingDigest)) ||
+uint(issuedAtMs) ||
+uint(signerSequence) || uint(serverKeyGeneration) || str(signerIdentityKeyId) ||
+str(signerScopeCertificateId) || str(signatureAlgorithm) ||
+str(canonicalPayloadDigestAlgorithm)
+```
+
+The side-specific current certified server key signs those bytes through
+`purpose:"nested_management_live_handshake"`; its signer scope certificate must equal the named
+source or target certificate for that side. `sourceScopeCertificateId` must be the source server's
+current accepted scope certificate; `targetScopeCertificateId` must equal the management binding's
+`targetServerScopeCertificateId` and the target outside binding's current accepted server scope.
+Each signed-attestation digest is SHA-256 of
+`str("remote-claw/nested-management-live-handshake-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || bytes(base64urlDecode(signature))`. Apart from
+`side`, issuance/signature fields, the two parsed transcripts must be byte-identical.
+
+The lease ID is
+`nml_${base64url(SHA256(str("remote-claw/nested-management-live-lease/v1") ||
+str(nestedServerManagementBindingId) || uint(leaseGeneration) || str(handshakeId) ||
+bytes(base64urlDecode(sourceHandshakeAttestationDigest)) ||
+bytes(base64urlDecode(targetHandshakeAttestationDigest))))}`. Only after both signatures, certificate
+chains, reservations, signed-record acceptance rows, and the still-live exporter
+verify does each side store the same lease row. The source compare-and-swaps
+`NestedServerManagementBindingRecord.currentLeaseId`; the target compare-and-swaps the matching
+`NestedManagementTargetLeasePointerRecord.currentLeaseId`. Writability requires both pointers to name
+that exact current lease and every lease/transcript coordinate to match. A split install is
+non-writable. Connection loss, certificate/epoch change, or pointer replacement immediately closes
+the lease. Reconnect repeats the whole handshake with a higher generation/epoch; public transcript
+replay, caller-selected nonces/epochs, or one-sided attestation cannot recreate writability.
+
+The selected management capability is byte-exact. `newChatRequestSchemaId` is
+`remote-claw/nested-management-new-chat-request/v1`, `newChatReceiptProofSchemaId` is
+`remote-claw/nested-target-command-receipt-proof/v1`, and:
+
+```text
+newChatCapabilityDigest =
+  SHA256(str("remote-claw/nested-management-new-chat-capability/v1") ||
+         str(newChatRequestSchemaId) || str(newChatReceiptProofSchemaId) ||
+         bytes(base64urlDecode(proofDigest)))
+```
+
+The capability snapshot digest is:
+
+```text
+SHA256(str(canonicalSnapshotSchemaId) || uint(schemaVersion) ||
+       str(nestedServerManagementCapabilitySnapshotId) ||
+       str(nestedServerManagementBindingId) || str(nestedServerManagementLeaseId) ||
+       uint(capabilityGeneration) || str(newChatRequestSchemaId) ||
+       str(newChatReceiptProofSchemaId) ||
+       bytes(base64urlDecode(newChatCapabilityDigest)) ||
+       bytes(base64urlDecode(proofDigest)) || uint(verifiedAtMs))
+```
+
+Its proof ref must resolve exact interoperability bytes for those request and receipt schemas.
+Installation compare-and-swaps the management binding's capability pointer while its named lease is
+current; state is excluded from the digest. The decision executor evidence, command capability digest,
+and creation attempt repeat the snapshot ID, snapshot digest, and `new_chat` capability digest.
+Same-ID content changes, a request/receipt schema substitution, a stale lease/generation, or a
+superseded/revoked snapshot rejects before result finalization and again before send.
+
+Each outer server also has exactly one current `NestedReadinessPolicySnapshot`. Its policy digest is:
+
+```text
+SHA256(str(canonicalPolicySchemaId) || uint(schemaVersion) ||
+       str(nestedReadinessPolicySnapshotId) || str(collaborationServerId) ||
+       uint(policyGeneration) || uint(maxWaitMs))
+```
+
+`maxWaitMs` is an integer from 1 through 120000 in version one. Finalization pins the current policy ID
+and digest, sets the immutable `attemptCreatedAtMs`, and computes
+`readinessDeadlineAtMs = attemptCreatedAtMs + maxWaitMs` with checked unsigned arithmetic. Policy
+replacement affects only later attempts. Expiry stops waiting and records uncertainty; it is not
+evidence that the target did not execute and never authorizes a second downstream `new_chat`.
+
+The nested arm requires a staged secondary signature. Its common-result preparation sets
+`requiredFinalizationArtifactKind:"nested_management_lineage_hop"`. After the exact common-result
+signature is durable in its bound reservation—but before a result row, source ACK, output, attempt, or
+effect gate exists—the coordinator builds the semantic creation base using that result ID and
+`signedRecordDigest`, appends the next management hop, binds the decision transaction's pre-reserved
+secondary signer sequence to that exact payload, and signs the
+`NestedManagementLineageHopPreparationRecord`. It then builds the completed wire envelope. One
+joint compare-and-swap finalization inserts the immutable common result, prepared hop/vector, semantic
+base and wire envelope, source result outbox, nested creation attempt, and effect gate, and marks the
+command decided. A nested executor can never use the ordinary result-only finalizer.
+
+If a crash occurs after result signing, recovery reuses that exact result signature while the compound
+group and signing lease remain live. A secondary reservation that aborts after that point is replaced
+by a higher hop `preparationGeneration` within the same group, naming the prior preparation and using a
+new sequence from the held lease. An abort before result signing replaces the entire group and both
+preparations at a higher paired generation.
+Only one hop preparation may become the result preparation's
+`currentFinalizationArtifactPreparationRef`, and only one joint finalizer may win. A stale/racing
+finalizer, changed source result/digest, changed base/lineage bytes, or missing secondary signature
+creates no partial result, ACK, output, attempt, or effect.
+
+The management lineage is a retained vector of at most 16 `NestedManagementLineageHop` values. Each
+hop is signed by its source server over the prior lineage digest, origin/current command, signed common
+result and allocated target, source/target server IDs, stable management binding, mapping generation, target
+project/selector, intent, semantic creation-base digest, source namespace/event, and signer metadata.
+Hop zero starts at the origin server. Every later `sourceServerId` equals the preceding
+`targetServerId`; each proposed `targetServerId` and management binding is new in the visited path, and
+the origin/command/allocated-outer-target coordinates remain consistent across hops. At hop zero,
+`sourceCommandId === originCommandId` and
+`sourceTargetLogicalChatId === originTargetLogicalChatId`. Its source result is the immutable signed
+common result for that exact origin server/command/target. At every later hop, the source command,
+source result, result digest, and source target chat must equal the verified
+`CollaborationCommandRecord`/`CollaborationCommandResultRecord` allocated by the preceding hop's target
+server for the preceding management source event. Composite foreign keys bind
+`(sourceServerId,sourceCommandId,sourceCommandResultId,sourceTargetLogicalChatId)` to that result and
+bind its source event to the preceding hop's exact namespace/event and signed-record digest. A server
+cannot replace those coordinates with another local command before extending the lineage. Invalid schema,
+index, adjacency, signature, certificate, namespace/event derivation, or changed signed field is an
+authentication/transport failure: the receiver records evidence but creates no canonical source event,
+command, or semantic ACK. Once the complete lineage is authenticated, proposing an already visited
+target or a seventeenth hop is a semantic cycle/depth rejection. The target creates the common command
+and ordered rejected result but allocates no target chat or effect gate. The vector digest is
+SHA-256 of `str("remote-claw/nested-management-lineage-vector/v1") || uint(count)` followed by each
+canonical signed-record digest in hop order.
+
+The lineage does not sign an envelope that already contains itself. The exact semantic creation base
+payload is:
+
+```text
+str("remote-claw/nested-management-creation-base/v1") || uint(1) ||
+str(sourceServerId) || str(sourceCommandId) || str(sourceCommandResultId) ||
+bytes(base64urlDecode(sourceCommandResultDigest)) || str(sourceTargetLogicalChatId) ||
+str(targetServerId) || str(nestedServerManagementBindingId) ||
+str(projectTargetSelectorMappingId) || uint(projectTargetSelectorMappingGeneration) ||
+str(targetProjectId) || str(targetWorkspaceSelectorId) || str(creationIntent) ||
+str(sourceEventNamespaceId) || str(sourceEventId)
+```
+
+`semanticCreationBaseRef` retains those exact bytes and
+`semanticCreationBaseDigest` is their SHA-256. Every new hop signs that base digest. After the complete
+hop vector is signed, `canonicalRequestRef` retains this wire envelope:
+
+```text
+str(canonicalRequestSchemaId) || uint(1) ||
+bytes(exactSemanticCreationBasePayload) || uint(lineage.length) ||
+for hop in lineage:
+  bytes(exactCanonicalHopPayload) || bytes(base64urlDecode(hop.signature))
+```
+
+`canonicalRequestDigest` is SHA-256 of those bytes. The target parses the retained/request bytes,
+recomputes the base, every hop signed-record digest, the lineage-vector digest, and the full wire
+digest, and requires all attempt fields to match. Neither a different base under the same lineage nor a
+different lineage around the same base is accepted. The transport attestation's
+`semanticRequestDigest` equals this full `canonicalRequestDigest`.
+
+One hop's canonical payload is:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) || uint(hopIndex) ||
+str(originServerId) || str(originCommandId) || str(originTargetLogicalChatId) ||
+str(sourceServerId) || str(sourceCommandId) || str(sourceCommandResultId) ||
+bytes(base64urlDecode(sourceCommandResultDigest)) || str(sourceTargetLogicalChatId) ||
+str(targetServerId) || str(nestedServerManagementBindingId) ||
+str(projectTargetSelectorMappingId) || uint(projectTargetSelectorMappingGeneration) ||
+str(targetProjectId) || str(targetWorkspaceSelectorId) || str(creationIntent) ||
+bytes(base64urlDecode(semanticCreationBaseDigest)) || str(sourceEventNamespaceId) ||
+str(sourceEventId) || optionalDigest(priorLineageDigest) || uint(signerSequence) ||
+uint(serverKeyGeneration) || str(signerIdentityKeyId) || str(signerScopeCertificateId) ||
+str(signatureAlgorithm) || str(canonicalPayloadDigestAlgorithm)
+```
+
+The canonical payload digest and Ed25519 signature use the named certified source-server key. The
+hop's signed-record digest is SHA-256 of
+`str("remote-claw/nested-management-lineage-hop-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || bytes(base64urlDecode(signature))`.
+`hopIndex` starts at zero, increments contiguously, and `priorLineageDigest` is null only at zero;
+otherwise it equals the prior hop's signed-record digest.
+
+The management binding's `targetOutsideBindingId` resolves on the target to one
+`OutsideBindingRecord(kind:"nested-remote-claw",scopeKind:"server_control",logicalChatId:null)`.
+Its stable namespace is
+`nmn_${base64url(SHA256(str("remote-claw/nested-management-source-namespace/v1") ||
+str(targetServerId) || str(targetOutsideBindingId) || str(collaborationServerId) ||
+str(nestedServerManagementBindingId)))}` and must equal `targetSourceEventNamespaceId`. The source
+event ID is
+`nme_${base64url(SHA256(str("remote-claw/nested-management-source-event/v1") ||
+str(sourceServerId) || str(sourceCommandId) || str(sourceTargetLogicalChatId) ||
+str(projectTargetSelectorMappingId) || uint(projectTargetSelectorMappingGeneration)))}`.
+Reconnect never changes either value.
+
+Lease and TLS/channel-binding evidence are intentionally not part of that stable semantic lineage. One
+immutable `NestedManagementDeliveryAttemptRecord` and its
+`NestedManagementTransportAttestation` bind a physical attempt and the same semantic request digest to
+the current management lease, coordinator/transport epochs, and live channel immediately before send.
+They are verified as transport authorization but excluded from target source-event fingerprinting.
+The semantic creation attempt has many such child rows, unique by both child ID and
+`transportAttemptId`. The initial child repeats the exact management lease and capability snapshot
+ID/digest frozen in the signed executor evidence and has both continuation fields null. A later child
+requires both continuation fields non-null and a valid signed
+`NestedManagementCapabilityContinuation`; one-null/one-non-null is invalid. A reconnect may append
+that fresh child for the exact semantic event only after positive evidence marks every prior child
+`never_started`. Any child that remains `started` or `outcome_unknown` fences all future sends under
+either old or new transport. No transport row, snapshot, continuation, or attestation is overwritten.
+
+Positive-never-started is a signed, typed fact, not a timeout, disconnect, missing receipt, or mutable
+status label. Every management or chat transport child is created in the same transaction as one
+`NestedDispatchAuthorizationRecord(state:"armed",stateVersion:1)`. Its ID is
+`nda_${base64url(SHA256(str("remote-claw/nested-dispatch-authorization/v1") ||
+str(authorizationKind) || str(semanticAttemptId) || str(physicalAttemptId) ||
+str(transportAttemptId)))}`. Its handle digest is:
+
+```text
+SHA256(str("remote-claw/nested-dispatch-authorization-handle/v1") ||
+       str(nestedDispatchAuthorizationId) || str(dispatchAuthorizationHandle))
+```
+
+`stateVersion` is exactly `1` with `state:"armed"` and null `revokedAtJournalSeq`, then exactly `2`
+with either `state:"consumed"` and null journal sequence or `state:"revoked"` and one non-null
+coordinator journal sequence. No other transition or version is valid. A revocation's evidence ID is
+deterministic:
+`pns_${base64url(SHA256(str("remote-claw/nested-positive-never-started-evidence-id/v1") ||
+str(nestedDispatchAuthorizationId) || uint(revokedAtJournalSeq)))}`. It is unique on both that ID and
+`nestedDispatchAuthorizationId`, so the one authorization cannot acquire two attestations.
+
+The immutable authorization coordinates composite-foreign-key the exact admitted command/result,
+semantic and physical child, route/target, prior lease and capability snapshot, capability entry, and
+semantic request. `nested_management` maps `semanticAttemptId` to
+`nestedChatCreationAttemptId`, `physicalAttemptId` to `nestedManagementDeliveryAttemptId`,
+`routingBindingId` to `nestedServerManagementBindingId`, `priorLeaseId` to the management lease,
+`capabilityEntryDigest` to `newChatCapabilityDigest`, and `semanticRequestSchemaId`/digest to the
+canonical management request; its target logical chat and topology generation are null.
+`nested_chat` maps those fields to `nestedChatDeliveryAttemptId`,
+`nestedChatDeliveryTransportAttemptId`, `inwardEdgeId`, `inwardLiveLeaseId`, the family digest, and
+the canonical wire-envelope schema/digest; its target logical chat and source topology generation are
+non-null and exact.
+
+The transport writer has no socket-send path without consuming that one armed authorization. Its final
+pre-write transaction compare-and-swaps authorization `armed@1 → consumed@2`, child
+`prepared → started`, and gate `(never_started,null) → (started,physicalAttemptId)` together; only
+after commit may the first transport byte be attempted. Therefore a consumed authorization, a started
+child/gate, an uncertain outcome, or a missing row can never produce positive-never-started evidence.
+
+Before that send CAS only, an abandonment transaction may compare-and-swap the exact authorization
+`armed@1 → revoked@2`, set its non-null `revokedAtJournalSeq`, and change the child
+`prepared → never_started` while requiring the command-wide gate to remain
+`(never_started,null)`. It does not move a gate back from `started`. The current source server may then
+sign one `NestedPositiveNeverStartedAttestation` over that immutable revocation:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(positiveNeverStartedEvidenceId) || str(authorizationKind) ||
+str(collaborationServerId) || str(commandId) || str(admittingCommandResultId) ||
+bytes(base64urlDecode(admittingCommandResultSignedRecordDigest)) ||
+bytes(base64urlDecode(canonicalCommandRecordDigest)) ||
+bytes(base64urlDecode(decisionEvidenceDigest)) ||
+str(semanticAttemptId) || str(physicalAttemptId) || str(transportAttemptId) ||
+str(routingBindingId) || str(targetServerId) || optionalStr(targetLogicalChatId) ||
+str(targetOutsideBindingId) || optionalUint(sourceTopologyGeneration) ||
+str(priorLeaseId) || str(priorCapabilitySnapshotId) ||
+bytes(base64urlDecode(priorCapabilitySnapshotDigest)) ||
+bytes(base64urlDecode(capabilityEntryDigest)) || str(semanticRequestSchemaId) ||
+bytes(base64urlDecode(semanticRequestDigest)) || str(nestedDispatchAuthorizationId) ||
+bytes(base64urlDecode(dispatchAuthorizationHandleDigest)) ||
+uint(revokedAuthorizationStateVersion) || uint(revokedAtJournalSeq) || str(assertion) ||
+uint(issuedAtMs) || uint(signerSequence) || uint(serverKeyGeneration) ||
+str(signerIdentityKeyId) || str(signerScopeCertificateId) || str(signatureAlgorithm) ||
+str(canonicalPayloadDigestAlgorithm)
+```
+
+`revokedAuthorizationStateVersion` is exactly `2` and `assertion` is the literal in the schema. The
+signing service accepts only `purpose:"nested_positive_never_started_attestation"` and the current
+source-server signing lease. The evidence digest is SHA-256 of
+`str("remote-claw/nested-positive-never-started-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || bytes(base64urlDecode(signature))`. Verification
+parses every field, recomputes the authorization and request/capability joins, and accepts the signer
+under the current/retired-key and historical-reattestation rules in §4. Both the prior child and
+command-wide gate retain the exact evidence schema/ref/digest tuple. The three fields are either all
+null until continuation installation or all non-null afterward; a partial tuple is invalid.
+
+Continuation installation is one fail-closed CAS after both this attestation and the continuation
+signature are durable. It requires the predecessor authorization still `revoked@2`, predecessor child
+still `never_started`, evidence schema/ref/digest exact, gate still `(never_started,null)`, and the named
+successor lease/snapshot current. It then inserts exactly one successor child and a fresh
+`armed@1` authorization, records the continuation and evidence schema/ref/digest, and leaves the gate
+`(never_started,null)`. A racing old send sees a revoked authorization; a racing successor send cannot
+start before this install commits. Crash before the install leaves no armed successor, and exact replay
+of the install returns the same child. There is no valid `started → never_started` downgrade.
+
+The continuation permits only transport/capability-generation replacement, never semantic
+readjudication. It names the prior/current management leases and capability snapshot IDs/digests, the
+same binding/target, exact `newChatCapabilityDigest`, receipt-proof schema, semantic request digest,
+prior/next transport attempt IDs, and positive prior-never-started evidence. Both snapshots must parse,
+recompute, bind their named lease, select the same request/receipt schemas and capability digest, and
+be valid for the same management binding/target. The current snapshot and lease must be current; the
+prior child and evidence must be immutable and exact. The continuation's canonical payload is:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(nestedChatCreationAttemptId) || str(nestedServerManagementBindingId) ||
+str(targetServerId) || str(priorManagementLeaseId) ||
+str(priorManagementCapabilitySnapshotId) ||
+bytes(base64urlDecode(priorManagementCapabilitySnapshotDigest)) ||
+str(currentManagementLeaseId) || str(currentManagementCapabilitySnapshotId) ||
+bytes(base64urlDecode(currentManagementCapabilitySnapshotDigest)) ||
+bytes(base64urlDecode(newChatCapabilityDigest)) || str(targetReceiptProofSchemaId) ||
+bytes(base64urlDecode(semanticRequestDigest)) || str(priorTransportAttemptId) ||
+str(nextTransportAttemptId) || str(positiveNeverStartedEvidenceSchemaId) ||
+bytes(base64urlDecode(positivePriorNeverStartedEvidenceDigest)) ||
+uint(signerSequence) || uint(serverKeyGeneration) || str(signerIdentityKeyId) ||
+str(signerScopeCertificateId) || str(signatureAlgorithm) ||
+str(canonicalPayloadDigestAlgorithm)
+```
+
+The current certified source-server key signs those bytes through
+`purpose:"nested_management_capability_continuation"`.
+`capabilityContinuationDigest` is SHA-256 of
+`str("remote-claw/nested-management-capability-continuation-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || bytes(base64urlDecode(signature))`.
+After that exact signature is retained, one transaction compares the prior child, positive evidence,
+old lease/snapshot pointers, revoked authorization, and still-never-started command-wide gate; retains
+the paired `positiveNeverStartedEvidenceSchemaId`/ref/digest; and inserts the successor child,
+continuation ref/digest, and fresh one-time authorization against the new current lease/snapshot. The gate remains
+`(never_started,null)` until the successor's final send CAS changes it to
+`(started,nextChildId)`. There is no state in which old and new children may both send.
+
+The transport attestation canonical payload is:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(nestedChatCreationAttemptId) || str(transportAttemptId) ||
+str(nestedServerManagementBindingId) || str(nestedServerManagementLeaseId) ||
+uint(sourceCoordinatorEpoch) || uint(targetCoordinatorEpoch) || uint(transportEpoch) ||
+bytes(base64urlDecode(mutualChannelBindingDigest)) ||
+bytes(base64urlDecode(semanticRequestDigest)) || uint(issuedAtMs) ||
+uint(signerSequence) || uint(serverKeyGeneration) || str(signerIdentityKeyId) ||
+str(signerScopeCertificateId) || str(signatureAlgorithm) ||
+str(canonicalPayloadDigestAlgorithm)
+```
+
+The named source-server key signs those bytes. `transportAttestationDigest` is SHA-256 of
+`str("remote-claw/nested-management-transport-attestation-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || bytes(base64urlDecode(signature))`. The management
+lease's channel digest comes from the same mutually attested TLS 1.3 exporter construction used for
+the exact management live-handshake contract above. The receiver recomputes and requires exact
+binding/lease generation, source and target coordinator epochs, transport epoch, handshake
+attestation digests, channel digest, both current pointers, and live connection equality immediately
+before accepting the semantic envelope.
+
+The management last hop atomically marks the unique gate/attempt started before sending one typed
+nested `new_chat`. It also requires the child's current snapshot ID/digest, continuation when present,
+and capability digest to match the retained semantic attempt before sending. That same CAS consumes
+the child's exact one-time `dispatchAuthorizationHandle` by changing its matching
+`NestedDispatchAuthorizationRecord` from `armed@1` to `consumed@2`; a missing, revoked, reused, or
+cross-child ID/handle digest
+reaches no transport write. The target normalizes
+that authenticated management event into its ordinary
+server-control `CollaborationCommandRecord`; its stable source namespace/event identity is derived
+from the management binding and survives reconnect. It may recurse again through the same adjudicator.
+For `NestedChatCreationEffectGateRecord`, `startedAttemptId` names the exact physical
+`nestedManagementDeliveryAttemptId`, not the stable semantic creation-attempt ID.
+
+Every nested semantic ACK is the closed
+`NestedTargetCommandReceiptProofBundle`, not a result locator. Its digest is:
+
+```text
+SHA256(str(targetReceiptProofSchemaId) || uint(schemaVersion) ||
+       str(targetServerId) || str(targetOutsideBindingId) ||
+       str(targetSourceEventNamespaceId) || str(targetSourceEventId) ||
+       str(targetRequestSchemaId) || bytes(base64urlDecode(targetRequestDigest)) ||
+       str(targetCommandId) || uint(targetCommandSeq) || str(targetCommandResultId) ||
+       str(targetDecision) || bytes(base64urlDecode(targetCanonicalSourceEventDigest)) ||
+       bytes(base64urlDecode(targetCommandPayloadDigest)) ||
+       bytes(base64urlDecode(targetCommandRecordDigest)) ||
+       bytes(base64urlDecode(targetDecisionEvidenceDigest)) ||
+       optionalDigest(targetExecutorEvidenceDigest) || str(targetCommandResultSchemaId) ||
+       bytes(base64urlDecode(targetCommandResultSignedRecordDigest)))
+```
+
+Every ref retains and parses the complete canonical component bytes. The source recomputes the target
+canonical source event from the exact received request and target binding/namespace/event; parses the
+typed command payload; recomputes the target decision and executor evidence; recomputes the complete
+command-record digest; and then verifies that the version-one/null-predecessor common result repeats
+that command digest and is accepted under the current/retired-key and historical-reattestation rules
+of §4 for the certified target-server signer sequence. The bundle's target
+request schema/digest must equal the selected nested attempt, its result schema is exactly
+`remote-claw/collaboration-command-result/v1`, and admitted versus non-admitted executor-evidence
+nullability must obey the common adjudication union. Thus a signed result for another source event,
+command payload, decision, capability, or executor cannot complete this attempt even if its key is
+valid.
+
+The management source does not precompute the target-local command or result ID: those depend on the
+target's verified canonical source-event record. Both remain null until the first complete receipt
+proof verifies and one compare-and-swap stores its command/result IDs, sequence, decision, proof
+ref/digest, and any allocated `observedTargetLogicalChatId`. Exact byte replay is idempotent. A second
+different proof or result, version other than one, non-null predecessor, changed component bytes, or
+fork quarantines the creation attempt. Because server-control creation is terminal admitted/rejected,
+a queued target result or receipt is invalid and quarantines; it never becomes admission later.
+An admitted receipt proves only that the target ordered and allocated the chat, which may still be
+`recovering`. The outer server waits for a signed target-ready observation plus a valid rooted terminal-path
+certificate, and then runs the existing two-party `InwardEdgeInstallReservation`
+prepare/commit/install protocol and mutual live handshake. Only after both installed receipts and the
+current live lease verify does it select the normal chat-scoped `InwardCollaborationEdgeRecord` and
+mark the outer chat ready. Before then there is no usable chat-scoped edge. A target rejection,
+readiness gap, invalid root path, or ambiguity never sends again. Arbitrary nesting therefore applies
+the same creation rule at every server while the native app appears only once, at the innermost
+terminal.
+
+The ready observation is one retained `NestedTargetReadyAttestation`, not an inference from a result
+or announcement timestamp. Its target server/chat/result/command/sequence must equal the verified
+target common result, its target chat must be durably `ready` at `readyJournalSeq`, and its current
+topology generation/root certificate must verify to the terminal native root. The result ID **and**
+`targetCommandResultSignedRecordDigest` must equal the complete receipt proof, so readiness cannot be
+transplanted onto a fork with the same logical coordinates. Its canonical payload is:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(targetServerId) || str(targetLogicalChatId) || str(targetCommandResultId) ||
+bytes(base64urlDecode(targetCommandResultSignedRecordDigest)) || str(targetCommandId) ||
+uint(targetCommandSeq) || uint(targetTopologyGeneration) || uint(attestationGeneration) ||
+optionalDigest(supersedesAttestationDigest) || str(rootPathCertificateId) ||
+bytes(base64urlDecode(rootPathCertificateDigest)) || uint(readyJournalSeq) ||
+uint(issuedAtMs) || uint(signerSequence) || uint(serverKeyGeneration) ||
+str(signerIdentityKeyId) || str(signerScopeCertificateId) || str(signatureAlgorithm) ||
+str(canonicalPayloadDigestAlgorithm)
+```
+
+The target's current certified key signs those bytes; the attestation digest is SHA-256 of
+`str("remote-claw/nested-target-ready-attestation-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || bytes(base64urlDecode(signature))`.
+It is unique on
+`(targetServerId,targetLogicalChatId,targetTopologyGeneration,attestationGeneration)`.
+Generation zero has null `supersedesAttestationDigest`; each renewal increments by one, names the
+prior attestation digest, and may carry a renewed unexpired root certificate without changing
+topology. A fork or different bytes at one generation is equivocation. The outer attempt stores the
+latest complete current chain's exact ref/digest before edge installation.
+
+The attempt also has a bounded, policy-pinned readiness deadline used only to stop waiting, never to
+prove non-execution. A verified target rejection or positive terminal failure marks the attempt and
+effect gate completed and the attempt `failed`, records a stable `failureCode`, and atomically moves the outer chat from `recovering` to
+`quarantined`. An invalid root/readiness attestation does the same with retained evidence. A lost or
+ambiguous result, elapsed deadline, or disconnected target changes the attempt/effect gate to
+`outcome_unknown` and also quarantines the outer chat. Recovery may later install the edge only from
+positive evidence for that same attempt; it never sends again or rewrites the immutable outer
+admission result. A separate status result/projection reports readiness failure or uncertainty.
+
+That projection is a `NestedCreationStatusRecord`, unique on
+`(nestedChatCreationAttemptId,statusVersion)`, with ID
+`ncs_${base64url(SHA256(str("remote-claw/nested-creation-status/v1") ||
+str(nestedChatCreationAttemptId) || uint(statusVersion)))}`. Its retained compact payload contains
+these exact canonical bytes:
+`str(canonicalPayloadSchemaId) || str(nestedCreationStatusId) ||
+str(nestedChatCreationAttemptId) || uint(statusVersion) ||
+optionalStr(supersedesNestedCreationStatusId) || str(outerCommandId) ||
+str(outerTargetLogicalChatId) || str(status) || optionalStr(failureCode) ||
+bytes(base64urlDecode(evidenceDigest))`. Version one has null predecessor; each later version names the
+current status ID and increments by one. The canonical payload digest and one causal projection outbox
+are committed with the lifecycle transition. Exact recovery replays the same status to every enabled
+source/outside binding; a later positive resolution appends the next version rather than changing the
+admission result or earlier status bytes.
+`outerCommandId` and `outerTargetLogicalChatId` are immutable fields on the status row and
+composite-foreign-key the creation attempt's admitted result/target; they are never obtained from the
+projection caller.
+
+A retry before, during, or after the creation response resolves the same server-control result key and
+therefore the same stored target chat, command, selected executor, terminal reservation or nested
+attempt, and result; it cannot allocate a second chat, send a second native POST, or make a second
+nested management send. The host-signed server-control result payload includes the stored target
+chat ID so the requester can subscribe to its chat route. A changed proposal under the same source ID
+is a collision. Physical server-control order decides allocation order only; all later mutations use
+the target chat's own command/native-order actors.
+
+The server-control plaintext is one non-chunked compact UTF-8 JSON object with keys in this order:
+
+```ts
+type A1NewChatProposalPayload = {
+  v: 1;
+  intent: "first_bootstrap" | "new_chat";
+  project_id: string;
+  workspace_selector_id: string;
+};
+```
+
+All strings are non-empty A1 safe IDs of at most 128 ASCII bytes. There are no optional or extra
+fields, directory/header aliases, native workspace/session IDs, target chat ID, title/history match,
+provider coordinate, or caller creation marker. Header `logical_chat_id` and `seq` are null,
+`client_msg_id` is present, `part=0`, and `parts=1`. The host resolves the public
+`(project_id, workspace_selector_id)` through exactly one current
+`ProjectTargetSelectorMappingRecord` inside the server sequencer's deciding transaction. That mapping
+selects either a terminal native workspace or a nested server; zero, multiple, or stale mappings
+produce an ordered rejection. The host, not the caller, creates a native marker only for the terminal
+OpenCode arm.
+
+The corresponding `chat_creation_result` is also non-chunked, has null `logical_chat_id`,
+`seq=command_seq`, `client_msg_id` equal to the proposal's value, stable semantic-result `msg_id`, and
+all outbound host-authentication fields non-null. Its exact plaintext is
+`A1ChatCreationResultPayload` below. Any other header/nullability/part combination is an invalid
+server-control position, not a generic chat proposal.
+
+Every A1 frame also carries an authenticated `deliveryAttemptId`: a fresh random ID for one transport
+attempt, shared by all of that attempt's parts. `msgId` remains the stable semantic source ID.
+`IngressDeliveryCandidateRecord` is unique on `(ingressResultId, deliveryAttemptId)`, and
+`AuthenticatedIngressPartRecord` is unique on `(ingressCandidateId, part)`. Both inherit the full
+server/route/chat/source scope through immutable foreign keys; no candidate or part map is keyed by `msgId`
+alone. `IngressTransportAttemptRecord` is unique on
+`(brokerRouteId, deliveryAttemptId)`; the source namespace
+is immutable bound data, not part of the lookup key. The row durably binds one delivery attempt to one
+namespace, result, stable logical header, and part count. Reusing that attempt after rollover under
+another namespace, `msgId`, header, or part count is therefore a host-side collision linked to the
+original result and a blocked observation, not a new result.
+`stableLogicalHeaderDigest` is unpadded-base64url SHA-256 of
+`str("remote-claw/a1/attempt-header/v1") || bytes(stableLogicalHeader)` using the exact
+[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow)
+writer.
+Selected A1 requires a durable ciphertext broker whose route-wide transport uniqueness key is
+`(route token, deliveryAttemptId, part)`, not semantic `msgId` and not one generation. The first insert
+first parses the exact clear frame schema, rejects duplicate or noncanonical fields, and recomputes the
+normalized transport-frame bytes and digest itself; it never trusts a publisher-supplied digest. The
+insert atomically stores its assigned `(channelGeneration, frameIndex)` and that recomputed digest. An
+exact HTTP retry before or after rollover returns that original cursor only when the recomputed digest
+matches; different bytes under the same key fail closed as a transport collision. A semantic retry
+uses a fresh delivery ID with the same `msgId`. The store-free Workflow broker remains an A0 backend
+and cannot advertise A1 recovery.
+
+Selected A1 retains every chat- and server-control-route ciphertext frame body indefinitely because a
+newly paired viewer must verify and traverse each authenticated route from genesis; selected A1 has no
+semantic-route checkpoint that can safely skip mutation/result history. The scope bus may compact a sealed generation only after a valid
+host-signed checkpoint for its successor is durable and all supported recovery leases have passed it,
+because that route is discovery-only. In either case the broker retains indefinitely the route-wide
+`(route token, deliveryAttemptId, part) → (channelGeneration, frameIndex, transportFrameDigest)`
+tombstone and the generation manifest. Selected A1 has no safe collection transition: local chat
+closure and machine reset do not revoke copied bearer/key material, and the broker has no permanent
+route-revocation protocol. A future bounded-retention version must add and prove that protocol rather
+than infer safety from time or local deletion. A late exact retry of a compacted scope-bus body still
+returns the old cursor; changed bytes still collide, and neither can insert a new position.
+
+The canonical message digest is computed only after every authenticated part in one candidate is
+present, over the versioned canonical logical-frame header—excluding `deliveryAttemptId`, salt, nonce,
+and individual part index—plus the complete reassembled plaintext. A single matching old part never
+returns a parent result. After a terminal result, one fresh-attempt replay candidate must supply all
+expected parts with the same coordinates and authenticated part digests; only then is it a
+`completed_exact_replay`. A changed coordinate, part count, part digest, or final canonical message
+digest latches a collision on the result and quarantines the source/chat. No later exact subset or
+candidate may produce a success result while that collision latch remains unresolved.
+
+`authenticatedPartDigest` and `canonicalMessageDigest` use the exact
+`remote-claw/a1/stable-part/v1` and `remote-claw/a1/logical-message/v1` encodings in
+[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow).
+The part digest is computed only after AEAD open and excludes `deliveryAttemptId`, salt, and nonce, so
+an exact semantic retry under fresh transport encryption compares equal.
+
+Assembly across all candidates for one semantic result is bounded by the same maximum part count,
+candidate count, and total-byte cap as live frame decoding, plus one durable result deadline. A second
+candidate may complete a first candidate's interrupted delivery only when every overlapping coordinate
+matches and one candidate itself supplies the complete part set. An incomplete result remains
+non-writable and holds the contiguous source cursor only until its deadline. If no candidate completes,
+expiry atomically writes `quarantined_incomplete` and candidate/part/tombstone records. A chat route
+may emit its exact pre-order `action_result` form with null command sequence. A server-control route
+has no pre-order result shape: it emits no `chat_creation_result`, remains quarantined/closed until an
+explicit cursor-recovery decision, and requires a fresh semantic proposal after recovery. It never
+invents a command sequence for incomplete or colliding bytes. The permitted recovery then allows the
+contiguous cursor to advance. Ciphertext and
+plaintext part bodies on chat and server-control routes remain retained from genesis; only
+checkpointed discovery-only scope-bus bodies may later be compacted. The full-scope semantic result key,
+`expectedParts`, every `(part, authenticatedPartDigest)` coordinate, source payload schema, canonical
+message digest, source-event fingerprint tuple, disposition, stable semantic result ID, exact
+accepted/action-result payload bytes, transport-attempt binding, and the collision/incomplete tombstone
+needed to reject replay remain indefinitely for that
+route. Neither local chat/channel closure nor machine reset authorizes collection because copied
+bearer/key material may remain valid. A late missing part links the tombstone as
+`late_after_tombstone` and cannot resurrect or execute the message.
+Candidate/count/byte overflow follows the same terminal quarantine path immediately.
+
+One serializable transaction locks the unique result key and classifies each authenticated
+observation:
+
+1. A new part creates or extends the result's exact `deliveryAttemptId` candidate without allocating a
+   command or viewer projection sequence.
+2. An honest exact retry of an already stored delivery-attempt part returns its existing broker cursor
+   and therefore resolves to the same deterministic channel/ingress observation. If the hostile broker
+   replays those valid bytes at a fabricated new cursor anyway, the host creates an advanceable
+   `exact_transport_retry` observation that changes no candidate, creates no result delivery, and never
+   starts a second decision. Before classification, the transaction updates the result/candidate
+   `firstIngressCursor` to the minimum and `lastObservedIngressCursor` to the maximum of every
+   authenticated physical position. If the fabricated duplicate becomes the earliest position while
+   the result is non-terminal, that position inherits the candidate's block rather than becoming
+   advanceable. Genuinely missing parts may still extend and complete that candidate across a
+   generation boundary.
+3. Completion computes the full digest. A new message advances to `awaiting_order`; a
+   same-ID/different message atomically latches a collision and quarantines the source/chat.
+4. Each route-local scheduler exposes only its earliest unblocked semantic result by
+   `firstIngressCursor`; cursors from another chat or the server-control route are never compared. A
+   later result on the same route may assemble and enter `awaiting_order`, but cannot become that
+   route's head while an earlier position remains blocked. When a route head first becomes eligible,
+   the journal assigns immutable `readyAtJournalSeq` and materializes the common command. One
+   server-wide sequencer chooses the smallest `(readyAtJournalSeq, commandId)` among ready common
+   commands from every source kind and atomically increments
+   `CollaborationServerRecord.nextCommandSeq`. Thus `commandSeq` is unique and definitive within one
+   collaboration server without pretending route-local cursors have a total order. A partial proposal
+   on one route does not block another unless a separately recorded server-scope quarantine applies.
+   The server-control actor receives the same command sequence before it either rejects creation or
+   allocates an admitted target chat.
+5. The decision-reservation transaction records the ordered server decision, freezes the selected
+   target/capability and canonical command-record digest, allocates the exact result preparation and
+   signing reservation, and leaves the ingress in `deciding`. Every complete authenticated semantic
+   proposal, including a rejected unsupported one, receives a `commandId` and `commandSeq`; malformed,
+   incomplete, and colliding input does not. It reserves `viewerProjectionSeq` only for an admitted kind
+   that will actually be projected. An unsupported OpenCode attachment, or any other capability
+   rejection, keeps that sequence null. This transaction creates no source ACK, stored A1 result,
+   result delivery, projection intent, native/nested attempt, or external effect.
+6. After protected-key signing, the signed-result-finalization transaction rechecks the frozen command
+   digest, inserts the immutable common result and exact A1 semantic result, advances the terminal
+   cursor/state, and creates the causal proposal/result outboxes plus first
+   `IngressResultDeliveryRecord`. For a supported admitted action it also creates the selected executor
+   attempt/effect gate and any provisional projection intent; only then may a separate dispatcher try
+   the effect. The reserved viewer sequence orders only the admission receipt/provisional caller
+   display. The final transcript row and `chat_seq` are allocated only when correlated native
+   observation establishes native order; rebuild may move/replace the provisional row without changing
+   its stable result ID. A rejected `action_result.command_seq` still names the ordered proposal.
+   Nothing acknowledges the source or reaches an executor before this finalization commits.
+7. A semantic replay of a terminal record requires a fresh delivery attempt whose own complete part
+   set matches. It creates no command, echo, projection sequence, or native attempt—only an observation
+   plus the one result-delivery outbox row uniquely associated with that observation. Reposting all or
+   part of an already known delivery attempt remains a broker retry at its old cursor—or a host-side
+   `exact_transport_retry` if the broker fabricates a new position—and never re-emits the result.
+8. A collision before or after an earlier terminal success cannot rewrite that result. It creates a
+   blocked collision observation, latches the result, and quarantines the source namespace/chat. No
+   result, mutation, or cursor progress is released through that position until an explicit,
+   auditable `ChannelPositionRecoveryRecord` marks only that position safe to discard. Recovery
+   never rewrites the old result or treats the colliding bytes as applied.
+
+Every physical frame first resolves its externally authenticated `BrokerRouteRecord` and creates one
+`AuthenticatedChannelPositionRecord`, unique on
+`(brokerRouteId, channelGeneration, frameIndex)`. `channelPositionObservationId` is
+`rcp_${base64url(SHA256(str("remote-claw/a1/channel-position/v1") || str(brokerRouteId) ||
+uint(channelGeneration) || uint(frameIndex)))}`. An authenticated inbound frame on a `chat` or
+`server_control` route then creates one `AuthenticatedIngressObservationRecord` whose
+`ingressObservationId` is
+`rio_${base64url(SHA256(str("remote-claw/a1/ingress-observation/v1") ||
+str(channelPositionObservationId)))}`.
+
+The position transaction compares raw bytes before parsing. If the position already exists with the
+same `receivedFrameDigest`, this is exact physical redelivery and returns the stored classification and
+cursor disposition without parsing, decrypting, or mutating again. Different bytes at that cursor
+create a durable `ChannelPositionEquivocationRecord`, latch a route gap/quarantine, and make no semantic
+or cursor progress. The accepted bytes/digest are never overwritten. This applies whether both byte
+strings are valid frames or one is malformed, and survives restart.
+
+For a new position, parsing occurs only after the route/cursor row exists. Before any KDF selection or
+AEAD open, the exact frame identity and server must equal the authenticated route. A `chat` route also
+requires its exact chat ID and rejects `session_announce`, `new_chat`, and
+`chat_creation_result`; a `scope_bus` route accepts only an outbound
+`session_announce`, whose non-null chat ID selects the announced chat only after identity/server
+matching and must belong to the route's server. A `server_control` route requires null chat and accepts
+only inbound `new_chat` under the server-control input key or outbound `chat_creation_result` under
+the server-control output key. A frame transplanted from another machine, server,
+chat, or route—including bus↔control↔chat—is an `invalid` position with
+`validationFailureCode: "route_transplant"` on the selected route; it is never dispatched or decrypted
+according to its own header. The scope bus accepts no inbound semantic proposals.
+
+An outbound position becomes `known_host_output` and immediately advanceable only after both of these
+checks succeed: its certified Ed25519 host signature verifies, and its complete header/digest matches
+the unique durable `HostOutputPartRecord` written before publish. This includes ordinary native
+projections, accepted/action results, fresh A1 catch-up delivery attempts, and discovery announcements.
+Because collaborators possess the shared sealing keys, neither AEAD nor
+`dir: "out"` proves host origin. A pass holder may propose authenticated inbound work, but cannot forge
+a server projection or membership announcement. An unsigned, invalidly signed, unknown, or changed
+outbound frame is blocked and quarantined, never rendered, ignored, or admitted as an inbound proposal.
+Its explicit recovery follows the same audited-discard rule as a collision.
+
+The host first inserts one immutable `HostOutputDeliveryRecord`, unique on
+`(brokerRouteId, deliveryAttemptId)`, for the complete common v2 header and signer policy. Each
+delivery has an immutable foreign key to the already durable semantic decision/native-observation
+outbox intent that authorized it; signing cannot create an orphan output. The signing service binds
+its reservation and stored signature to that parent/part artifact in the same transaction that makes
+the signed part recoverable, before returning a signature or allowing publish. Thus a crash cannot
+leave a valid server-signed frame that the host later classifies as `unknown_outbound`.
+Each
+`HostOutputPartRecord` has that parent as a foreign key and must match its route, machine/server/chat,
+message, attempt, part count, server key generation, signer key, and scope certificate. The host
+allocates each part's salt/nonce once, seals that part once, and persists the complete serialized
+`A1EncryptedFrameV2` bytes in `sealedFrameRef` before publishing. It obtains the signature
+only through the current fenced signing lease and stores the exact key generation, signer ID, signature,
+scope certificate, signature sequence, host-signed-record digest, header, transport digest, and bytes.
+`hostSignedRecordDigest` is SHA-256 of the exact versioned host-signature payload from
+[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow).
+`HostOutputPartRecord` is unique on both
+`(brokerRouteId, deliveryAttemptId, part)` and `(hostOutputDeliveryId, part)`; every header field,
+`parts`, digest, sealed bytes, signer coordinate, and signature is immutable. A conflicting local
+insert quarantines the route.
+
+After exactly one immutable row exists for every index `0..parts-1`, compute
+`completePartVectorDigest = SHA256(str("remote-claw/a1/host-output-part-vector/v1") ||
+str(hostOutputDeliveryId) || uint(parts) || bytes(base64urlDecode(hostSignedRecordDigest[0])) ||
+bytes(base64urlDecode(transportFrameDigest[0])) || ... ||
+bytes(base64urlDecode(hostSignedRecordDigest[parts-1])) ||
+bytes(base64urlDecode(transportFrameDigest[parts-1])))` in index order. Every digest is canonical
+unpadded base64url of exactly 32 bytes. One compare-and-swap moves the parent from
+`preparing` to `ready` and stores that digest. Missing, extra, duplicate, re-ordered, or
+header-inconsistent siblings quarantine the parent and route. No part may publish before the parent is
+`ready`; publish/recovery rechecks the exact parent and complete vector, then advances the parent and
+parts together. This prevents a crash or conflicting sibling from exposing a mixed multipart output.
+
+Every retry of that output row—including after a crash where publish may
+have committed but its response was lost—reuses those bytes exactly; re-sealing or re-signing under the
+same `deliveryAttemptId` is forbidden. The sealed bytes remain until the durable broker receipt and
+matching channel-position observation are committed. Only then, and only while the broker's
+route-wide cursor/digest tombstone remains live, may `sealedFrameRef` become null. Multipart native
+output, catch-up, and result delivery follow the same rule.
+
+The position row is created from the broker-authenticated route/cursor before frame parsing or AEAD
+open. `receivedFrameDigest` is unpadded-base64url SHA-256 of the exact received frame bytes;
+`normalizedTransportFrameDigest` exists only after the exact v2 object validates. Duplicate JSON
+members, bad encodings/lengths, unknown kinds, wrong planes, and failed AEAD become immutable
+`invalid` positions with a versioned failure code and no ingress/result link. In one transaction, the
+coordinator records an explicit recovery gap, quarantines the channel, and marks that physical
+position advanceable as a terminal no-mutation rejection. This avoids an unrepresentable cursor hole,
+but later valid proposals may only assemble or buffer—not enter decision or native delivery—until
+explicit recovery resolves the quarantine. No semantic acknowledgement is emitted for the invalid
+frame.
+
+The parsed header fields on an invalid position are nullable because duplicate, missing, or wrong-type
+members have no canonical value; an implementation must not choose a first or last duplicate merely to
+fill them. Every non-`invalid` classification requires all header fields and
+`normalizedTransportFrameDigest` to be non-null and fully validated.
+
+Resolving that gap requires a current-epoch `ChannelPositionRecoveryRecord` with the matching
+`brokerRouteId`, `reason: "invalid_frame"`, and evidence for either safe discard or source closure. The transaction
+links the recovery to the invalid position, resolves its gap, and clears channel quarantine only when
+no unresolved gap/collision remains. Buffered valid proposals then re-enter the ordinary
+first-ingress order; they never overtake the invalid position before that transition.
+
+`IngressResultDeliveryRecord` is unique on `(ingressResultId, triggerIngressObservationId)`;
+`resultDeliveryId` is
+`rrd_${base64url(SHA256(str("remote-claw/a1/result-delivery/v1") || str(ingressResultId) ||
+str(triggerIngressObservationId)))}`. Its random `deliveryAttemptId` is allocated once in the same
+transaction. Redelivery of one committed broker cursor after a crash therefore finds the same
+observation and outbox row rather than creating a fresh result delivery on every restart.
+
+`EncryptedChannelCursorRecord` advances only across a contiguous prefix of channel-position
+observations with `cursorDisposition: "advanceable"`. A matched host output, terminal invalid-frame
+rejection, terminal inbound success, complete exact replay, bounded incomplete expiry, and a late part
+linked to an already terminal tombstone can become advanceable. A collision or unknown outbound
+position is blocked even if it references an otherwise terminal result; only explicit recovery can
+change that observation's cursor disposition. A crash in `assembling` resumes the bounded group or
+expires it; a crash in
+`awaiting_order` preserves its place; a crash in `deciding` resumes the journaled decision; a crash
+after the terminal transaction only drains its outbox. Thus restart cannot convert pending into new,
+lose a terminal result, overtake an earlier multipart proposal, or execute a duplicate.
+
+`BrokerChannelCursorV1` is an exact physical coordinate within one `BrokerRouteRecord`, not an opaque
+or globally meaningful string. For every scope-bus, server-control, or chat route, the A1 broker assigns
+`frameIndex = 0, 1, ...` transactionally to newly inserted frames within `channelGeneration`; every
+frame or multipart part occupies one index. The coordinator resolves a chat or server-control route's
+authenticated web outside-binding/source namespace before semantic adjudication; official and nested
+connectors retain their separate ingress domains. The scope bus has its own cursor/quarantine actor and
+never enters semantic ingress. The durable broker's route-wide
+`(route token, deliveryAttemptId, part)` row owns one immutable cursor. An exact transport retry returns
+that cursor even after rollover; changed normalized frame bytes under the same key fail closed as a
+transport collision and create no position. A semantic retry has a fresh delivery attempt and
+therefore new positions.
+
+Generation closure atomically seals `BrokerChannelGenerationRecord.frameCount`,
+`nextGeneration = channelGeneration + 1`, and the canonical manifest digest before that next
+generation accepts a frame; indices restart at zero there. The first accepted sealed
+`(brokerRouteId, generation, frameCount, nextGeneration, state)` tuple is immutable. An exact duplicate
+manifest is idempotent. A changed count/state/successor creates a durable
+`BrokerChannelManifestEquivocationRecord`, latches a route gap/quarantine, and never rewrites ordering.
+Likewise, a frame observed at `frameIndex >= frameCount` in a sealed generation is manifest
+equivocation, not an append. A conflicting attempt to reopen the sealed generation has
+`conflictingManifestDigest: null`; `conflictingObservationDigest` always hashes the exact received
+manifest/transition evidence, so the conflict remains representable. Empty sealed generations have
+`frameCount = 0` and remain in the manifest chain.
+An open generation has null `frameCount`, `nextGeneration`, and `manifestDigest`; a sealed generation
+has all three non-null, `nextGeneration === channelGeneration + 1`, and non-negative safe-integer
+counts. The sealed digest is unpadded-base64url SHA-256 of these exact bytes:
+
+```text
+str("remote-claw/a1/broker-generation-manifest/v1")
+str(brokerRouteId)
+uint(channelGeneration)
+uint(frameCount)
+uint(nextGeneration)
+str("sealed")
+```
+
+No open-state digest is accepted or compared as a sealed manifest.
+Cursors order lexicographically by `(channelGeneration, frameIndex)`. Within a generation, the
+successor of `(g, i)` is `(g, i+1)` while `i+1 < frameCount`; after the last frame, the sealed manifest
+points to `(g+1, 0)` or across any explicitly recorded empty generations. An open generation has no
+claimed successor beyond its current last inserted index. The same durable broker transaction that
+seals generation `g` creates the unique `g+1` manifest row or proves it already exists, so concurrent
+publishers cannot fork or renumber the chain. A crash after seal but before the coordinator consumes
+the final old frame resumes by durable `(channelGeneration, frameIndex)` cursor and drains through the
+stored `frameCount` before reading its successor. After every supported recovery lease has passed a
+scope-bus generation and its signed successor checkpoint is durable, that discovery-only ciphertext
+may be compacted. Chat- and server-control-route ciphertext remain retained from genesis. Selected A1 never deletes the
+sealed-generation manifest, cursor/digest tombstone, or immutable ordering coordinates.
+
+Subscribe returns each frame with its `brokerRouteId`/cursor plus every intervening sealed-generation
+manifest for that same route. The scope-bus-only cold form may additionally return the separate signed
+checkpoint metadata described above.
+The coordinator buffers out-of-order positions and never infers a missing successor from wall time,
+frame count sampled at startup, or a newer generation alone. A partial multipart candidate blocks the
+contiguous high-water mark at its earliest unresolved part; subsequent observations may be durably
+classified or assembled but cannot be decided or offered inward ahead of it. Exact completion or
+bounded terminal expiry can unblock that position. Collision does not: it remains a cursor hole until
+explicit recovery records a safe discard. One local transaction then advances across the longest
+advanceable prefix. For example, if part 0 of proposal A arrives, complete proposal B arrives, and then
+the rest of A arrives or A expires, B waits in `awaiting_order` and never overtakes A. A broker can
+still withhold data and cause availability loss, but cannot make a skipped cursor become a second
+semantic command because full-scope source adjudication remains mandatory.
+
+The semantic result and its transport delivery have separate identities. The initial signed-result
+finalization atomically enqueues the first durable `IngressResultDeliveryRecord`; each later exact-replay
+observation owns one distinct row and random `deliveryAttemptId`. Retries of that outbox item reuse the
+stored delivery ID, while a later ingress observation gets another one. Its A1 frame uses the stable
+semantic result ID as `msgId` and the fresh delivery ID for broker uniqueness.
+
+The encrypted UTF-8 JSON result payload has one of two exact shapes; it is compact (no insignificant
+whitespace), and keys are emitted in the shown order with no extra fields:
+
+```ts
+type A1ProjectionAcceptedPayload = {
+  v: 1;
+  result_id: string;
+  client_msg_id: string;
+  seq: number; // exactly viewerProjectionSeq
+};
+
+type A1ActionResultPayload = {
+  v: 1;
+  result_id: string;
+  source_msg_id: string;
+  source_record_kind: string;
+  decision: "admitted" | "queued" | "rejected";
+  command_seq: number | null;
+};
+
+type A1ChatCreationResultPayload = {
+  v: 1;
+  result_id: string;
+  source_msg_id: string;
+  decision: "admitted" | "rejected";
+  target_logical_chat_id: string | null;
+  command_seq: number;
+};
+```
+
+Every variable string in these payloads is an A1 safe ID matching `[A-Za-z0-9._:-]+`; the other strings
+are the fixed literals shown above. Quotes, backslashes, controls, non-ASCII, optional slash escaping,
+and any alternative spelling are rejected rather than escaped or normalized, so the compact bytes are
+unique. Payload `v` is exactly the token `1`. `seq` and non-null `command_seq` use the canonical non-negative safe-integer token
+`0|[1-9][0-9]*`, at most `2^53−1`; signs, leading zeroes, fractions, and exponents are rejected.
+Null `command_seq` is exactly the token `null`.
+
+The third shape is used only as host-signed `record_kind: "chat_creation_result"` on the
+`server_control` route. On `admitted`, `target_logical_chat_id` and `command_seq` are both non-null and
+name the exact stored target/command; on `rejected`, the target is null while `command_seq` still names
+the server-ordered decision. Its null spelling is the literal `null`, and a non-null chat ID obeys the
+exact A1 `rcl_` encoding. The decision-reservation transaction allocates the target
+`LogicalChatRecord(state: "recovering")`, its chat `BrokerRouteRecord` plus open genesis, the frozen
+selected executor, and the common result preparation; it creates no output, attempt, or effect gate.
+After the signature is retained, finalization inserts the common/A1 results and output intent plus
+exactly one selected-executor arm. A terminal-native arm creates the starting native binding and native
+creation reservation/effect gate; a nested-server arm creates no native binding and creates the nested
+management attempt/effect gate. Only that finalization may announce the recovering row. The terminal arm becomes ready
+only with its positive native bind; the nested arm becomes ready only after target-ready/root proof,
+two-party edge installation, and a current live lease. Rejection or terminal uncertainty changes it
+to `quarantined`. Exact result replay returns the byte-identical target and never allocates, announces,
+posts, or sends inward again.
+
+An admitted `user` or `attachment` proposal uses meta `record_kind: "accepted"` and the first shape.
+Every queued/rejected proposal, and every admitted control other than `attachment`, uses meta
+`record_kind: "action_result"` and the second. For an admitted attachment, semantic validation performs
+no file write. Admission additionally requires the command's exact
+`remote-claw/command-payload/attachment/v1` manifest, item-vector, and retained content bytes plus a
+target family capability naming that same common schema; an adapter-shaped JSON blob or an
+`unsupported_recognized` payload can never produce `accepted`. Its decision-reservation transaction
+allocates one viewer-projection sequence and
+freezes the decision. Only signed-result finalization creates the exact retained `accepted` payload,
+one user attachment projection intent, and its write-ahead-fenced native attempt. A later dispatcher
+writes the files and offers the prompt. Exact replay only redelivers the stored result: it does
+not write another file, allocate another projection/sequence, or start another native attempt. Changed
+attachment bytes under the same semantic ID are a collision. Both payload shapes are coordinator
+admission/order results, not proof that the native harness applied a mutation.
+`storedSemanticResultRef` names exactly one retained payload. Broker uniqueness can suppress a
+transport retry of one envelope without suppressing the next observation's delivery, and clients fold
+all such envelopes by stable `result_id`. Reposting the original deterministic A0 `accepted-*` message
+ID is explicitly forbidden.
+
+The paired schema ID and `storedSemanticResultDigest` are immutable and equal SHA-256 of
+`str("remote-claw/a1/stored-semantic-result/v1") || str(storedSemanticResultSchemaId) ||
+bytes(exactCompactUtf8Payload)`. Every `IngressResultDeliveryRecord` repeats that schema/digest;
+its encrypted-payload digest covers the retained sealed bytes, and decrypting them under the selected
+route/plane must reproduce the exact stored plaintext digest before publish or replay. A ref
+substitution or changed result bytes under one `stableSemanticResultId` quarantines the route.
 
 `NativeTransportAttachment` and `NativeTransportLease` describe remote-claw's one collaboration
 attachment to the native harness, not the person's TUI connection or the inference connector. The
 client-facing endpoint and `InferenceConnectorLease` are supervised by the native runtime owner so a
 collaboration-coordinator restart does not tear down local work.
+
+Before a decision can admit a native mutation, the transaction must pin the current immutable
+`NativeBindingCapabilitySnapshot` for the exact binding, native incarnation, attachment lease, engine
+version, and exact `NativeMutationFamilyCapability`. That family entry fixes the native route,
+canonical request, transport-receipt meaning, action-ID requirement, positive read-back,
+positive-never-started, source-causality, and proof tuple for this one family; no text, compact, abort,
+permission, creation, or future-control family inherits another family's evidence rules. The runtime owner—not the collaboration
+coordinator—attests that local snapshot from retained proof for the installed tuple. Missing, stale,
+superseded, downgraded, or family-incomplete snapshots deterministically reject before a user
+projection or native attempt. Recovery after an adapter/server upgrade may finish an old attempt only
+under its pinned historical snapshot; if that implementation is unavailable, it quarantines instead of
+reinterpreting the request under new rules.
+
+Capability generation is monotonic within one attachment lease. Installation atomically
+compare-and-swaps `NativeTransportLease.currentCapabilitySnapshotId`, marks the prior snapshot
+superseded, and makes exactly one snapshot current; withdrawal may instead revoke it and clear the
+pointer. The decision and the pre-send attempt claim both revalidate that pointer, lease, incarnation,
+and coordinator fence. Once an attempt is `started`, recovery keeps its historical schema only to
+observe/contain that attempt; it does not make the old capability writable for another command.
+
+Each family appears at most once and is ordered by the closed `NativeMutationFamily` declaration above.
+Its `capabilityFamilyDigest` is unpadded-base64url SHA-256 of:
+
+```text
+str("remote-claw/native-mutation-family-capability/v1")
+str(mutationFamily)
+str(capabilityScope)
+str(canonicalCommandPayloadSchemaId)
+str(nativeRequestTranslatorSchemaId)
+bytes(base64urlDecode(nativeRequestTranslatorImplementationDigest))
+bytes(base64urlDecode(nativeRequestTranslatorBuildManifestDigest))
+bytes(base64urlDecode(nativeRequestTranslatorDigest))
+bytes(base64urlDecode(translationInjectivityProofDigest))
+bytes(base64urlDecode(manifestEntryDigest))
+bytes(base64urlDecode(nativeOperationCoordinateDigest))
+str(nativeMethod)
+str(nativeRouteSchemaId)
+str(canonicalQuerySchemaId)
+str(canonicalHeaderSchemaId)
+str(canonicalBodySchemaId)
+str(targetScope)
+str(canonicalRequestSchemaId)
+str(transportReceiptSemantics)
+str(nativeActionIdRequirement)
+str(positiveReadBackSchemaId)
+optionalStr(positiveNeverStartedSchemaId)
+str(sourceCausality)
+bytes(base64urlDecode(proofTupleDigest))
+bytes(base64urlDecode(evidenceDigest))
+```
+
+`nativeRequestTranslatorDigest` is SHA-256 of
+`str("remote-claw/native-request-translator/v1") || str(canonicalCommandPayloadSchemaId) ||
+str(nativeRequestTranslatorSchemaId) ||
+bytes(base64urlDecode(nativeRequestTranslatorImplementationDigest)) ||
+bytes(base64urlDecode(nativeRequestTranslatorBuildManifestDigest)) ||
+str(canonicalRequestSchemaId) || bytes(base64urlDecode(translationInjectivityProofDigest))`.
+The retained injectivity proof establishes that distinct common payload bytes or allowed generated
+coordinate bytes cannot yield one identical native request/path pair. A many-to-one translator,
+unretained implementation/build, or source of native bytes outside that closed input is not writable.
+The retained family evidence supplies `evidenceDigest`; refs are only local locators.
+`familyCapabilityVectorDigest` is SHA-256 of
+`str("remote-claw/native-mutation-family-vector/v1") || uint(count)`, followed by each
+`bytes(base64urlDecode(capabilityFamilyDigest))` in that fixed enum order. Duplicate, unknown, or reordered families,
+wrong digest lengths, and two entries that claim the same mutation route are invalid. The decision,
+attempt, and last-hop dispatch all recompute and pin the identical family digest.
+
+The snapshot-level proof tuple is SHA-256 of:
+
+```text
+str("remote-claw/native-capability-proof-tuple/v1") ||
+str(descriptor.product) || str(descriptor.access) || str(engineVersion) ||
+str(nativeSurfaceSchemaId) || bytes(base64urlDecode(nativeSurfaceSchemaDigest)) ||
+bytes(base64urlDecode(nativeListenerRouteManifestDigest)) ||
+bytes(base64urlDecode(runtimeIsolationAttestationDigest)) ||
+bytes(base64urlDecode(operationClassificationVectorDigest)) ||
+bytes(base64urlDecode(familyCapabilityVectorDigest)) ||
+optionalStr(slashCommandNormalizationSchemaId) ||
+optionalDigest(slashCommandNormalizationImplementationDigest) ||
+optionalDigest(slashCommandTableDigest) || bytes(base64urlDecode(evidenceDigest))
+```
+
+The three slash fields are present only for a binding snapshot and absent for a server snapshot.
+`proofTupleDigest` must recompute from the exact retained manifest, isolation, operation, family,
+slash-table, and evidence refs. A native binary/surface change flows through those measured records and
+changes this tuple.
+
+The binding snapshot's `canonicalSnapshotDigest` is SHA-256 of:
+
+```text
+str(canonicalSnapshotSchemaId) || uint(schemaVersion) || str(capabilitySnapshotId) ||
+str(nativeBindingId) || str(runtimeId) || uint(nativeIncarnation) ||
+str(attachmentLeaseId) || uint(capabilityGeneration) ||
+str(descriptor.product) || str(descriptor.access) || str(engineVersion) ||
+str(nativeSurfaceSchemaId) || bytes(base64urlDecode(nativeSurfaceSchemaDigest)) ||
+bytes(base64urlDecode(nativeListenerRouteManifestDigest)) ||
+bytes(base64urlDecode(runtimeIsolationAttestationDigest)) ||
+bytes(base64urlDecode(operationClassificationVectorDigest)) ||
+bytes(base64urlDecode(familyCapabilityVectorDigest)) ||
+str(slashCommandNormalizationSchemaId) ||
+bytes(base64urlDecode(slashCommandNormalizationImplementationDigest)) ||
+bytes(base64urlDecode(slashCommandTableDigest)) ||
+bytes(base64urlDecode(proofTupleDigest)) || bytes(base64urlDecode(evidenceDigest)) ||
+uint(verifiedAtMs)
+```
+
+The server snapshot uses:
+
+```text
+str(canonicalSnapshotSchemaId) || uint(schemaVersion) || str(serverCapabilitySnapshotId) ||
+str(runtimeId) || uint(nativeIncarnation) || str(nativeServerAttachmentLeaseId) ||
+uint(capabilityGeneration) || str(descriptor.product) || str(descriptor.access) ||
+str(engineVersion) || str(nativeSurfaceSchemaId) ||
+bytes(base64urlDecode(nativeSurfaceSchemaDigest)) ||
+bytes(base64urlDecode(nativeListenerRouteManifestDigest)) ||
+bytes(base64urlDecode(runtimeIsolationAttestationDigest)) ||
+bytes(base64urlDecode(operationClassificationVectorDigest)) ||
+bytes(base64urlDecode(familyCapabilityVectorDigest)) ||
+bytes(base64urlDecode(proofTupleDigest)) || bytes(base64urlDecode(evidenceDigest)) ||
+uint(verifiedAtMs)
+```
+
+Lifecycle `state` and attestation locator/signature fields are excluded. The runtime owner signs one
+`NativeCapabilitySnapshotAttestation` whose payload is:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(capabilitySnapshotAttestationId) || str(snapshotKind) || str(snapshotId) ||
+str(canonicalSnapshotSchemaId) || bytes(base64urlDecode(canonicalSnapshotDigest)) ||
+str(runtimeId) || uint(nativeIncarnation) || str(runtimeOwnerIdentityKeyId) ||
+uint(runtimeOwnerKeyGeneration) || uint(signerSequence) || uint(issuedAtMs)
+```
+
+Its `canonicalPayloadDigest` is SHA-256 of those bytes and `signedRecordDigest` is SHA-256 of
+`str("remote-claw/native-capability-snapshot-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || str(runtimeOwnerIdentityKeyId) ||
+uint(runtimeOwnerKeyGeneration) || uint(signerSequence) || bytes(base64urlDecode(signature))`.
+The purpose-specific reservation and runtime-owner acceptance row must match before the snapshot
+pointer can become current. For a binding snapshot, `runtimeOwnerAttestationRef` must resolve exactly
+one attestation with `snapshotKind:"binding"`, `snapshotId == capabilitySnapshotId`, the binding
+snapshot schema/digest, and the same runtime/incarnation. For a server snapshot, the corresponding
+values are `snapshotKind:"server"`, `snapshotId == serverCapabilitySnapshotId`, and the server
+snapshot schema/digest. A TUI policy uses `snapshotKind:"tui_policy"`, its TUI policy snapshot
+ID/schema/digest, and the same runtime/incarnation. In every case `runtimeOwnerAttestationDigest` must
+equal the recomputed `signedRecordDigest`; the runtime-owner key generation and signer sequence must be
+accepted under `native_capability_snapshot` for binding/server or `native_tui_policy_snapshot` for
+TUI. Snapshot refs are parsed and every component digest is recomputed; same
+ID with different content, a cross-kind/ref transplant, or a changed attestation is equivocation. A
+decision's native executor evidence and its native attempt/reservation repeat this exact signed-record
+digest. Superseded/revoked snapshots remain readable only for a previously started attempt and cannot
+authorize a new one.
+
+Scope is closed: `new_chat` appears only with `capabilityScope:"server"` in a
+`NativeServerCapabilitySnapshot` and can reach only the creation reservation/server front door.
+Every other family is `binding` and can appear only in a `NativeBindingCapabilitySnapshot` and
+binding-scoped delivery attempt/front door. A lease or snapshot containing the other scope's family is
+invalid; no adapter credential can turn a session route into creation or vice versa.
+
+The operation/family join is reciprocal without a hash cycle. A classification is
+`collaborator_family` if and only if its
+mutation family and family-capability digest are both non-null, its method/route/query/header/body/target
+scope exactly match that family entry, and the family points back to that exact operation-coordinate digest.
+Exactly one collaborator operation may implement a family in one snapshot. Every other classification
+keeps both fields null; `runtime_management` cannot become writable until a separate runtime-management
+capability schema exists. `proved_read` requires retained proof and is never inferred from the HTTP
+verb. `tuiPolicy:"pass"` is valid only for `proved_read`, `tui_only`, or a native operation explicitly
+proved safe on the TUI seam; `virtualize` requires a pinned virtualization entry; `reject` forwards
+nothing. Those three values are valid only when the manifest entry has `frontDoorKind:"tui"`.
+Observer, binding-adapter, and server-creation entries require `not_applicable`; no policy value can
+make one seam callable from another. Initial A2 permits no `virtualize` entry: the policy uses
+`virtualizationSchemaId:"none"`,
+null vector ref, and
+`virtualizationPolicyDigest = SHA256(str("remote-claw/native-tui-virtualization-vector/v1") ||
+uint(0))`. Exact credential-free provider/auth/config reads may be `tui_only`/`pass` only from the
+sealed synthetic runtime view described in §9.3; their retained proof covers the exact response
+schema and redaction. Provider/auth/config mutations are explicit `reject` with a pinned unsupported response.
+The immutable unsupported-response vector contains one `NativeTuiUnsupportedResponseItem` per rejected
+TUI operation, ordered by manifest position. Its digest is SHA-256 of
+`str("remote-claw/native-tui-unsupported-response-vector/v1") || uint(count)` followed by
+`bytes(base64urlDecode(operationEntryDigest)) || uint(statusCode) ||
+str(canonicalHeaderSchemaId) || bytes(base64urlDecode(canonicalHeaderDigest)) ||
+str(canonicalBodySchemaId) || bytes(base64urlDecode(canonicalBodyDigest))` for every item.
+The refs retain the exact credential-free header/body bytes and must recompute those digests. The
+TUI read-policy vector contains one `NativeTuiReadPolicyItem` for every passed TUI read, in manifest
+order. Its digest is SHA-256 of
+`str("remote-claw/native-tui-read-policy-vector/v1") || uint(count)` followed by
+`bytes(base64urlDecode(operationEntryDigest)) || str(canonicalQueryScopeSchemaId) ||
+str(responseParserSchemaId) || str(responseSchemaId) || str(redactionSchemaId) || str(dataSource) ||
+str(nativeWorkspaceBindingId) || bytes(base64urlDecode(evidenceDigest))`. The retained evidence proves
+the exact query/workspace scoping, parser, response schema, secret redaction, and either sealed
+synthetic source or native state source. Prefix- or verb-wide policy is invalid.
+
+The TUI-policy proof tuple commits to the virtualization, unsupported-response, and read-policy vector
+digests. Startup compares every rejected operation to exactly one response item and every passed read
+to exactly one read-policy item. A missing, extra, or generic catch-all entry invalidates the policy.
+Future virtualization requires a separate entry
+schema binding operation, connector action, response/events, custody/redaction, and write-ahead
+recovery before this enum arm becomes valid. Any inconsistent combination invalidates the whole
+snapshot.
+
+The proof tuple is exactly SHA-256 of:
+
+```text
+str("remote-claw/native-tui-policy-proof-tuple/v1") ||
+bytes(base64urlDecode(nativeListenerRouteManifestDigest)) ||
+bytes(base64urlDecode(runtimeIsolationAttestationDigest)) ||
+bytes(base64urlDecode(operationClassificationVectorDigest)) ||
+str(virtualizationSchemaId) || optionalDigest(virtualizationVectorDigest) ||
+bytes(base64urlDecode(virtualizationPolicyDigest)) ||
+str(unsupportedResponseSchemaId) ||
+bytes(base64urlDecode(unsupportedResponseVectorDigest)) ||
+bytes(base64urlDecode(tuiReadPolicyVectorDigest)) ||
+bytes(base64urlDecode(evidenceDigest))
+```
+
+For the version-one `none` arm, `virtualizationVectorDigest` is null, while the separately committed
+empty-vector `virtualizationPolicyDigest` has the value above. The TUI snapshot's
+`canonicalSnapshotDigest` is SHA-256 of:
+
+```text
+str(canonicalSnapshotSchemaId) || uint(schemaVersion) || str(tuiPolicySnapshotId) ||
+str(runtimeId) || uint(nativeIncarnation) || str(nativeServerAttachmentLeaseId) ||
+uint(policyGeneration) || str(descriptor.product) || str(descriptor.access) ||
+str(engineVersion) || str(nativeSurfaceSchemaId) ||
+bytes(base64urlDecode(nativeSurfaceSchemaDigest)) ||
+bytes(base64urlDecode(nativeListenerRouteManifestDigest)) ||
+bytes(base64urlDecode(runtimeIsolationAttestationDigest)) ||
+bytes(base64urlDecode(operationClassificationVectorDigest)) ||
+str(virtualizationSchemaId) || optionalDigest(virtualizationVectorDigest) ||
+bytes(base64urlDecode(virtualizationPolicyDigest)) ||
+str(unsupportedResponseSchemaId) ||
+bytes(base64urlDecode(unsupportedResponseVectorDigest)) ||
+bytes(base64urlDecode(tuiReadPolicyVectorDigest)) ||
+bytes(base64urlDecode(proofTupleDigest)) || bytes(base64urlDecode(evidenceDigest)) ||
+uint(verifiedAtMs)
+```
+
+Lifecycle state and attestation locator/signature fields are excluded. The runtime-owner attestation
+must resolve to `snapshotKind:"tui_policy"`, this snapshot ID, schema, digest, runtime, and incarnation;
+`runtimeOwnerAttestationDigest` must equal its recomputed signed-record digest. Its accepted signature
+reservation has `purpose:"native_tui_policy_snapshot"`. The current process-ingress lease must name
+that exact current policy snapshot and the same runtime, incarnation, server attachment, directory
+path, and workspace-binding digest. A same-ID changed policy, missing ref, wrong kind or purpose,
+attestation transplant, or stale process lease rejects before the TUI front door can pass a request.
+
+The total native-operation table is independently canonical. Its cycle-free
+`operationCoordinateDigest` is SHA-256 of
+`str("remote-claw/native-operation-coordinate/v1") ||
+bytes(base64urlDecode(manifestEntryDigest)) || str(nativeMethod) || str(nativeRouteSchemaId) ||
+str(canonicalQuerySchemaId) || str(canonicalHeaderSchemaId) || str(canonicalBodySchemaId) ||
+str(targetScope) || str(classification) || optionalStr(mutationFamily) || str(tuiPolicy) ||
+optionalStr(workspaceTransitionKind)`.
+`workspaceTransitionKind` is non-null exactly when the operation can change top-level workspace
+identity, active selection, or discovery availability. A TUI `pass` operation has one concrete
+transition kind; `first_bootstrap` is never a TUI kind. The server-creation `new_chat` operation uses
+exactly `from_creation_intent`: its signed common payload/reservation maps `first_bootstrap` to
+transition `first_bootstrap` and `new_chat` to transition `create`. Every other operation has null.
+`NativeWorkspaceTransitionRecord` composite-foreign-keys its `operationEntryDigest` and actual
+`transitionKind` through that closed rule. `source:"direct_tui"` requires all common result fields and
+creation reservation null and a matching concrete TUI kind.
+`source:"server_control"` requires the admitted-result/command/decision tuple and creation reservation
+to match, plus the `from_creation_intent` operation. Missing/wrong kind, a fixed `create` substituted
+for the discriminator, or an identity-changing route classified null rejects before the raw listener.
+The manifest entry must exist exactly once in the pinned listener manifest, and every manifest entry
+must have exactly one classification; this distinguishes an HTTP route from a raw/upgrade handler at
+the same path. The `operationEntryDigest` is SHA-256 of
+`str("remote-claw/native-operation-classification/v1") ||
+bytes(base64urlDecode(operationCoordinateDigest)) ||
+optionalDigest(familyCapabilityDigest)`. A family hashes only the
+coordinate digest; the operation entry then hashes the completed family digest. Entries follow their
+manifest positions, and the raw tuple `(manifestEntryDigest, method, route schema, query schema,
+header schema, body schema, target scope)` is unique. Native fallback/API overlap is allowed only when
+the manifest's measured transport, normalization, priority, registration-order, and fallback rules
+select one deterministic entry; equal or ambiguous resolution is invalid. The vector digest is
+SHA-256 of `str("remote-claw/native-operation-classification-vector/v1") || uint(count)` followed by
+each `bytes(base64urlDecode(operationEntryDigest))` in that order. The pinned listener-route manifest
+is the complete generated registry of routes callable through a remote-claw front door: the explicitly
+exposed target-schema operations plus wrapper raw/catch-all/upgrade/fallback handlers. For OpenCode
+the target schema is OpenAPI, but unexposed native routes need not be copied into the registry because
+the private native listener has no other network path. Every manifest operation appears once, and
+every table entry resolves to one manifest operation. Deletion, addition,
+reclassification, or ambiguity changes the vector and holds startup non-writable.
+
+Every digest in these formulas is canonical unpadded base64url decoding to exactly 32 bytes.
+`optionalDigest(null)` is `0x00`; a present digest is
+`0x01 || bytes(base64urlDecode(value))`. Padding, aliases, and wrong lengths fail snapshot validation.
+
+Each listener manifest entry digest excludes its own digest field and is SHA-256 of
+`str("remote-claw/native-listener-route-entry/v1") || str(frontDoorKind) ||
+bytes(base64urlDecode(frontDoorListenerIdentityDigest)) ||
+bytes(base64urlDecode(authorizationHandlerIdentityDigest)) || str(source) || str(transport) ||
+str(nativeMethod) || str(canonicalPathTemplate) || str(routeParserSchemaId) ||
+str(pathNormalizationSchemaId) || str(queryParserSchemaId) || str(headerParserSchemaId) ||
+str(bodyParserSchemaId) || bytes(base64urlDecode(handlerIdentityDigest)) ||
+uint(registrationOrder) || uint(matchPriority) || str(fallbackOnly ? "true" : "false")`. The manifest digest is
+SHA-256 of:
+
+```text
+str("remote-claw/native-listener-route-manifest/v1")
+str(descriptor.product)
+str(descriptor.access)
+str(engineVersion)
+bytes(base64urlDecode(nativeBinaryDigest))
+bytes(base64urlDecode(frontDoorBinaryDigest))
+bytes(base64urlDecode(frontDoorBuildManifestDigest))
+str(surfaceSchemaKind)
+bytes(base64urlDecode(generatedSurfaceSchemaDigest))
+bytes(base64urlDecode(buildRouteRegistryDigest))
+str(routeResolutionSchemaId)
+bytes(base64urlDecode(runtimeRegistrationAttestationDigest))
+uint(orderedEntryDigests.length)
+for digest in orderedEntryDigests:
+  bytes(base64urlDecode(digest))
+```
+
+For selected A2, `routeResolutionSchemaId` is
+`remote-claw/native-listener-route-resolution/v1`. After the pinned parsers canonicalize a request,
+candidates must belong to the listener's exact `frontDoorKind` and identity and have the same
+transport and exact method; method override is never applied. The authorization-handler identity is
+part of every entry, so moving `/global/event`, `GET /session`, or `POST /session` between TUI,
+observer, adapter, or creation audiences changes the manifest.
+Non-fallback candidates precede fallback candidates, greater `matchPriority` precedes lower, and lower
+`registrationOrder` precedes higher. A tie after those keys is invalid rather than broken by source
+text or hash. An Upgrade request is considered only in the `websocket` transport set, so it cannot
+fall through to an HTTP route. `orderedEntryDigests` is the resulting actual dispatch traversal order,
+not lexical order.
+
+The build registry is generated from the wrapper front-door registration DSL and compiled into the
+front-door binary; startup instrumentation walks that same live registry and attests it contains
+exactly the generated set—no hidden front-door route, catch-all, or upgrade and no missing handler. A
+hand-maintained inventory or `/doc` scrape is insufficient. The private native destination is
+reachable only from those generated handlers. Any exposed entry, parser, normalization rule,
+authorization/target handler identity, pinned native binary/schema, registration, or ordering
+difference changes the digest and prevents a capability snapshot from becoming current.
+
+`frontDoorBuildManifestRef` retains the deterministic build's exact route-to-module/symbol/dependency
+closure and recomputes `frontDoorBuildManifestDigest`; `frontDoorBinaryDigest` covers the executable
+bundle that serves the sockets. For each entry:
+
+```text
+frontDoorListenerIdentityDigest =
+  SHA256(str("remote-claw/front-door-listener-identity/v1") ||
+         bytes(base64urlDecode(frontDoorBinaryDigest)) || str(frontDoorKind) ||
+         bytes(canonicalListenerModuleSymbolAndDependencyClosure))
+
+authorizationHandlerIdentityDigest =
+  SHA256(str("remote-claw/front-door-authorization-handler/v1") ||
+         bytes(base64urlDecode(frontDoorBinaryDigest)) || str(frontDoorKind) ||
+         bytes(canonicalAuthorizationModuleSymbolAndDependencyClosure))
+
+handlerIdentityDigest =
+  SHA256(str("remote-claw/front-door-target-handler/v1") ||
+         bytes(base64urlDecode(frontDoorBinaryDigest)) ||
+         bytes(canonicalTargetHandlerModuleSymbolAndDependencyClosure))
+```
+
+The build manifest supplies those canonical bytes and the startup attestation binds both build and
+binary digests. Labels, source paths, or function names without artifact/dependency bytes do not
+qualify.
+
+`orderedEntryVectorDigest` is SHA-256 of
+`str("remote-claw/native-listener-entry-vector/v1") || uint(count)` followed by each canonical
+32-byte-decoded `manifestEntryDigest` in the manifest order. `measuredDispatchTableDigest` is SHA-256
+of `str("remote-claw/native-listener-measured-dispatch/v1") || uint(count)`, followed for each live
+front-door registration—in actual dispatch traversal order—by the complete listener-entry preimage fields above,
+including transport, parser/normalization/handler identity, registration order, priority, and fallback
+flag. Startup retains that measured item vector, recomputes its entry digests, and requires exact
+item-for-item and order equality with the build registry/manifest vector before signing; digest
+comparison alone is not used to paper over a mismatch.
+
+The runtime registration attestation is signed by the current runtime-owner key using its fenced
+sequence ledger. Its cycle-free canonical payload is:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(runtimeId)
+uint(nativeIncarnation)
+str(descriptor.product)
+str(descriptor.access)
+str(engineVersion)
+bytes(base64urlDecode(nativeBinaryDigest))
+bytes(base64urlDecode(frontDoorBinaryDigest))
+bytes(base64urlDecode(frontDoorBuildManifestDigest))
+str(surfaceSchemaKind)
+bytes(base64urlDecode(generatedSurfaceSchemaDigest))
+bytes(base64urlDecode(buildRouteRegistryDigest))
+str(routeResolutionSchemaId)
+bytes(base64urlDecode(orderedEntryVectorDigest))
+bytes(base64urlDecode(measuredDispatchTableDigest))
+str(runtimeOwnerIdentityKeyId)
+uint(runtimeOwnerKeyGeneration)
+uint(signerSequence)
+uint(issuedAtMs)
+```
+
+`canonicalPayloadDigest` and signature follow the common runtime-owner rules. The retained
+`runtimeRegistrationAttestationRef` resolves to the complete immutable attestation.
+`runtimeRegistrationAttestationDigest` is unpadded-base64url SHA-256 of
+`str("remote-claw/native-listener-registration-signed-record/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || str(runtimeOwnerIdentityKeyId) ||
+uint(runtimeOwnerKeyGeneration) || uint(signerSequence) || bytes(base64urlDecode(signature))`.
+The signature verifies over the exact canonical payload under that named runtime-owner key, and the
+ref, digest, signer reservation, and acceptance-ledger row must agree byte-for-byte. It does not include the
+final manifest digest; the manifest includes this attestation digest, so there is no cycle. Startup
+produces `measuredDispatchTableDigest` from the instrumented live front-door registry and requires it
+to equal the build registry's expected ordered dispatch semantics before attesting.
+
+The runtime-isolation attestation independently proves that only the four measured front doors can
+reach the raw listener and that only the exact native OpenCode process can reach its provider façade.
+`allowedRawListenerPeerVectorRef` retains exactly four `NativeRuntimeIsolationPeerItem` values in this
+closed role order: TUI, binding adapter, server creation, observer. Each peer item hashes:
+
+```text
+str("remote-claw/native-runtime-isolation-peer/v1") || str(role) || uint(tgid) ||
+bytes(base64urlDecode(pidfdIdentityDigest)) || uint(processStartTimeTicks) ||
+bytes(base64urlDecode(cgroupIdentityDigest)) || bytes(base64urlDecode(executableImageDigest)) ||
+bytes(base64urlDecode(frontDoorBinaryDigest)) ||
+bytes(base64urlDecode(frontDoorBuildManifestDigest)) ||
+bytes(base64urlDecode(runtimeRegistrationAttestationDigest)) ||
+bytes(base64urlDecode(roleManifestEntryVectorDigest)) ||
+bytes(base64urlDecode(authorizationHandlerVectorDigest))
+```
+
+Each peer's two refs are typed, exhaustive vectors rather than opaque evidence. The role-manifest ref
+contains one `NativeRuntimeIsolationRoleManifestItem` for every manifest entry owned by that role,
+ordered by `manifestPosition`; each item digest is SHA-256 of
+`str(canonicalItemSchemaId) || uint(schemaVersion) || str(role) || uint(manifestPosition) ||
+bytes(base64urlDecode(manifestEntryDigest)) || bytes(base64urlDecode(operationEntryDigest)) ||
+bytes(base64urlDecode(handlerIdentityDigest))`. Its vector digest is SHA-256 of
+`str("remote-claw/native-runtime-isolation-role-manifest-vector/v1") || str(role) || uint(count)`
+followed by every decoded item digest. The authorization ref has the identical entry set and order.
+Each `NativeRuntimeIsolationAuthorizationHandlerItem` digest is SHA-256 of
+`str(canonicalItemSchemaId) || uint(schemaVersion) || str(role) || uint(manifestPosition) ||
+bytes(base64urlDecode(operationEntryDigest)) ||
+bytes(base64urlDecode(authorizationHandlerDigest)) ||
+bytes(base64urlDecode(authorizationPolicyDigest))`; its vector uses
+`remote-claw/native-runtime-isolation-authorization-handler-vector/v1`, the role, count, and decoded
+item digests.
+
+The two vectors must have exactly the same `(role,manifestPosition,operationEntryDigest)` keys. Every
+manifest item must resolve to that position and handler in the current listener manifest and
+registration attestation; every authorization item must resolve to the one installed audience- and
+operation-specific authorization handler. Missing, duplicate, reordered, cross-role, additional, or
+same-digest/different-ref content invalidates the peer and therefore the whole isolation attestation.
+
+The vector digest is SHA-256 of
+`str("remote-claw/native-runtime-isolation-peer-vector/v1") || uint(4)` followed by each decoded
+item digest. A missing, duplicate, reordered, or additional peer invalidates the attestation. PID reuse
+does not compare equal because pidfd identity and process start time are both committed.
+
+`providerFacadeAllowedProcessRef` retains exactly one
+`NativeRuntimeIsolationProviderPeer`. Its canonical peer digest is SHA-256 of:
+
+```text
+str(canonicalPeerSchemaId) || uint(schemaVersion) || str(runtimeId) ||
+uint(nativeIncarnation) || uint(tgid) || bytes(base64urlDecode(pidfdIdentityDigest)) ||
+uint(processStartTimeTicks) || bytes(base64urlDecode(cgroupIdentityDigest)) ||
+bytes(base64urlDecode(executableImageDigest)) ||
+bytes(base64urlDecode(providerFacadeSocketIdentityDigest)) ||
+bytes(base64urlDecode(providerFacadePolicyMapEntryDigest)) ||
+bytes(base64urlDecode(descendantDenialPolicyDigest))
+```
+
+The runtime/incarnation and façade socket digest must equal the enclosing attestation. The TGID,
+pidfd/start identity, cgroup, executable, exact installed façade-policy map entry, and descendant
+denial are all live-revalidated; no same-UID, child, or PID-reused process compares equal.
+`providerFacadeAllowedProcessDigest` equals that recomputed peer digest, and
+`providerFacadeExactProcessPolicyDigest` is SHA-256 of
+`str("remote-claw/provider-facade-exact-process-policy/v1") ||
+bytes(base64urlDecode(providerFacadeSocketIdentityDigest)) ||
+bytes(base64urlDecode(providerFacadeAllowedProcessDigest)) ||
+bytes(base64urlDecode(installedPolicyMapDigest)) ||
+bytes(base64urlDecode(descendantDenialPolicyDigest))`. The policy ref must recompute that value and
+name the same exact installed map entry; an opaque evidence digest cannot substitute for the typed
+peer.
+
+The isolation attestation's canonical payload is:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(runtimeIsolationAttestationId) || str(runtimeId) || uint(nativeIncarnation) ||
+str(descriptor.product) || str(descriptor.access) ||
+bytes(base64urlDecode(rawListenerSocketIdentityDigest)) || uint(rawListenerSocketInode) ||
+bytes(base64urlDecode(allowedRawListenerPeerVectorDigest)) ||
+str(processIdentityPolicySchemaId) ||
+bytes(base64urlDecode(attachBeforeRunProgramDigest)) ||
+bytes(base64urlDecode(installedPolicyMapDigest)) ||
+bytes(base64urlDecode(descendantDenialPolicyDigest)) ||
+bytes(base64urlDecode(toolNamespacePolicyDigest)) ||
+bytes(base64urlDecode(providerFacadeSocketIdentityDigest)) ||
+bytes(base64urlDecode(providerFacadeAllowedProcessDigest)) ||
+bytes(base64urlDecode(providerFacadeExactProcessPolicyDigest)) ||
+bytes(base64urlDecode(networkNamespaceDigest)) ||
+bytes(base64urlDecode(mountNamespaceDigest)) ||
+str(runtimeOwnerIdentityKeyId) || uint(runtimeOwnerKeyGeneration) ||
+uint(signerSequence) || uint(issuedAtMs)
+```
+
+`canonicalPayloadDigest` is SHA-256 of those bytes. The current runtime-owner key signs the exact
+bound payload through a `purpose:"runtime_isolation_attestation"` reservation. `signedRecordDigest` is
+SHA-256 of
+`str("remote-claw/native-runtime-isolation-signed-record/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || str(runtimeOwnerIdentityKeyId) ||
+uint(runtimeOwnerKeyGeneration) || uint(signerSequence) || bytes(base64urlDecode(signature))`.
+The reservation and `RuntimeOwnerSignedRecordAcceptanceRecord` must agree before installation.
+
+The socket, process-policy, tool-namespace, provider-peer, and provider-façade evidence refs retain the
+measured installed socket identity/inode, program and policy-map bytes, exact process/pidfd/start-time
+identities, `/proc`/LSM executable image, per-role manifest/authorization entry vectors,
+descendant-denial result, namespace mounts/routes/fd table, and façade listener/rule.
+Startup recomputes every paired digest from those refs and requires the installed kernel policy map to
+equal the attested map item-for-item before any inner or front-door process runs. The raw listener
+allows exactly the four attested TGIDs; the OpenCode server, TUI, and all tool descendants are absent
+from that map. The provider-façade rule allows exactly the attested OpenCode server process and denies
+every descendant and PID reuse.
+
+Every current OpenCode server/binding capability, TUI policy, and observer lease must carry the same
+attestation ref/digest and composite-foreign-key its runtime/incarnation. Their proof tuples include
+that signed digest. A ref that parses to different bytes, changed listener inode, peer, pidfd/start
+time, program/map, network/mount namespace, tool rule, or façade rule revokes those pointers and keeps
+the tuple non-writable. The last-hop front doors revalidate the still-live exact process/socket
+identities; a signature is not permission to keep using a dead or replaced TGID.
+Each peer's binary/build/registration digests must equal the current listener manifest and its
+role-specific entry/authorization vectors. An `exec` under the same TGID changes executable evidence
+and revokes readiness before another request can reach the raw socket.
+
+The measured front-door table is sealed for that native incarnation before readiness. The runtime
+owner interposes every later wrapper route, middleware, plugin, config, upgrade, and fallback
+registration; before a changed handler can serve, it atomically revokes current server/binding
+capabilities, observer lease, and TUI policy, marks bindings non-writable, and advances or quarantines
+the incarnation for a new measurement. A front door that can mutate dispatch without this
+interposition is unsupported. A hidden native handler discovered later remains unreachable; exposing
+it requires a generated manifest entry, total classification, proof, and new policy generation.
+
+`NativeDeliveryAttemptRecord` is the concrete write-ahead boundary between common adjudication and an
+engine adapter. There is exactly one immutable row per
+`(commandId, nativeBindingId, nativeIncarnation)`, and its ID is exactly:
+
+```text
+nativeDeliveryAttemptId =
+  "nat_" || base64url(SHA256(
+    str("remote-claw/native-delivery-attempt-id/v1") ||
+    str(commandId) || str(nativeBindingId) || uint(nativeIncarnation)))
+```
+
+The hash suffix is canonical unpadded base64url SHA-256. A second random or differently derived
+attempt for that tuple is forbidden. The row pins the complete server/chat scope,
+attachment lease, capability snapshot, typed mutation family, engine-native action ID such as
+OpenCode's caller `msg_*`, exact native target-path digest, canonical request digest, expected native
+part count, per-part fingerprint vector, and an immutable credential-stripped reference to the exact
+target/body bytes. Recovery and the front door send those retained bytes; they never reconstruct a
+request from a newer adapter. OpenCode `user_text` requires a non-null caller `msg_*`;
+ID-only read-back is insufficient because the pinned server can append another part under the same ID.
+Every non-null native action ID is unique on
+`(nativeBindingId, nativeIncarnation, nativeActionId)`; a second command that tries to reuse one is a
+collision before dispatch.
+A delivery attempt and its command-wide gate each composite-foreign-key
+`(collaborationServerId,commandId,admittingCommandResultId,canonicalCommandRecordDigest,
+admittingCommandResultSignedRecordDigest)` to the one immutable
+`CollaborationCommandResultRecord(disposition:"admitted")`. Their decision-evidence schema/digest must
+equal the command record. A `decision_reserved`, unsigned, queued, rejected, different-command, or
+different-result row cannot create either record. The gate's `startedAttemptId` must point to an
+attempt carrying that identical whole authorization tuple. The same rule applies to native creation,
+nested creation, and nested chat delivery attempts/effect gates; their executor-specific composite
+foreign keys additionally equal the selected executor-evidence arm. Thus signed admission is necessary
+but cannot be transplanted to another executor.
+A compare-and-swap claims a `prepared` attempt for one current coordinator epoch by moving it to
+`claimed`; claiming alone grants no permission to send. The final transaction described below
+advances it to `started` before the first byte that might mutate the native engine.
+A transport receipt advances only `transport_receipt`. Only exact native read-back under the pinned
+fingerprint schema advances `native_observed`/`completed`; a negative result can become `rejected`.
+After `started`, ambiguity becomes `outcome_unknown` and quarantines later remote writes. Neither
+coordinator replacement nor stored-result replay may allocate or send a second attempt.
+
+The command-wide `NativeCommandEffectGateRecord` prevents a native replacement from becoming a retry
+loophole. The only final pre-write transaction locks the attempt, its unique dispatch row, and the
+unique command gate together. It requires attempt `claimed` by the current coordinator epoch,
+dispatch `not_started` with null start/receipt/outcome fields, gate
+`(never_started,null)` with null outcome fields, no abandonment record, and the entire current
+executor/translation/handle join. In one commit it moves the attempt to `started`, the dispatch to
+`started` with its one start time, and the gate to `(started,nativeDeliveryAttemptId)`. Only after that
+commit may the first socket byte be written. No other path may start any of the three rows.
+
+A prepared attempt stranded by a crash is different from an attempt explicitly abandoned by a
+runtime-local operator request or deliberate shutdown policy:
+
+- Crash recovery may resume only the same immutable attempt, retained request, and one-time dispatch
+  authorization. It requires no committed `NativeBindingPreSendAbandonmentRecord`; attempt state
+  `prepared` or `claimed`; dispatch state `not_started` with null `dispatchStartedAtMs`,
+  `nativeReceiptRef`, and all three outcome-evidence fields; gate state `never_started` with null
+  `startedAttemptId` and all three outcome-evidence fields; no transport receipt, native read-back, or
+  outcome evidence on the attempt; and the exact signed
+  runtime/incarnation/attachment/ingress/capability executor still current.
+  Coordinator fencing may transfer ownership of that row, but it does not allocate a new attempt,
+  request, action ID, handle, or authorization.
+- Explicit pre-send abandonment is one runtime-owner journal transaction. It locks the attempt,
+  dispatch, and command gate; rechecks all of the crash-recovery preconditions above; requires the
+  attempt's unique dispatch row's exact current `canonicalDispatchDigest` and handle; allocates one
+  journal sequence; and inserts one `NativeBindingPreSendAbandonmentRecord`. In that same commit it
+  moves the attempt, dispatch, and gate to `quarantined`; leaves `dispatchStartedAtMs`,
+  `nativeReceiptRef`, `startedAttemptId`, transport receipt, and native read-back null; sets all three
+  `outcomeEvidenceSchemaId` fields to
+  `remote-claw/native-binding-pre-send-abandonment/v1`; sets all three `outcomeEvidenceRef` fields to
+  the exact `nativePreSendAbandonmentId`; and sets all three `outcomeEvidenceDigest` fields to its
+  `canonicalEvidenceDigest`. Before the transaction, each schema/ref/digest triple must be all null;
+  afterward, each is that exact all-non-null triple. The dispatch handle remains immutable but is no
+  longer accepted because the front door accepts only `not_started`.
+
+`explicit_runtime_shutdown` means a deliberate, configured cancellation decision committed before
+shutdown. A disconnect, process death, signal, ordinary graceful restart, or missing record never
+implies abandonment; it leaves the crash-recovery branch above. The quarantine closes this command's
+attempt/dispatch/gate, not the whole binding, so a distinct newly authenticated source event may later
+be adjudicated normally while the binding remains otherwise current. `abandonmentReason` is the
+trusted runtime's local classification of why it committed this transaction; it does not by itself
+attest a human operator identity.
+
+The dispatch CAS and abandonment transaction serialize on these same three rows. If dispatch wins,
+the abandonment preconditions fail without changing any state; if abandonment wins, the front-door
+state check fails before a socket write. A stale precheck cannot commit either transition.
+
+The abandonment record is unique by both `nativePreSendAbandonmentId` and
+`nativeDeliveryAttemptId`. Its ID and authorization-handle digest are:
+
+```text
+nativePreSendAbandonmentId =
+  "npa_" || base64url(SHA256(
+    str("remote-claw/native-binding-pre-send-abandonment-id/v1") ||
+    str(commandId) || str(nativeDeliveryAttemptId)))
+
+dispatchAuthorizationHandleDigest =
+  SHA256(str("remote-claw/native-front-door-dispatch-authorization-handle/v1") ||
+         str(nativeDeliveryAttemptId) || str(dispatchAuthorizationHandle))
+```
+
+The ID's hash suffix and the handle digest are encoded as canonical unpadded base64url SHA-256. Its
+`canonicalEvidenceDigest` is unpadded-base64url SHA-256 of:
+
+```text
+str(canonicalEvidenceSchemaId) || uint(schemaVersion) ||
+str(nativePreSendAbandonmentId) || str(commandId) ||
+str(admittingCommandResultId) ||
+bytes(base64urlDecode(admittingCommandResultSignedRecordDigest)) ||
+bytes(base64urlDecode(canonicalCommandRecordDigest)) ||
+str(decisionEvidenceSchemaId) || bytes(base64urlDecode(decisionEvidenceDigest)) ||
+str(collaborationServerId) || str(logicalChatId) || str(nativeBindingId) ||
+str(runtimeId) || uint(nativeIncarnation) || str(nativeDeliveryAttemptId) ||
+bytes(base64urlDecode(canonicalDispatchDigest)) ||
+bytes(base64urlDecode(dispatchAuthorizationHandleDigest)) ||
+str(attemptStateBefore) || str(dispatchStateBefore) || str(gateStateBefore) ||
+str(abandonmentReason) || uint(abandonedAtJournalSeq) || str(assertion)
+```
+
+Verification resolves the retained attempt, dispatch, gate, admitted result, command, and decision;
+recomputes every digest including the protected dispatch handle; and requires every coordinate to
+match the rows changed by that one journal commit. This local atomic fact is not a signed portable
+positive-never-started attestation. Exact replay looks up the unique attempt/abandonment row before
+allocating a journal sequence and returns the one existing record. A changed reason, coordinate, or
+digest is a collision; substituting a different retained journal sequence is record equivocation. A
+crash exposes either all three quarantined rows and the record or none of them. Quarantine is terminal
+for that command: it cannot be reopened, and no replacement attempt, native-executor continuation, or
+successor may be created. A new incarnation, attachment, ingress lease, or snapshot never replaces the
+signed executor for that command.
+
+Every terminal-native `NativeMutationFamilyCapability`, binding-scoped or server-scoped, has
+`positiveNeverStartedSchemaId == null`; selected A2 OpenCode `user_text` is no exception. Only the
+nested transport capability types use their separately signed positive-never-started attestation to
+install a continuation.
+Once any terminal native attempt reached `started`, no successor attempt may start even if later
+evidence proves no effect; the old command closes without an effect and a fresh authenticated source
+event/common command is required. Lost response/history or `outcome_unknown` remains quarantined.
+
+`nativeTargetPathDigest` is unpadded-base64url SHA-256 of:
+
+```text
+str("remote-claw/native-target-path/v1")
+str(descriptor.product)
+str(descriptor.access)
+str(runtimeId)
+uint(nativeIncarnation)
+str(nativeBindingId)
+str(nativeConversationId)
+str(nativeWorkspaceBindingId)
+bytes(base64urlDecode(canonicalDirectoryPathDigest))
+bytes(base64urlDecode(nativeWorkspaceBindingDigest))
+str(attachmentLeaseId)
+str(nativeClientIngressLeaseId)
+str(nativeMethod)
+str(nativeRouteSchemaId)
+bytes(canonicalRouteParameterBytes)
+optionalStr(nativeActionId)
+```
+
+`canonicalRouteParameterBytes` comes from the pinned route schema and exact retained request; for
+OpenCode it includes the target `ses_*`, subresource kind/ID, parent/child coordinate where applicable,
+the exact resolved workspace/directory binding, and no query/header alias normalization. OpenCode
+`workspace`, `directory`, and `x-opencode-directory` spellings must resolve to one identical pinned
+value; missing required scope or multiple/conflicting aliases reject before dispatch. The front door
+recomputes this digest from the retained exact
+method/path parameters before its dispatch CAS. A valid credential with a changed session, permission,
+child, method, or native action ID collides before a socket write.
+
+`canonicalRequestDigest` is unpadded-base64url SHA-256 of
+`str("remote-claw/native-request/v1") || str(canonicalRequestSchemaId) ||
+bytes(canonicalCredentialStrippedRequestBytes)`. The pinned schema emits, in order, the exact method,
+canonical route parameters, content type, semantics-relevant headers as an ordered name/value vector,
+and exact body bytes; hop-by-hop headers and the front-door credential are excluded. The immutable
+`canonicalRequestRef` retains those canonical bytes. The dispatcher recomputes both request and target
+digests from that reference before its one-time CAS; a mismatch is a collision, never a reconstructed
+send.
+
+The common-to-native translation is itself retained. The two selected OpenCode generated-coordinate
+payloads are:
+
+```text
+user_text =
+  str("remote-claw/opencode-user-text-generated-coordinates/v1") || uint(1) ||
+  str(nativeBindingId) || str(nativeConversationId) || str(nativeWorkspaceBindingId) ||
+  str(canonicalDirectory) || bytes(base64urlDecode(canonicalDirectoryPathDigest)) ||
+  bytes(base64urlDecode(nativeWorkspaceBindingDigest)) ||
+  str(nativeActionId)
+
+new_chat =
+  str("remote-claw/opencode-new-chat-generated-coordinates/v1") || uint(1) ||
+  str(runtimeId) || uint(nativeIncarnation) || str(nativeWorkspaceBindingId) ||
+  str(canonicalDirectory) || bytes(base64urlDecode(canonicalDirectoryPathDigest)) ||
+  bytes(base64urlDecode(nativeWorkspaceBindingDigest)) ||
+  str(nativeCreationMarker) ||
+  bytes(base64urlDecode(nativeCreationIntentDigest))
+```
+
+`canonicalDirectory` is the exact safe path decoded from the retained
+`NativeWorkspaceBindingRecord.canonicalDirectoryRef`, and
+`canonicalDirectoryPathDigest = SHA256(str("remote-claw/canonical-directory-path/v1") ||
+str(canonicalDirectory))`. The header carries those exact path bytes. The workspace record,
+executor evidence, ingress/server front-door lease, generated coordinates, and target-path digest
+also repeat `nativeWorkspaceBindingDigest`; all refs and both digests must join the one current
+workspace record. A same path under a changed filesystem, mount, allowed root, or generation is
+therefore a different binding even though its path digest is unchanged.
+The generated-coordinate digest is SHA-256 of the selected bytes. For `descriptor.product:"opencode"`
+only those two schema IDs are valid in selected A2; another family or coordinate schema is rejected.
+The full translation record bytes are:
+
+```text
+str(nativeRequestTranslationSchemaId) || uint(schemaVersion) ||
+str(commandId) || str(admittingCommandResultId) ||
+bytes(base64urlDecode(admittingCommandResultSignedRecordDigest)) ||
+bytes(base64urlDecode(canonicalCommandRecordDigest)) ||
+bytes(base64urlDecode(decisionEvidenceDigest)) ||
+bytes(base64urlDecode(capabilitySnapshotAttestationDigest)) ||
+str(canonicalCommandPayloadSchemaId) ||
+bytes(base64urlDecode(canonicalCommandPayloadDigest)) ||
+bytes(base64urlDecode(nativeRequestTranslatorDigest)) ||
+str(generatedCoordinateSchemaId) || bytes(base64urlDecode(generatedCoordinateDigest)) ||
+str(canonicalRequestSchemaId) || bytes(base64urlDecode(canonicalRequestDigest)) ||
+bytes(base64urlDecode(nativeTargetPathDigest))
+```
+
+`nativeRequestTranslationDigest` is SHA-256 of those bytes and its ref retains the parsed record.
+The translator receives only the immutable common payload bytes and the exact generated-coordinate
+bytes. It receives no adapter defaults, environment, current model, later capability, or reconstructed
+chat state.
+
+For selected OpenCode `user_text`, the output is exactly method `POST`, route
+`/session/{nativeConversationId}/prompt_async`, empty query, and the canonical request schema
+`remote-claw/opencode-prompt-async-request/v1`. Its semantics-relevant header vector contains exactly
+`content-type: application/json` then
+`x-opencode-directory: <the UTF-8 canonical directory bytes>`; the dispatch credential is excluded.
+The compact UTF-8 JSON body has keys in exactly this order:
+`{"messageID":"<nativeActionId>","parts":[{"type":"text","text":"<text>"}]}` using the strict canonical
+JSON string encoder; the quoted placeholders denote the generated string contents after that encoder.
+`text` is decoded directly from the common `user_text` payload. `model`, `noReply`,
+agent/system fields, extra keys, extra/reordered parts, and every other header/query alias are
+forbidden. The native session's brokered provider path chooses its normal configured model; the
+collaboration adapter cannot override it.
+Selected A2 accepts a workspace directory only when its canonical filesystem path is an absolute
+POSIX path whose UTF-8 bytes match `^/[A-Za-z0-9._~/-]*$` after symlink/filesystem-identity resolution.
+Empty components other than the leading slash, `.`/`..`, percent, backslash, space, colon, non-ASCII,
+non-UTF-8 filesystem bytes, NUL, CR/LF, and every C0/DEL byte are unsupported rather than encoded into
+a header. The `x-opencode-directory` value is that exact byte string with no trimming, percent/base64
+alias, or alternate header. This intentionally narrow grammar makes header injection and cross-runtime
+path encoding impossible; expanding it requires a new request schema and proof.
+
+The strict JSON string encoder emits Unicode scalar input as UTF-8 between quotes. It escapes quote as
+`\"`, backslash as `\\`, and every U+0000–U+001F scalar as six lowercase bytes `\u00xx`; slash,
+U+007F, all other non-ASCII scalars, U+2028, and U+2029 are emitted literally. Lone surrogates,
+overlong/invalid UTF-8, alternate escapes, and normalization are rejected. The literal object keys and
+punctuation above are never reserialized by a generic map encoder.
+
+The runtime owner allocates `nativeActionId` before translation as `msg_` plus unpadded base64url of
+16 random bytes. It atomically persists the ID and unique
+`(nativeBindingId,nativeIncarnation,nativeActionId)` index with the attempt preparation; no web,
+official, automation, nested, or inner-model caller may provide it. A crash reuses only that stored ID.
+Malformed IDs, RNG/allocation failure, duplicate/reused IDs, or an ID found already in native history
+reject before request construction and never fall back to text matching.
+
+For selected OpenCode `new_chat`, the output is exactly method `POST`, route `/session`, empty query,
+the same two-header vector, and canonical request schema
+`remote-claw/opencode-session-create-request/v1`. Its compact body is exactly:
+
+```json
+{"metadata":{"remoteClawCreationId":"<nativeCreationMarker>","remoteClawCreationIntentDigest":"<nativeCreationIntentDigest>"}}
+```
+
+The two nested keys have that order. The marker is generated once from the creation reservation; the common payload supplies and
+commits `creationIntent`, `projectId`, and `workspaceSelectorId`. No title, session ID, directory
+alias, model, provider, parent, or extra metadata key is allowed. The translator proof covers both
+output shapes and the caller-ID/marker generation rules. The selected server-family
+`positiveReadBackSchemaId` and the creation reservation both equal
+`remote-claw/opencode-new-chat-marker-reconciliation/v1`; another marker/discovery interpretation
+cannot bind the returned session.
+
+Selected OpenCode `user_text` also fixes its native read-back oracle. The one expected part
+fingerprint is:
+
+```text
+SHA256(str("remote-claw/opencode-expected-user-part/v1") ||
+       str(nativeConversationId) || str(nativeActionId) || uint(0) ||
+       str("user") || str("text") || str(text))
+```
+
+The expected vector digest is SHA-256 of
+`str("remote-claw/opencode-expected-user-part-vector/v1") || uint(1) ||
+bytes(base64urlDecode(expectedPartFingerprintDigest))`. The attempt stores that exact vector ref and
+digest with count one before dispatch. The body text and action/session IDs must recompute it from the
+translation record.
+
+Each observed read-back part hashes:
+
+```text
+str("remote-claw/opencode-observed-user-part/v1") ||
+str(nativeConversationId) || str(nativeActionId) || str(nativePartId) ||
+uint(nativePartIndex) || str(role) || str(partType) ||
+bytes(base64urlDecode(canonicalTextDigest)) ||
+bytes(base64urlDecode(expectedPartFingerprintDigest)) ||
+bytes(base64urlDecode(historySnapshotDigest)) ||
+optionalDigest(filteredSseObservationDigest) ||
+bytes(base64urlDecode(nativeOrderCoordinateDigest))
+```
+
+`observedPartFingerprintDigest` is SHA-256 of those bytes. The observed vector is ordered by exact
+native part index, then native part ID, and hashes the count plus each decoded item digest under
+`remote-claw/opencode-observed-user-part-vector/v1`; duplicates, reordering, or gaps are invalid. The
+optional SSE ref resolves one `NativeFilteredObserverObservationRecord` for the same
+runtime/incarnation/binding/session/action/part coordinate and recomputes its filtered digest. The
+history snapshot ref resolves the complete
+`OpenCodeConversationHistorySnapshotRecord`, whose part vector contains the same item.
+
+The history/read-back join is typed rather than text-matched. For selected A2 text parts,
+`OpenCodeHistoryPartItem.canonicalPartPayloadSchemaId` is exactly
+`remote-claw/opencode-history-text-part/v1`, and the retained payload is:
+
+```text
+str(canonicalPartPayloadSchemaId) || uint(1) ||
+str(nativeConversationId) || str(nativeMessageId) || str(nativePartId) ||
+uint(messageIndex) || uint(partIndex) || str("text") || str(text)
+```
+
+Its SHA-256 is `canonicalPartPayloadDigest`. The joined history message must have the same
+conversation and message index, `nativeMessageId == nativeActionId`, and `role:"user"`. The joined
+history part must have the same conversation/message ID, message index, native part ID, and part
+index as the read-back item. Parsing the exact retained part payload supplies `text`; the read-back
+item's `canonicalTextRef` retains `str(text)` and
+`canonicalTextDigest = SHA256(str("remote-claw/opencode-canonical-text/v1") || str(text))`.
+`nativePartIndex == partIndex`, and the expected fingerprint is recomputed from that extracted text,
+not accepted from the SSE event or a caller. A role, ID, index, schema, retained-payload, or extracted
+text mismatch cannot join.
+
+The raw history projection is exhaustive, not caller-selected. Starting from the complete history
+snapshot's ordered message/part refs, the verifier selects the unique message with
+`nativeConversationId` equal to the attempt and `nativeMessageId == nativeActionId`, then selects
+**every** `OpenCodeHistoryPartItem` whose conversation/message ID names that message. It hashes
+`str("remote-claw/opencode-same-message-history-part-vector/v1") || uint(count)` followed by every
+selected decoded history-part item digest in `(messageIndex,partIndex,nativePartId)` order.
+`sameMessageHistoryPartCount` and `sameMessageHistoryPartVectorDigest` must equal that complete
+projection before any filtering by type, text, fingerprint, SSE presence, or index.
+
+Only when that raw projection contains exactly one part, the joined message has role `user`, and the
+sole part parses as the exact index-zero text schema above does the verifier construct the one typed
+`OpenCodeNativeReadBackPartItem`; `observedPartVectorRef` then contains exactly that one item. Its
+`expectedPartFingerprintDigest` equals the attempt's one expected-vector item. Its separately
+domain-separated `observedPartFingerprintDigest` is recomputed from the observed typed fields and is
+not compared byte-for-byte to the expected digest; positive adjudication instead requires equality of
+the canonical session/action/index/role/type/text values from which the two domain-separated digests
+are recomputed. For `mismatch` or `ambiguous`, the typed observed vector is canonically empty and the
+stored `observedPartCount` is zero. For `exactly_one_applied`, both are exactly one. The
+complete raw projection remains committed by the history snapshot plus the two same-message fields.
+A second same-ID part, non-text sole part, duplicate/gapped index, omitted history item, or fabricated
+typed item therefore cannot be hidden by presenting a one-item observed vector.
+
+`OpenCodeNativeOrderEvidence.nativeOrderEvidenceDigest` is SHA-256 of:
+
+```text
+str(canonicalOrderEvidenceSchemaId) || uint(schemaVersion) ||
+str(nativeHistorySnapshotId) || bytes(base64urlDecode(historySnapshotDigest)) ||
+str(nativeMessageId) || uint(messageIndex) || str(nativePartId) || uint(partIndex) ||
+str(linearizationProofKind) || bytes(base64urlDecode(linearizationProofDigest)) ||
+optionalUint(linearizedThroughObservationSeq) ||
+optionalDigest(filteredSseObservationDigest)
+```
+
+The order evidence ref retains those fields and `nativeOrderCoordinateDigest` equals this digest.
+`linearizedThroughObservationSeq` equals the complete history snapshot's field, and the read-back
+record's `throughObservationSeq` must equal both. For `sequence_watermark` it is the non-null observer
+sequence named by the shared native watermark. For `barrier_event` it equals the non-null
+`postSnapshotBarrierObservationSeq`; the filtered part observation is required, belongs to the same
+stream epoch and overlap buffer, has sequence no greater than that barrier, and resolves the exact
+joined IDs above. For `atomic_store_snapshot` it is null because the signed store transaction boundary,
+not an SSE cursor, linearizes the retained history. Thus a complete sequence-watermark or atomic-store
+history snapshot remains positive evidence after reconnect even when legacy SSE cannot replay. The
+filtered SSE digest is null outside `barrier_event`; an arbitrary stale/live event cannot be appended
+as support.
+
+The
+read-back evidence's `canonicalEvidenceDigest` is SHA-256 of:
+
+```text
+str(nativeReadBackSchemaId) || uint(schemaVersion) || str(nativeReadBackEvidenceId) ||
+str(nativeDeliveryAttemptId) || str(runtimeId) || uint(nativeIncarnation) ||
+str(nativeBindingId) || str(nativeConversationId) || str(nativeWorkspaceBindingId) ||
+str(nativeRuntimeObserverLeaseId) || uint(observerGeneration) || str(nativeActionId) ||
+str(nativeHistorySnapshotId) || bytes(base64urlDecode(historySnapshotDigest)) ||
+str(observerStreamEpochId) ||
+optionalUint(throughObservationSeq) ||
+bytes(base64urlDecode(sameMessageHistoryPartVectorDigest)) || uint(sameMessageHistoryPartCount) ||
+bytes(base64urlDecode(observedPartVectorDigest)) ||
+uint(observedPartCount) || bytes(base64urlDecode(expectedPartFingerprintVectorDigest)) ||
+optionalDigest(nativeOrderEvidenceDigest) || str(outcome)
+```
+
+For selected OpenCode `user_text`, the capability and attempt `positiveReadBackSchemaId` and the
+evidence `nativeReadBackSchemaId` are all exactly
+`remote-claw/opencode-user-text-read-back/v1`; the attempt's
+`expectedNativePartFingerprintSchemaId` is exactly
+`remote-claw/opencode-expected-user-part-vector/v1`, and the capability's
+`positiveNeverStartedSchemaId` is null. The evidence's expected-vector digest must equal
+the attempt's retained vector digest and the vector must parse under that exact schema. Only
+`outcome:"exactly_one_applied"`, count one, index zero, role `user`, type `text`, exact extracted text,
+exact caller `msg_*`, same runtime/incarnation/session, one complete history snapshot, the exact
+linearization sequence rules above, and valid native order evidence may compare-and-swap the attempt
+from `transport_receipt` or `started` to
+`native_observed`, then `completed`. The evidence ref must parse and recompute its digest. Missing,
+extra, reordered, changed, cross-session, cross-incarnation, incomplete/unlinearized history, SSE-only, or ambiguous
+evidence records `outcome:"mismatch"` or `"ambiguous"` and moves a possibly started attempt/gate to
+`outcome_unknown`, quarantining later remote writes;
+it never triggers another `prompt_async`.
+
+`exactly_one_applied` requires both order-evidence fields non-null. `mismatch` and `ambiguous` require
+both null because their typed observed vector is empty; their complete history snapshot and raw
+same-message projection retain the negative/ambiguous evidence without inventing one privileged part
+coordinate.
+
+The evidence's `historySnapshotRef` always resolves its one exact complete history snapshot. Its
+runtime, incarnation, binding, session, and `observerStreamEpochId` equal the read-back record; its
+workspace and observer lease/generation equal the record and the retained attempt's current
+workspace/observer coordinates. For a positive result, the order evidence's history ID/digest and linearization fields
+equal that same snapshot. For `barrier_event`, the order evidence's
+`filteredSseObservationDigest` and the sole typed part item's filtered-observation digest must be the
+same filtered observation in that snapshot's stream epoch and overlap buffer. Mixed snapshots,
+leases, generations, or stream epochs are invalid even when their message and part IDs happen to
+match.
+
+The runtime-owned front door has a second, last-hop one-time boundary:
+`NativeFrontDoorDispatchRecord` is unique by `nativeDeliveryAttemptId` and immutably binds the admitted
+ingress lease, target path, request digest, and one-time opaque dispatch authorization. The front door
+does not accept arbitrary traffic from a current adapter credential: it resolves that handle to the
+exact attempt, revalidates the current admitted-result tuple, decision/executor evidence,
+command/effect gate, pinned family/translator entry, capability/attachment/ingress leases, method,
+route, path, request and translation digests, recomputes the translation from the retained common
+payload plus generated coordinates, and runs the one three-row final pre-write transaction above:
+attempt `claimed → started`, dispatch `not_started → started`, and gate
+`(never_started,null) → (started,nativeDeliveryAttemptId)` atomically, while requiring no abandonment
+record. A repeated valid request returns the stored dispatch classification and never forwards again;
+a changed path or body is a collision. Crash after that transaction and before/after the write is
+therefore `outcome_unknown` until exact native read-back resolves it, not permission to dispatch
+twice.
+Its immutable digest is SHA-256 of
+`str("remote-claw/native-front-door-dispatch/v1") || str(nativeDeliveryAttemptId) ||
+str(nativeClientIngressLeaseId) || bytes(base64urlDecode(nativeTargetPathDigest)) ||
+bytes(base64urlDecode(canonicalRequestDigest)) ||
+bytes(base64urlDecode(nativeRequestTranslationDigest)) || str(dispatchAuthorizationHandle)`.
+The runtime owner allocates the handle as canonical unpadded base64url of 32 random bytes in the same
+transaction as the dispatch row. It is globally unique across binding and creation dispatches, retained
+only in protected owner state, never caller-chosen or reassigned to another dispatch, and never exposed
+in argv, environment, files readable by the inner process, or logs. After a crash, the adapter may
+present the same handle only for the same still-`not_started` attempt under the exact recovery
+preconditions above. A handle/digest transplant or collision fails before the dispatch CAS.
 
 For Codex, each managed top-level chat-thread binding has its own logical attachment and lease, but all
 of those attachments reference the same daemon-wide physical app-server connection through one shared
@@ -853,10 +6512,66 @@ Inference delivery has its own write-ahead boundary. Before an isolated connecto
 provider request, the runtime owner durably creates an `InferenceAttemptRecord` with upstream state
 `prepared` and native delivery `not_started`. The inference lease and attempt are scoped to the exact
 runtime/incarnation rather than a `nativeBindingId`, `logicalChatId`, or coordinator epoch. The
-attempt pins the exact native request, connector lease, request digest, response-stream identity, and
-any upstream idempotency key. It names the local native-conversation record when that correlation is
+attempt pins the exact native request, request digest, response-stream identity, and any upstream
+idempotency key. Each physical child pins its connector lease/generation; the stable attempt does not
+change owner on lease replacement. It names the local native-conversation record when that correlation is
 already known; otherwise a later immutable `InferenceConversationCorrelationRecord` may link it only
 after native evidence proves the relationship. This correlation never replays or moves the attempt.
+
+`NativeRuntimeIncarnationRecord.nativeRequestNamespaceId` is
+`irn_${base64url(SHA256(str("remote-claw/inference-native-request-namespace/v1") ||
+str(runtimeId) || uint(nativeIncarnation) || str(facadeProtocolSchemaId)))}`. It is stable across
+inference-connector lease replacement and is immutable for that native incarnation. Changing the
+façade protocol, extraction schema, or request-ID uniqueness semantics requires fencing every old
+attempt and advancing `nativeIncarnation`; it may not mint a new namespace around a still-live native
+process. `InferenceAttemptRecord` is unique on
+`(nativeRequestNamespaceId,nativeRequestId)` and also on `inferenceAttemptId`; its response stream ID
+is immutable and unique.
+
+`facadeProtocolSchemaId` pins a `nativeRequestIdExtractionSchemaId` that names the exact canonical
+request field or composite coordinate. Its retained proof must establish both that the pinned native
+client preserves the coordinate on transport retry and that it never reuses the coordinate for two
+distinct semantic requests during the entire native incarnation. A monotonic client-process
+generation plus request sequence qualifies when both fields are authenticated by the façade; a bare
+request ID with only retry-stability proof does not. The exact extraction evidence ref/digest and
+incarnation-wide uniqueness proof ref/digest are retained, and every connector lease must repeat the
+same namespace, extraction schema, and uniqueness-proof digest. Connector- or façade-minted
+per-connection IDs do not qualify. If the provider-shaped protocol/client tuple has no stable,
+lifetime-unique coordinate, the façade may allocate a connection-local ID only for write-ahead
+bookkeeping: after possible upstream start, loss becomes `outcome_unknown`, blocks later inference for
+that runtime until contained, and a visually identical native retry is not silently treated as safe.
+Writability across façade restart requires retained retry and non-reuse fixtures for the exact
+extraction schema.
+
+The request digest is SHA-256 of
+`str("remote-claw/inference-native-request/v1") || str(requestFingerprintSchemaId) ||
+str(canonicalProviderRequestSchemaId) || str(nativeRequestNamespaceId) || str(nativeRequestId) ||
+bytes(canonicalCredentialStrippedProviderRequest)`. Before setting upstream state `prepared`, one
+transaction looks up that composite key. Same ID and digest is exact native retry and returns/resumes
+the same attempt and response stream; same ID with a different digest is a collision and sends no
+upstream byte. The same transaction encrypts and retains those exact credential-stripped canonical
+request bytes in `encryptedCanonicalProviderRequestRef`, bound to
+`canonicalProviderRequestSchemaId`, `requestDigest`, and the encrypted-envelope digest. Recovery
+verifies the envelope, decrypts the retained bytes, and recomputes the request digest before any first
+send or resume; it never reconstructs a provider request from native history. A façade or connector
+restart performs this lookup and verification before allocating anything.
+
+Exactly one inference lease is current per runtime incarnation. Installation first fences the old
+connector and classifies every started upstream/native delivery, then compare-and-swaps
+`NativeRuntimeIncarnationRecord.currentInferenceLeaseId`; a uniqueness constraint forbids two current
+leases. A replacement lease is valid only when its runtime/incarnation, façade schema, request
+namespace, extraction schema, canonical provider-request schema, and uniqueness-proof digest exactly
+equal the incarnation record.
+Changing any of those fields requires closing the old incarnation and completing its ambiguity audit
+before a higher incarnation may start. Each physical send/resume uses a new immutable
+`InferenceConnectorTransportAttemptRecord`, and `currentTransportAttemptId` advances by CAS. If every
+prior child has positive `never_started` evidence, a new lease may create another `initial_send`
+child. If upstream may have started, a replacement can use only `resume_existing` with the same
+upstream request ID and a positively proved cursor/read-back; it cannot send the provider request
+again. Missing recovery evidence leaves the parent and child `outcome_unknown`. A new connector
+therefore recovers the existing attempt under its pinned upstream idempotency/read-back rules but
+cannot create a second attempt or response stream for the same native request namespace/ID. A stale
+connector or lease generation cannot send or deliver a chunk after the pointer changes.
 
 Upstream state moves to `started` before the first possible provider byte. Each response chunk is
 encrypted in the local durable chunk outbox with its upstream coordinate and digest before its
@@ -877,8 +6592,9 @@ namespace/transition/observation and canonical deduplication record, immutable c
 and verification, cursor, correlation tombstone, and containment result. An attachment belongs to
 the durable native binding, not to one process incarnation: a new lease ties the same attachment to
 the current native incarnation and coordinator epoch. For Claude, `transportEpoch` is the private RC
-worker epoch. A1 registration resolves a `nativeBindingId` through its durable `logicalChatId`; it
-never assumes the two IDs are equal.
+worker epoch. A1 registration resolves a `nativeBindingId` through its durable
+`(collaborationServerId, logicalChatId)` scope; it never assumes either chat coordinate is the native
+ID.
 
 Every server-local record that belongs to a logical chat either carries both `collaborationServerId`
 and `logicalChatId` or has an immutable foreign key to a record that carries that pair. A globally
@@ -910,10 +6626,15 @@ durable but non-writable, and exchange signed installed receipts naming both com
 expected topology generations. A reservation reaches `both_installed` only after each side has
 verified both installed receipts.
 
-Writability is a separate live handshake. Each side presents both installed receipts, the reservation
-ID, current topology generations, and a fresh connection epoch; only then may its local edge become
-`current`. Every inward send revalidates that live peer lease, and every receiver rejects a mutation
-unless its own matching edge is also current. A split finalization can therefore leave one side
+Writability is a separate mutually authenticated live handshake. Both peers contribute fresh nonces
+and connection epochs on the actual transport, then each current server key signs the same transcript:
+the source server/chat/inward-edge and target server/chat/collaborator-slot coordinates, reservation and root-certificate digest, both topology generations,
+both installed-receipt digests, both nonces/epochs, and the selected TLS 1.3 exporter binding.
+Only after verifying both signatures does each side compare-and-swap the same
+`InwardEdgeLiveLeaseRecord` and `currentLiveLeaseId`. Every inward send names that live lease and
+transcript digest; every receiver revalidates it and rejects a mutation unless its own matching edge,
+epoch, channel binding, and lease are current. Public receipt replay or a caller-chosen connection epoch
+cannot recreate writability. A split finalization can therefore leave one side
 installed or locally current, but it cannot deliver a mutation through a non-current peer. Connection
 loss immediately removes writability even though the installed reservation remains recoverable.
 Finalization and recovery are idempotent compare-and-swaps: they either reconnect the same installed
@@ -932,17 +6653,539 @@ question, or control command that caused it. Each hop signs a versioned canonica
 immutable origin, complete event-envelope digest, direction, prior-chain digest, and new hop. Thus an
 intact chain cannot be transplanted onto changed text or control fields.
 
-The edge handshake binds each `collaborationServerId` to a server identity public key through
-operator-approved enrollment or a previously trusted signed certificate. A rotation is accepted only
-when the old current key signs the new key, or after explicit re-pairing; retired public keys remain
-available to verify old records, while revocation blocks new hops without rewriting history. The
-receiver resolves each hop's key from that authenticated registry, verifies the complete chain, and
-appends its own attestation. The outward result intentionally returns over the same physical edges in
-reverse. A server rejects a proposal that already traversed that server or inward edge, rejects an
-observation that already traversed that outward edge, and never converts an outward observation or
-correlated echo into an inward proposal. A malicious server can lie about a new event it originates,
-but it cannot change the payload or remove, reorder, or change an already-attested inner hop without
-breaking the verifiable chain.
+The edge handshake binds each stable random `collaborationServerId` to the machine `identity_id` and a
+server identity public key through a `ServerScopeCertificateRecord`. Operator-approved enrollment
+carries a `ViewerOnboardingBundleV2` containing an oldest-to-newest certificate chain, the pinned
+current public key, and the existing viewer credentials. The first item is the operator-approved,
+self-signed trust anchor; every later item is signed by the immediately preceding subject key, and the
+last item matches `serverIdentityKey`. An already paired viewer may receive only the suffix beginning
+with its exact current trusted certificate. This is a transport/serialization contract: never log it
+or persist the whole bundle as one plaintext artifact. After verification, the viewer may retain
+extracted credentials in memory or in its explicitly chosen plaintext `localStorage` reconnect mode
+under the same live-credential warnings as the existing pass; the non-secret certificate chain and
+public keys may be stored in the scoped trust registry. A cold client verifies the complete chain
+before deriving the canonical A1 bus address. A nested peer receives the same chain through its
+authenticated pairing flow.
+
+Bundle verification is fail-closed and precedes every route hash, key derivation, subscription, or
+publish:
+
+1. Require bundle version 2, canonical string encodings, exact key lengths, one decoded 16-byte
+   `machineIdentityId`, one decoded 16-byte `collaborationServerId`, and the fixed certificate
+   algorithms/lengths.
+2. Decode `authToken` and require
+   `lowerHex(trunc16(SHA-256(authToken))) === machineIdentityId`.
+3. Require every certificate's `machineIdentityId` and `collaborationServerId` to match the bundle
+   exactly, require a non-empty chain of at most 32 items, and reject duplicate certificate IDs or
+   duplicate subject-key declarations. A signer key reference may repeat only where the next chain item
+   legitimately names the preceding subject.
+4. For a cold pair, require the first certificate to be self-signed and explicitly accepted through
+   the operator-approved pairing channel. For an existing pair, require the first certificate to equal
+   the locally current trusted certificate byte-for-byte; never trust a caller-supplied status.
+5. Walk the chain in order. Recompute every canonical digest and signature; require each next
+   `signerIdentityKeyId` to equal the preceding subject key, `supersedesScopeCertificateId` to equal the
+   preceding certificate ID, and `keyGeneration` to equal the preceding generation plus one. Enforce
+   one immutable key-ID-to-algorithm/public-key binding across local history and the whole chain.
+   Signer sequences are canonical safe integers and strictly increase across the supplied signed
+   certificates; gaps are allowed because other server records may have been signed between rotations.
+6. Require `serverIdentityKey` to equal the final certificate's subject key ID, `Ed25519` algorithm,
+   and raw 32-byte public key. Recompute and verify `keyAttestation` under that key, require its server,
+   machine, certificate ID, key generation, and signer ID to equal the verified tip, and require all
+   four domain-separated key commitments to match the decoded operational keys.
+7. If an existing viewer receives exactly its one current certificate as the whole chain, require an
+   exact current key and key-attestation replay and return success without mutating certificate status,
+   current pointers, or capability state. This is the idempotent lost-reply retry.
+8. For a non-empty successor suffix, atomically compare-and-swap
+   `(currentScopeCertificateId, currentKeyGeneration, currentIdentityKeyId)` to the final certificate's
+   ID, `keyGeneration`, and subject key ID. `currentKeyGeneration` must equal the current certificate's
+   `keyGeneration` before and after the transaction. One concurrent branch can win; a stale, rollback,
+   skipped-generation, or forked chain fails closed.
+9. In that same successor transaction, require the prior local status to be `current` and not revoked, change it
+   to `retired`, install any newly learned intermediate certificates as `retired`, and install the tip
+   as the sole `current` status for the server. A uniqueness constraint permits exactly one
+   `(collaborationServerId, state: "current")`; no transition overwrites `revoked`. Initial cold
+   enrollment installs every non-tip chain item as retired and the tip as current.
+10. Insert every certificate and the key attestation into the signer-sequence acceptance index in that
+    transaction. The attestation sequence is greater than the final certificate sequence. Exact repeats
+    are idempotent; a duplicate, decreasing, or equal sequence with different signed content
+    quarantines enrollment.
+
+Any mismatch rejects the bundle as a splice/corruption error rather than waiting for broker admission
+to fail. Current/retired/revoked state lives only in local
+`ServerScopeCertificateStatusRecord`s and is not accepted from the onboarding DTO. A revoked key may
+verify old history but cannot authorize a new chain item.
+
+The certificate signature covers this exact immutable, length-prefixed canonical payload, in this
+order:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(scopeCertificateId)
+bytes(hexDecode(machineIdentityId))  // exactly 16 bytes from 32 lowercase hex chars
+str(collaborationServerId)
+str(subjectIdentityKeyId)
+str(subjectKeyAlgorithm)
+bytes(base64urlDecode(subjectPublicKey))   // exactly 32 raw Ed25519 bytes
+uint(keyGeneration)
+uint(issuedAtMs)
+optionalStr(supersedesScopeCertificateId)
+str(signerIdentityKeyId)
+uint(signerSequence)
+optionalUint(supersededSignerMaxSequence)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+`canonicalPayloadDigest` must equal SHA-256 of those bytes, and `signature` signs those same bytes.
+`canonicalPayloadDigest` is unpadded base64url of 32 digest bytes. A1 selects Ed25519 only:
+`subjectPublicKey` is unpadded base64url of the 32 raw public-key bytes, and `signature` is unpadded
+base64url of the 64 raw signature bytes. SPKI/PEM wrappers, padded base64, and algorithm aliases are
+rejected. Neither the digest/signature value nor locally mutable certificate status is part of the
+signed payload. The
+onboarding bundle's
+`serverIdentityKey` must exactly match the final certificate's subject key ID, algorithm, and public
+key.
+For initial enrollment or explicit re-pairing, the newly pinned subject key self-signs
+(`signerIdentityKeyId === subjectIdentityKeyId`) and `supersededSignerMaxSequence` is null. For
+continuity rotation, `subjectIdentityKeyId`
+names the new subject key and `signerIdentityKeyId` names the old current key; the verifier resolves
+that old key from its trusted registry before accepting the new certificate, and
+`supersededSignerMaxSequence` must equal this certificate's `signerSequence`. The signed cutoff is the
+maximum sequence under which any old-key record can later verify.
+
+The four onboarding key commitments use
+`SHA256(str("remote-claw/viewer-onboarding-key-commitment/v1") || str(label) || bytes(decodedKey))`,
+with labels exactly `auth_token`, `content_root`, `control_key`, and `meta_key`. Each commitment is
+canonical unpadded base64url. The attestation payload and signature bytes are:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(collaborationServerId)
+bytes(hexDecode(machineIdentityId))
+str(scopeCertificateId)
+uint(keyGeneration)
+str(signerIdentityKeyId)
+uint(signerSequence)
+bytes(base64urlDecode(authTokenCommitment))
+bytes(base64urlDecode(contentRootCommitment))
+bytes(base64urlDecode(controlKeyCommitment))
+bytes(base64urlDecode(metaKeyCommitment))
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+`canonicalPayloadDigest` is SHA-256 of those bytes and `signature` is Ed25519 over those same bytes.
+Substituting even one operational key therefore fails before a route or KDF is used.
+
+The human transfer wire is separate from the typed DTO. `canonicalBundleBytes` is exactly:
+
+```text
+str("remote-claw/viewer-onboarding-bundle/v2")
+uint(version=2)
+bytes(hexDecode(machineIdentityId))
+str(collaborationServerId)
+bytes(base64urlDecode(authToken))
+bytes(base64urlDecode(contentRoot))
+bytes(base64urlDecode(controlKey))
+bytes(base64urlDecode(metaKey))
+str(serverIdentityKey.identityKeyId)
+str(serverIdentityKey.algorithm)
+bytes(base64urlDecode(serverIdentityKey.publicKey))
+uint(scopeCertificateChain.length)
+for certificate in scopeCertificateChain:
+  bytes(certificateCanonicalPayloadBytes)
+  bytes(base64urlDecode(certificate.canonicalPayloadDigest))
+  bytes(base64urlDecode(certificate.signature))
+bytes(keyAttestationCanonicalPayloadBytes)
+bytes(base64urlDecode(keyAttestation.canonicalPayloadDigest))
+bytes(base64urlDecode(keyAttestation.signature))
+```
+
+Every nested payload is the exact canonical payload defined above, wrapped once by `bytes`; digests are
+32 bytes and signatures 64 bytes. The decoder consumes exactly the stated certificate count and then
+the one attestation and rejects trailing bytes. The only accepted text spelling is
+`rcp2.<base64url(canonicalBundleBytes)>.<base64url(checksum)>`, where
+`checksum = SHA256(str("remote-claw/viewer-onboarding-wire-checksum/v2") ||
+bytes(canonicalBundleBytes))`. Base64url is unpadded and canonical; decoded length, item count, field
+length, and total size are capped before allocation. The checksum detects transfer corruption; only the
+certificate chain and key attestation establish trust.
+
+Already-paired viewers learn continuity rotations through a retained, public certificate-update
+surface, not through a shared-key frame. After the successor certificate is durably signed and before
+the pointer/lease swap, the host stores one immutable `BrokerScopeCertificateUpdateRecord` under the
+machine/server scope. The broker sees only public certificate material and its digest. A viewer that
+sees an unknown output signer pauses that route without rendering, fetches by expected
+`supersedesScopeCertificateId`/generation, and walks every retained successor from its exact local
+current certificate. Certificate-before-frame and frame-before-certificate both converge; an offline
+viewer may walk several rotations. Missing, forked, revoked, or noncontiguous updates leave the route
+non-writable and require operator re-pairing. A viewer still pinned to a subsequently compromised old
+key cannot cryptographically choose between two old-key-signed successor forks: viewers that already
+advanced reject the fork, while an offline pre-rotation viewer requires an out-of-band trust reset.
+The design does not claim automatic fork recovery.
+
+`certificateUpdateId` is
+`scu_${base64url(SHA256(str("remote-claw/server-scope-certificate-update/v1") ||
+str(collaborationServerId) || str(supersedesScopeCertificateId) || uint(keyGeneration)))}`.
+The public store's unique lookup key is exactly
+`(collaborationServerId, supersedesScopeCertificateId, keyGeneration)`, and
+`keyGeneration` must equal the superseded certificate's generation plus one. It independently parses
+the supplied certificate, recomputes its canonical digest, and requires every coordinate to match the
+lookup key before storing it. Exact bytes are idempotent. A different successor certificate ID,
+subject key, digest, or bytes at that key is retained as explicit certificate-update equivocation and
+quarantines the server scope; keying only by the new certificate ID is forbidden because it would hide
+a fork.
+
+Historical reattestations use an analogous retained public lookup keyed by
+`(collaborationServerId, historicalRecordDigest, reattesterKeyGeneration)`. A delayed old-key output pauses before render,
+fetches the exact `BrokerHistoricalReattestationRecord`, verifies its digest and current certified
+signature, and only then resumes ordinary frame verification. Frame-before-reattestation and
+reattestation-before-frame converge on the same signed-record acceptance row; missing or conflicting
+metadata remains quarantined.
+
+The current signing service may create a reattestation only after its local acceptance table proves the
+exact historical digest was accepted before the predecessor cutoff. It durably signs the immutable
+reattestation, then publishes the public object and digest alongside certificate updates. The broker
+key includes the reattester generation: exact bytes are idempotent, while a different reattestation or
+digest in that generation is public-metadata equivocation and quarantines the server scope. On a later
+rotation, the new current key may publish the deterministic successor for the same historical digest;
+its `supersedesHistoricalReattestationId` names the prior generation's record. A late viewer fetches
+the record signed by its verified current certificate, walking the contiguous public certificate and
+reattestation updates as necessary, so K0 history remains verifiable after K0→K1→K2 without treating
+K2's reattestation as a conflict. Certificate updates and reattestations are retained as long as any corresponding old
+frame/certificate may be returned; ordinary chat closure, reset, or ciphertext-body compaction does
+not collect them.
+
+The ID is
+`rhr_${base64url(SHA256(str("remote-claw/historical-record-reattestation-id/v1") ||
+str(collaborationServerId) || bytes(base64urlDecode(historicalRecordDigest)) ||
+str(signerScopeCertificateId)))}`. The first reattestation has a null `supersedes` field; every later
+generation names the exact prior record. The broker lookup key is
+`(collaborationServerId, historicalRecordDigest, signerKeyGeneration)`, and it recomputes both the ID
+and signed-object digest rather than trusting publisher-supplied values.
+
+Here `str`, `uint`, `bytes`, `optionalStr`, and `optionalUint` are exactly the A1 primitives in
+[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow);
+the stored lowercase-hex machine identity and base64url public key are decoded before their byte
+fields are serialized.
+
+All rooted-topology and lineage signatures use the same fixed algorithms and canonical primitives.
+`canonicalPayloadDigest` is unpadded-base64url SHA-256 of the listed payload, and the 64-byte canonical
+Ed25519 `signature` signs those exact bytes. Digest/signature fields themselves are excluded. Unknown
+fields, duplicate members, noncanonical strings/numbers, unsupported algorithms, and wrong digest/key/
+signature lengths fail before trust or topology mutation.
+
+The runtime owner has a separately protected local `RuntimeOwnerIdentityKeyRecord`. Initial pinning and
+rotation are explicit local-owner operations recorded in `localTrustEvidenceRef`; exactly one key is
+current, and revoked keys cannot sign a new native root. Its private key follows the same protected
+handle/no-argv/no-log custody rule as server keys. It may sign a native root only after its local
+registry proves the exact binding current. That evidence digest is:
+
+```text
+SHA256(
+  str("remote-claw/native-binding-evidence/v1") ||
+  str(runtimeId) ||
+  uint(nativeIncarnation) ||
+  str(nativeBindingId) ||
+  str(descriptor.product) ||
+  str(descriptor.access) ||
+  str(nativeConversationId) ||
+  str(attachmentLeaseId)
+)
+```
+
+Runtime-owner signatures use the same reserve/bind/sign crash discipline, but a separate
+`RuntimeOwnerSignatureReservationRecord` and counter domain. Reserving atomically advances
+`nextSignerSequence`; binding stores the exact purpose-selected canonical payload/ref and digest; signing
+persists the canonical 64-byte signature and artifact ID before release. The acceptance index is
+unique on both the signed digest and
+`(runtimeId, runtimeOwnerIdentityKeyId, runtimeOwnerKeyGeneration, signerSequence)`. Exact replay is
+idempotent, sequence reuse with different bytes is local signer equivocation, and a missing/stale
+counter or bound record makes native-root renewal non-writable. A crash never reconstructs a different
+binding-evidence digest under an already reserved sequence.
+
+The terminal coordinator resolves and compares every field from its local runtime registry; an outer
+server never invents or directly trusts a runtime-owner key. The exact native-root certificate payload
+is:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(rootPathCertificateId)
+str(kind)
+str(terminalNativeBindingId)
+str(terminalServerId)
+str(terminalLogicalChatId)
+uint(terminalTopologyGeneration)
+bytes(base64urlDecode(nativeBindingEvidenceDigest))
+str(runtimeOwnerIdentityKeyId)
+uint(runtimeOwnerKeyGeneration)
+uint(signerSequence)
+uint(issuedAtMs)
+uint(expiresAtMs)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+Each `TopologyPathHop` extends either that native-root digest or the preceding hop digest. Its payload
+is:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+uint(hopIndex)
+str(collaborationServerId)
+str(logicalChatId)
+str(inwardEdgeId)
+uint(topologyGeneration)
+bytes(base64urlDecode(predecessorCertificateOrHopDigest))
+uint(rootAnchorExpiresAtMs)
+str(signerIdentityKeyId)
+uint(signerKeyGeneration)
+str(signerScopeCertificateId)
+uint(signerSequence)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+Hop zero has `predecessorCertificateOrHopDigest` equal to the verified native-root
+`canonicalPayloadDigest`; every later hop names the preceding hop's `canonicalPayloadDigest`.
+`hopIndex` is contiguous from zero, each signer is the current certified key for that hop's server at
+issuance, and the server/chat/edge/generation matches its current installed inward edge. The exact
+server-rooted container payload is:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(rootPathCertificateId)
+str(kind)
+str(targetServerId)
+str(targetLogicalChatId)
+uint(targetTopologyGeneration)
+bytes(base64urlDecode(rootAnchorCertificateDigest))
+uint(rootAnchorExpiresAtMs)
+uint(path.length)
+for hop in path:
+  bytes(base64urlDecode(hop.canonicalPayloadDigest))
+str(issuerServerIdentityKeyId)
+uint(issuerServerKeyGeneration)
+str(issuerScopeCertificateId)
+uint(signerSequence)
+uint(issuedAtMs)
+uint(expiresAtMs)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+`rootAnchorCertificateDigest` is an opaque commitment to the terminal server's locally verified
+native-root certificate; outer servers never receive its native binding fields.
+`rootAnchorExpiresAtMs` must equal that native root's signed expiry and every hop repeats it. `path` is non-empty,
+the last hop's
+server/chat/generation equals the target tuple, and the container issuer equals that last hop's server
+key. The terminal server verifies the private native-root certificate locally and signs hop zero
+against its opaque digest. Outer servers verify the terminal server's certified hop-zero signature and
+every later signed server hop; they do not receive or independently verify native-binding fields and
+therefore trust the terminal server's root-existence claim. A plain unsigned path array is never
+accepted. The signed server path rejects repeated server/chat or edge coordinates, a
+missing/reordered hop, a predecessor splice, and a target/container mismatch. Every
+`collaborationServerId` and every inward-edge ID is unique across the path, regardless of chat; a
+source rejects a candidate path containing its server ID anywhere. A compromised terminal
+server can lie about its own root, but cannot remove or reorder an already signed outer hop.
+`expiresAtMs - issuedAtMs` is positive and at most five
+minutes, and `expiresAtMs <= rootAnchorExpiresAtMs`; issuance may be at most five seconds in the future. Current topology/edge generations and
+certificate expiry are revalidated on every prepare, install, live handshake, and mutation, not only
+when the certificate was first stored.
+
+Renewal does not reinstall or reparent a healthy edge. Before expiry, the runtime owner signs a fresh
+native root for the same exact binding/generation, and every server on the existing path reissues its
+same-coordinate hop against the new predecessor/root commitment without changing topology generation.
+Each side verifies the whole renewed chain, then atomically swaps its edge's
+`rootPathCertificateId` and fresh live-handshake reference while the old certificate is still valid.
+All descendant/container expiries must be no later than `rootAnchorExpiresAtMs`. A crash retries the
+same signed renewal records and compare-and-swap; if renewal is incomplete at expiry, the edge becomes
+non-writable rather than extending the old authority.
+
+Every install receipt signs all immutable reservation coordinates. Its payload is:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(receiptId)
+str(reservationId)
+str(stage)
+str(side)
+str(sourceServerId)
+str(sourceLogicalChatId)
+str(sourceInwardEdgeId)
+uint(expectedSourceTopologyGeneration)
+str(targetServerId)
+str(targetLogicalChatId)
+str(targetCollaboratorBindingId)
+uint(expectedTargetTopologyGeneration)
+str(rootPathCertificateId)
+bytes(base64urlDecode(priorReceiptChainDigest))
+uint(issuedAtMs)
+str(signerServerId)
+str(signerIdentityKeyId)
+uint(signerKeyGeneration)
+str(signerScopeCertificateId)
+uint(signerSequence)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+Define
+`receiptChain(label, digests...) = SHA256(str("remote-claw/inward-edge-receipt-chain/v1") ||
+str(reservationId) || str(label) || uint(digests.length) ||
+bytes(base64urlDecode(digest[0])) || ...)`.
+The only accepted predecessors are, in order: source `prepared` uses `receiptChain("source-prepared")`;
+target `prepared` uses `receiptChain("target-prepared", sourcePreparedDigest)`; source
+`commit_intent` uses `receiptChain("source-commit", sourcePreparedDigest, targetPreparedDigest)`;
+target `commit_intent` uses
+`receiptChain("target-commit", sourcePreparedDigest, targetPreparedDigest, sourceCommitDigest)`;
+source `installed` uses
+`receiptChain("source-installed", sourceCommitDigest, targetCommitDigest)`; and target `installed`
+uses `receiptChain("target-installed", sourceCommitDigest, targetCommitDigest,
+sourceInstalledDigest)`. The named side must sign with that server's current certified key. A receipt
+with another predecessor set, order, reservation, generation, or certificate is not a later phase.
+
+Each side's live-handshake attestation signs this payload:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(handshakeId)
+str(side)
+str(reservationId)
+str(sourceServerId)
+str(sourceLogicalChatId)
+str(sourceInwardEdgeId)
+uint(sourceTopologyGeneration)
+uint(sourceConnectionEpoch)
+bytes(base64urlDecode(sourceNonce))
+str(targetServerId)
+str(targetLogicalChatId)
+str(targetCollaboratorBindingId)
+uint(targetTopologyGeneration)
+uint(targetConnectionEpoch)
+bytes(base64urlDecode(targetNonce))
+bytes(base64urlDecode(rootPathCertificateDigest))
+bytes(base64urlDecode(sourceInstalledReceiptDigest))
+bytes(base64urlDecode(targetInstalledReceiptDigest))
+str(transportBindingSchemaId)
+bytes(base64urlDecode(transportChannelBinding))
+uint(issuedAtMs)
+str(signerIdentityKeyId)
+uint(signerKeyGeneration)
+str(signerScopeCertificateId)
+uint(signerSequence)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+Nonces are distinct canonical 32-byte random values. The initial and only supported binding schema is
+`remote-claw/tls13-exporter-binding/v1`: over the exact TLS 1.3 connection, both peers call the RFC
+8446 exporter with label `EXPORTER-remote-claw-inward-edge-v1`, length 32, and context equal to
+`SHA256(str("remote-claw/inward-edge-exporter-context/v1") || str(reservationId) ||
+str(sourceServerId) || str(sourceLogicalChatId) || str(sourceInwardEdgeId) || str(targetServerId) ||
+str(targetLogicalChatId) || str(targetCollaboratorBindingId) || bytes(sourceNonce) ||
+bytes(targetNonce))`. The 32 exporter bytes are `transportChannelBinding`; application Ed25519
+attestations authenticate the declared server keys over that channel. No alternate TLS version,
+exporter label/context, Noise/Unix shortcut, or fallback transport is accepted without a new binding
+schema and retained interop/downgrade proof. Source and target attestations differ only in
+`side` and signer coordinates. `inwardLiveLeaseId` is
+`ril_${base64url(SHA256(str("remote-claw/inward-edge-live-lease/v1") ||
+bytes(base64urlDecode(sourceAttestationDigest)) ||
+bytes(base64urlDecode(targetAttestationDigest))))}`. Both peers install those exact
+digests and epochs; a mutation carries that ID plus its lineage, and cannot be replayed on another
+connection or after either lease is superseded.
+
+The canonical origin bytes begin with `str("remote-claw/event-lineage-origin/v1")` and then either
+`str("collaborator")` followed by the five collaborator-origin strings in DTO order, or
+`str("native")` followed by native binding and observation IDs. `originDigest` is SHA-256 of those
+bytes. Each lineage hop payload is:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(lineageId)
+bytes(base64urlDecode(originDigest))
+uint(hopIndex)
+str(collaborationServerId)
+str(logicalChatId)
+str(inwardEdgeId)
+str(direction)
+str(canonicalEnvelopeSchemaId)
+bytes(base64urlDecode(canonicalEnvelopeDigest))
+bytes(base64urlDecode(priorChainDigest))
+str(signerIdentityKeyId)
+uint(signerKeyGeneration)
+str(signerScopeCertificateId)
+uint(signerSequence)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+For hop zero, `priorChainDigest === originDigest`; later hops require the preceding `chainDigest`.
+`canonicalPayloadDigest` and `chainDigest` both equal SHA-256 of the payload above. The record direction
+equals every hop direction, indices are contiguous, and every hop key resolves to that exact server.
+Changing origin, payload, direction, edge, order, or any predecessor breaks the chain.
+The current certified server key signs the exact canonical payload. `signedRecordDigest` is SHA-256 of
+`str("remote-claw/event-lineage-hop-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || str(signerIdentityKeyId) ||
+uint(signerKeyGeneration) || uint(signerSequence) || bytes(base64urlDecode(signature))`.
+The hop, its preparation, bound signature reservation, signed-record acceptance row, and any compound
+joint finalizer must all carry that exact digest; a signature or hop transplanted from another
+preparation fails before publication.
+
+`SignedRecordAcceptanceRecord` is unique on both the exact signed-record digest and
+`(collaborationServerId, signerSequence)`. Same sequence/same key, certificate, generation, and digest
+is idempotent; same sequence with any different value is signer equivocation and quarantines before
+rendering, topology action, or forwarding. When a successor certificate arrives, its signed
+`supersededSignerMaxSequence` becomes the retired predecessor status cutoff atomically. A higher
+already-accepted predecessor sequence makes the rotation inconsistent and quarantines it.
+
+A retired-key artifact is accepted after that transition only if its exact digest was already in the
+local acceptance table before the status change and its sequence is at or below the signed cutoff.
+Merely choosing an old sequence never backdates a newly observed record. A cold or late peer needs a
+current-key `HistoricalRecordReattestationRecord`; its payload is:
+
+```text
+str(canonicalPayloadSchemaId)
+uint(schemaVersion)
+str(historicalReattestationId)
+optionalStr(supersedesHistoricalReattestationId)
+str(collaborationServerId)
+bytes(base64urlDecode(historicalRecordDigest))
+str(historicalSignerIdentityKeyId)
+str(historicalSignerScopeCertificateId)
+uint(issuedAtMs)
+str(signerIdentityKeyId)
+uint(signerKeyGeneration)
+str(signerScopeCertificateId)
+uint(signerSequence)
+str(signatureAlgorithm)
+str(canonicalPayloadDigestAlgorithm)
+```
+
+The reattesting key must be current when received. A revoked key never authorizes a newly observed
+artifact without that current-key reattestation. These rules preserve already accepted history without
+letting an old private key create new frames, hops, receipts, or topology claims after its cutoff.
+
+A rotation is accepted only by the ordered-chain invariants and current-pointer/status
+compare-and-swap above.
+Explicit re-pairing is a separate operator-confirmed trust reset with a new self-signed anchor; it does
+not masquerade as continuity. The random `collaborationServerId` remains stable. Retired public keys
+remain available to verify old records, while revocation blocks new hops without rewriting history.
+The receiver resolves each hop's key from that authenticated registry, verifies the complete chain,
+and appends its own attestation. The outward result intentionally returns over the same physical edges
+in reverse. For an authenticated stable proposal, a server records an ordered rejection when the
+lineage already traversed that server or inward edge; malformed or unauthenticated transport gets no
+semantic ACK. It rejects an observation that already traversed that outward edge, and never converts an outward
+observation or correlated echo into an inward proposal. A malicious server can lie about a new event
+it originates, but it cannot change the payload or remove, reorder, or change an already-attested
+inner hop without breaking the verifiable chain.
 
 A source observation's envelope, coordinate, capability/epoch pins, classification evidence, and
 fingerprint fields are immutable. Its `pending` disposition and nullable result links advance exactly
@@ -951,20 +7194,87 @@ classification. A `CanonicalSourceEventRecord` is immutable and unique on the ex
 exists only for a proven-new event created with `command.proposed`. Duplicate observations link that
 record, while collision/ambiguous observations link only a recovery gap.
 
-An outside capability snapshot is owned by one outside-binding incarnation and records the proven
-ingress command/control families, projection shapes, acknowledgement/cursor behavior, idempotency and
-read-back guarantees, and the evidence/version that established them. The connector must durably
-install or revalidate that snapshot before the incarnation becomes writable. A protocol or connector
-change creates a new immutable snapshot even when the provider namespace stays the same; commands and
-outbox items retain the snapshot ID used for their decision so later capability changes cannot rewrite
-history.
+An outside capability snapshot is owned by one outside-binding incarnation. Every writable ingress
+operation has one `OutsideIngressFamilyCapability`; there are no string-only family allowlists. Its
+`capabilityEntryDigest` is SHA-256 of:
 
-Each startup or reconnect writes a separate immutable capability-verification record tied to the
-current coordinator and connection epochs. Writability requires an `accepted` verification whose
-incarnation, snapshot, coordinator epoch, and connection epoch all match the current binding lease. If
-revalidation finds different capabilities, the connector creates the replacement snapshot and its
-verification, then atomically advances both current pointers. A failed verification leaves the
-incarnation non-writable and preserves the previous records for recovery and audit.
+```text
+str("remote-claw/outside-ingress-family-capability/v1") ||
+str(scopeKind) || str(sourceOperationKind) || str(sourcePayloadSchemaId) ||
+str(sourcePayloadDigestAlgorithm) || str(sourceParserSchemaId) ||
+bytes(base64urlDecode(sourceParserImplementationDigest)) ||
+str(sourceEventIdExtractionSchemaId) ||
+bytes(base64urlDecode(sourceEventIdExtractionImplementationDigest)) ||
+str(sourceCoordinateSchemaId) ||
+bytes(base64urlDecode(sourceCoordinateImplementationDigest)) ||
+str(sourceFingerprintSchemaId) ||
+bytes(base64urlDecode(sourceFingerprintImplementationDigest)) ||
+str(sourceFingerprintDigestAlgorithm) || str(namespaceBoundaryClassifierSchemaId) ||
+bytes(base64urlDecode(namespaceBoundaryClassifierImplementationDigest)) ||
+str(fingerprintCapabilityRelation) || str(normalizationSchemaId) ||
+bytes(base64urlDecode(normalizationImplementationDigest)) ||
+str(normalizedMutationFamily) || str(canonicalCommandPayloadSchemaId) ||
+str(acknowledgement) || str(cursor) || str(replayIdentity) ||
+bytes(base64urlDecode(evidenceDigest))
+```
+
+The retained evidence proves the exact source parser, ID extraction, coordinate, fingerprint,
+namespace-boundary classification, normalization, replay, and ACK semantics. Both payload and
+fingerprint algorithms are exactly SHA-256 over canonical bytes and every digest decodes from
+unpadded base64url to 32 bytes. Entries are ordered by
+`(scopeKind,sourceOperationKind,sourcePayloadSchemaId)` using unsigned UTF-8 byte order. Duplicate or
+reordered keys, a parser/normalizer implementation substitution, or two source operations mapping
+ambiguously to one normalized operation invalidates the document. The ingress vector digest is:
+
+```text
+SHA256(str("remote-claw/outside-ingress-family-vector/v1") || uint(count) ||
+       for entry in order: bytes(base64urlDecode(entry.capabilityEntryDigest)))
+```
+
+`OutsideProtocolCapabilities.canonicalCapabilityDocumentDigest` is SHA-256 of:
+
+```text
+str("remote-claw/outside-protocol-capabilities/v1") || uint(schemaVersion) ||
+str(providerKind) || str(providerProtocolVersion) || str(providerProtocolSchemaId) ||
+bytes(base64urlDecode(connectorBinaryDigest)) ||
+bytes(base64urlDecode(ingressCapabilityVectorDigest)) ||
+str(projectionCapabilitySchemaId) ||
+bytes(base64urlDecode(projectionCapabilityVectorDigest)) ||
+str(controlCapabilitySchemaId) ||
+bytes(base64urlDecode(controlCapabilityVectorDigest))
+```
+
+All three vector refs retain their exact canonical entries; the snapshot validator recomputes them
+and the document digest. Projection/control schemas remain separately versioned, but cannot alter
+ingress normalization. The immutable snapshot digest is:
+
+```text
+SHA256(str("remote-claw/outside-capability-snapshot/v1") || uint(schemaVersion) ||
+       str(capabilitySnapshotId) || str(outsideIncarnationId) ||
+       bytes(base64urlDecode(capabilityDocumentDigest)) ||
+       bytes(base64urlDecode(evidenceDigest)) || uint(verifiedAtMs))
+```
+
+A protocol, connector binary, parser, normalizer, replay contract, or evidence change creates a new
+snapshot even when the provider namespace stays the same. Commands and outbox items retain the
+snapshot used for their decision, so a later change cannot rewrite history.
+
+Each startup or reconnect writes a separate immutable verification whose digest is:
+
+```text
+SHA256(str(verifierSchemaId) || str(capabilityVerificationId) ||
+       str(outsideIncarnationId) || str(capabilitySnapshotId) ||
+       bytes(base64urlDecode(capabilitySnapshotDigest)) || uint(coordinatorEpoch) ||
+       uint(connectionEpoch) || bytes(base64urlDecode(evidenceDigest)) ||
+       uint(verifiedAtMs) || str(result))
+```
+
+Writability requires `result:"accepted"` and one atomic compare-and-swap that makes the incarnation's
+snapshot and verification pointers current together. The verification's incarnation, snapshot
+ID/digest, coordinator epoch, and connection epoch must equal the current binding lease. If
+revalidation finds different capabilities, it creates a replacement snapshot and verification before
+advancing either pointer. A failed verification leaves the incarnation non-writable and preserves the
+previous records.
 
 `sourceEventNamespaceId` is durable independently of an outside-binding incarnation or connection
 epoch. Reconnect, credential rotation, capability revalidation, and connector replacement preserve it
@@ -1093,28 +7403,30 @@ topology generation is no longer current.
 
 ## 5. Normalized command path
 
-The first command family is intentionally small:
+The first selected families are intentionally small: chat-scoped `user_text` and server-control
+`new_chat`. Both normalize into the common command shape:
 
 ```text
-submit_text
+command
 ├── command ID
 ├── collaboration server ID
-├── logical chat ID
-├── event lineage ID
-├── source surface
-├── outside binding
-├── source event namespace
-├── source event/message ID
-├── capability snapshot
-├── capability verification
-├── text
-├── received time
-└── expected active turn
+├── scope kind + optional source/target logical chat IDs
+├── source kind + immutable source record
+├── source event namespace + event ID + source-identity/source-record digests
+├── typed mutation family
+├── canonical typed payload reference + digest
+├── ready journal position + server-wide command sequence
+├── decision + admitted target kind
+├── target capability snapshot + family digest
+├── result version/current-result pointer
+└── decision evidence + lifecycle state
 ```
 
-The outside binding, namespace, source ID, and capability pins are required for structured outside
-ingress and nullable only where the source contract explicitly has no such field. The expected active
-turn is likewise optional.
+The immutable source record, normally a `CanonicalSourceEventRecord`, carries the outside binding,
+source-surface observation, event/management lineage, connector-incarnation provenance, and source
+capability verification. Those facts are not copied into ad hoc text or timing fields on the common
+command. The command carries only a typed canonical payload and pins a target capability after ordered
+adjudication. Nullable chat/target fields follow the closed chat-versus-server-control rules in §4.
 
 The initial remote collaborator source surfaces are:
 
@@ -1129,17 +7441,79 @@ execution. It is a peer of the one innermost remote-claw connection at the nativ
 history or a live stream exposes the local action, remote-claw records it as a native observation and
 correlates it with the applied native order; it never fabricates a prior coordinator decision.
 
-The exact ingress deduplication key is
-`(collaboration_server_id, logical_chat_id, outside_binding_id, source_event_namespace_id, source_event_id)`.
-`outside_incarnation_id`, capability verification, and connection epoch remain immutable
-provenance on the observation, but none resets semantic deduplication. Mutable structured sources must
+The exact outside-ingress scope ID is
+`css_${base64url(SHA256(str("remote-claw/collaboration-source-scope/v1") ||
+str(collaborationServerId) || str(scopeKind) || optionalStr(logicalChatId)))}`. `chat` requires a
+non-null chat; `server_control` requires null. The deduplication key is the non-null tuple
+`(sourceScopeId,outsideBindingId,sourceEventNamespaceId,sourceEventId)`, avoiding nullable-SQL
+uniqueness. Both observation and canonical source-event rows retain/recompute that scope ID.
+The observation's immutable `sourceObservationEvidenceDigest` is SHA-256 of:
+
+```text
+str("remote-claw/source-observation-evidence/v1") ||
+str(sourceEventObservationId) || str(collaborationServerId) || str(scopeKind) ||
+optionalStr(logicalChatId) || str(sourceScopeId) || str(lineageKind) ||
+bytes(base64urlDecode(lineageDigest)) || str(outsideBindingId) ||
+str(observedOutsideIncarnationId) || optionalStr(sourceEventNamespaceId) ||
+str(sourceEventId) || optionalStr(sourceReplayIdentity) || str(sourcePayloadSchemaId) ||
+str(sourcePayloadDigestAlgorithm) || bytes(base64urlDecode(sourcePayloadDigest)) ||
+str(coordinateSchemaId) ||
+str(sourceCoordinate) || optionalStr(namespaceTransitionId) ||
+optionalDigest(classificationEvidenceDigest) || str(sourceCapabilitySnapshotId) ||
+bytes(base64urlDecode(sourceCapabilitySnapshotDigest)) ||
+str(sourceCapabilityVerificationId) ||
+bytes(base64urlDecode(sourceCapabilityVerificationDigest)) ||
+bytes(base64urlDecode(ingressCapabilityEntryDigest)) || str(normalizationSchemaId) ||
+bytes(base64urlDecode(normalizationImplementationDigest)) || uint(coordinatorEpoch) ||
+uint(connectionEpoch) || str(fingerprintSchemaId) || str(fingerprintDigestAlgorithm) ||
+bytes(base64urlDecode(eventFingerprint)) || str(fingerprintCapabilitySnapshotId)
+```
+
+Refs are locators only; their retained bytes must recompute every paired digest. The observation's
+coordinate, fingerprint, source-event ID extraction, namespace classifier, source payload schema, and
+normalizer must equal one entry in its snapshot's verified ingress vector. Selected version one
+requires `fingerprintCapabilitySnapshotId === sourceCapabilitySnapshotId`; cross-snapshot
+compatibility requires a future schema and cannot be inferred. The snapshot ID/digest and verification
+ID/digest must composite-foreign-key one currently accepted verification for the same outside
+incarnation and epochs when a new event is classified. A later replay may use a successor incarnation
+only through the stored historical entry and namespace rules.
+
+For a proven-new observation, the canonical event ID is
+`cev_${base64url(SHA256(str("remote-claw/canonical-source-event-id/v1") ||
+str(sourceScopeId) || str(outsideBindingId) || str(sourceEventNamespaceId) ||
+str(sourceEventId)))}`. Its `canonicalSourceEventDigest` is SHA-256 of:
+
+```text
+str("remote-claw/canonical-source-event/v1") || str(canonicalSourceEventId) ||
+str(collaborationServerId) || str(scopeKind) || optionalStr(logicalChatId) ||
+str(sourceScopeId) || str(lineageKind) || bytes(base64urlDecode(lineageDigest)) ||
+str(outsideBindingId) || str(observedOutsideIncarnationId) ||
+str(sourceEventNamespaceId) || str(sourceEventId) || str(firstObservationId) ||
+bytes(base64urlDecode(firstObservationEvidenceDigest)) ||
+optionalStr(sourceReplayIdentity) || str(sourcePayloadSchemaId) ||
+str(sourcePayloadDigestAlgorithm) || bytes(base64urlDecode(sourcePayloadDigest)) ||
+str(sourceCapabilitySnapshotId) ||
+bytes(base64urlDecode(sourceCapabilitySnapshotDigest)) ||
+str(sourceCapabilityVerificationId) ||
+bytes(base64urlDecode(sourceCapabilityVerificationDigest)) ||
+bytes(base64urlDecode(ingressCapabilityEntryDigest)) || str(normalizationSchemaId) ||
+bytes(base64urlDecode(normalizationImplementationDigest)) || uint(coordinatorEpoch) ||
+uint(connectionEpoch) || str(fingerprintSchemaId) || str(fingerprintDigestAlgorithm) ||
+bytes(base64urlDecode(eventFingerprint)) || str(fingerprintCapabilitySnapshotId)
+```
+
+`firstObservationId` and its evidence digest must resolve to that exact new observation; substituting
+another observation, accepted verification, epoch, parser, normalizer, or capability row changes the
+event digest. `commandId` is inserted atomically with the event but excluded from this cycle-free
+digest. `outside_incarnation_id`, capability verification, and connection epoch do not reset semantic
+deduplication. Mutable structured sources must
 generate and persist their event ID before first send. An adapter-assigned ID is safe only when the
 source receives and retains it before retry. If that acknowledgement is lost, an indistinguishable
 repeat remains `outcome_unknown`; it becomes a new proposal only after explicit user confirmation of
 new intent, never automatically and never by text matching.
 
 Before allocating any proposal, the coordinator searches canonical source-event records, observations,
-and correlation mappings for the same logical chat and outside binding across every superseded
+and correlation mappings for the same source scope and outside binding across every superseded
 connector incarnation. A source-stable object/replay identity or historical mapping that proves the
 event is old links the new observation to the prior command and append-only outcome records without
 allocating `command_seq` or executing native work. A same raw event ID in a proven distinct namespace
@@ -1179,7 +7553,15 @@ with weaker post-acceptance correlation.
 
 Interrupts, approvals, questions, attachments, model changes, and mode changes become separate typed
 command families only after the chosen inner and outside adapters can represent them faithfully.
-Unknown mutation shapes fail closed.
+Unknown mutation shapes fail closed. Semantic normalization happens before capability lookup, result
+allocation, projection intent, or native attempt. A blank `user` proposal is rejected unless the
+pinned engine tuple proves a real native blank-submit meaning. Reserved slash text is never left for an
+engine adapter to reinterpret after generic user admission: for OpenCode, exact `/compact` is
+normalized to typed `compact` first. If that family is unsupported, it receives the stored rejected
+`action_result` path with no `accepted`, user projection, or native attempt; if supported, it receives
+a typed action-result and one fenced compact attempt. Other slash text stays ordinary user text only
+when the native product treats it as ordinary submitted content under the pinned compatibility
+contract.
 
 ## 6. Control journal and rebuildable projection
 
@@ -1195,8 +7577,10 @@ own remote-collaborator mutations:
 - `outbox.changed`: a stable projection item was enqueued, claimed, accepted, or became uncertain;
 - `recovery.gap`: evidence is missing and the missing range or action is explicit.
 
-Every control record carries a stable record ID, `(collaborationServerId, logicalChatId)` scope or an
-immutable foreign key to that pair, journal offset, commit time, correlation, and source provenance.
+Every control record carries a stable record ID and exactly one closed scope: either
+`(collaborationServerId,"server_control",null)` or
+`(collaborationServerId,"chat",non-null logicalChatId)`, or an immutable foreign key to one of those
+tuples. It also carries journal offset, commit time, correlation, and source provenance.
 The exact payload of a queued or uncertain command remains durable until its delivery is resolved. A
 retention policy may later redact or expire the payload, but it must
 retain the canonical source-event identity→command record; the observation's namespace transition,
@@ -1233,8 +7617,10 @@ classification and does exactly one of these:
 A crash before commit leaves none of those semantic results; a crash after commit resumes the recorded
 one. No semantic ACK or cursor advances until that transaction commits. A proposal left without
 `command.decided` is resumed deterministically after restart; uniqueness constraints and one
-transaction allocate its single decision and `command_seq`. A durable causal outbox item is likewise
-enqueued atomically with the command or native-observation mapping it projects. It retains the exact
+transaction allocate its single decision and `command_seq`. A source result/ACK or admitted-user
+projection outbox is enqueued only with signed-result finalization (or the joint nested finalizer),
+never with `command.proposed` or decision reservation. A native-observation projection outbox is
+enqueued atomically with the observation mapping it projects. Each outbox item retains the exact
 credential-stripped publish payload and stable target message/attempt ID until resolved. These are
 transport obligations, not a second semantic transcript.
 
@@ -1375,14 +7761,17 @@ When the coordinator restarts:
 11. Reconcile proposals:
     - if the inward target, ultimately backed by native evidence, proves the proposal happened, mark it
       observed and never resend it;
-    - if delivery provably never started, offer it inward in this server's proposal order;
+    - if delivery provably never started, offer it inward in this server's proposal order. At a
+      terminal-native edge this resumes only the same immutable attempt against its exact original
+      executor; at a nested edge, transport replacement additionally requires the separately signed
+      positive-never-started continuation;
     - if delivery started but cannot be proven, mark it `outcome_unknown` and do not resend
       automatically.
 12. Reconnect collaborator protocols, revalidate each current incarnation's durable capability
     snapshot, and resume durable projection outboxes from their stable IDs.
-13. Announce and route the same server-scoped `logicalChatId`. A rotated nested or native transport
-    must not allocate a second web row, broker channel, provider session/chat, represented subtree, or
-    command sequence.
+13. Announce and route the same `(collaborationServerId, logicalChatId)` scope. A rotated nested or
+    native transport must not allocate a second web row, broker channel, provider session/chat,
+    represented subtree, or command sequence.
 14. Reopen forwarding only when the next inward proposal cannot overtake an uncertain older attempt.
     Merely displaying a gap does not make delivery safe.
 
@@ -1408,9 +7797,13 @@ collaborator delivery.
 If the native client cannot recover the conversation, remote-claw may install a successor binding
 under the existing logical chat only after an explicit recovery decision and gap, or may create an
 explicit new logical chat with predecessor lineage. Delivery attempts are bound to their original
-native conversation/incarnation: `not_started` proposals forwarded toward the old conversation require
-explicit abandonment or user reauthorization before delivery to a successor. It never manufactures
-native state by replaying historical actions.
+native conversation/incarnation. An existing terminal-native attempt never migrates to that successor:
+if it cannot still run against its exact original executor, it must be explicitly abandoned before
+send and closes without effect. Any user reauthorization creates a fresh authenticated source event,
+common command, and attempt against the successor; it does not reopen or continue the old command.
+Only the separately signed nested-transport positive-never-started contract may continue one old
+command onto a replacement transport. Recovery never manufactures native state by replaying
+historical actions.
 
 The runtime owner observes native conversation changes even while every collaboration coordinator is
 offline and writes a monotonic local transition log before depending on that transition for recovery.
@@ -1432,8 +7825,9 @@ server-journal transaction commits the transition classification, all new or reu
 
 Inference attempts remain attached to their immutable runtime/local records and are never replayed,
 rewritten, or moved during this import. The coordinator never silently repoints the old binding, and
-queued proposals for the old chat are not delivered to the new conversation without explicit
-abandonment or user reauthorization. Only after the import and native reconciliation commit may a
+terminal queued proposals for the old chat are never delivered to the new conversation. Explicit
+reauthorization creates a fresh authenticated source event and common command. Only after the import
+and native reconciliation commit may a
 newly mapped chat acquire a writable inward edge.
 
 ## 9. Native adapter recovery
@@ -1634,7 +8028,7 @@ selected, correlated native projections for those later commands, including nati
 and output bytes.
 
 The retained real-TUI fixture, whose probe SHA-256 is
-`014f8bbfcc17ebf25e40598be9117d4fbbc78d83eefbbeeaad189c77bc8e5ae8`, starts one real app-server,
+`698d2202c9dcaa5f1d5789fe11c7f8d27e35f430109cedd0bc6aeac3a703bc73`, starts one real app-server,
 connects one raw client, and attaches a real
 `codex resume <same-id> --remote <transparent-recorder> --no-alt-screen` TUI to the exact same native
 thread. One model-free shell command in each direction yielded deeply equal selected five-event
@@ -1649,7 +8043,7 @@ before emitting its checked evidence. The TUI source itself uses the same
 coexistence path, not complete TUI parity.
 
 The retained multi-chat attachment fixture, whose probe SHA-256 is
-`aaaa9c633a857c62b6527bb6d5bce3d5bb749b41eb727d02b72f0fa7c53ab5c3`, starts one real app-server
+`f1f6a14c69a1d8650cbc6519c129d7afc50e96c43e968d9866952615569065ba`, starts one real app-server
 and three independently initialized raw connections. Two direct-client stand-ins each create a
 different persistent top-level thread. Before the host joins, only the requester receives its
 thread's selected five-event shell-command projection; both other connections return
@@ -1776,15 +8170,605 @@ OpenCode is the cleanest first control adapter:
 In shared mode exactly one directly used OpenCode TUI path and one epoch-fenced remote-claw adapter
 lease share the same private server/session. OpenCode exposes a server-wide SSE observer plus
 independent HTTP mutations, not a persistent writer connection whose count can enforce this rule. The
-private endpoint/runtime owner therefore authenticates the TUI separately, admits remote mutations
-only from the current adapter epoch, rejects concurrent old/new wrapper writes, and excludes
-unclassified native clients until their concurrency and source attribution are proven. The TUI uses
-normal HTTP/SSE semantics; its mutable requests do not detour through the coordinator. remote-claw
+runtime owner therefore exposes three callable fenced seams—TUI process, binding adapter, and
+server-scoped creation—plus one internal-only observer; the actual OpenCode listener is
+unreachable outside its private namespace. The TUI front door is bound to one supervised TUI process
+by a server-scoped `NativeTuiProcessIngressLease`, incarnation-specific credential, and OS
+peer/namespace evidence. That process lease permits native create/switch/clear while coordinators are
+offline; the runtime owner records each resulting `LocalNativeConversationTransitionRecord` and
+atomically rotates the child `NativeTuiSessionIngressBinding` when the active `ses_*` changes. That
+child binds the process lease, workspace, local transition cursor, and exact native session; it is
+evidence about one target, not an attempt to freeze the TUI onto it. Policy installation is
+generation-monotonic and compare-and-swaps the server attachment's current TUI policy pointer after
+runtime-owner attestation; stale, unproved, or superseded policies make that front door non-writable.
+Exactly one TUI process ingress lease is current per server attachment, and installation
+compare-and-swaps `currentTuiProcessIngressLeaseId`; every session child references that current
+process lease. Replacement closes the old endpoint/credential and proves already-forwarded mutations
+terminal or contained before advancing the pointer, so a second TUI never overlaps.
+The adapter front door
+accepts only the credential handle and epoch on the current `NativeClientIngressLease` and
+`NativeTransportLease`, but is dispatch-only rather than a general HTTP proxy. Every mutating adapter
+request also presents the one-time opaque authorization from the exact current
+`NativeFrontDoorDispatchRecord`. Immediately before the socket write, the front door revalidates the
+command/effect gate, immutable per-family capability entry, binding/incarnation/session, attachment and
+ingress leases, method/path/body and target digests, then performs the same atomic final pre-write
+transaction defined above: attempt `claimed → started`, dispatch `not_started → started`, and gate
+`(never_started,null) → (started,nativeDeliveryAttemptId)`, while requiring no abandonment record.
+The handle is consumed by that transaction. A current adapter credential without a current dispatch
+row cannot mutate anything.
+
+Exactly one `NativeClientIngressLease` is current per binding transport lease. Installation fences and
+closes the old endpoint/credential, settles or quarantines every old dispatch, and only then
+compare-and-swaps `NativeTransportLease.currentNativeClientIngressLeaseId`; a uniqueness constraint
+forbids two current rows for one attachment lease. A stale credential remains rejected even if its
+coordinator is still alive.
+
+Exactly one `NativeServerFrontDoorLease` is current per server attachment/workspace. Installation
+closes the old endpoint and credential, then proves every old creation dispatch terminal or
+quarantined before compare-and-swapping `currentServerFrontDoorLeaseId`; a uniqueness constraint
+forbids two current rows. If an old dispatch already passed `not_started → started`, replacement
+cannot make another lease resend it and remains blocked until its outcome is reconciled or contained.
+Every creation dispatch revalidates this pointer immediately before its final CAS, so a stale creation
+credential cannot write after replacement.
+
+Raw access to the private listener, a second TUI lease, an unclassified third
+client, and concurrent old/new adapter writes are rejected. Credentials are random, rotated with their
+lease, and stored only in protected runtime-owner custody; journal rows contain opaque handles. The TUI
+still sees normal HTTP/SSE semantics, and its mutable requests do not detour through the coordinator.
+The TUI authority is not a same-UID bearer token or loopback URL that a model tool can copy. After the
+TUI executable has started, the wrapper sends a connected process-bound channel over a private
+bootstrap socket with `SCM_RIGHTS`; the pinned TUI transport hook receives it, sets `FD_CLOEXEC`, and
+never exposes its descriptor or authorization in argv, environment, cwd, or readable files. Thus the
+wrapper-to-TUI exec cannot close the channel prematurely, while later tool execs cannot inherit it.
+The front door also checks the exact peer PID/pidfd plus its expected process/cgroup and rejects
+descendants, sibling processes, and a reopened connection. The raw private OpenCode listener has a
+separate OS boundary: only the exact runtime-owner TUI, adapter, observer, and creation front-door
+TGIDs may connect to its socket. The OpenCode server TGID, TUI TGID, model/tool descendants, and every
+other same-UID process are denied by an attach-before-run cgroup-BPF/LSM policy keyed to pidfd/start
+time and the listener socket inode. Tool processes enter their ordinary user-network namespace before
+exec and that namespace has no route, mount, inherited descriptor, proxy, or DNS name for the raw
+listener. Release proof launches a tool subprocess that tries the raw listener plus every
+TUI/adapter/observer/creation endpoint and the provider-control/inference sockets. If
+the pinned OpenCode build lacks the post-exec transport hook (as unmodified 1.17.5 currently does) and
+the OS cannot enforce an equivalent exact-process boundary, real-TUI writability is unsupported for
+that tuple rather than falling back to a reusable credential.
+Differential parity against a direct network-fenced server is a release gate for ordinary TUI
+operations. Provider/auth/config **mutations** are the deliberate initial-A2 exception: the
+`NativeTuiPolicySnapshot` classifies each exact method/path/query/body operation rejected and returns
+its pinned unsupported response. Read operations required by the real TUI are different. The runtime
+gives OpenCode a sealed, read-only synthetic HOME/XDG provider/config/auth view containing only
+credential-free descriptors for the local remote-claw façades, and the front-door policy may pass an
+exact proved TUI read only when its retained response/redaction proof shows no secret or mutable
+destination. The initial real-TUI trace and allowlist must include every startup and active-use read,
+including dynamic-directory queries, `/global/event`, config/provider/auth descriptors, session
+status, commands/agents/models/projects, integrations/MCP/LSP/resources/workspace state, and any
+console/location endpoints the pinned build actually calls. A changed or unlisted read fails closed;
+classifying an entire provider/config path prefix as safe is forbidden.
+
+The synthetic files are mounted read-only and cannot be replaced through an alternate XDG/HOME,
+symlink, or bind mount; the supervisor scrubs provider/proxy/config override variables on every start.
+OpenCode and its tool children receive no real provider credential. Below all mutable app
+configuration, process-tree network policy redirects the pinned provider façade destination to a
+private runtime-owner socket and denies every other provider egress, including DNS, proxy, Unix-socket,
+and inherited-fd bypasses. The separately isolated inference connector discards any inner
+`Authorization` value and owns the real upstream credential. A tool may retain ordinary user-authorized
+network access only in a different identity/namespace that cannot reach the raw native listener, TUI,
+adapter, observer, creation, inference-connector, or provider-control sockets. It never installs provider credentials in
+OpenCode or changes the fence. remote-claw
 orders only the proposals behind its adapter lease, then OpenCode arbitrates those against direct TUI
 work and emits the applied native order through history/SSE. An outside-collaborator disconnect cannot
 abort the native run, close the shared observer, or detach the TUI. Any client-facing proxy must behave
 like a direct OpenCode server connection. Separately, every configured OpenCode model provider is
 pointed at a private remote-claw façade and direct provider egress is blocked.
+
+Façade admission is exact-process, not same-UID or descendant authority. On Linux the runtime owner
+pins the OpenCode server's pidfd/start-time identity in an attach-before-run cgroup-BPF connect policy;
+only that exact TGID (including its threads) may connect to the façade socket, and forked tool TGIDs
+are denied even while they share a UID/cgroup. PID reuse is rejected after pidfd exit. The façade
+socket is in the owner's private network namespace, has no pathname visible in the tool mount
+namespace, and accepts no bearer token from request headers. Equivalent non-Linux enforcement must
+prove exact process identity and descendant denial; otherwise that tuple is unsupported. Release tests
+attempt direct, proxy, DNS, inherited-fd, Unix-socket, and PID-reuse access from a spawned tool.
+
+Authentication alone never authorizes an arbitrary OpenCode URL. For every **binding-adapter**
+mutating method, the front
+door resolves the path/body session ID, permission or child object, and any parent relationship through
+the ingress lease's exact `nativeBindingId` and `nativeConversationId`. It rejects a valid adapter
+credential aimed at another `ses_*`, child, permission, chat, or server scope before forwarding.
+Replacing the direct-TUI lease is also a barrier: the runtime owner first closes the old endpoint,
+revokes its credential, and proves the supervised old TUI/process plus every forwarded mutable request
+stopped or reached a classified terminal outcome. A new TUI lease cannot become current while the old
+path could still act.
+
+The adapter allowlist is the exact method/path/body set in the pinned capability entry for the
+admitted family. `NativeServerCapabilitySnapshot` and every binding snapshot pin the exact generated
+OpenAPI version/digest, the complete callable front-door route manifest, and a retained total
+operation-classification table. The real native listener remains unreachable, so an undocumented
+native route is not callable merely because it exists in the binary. Startup recomputes the wrapper's
+measured front-door registry and remains non-writable if it differs or any callable operation lacks a
+classification. Totality covers every TUI, adapter, observer, and creation front-door path, not only
+`/doc`: raw/catch-all handlers, path normalization, method override, upgrade/WebSocket paths, PTY
+connect, TUI/UI fallback, and side-effectful or ticket-minting `GET` handlers are explicit entries.
+Everything else is rejected before a socket to the native listener is opened. HTTP verb alone never
+proves read-only. The table is complete for that exposed surface: every operation is
+classified as TUI-only, dispatch-gated collaborator work, separately gated runtime management, or
+rejected; an unknown route in a newer schema defaults to rejected. In particular,
+`PATCH /session/{id}` permission-policy setup, session delete/rename/share, message or part mutation,
+shell/revert, auth/credential/config/provider/integration/MCP changes, PTY/worktree/workspace changes,
+TUI-control routes on the adapter seam, and every unclassified child mutation are denied by default.
+The network fence and provider façade remain in force even on the TUI seam: native auth/config routes
+follow that explicit virtualization/unsupported policy and cannot install real provider credentials,
+redirect provider egress, or weaken the fence. Simple silent denial is not called transparent parity.
+
+Adapter and creation credentials issue zero reads or SSE subscriptions. They cannot list sessions, read another history or
+status, consume global permission/question lists, subscribe to raw server-wide SSE, or open a raw/
+upgrade stream. Action-specific read-back is performed by the runtime owner under the separate fenced
+`NativeRuntimeObserverLease`, then filtered through the pinned observer schema to the exact workspace,
+binding/session, proved children, action ID, and expected fingerprint before it becomes attempt
+evidence. The observer's server-wide credential is never exposed to either adapter front door and
+cannot mutate. A new session/child is withheld from a chat projection until classification binds it;
+unknown lineage creates a gap, not cross-chat output.
+
+Exactly one observer lease is current per server attachment. Installation increments
+`observerGeneration` and compare-and-swaps `currentRuntimeObserverLeaseId` after verifying the current
+server capability snapshot, listener manifest, workspace, runtime-owner attestation, exact vector of
+`proved_read` entries, and filter-policy digest. Its client can call only those exact entries; a
+ticket-minting GET, upgrade, raw route, global config/provider/auth read, or unlisted SSE surface is
+not proved-read and is denied. Replacement fences the old credential before changing the pointer.
+Every observation records the observer generation and pre-filter source digest; filtering happens
+before any chat projection, while the unprojected raw evidence remains protected runtime-owner state.
+The lease's `capabilitySnapshotAttestationRef` must resolve the exact server snapshot's
+`NativeCapabilitySnapshotAttestation`, and its recomputed `signedRecordDigest` must equal
+`capabilitySnapshotAttestationDigest`; kind, snapshot ID/schema/digest, runtime, and incarnation all
+match. It is not a second untyped runtime-owner locator.
+
+`provedReadOperationVectorDigest` is SHA-256 of
+`str("remote-claw/native-observer-proved-read-vector/v1") || uint(count)` followed by the canonical
+32-byte-decoded `operationEntryDigest` values in operation-table order. Every value must be a unique
+entry from the pinned classification vector whose manifest entry has `frontDoorKind:"observer"`,
+`classification:"proved_read"`, and `tuiPolicy:"not_applicable"`; it cannot name a TUI read, upgrade,
+ticket-minting read, or mutation. Conversely, the TUI read/reject vectors may name only
+`frontDoorKind:"tui"` entries.
+`filteringPolicyDigest` is SHA-256 of
+`str("remote-claw/native-observer-filtering-policy/v1") || uint(schemaVersion) ||
+str(filteringSchemaId) || str(nativeWorkspaceBindingId) ||
+bytes(base64urlDecode(topLevelSessionBindingVectorDigest)) ||
+str(childLineageClassifierSchemaId) || bytes(base64urlDecode(childLineagePolicyDigest)) ||
+str(actionCorrelationSchemaId) || bytes(base64urlDecode(actionCorrelationPolicyDigest)) ||
+bytes(base64urlDecode(globalEventRejectionPolicyDigest))`. Each component ref resolves to the exact
+canonical bytes that produce its paired digest; historical replay is invalid if any ref is missing.
+The top-level vector is ordered by
+`(nativeConversationId,nativeBindingId,collaborationServerId,logicalChatId)` and hashes
+`str("remote-claw/native-observer-top-level-binding-vector/v1") || uint(count)` followed by all five
+string fields of each `NativeObserverTopLevelSessionBindingItem` in declaration order. That commits to
+the exact workspace, current top-level session→binding/chat vector, child-lineage classifier/policy,
+action-ID/fingerprint correlation policy, and global rejection rules. Any binding, lineage, or policy
+change requires a new observer generation and discovery snapshot.
+
+There is exactly one `NativeFilteredObserverObservationRecord` per
+`(observerStreamEpochId,observationSeq)`, and its raw digest must equal that immutable raw observation.
+Its ID is
+`nfo_${base64url(SHA256(str("remote-claw/native-filtered-observation-id/v1") ||
+str(nativeRuntimeObserverLeaseId) || str(observerStreamEpochId) || uint(observationSeq)))}`. Its
+canonical digest is SHA-256 of
+`str("remote-claw/native-filtered-observation/v1") || str(filteredObservationId) ||
+optionalStr(collaborationServerId) || uint(observerGeneration) || bytes(base64urlDecode(rawEventDigest)) ||
+bytes(base64urlDecode(filteringPolicyDigest)) || str(nativeWorkspaceBindingId) ||
+optionalStr(resolvedNativeConversationId) || optionalStr(resolvedChildConversationId) ||
+optionalStr(resolvedNativeBindingId) || optionalStr(resolvedLogicalChatId) ||
+optionalStr(resolvedNativeActionId) || str(disposition) ||
+bytes(base64urlDecode(decisionEvidenceDigest)) || optionalStr(recoveryGapId)`.
+`projectable` requires non-null server, native conversation, binding, logical chat, and null gap, all
+resolving through the retained top-level/child policy to this server/workspace. `internal_only` has
+null logical chat and gap and may have null server for pre-import TUI state. `rejected_global` has
+server and every resolved target null and null gap. `gap` has a non-null
+recovery gap and cannot project. Filtering and this row commit happen before any projection outbox;
+restart resumes the retained decision rather than rerunning a newer filter.
+
+Every last-hop destination is the private socket/origin in the current lease, never a caller `Host`,
+absolute-form URI, forwarded-host header, or redirect target. CONNECT, method override, proxy
+smuggling, unclassified Upgrade/WebSocket, and automatic retries are disabled. Redirect following is
+disabled for every adapter/runtime request; a 3xx is a transport receipt/error to classify, not a
+second write or body exfiltration. A TUI-visible OAuth URL may be virtualized as data, but the front
+door does not follow it.
+
+The first A2 slice removes the legacy best-effort permission-policy PATCH and advertises structured
+permissions as unsupported. A later setup mutation needs its own runtime-scoped capability,
+write-ahead effect gate, one-time dispatch, and native policy read-back; it cannot borrow a
+collaborator command or startup credential. Teardown likewise cannot abort, delete, rename, or share a
+session unless an explicit typed command crosses the corresponding supported family gate.
+
+The initial A2 writable vectors are exact: server-scoped `{new_chat}` and binding-scoped
+`{user_text}`. Attachment, clear, set-model, set-mode, end-as-native-mutation, permission answer,
+question answer, compact, interrupt, fork, revert/unrevert, shell, session command, message/part
+mutation, share, rename, and delete are absent until each has its own retained causal and recovery
+proof. Coordinator-only detach/close does not pretend to be a native `end` attempt. Direct TUI use of
+native lifecycle methods remains allowed by its pinned TUI policy and becomes post-hoc local
+transition/native observation, never a fabricated remote-claw proposal.
+
+OpenCode workspace selection resolves before either front door authorizes a request. The initial
+`directoryNormalizationSchemaId` rejects NUL, relative paths, `..`, conflicting case aliases, and
+multiple selector values; resolves symlinks once inside the runtime's mount namespace; requires the
+resolved object under the configured allowed root; and records platform-specific filesystem identity
+without following another link at dispatch. `canonicalDirectoryPathDigest` commits only to the exact
+header/path bytes as defined in the common-to-native translation rules above. The separate
+`nativeWorkspaceBindingDigest` is:
+
+```text
+SHA256(
+  str("remote-claw/native-workspace-binding/v1") ||
+  str(nativeWorkspaceBindingId) ||
+  str(runtimeId) ||
+  uint(nativeIncarnation) ||
+  str(projectId) ||
+  optionalStr(nativeWorkspaceId) ||
+  str(directoryNormalizationSchemaId) ||
+  bytes(canonicalResolvedDirectoryBytes) ||
+  str(filesystemIdentitySchemaId) ||
+  bytes(base64urlDecode(filesystemIdentityDigest)) ||
+  bytes(base64urlDecode(allowedRootDigest)) ||
+  bytes(base64urlDecode(mountNamespaceDigest)) ||
+  uint(workspaceGeneration)
+)
+```
+
+The immutable `NativeWorkspaceBindingRecord` owns the exact path bytes, path digest, and full binding
+digest. Its `canonicalDirectoryRef` must decode to `canonicalResolvedDirectoryBytes` and recompute
+`canonicalDirectoryPathDigest`; every other field must recompute `nativeWorkspaceBindingDigest`. Every
+`workspace`/`directory` query, `x-opencode-directory` header, route-derived selector, lease, snapshot,
+request target, and read-back must resolve to its one current record; missing or conflicting aliases,
+a replaced directory identity, symlink swap, mount change, wrong workspace, or stale generation
+rejects before dispatch.
+
+Every OpenCode discovery snapshot also pins the native store it actually read. The version-specific
+`nativeStoreBackendSchemaId` names the measured OpenCode storage layout and the exact extraction rules
+for three credential-free immutable refs: the canonical absolute store-root path bytes, a no-follow
+filesystem identity for that root, and the database/store instance identity recorded by the native
+format. Their digests are:
+
+```text
+canonicalNativeStoreRootPathDigest =
+  SHA256(str("remote-claw/opencode-native-store-root-path/v1") ||
+         bytes(exactCanonicalAbsoluteStoreRootUtf8))
+
+nativeStoreFilesystemIdentityDigest =
+  SHA256(str("remote-claw/opencode-native-store-filesystem-identity/v1") ||
+         str(nativeStoreBackendSchemaId) ||
+         bytes(canonicalNoFollowFilesystemIdentityEvidence))
+
+nativeStoreDatabaseIdentityDigest =
+  SHA256(str("remote-claw/opencode-native-store-database-identity/v1") ||
+         str(nativeStoreBackendSchemaId) ||
+         bytes(canonicalStableDatabaseIdentityEvidence))
+
+stableNativeStoreIdentityDigest =
+  SHA256(str("remote-claw/opencode-stable-native-store-identity/v1") ||
+         str(nativeStoreBackendSchemaId) ||
+         bytes(base64urlDecode(canonicalNativeStoreRootPathDigest)) ||
+         bytes(base64urlDecode(nativeStoreFilesystemIdentityDigest)) ||
+         bytes(base64urlDecode(nativeStoreDatabaseIdentityDigest)))
+```
+
+The database identity is a format-defined stable instance coordinate, not a digest of mutable session
+contents, file timestamps, or the current row set. A path alone, process ID, runtime ID, directory
+name, workspace ID, database filename, or post-restart content similarity does not qualify. If the
+pinned OpenCode build/store backend exposes no stable database identity, cross-incarnation creation
+reconciliation is unsupported and deterministically becomes `lineage_unproved`.
+
+`OpenCodeNativeStoreCoordinateRecord.canonicalNativeStoreCoordinateDigest` is:
+
+```text
+SHA256(str(nativeStoreCoordinateSchemaId) || uint(schemaVersion) ||
+       str(runtimeId) || uint(nativeIncarnation) ||
+       str(nativeServerAttachmentLeaseId) || str(nativeWorkspaceBindingId) ||
+       str(nativeStoreBackendSchemaId) ||
+       bytes(base64urlDecode(canonicalNativeStoreRootPathDigest)) ||
+       bytes(base64urlDecode(nativeStoreFilesystemIdentityDigest)) ||
+       bytes(base64urlDecode(nativeStoreDatabaseIdentityDigest)) ||
+       bytes(base64urlDecode(stableNativeStoreIdentityDigest)))
+```
+
+The attachment attestation is deliberately excluded from that coordinate digest, so its signature can
+bind the digest without a cycle. `nativeStoreAttachmentAttestationId` is:
+
+```text
+nsa_${base64url(SHA256(
+  str("remote-claw/opencode-native-store-attachment-attestation-id/v1") ||
+  str(runtimeId) || uint(nativeIncarnation) ||
+  str(nativeServerAttachmentLeaseId) || str(nativeWorkspaceBindingId) ||
+  bytes(base64urlDecode(nativeStoreCoordinateDigest))
+))}
+```
+
+The read witness digest is SHA-256 of
+`str(storeReadWitnessSchemaId) || str(runtimeId) || uint(nativeIncarnation) ||
+str(nativeServerAttachmentLeaseId) || bytes(base64urlDecode(nativeStoreCoordinateDigest)) ||
+bytes(base64urlDecode(openedStoreHandleIdentityDigest)) ||
+bytes(canonicalCredentialFreeStoreReadWitness)`. The witness must come from an actual read through the
+still-open no-follow store handle whose identity recomputes the coordinate's filesystem and database
+identity evidence; a path lookup, cached value, or child-process claim does not qualify.
+
+The warden's protected continuity registry current-writer digest is:
+
+```text
+SHA256(str(continuityRegistrySchemaId) || str(continuityRegistryId) ||
+       bytes(base64urlDecode(stableNativeStoreIdentityDigest)) ||
+       str("current_writer") || str(runtimeId) || uint(nativeIncarnation) ||
+       str(nativeServerAttachmentLeaseId) || uint(currentWriterGeneration))
+```
+
+The runtime-owner-signed attachment payload is:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(nativeStoreAttachmentAttestationId) || str(assertion) ||
+str(runtimeId) || uint(nativeIncarnation) ||
+str(nativeServerAttachmentLeaseId) || str(nativeWorkspaceBindingId) ||
+str(nativeStoreCoordinateSchemaId) ||
+bytes(base64urlDecode(nativeStoreCoordinateDigest)) ||
+bytes(base64urlDecode(stableNativeStoreIdentityDigest)) ||
+bytes(base64urlDecode(openedStoreHandleIdentityDigest)) ||
+str(storeReadWitnessSchemaId) || bytes(base64urlDecode(storeReadWitnessDigest)) ||
+str(continuityRegistrySchemaId) || str(continuityRegistryId) ||
+uint(currentWriterGeneration) ||
+bytes(base64urlDecode(currentWriterRegistrationDigest)) ||
+bytes(base64urlDecode(runtimeOwnerTrustAttestationDigest)) ||
+str(runtimeOwnerIdentityKeyId) || uint(runtimeOwnerKeyGeneration) ||
+uint(signerSequence) || uint(issuedAtMs) ||
+str(signatureAlgorithm) || str(canonicalPayloadDigestAlgorithm)
+```
+
+`canonicalPayloadDigest` is SHA-256 of those bytes. The current runtime-owner key signs those exact
+bytes, and `signedRecordDigest` is SHA-256 of
+`str("remote-claw/opencode-native-store-attachment-attestation-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || str(runtimeOwnerIdentityKeyId) ||
+uint(runtimeOwnerKeyGeneration) || uint(signerSequence) ||
+bytes(base64urlDecode(signature))`. The signature reservation and acceptance row must use
+`purpose:"opencode_native_store_attachment_attestation"`; the coordinate and snapshot
+`nativeStoreAttachmentAttestationDigest` fields equal that recomputed `signedRecordDigest`.
+
+Each coordinate component ref must decode under the backend schema and recompute its named digest.
+The coordinate's runtime/incarnation, attachment, and workspace must match the observer lease that
+produced the discovery snapshot. The attachment attestation must parse and verify, repeat the exact
+coordinate/stable identity, use assertion `incarnation_opened_and_read_exact_store`, and name the
+runtime-owner trust attestation in the server capability snapshot selected by that observer lease.
+It must also repeat the protected registry's exact current-writer row for this
+runtime/incarnation/attachment and recompute `currentWriterRegistrationDigest`. Its signer
+reservation/acceptance must be current for that runtime/incarnation. Thus the attestation proves that
+exact owner opened and read the exact coordinate while already registered as its sole writer; merely
+storing an owner-attestation digest beside the coordinate is not proof. The coordinate ref retains
+that exact immutable record. A complete snapshot requires a valid coordinate and attachment
+attestation; neither can be reconstructed after the native incarnation has ended.
+
+An `OpenCodeDiscoverySnapshotRecord` is valid only while that workspace binding and server incarnation
+remain current. Its canonical digest is SHA-256 of these exact bytes:
+
+```text
+str("remote-claw/opencode-discovery-snapshot/v1")
+str(discoverySnapshotId)
+str(runtimeId)
+uint(nativeIncarnation)
+str(nativeWorkspaceBindingId)
+str(nativeStoreCoordinateSchemaId)
+bytes(base64urlDecode(nativeStoreCoordinateDigest))
+bytes(base64urlDecode(stableNativeStoreIdentityDigest))
+str(nativeStoreAttachmentAttestationSchemaId)
+bytes(base64urlDecode(nativeStoreAttachmentAttestationDigest))
+str(nativeRuntimeObserverLeaseId)
+uint(observerGeneration)
+uint(eventStreamEpoch)
+bytes(base64urlDecode(provedReadOperationVectorDigest))
+str(linearizationProofKind)
+bytes(base64urlDecode(linearizationProofDigest))
+optionalUint(postSnapshotBarrierObservationSeq)
+str(overlapBufferId)
+uint(overlapStartObservationSeq)
+uint(overlapEndObservationSeqExclusive)
+str(nativeStatusSnapshotId)
+bytes(base64urlDecode(statusSnapshotDigest))
+bytes(base64urlDecode(orderedSessionVectorDigest))
+bytes(base64urlDecode(orderedCreationMarkerVectorDigest))
+uint(capturedAtMs)
+str(completeness)
+```
+
+The snapshot's `nativeStoreCoordinateRef` must parse as
+`OpenCodeNativeStoreCoordinateRecord`; its schema, runtime/incarnation, workspace, coordinate digest,
+stable identity, and attachment-attestation tuple must equal the snapshot fields exactly. Its
+attachment must equal the attachment named by `nativeRuntimeObserverLeaseId`. The snapshot's
+attachment-attestation ref must parse as the exact signed record named by the coordinate and recompute
+`nativeStoreAttachmentAttestationDigest`. A mismatched or unavailable coordinate, signature, open/read
+witness, or attachment attestation forces `completeness:"gap"` and cannot become the current snapshot
+used for creation or reconciliation.
+
+`orderedSessionVectorDigest` is SHA-256 of
+`str("remote-claw/opencode-discovery-session-vector/v1") || uint(count)`, followed for each item by
+`str(sessionId) || optionalStr(parentSessionId) || str(nativeWorkspaceBindingId) ||
+uint(createdAtMs) || uint(updatedAtMs) || bytes(base64urlDecode(metadataDigest)) ||
+bytes(base64urlDecode(statusDigest))`.
+Items are ordered by exact native `sessionId`. `orderedCreationMarkerVectorDigest` is SHA-256 of
+`str("remote-claw/opencode-discovery-marker-vector/v1") || uint(count)`, followed by
+`uint(schemaVersion) || str(canonicalCreationMetadataSchemaId) ||
+str(fullNativeMetadataSchemaId) || str(remoteClawCreationId) ||
+optionalDigest(remoteClawCreationIntentDigest) || str(sessionId) ||
+str(creationMetadataClassification) || optionalDigest(canonicalCreationMetadataDigest) ||
+bytes(base64urlDecode(fullNativeMetadataDigest))`, ordered by
+`(remoteClawCreationId, sessionId, fullNativeMetadataDigest)`.
+
+The marker item is not a marker-only index. `fullNativeMetadataRef` retains the exact UTF-8 JSON slice
+of the complete native `metadata` value from the proved discovery response, including every extra
+member and value without reserialization. It must parse as one JSON object; duplicate member names,
+invalid UTF-8/JSON, or an unretainable slice makes the discovery snapshot a gap. Its digest is:
+
+```text
+fullNativeMetadataDigest =
+  SHA256(str(fullNativeMetadataSchemaId) || uint(schemaVersion) ||
+         bytes(exactNativeMetadataUtf8))
+```
+
+Every discovery session's `metadataDigest` uses that same digest definition over its retained native
+metadata slice. A marker item's `fullNativeMetadataDigest` must equal the corresponding session
+item's `metadataDigest`. A marker item exists whenever the parsed object has exactly one valid string
+`remoteClawCreationId` member; therefore an object with the expected marker but a missing, malformed,
+wrong-type, or extra intent/member is still retained for reconciliation. If the object has a
+`remoteClawCreationIntentDigest` string in canonical unpadded base64url that decodes to exactly 32
+bytes, the item retains that exact string; otherwise the field is null.
+
+`creationMetadataClassification` is `canonical_two_field` only when the full object has exactly the
+two named string members, its intent is a canonical 32-byte digest, and no other member exists. In
+that case, and only that case, both canonical ref/digest fields are non-null.
+`canonicalCreationMetadataRef` then retains exactly this compact UTF-8 JSON, with the shown key order:
+
+```json
+{"remoteClawCreationId":"<remoteClawCreationId>","remoteClawCreationIntentDigest":"<remoteClawCreationIntentDigest>"}
+```
+
+The two substitutions use the same strict JSON string and digest encodings as the creation request.
+The ref must parse to exactly those two fields, and:
+
+```text
+canonicalCreationMetadataDigest =
+  SHA256(str(canonicalCreationMetadataSchemaId) || uint(schemaVersion) ||
+         str(remoteClawCreationId) ||
+         bytes(base64urlDecode(remoteClawCreationIntentDigest)) ||
+         bytes(exactCompactUtf8CreationMetadata))
+```
+
+For `noncanonical_or_extra`, both canonical ref/digest fields are null; the full ref/digest remains
+mandatory and is the evidence that makes the mismatch representable. A valid observed intent on an
+extra-member object remains populated but does not make the canonical pair valid. The canonical
+ref/digest can never be a two-field projection that discards full-metadata members.
+`optionalDigest(null)` is `0x00`; a present digest is `0x01` followed by its decoded 32 bytes. Other
+digest fields decode from canonical unpadded base64url to exactly 32 bytes before `bytes`. The two
+retained vector refs contain those exact immutable items.
+
+Duplicate native session IDs, duplicate exact
+`(remoteClawCreationId,sessionId)` marker items, conflicting full-metadata bytes, or a stream gap force
+`completeness: "gap"` and such a row cannot become current. The same marker on distinct native
+session IDs is instead retained as multiple items so creation reconciliation can quarantine it.
+Snapshot content and `completeness` are immutable; superseding changes only the lifecycle `state`,
+which is excluded from `canonicalSnapshotDigest`. Installation compare-and-swaps the server
+attachment's current discovery-snapshot pointer.
+Creation pins both its snapshot ID and digest, requires byte equality with that current verified row,
+and revalidates the workspace/incarnation, current observer lease/generation, stream epoch, and
+proved-read vector immediately before dispatch. An empty snapshot from
+workspace A can never authorize creation or binding in workspace B.
+
+Conversation recovery/read-back uses a separate binding/session-scoped history snapshot, never the
+server-wide discovery list. Each message item digest is SHA-256 of
+`str("remote-claw/opencode-history-message/v1") || str(nativeConversationId) ||
+str(nativeMessageId) || uint(messageIndex) || str(role) ||
+bytes(base64urlDecode(nativeTimestampDigest)) || bytes(base64urlDecode(metadataDigest))`.
+The message vector orders contiguous `messageIndex`, then exact message ID, and hashes count plus
+decoded item digests under `remote-claw/opencode-history-message-vector/v1`.
+
+Each part item digest is SHA-256 of
+`str("remote-claw/opencode-history-part/v1") || str(nativeConversationId) ||
+str(nativeMessageId) || str(nativePartId) || uint(messageIndex) || uint(partIndex) ||
+str(partType) || str(canonicalPartPayloadSchemaId) ||
+bytes(base64urlDecode(canonicalPartPayloadDigest))`. The part ref retains exact credential-free
+canonical payload bytes and must parse under that schema. The part vector orders by
+`(messageIndex,partIndex,nativePartId)` and hashes count plus decoded item digests under
+`remote-claw/opencode-history-part-vector/v1`. Message/part IDs and both index domains are unique;
+indices are contiguous within their scope. A part must reference the message at its message index.
+
+`OpenCodeConversationHistorySnapshotRecord.canonicalSnapshotDigest` is SHA-256 of:
+
+```text
+str("remote-claw/opencode-conversation-history-snapshot/v1") ||
+str(nativeHistorySnapshotId) || str(runtimeId) || uint(nativeIncarnation) ||
+str(nativeBindingId) || str(nativeConversationId) || str(nativeWorkspaceBindingId) ||
+str(nativeRuntimeObserverLeaseId) || uint(observerGeneration) ||
+str(observerStreamEpochId) || str(overlapBufferId) ||
+uint(overlapStartObservationSeq) || uint(overlapEndObservationSeqExclusive) ||
+str(nativeStatusSnapshotId) || bytes(base64urlDecode(statusSnapshotDigest)) ||
+str(linearizationProofKind) || bytes(base64urlDecode(linearizationProofDigest)) ||
+optionalUint(linearizedThroughObservationSeq) ||
+optionalUint(postSnapshotBarrierObservationSeq) ||
+bytes(base64urlDecode(orderedMessageVectorDigest)) ||
+bytes(base64urlDecode(orderedPartVectorDigest)) || uint(capturedAtMs) || str(completeness)
+```
+
+The snapshot transaction verifies its exact current observer lease/epoch, actively drained overlap,
+status snapshot, history response, and retained linearization proof before setting
+`completeness:"complete"`. The same watermark/barrier/atomic-store rules as discovery apply. A gap,
+overflow, duplicate, bad index/lineage, cross-session item, or stale epoch produces only
+`completeness:"gap"`. The immutable snapshot is the recovery authority for exact history and order;
+it does not become another transcript or authorize replay. A complete sequence-watermark snapshot has
+`linearizedThroughObservationSeq` equal to the non-null sequence certified by its shared watermark and
+null `postSnapshotBarrierObservationSeq`. A complete barrier snapshot has both fields non-null and
+equal. A complete atomic-store snapshot has both fields null. Any other combination, or a claimed
+sequence not covered by the retained proof and current stream epoch, is a gap.
+
+`ProjectTargetSelectorMappingRecord` is the only public-selector resolver. Its ID is
+`ptm_${base64url(SHA256(str("remote-claw/project-target-selector/v1") ||
+str(collaborationServerId) || str(projectId) || str(workspaceSelectorId) ||
+uint(mappingGeneration) || bytes(base64urlDecode(targetDigest))))}`. `targetDigest` is the canonical
+digest of exactly one closed union arm: terminal-native includes kind, descriptor, terminal project
+ref, and optional workspace binding; nested-server includes kind, current server-scoped nested
+management binding, target server/project, and target selector. Exactly one current row may exist for
+`(collaborationServerId, projectId, workspaceSelectorId)`. Initial OpenCode A2 forbids one native
+workspace binding from being current under two public selectors in the same project. Mapping
+replacement is a generation-incrementing compare-and-swap. The target logical chat, creation command/
+result, and either terminal binding reservation or nested-edge creation all foreign-key the resolved
+mapping generation; a stale selector cannot move creation into a replacement directory or server.
+
+The two exact `targetDigest` encodings are:
+
+```text
+terminal_native:
+  SHA256(str("remote-claw/project-target/terminal-native/v1") ||
+         str("terminal_native") || str(descriptor.product) || str(descriptor.access) ||
+         str(terminalProjectRef) || optionalStr(nativeWorkspaceBindingId))
+
+nested_server:
+  SHA256(str("remote-claw/project-target/nested-server/v1") ||
+         str("nested_server") || str(nestedServerManagementBindingId) ||
+         str(targetServerId) || str(targetProjectId) || str(targetWorkspaceSelectorId))
+```
+
+The tagged arm is parsed before hashing; extra fields, null aliases, a terminal-only field in the
+nested arm, or a nested-only field in the terminal arm reject. Every decoded digest is canonical
+unpadded base64url SHA-256.
+
+Initial A2 allows exactly one current workspace binding per OpenCode server attachment. Multi-workspace
+support moves observer/discovery pointers to `(server attachment, workspace)` and is not implied by
+this slice. `NativeObserverStreamEpochRecord` is unique on
+`(nativeRuntimeObserverLeaseId, eventStreamEpoch)`; every SSE reconnect increments the epoch before
+reading a byte and compare-and-swaps `NativeRuntimeObserverLease.currentObserverStreamEpochId`.
+Exactly one epoch may be open. Replacement first stops and drains or marks a gap on the old transport,
+closes its epoch, and only then installs the higher epoch; a stale tail is retained against the old
+epoch and cannot project. Every discovery snapshot and filtered projection revalidates that current
+pointer. Each raw event is appended before parsing under unique
+`(observerStreamEpochId, observationSeq)`, where local sequence starts at zero and increments
+contiguously; the immutable raw ref/digest survives parser failure.
+
+The overlap buffer is unique to that stream epoch and has exact event/byte caps. Overflow, disconnect,
+missing local sequence, duplicate native event ID with changed bytes, malformed/unknown event, or
+stale-epoch tail is durably retained and atomically sets the stream/buffer to `gap` with a recovery-gap
+link; no parser may drop or invent it. A sealed buffer names one contiguous half-open
+`[startObservationSeq,endObservationSeqExclusive)` range. Equal bounds represent a proved quiet stream
+only when the pinned native linearization proof independently establishes the boundary; an open,
+apparently drained transport alone does not mean “no event.”
+
+The status snapshot digest is SHA-256 of
+`str("remote-claw/native-observer-status-snapshot/v1") || str(nativeStatusSnapshotId) ||
+str(nativeRuntimeObserverLeaseId) || str(observerStreamEpochId) ||
+str(nativeWorkspaceBindingId) || optionalUint(capturedThroughObservationSeq) ||
+bytes(canonicalStatusBytes)`. Its exact canonical status ref is retained. The discovery transaction
+verifies every buffered observation through the exclusive end, merges status/history plus that tail,
+and installs the snapshot and current pointer together. Restart resumes those durable records or
+starts a higher epoch; it never splices an old tail into a new snapshot.
+
+`completeness:"complete"` additionally requires exactly one retained native linearization proof: a
+native sequence watermark shared by snapshot and stream, a post-snapshot barrier event observed on the
+same ordered stream, or an atomic native-store snapshot whose transaction boundary is proved to cover
+all earlier mutations. `linearizationProofDigest` commits to the exact credential-free proof bytes.
+For `barrier_event`, `postSnapshotBarrierObservationSeq` is non-null and lies inside the verified
+buffer; for the other kinds it is null. A legacy SSE connection with no replay cursor, watermark,
+barrier, or proved atomic-store boundary remains `completeness:"gap"` even when open and drained,
+because a pre-snapshot event may still be delayed in transport. The retained 1.17.5 model-free fixture
+does not prove such a boundary, so it cannot by itself enable writable A2.
 
 Startup establishes server-wide SSE first and immediately drains it into a bounded, durable overlap
 buffer while it snapshots sessions/history. It registers top-level sessions, classifies
@@ -1805,6 +8789,14 @@ on connect. A native restart that leaves an incomplete durable assistant message
 runner is classified from incarnation, status, and history as active, interrupted, or an explicit
 gap—never silently completed or left waiting forever.
 
+The present `evidence-1.17.5.json` remains an honest narrow Phase-0 fixture: it retains `/doc` only as
+length/hash plus selected facts and proves marker/caller-ID behavior, not A2. Enabling A2 requires a
+separate checked-in sanitized release fixture with the complete generated front-door build manifest,
+ordered route/classification vectors, runtime registration attestation, full real-TUI request trace,
+synthetic-read/redaction policies, unsupported-response vectors, observer linearization/filter
+evidence, creation metadata/restart evidence, and process/network-fence results. It must retain every
+canonical byte used by the digests. The narrow proof is not broadened by prose or used as a substitute.
+
 Discovery failure never authorizes session creation, and “most recent” never establishes identity. An
 existing logical chat attaches only its exact stored `ses_*`; an absent or wrong-lineage native session
 quarantines that binding rather than authorizing a replacement. First import requires an explicit exact
@@ -1817,21 +8809,527 @@ creation uses a two-phase native reservation and write-ahead `POST /session` att
 listable; `POST /session` exposes no proved idempotency seam and is treated as non-idempotent. The
 supported tuple must additionally prove the exact typed-intent metadata shape before relying on it. A
 positive response binds its exact `ses_*`; after a lost response, zero marker matches stays uncertain
-while the proof window remains open, one binds that exact ID, and multiple matches quarantine. The
-runtime does not retry or use a title/history match. Typed-intent preservation and marker durability
-across native server restart are release proofs.
+while the proof window remains open. Exactly one marker match binds that exact ID only when its
+retained full native metadata evidence recomputes, its classification is `canonical_two_field`, and its
+canonical two-field metadata recomputes, and its
+`remoteClawCreationIntentDigest` equals the reservation's expected `nativeCreationIntentDigest`.
+A same-marker wrong/missing/malformed intent or `noncanonical_or_extra` metadata match, and multiple
+marker matches, quarantine.
+The runtime does not retry or use a marker-only, title, or history match. Typed-intent preservation
+and marker durability across native server restart are release proofs.
+
+The empty-snapshot check cannot race the person's TUI. Exactly one current
+`NativeWorkspaceTransitionBarrierRecord` exists for the current server attachment/workspace, and its
+ID is held by `currentWorkspaceTransitionBarrierId`. Replacement is a generation-incrementing
+compare-and-swap after the old active transition is terminal or quarantined. Every direct-TUI
+create/import/switch/clear/fork/archive/unarchive and every server-control creation first allocates the next
+`NativeWorkspaceTransitionRecord`, compare-and-swaps `activeTransitionId` from null, and records
+`started` before the corresponding TUI or creation front door may write a byte. Completion or
+contained failure clears that same ID; no other transition can pass while it is active. This barrier
+belongs to the independently supervised runtime owner, so direct TUI use still works when the
+collaboration coordinator is offline. A pinned TUI operation that can change top-level session
+identity, active-session selection, or discovery availability but has no classified transition kind is
+rejected at the TUI front door; it cannot bypass this barrier as a generic lifecycle request.
+
+For `first_bootstrap`, the holder re-reads current discovery under that barrier immediately before
+dispatch and requires zero top-level sessions, no current or uncertain creation, no prior logical
+binding, and `firstBootstrapState:"available"`. The transaction that reserves and prepares the creation
+dispatch also changes the state to `claimed`. Any TUI-created/imported session observed before that CAS changes it to
+`inapplicable` and rejects bootstrap without a POST. There is no `claimed → available` transition and
+no bootstrap successor. While the original reservation is still `reserved`, its dispatch remains
+`not_started`, and its original authorization remains unconsumed, recovery may continue only that
+exact stored reservation. Explicit pre-send abandonment atomically changes the reservation to
+`quarantined` and `firstBootstrapState` from `claimed` to `inapplicable` while rechecking the
+still-`not_started` dispatch and `never_started` effect gate; the original authorization then fails
+the front door's reservation-state check and no replacement is created. The last pre-byte dispatch CAS
+changes `claimed` to `consumed` for `first_bootstrap`. Once the POST may have started, `consumed` is
+permanent for that attempt; it cannot return to `available` or authorize a successor. Explicit
+`new_chat` uses the same short dispatch serialization but has no empty-workspace precondition, so later
+direct and remote creates may coexist in their native observed order. Crash recovery resumes or
+quarantines the one active transition before admitting another.
+
+Creation is not an exception to common adjudication. The server-control actor authenticates, orders,
+and decides typed `new_chat` exactly once. When its mapping selects this terminal OpenCode runtime, the
+decision-reservation transaction allocates the target `logicalChatId` in `recovering` state and freezes
+the terminal executor, but creates no native binding, attempt, or output. After the common result is
+signed, finalization creates one `NativeBindingRecord(state: "starting")`, one
+`NativeConversationCreationReservationRecord`, its command-wide creation effect gate, and the result
+delivery. No native `ses_*` is invented. The target chat actor executes that already-decided command
+and never readjudicates it. The
+reservation pins the current runtime/server incarnation, private server attachment and creation-only
+front-door lease, current `NativeServerCapabilitySnapshot` and immutable `new_chat` family entry,
+exact discovery snapshot, typed intent,
+unique metadata marker, and canonical POST path/body bytes.
+
+The host generates `nativeCreationMarker` as `rcc_` plus canonical unpadded base64url of 16 random
+bytes; callers cannot supply it. It is unique on `(runtimeId, nativeIncarnation,
+nativeWorkspaceBindingId, nativeCreationMarker)` and is never reused. The intent digest is SHA-256 of
+`str("remote-claw/opencode-native-creation-intent/v1") || str(commandId) ||
+str(admittingCommandResultId) ||
+bytes(base64urlDecode(admittingCommandResultSignedRecordDigest)) ||
+bytes(base64urlDecode(canonicalCommandRecordDigest)) ||
+bytes(base64urlDecode(decisionEvidenceDigest)) ||
+bytes(base64urlDecode(serverCapabilitySnapshotAttestationDigest)) ||
+str(canonicalCommandPayloadSchemaId) ||
+bytes(base64urlDecode(canonicalCommandPayloadDigest)) ||
+bytes(base64urlDecode(nativeRequestTranslatorDigest)) ||
+str(collaborationServerId) || str(targetLogicalChatId) || str(projectId) ||
+str(workspaceSelectorId) || str(projectTargetSelectorMappingId) ||
+uint(projectTargetSelectorMappingGeneration) || bytes(base64urlDecode(projectTargetDigest)) ||
+str(runtimeId) || uint(nativeIncarnation) || str(nativeWorkspaceBindingId) ||
+bytes(base64urlDecode(canonicalDirectoryPathDigest)) ||
+bytes(base64urlDecode(nativeWorkspaceBindingDigest)) || str(creationIntent) ||
+str(nativeCreationMarker)`. The proposed OpenCode body is exact compact
+JSON `{"metadata":{"remoteClawCreationId":"…","remoteClawCreationIntentDigest":"…"}}` with those keys
+in order and no extras. It is not writable until a retained release fixture proves that exact metadata
+survives response, SSE/list, and real server restart without changing native semantics. Invalid,
+noncanonical, duplicated, caller-chosen, or mismatched marker/intent metadata rejects before
+reservation.
+
+The server front door is dispatch-only and accepts `POST /session` only with the one-time authorization
+on the matching `NativeCreationFrontDoorDispatchRecord`. It revalidates the admitted-result and
+decision/executor-evidence tuple, reservation/effect gate, mapping, capability/translator,
+incarnation, attachment, marker, target path, request and translation digests, and recomputes the
+request from the common payload plus generated coordinates immediately before its one socket write.
+In the last transaction before that first possible byte, it atomically changes the
+reservation `reserved → started`, changes the unique creation effect gate
+`never_started → started` while naming that reservation, and consumes the authorization while changing
+the dispatch `not_started → started`; for `first_bootstrap` it also changes the same barrier's
+`firstBootstrapState` from `claimed` to `consumed`. If any compare-and-swap fails, no byte is written; once the
+dispatch is started, the POST is treated as may-have-started even if the process dies before the write
+is observed. A response binds only its exact returned `ses_*`. After a lost
+response, a fresh subscribe/snapshot reconciliation enumerates zero, one, or multiple sessions carrying
+the exact expected marker and verifies the retained full native metadata evidence for every candidate.
+Zero leaves that started attempt `outcome_unknown` and authorizes no retry or successor; a later
+current, complete, exhaustive snapshot may find the original session, but no later observation can
+retroactively make the consumed authorization `never_started`. Exactly one candidate atomically fills
+the starting binding and marks the logical chat ready only when its
+`remoteClawCreationIntentDigest` equals the reservation's expected `nativeCreationIntentDigest` and
+its classification is `canonical_two_field` and its canonical metadata ref/digest recompute. A
+same-marker/different-intent or `noncanonical_or_extra` candidate, or multiple same-marker candidates,
+quarantines. Neither exact
+proposal replay, coordinator replacement, nor native replacement sends the POST again. A session
+created directly by the TUI remains a native observation followed by explicit import; it is never
+backfilled as though remote-claw had admitted its creation.
+
+`NativeCreationFrontDoorDispatchRecord.canonicalDispatchDigest` is SHA-256 of
+`str("remote-claw/native-creation-dispatch/v1") || str(nativeCreationReservationId) ||
+str(serverFrontDoorLeaseId) || bytes(base64urlDecode(canonicalRequestDigest)) ||
+bytes(base64urlDecode(nativeRequestTranslationDigest)) ||
+bytes(base64urlDecode(nativeTargetPathDigest)) || str(dispatchAuthorizationHandle)`. The handle is an
+opaque random value retained only in protected owner state; the digest, reservation, and front-door
+request must all agree before the CAS. Lifecycle fields and receipts are excluded from this immutable
+pre-send digest.
+
+The pre-create discovery snapshot need be current only through the dispatch CAS. Its digest commits
+the original store coordinate and signed open/read attachment attestation. The creation reservation
+stores that exact discovery snapshot ID/digest before dispatch, and the final dispatch CAS revalidates
+the same current snapshot; this is the immutable pre-dispatch store anchor and it cannot be supplied
+for the first time during recovery. Lost-response recovery creates a
+`NativeConversationCreationReconciliationRecord` rather than pretending that old snapshot stayed
+current. It binds the original reservation/dispatch to one current successor observer and discovery
+snapshot. The successor snapshot must be `completeness:"complete"`, current for that
+attachment/workspace/observer epoch, and backed by its retained linearization proof; a gap, stale
+pointer, or omitted item cannot create a reconciliation row or bind. Its marker vector is therefore an
+exhaustive view at that proved boundary. Same-incarnation reconciliation is direct and uses the
+explicit `same_incarnation_not_required` sentinel described below. A different runtime/incarnation
+pair requires typed positive native-store lineage showing that the successor read the same stable
+marker-and-intent-bearing store; otherwise the decision is deterministically `lineage_unproved`. The
+retained marker-match vector contains every session with the expected marker as an
+exact `(marker, optional intentDigest, ses_*, classification, optional canonical metadata digest,
+full native metadata digest)` entry before intent or shape filtering. Zero marker matches remains
+uncertain; one binds only when its intent digest equals the reservation, its classification is
+`canonical_two_field`, and both evidence pairs recompute. A wrong/missing/malformed intent,
+`noncanonical_or_extra` metadata, or multiple marker matches quarantine; unproved store lineage cannot
+bind. No reconciliation state authorizes a second POST.
+
+The retained marker-match vector contains `NativeCreationMarkerMatchItem` values ordered by
+`(nativeCreationMarker,nativeConversationId,fullNativeMetadataDigest)`. Every item repeats both schema
+IDs, marker, optional observed intent, classification, nullable canonical two-field ref/digest, and
+mandatory full native metadata ref/digest from its discovery item. Its digest is SHA-256 of
+`str("remote-claw/native-creation-marker-match-vector/v1") || uint(count)` followed by
+`uint(schemaVersion) || str(canonicalCreationMetadataSchemaId) ||
+str(fullNativeMetadataSchemaId) || str(nativeCreationMarker) ||
+optionalDigest(nativeCreationIntentDigest) || str(nativeConversationId) ||
+str(creationMetadataClassification) || optionalDigest(canonicalCreationMetadataDigest) ||
+bytes(base64urlDecode(fullNativeMetadataDigest))` for each item. Every full metadata ref must parse and
+recompute under the exact encoding above. The canonical ref/digest pair must be non-null and recompute
+only for `canonical_two_field`; it must be all-null for `noncanonical_or_extra`.
+`markerMatchCount` equals the retained vector length exactly.
+
+Cross-incarnation store identity equality is necessary but not sufficient: a copied, reset, or forked
+store can preserve every embedded identifier. The runtime warden therefore keeps one continuity
+registry outside the native store, keyed by `stableNativeStoreIdentityDigest`, with exactly one
+current writer and a monotonic generation. The predecessor-fence registry transition digest is:
+
+```text
+SHA256(str(continuityRegistrySchemaId) || str(continuityRegistryId) ||
+       bytes(base64urlDecode(stableNativeStoreIdentityDigest)) ||
+       str("current_writer_to_fenced") ||
+       str(originalRuntimeId) || uint(originalNativeIncarnation) ||
+       str(originalNativeServerAttachmentLeaseId) ||
+       uint(originalCurrentWriterGeneration) ||
+       bytes(base64urlDecode(originalCurrentWriterRegistrationDigest)) ||
+       uint(predecessorFenceGeneration))
+```
+
+`originalCurrentWriterGeneration` and `originalCurrentWriterRegistrationDigest` must equal the
+pre-dispatch attachment attestation pinned by the reservation's discovery snapshot, and
+`predecessorFenceGeneration` must equal `originalCurrentWriterGeneration + 1`. Thus a registry first
+invented during recovery cannot satisfy the predecessor CAS.
+
+The predecessor evidence ID is
+`nspf_${base64url(SHA256(str("remote-claw/opencode-native-store-predecessor-stop-fence-id/v1") ||
+str(originalRuntimeId) || uint(originalNativeIncarnation) ||
+bytes(base64urlDecode(originalNativeStoreCoordinateDigest)) ||
+uint(predecessorFenceGeneration)))}`. Its definitive-stop evidence digest is SHA-256 of
+`str(definitiveStopEvidenceSchemaId) ||
+bytes(canonicalCredentialFreeDefinitiveProcessStopEvidence)`. That version-pinned evidence must prove
+the exact process-start identity exited or was killed, its private listener namespace was contained,
+and no open file description for the attested store handle remains in that predecessor. A timeout,
+missing PID, reused PID, socket close, coordinator lease expiry, or process-name scan is not definitive.
+
+The predecessor runtime-owner/warden signs this exact payload only after the registry CAS above and
+definitive stop both succeed:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(predecessorStopFenceEvidenceId) || str(assertion) ||
+str(originalRuntimeId) || uint(originalNativeIncarnation) ||
+str(originalNativeServerAttachmentLeaseId) ||
+bytes(base64urlDecode(originalNativeStoreCoordinateDigest)) ||
+bytes(base64urlDecode(originalNativeStoreAttachmentAttestationDigest)) ||
+bytes(base64urlDecode(stableNativeStoreIdentityDigest)) ||
+bytes(base64urlDecode(stoppedProcessStartIdentityDigest)) ||
+bytes(base64urlDecode(closedStoreHandleIdentityDigest)) ||
+str(continuityRegistrySchemaId) || str(continuityRegistryId) ||
+uint(originalCurrentWriterGeneration) ||
+bytes(base64urlDecode(originalCurrentWriterRegistrationDigest)) ||
+uint(predecessorFenceGeneration) ||
+bytes(base64urlDecode(continuityRegistryTransitionDigest)) ||
+str(definitiveStopEvidenceSchemaId) ||
+bytes(base64urlDecode(definitiveStopEvidenceDigest)) ||
+str(runtimeOwnerIdentityKeyId) || uint(runtimeOwnerKeyGeneration) ||
+uint(signerSequence) || uint(fencedAtMs) ||
+str(signatureAlgorithm) || str(canonicalPayloadDigestAlgorithm)
+```
+
+`canonicalPayloadDigest` is SHA-256 of those bytes. `signedRecordDigest` is SHA-256 of
+`str("remote-claw/opencode-native-store-predecessor-stop-fence-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || str(runtimeOwnerIdentityKeyId) ||
+uint(runtimeOwnerKeyGeneration) || uint(signerSequence) ||
+bytes(base64urlDecode(signature))`. The signature reservation/acceptance purpose is exactly
+`opencode_native_store_predecessor_stop_fence`; every downstream
+`predecessorStopFenceEvidenceDigest` equals that recomputed `signedRecordDigest`.
+
+Only after that fence is retained may the successor open the store. Its registry transition is:
+
+```text
+SHA256(str(continuityRegistrySchemaId) || str(continuityRegistryId) ||
+       bytes(base64urlDecode(stableNativeStoreIdentityDigest)) ||
+       str("fenced_to_current_writer") ||
+       bytes(base64urlDecode(predecessorStopFenceEvidenceDigest)) ||
+       str(successorRuntimeId) || uint(successorNativeIncarnation) ||
+       str(successorNativeServerAttachmentLeaseId) ||
+       uint(predecessorFenceGeneration) || uint(successorExclusiveOpenGeneration))
+```
+
+`successorExclusiveOpenGeneration` must equal `predecessorFenceGeneration + 1`. The successor evidence
+ID is
+`nseo_${base64url(SHA256(str("remote-claw/opencode-native-store-successor-exclusive-open-id/v1") ||
+str(successorRuntimeId) || uint(successorNativeIncarnation) ||
+bytes(base64urlDecode(successorNativeStoreCoordinateDigest)) ||
+bytes(base64urlDecode(predecessorStopFenceEvidenceDigest)) ||
+uint(successorExclusiveOpenGeneration)))}`. `conflictingWriterScanDigest` is SHA-256 of
+`str(conflictingWriterScanSchemaId) ||
+bytes(canonicalCredentialFreeConflictingWriterScanEvidence)` resolved from the immutable
+`conflictingWriterScanRef`. The scan runs under the warden's version-pinned host/namespace policy after
+the predecessor fence and proves no other process or attachment holds a writer-capable handle to that
+exact store object.
+
+The successor runtime owner signs:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(successorExclusiveOpenEvidenceId) || str(assertion) ||
+str(successorRuntimeId) || uint(successorNativeIncarnation) ||
+str(successorNativeServerAttachmentLeaseId) ||
+bytes(base64urlDecode(successorNativeStoreCoordinateDigest)) ||
+bytes(base64urlDecode(successorNativeStoreAttachmentAttestationDigest)) ||
+bytes(base64urlDecode(stableNativeStoreIdentityDigest)) ||
+bytes(base64urlDecode(openedStoreHandleIdentityDigest)) ||
+str(continuityRegistrySchemaId) || str(continuityRegistryId) ||
+bytes(base64urlDecode(predecessorStopFenceEvidenceDigest)) ||
+uint(predecessorFenceGeneration) || uint(successorExclusiveOpenGeneration) ||
+bytes(base64urlDecode(continuityRegistryTransitionDigest)) ||
+str(conflictingWriterScanSchemaId) ||
+bytes(base64urlDecode(conflictingWriterScanDigest)) ||
+str(runtimeOwnerIdentityKeyId) || uint(runtimeOwnerKeyGeneration) ||
+uint(signerSequence) || uint(openedAtMs) ||
+str(signatureAlgorithm) || str(canonicalPayloadDigestAlgorithm)
+```
+
+Its payload digest is SHA-256 of those bytes, and its `signedRecordDigest` is SHA-256 of
+`str("remote-claw/opencode-native-store-successor-exclusive-open-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || str(runtimeOwnerIdentityKeyId) ||
+uint(runtimeOwnerKeyGeneration) || uint(signerSequence) ||
+bytes(base64urlDecode(signature))`. Its signature reservation/acceptance purpose is exactly
+`opencode_native_store_successor_exclusive_open`; every downstream
+`successorExclusiveOpenEvidenceDigest` equals that recomputed `signedRecordDigest`.
+
+The version-one continuity proof ID is:
+
+```text
+nsh_${base64url(SHA256(
+  str("remote-claw/opencode-native-store-continuity-handoff-id/v1") ||
+  str(nativeCreationReservationId) ||
+  bytes(base64urlDecode(originalNativeStoreCoordinateDigest)) ||
+  bytes(base64urlDecode(successorNativeStoreCoordinateDigest)) ||
+  bytes(base64urlDecode(predecessorStopFenceEvidenceDigest)) ||
+  bytes(base64urlDecode(successorExclusiveOpenEvidenceDigest))
+))}
+```
+
+Its canonical digest is:
+
+```text
+SHA256(str(nativeStoreContinuityProofSchemaId) || uint(schemaVersion) ||
+       str(nativeStoreContinuityProofId) || str(proofKind) ||
+       str(continuityAssertion) || str(nativeCreationReservationId) ||
+       str(originalRuntimeId) || uint(originalNativeIncarnation) ||
+       bytes(base64urlDecode(originalNativeStoreCoordinateDigest)) ||
+       bytes(base64urlDecode(originalNativeStoreAttachmentAttestationDigest)) ||
+       str(successorRuntimeId) || uint(successorNativeIncarnation) ||
+       bytes(base64urlDecode(successorNativeStoreCoordinateDigest)) ||
+       bytes(base64urlDecode(successorNativeStoreAttachmentAttestationDigest)) ||
+       bytes(base64urlDecode(stableNativeStoreIdentityDigest)) ||
+       str(continuityRegistrySchemaId) || str(continuityRegistryId) ||
+       str(predecessorStopFenceEvidenceSchemaId) ||
+       bytes(base64urlDecode(predecessorStopFenceEvidenceDigest)) ||
+       str(successorExclusiveOpenEvidenceSchemaId) ||
+       bytes(base64urlDecode(successorExclusiveOpenEvidenceDigest)) ||
+       uint(predecessorFenceGeneration) || uint(successorExclusiveOpenGeneration) ||
+       bytes(base64urlDecode(predecessorRegistryTransitionDigest)) ||
+       bytes(base64urlDecode(successorRegistryTransitionDigest)))
+```
+
+The proof ref must parse as exactly `OpenCodeNativeStoreContinuityHandoffProofRecord`; its
+`canonicalNativeStoreContinuityProofDigest` and every downstream
+`nativeStoreContinuityProofDigest` must equal the recomputed digest above. Both signed subrecords must
+parse and verify under their named, accepted runtime-owner
+keys; their runtime/incarnation, attachment, coordinate, store-attachment attestation, stable identity,
+registry, generations, transition digests, and handle identities must match the original/successor
+snapshots and each other. The predecessor's closed-handle identity and successor's opened-handle
+identity must identify the same store object already committed by both coordinates. The registry CAS
+must be linear: one current predecessor, then fenced, then exactly one successor at the next
+generation, with no reset, generation reuse, skipped transition, parallel writer, clone adoption, or
+fork branch. The predecessor attachment's current-writer generation/digest must equal the fence
+record's CAS input; the successor attachment's current-writer generation must equal
+`successorExclusiveOpenGeneration` and its current-writer digest must recompute from the successor CAS
+output. The predecessor attachment attestation must precede its fence; the successor
+attachment-attestation/open-read witness must be created only after that fence and must precede the
+signed exclusive-open record. Signed timestamps are consistency checks, while the protected registry
+CAS is the authoritative ordering boundary. `proofKind` is `exclusive_warden_handoff` and
+`continuityAssertion` is exactly
+`same_store_no_reset_no_fork`; an assertion without the two verified transitions and signed evidence
+does not qualify.
+
+For cross-incarnation proof, `nativeStoreLineageEvidenceId` is:
+
+```text
+nsl_${base64url(SHA256(
+  str("remote-claw/opencode-native-store-lineage-evidence-id/v1") ||
+  str(nativeCreationReservationId) ||
+  str(originalDiscoverySnapshotId) ||
+  str(successorDiscoverySnapshotId)
+))}
+```
+
+The exact evidence digest is:
+
+```text
+canonicalNativeStoreLineageEvidenceDigest =
+  SHA256(str(nativeStoreLineageEvidenceSchemaId) || uint(schemaVersion) ||
+         str(nativeStoreLineageEvidenceId) || str(nativeCreationReservationId) ||
+         str(proofKind) ||
+         str(originalRuntimeId) || uint(originalNativeIncarnation) ||
+         str(originalDiscoverySnapshotId) ||
+         bytes(base64urlDecode(originalDiscoverySnapshotDigest)) ||
+         str(originalNativeStoreCoordinateSchemaId) ||
+         bytes(base64urlDecode(originalNativeStoreCoordinateDigest)) ||
+         str(successorRuntimeId) || uint(successorNativeIncarnation) ||
+         str(successorDiscoverySnapshotId) ||
+         bytes(base64urlDecode(successorDiscoverySnapshotDigest)) ||
+         str(successorNativeStoreCoordinateSchemaId) ||
+         bytes(base64urlDecode(successorNativeStoreCoordinateDigest)) ||
+         bytes(base64urlDecode(stableNativeStoreIdentityDigest)) ||
+         str(nativeStoreContinuityProofSchemaId) ||
+         bytes(base64urlDecode(nativeStoreContinuityProofDigest)))
+```
+
+The immutable evidence ref must parse as exactly
+`OpenCodeNativeStoreLineageEvidenceRecord` and recompute that digest; the reconciliation's evidence
+schema ID and digest must equal the record's schema ID and
+`canonicalNativeStoreLineageEvidenceDigest`. Its proof kind is exactly
+`exclusive_continuity_handoff`; the original and successor runtime/incarnation pairs must differ. The
+original fields, snapshot ID/digest,
+and coordinate ref/digest must equal the creation reservation and its pinned original discovery
+snapshot. The successor fields, snapshot ID/digest, and coordinate ref/digest must equal the
+reconciliation's current complete successor snapshot. Both coordinate refs must parse, recompute, and
+carry the one
+`stableNativeStoreIdentityDigest` repeated by the evidence. Their backend schema, canonical root,
+filesystem identity, and database identity digests must all be equal; equality of only the derived
+stable digest without those component checks is insufficient. The continuity proof ref/digest must
+parse and verify under the exact handoff contract above and repeat both coordinate digests and the
+stable identity. Marker and intent deliberately remain outside this store-lineage proof: the
+reconciliation record, successor snapshot, and marker-match vector bind and verify them separately,
+avoiding a circular or duplicated lineage coordinate.
+
+`nativeStoreLineageStatus` has these exact representations:
+
+- `same_incarnation_not_required` requires identical original and successor `(runtimeId,
+  nativeIncarnation)` pairs, exact equality of their snapshot-pinned store coordinate schema/digest and
+  stable store identity, and an all-null evidence schema/ref/digest triple. A same-incarnation store
+  coordinate change is a recovery gap and cannot bind through this sentinel.
+- `cross_incarnation_proved` requires different pairs and the all-non-null exact schema/ref/digest
+  triple above, including the verified continuity handoff. Equal coordinate or embedded store identity
+  without that handoff is not proved.
+- `cross_incarnation_unproved` requires different pairs and an all-null evidence schema/ref/digest
+  triple. A missing, malformed, stale, mismatched, or unsupported proof is retained only as diagnostic
+  failure evidence outside the positive slot and normalizes to this status.
+
+A mixed-null triple, evidence on the same-incarnation sentinel, or `proved` without a valid record
+invalidates the reconciliation row rather than changing its decision.
+
+Reconciliation runs under the reservation/effect-gate lock. Its sequence is allocated from
+`nextReconciliationSeq`; the ID is
+`ncr_${base64url(SHA256(str("remote-claw/native-creation-reconciliation/v1") ||
+str(nativeCreationReservationId) || uint(reconciliationSeq) ||
+str(successorDiscoverySnapshotId)))}`. The database is unique on both
+`(nativeCreationReservationId,reconciliationSeq)` and
+`(nativeCreationReservationId,successorDiscoverySnapshotId)`. `originalDispatchDigest` must equal the
+dispatch row's canonical digest. `originalRuntimeId`, `originalNativeIncarnation`, and the original
+snapshot ID/digest must equal the creation reservation's runtime/incarnation and pinned discovery
+snapshot. `expectedNativeCreationMarker` and `expectedNativeCreationIntentDigest` must equal the
+reservation and are immutable inputs to the reconciliation digest.
+
+Decision precedence is exact. `cross_incarnation_unproved` requires `lineage_unproved` and a null
+observed ID regardless of marker count or contents; neither of the other lineage statuses may choose
+`lineage_unproved`. With `same_incarnation_not_required` or `cross_incarnation_proved`, a zero count
+requires `zero_uncertain` and null observed ID; it is nonterminal and may be superseded by a later
+sequence. Count one requires `bind_one` and the one exact native ID only if that item's marker and
+intent digest both equal those expected values, its classification is `canonical_two_field`, and its
+canonical and full metadata ref/digest pairs both recompute. A same-marker
+wrong/missing/malformed intent or `noncanonical_or_extra` metadata item requires `metadata_mismatch`
+and null observed ID; count greater than one requires `quarantine_many` and null observed ID regardless
+of each item's classification.
+The first validated `bind_one`, `metadata_mismatch`, `quarantine_many`, or `lineage_unproved`
+compare-and-swaps the
+reservation's current reconciliation and effect/binding terminal state atomically; later conflicting
+rows are rejected rather than racing the winner.
+
+The immutable reconciliation digest is:
+
+```text
+SHA256(str(positiveReadBackSchemaId) || uint(schemaVersion) ||
+       str(nativeCreationReconciliationId) || str(nativeCreationReservationId) ||
+       str(expectedNativeCreationMarker) ||
+       bytes(base64urlDecode(expectedNativeCreationIntentDigest)) ||
+       uint(reconciliationSeq) || str(originalRuntimeId) || uint(originalNativeIncarnation) ||
+       str(originalDiscoverySnapshotId) ||
+       bytes(base64urlDecode(originalDiscoverySnapshotDigest)) ||
+       bytes(base64urlDecode(originalDispatchDigest)) ||
+       str(successorRuntimeId) || uint(successorNativeIncarnation) ||
+       str(successorObserverLeaseId) || str(successorDiscoverySnapshotId) ||
+       bytes(base64urlDecode(successorDiscoverySnapshotDigest)) ||
+       str(nativeStoreLineageStatus) ||
+       optionalStr(nativeStoreLineageEvidenceSchemaId) ||
+       optionalDigest(nativeStoreLineageEvidenceDigest) ||
+       bytes(base64urlDecode(markerMatchVectorDigest)) || uint(markerMatchCount) ||
+       str(decision) || optionalStr(observedNativeConversationId))
+```
+
+The original and successor discovery plus marker-vector ref/digest pairs must parse and recompute
+before this row can change the reservation. The lineage ref/digest must do so exactly when status is
+`cross_incarnation_proved`; the two null-sentinel statuses follow the rules above. Its positive
+read-back schema equals the selected family and reservation; a schema/ref/digest substitution, same-ID
+changed row, cross-reservation store proof, or cross-reservation marker proof is invalid.
+
+The creation reservation and effect gate are each unique on `commandId`; the reservation is also
+unique on `(collaborationServerId, targetLogicalChatId)`,
+`(runtimeId, nativeIncarnation, nativeCreationMarker)`, and `provisionalNativeBindingId`. Its target
+digest is:
+
+```text
+SHA256(
+  str("remote-claw/native-creation-target/v1") ||
+  str(descriptor.product) ||
+  str(descriptor.access) ||
+  str(runtimeId) ||
+  uint(nativeIncarnation) ||
+  str(nativeServerAttachmentLeaseId) ||
+  str(serverFrontDoorLeaseId) ||
+  str(projectId) ||
+  str(nativeWorkspaceBindingId) ||
+  bytes(base64urlDecode(canonicalDirectoryPathDigest)) ||
+  bytes(base64urlDecode(nativeWorkspaceBindingDigest)) ||
+  str(creationIntent) ||
+  str(nativeCreationMarker) ||
+  str(nativeMethod) ||
+  str(nativeRouteSchemaId) ||
+  bytes(canonicalRouteParameterBytes)
+)
+```
+
+Its request digest uses the separate domain
+`remote-claw/native-creation-request/v1`, the pinned `canonicalRequestSchemaId`, and the exact
+credential-stripped request bytes. Neither digest contains a fake session ID. The dispatch CAS
+revalidates the current server attachment/front-door lease, server capability pointer, exact
+`new_chat` family digest, discovery snapshot, marker, and both digests. The bind transaction creates
+the `LocalNativeConversationRecord`/mapping, fills the starting binding with the one observed `ses_*`,
+marks the creation effect complete, and changes the logical chat to `ready` together; no partial bind
+is writable.
 
 One limitation is load-bearing: `prompt_async` returns HTTP 204 without a response-assigned native
 command/message ID, but pinned `1.17.5` accepts a caller-supplied native `msg_*`. The adapter persists a
 unique valid ID before delivery and sends it once. Exact history/SSE read-back of that ID is positive
-correlation. The retained [OpenCode native proof](opencode-native-proof.md) uses `noReply:true`, one server incarnation, and no
-provider/model reply; in that narrow mode the same-ID second POST appends another part. Model-bearing,
-concurrent, TUI, and restart variants remain unproved, so a lost response is never blindly retried and
-absence remains inconclusive until a proved terminal boundary. Text matching is not evidence. For
-text, compact, interrupt, permission, and future question actions, coordinator admission is only
+correlation. The retained [OpenCode native proof](opencode-native-proof.md) uses `noReply:true`, one
+server incarnation, and no provider/model reply; in that narrow mode the same-ID second POST appends
+another part. It proves the caller-ID and duplicate-append facts only. It does **not** prove the
+selected A2 translator, which omits `noReply` and `model`, nor the private provider façade, assistant
+completion, direct-TUI concurrency, or restart path. OpenCode `{user_text}` therefore cannot be
+advertised writable for A2 until one retained release fixture sends the exact selected request through
+that full path and passes the read-back/restart matrix: same-incarnation adapter/coordinator restart
+must retain positive read-back, while native-server restart must quarantine under the selected
+version-one oracle. A lost response is never blindly retried and
+absence remains inconclusive until a proved terminal boundary. Text matching is not evidence. For text
+and every future compact, interrupt, permission, or question capability, coordinator admission is only
 permission to try; native
 history/events/status and stable native IDs establish whether, where, and in what order OpenCode
 applied the action.
+
+Before the common actor decides an OpenCode **chat/binding-scoped** proposal, it pins the current
+`NativeBindingCapabilitySnapshot`. Server-control `new_chat` instead resolves its selector and pins
+either the terminal `NativeServerCapabilitySnapshot` or nested-management capability before any
+binding exists. The binding snapshot's immutable family entry pins support, route/method schema,
+request schema, transport-receipt meaning, action-ID requirement, positive and negative read-back,
+source-causality strength, and
+versioned reserved-command normalization table are part of the decision and the one native attempt.
+That table recognizes reserved input before generic text even when its family is unsupported; it is
+not the advertised-writable set. The viewer deterministically advertises only table items whose
+normalized family also has a current entry in the snapshot's `familyCapabilities`. Blank user text is rejected unless
+the pinned tuple proves native blank-submit behavior. Exact `/compact`, `/clear`, `/model`, `/context`,
+and any other advertised reserved command are normalized to their typed operation before generic
+`user` admission; a missing mapping is a stored unsupported rejection. The adapter may not discover
+after `accepted` that text was really a control. Snapshot replacement or proof downgrade cannot make a
+previously unsupported attachment/control writable, and an attempt cannot be recovered under a newer
+snapshot merely because its request looks similar.
+
+For A2, `/compact`, `/clear`, `/model`, `/context`, and every unproved command remain in the reserved
+normalization table but are absent from the advertised-writable set and deterministically rejected.
+`/clear` cannot become writable until it executes the
+typed `clear` family together with the `LocalNativeConversationTransitionRecord(kind: "clear")` and
+coordinator logical-chat identity transaction; it must never fall through as literal model text.
 
 Native outcome does not automatically prove source. Permission has a request/gate identity that may
 provide a causal seam once pinned. Abort and summarize do not yet have a proved caller action ID in
@@ -1851,9 +9349,13 @@ enough until its true/false contract is parsed and correlated; false, stale, los
 remain rejected or `outcome_unknown`, and every outward gate copy closes from the proved native
 terminal record. Additional pending-list routes must likewise be schema-pinned and runtime-probed
 rather than reimplemented from guesses.
+
 Parent-session policy setup does not validate child sessions: the current post-creation PATCH can lose
 a race to a child's first tool. Shared structured permissions therefore require an atomically inherited
-owned-session policy or must advertise child tools ungated and unsupported.
+owned-session policy or must advertise child tools ungated and unsupported. In the first A2 slice,
+`permission_answer` is absent from the capability vector and receives the same stored unsupported
+result as every other unavailable family; the dispatch-only adapter front door cannot reach the reply
+or policy endpoints.
 
 Shutdown distinguishes ownership. Detaching one outside collaborator or an externally owned adapter
 does not abort its active turn, close the server-wide observer, or detach the TUI. Adapter replacement
@@ -2180,10 +9682,232 @@ binding and source namespace. The edge maps those distinct identities explicitly
 
 Every inward proposal carries immutable origin and traversed-edge lineage. Every native observation
 travels outward on a separately typed path and may return over those same physical edges in reverse.
-A server drops a proposal that already traversed it or an inward edge, drops an observation that
-already traversed the same outward edge, and never promotes an outward observation or echo into an
-inward proposal. These rules make recursive composition possible without suppressing replies or
-creating feedback loops.
+After authenticating its stable source event, a server gives an inward proposal that already traversed
+it or its inward edge an ordered rejected common result; the source can therefore finish its started
+attempt. It drops only unauthenticated/malformed transport without semantic ACK. It drops an outward
+observation that already traversed the same outward edge and never promotes an outward observation or
+echo into an inward proposal. These rules make recursive composition possible without suppressing
+replies or creating feedback loops.
+
+Ordinary nested chat mutation uses the same common adjudication boundary, not a direct edge send.
+`NestedChatEdgeCapabilitySnapshot.familyCapabilitiesRef` retains one
+`NestedChatEdgeFamilyCapability` per supported family in `NativeMutationFamily` order. Each family
+digest is SHA-256 of
+`str("remote-claw/nested-chat-edge-family/v1") || str(mutationFamily) ||
+str(canonicalCommandPayloadSchemaId) ||
+str(targetRequestSchemaId) ||
+str(targetReceiptProofSchemaId) ||
+str(acknowledgement)`. The vector digest uses
+`str("remote-claw/nested-chat-edge-family-vector/v1") || uint(count)` followed by each decoded family
+digest. The snapshot digest is:
+
+```text
+SHA256(str(canonicalSnapshotSchemaId) || uint(schemaVersion) ||
+       str(nestedChatEdgeCapabilitySnapshotId) || str(inwardEdgeId) ||
+       str(inwardLiveLeaseId) || uint(sourceTopologyGeneration) ||
+       uint(targetTopologyGeneration) || str(targetOutsideBindingId) ||
+       str(targetSourceEventNamespaceId) || uint(capabilityGeneration) ||
+       bytes(base64urlDecode(familyCapabilityVectorDigest)) ||
+       bytes(base64urlDecode(proofDigest)) || uint(verifiedAtMs))
+```
+
+The family and proof refs must parse to the exact bytes behind their digests. Installation
+compare-and-swaps `InwardCollaborationEdgeRecord.currentCapabilitySnapshotId`; state is excluded from
+the immutable digest. The decision executor evidence and semantic delivery attempt repeat the
+snapshot ID and digest, while the command repeats the selected family digest. The snapshot is valid
+only for that installed edge, both topology generations, its named current live lease, target outside
+binding/namespace, and current pointer. A same-ID content change, ref/digest substitution, or stale
+lease/topology is equivocation and cannot reach joint finalization or send.
+
+The family has two different schema commitments. `canonicalCommandPayloadSchemaId` is the
+source-independent common payload accepted by the target for that mutation family;
+`targetRequestSchemaId` is the nested wire envelope parsed at the target boundary. They must never be
+substituted for one another. The admitted command and delivery attempt repeat the exact common payload
+schema/ref/digest, and that schema must equal the selected family entry. The source-local refs are not
+sent as authority. Instead, every nested chat attempt retains one portable
+`NestedCommandPayloadTransferBundleRecord` whose exact bytes are:
+
+```text
+str(canonicalPayloadTransferSchemaId) || uint(schemaVersion) ||
+str(mutationFamily) || str(canonicalCommandPayloadSchemaId) ||
+bytes(exactCanonicalCommandPayloadBytes) ||
+uint(attachmentTransferItemCount) ||
+for item in itemIndex order:
+  bytes(exactCanonicalAttachmentItemBytes) ||
+  bytes(exactDecodedContentBytes)
+```
+
+`canonicalPayloadTransferSchemaId` is
+`remote-claw/nested-command-payload-transfer/v1`, and
+`canonicalPayloadTransferDigest` is SHA-256 of those exact bytes.
+`canonicalCommandPayloadBytesRef` resolves the exact bytes already committed by the admitted
+command's `canonicalCommandPayloadDigest`; the bundle's family, payload schema, and payload digest
+must equal the command, attempt, and selected family. For every family other than `attachment`,
+version one requires `attachmentTransferItemCount:0` and
+`attachmentTransferItemsRef:null`. Any future common payload with subordinate blobs requires a new
+transfer schema version rather than treating a local ref as portable.
+
+For `attachment`, the count is the payload's nonzero `itemCount` and
+`attachmentTransferItemsRef` resolves contiguous
+`NestedAttachmentPayloadTransferItemRecord` values starting at zero. Each
+`exactCanonicalAttachmentItemBytes` is exactly:
+
+```text
+str(canonicalItemSchemaId) || uint(1) || uint(itemIndex) ||
+str(clientFileName) || str(mediaType) || uint(contentLength) ||
+bytes(base64urlDecode(contentDigest))
+```
+
+Its SHA-256 must equal both the transfer item's `canonicalAttachmentItemDigest` and the corresponding
+source `CanonicalAttachmentItemRecord.canonicalItemDigest`.
+`exactDecodedContentBytes` must have exactly `contentLength` bytes and hash to `contentDigest`.
+Recomputing the ordered item digests must reproduce the common payload's `itemVectorDigest`; the
+payload count, transfer count, item indices, filenames, media types, lengths, and content digests must
+all agree. The target validates all common attachment limits before it materializes target-local
+payload/item/content refs. A missing byte, source-local ref, extra item, reordered item, noncanonical
+item bytes, changed schema, or digest mismatch rejects before target source-event normalization.
+
+For an admitted `nested_chat_edge` command, the decision transaction derives
+`requiredFinalizationArtifactKind:"nested_chat_event_lineage_hop"`, builds the exact semantic envelope
+core below, and pre-reserves one `NestedChatEventLineageHopPreparationRecord` under the same
+compound signing group as the common result. The decision transaction only reserves its sequence; the
+signer later binds the exact core payload. That hop's `canonicalEnvelopeSchemaId` and
+`canonicalEnvelopeDigest` are the core schema/digest, not the later wire envelope. After both
+signatures are durable, one joint finalizer rechecks and inserts the common result, signed hop and
+completed `EventLineageRecord`, wire envelope, source outbox, exactly one
+`NestedChatDeliveryEffectGateRecord`, and exactly one stable
+`NestedChatDeliveryAttemptRecord`. No result ACK, attempt, or effect gate exists before that commit.
+Crash, secondary-preparation replacement, signing-lease rotation blocking, and racing-finalizer rules
+are the same compound-group rules as nested management.
+
+The stable attempt is unique on both `commandId` and `(commandId,inwardEdgeId)`. Its ID is
+`ncd_${base64url(SHA256(str("remote-claw/nested-chat-delivery/v1") ||
+str(collaborationServerId) || str(logicalChatId) || str(commandId) || str(inwardEdgeId)))}`. The target
+namespace is
+`ncn_${base64url(SHA256(str("remote-claw/nested-chat-source-namespace/v1") ||
+str(targetServerId) || str(targetOutsideBindingId) || str(collaborationServerId) ||
+str(inwardEdgeId)))}` and the event ID is
+`nce_${base64url(SHA256(str("remote-claw/nested-chat-source-event/v1") ||
+str(collaborationServerId) || str(commandId) || str(inwardEdgeId)))}`. Neither changes on reconnect.
+
+The cycle-free semantic envelope core is exactly:
+
+```text
+str(canonicalEnvelopeCoreSchemaId) || uint(1) ||
+str(collaborationServerId) || str(logicalChatId) || str(commandId) || uint(commandSeq) ||
+bytes(base64urlDecode(canonicalCommandRecordDigest)) ||
+str(targetServerId) || str(targetLogicalChatId) || str(mutationFamily) ||
+str(targetRequestSchemaId) || str(targetReceiptProofSchemaId) ||
+str(canonicalCommandPayloadSchemaId) ||
+bytes(base64urlDecode(canonicalCommandPayloadDigest)) ||
+str(canonicalPayloadTransferSchemaId) ||
+bytes(base64urlDecode(canonicalPayloadTransferDigest)) ||
+str(targetSourceEventNamespaceId) || str(targetSourceEventId)
+```
+
+`canonicalEnvelopeCoreRef` retains those bytes and `canonicalEnvelopeCoreDigest` is their SHA-256.
+The new final `EventLineageHop` signs that core digest. Once the hop is signed,
+`eventLineageDigest` equals its verified `chainDigest`; an inward send requires the current edge as the
+final contiguous `inward-proposal` hop, so it is never hopless. The retained wire envelope is then:
+
+```text
+str(canonicalEnvelopeSchemaId) || uint(1) ||
+bytes(exactCanonicalEnvelopeCoreBytes) ||
+bytes(exactCanonicalCommandPayloadTransferBytes) ||
+bytes(base64urlDecode(eventLineageDigest))
+```
+
+The embedded transfer bytes must hash to the core's `canonicalPayloadTransferDigest`.
+`canonicalEnvelopeDigest` is SHA-256 of the complete wire bytes. The signed lineage record is
+transmitted with the envelope and the target recomputes the payload transfer, core digest, every
+lineage hop, final chain digest, and wire digest before source normalization. For an attachment this
+includes the complete canonical item records and decoded content bytes, not source-local refs. Thus
+the hop never signs a digest that contains that hop.
+The attempt's `canonicalEnvelopeSchemaId` is derived and must equal the selected family's
+`targetRequestSchemaId`; the family has no second envelope-schema field. The attempt repeats that
+request schema, `targetReceiptProofSchemaId`, selected common payload schema, and exact payload
+transfer schema/ref/digest. The target rejects an
+envelope-schema substitution before source normalization. Its durable receipt proof must parse under
+that exact selected schema.
+Every coordinate repeats the common command, selected edge capability, and installed edge through
+composite foreign keys. The canonical origin/hop encodings in §4 are the only lineage encoding; no
+parallel ad hoc vector exists. The target outside binding is chat-scoped to
+the exact target chat and normalizes this event into its own `CanonicalSourceEventRecord` and
+`CollaborationCommandRecord`. It never interprets a transport retry as another proposal.
+
+Physical sends are immutable child `NestedChatDeliveryTransportAttemptRecord` rows. Immediately before
+the first possible byte, the edge last hop revalidates the selected command/family, topology, current
+edge, capability continuation, live lease/channel binding, target, and retained envelope, then
+atomically consumes the exact armed `NestedDispatchAuthorizationRecord` and changes the child plus
+command-wide effect gate to `started` under the common positive-never-started contract above. The
+initial child repeats the semantic attempt's selected capability snapshot ID/digest and
+has both continuation fields null. A later child requires both fields non-null and a valid capability
+continuation; one-null/one-non-null is invalid. A continuation can move an otherwise identical
+not-started semantic attempt to
+a fresh live lease only when the topology/target/family digest are unchanged and every prior child has
+positive `never_started` evidence. The retained
+`NestedChatEdgeCapabilityContinuation` names the prior/current snapshots and transport attempts,
+identical target/family/topology coordinates, and the exact positive-never-started evidence digest.
+The source first allocates a fresh random `transportAttemptId`; its child row ID is
+`nct_${base64url(SHA256(str("remote-claw/nested-chat-transport-attempt/v1") ||
+str(nestedChatDeliveryAttemptId) || str(transportAttemptId)))}`. That ID allocation depends on neither
+the continuation nor its signature, so the signed next-attempt reference is not circular. The exact
+continuation payload is:
+
+```text
+str(canonicalPayloadSchemaId) || uint(schemaVersion) ||
+str(nestedChatDeliveryAttemptId) || str(priorEdgeCapabilitySnapshotId) ||
+bytes(base64urlDecode(priorEdgeCapabilitySnapshotDigest)) ||
+str(currentEdgeCapabilitySnapshotId) ||
+bytes(base64urlDecode(currentEdgeCapabilitySnapshotDigest)) || str(inwardEdgeId) ||
+uint(sourceTopologyGeneration) || str(targetServerId) || str(targetLogicalChatId) ||
+str(targetOutsideBindingId) || bytes(base64urlDecode(capabilityFamilyDigest)) ||
+str(priorTransportAttemptId) || str(nextTransportAttemptId) ||
+str(positiveNeverStartedEvidenceSchemaId) ||
+bytes(base64urlDecode(positivePriorNeverStartedEvidenceDigest)) ||
+uint(signerSequence) || uint(serverKeyGeneration) || str(signerIdentityKeyId) ||
+str(signerScopeCertificateId) || str(signatureAlgorithm) ||
+str(canonicalPayloadDigestAlgorithm)
+```
+
+The current certified source-server key signs those bytes. `capabilityContinuationDigest` is
+SHA-256 of
+`str("remote-claw/nested-chat-edge-capability-continuation-signed/v1") ||
+bytes(base64urlDecode(canonicalPayloadDigest)) || bytes(base64urlDecode(signature))`.
+The next child, its continuation ref/digest, and its one-time authorization are inserted in one
+transaction after that exact signature is retained. Installing it and the next
+child is one CAS against the edge's current capability pointer, predecessor's `revoked@2`
+authorization and `never_started` state, exact signed positive-never-started evidence, and the same
+still-`(never_started,null)` command-wide gate. It retains the paired evidence schema/ref/digest and installs
+only the successor's fresh `armed@1` authorization; it never downgrades a started gate. The successor's
+last-hop send CAS alone changes the gate to `(started,nextChildId)`. A changed target, family, topology,
+snapshot bytes/digest, missing signature, noncurrent snapshot, authorization/gate mismatch, or evidence mismatch
+rejects. The next transport child repeats the current snapshot ID/digest and the continuation's current values.
+Any started or uncertain child
+forbids another send.
+For `NestedChatDeliveryEffectGateRecord`, `startedAttemptId` names the exact physical
+`nestedChatDeliveryTransportAttemptId`, not the stable semantic delivery-attempt ID.
+
+The target returns the same closed `NestedTargetCommandReceiptProofBundle` defined for management.
+Its target request schema/digest must equal this attempt's exact wire envelope, and the bundle's
+outside binding, namespace, event, mutation family, common payload, command record, decision/executor
+evidence, and signed result must all recompute as one target adjudication chain. Its receipt-proof
+schema must equal the selected family. The target's common payload ref is target-local, but its bytes,
+schema, and digest must equal the verified portable transfer; for an attachment its newly materialized
+item/content refs must reproduce every transferred item/content byte and the same vector digest. A
+result for another envelope, capability, target chat, or
+decision therefore cannot complete the attempt. Each verified proof is appended as one
+`NestedChatTargetResultRecord`, unique on `nestedChatDeliveryAttemptId` and on the target
+command-result ID, and retains the exact proof ref/digest. Its target common-result version is exactly
+one and its predecessor is null. An exact replay returns the same proof and target command/result
+bytes. A second different proof or result, any result version other than one, any non-null predecessor,
+or changed component bytes quarantines the attempt; the acknowledged target decision never changes
+behind that receipt. Forwarding a formerly queued proposal requires a fresh authenticated target
+source event, a new target command/sequence, and another version-one result, not an update to this
+attempt. Target
+admission is still not native application: terminal OpenCode, Claude, or Codex state and observations
+remain the final applied-state authority. Lost response, result fork, or unproved target outcome leaves
+the source effect `outcome_unknown` and never sends again.
 
 ## 11. Core workflows
 
@@ -2369,15 +10093,18 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 - Add durable `logical_chat`, `native_binding`, native-incarnation, runtime-local
   native-conversation/transition/mapping, private-transport-attachment and attachment-lease,
   runtime-scoped inference-attempt/chunk-outbox/correlation, outside-binding,
-  ChatGPT-Remote-host/connector-lease/transport-state/chat-mapping, outside-capability-snapshot,
-  outside-capability-verification, and connection-epoch records, plus inward-collaboration-edge,
-  rooted-topology-certificate/reservation, signed event-lineage, server-identity-key, source-event
-  namespace/transition/observation, canonical source-event, and cross-incarnation correlation records.
+  collaboration-server/scope-certificate, ChatGPT-Remote-host/connector-lease/transport-state/chat-mapping,
+  outside-capability-snapshot, outside-capability-verification, and connection-epoch records, plus
+  inward-collaboration-edge, rooted-topology-certificate/reservation, signed event-lineage,
+  server-identity-key, source-event namespace/transition/observation, canonical source-event, and
+  cross-incarnation correlation records.
   Never alias one server's `logicalChatId` to another server's chat, the A0 `rcb_*`, Claude `cse_*`,
   Codex/OpenCode ID, broker channel, or provider ID.
-- Route web presence, broker channel/key derivation, and normalized command/chat sequences by the
-  stable `logicalChatId`; a transport replacement must update one visible row rather than create
-  another.
+- Route canonical command/chat sequences and native/outward bindings by the complete
+  `(collaborationServerId, logicalChatId)` chat scope. Machine-facing web presence, broker
+  channel/key derivation, visible rows, aliases, and client caches use
+  `(identity_id, collaborationServerId, logicalChatId)`. A transport replacement must update that one
+  scoped row rather than create another.
 - Add an epoch-fenced runtime owner/warden and local native-transition registry that keep the native
   client endpoint, provider façade, inference connector, and real TUI usable across coordinator
   unavailability without changing native semantic authority. Import exact transitions into
@@ -2406,12 +10133,14 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 
 ### A2 — OpenCode vertical slice
 
-- Persist a stable binding from `logicalChatId` to the native OpenCode `ses_*`; do not use `ses_*` as
-  the remote-claw chat or broker ID.
+- Persist a stable binding from `(collaborationServerId, logicalChatId)` to the native OpenCode
+  `ses_*`; do not use `ses_*` as either remote-claw chat coordinate or the broker ID.
 - Keep one real OpenCode TUI path and one epoch-fenced remote-claw adapter lease on the same `ses_*`;
-  enforce the lease at the private HTTP endpoint because SSE/HTTP exposes no persistent writer
-  identity, reject concurrent old/new wrappers, preserve direct OpenCode semantics, and let OpenCode
-  arbitrate their interleaving.
+  put the actual server in a private namespace and expose the four total, attested runtime-owned
+  audiences: exact-process TUI, dispatch-only binding adapter, creation-only server control, and
+  internal observer. Permit only those exact front-door TGIDs to reach the raw listener; deny the
+  OpenCode process and spawned tools. Stock `1.17.5` remains non-writable until a retained full
+  front-door/real-TUI/observer/isolation fixture proves this boundary.
 - Make takeover a barrier: reject new old-epoch arrivals, keep the replacement non-writable, and settle
   or quarantine every request already admitted under the old lease before activating the new one.
 - Fail closed on session discovery errors and never adopt “most recent.” Reattach an existing binding
@@ -2419,26 +10148,56 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
   native-TUI-created session, as an identity transition. Permit automatic creation only with explicit
   first-bootstrap intent, no existing binding, and a positive empty snapshot; permit explicit **New
   chat** as a separately typed operation even when sessions exist. Use a two-phase
-  reservation/write-ahead attempt with a unique namespaced metadata marker and typed intent; reconcile
-  zero, one, or multiple exact marker matches without retry, and prove marker durability across server
-  restart.
+  reservation/write-ahead attempt with the exact two-field namespaced marker/typed-intent metadata;
+  retain every same-marker candidate's full native metadata ref/digest and bind exactly one only when
+  that evidence recomputes, its classification is canonical, its canonical two-field ref/digest
+  recomputes, and its intent equals the expected digest. Lost-response reconciliation requires a
+  current, complete, linearly proved and exhaustive successor discovery snapshot. Zero remains
+  uncertain; wrong/missing/malformed intent, noncanonical/extra metadata, or multiple matches
+  quarantine without retry. Prove both metadata fields across server restart. Retain one
+  same-incarnation vector with the exact null lineage sentinel and one cross-incarnation vector whose
+  original/successor signed open/read attestations and store coordinates recompute to the same stable
+  store identity and whose predecessor-stop/fence plus successor-exclusive-open records form the exact
+  no-reset/no-fork continuity handoff. Exercise a cloned store with copied embedded identity, missing
+  predecessor containment, an open predecessor handle, parallel successor, reset/forked registry,
+  reused/skipped generation, or mismatched handle identity and require `lineage_unproved`. Corrupt each
+  runtime, incarnation, snapshot, coordinate, attachment-attestation, continuity-proof, stable
+  identity, marker, intent, schema, and digest in turn before row construction and require normalization to
+  `cross_incarnation_unproved`/`lineage_unproved` with no bind. Tampering with an already retained
+  `cross_incarnation_proved` row instead invalidates that row and changes no state.
+- Serialize direct-TUI create/import/switch/clear/fork/archive/unarchive with server-control creation
+  through the runtime-owned workspace transition barrier. Reject an unclassified top-level
+  identity/selection/discovery mutation rather than letting it race first-bootstrap.
 - Feed history/live events into normalized text observations.
 - Establish and actively drain SSE into a bounded durable buffer before history snapshot; make
   overflow, stream loss, snapshot failure, and pre-merge crash explicit non-writable recovery gaps.
 - Compare legacy `/event` with v2 `/api/event`, pin event-ID/sequence scope and reset behavior, merge a
   native status snapshot before readiness, and classify orphaned incomplete messages across a real
-  server kill/restart.
-- Route web text through the command actor with a write-ahead caller-supplied native `msg_*`, treat
+  server kill/restart. A complete snapshot requires a proved native watermark, same-stream
+  post-snapshot barrier, or atomic store boundary; drained legacy SSE alone is not sufficient.
+- Route every web, official, automation, or nested proposal through the common command and signed-result
+  adjudicator. The selected writable families are exactly server `{new_chat}` and binding
+  `{user_text}`; compact, interrupt, permissions/questions, attachments, clear/fork, and every other
+  unproved family receive a stored ordered rejection with no admitted user-content/native projection,
+  attempt, or effect; the signed rejection `action_result` is still delivered.
+- Route admitted text through a write-ahead caller-supplied native `msg_*`, treat
   `204` as transport receipt only, advance native acceptance/order solely from exact correlated
   OpenCode evidence, and never retry the non-idempotent same ID blindly.
-- Record abort/compact native outcomes separately from source attribution; if the pinned API exposes no
-  durable causal seam for a TUI/adapter race, preserve source and the remote proposal as unknown.
+- Implement terminal pre-send cancellation as the one atomic
+  `NativeBindingPreSendAbandonmentRecord` transaction over attempt, dispatch, and command gate.
+  Distinguish it from a no-record crash that resumes the same immutable attempt; make every
+  terminal-native `positiveNeverStartedSchemaId` null; and reject any terminal replacement,
+  continuation, or successor.
+- Pin a durable per-binding/incarnation capability snapshot in both the decision and native attempt.
+  Normalize every OpenCode slash command to a typed family before that decision; reject
+  blank input and unproved/unsupported commands with a stored `action_result`, never an adapter-side
+  no-op or literal prompt after generic acceptance.
 - Treat direct TUI actions as native observations, never as server-forwarded proposals or echoes to
   execute again.
-- Parse and correlate permission reply results, runtime-prove whether `permission.replied` is terminal,
-  and resolve TUI/remote races only from a proved native gate record. Prove inherited child policy
-  before advertising structured permissions, otherwise mark child tools unsupported.
-- Route all OpenCode model-provider traffic through private local façades and prove the network fence.
+- Route all OpenCode model-provider traffic through private local façades and prove the exact-process
+  provider/raw-listener network fence. Retain an incarnation-wide non-reused native request coordinate,
+  encrypted exact provider-request bytes, immutable response stream, and connector-lease recovery;
+  ambiguous upstream start never becomes a second inference request.
 - Reconcile the persisted coordinator journal with OpenCode history and rebuild its projection.
 - Treat ambiguous HTTP 204 delivery as `outcome_unknown` rather than retrying.
 
@@ -2544,8 +10303,8 @@ The following remain unproven until a test says otherwise:
   provider IDs;
 - runtime-local conversation/inference identity while the coordinator is absent, plus exact atomic
   import into a server-scoped chat without replay, reassignment, or old-chat proposal leakage;
-- stable `logicalChatId`, `command_seq`, `chat_seq`, and one visible row across a known-transport
-  re-bridge or a proven replacement private transport;
+- stable `(collaborationServerId, logicalChatId)` scope, `command_seq`, `chat_seq`, and one visible row
+  across a known-transport re-bridge or a proven replacement private transport;
 - exact native history completeness and stable IDs for every adapter;
 - non-reusable runtime/incarnation identity and correct new-chat/reconnect/fork classification;
 - subscribe/snapshot ordering without a lost-event gap;
@@ -2582,9 +10341,11 @@ The following remain unproven until a test says otherwise:
   sequence/chunk/ACK recovery, global server-request response/error races, pre-rollout late-join and recovery,
   active-turn `turn/start` correlation, and full app-server compatibility;
 - OpenCode epoch-fenced single-adapter enforcement over stateless HTTP, exact session
-  discovery/create ambiguity, actively drained SSE overlap and overflow/drop recovery, native
-  adjudication of prompt/compact/interrupt actions, terminal permission reply correlation and
-  TUI/remote races, atomically inherited child permission policy, and child-session recovery;
+  discovery/create ambiguity, complete four-audience front-door attestation, exact-process TUI and raw
+  listener/tool isolation, workspace-transition serialization, and lossless SSE snapshot
+  linearization; the selected A2 `{new_chat}`/`{user_text}` executor/recovery proofs remain open, while
+  compact, interrupt, permissions/questions, and child-session mutation stay explicitly unsupported
+  until their own causal and recovery proofs land;
 - tmux transcript completeness; response-loss after applied paste/Enter; local partial-draft collision;
   write-ahead origin versus transcript-UUID acceptance; permission local/remote ordering and
   decision-write failure; keep-pane detach/handoff; `/clear` new identity; `/branch` lineage; rotation;
@@ -2648,6 +10409,137 @@ Native-client fidelity is a differential release gate, not a prose aspiration:
 13. Crash the inference connector before send, after possible upstream receipt, during streaming, and
     after completion. Require one write-ahead attempt and one native response stream; retry only with
     proven upstream idempotency/read-back, otherwise surface the pinned native error/retry behavior.
+14. Cold-onboard an A1 viewer from one `ViewerOnboardingBundleV2`; verify the scope certificate,
+    derive the canonical bus/chat addresses, and require the broker to recompute both from the clear
+    routing tuple plus `auth_token`. Tamper with each tuple field, certificate, key, and opaque token;
+    fuzz field-boundary collisions; rotate the server key while preserving `collaborationServerId`;
+    and require rejection, historical verification, or explicit re-pairing as appropriate. Cover a
+    cold multi-certificate chain, an existing viewer's suffix, stale/forked concurrent rotations,
+    rollback, skipped generation, key-ID rebinding, revoked signer, and atomic current-certificate
+    compare-and-swap. Publish byte-exact Node/browser/second-language vectors for the primitive
+    encoder, route hashes, exact A1 JSON frame, AAD, all three chat-plane KDFs, message
+    ciphertext/tag, transport-frame digest, stable part/message digest encodings, initial self-signed
+    Ed25519 scope certificate, old-key-signed rotation chain, exact result payloads, kind-to-plane
+    mappings, every allowed/rejected direction/sequence/client-ID combination, and broker
+    generation/cursor encode-order-successor rules. Reject duplicate JSON members before object
+    construction, including duplicate routing/AAD fields, and assert the invalid-position cursor/
+    quarantine result. Include the four onboarding key commitments/attestation and transfer checksum,
+    certified host-output signature preimage and signed-record digest, signer reservation/burn and
+    sequence equivocation, cutoff/current/retired/revoked behavior, certificate update and historical
+    reattestation publication/retrieval/fork cases, and signature transplant/omission/stale-key cases.
+15. Lose the first `accepted`/action-result delivery, then retry the complete exact input with the
+    same semantic `msgId` and a fresh ingress-result `deliveryAttemptId`—not a fresh native
+    attempt—before and after coordinator restart. Require
+    one decision and command plus a newly deliverable envelope containing the same stable result.
+    Split the side-effect expectations: admitted projected user/attachment gets one viewer projection
+    and one native attempt; an admitted supported control gets one native attempt and no user
+    projection; queued or rejected/unsupported gets neither. A later forwarding request must be a
+    fresh authenticated source event, command, sequence, and version-one result. Repeat while the
+    original is still `assembling` and
+    `awaiting_order` and `deciding`. Redeliver the same committed broker cursor across a crash and
+    require the same deterministic observation/result-delivery rows and stored output attempt ID.
+    Compact part bodies, lose the result delivery, and require an exact replay to reproduce the
+    retained stable result ID and payload without another command or projection sequence. In one
+    broker generation, request the same projection through catch-up twice: each request gets a fresh
+    persisted delivery attempt, exact retries of one outbox row reuse it, and the viewer folds one
+    semantic projection.
+16. Reuse the semantic ID with changed content and require a collision without cursor advance or
+    mutation. For multipart input, replay one old part, all exact parts, and one changed sibling across
+    restart and a sealed broker-generation rollover; overflow/expire an incomplete candidate; deliver
+    a late missing part; place a complete proposal B between the first and final positions of proposal
+    A; and require full-candidate matching, no premature success, no B decision/order allocation before
+    A completes or expires, exact per-part cursor positions, and contiguous progress across the
+    manifest chain. Retry one unchanged delivery attempt within a generation and require its original
+    cursor; retry it after rollover and require that same original cursor with no new semantic result.
+    Change normalized frame bytes under that route-wide attempt/part key and require a broker transport
+    collision. Retry only one part of a formerly complete multipart attempt after rollover and require
+    the same original position with no result delivery or candidate completion; only a fresh attempt's
+    complete part set may replay the stored semantic result. Then make the hostile broker replay that
+    valid part at a fabricated new cursor and require one `exact_transport_retry` with no result
+    delivery or candidate change. Reveal an incomplete attempt first at cursor 10, then its duplicate
+    at cursor 5 with complete proposal B at cursor 7; require the result's first cursor to move to 5,
+    that duplicate to inherit the candidate block, and B never to decide before the multipart attempt
+    completes or expires. Crash after a generation seals but before its last frame is consumed:
+    recovery resumes the durable cursor, drains through the stored frame count, and only then consumes
+    the successor.
+    Compact an old checkpointed discovery scope-bus frame body after recovery leases pass, then retry
+    that attempt/part unchanged and changed; the retained route-wide tombstone must return the original
+    cursor or a collision, never insert a new position. Attempt the same compaction on chat and
+    server-control routes and require rejection.
+    Interleave announcements for two chats on one scope bus across generations; require one bus-route
+    cursor/manifest sequence distinct from both chat routes. A malformed bus position quarantines only
+    that route and requires explicit bus recovery while both chat routes remain writable. At one
+    existing cursor, redeliver identical bytes, then equivocate with valid-A/valid-B and
+    valid/malformed bytes across restart; only the identical copy is idempotent, while each changed copy
+    records alternate digest evidence and a blocked route gap with no parse, mutation, or progress.
+    Transplant valid frames across machines, servers, equal-ID cross-server chats, different chats,
+    bus↔control↔chat routes, and null↔non-null chat coordinates; each fails route matching before
+    KDF/open and records an invalid position on the
+    selected route. Replay an exact sealed manifest, then change its count/state/successor or present an
+    index outside its sealed count; retain the original manifest and record durable
+    manifest-equivocation quarantine across restart.
+    Create every route with generation-zero genesis. Reject a mutating chat subscription that begins at
+    a later generation or misses a manifest successor. For discovery only, seal and sign non-empty and
+    empty bus checkpoints, persist the applied checkpoint/effective successor across restart, and reject
+    stale/open/forked metadata or any attempt to seed chat/semantic state from it.
+    Reconnect/replace the web client and coordinator, then reveal unseen pre-boundary ciphertext;
+    require the same deterministic web namespace. Reject an in-place namespace reset while the old A1
+    keys/routes remain live. Attempt tombstone collection after ordinary retention, local chat closure,
+    and machine reset; selected A1 must reject all three because it has no broker-enforced route
+    revocation and copied bearer/key material can remain valid.
+    Interleave a known host output and fresh catch-up output before an inbound proposal across crash
+    and rollover; require certified host signatures, signer-sequence acceptance, and durable
+    outbox/digest matches to advance those positions without source adjudication. Forge output with a
+    copied pass, omit a signature, transplant a real signature across route/server, use an old signing
+    lease after rotation, and conflict a local outbox part; require blocked quarantine before render or
+    mutation. Inject an authenticated but unknown outbound frame and require the same.
+    For multipart native output, catch-up, accepted, and action-result deliveries, crash after broker
+    acceptance but before the publish response/local receipt; require retry of the exact persisted
+    header/salt/nonce/ciphertext/tag bytes and original cursor, never re-sealing under the same attempt.
+    Interleave duplicate/missing/wrong-type header JSON, unknown kind, wrong plane, and bad-tag frames
+    before valid input; each invalid position records one terminal no-mutation gap and advances
+    physically, while the valid proposal remains buffered and non-writable across restart until
+    explicit invalid-frame recovery.
+    A semantic collision remains a cursor hole until an explicit audited discard/close recovery.
+    Compact large part bodies, replay a changed sibling and the full message after the retention
+    boundary, and require the retained part-digest vector and full-lifetime result/tombstone to prevent
+    a second command.
+17. Under one constant `identity_id`, bind OpenCode server A/chat X to `ses_A` and server B/chat X to
+    `ses_B`; reuse the same source-local semantic `msgId` but require distinct deterministic web source
+    namespaces. Require independent adapter
+    leases, ingress/result/native-attempt records, projection/cache/channel coordinates, native
+    adjudication, and restart recovery, with no cross-server lookup or mutation despite equal machine
+    identity, `logicalChatId`, and source ID. Transplant A's namespace/frame onto B and reject it before
+    adjudication. Then run one prompt through the common
+    A1 actor and real A2 adapter across decision/outbox/native-attempt crashes, broker rollover, and a
+    fresh broker delivery of the exact replayed A1 input while retaining the one original
+    `NativeDeliveryAttemptRecord`. A crash before `delivery.started` must eventually permit exactly
+    one `prompt_async`; after `delivery.started`, permit at most one send and require either exact
+    caller-`msg_*` read-back of one native user message with the expected part
+    cardinality/fingerprints or `outcome_unknown` plus binding quarantine. Stored-result replay adds no
+    native send; extra/mismatched native parts are a collision/gap. Before dispatch, exercise explicit
+    operator cancellation and a deliberately configured shutdown cancellation: atomically retain one
+    `NativeBindingPreSendAbandonmentRecord`, move the attempt/dispatch/gate to `quarantined` with the
+    same exact evidence schema/ref/digest triple and all start/receipt/read-back fields null, reject the
+    old handle, and emit no native send, replacement, terminal continuation, or successor. Race that transaction
+    against dispatch in both orders; crash on both sides; replay it exactly; substitute every state,
+    reason, executor, handle, coordinate, sequence, and digest; and require all-or-nothing state with
+    no downgrade. Process death or restart without the record instead resumes only the original
+    attempt. Require terminal `user_text` positive-never-started capability null, reject the local
+    record as nested continuation evidence, and prove a distinct authenticated source event can still
+    use the otherwise-current binding. Keep OpenCode attachment proposals
+    non-writable until a retained native fixture proves exact file-part request and read-back semantics.
+    Before that proof, parsing/ingress support must deterministically reject with a stored
+    `action_result`, no `accepted`, projection sequence/intent, file write, or native attempt; exact
+    replay only redelivers the rejection and changed bytes collide. After that gate, apply the common
+    A1 attachment accepted/result/replay rules without bypassing the adapter's capability check.
+    Pin the current per-family OpenCode capability snapshot in the decision and attempt; race its
+    withdrawal/upgrade. Exercise separate TUI/adapter front doors, reject raw/third/second-TUI/stale-
+    wrapper and wrong-session/child/permission writes, and crash around the one-time dispatch CAS.
+    Require attempt, dispatch, and command gate to start in that one commit with no partial state.
+    Normalize typed `/compact` before decision; reject blank, `/clear`, and other unproved reserved
+    commands with stored results and no user projection/native call, including raw-as-user bypass,
+    exact replay, and changed-byte collision.
 
 The restart matrix must include:
 

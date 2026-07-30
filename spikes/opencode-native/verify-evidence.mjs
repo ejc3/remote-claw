@@ -7,9 +7,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const EXPECTED_EVIDENCE_SHA256 =
-	"521558490f9bb0c759deb10b2aa0e849f230fae8193aec3a7073607f5864afe6";
+	"a5641094f970884067aed3cf191cc40670420448ba938053f5ee056c02cc97bd";
 const EXPECTED_PROBE_SHA256 =
-	"f7bbbecfa7ea7c28eedb4dc7836972f63fdaa03c996a18b9982aa1f0782a2939";
+	"ebb2ca1ea48a0c86d31bce5746fd30a6913bd4f7ed54fe9928dad69fd8d50b6a";
 const EXPECTED_LAUNCHER_SHA256 =
 	"d167e30e12cca32cc4a5da0003ee0deb1120b5ca5ee2d64cef23aec44a3c9fa9";
 const EXPECTED_BINARY_SHA256 =
@@ -25,6 +25,10 @@ const [evidenceBytes, probeBytes] = await Promise.all([
 	readFile(join(packageDirectory, "evidence-1.17.5.json")),
 	readFile(join(packageDirectory, "probe.mjs")),
 ]);
+const evidenceText = evidenceBytes.toString("utf8");
+
+assert.doesNotMatch(evidenceText, /\/(?:home|Users)\//);
+assert.doesNotMatch(evidenceText, /(?:\/)?tmp\/remote-claw-opencode-native-/);
 
 assert.equal(
 	sha256(evidenceBytes),
@@ -37,7 +41,7 @@ assert.equal(
 	"the probe no longer matches the program named by the retained evidence",
 );
 
-const evidence = JSON.parse(evidenceBytes.toString("utf8"));
+const evidence = JSON.parse(evidenceText);
 assert.deepEqual(Object.keys(evidence), [
 	"capturedAt",
 	"proofScope",
@@ -54,7 +58,7 @@ assert.deepEqual(Object.keys(evidence), [
 	"disposal",
 	"cleanup",
 ]);
-assert.equal(evidence.capturedAt, "2026-07-29T19:58:31.145Z");
+assert.equal(evidence.capturedAt, "2026-07-29T21:22:36.747Z");
 assert.equal(
 	evidence.proofScope,
 	"model-free OpenCode 1.17.5 session-create metadata correlation and prompt_async caller-message-ID behavior on one private native server",
@@ -74,10 +78,9 @@ assert.deepEqual(evidence.probe, {
 });
 assert.deepEqual(evidence.opencode, {
 	version: "1.17.5",
-	launcherPath: "/home/ubuntu/.local/share/pnpm/opencode",
+	launcherPath: "<opencode-launcher>",
 	launcherSha256: EXPECTED_LAUNCHER_SHA256,
-	nativeBinaryPath:
-		"/home/ubuntu/.local/share/pnpm/global/5/.pnpm/opencode-ai@1.17.5/node_modules/opencode-ai/bin/opencode.exe",
+	nativeBinaryPath: "<opencode-native-binary>",
 	nativeBinarySha256: EXPECTED_BINARY_SHA256,
 	platform: "linux",
 	architecture: "arm64",
@@ -176,10 +179,7 @@ assert.equal(evidence.sessionCreate.postCount, 1);
 assert.equal(evidence.sessionCreate.blindRetryIssued, false);
 assert.equal(evidence.sessionCreate.remoteClawCreationId, CREATION_ID);
 assert.match(session.id, /^ses_[A-Za-z0-9]+$/);
-assert.match(
-	session.directory,
-	/^\/tmp\/remote-claw-opencode-native-[A-Za-z0-9]+\/workspace$/,
-);
+assert.equal(session.directory, "<temp-root>/workspace");
 assert.equal(session.title, "remote-claw-native-proof");
 assert.equal(session.version, "1.17.5");
 assert.deepEqual(session.metadata, { remoteClawCreationId: CREATION_ID });

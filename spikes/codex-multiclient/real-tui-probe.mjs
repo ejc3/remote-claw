@@ -680,9 +680,15 @@ class RpcClient {
 	constructor(url) {
 		this.url = url;
 		this.nextId = 1;
-		this.messages = [];
+		this._messages = [];
 		this.sent = [];
 		this.pending = new Map();
+		this.protocolError = null;
+	}
+
+	get messages() {
+		this.assertHealthy();
+		return this._messages;
 	}
 
 	async connect(child) {
@@ -712,8 +718,26 @@ class RpcClient {
 	}
 
 	handle(data) {
-		const message = JSON.parse(data.toString());
-		this.messages.push(message);
+		let message;
+		try {
+			message = JSON.parse(data.toString());
+			if (
+				message === null ||
+				typeof message !== "object" ||
+				Array.isArray(message)
+			) {
+				throw new Error("JSON-RPC message was not an object");
+			}
+		} catch (cause) {
+			const error = new FatalProtocolError("app-server sent malformed JSON", {
+				cause,
+			});
+			this.protocolError ??= error;
+			this.rejectPending(this.protocolError);
+			this.socket?.terminate();
+			return;
+		}
+		this._messages.push(message);
 		if (
 			Object.hasOwn(message, "id") &&
 			!Object.hasOwn(message, "method") &&
@@ -737,7 +761,20 @@ class RpcClient {
 		}
 	}
 
+	rejectPending(error) {
+		for (const [id, pending] of this.pending) {
+			this.pending.delete(id);
+			clearTimeout(pending.timer);
+			pending.reject(error);
+		}
+	}
+
+	assertHealthy() {
+		if (this.protocolError) throw this.protocolError;
+	}
+
 	request(method, params = {}, timeout = TIMEOUT) {
+		this.assertHealthy();
 		const id = this.nextId++;
 		const message = { id, method, params };
 		this.sent.push(message);
@@ -752,6 +789,7 @@ class RpcClient {
 	}
 
 	notify(method, params = {}) {
+		this.assertHealthy();
 		const message = { method, params };
 		this.sent.push(message);
 		this.socket.send(JSON.stringify(message));
@@ -773,6 +811,13 @@ class RpcClient {
 		if (this.socket.readyState !== WebSocket.CLOSED) {
 			throw new Error("raw websocket did not close");
 		}
+	}
+}
+
+class FatalProtocolError extends Error {
+	constructor(message, options) {
+		super(message, options);
+		this.name = "FatalProtocolError";
 	}
 }
 
@@ -1189,6 +1234,7 @@ async function waitUntil(operation, timeout = TIMEOUT) {
 			const result = await operation();
 			if (result) return result;
 		} catch (error) {
+			if (error instanceof FatalProtocolError) throw error;
 			lastError = error;
 		}
 		await delay(25);

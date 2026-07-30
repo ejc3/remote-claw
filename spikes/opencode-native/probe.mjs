@@ -590,9 +590,9 @@ async function executeProof(metadata) {
 			},
 			opencode: {
 				version,
-				launcherPath: metadata.launcher,
+				launcherPath: "<opencode-launcher>",
 				launcherSha256: metadata.launcherSha256,
-				nativeBinaryPath: metadata.binary,
+				nativeBinaryPath: "<opencode-native-binary>",
 				nativeBinarySha256: metadata.binarySha256,
 				platform: process.platform,
 				architecture: process.arch,
@@ -733,7 +733,14 @@ async function executeProof(metadata) {
 			temporaryRootRemoved: cleanup.temporaryRootRemoved,
 		},
 	};
-	console.log(JSON.stringify(evidence, null, "\t"));
+	const sanitizedEvidence = sanitizeProofPaths(evidence, proofRoot);
+	const serializedEvidence = JSON.stringify(sanitizedEvidence, null, "\t");
+	assert(
+		!serializedEvidence.includes(proofRoot) &&
+			!serializedEvidence.includes(proofRoot.slice(1)),
+		"retained evidence contains the temporary proof path",
+	);
+	console.log(serializedEvidence);
 }
 
 class SseRecorder {
@@ -880,6 +887,10 @@ function inspectOpenApi(openApi) {
 		"prompt_async unexpectedly accepts unknown top-level fields",
 	);
 	assert(
+		Object.hasOwn(prompt.responses ?? {}, "204"),
+		"prompt_async 204 response missing",
+	);
+	assert(
 		permissionList?.operationId === "permission.list",
 		"permission.list missing",
 	);
@@ -923,9 +934,7 @@ function inspectOpenApi(openApi) {
 			noReplyType: promptSchema.properties.noReply.type,
 			operationId: prompt.operationId,
 			required: promptSchema.required,
-			successStatus: Number(
-				Object.keys(prompt.responses).find((status) => status === "204"),
-			),
+			successStatus: 204,
 		},
 		permissionList: {
 			itemSchema:
@@ -1091,6 +1100,26 @@ function projectReceipt(response) {
 		status: response.status,
 		bodyByteLength: response.bytes.length,
 	};
+}
+
+function sanitizeProofPaths(value, proofRoot) {
+	if (typeof value === "string") {
+		return value
+			.replaceAll(proofRoot, "<temp-root>")
+			.replaceAll(proofRoot.slice(1), "<temp-root>");
+	}
+	if (Array.isArray(value)) {
+		return value.map((entry) => sanitizeProofPaths(entry, proofRoot));
+	}
+	if (value !== null && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, entry]) => [
+				key,
+				sanitizeProofPaths(entry, proofRoot),
+			]),
+		);
+	}
+	return value;
 }
 
 function sanitizeNotFound(error, sessionId) {

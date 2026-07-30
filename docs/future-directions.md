@@ -215,9 +215,11 @@ total order. Everyone polls/subscribes `WHERE id > cursor`, syncs into memory, a
 This re-opens v2 **Decision #1 (store-free)**. Zero-knowledge survives *only if* every row payload is
 E2E-sealed and the store orders/indexes on **cleartext routing columns** while `ciphertext BLOB` stays
 opaque — doable, the store never decrypts. **But** you then hold a durable encrypted transcript at rest,
-so a key leak decrypts *everything* (today's "store-free ⇒ no at-rest ciphertext to re-key" property,
-and what little forward-secrecy posture exists, both get worse). The v2 doc deliberately chose the
-left column of its own comparison table; this is choosing the right column.
+so a key leak decrypts *everything*. That was a regression from the original store-free profile's
+“no at-rest ciphertext to re-key” property and its limited forward-secrecy posture. It is not a
+description of selected A1: current durable backends retain sealed broker frames, including chat and
+server-control history from genesis. The historical v2 choice described here was the left column of
+its comparison table; the durable-log direction chose the right column.
 
 ### The primitive that fits
 

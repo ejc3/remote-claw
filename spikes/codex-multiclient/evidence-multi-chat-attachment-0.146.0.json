@@ -1,15 +1,15 @@
 {
-	"capturedAt": "2026-07-29T19:03:28.775Z",
+	"capturedAt": "2026-07-29T21:22:05.755Z",
 	"proofScope": "ordinary top-level thread/start behavior on pinned Codex 0.146.0: each requester is subscribed only to its own new thread, two other pre-initialized connections report notSubscribed and receive no correlated selected shellCommand projection, then one host observer explicitly resumes both native thread IDs and receives both while each non-owning direct-client stand-in remains unsubscribed",
 	"scopeBoundary": "the fixture does not exercise core-created ThreadSpawn child threads; those require a model-driven collaboration tool path, while this proof is deliberately model-free",
 	"probe": {
 		"file": "multi-chat-attachment-probe.mjs",
-		"sha256": "aaaa9c633a857c62b6527bb6d5bce3d5bb749b41eb727d02b72f0fa7c53ab5c3",
+		"sha256": "f1f6a14c69a1d8650cbc6519c129d7afc50e96c43e968d9866952615569065ba",
 		"nodeVersion": "v22.23.1"
 	},
 	"codex": {
 		"version": "codex-cli 0.146.0",
-		"binaryPath": "/home/ubuntu/.codex/packages/standalone/releases/0.146.0-aarch64-unknown-linux-musl/bin/codex",
+		"binaryPath": "<codex-binary>",
 		"binarySha256": "cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6",
 		"platform": "linux",
 		"architecture": "arm64",
@@ -59,7 +59,7 @@
 			"name": "remote-claw-proof-direct-tui-a",
 			"connectionOpenCount": 1,
 			"initializeRequestId": 1,
-			"startedThread": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+			"startedThread": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
 			"resumeRequestsSent": 0
 		},
 		"TUI_B": {
@@ -67,7 +67,7 @@
 			"name": "remote-claw-proof-direct-tui-b",
 			"connectionOpenCount": 1,
 			"initializeRequestId": 1,
-			"startedThread": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+			"startedThread": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
 			"resumeRequestsSent": 0
 		},
 		"HOST": {
@@ -81,12 +81,12 @@
 	},
 	"threads": {
 		"threadA": {
-			"id": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
+			"id": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
 			"startedBy": "TUI_A",
 			"persistent": true
 		},
 		"threadB": {
-			"id": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
+			"id": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
 			"startedBy": "TUI_B",
 			"persistent": true
 		},
@@ -94,8 +94,8 @@
 	},
 	"hostJoin": {
 		"resumedThreadIds": [
-			"019faf42-a568-7fe1-b16f-b5323ae8ac45",
-			"019faf42-a5ab-72a3-8ca1-d97c154ebdc5"
+			"019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+			"019fafc1-8dfc-7c82-8709-a335e4e23c50"
 		],
 		"sameNativeThreadIds": true
 	},
@@ -110,9 +110,9 @@
 				"byteLength": 42,
 				"utf8": "codex-multi-chat-thread-a-before-host-join"
 			},
-			"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-			"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
-			"itemId": "ae8cdc88-a424-414b-88aa-879fc6c3170c",
+			"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+			"turnId": "019fafc1-8dce-7ef2-b146-4a8acac2cefb",
+			"itemId": "3cf66bf0-c7e5-4e46-863e-c295e4d159b5",
 			"expectedObserverLabels": ["TUI_A"],
 			"absentObserverLabels": ["TUI_B", "HOST"],
 			"orderedExpectedProjectionsEqual": true,
@@ -124,23 +124,23 @@
 				"TUI_A": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8dce-7ef2-b146-4a8acac2cefb",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
-						"itemId": "ae8cdc88-a424-414b-88aa-879fc6c3170c",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8dce-7ef2-b146-4a8acac2cefb",
+						"itemId": "3cf66bf0-c7e5-4e46-863e-c295e4d159b5",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-before-host-join'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
-						"itemId": "ae8cdc88-a424-414b-88aa-879fc6c3170c",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8dce-7ef2-b146-4a8acac2cefb",
+						"itemId": "3cf66bf0-c7e5-4e46-863e-c295e4d159b5",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1iZWZvcmUtaG9zdC1qb2lu",
 							"byteLength": 42,
@@ -149,9 +149,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
-						"itemId": "ae8cdc88-a424-414b-88aa-879fc6c3170c",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8dce-7ef2-b146-4a8acac2cefb",
+						"itemId": "3cf66bf0-c7e5-4e46-863e-c295e4d159b5",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-before-host-join'",
 						"status": "completed",
 						"exitCode": 0,
@@ -163,8 +163,8 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a57c-7292-bd04-5dcd4ab48501",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8dce-7ef2-b146-4a8acac2cefb",
 						"status": "completed"
 					}
 				],
@@ -182,9 +182,9 @@
 				"byteLength": 42,
 				"utf8": "codex-multi-chat-thread-b-before-host-join"
 			},
-			"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-			"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
-			"itemId": "50a2aded-92df-4061-a68d-c35b6f8b4458",
+			"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+			"turnId": "019fafc1-8e13-7983-9dec-2a35eeb380f3",
+			"itemId": "a24b7133-ac98-4f25-8db6-9e50c1c9ba19",
 			"expectedObserverLabels": ["TUI_B"],
 			"absentObserverLabels": ["TUI_A", "HOST"],
 			"orderedExpectedProjectionsEqual": true,
@@ -197,23 +197,23 @@
 				"TUI_B": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e13-7983-9dec-2a35eeb380f3",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
-						"itemId": "50a2aded-92df-4061-a68d-c35b6f8b4458",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e13-7983-9dec-2a35eeb380f3",
+						"itemId": "a24b7133-ac98-4f25-8db6-9e50c1c9ba19",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-before-host-join'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
-						"itemId": "50a2aded-92df-4061-a68d-c35b6f8b4458",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e13-7983-9dec-2a35eeb380f3",
+						"itemId": "a24b7133-ac98-4f25-8db6-9e50c1c9ba19",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1iZWZvcmUtaG9zdC1qb2lu",
 							"byteLength": 42,
@@ -222,9 +222,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
-						"itemId": "50a2aded-92df-4061-a68d-c35b6f8b4458",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e13-7983-9dec-2a35eeb380f3",
+						"itemId": "a24b7133-ac98-4f25-8db6-9e50c1c9ba19",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-before-host-join'",
 						"status": "completed",
 						"exitCode": 0,
@@ -236,8 +236,8 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a5c6-7a13-950f-e522fe30166b",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e13-7983-9dec-2a35eeb380f3",
 						"status": "completed"
 					}
 				],
@@ -254,9 +254,9 @@
 				"byteLength": 41,
 				"utf8": "codex-multi-chat-thread-a-after-host-join"
 			},
-			"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-			"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
-			"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+			"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+			"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
+			"itemId": "d31ff2a7-a9a0-4dd5-9585-6e487e5d4b2d",
 			"expectedObserverLabels": ["TUI_A", "HOST"],
 			"absentObserverLabels": ["TUI_B"],
 			"orderedExpectedProjectionsEqual": true,
@@ -267,23 +267,23 @@
 				"TUI_A": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
-						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
+						"itemId": "d31ff2a7-a9a0-4dd5-9585-6e487e5d4b2d",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
-						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
+						"itemId": "d31ff2a7-a9a0-4dd5-9585-6e487e5d4b2d",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1hZnRlci1ob3N0LWpvaW4=",
 							"byteLength": 41,
@@ -292,9 +292,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
-						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
+						"itemId": "d31ff2a7-a9a0-4dd5-9585-6e487e5d4b2d",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
 						"status": "completed",
 						"exitCode": 0,
@@ -306,8 +306,8 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
 						"status": "completed"
 					}
 				],
@@ -315,23 +315,23 @@
 				"HOST": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
-						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
+						"itemId": "d31ff2a7-a9a0-4dd5-9585-6e487e5d4b2d",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
-						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
+						"itemId": "d31ff2a7-a9a0-4dd5-9585-6e487e5d4b2d",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYS1hZnRlci1ob3N0LWpvaW4=",
 							"byteLength": 41,
@@ -340,9 +340,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
-						"itemId": "c631cf5a-a164-490d-a297-f94154c0cb9a",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
+						"itemId": "d31ff2a7-a9a0-4dd5-9585-6e487e5d4b2d",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-a-after-host-join'",
 						"status": "completed",
 						"exitCode": 0,
@@ -354,8 +354,8 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf42-a568-7fe1-b16f-b5323ae8ac45",
-						"turnId": "019faf42-a620-72d1-95c0-50fa2729dc31",
+						"threadId": "019fafc1-8dc3-7390-b7d7-ec9c3d444989",
+						"turnId": "019fafc1-8e68-7ce1-9be6-73d7cc7680c5",
 						"status": "completed"
 					}
 				]
@@ -371,9 +371,9 @@
 				"byteLength": 41,
 				"utf8": "codex-multi-chat-thread-b-after-host-join"
 			},
-			"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-			"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
-			"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+			"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+			"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
+			"itemId": "11e7e294-e52f-47a1-aa12-65e888d4e809",
 			"expectedObserverLabels": ["TUI_B", "HOST"],
 			"absentObserverLabels": ["TUI_A"],
 			"orderedExpectedProjectionsEqual": true,
@@ -385,23 +385,23 @@
 				"TUI_B": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
-						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
+						"itemId": "11e7e294-e52f-47a1-aa12-65e888d4e809",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
-						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
+						"itemId": "11e7e294-e52f-47a1-aa12-65e888d4e809",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1hZnRlci1ob3N0LWpvaW4=",
 							"byteLength": 41,
@@ -410,9 +410,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
-						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
+						"itemId": "11e7e294-e52f-47a1-aa12-65e888d4e809",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
 						"status": "completed",
 						"exitCode": 0,
@@ -424,31 +424,31 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
 						"status": "completed"
 					}
 				],
 				"HOST": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
-						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
+						"itemId": "11e7e294-e52f-47a1-aa12-65e888d4e809",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
-						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
+						"itemId": "11e7e294-e52f-47a1-aa12-65e888d4e809",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGktY2hhdC10aHJlYWQtYi1hZnRlci1ob3N0LWpvaW4=",
 							"byteLength": 41,
@@ -457,9 +457,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
-						"itemId": "2277911d-d845-461c-a0f5-5bbabb3b3bb0",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
+						"itemId": "11e7e294-e52f-47a1-aa12-65e888d4e809",
 						"command": "/usr/bin/zsh -lc 'printf codex-multi-chat-thread-b-after-host-join'",
 						"status": "completed",
 						"exitCode": 0,
@@ -471,8 +471,8 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf42-a5ab-72a3-8ca1-d97c154ebdc5",
-						"turnId": "019faf42-a64c-7591-ada7-25a77e945e07",
+						"threadId": "019fafc1-8dfc-7c82-8709-a335e4e23c50",
+						"turnId": "019fafc1-8e91-7323-9c62-a0fe5b19aca0",
 						"status": "completed"
 					}
 				]

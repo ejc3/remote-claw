@@ -254,6 +254,22 @@ class FakeClient {
   }
 }
 
+/** A publish fake whose content POSTs fail with the supplied HTTP statuses before succeeding. */
+class SequencedStatusClient extends FakeClient {
+  postMessageAttempts = 0;
+
+  constructor(readonly failureStatuses: number[]) {
+    super();
+  }
+
+  override async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
+    this.postMessageAttempts++;
+    const status = this.failureStatuses.shift();
+    if (status !== undefined) throw new BrokerError(status, `injected ${status}`);
+    return super.postMessage(header, body);
+  }
+}
+
 /** Lets a newer announce reach the broker before the first request completes. */
 class DelayedFirstAnnounceClient extends FakeClient {
   readonly firstAnnounceStarted: Promise<void>;
@@ -373,6 +389,38 @@ describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
 });
 
 describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
+  it("retries a broker 409 and preserves the same content frame", async () => {
+    const session = new Session("s", "t", {});
+    const client = new SequencedStatusClient([409]);
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+    session.pushUpstream(assistant("retry me"));
+
+    await waitFor(() => client.content.length === 1);
+    ac.abort();
+    await served;
+
+    expect(client.postMessageAttempts).toBe(2);
+    expect(client.content).toHaveLength(1);
+    expect(client.content[0]).toMatchObject({ seq: 0, recordKind: "assistant" });
+  });
+
+  it("does not retry a broker 500", async () => {
+    const session = new Session("s", "t", {});
+    const client = new SequencedStatusClient([500]);
+    const relay = relayOf(session, client);
+    session.pushUpstream(assistant("fail once"));
+
+    await expect(relay.serve(new AbortController().signal)).rejects.toMatchObject({
+      name: "BrokerError",
+      status: 500,
+    });
+
+    expect(client.postMessageAttempts).toBe(1);
+    expect(client.content).toHaveLength(0);
+  });
+
   it("a failing content post HALTS the relay (serve rejects) with a gap-free durable prefix", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();

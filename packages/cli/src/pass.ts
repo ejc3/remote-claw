@@ -1,11 +1,11 @@
 // `--rc-pass` (§4.2a): issue a viewer PASS for this machine. A pass is a credential carrying the
 // derived keys (read + steer this machine's sessions) but NOT the master secret S — so it cannot
 // reveal the secret or reset the machine. You hand it to a phone/browser (paste it, or `--rc-qr` to
-// render a scannable terminal QR). It IS a live credential (anyone who holds it can drive this machine
-// until you reset it), but it is the deliverable of this command, so — unlike the secret in
-// --rc-identity/--rc-json — the pass is emitted in every mode (default / --rc-json / --rc-quiet), so
-// you can get it WHENEVER. Reads the stored identity; never launches claude. Revoke a pass by resetting
-// the machine (`--rc-identity --rc-confirm`).
+// render a scannable terminal QR). It IS a live credential: there is no in-place per-pass revocation,
+// and a reset only moves future service while copied passes remain valid on retained old routes. It is
+// the deliverable of this command, so — unlike the secret in --rc-identity/--rc-json — the pass is
+// emitted in every mode (default / --rc-json / --rc-quiet), so you can get it WHENEVER. Reads the
+// stored identity; never launches claude.
 //
 // `--rc-qr` WITH `--rc-app`/RC_APP uploads the pass as a ONE-TIME, TTL-bounded handoff and the QR carries
 // only `<origin>/#otk1_<OTK>` — a single-use bootstrap token, not a forever credential (the only mode that
@@ -129,9 +129,7 @@ export async function runPass(
   err(
     "  secret — it cannot reveal the secret or reset the machine — but it IS a live credential:\n",
   );
-  err(
-    "  anyone who gets it can drive this machine until you reset it (--rc-identity --rc-confirm).\n",
-  );
+  err("  anyone who gets it can drive retained old routes even after you reset this machine.\n");
   err("  Paste it into the web app, or show it as a QR.\n");
   out(`${pass}\n`); // the pass on one stdout line (stable for piping, even with --rc-qr)
   if (qrPayload !== undefined) {

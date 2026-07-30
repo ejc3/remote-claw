@@ -443,6 +443,88 @@ async function executeProbe(metadata) {
 		);
 		assert(turnStartRequestsSent === 0, "fixture unexpectedly sent turn/start");
 
+		const commands = [
+			firstBeforeHostJoin,
+			secondBeforeHostJoin,
+			firstAfterHostJoin,
+			secondAfterHostJoin,
+		];
+		const directClientCrossThreadObservations = {
+			TUI_A_received_threadB_selected_projection: [
+				secondBeforeHostJoin,
+				secondAfterHostJoin,
+			].some((command) => command.observations.TUI_A.length > 0),
+			TUI_B_received_threadA_selected_projection: [
+				firstBeforeHostJoin,
+				firstAfterHostJoin,
+			].some((command) => command.observations.TUI_B.length > 0),
+		};
+		const hostObserverReceivedBothThreads = [
+			firstAfterHostJoin,
+			secondAfterHostJoin,
+		].every((command) => command.observations.HOST.length > 0);
+		const hostResumeReturnedSameNativeThreadIds =
+			hostFirstResume.thread.id === firstThreadId &&
+			hostSecondResume.thread.id === secondThreadId;
+		const fixtureConclusion = {
+			ordinaryTopLevelThreadStartAttachedEveryInitializedConnection: [
+				firstBeforeHostJoin,
+				secondBeforeHostJoin,
+			].every((command) =>
+				Object.values(command.observations).every(
+					(projection) => projection.length > 0,
+				),
+			),
+			nonOwningDirectClientReceivedSelectedEvents: Object.values(
+				directClientCrossThreadObservations,
+			).some(Boolean),
+			hostObserverCanExplicitlySubscribeToBothNativeThreads:
+				hostResumeReturnedSameNativeThreadIds &&
+				hostObserverReceivedBothThreads,
+			hostAndOwningDirectClientReceivedEqualSelectedProjections: [
+				[firstAfterHostJoin, "TUI_A"],
+				[secondAfterHostJoin, "TUI_B"],
+			].every(([command, owningClient]) =>
+				isDeepStrictEqual(
+					command.observations.HOST,
+					command.observations[owningClient],
+				),
+			),
+			nonOwningDirectClientRemainedUnsubscribedAfterHostJoin: [
+				[firstAfterHostJoin, "TUI_B", "threadA"],
+				[secondAfterHostJoin, "TUI_A", "threadB"],
+			].every(
+				([command, nonOwner, threadLabel]) =>
+					command.observations[nonOwner].length === 0 &&
+					command.nativeNotSubscribedResponseFences[nonOwner] ===
+						"notSubscribed" &&
+					attachmentMatrix[threadLabel][nonOwner] === "notSubscribed",
+			),
+		};
+		assert(
+			isDeepStrictEqual(directClientCrossThreadObservations, {
+				TUI_A_received_threadB_selected_projection: false,
+				TUI_B_received_threadA_selected_projection: false,
+			}),
+			`direct-client cross-thread observations changed: ${JSON.stringify(
+				directClientCrossThreadObservations,
+			)}`,
+		);
+		assert(
+			hostObserverReceivedBothThreads,
+			"host observer did not receive selected projections from both threads",
+		);
+		assert(
+			isDeepStrictEqual(fixtureConclusion, {
+				ordinaryTopLevelThreadStartAttachedEveryInitializedConnection: false,
+				nonOwningDirectClientReceivedSelectedEvents: false,
+				hostObserverCanExplicitlySubscribeToBothNativeThreads: true,
+				hostAndOwningDirectClientReceivedEqualSelectedProjections: true,
+				nonOwningDirectClientRemainedUnsubscribedAfterHostJoin: true,
+			}),
+			`fixture conclusion changed: ${JSON.stringify(fixtureConclusion)}`,
+		);
+
 		const deletion = {};
 		for (const [threadLabel, threadId, client] of [
 			["threadA", firstThreadId, tuiA],
@@ -487,7 +569,7 @@ async function executeProbe(metadata) {
 			},
 			codex: {
 				version: metadata.codexVersion,
-				binaryPath: metadata.codexBinary,
+				binaryPath: "<codex-binary>",
 				binarySha256: metadata.codexBinarySha256,
 				platform: process.platform,
 				architecture: process.arch,
@@ -543,27 +625,13 @@ async function executeProbe(metadata) {
 					hostFirstResume.thread.id,
 					hostSecondResume.thread.id,
 				],
-				sameNativeThreadIds: true,
+				sameNativeThreadIds: hostResumeReturnedSameNativeThreadIds,
 			},
-			commands: [
-				firstBeforeHostJoin,
-				secondBeforeHostJoin,
-				firstAfterHostJoin,
-				secondAfterHostJoin,
-			],
+			commands,
 			finalNativeAttachmentStatus: attachmentMatrix,
-			directClientCrossThreadObservations: {
-				TUI_A_received_threadB_selected_projection: false,
-				TUI_B_received_threadA_selected_projection: false,
-			},
-			hostObserverReceivedBothThreads: true,
-			fixtureConclusion: {
-				ordinaryTopLevelThreadStartAttachedEveryInitializedConnection: false,
-				nonOwningDirectClientReceivedSelectedEvents: false,
-				hostObserverCanExplicitlySubscribeToBothNativeThreads: true,
-				hostAndOwningDirectClientReceivedEqualSelectedProjections: true,
-				nonOwningDirectClientRemainedUnsubscribedAfterHostJoin: true,
-			},
+			directClientCrossThreadObservations,
+			hostObserverReceivedBothThreads,
+			fixtureConclusion,
 			inference: {
 				directClientsSentNoResume,
 				hostResumeRequestsSent,

@@ -67,8 +67,11 @@ was then closed. Landed as a reviewed commit stack:
    inbound from `startIndex:0` with an empty dedup window and re-injected historical `user` prompts (and
    replayed `permission` answers) into claude. The relay now resumes BOTH durable cursors before the pumps
    go live — `maxSeq` (outbound seq) and a new `frameCount` (the inbound publish-order high-water mark, via
-   a zero-knowledge `/api/frame-count` route) — so historical inbound is skipped and only genuinely-new
-   inbound is delivered, exactly once. A failed cursor read **fails closed** (no seq-0 collision).
+   a zero-knowledge `/api/frame-count` route) — so already-stored historical indices are skipped. A
+   failed cursor read **fails closed** (no seq-0 collision). This is not semantic exactly-once: A0 does
+   not persist the authenticated source digest or original `accepted` result, so a lost acknowledgement
+   or the same source ID re-appended above the sampled floor remains ambiguous. A1 must persist that
+   result with the contiguous ingress cursor before it can claim restart-safe replay.
 5. **Durability discovered from the server, not the `--rc-backend` flag.** `/api/seq` reports `durable`,
    so a default-turso deployment is protected even when the host omits the flag. The gen-bump race is
    closed (a Turso `gen` only bumps on the internal `__close`+reopen; `/api/relay` rejects that sentinel).
@@ -135,12 +138,17 @@ pipe: it validates the §8 envelope shape and routes opaque ciphertext, and neve
   operator learns who is active and when, never what is said.
 - **Rate limiting is platform-level.** There is no app-level rate limiter (serverless has no shared
   state). The DoS surface is bounded: unauthenticated requests are rejected cheaply; an authenticated
-  identity can only flood its **own** retention-bounded channel; and Vercel provides DDoS mitigation + the
-  WAF. Recommendation: a Vercel Firewall rate rule on `/api/*` in production.
-- **No key rotation — rotation is replacement.** A compromised secret is remediated by minting a new
-  identity; the old channel's at-rest ciphertext is bounded by retention. There is no in-place re-key.
-- **Durable at-rest ciphertext weakens forward secrecy** vs the ephemeral backends; the retention sweep
-  bounds the exposure window.
+  identity can only flood its **own** retention-bounded legacy channel; and Vercel provides DDoS
+  mitigation + the WAF. Recommendation: a Vercel Firewall rate rule on `/api/*` in production.
+- **No key rotation — rotation is replacement.** Containing a compromised secret requires stopping
+  every relay that captured it, minting and restarting on a new identity, and reconnecting trusted
+  viewers there. This moves future traffic but does not revoke copied old credentials or retained old
+  routes; in this historical flat-session baseline, the old channel's at-rest ciphertext is bounded by
+  its retention policy. There is no in-place re-key.
+- **Durable at-rest ciphertext weakens forward secrecy** vs the ephemeral backends. The historical
+  baseline's retention sweep bounds that exposure window. Selected A1 deliberately differs: chat and
+  server-control ciphertext remains retained from genesis because it has no safe collection or
+  permanent route-revocation transition yet.
 
 ## Open design frontier (documented, not a regression)
 
@@ -148,10 +156,14 @@ Full durable cross-restart *resume* is now an A1 design target, not a property o
 It needs a separately persisted logical-chat-to-native binding, a fenced coordinator/runtime epoch,
 and a durable inbound acknowledgement cursor. A proven `claude --resume` replacement first reuses the
 known private synthetic RC attachment; if that attachment must rotate, the replacement remains under
-the same native binding and logical chat. A1 uses the stable logical-chat ID for the broker channel
-instead. An unproven or new native conversation must not silently reuse it. The session-ID fix removes
-the compatibility-channel collision and makes the current restart path **safe** (no silent corruption
-/ no re-execution); stable logical-chat and outward-binding recovery remain unimplemented.
+the same native binding and server/chat scope. A1 uses the stable
+`(collaborationServerId, logicalChatId)` pair for the canonical chat within one machine. The
+machine-facing viewer row, route, alias, broker channel, and cache keys use the full
+`(identity_id, collaborationServerId, logicalChatId)` triple. An unproven or new native conversation
+must not silently reuse that scope. The session-ID fix removes the compatibility-channel collision and
+makes the current restart path stop automatically re-executing already-stored pre-floor indices;
+replay/re-append above the floor and lost-result recovery remain A1 work. Stable logical-chat and
+outward-binding recovery also remain unimplemented.
 
 ## Reproducing
 

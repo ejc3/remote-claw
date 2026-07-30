@@ -20,7 +20,7 @@ import { planeForKind } from "./protocol.js";
 // the JSON envelope. Callers can override per message.
 const DEFAULT_MAX_CHUNK_BYTES = 3_000_000;
 
-/** A non-2xx broker reply. `status` lets callers branch (e.g. 409 = run rolled → retry). */
+/** A non-2xx broker reply. `status` lets callers branch (e.g. 409 = channel disposal race → retry). */
 export class BrokerError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {

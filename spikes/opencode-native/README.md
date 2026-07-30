@@ -8,7 +8,7 @@ Run the retained-evidence verifier with:
 pnpm --filter @remote-claw/opencode-native-proof test:run
 ```
 
-The retained run is deliberately host-specific: Linux arm64, Node 22.23.1, and the absolute launcher and native-binary paths and hashes recorded in the evidence. The package does not install OpenCode. A fresh run only works on a host where `opencode`, `unshare`, and `ip` are available and `opencode` resolves to those exact pinned 1.17.5 launcher and native bytes; the probe fails closed otherwise. On that captured host, write fresh JSON to standard output with:
+The retained run pins Linux arm64, Node 22.23.1, and the exact launcher and native-binary hashes recorded in the evidence. Emitted paths use stable placeholders because the install location is not part of the proof. The package does not install OpenCode. A fresh run only works on a host where `opencode`, `unshare`, and `ip` are available and `opencode` resolves to those exact pinned 1.17.5 launcher and native bytes; the probe fails closed otherwise. On a matching host, write fresh JSON to standard output with:
 
 ```bash
 node spikes/opencode-native/probe.mjs
@@ -29,11 +29,16 @@ The prompt requests no model reply, and the probe supplies no provider credentia
 This is a narrow native-protocol fact proof, not an OpenCode driver adjudication, coexistence, or parity proof. It does not prove:
 
 - concurrent driving by a real OpenCode TUI and a remote-claw adapter, or any multi-writer ordering;
+- a complete callable TUI/adapter/observer/creation front-door manifest, exact-process TUI authority,
+  or spawned-tool denial of the raw private OpenCode listener;
 - leases, takeover, an in-flight handoff barrier, or crash recovery;
 - runtime permission-request races, replies, or terminal permission state;
 - arbitrary metadata-field semantics or idempotency of session-creation POSTs;
 - control-event handling or source attribution;
 - durability of `remoteClawCreationId` across a native-server restart;
 - same-ID prompt behavior with model replies or across a native-server restart;
-- SSE reconnect, replay, gap detection, status convergence, or long-running stream behavior; or
+- SSE reconnect, replay, gap detection, subscribe/snapshot linearization, status convergence, or
+  long-running stream behavior;
+- provider-façade behavior, inference-request recovery, or the exact-process provider/network fence;
+- the selected writable A2 tuple of server-scoped `{new_chat}` and binding-scoped `{user_text}`; or
 - mount/filesystem isolation, including whether the child could read an absolute ambient host path outside the fresh homes.

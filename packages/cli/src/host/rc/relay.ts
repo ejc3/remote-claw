@@ -85,8 +85,8 @@ const MAX_INFLIGHT_ATTACHMENT_GROUPS = 4;
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
 const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
 
-/** Out-post retry budget for a transient broker error (409 = the run cap-rolled between resolve and
- *  publish — the "window rolling over"). A `seq` is allocated BEFORE the post, so a dropped post would
+/** Out-post retry budget for a transient broker error (409 = the channel was disposed or replaced
+ *  between resolve and publish). A `seq` is allocated BEFORE the post, so a dropped post would
  *  strand the viewer on a permanent gap; retrying the SAME frame (deterministic msg_id → viewer
  *  dedups) closes that hole. */
 const POST_RETRIES = 6;
@@ -582,7 +582,7 @@ export class HostRcRelay {
 
   /**
    * POST one out-message (postMessage chunks a large payload into seq-sharing parts, §8). Retries a
-   * transient 409 (the channel run cap-rolled mid-publish) with bounded backoff: the frame's msg_id
+   * transient 409 (the channel was disposed or replaced mid-publish) with bounded backoff: the frame's msg_id
    * is deterministic, so a re-post is deduped by the viewer — but a DROPPED post would leave a seq
    * gap that stalls every viewer's orderer forever, so we must not let one slip.
    */
@@ -594,7 +594,8 @@ export class HostRcRelay {
         await this.#client.postMessage(header, body);
         return;
       } catch (e) {
-        // 409 = run rolled → retry (§6B). Anything else, or out of budget, is terminal.
+        // 409 = typed channel disposal/replacement race → retry. Anything else, or out of budget,
+        // is terminal.
         if (BrokerError.is(e) && e.status === 409 && attempt < POST_RETRIES) {
           this.#trace.debug("post 409 → retry", { kind: recordKind, seq, attempt: attempt + 1 });
           await new Promise((r) => setTimeout(r, POST_RETRY_BASE_MS * 2 ** attempt));
@@ -843,7 +844,7 @@ export class HostRcRelay {
 
   /** INBOUND: tail the session channel for client frames and drive the worker. Re-subscribes if the
    *  stream ends — the session run may not exist yet (the relay serves before the first client
-   *  prompt) or may have cap-rolled (the "window rolling over"); `#seen` dedups the re-read. */
+   *  prompt) or may have been explicitly closed/replaced; `#seen` dedups the re-read. */
   async #pumpInbound(signal: AbortSignal): Promise<void> {
     this.#trace.debug("pumpInbound start");
     while (!signal.aborted) {
@@ -852,9 +853,9 @@ export class HostRcRelay {
       } catch (e) {
         // A seq-burning publish failure latches #fatal; retrying would re-subscribe and allocate seqs
         // PAST the burned one — widening the mid-stream gap on a live session. So propagate and let
-        // serve() tear the relay down. Only a NON-fatal error (stream not up yet / cap-roll) is the
-        // retryable case the loop exists for. The message is local-only (this machine holds the
-        // transcript), clipped by the formatter.
+        // serve() tear the relay down. Only a NON-fatal error (stream not up yet or explicitly
+        // closed/replaced) is the retryable case the loop exists for. The message is local-only
+        // (this machine holds the transcript), clipped by the formatter.
         if (this.#fatal) throw e;
         this.#trace.warn("inbound tail threw → retry", {
           error: (e as Error)?.message ?? String(e),
@@ -1130,7 +1131,8 @@ export class HostRcRelay {
       return; // AEAD open failed or unparseable → reject, never drive a control action
     }
     // Drop a STALE control frame: a malicious broker can withhold a valid frame and replay it much
-    // later. The client stamps `expiry`; past it, the verb is a no-op (matches catch_up's freshness).
+    // later. The client stamps `expiry`; past it, the verb is a no-op. The separate catch_up branch
+    // currently does not enforce its stamped expiry; docs/protocol.md §11 records that boundary.
     if (typeof body.expiry === "number" && body.expiry < Date.now()) {
       this.#trace.warn("control verb dropped (stale)", { kind });
       return;

@@ -38,12 +38,13 @@ log/edge observer**:
 ## 2. Today, and why it must change
 
 The viewer credential is the `rcp1_` **pass** = `authToken ‖ contentRoot ‖ controlKey ‖ kMeta` (128 B,
-HKDF-derived from root secret `S`; `packages/clawsec/src/{kdf,pass}.ts`). `--rc-qr` puts it in a QR deep link
-`<origin>/#<pass>`. It rides the `#fragment` (never sent to a server) — but it is a **forever, symmetric
-capability** (read **and** steer **and** forge; revoke only by resetting `S`), the textbook W3C
-"capability-URL as forever credential" anti-pattern. The fragment shields only Referer/server-logs, not a QR
-screenshot/photo, shoulder-surf, browser history, or third-party scripts (which can read the fragment). A
-leaked QR = forever control. The fix is the OAuth-auth-code shape (RFC 6749 §4.1.2: single-use, ≤10 min).
+HKDF-derived from root secret `S`; `packages/clawsec/src/{kdf,pass}.ts`). A pasted pass or bare-pass QR
+is a **forever, symmetric capability** (read **and** steer **and** forge) with no in-place revocation.
+Resetting `S` moves future legitimate host service to a new identity but does not invalidate copied
+passes on retained old routes. A pass in a URL fragment is not sent as an HTTP request, but the fragment
+shields only Referer/server logs—not a screenshot/photo, shoulder-surf, browser history, or third-party
+scripts that can read it. The shipped `--rc-qr` path with an app origin therefore uses the
+OAuth-auth-code shape below: a single-use, at-most-10-minute handoff token, never a pass deep link.
 
 ## 3. Design
 
@@ -179,7 +180,10 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
 ### 3.5 What the OTK delivers (scope) — explicit decision
 
 v1 wraps the **existing `rcp1_` pass** (simplest; trivial migration). This **hardens delivery, not the
-credential's authority**: a claimed pass is still full read+steer+forge, revocable only by machine reset.
+credential's authority**: a claimed pass still grants full read+steer and shared-key inbound authority.
+Machine reset moves future host service to a new identity but does not revoke copied passes against
+retained old routes. In selected A1, the separate certified server-output signature prevents a pass
+holder from forging projections or announcements; the shipped A0 envelope does not.
 
 > **Deferred follow-ups (higher value, tracked):** (a) deliver a *scoped / expiring / per-viewer-revocable*
 > grant so a compromised **viewer** is recoverable without resetting `S`; (b) a **pinned/native client** to

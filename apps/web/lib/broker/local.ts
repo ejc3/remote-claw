@@ -12,12 +12,12 @@ import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } fr
 //   • publish creates-or-resumes; subscribe resolves-or-null — only a publish brings a channel into
 //     existence, so an absent identity's subscribe returns null (the route replies 200-empty).
 //   • close frees the token — the __close sentinel ends every live stream and drops the channel, so a
-//     later publish re-creates it under the same token (the cap-roll handoff, here a clean teardown).
+//     later publish re-creates it under the same token (an explicit clean teardown).
 //
 // JS is single-threaded, so the synchronous replay-then-register in subscribe() and the synchronous
 // fan-out in publish() never interleave — there is no missed-or-duplicated frame window.
 //
-// The frame log is unbounded (no cap-roll): fine for dev/test sessions, which are short-lived. A
+// The frame log is unbounded (no production rollover controller): fine for dev/test sessions, which are short-lived. A
 // long-lived deployment uses the Vercel or per-session sqlite backend, which page/cap the durable history.
 
 interface Subscriber {
@@ -51,7 +51,7 @@ export class LocalBackend implements BrokerBackend {
       }
     }
     channel.subscribers.clear();
-    this.#channels.delete(token); // free the token for a fresh publish (cap-roll handoff, §6B)
+    this.#channels.delete(token); // free the token for a fresh publish after explicit teardown
   }
 
   async publish(token: string, payload: RelayPayload): Promise<PublishResult> {

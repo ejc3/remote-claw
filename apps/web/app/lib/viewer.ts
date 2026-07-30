@@ -415,7 +415,8 @@ export class Viewer {
   /**
    * Tail the identity bus; yield each fresh session_announce (decrypted under K_meta). Re-subscribes
    * when the stream ends: the bus run may not exist yet (you opened the app before any host
-   * announced) or may have cap-rolled. The generator applies shouldAcceptAnnounce per session before
+   * announced) or may have been explicitly closed/replaced. The generator applies
+   * shouldAcceptAnnounce per session before
    * yielding or notifying transcript listeners, so a replay or delayed publish cannot roll accepted
    * presence/incarnation state backward. Loops until `signal` aborts.
    *
@@ -471,7 +472,7 @@ export class Viewer {
           this.#rememberIncarnation(sessionId, announce.incarnation);
           yield announce;
         }
-        onError?.(null); // stream drained cleanly (run not up yet / cap-rolled) → broker still reachable
+        onError?.(null); // stream drained cleanly (run absent/closed/replaced) → broker still reachable
       } catch (e) {
         // A transient stream error (network blip / SSE reset / broker 5xx) must NOT end discovery — fall
         // through to the resume-or-retry sleep and re-subscribe, exactly like the relay does. But REPORT it
@@ -487,7 +488,7 @@ export class Viewer {
   /**
    * Tail a session's out-stream; yield decoded transcript messages (deduped + reordered by seq).
    * Re-subscribes when the stream ends: the session run may not exist yet (you opened the session
-   * before the host posted anything) or may have cap-rolled (the "window rolling over"). The
+   * before the host posted anything) or may have been explicitly closed/replaced. The
    * FrameOrderer persists across re-subscribes; for CONTENT frames its seq cursor (drops seq < next)
    * is what guarantees no gap and no duplicate on the re-read — the bounded msg_id window only de-dups
    * the seq===null meta frames (e.g. `accepted`), which are idempotent to re-yield (rendered as

@@ -20,9 +20,11 @@ claude's local transcript JSONL** (capture) and **typing into the pane via `send
 **Identity scope.** The shipped driver mints a synthetic remote-claw `Session.id` (`cse_*`) for its
 broker channel and separately controls a tmux pane plus a Claude transcript/session ID. None is an
 implemented durable remote-claw logical-chat ID, and a wrapper restart does not currently preserve
-their binding. A1 uses a persisted logical-chat ID for the broker row/channel only when pane,
-child-process, and native transcript evidence prove reattachment to the same semantic conversation;
-pane name or PID reuse is not enough.
+their binding. A1 uses a persisted `(collaborationServerId, logicalChatId)` scope for the canonical
+chat within one machine. Its machine-facing viewer row, route, alias, channel, and cache keys use the
+full `(identity_id, collaborationServerId, logicalChatId)` triple. The binding is retained only when
+pane, child-process, and native transcript evidence prove reattachment to the same semantic
+conversation; pane name or PID reuse is not enough.
 
 The decisive fact (verified against real transcripts, claude 2.1.63–2.1.177): the
 `message.content` blocks in `~/.claude/projects/<slug(cwd)>/<sessionId>.jsonl` are **byte-identical**

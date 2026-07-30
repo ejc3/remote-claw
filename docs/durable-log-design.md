@@ -167,13 +167,12 @@ Use two durable logs with different trust and replay roles:
    raw event bodies, downstream delivery state, worker epoch, close/archive metadata, and compact
    boundaries. This log is required even when no viewer is connected.
 
-2. Broker frame log: sealed viewer transport, already started by A1 Turso
-   `frames`. It stores encrypted `WireFrame` JSON and cleartext routing columns
-   such as token, generation, message id, part, and broker sequence. It serves
-   remote-claw viewers and catch-up. It should not be treated as the RC server
-   state because the broker should not need plaintext RC payloads and because
-   broker frames do not capture worker delivery acknowledgements or exact
-   `/worker/events` duplicate response semantics.
+2. Broker frame log: sealed viewer transport, prototyped by the historical A0-compatible Turso
+   `frames` table and migrated for selected A1 as described below. It stores encrypted frame JSON and
+   cleartext transport routing/cursor columns. It serves remote-claw viewers and catch-up. It should
+   not be treated as the RC server state because the broker should not need plaintext RC payloads and
+   because broker frames do not capture worker delivery acknowledgements or exact `/worker/events`
+   duplicate response semantics.
 
 The RC event log projects into the broker frame log. Projection is idempotent:
 an accepted RC event can create zero or more rendered viewer parts, each with a
@@ -189,18 +188,18 @@ received from its direct collaborators, including forwarded, queued, and rejecte
 forwarded subset is offered inward in that order; `command_seq` neither orders direct native-TUI
 actions nor replaces the native harness's final applied interleaving. Rebuildable projection
 `chat_seq`, Claude `sequence_num`, Codex thread/turn/item IDs, and broker `seq` are mappings/cursors in
-their separate domains. An adapter or provider incarnation may be replaced without changing
-`logical_chat_id`.
+their separate domains. An adapter or provider incarnation may be replaced without changing the
+`(collaboration_server_id, logical_chat_id)` scope.
 
 The durable identity join is:
 
 ```text
-logical_chat_id                     remote-claw's canonical user chat
-└── native_binding_id               binding to the proven semantic Claude conversation
-    ├── native incarnation history  exact Claude process generations
-    └── rc_attachment_id            one private RC transport generation
-        └── cse_session_id           canonical only within the RC event/worker tables below
-            └── worker_epoch         lease to one native incarnation + coordinator epoch
+(collaboration_server_id, logical_chat_id)  remote-claw's canonical user chat
+└── native_binding_id                        binding to the proven semantic Claude conversation
+    ├── native incarnation history           exact Claude process generations
+    └── rc_attachment_id                     one private RC transport generation
+        └── cse_session_id                    canonical only within the RC event/worker tables below
+            └── worker_epoch                  lease to one native incarnation + coordinator epoch
 ```
 
 Claude's proven transcript/resume UUID belongs to the native binding's
@@ -209,7 +208,8 @@ On recovery the coordinator first reuses a known, complete `cse_session_id` and
 starts a new worker epoch tied to the current native incarnation and coordinator
 epoch. The attachment belongs to the native binding, not to one process
 incarnation, so a cold native resume can reuse the same `cse_session_id`. A new
-`cse_session_id` is allowed under the same `logical_chat_id` only through a
+`cse_session_id` is allowed under the same `(collaboration_server_id, logical_chat_id)` scope only
+through a
 durable, proof-carrying RC-attachment replacement: preserve and supersede the
 old attachment, bind the replacement to the exact logical chat/native binding,
 and record the recovery evidence plus any explicit history gap. A gap records
@@ -220,7 +220,7 @@ logical chat.
 
 ## Data Model
 
-The A1 Turso frame table inspected on `feat-turso-broker-catchup` is:
+The historical Turso frame table inspected on `feat-turso-broker-catchup` was:
 
 ```sql
 CREATE TABLE IF NOT EXISTS channels (
@@ -245,19 +245,45 @@ CREATE TABLE IF NOT EXISTS frames (
 CREATE INDEX IF NOT EXISTS frames_token_gen_id ON frames (token, gen, id);
 ```
 
-Keep this table as the sealed viewer transport. Add host-owned RC tables in a **LOCAL** SQLite/libSQL
-database under the CLI config directory, in **cleartext** — nothing on the host needs encryption, and
-the broker never holds RC plaintext (only sealed frames cross to the cloud). The interface should hide
-the storage choice from `mitm.ts` and `session.ts`. (Decided: do NOT put RC payloads in the broker
-Turso — there is no host-encryption hedge to make, because the RC log simply stays local.)
+That table is retained evidence for the shipped A0-compatible durable backend. Its
+`UNIQUE(token, gen, msg_id, part)` rule is not the selected client-driven A1 replay contract. A1
+requires a broker migration whose transport row is unique route-wide on
+`(token, delivery_attempt_id, part)`, stores its assigned `(generation, frame_index)`, and stores the
+normalized transport-frame digest. An exact retry before or after rollover returns that original
+cursor only when the complete normalized frame digest matches; unequal bytes fail closed as a
+transport collision. Separate sealed-generation manifest rows define frame counts, next-generation
+links, and empty generations. Stable semantic results remain host-owned and key on the full
+server/chat/source namespace plus `msg_id`; they are not collapsed into the broker transport key. The
+store-free Workflow backend remains A0-only and cannot claim this A1 contract.
 
-No A1 `frames` schema change is required for the first durable server pass.
-The RC event store extends the system by adding companion server-state tables,
-then records the broker projection in `rc_event_parts.broker_msg_id`,
-`broker_part`, and `broker_seq`. A later optimization may add nullable
-`rc_session_id`/`rc_event_id` columns to `frames`, but it is not required for
-correctness because `UNIQUE(token, gen, msg_id, part)` already gives idempotent
-viewer-frame insertion.
+The physical cursor/manifest key is one immutable authenticated broker route, not a parsed chat:
+`scope_bus` has one null-chat discovery route, `server_control` has a distinct null-chat management
+ingress/result route, and each `chat` route has its exact chat. A position is unique on
+`(broker_route_id, generation, frame_index)`.
+Same-position/same raw digest is idempotent; different bytes retain equivocation evidence and quarantine
+the route before parse/open. The first sealed manifest tuple is immutable; changed count/state/successor
+or an index outside its sealed count records manifest equivocation. Chat, server, machine, and
+bus↔control↔chat route transplants are invalid on the externally selected route and never dispatch by the
+embedded header.
+
+Chat and server-control ciphertext bodies are retained from genesis. Only discovery-only scope-bus
+bodies in a sealed generation covered by a fresh host-signed successor checkpoint may be compacted
+after all supported recovery leases pass. Selected A1 retains every route-wide
+attempt/part→original-cursor/digest tombstone and generation manifest indefinitely. Ordinary retention
+expiry, local chat closure, and machine reset are insufficient:
+copied bearer/key material may remain valid, and A1 has neither an in-place key epoch nor a
+broker-enforced permanent route-revocation protocol. A future bounded-retention version must add and
+prove that protocol before it may collect these records.
+
+The selected design still adds host-owned RC tables in a **LOCAL** SQLite/libSQL database under the CLI
+config directory, in **cleartext** — nothing on the host needs encryption, and the broker never holds RC
+plaintext (only sealed frames cross to the cloud). The interface should hide the storage choice from
+`mitm.ts` and `session.ts`. (Decided: do NOT put RC payloads in the broker Turso — there is no
+host-encryption hedge to make, because the RC log simply stays local.)
+
+The RC event store records each semantic projection/result separately from its broker delivery attempt,
+part, and cursor. The A0 historical table can remain for A0 channels, but it cannot be relabeled A1 or
+used to claim A1 idempotency without the migration above.
 
 ```sql
 CREATE TABLE rc_sessions (
@@ -281,8 +307,22 @@ CREATE TABLE rc_sessions (
 -- Coordinator-owned identity mapping. The logical-chat and native-binding
 -- records live in the narrow control journal described by
 -- client-driven-host-runtime.md; these ids are not aliases for cse_session_id.
+CREATE TABLE logical_chats (
+  logical_chat_record_id   TEXT PRIMARY KEY,
+  collaboration_server_id TEXT NOT NULL,
+  logical_chat_id          TEXT NOT NULL,
+  UNIQUE (collaboration_server_id, logical_chat_id),
+  UNIQUE (
+    logical_chat_record_id,
+    collaboration_server_id,
+    logical_chat_id
+  )
+);
+
 CREATE TABLE rc_transport_attachments (
   rc_attachment_id       TEXT PRIMARY KEY,
+  logical_chat_record_id TEXT NOT NULL,
+  collaboration_server_id TEXT NOT NULL,
   logical_chat_id        TEXT NOT NULL,
   native_binding_id      TEXT NOT NULL,
   rc_generation          INTEGER NOT NULL,
@@ -292,8 +332,19 @@ CREATE TABLE rc_transport_attachments (
   recovery_evidence_json TEXT NOT NULL DEFAULT '{}',
   created_at_ms          INTEGER NOT NULL,
   superseded_at_ms       INTEGER,
+  UNIQUE (logical_chat_record_id, rc_generation),
+  UNIQUE (collaboration_server_id, logical_chat_id, rc_generation),
   UNIQUE (native_binding_id, rc_generation),
   UNIQUE (rc_attachment_id, cse_session_id),
+  FOREIGN KEY (
+    logical_chat_record_id,
+    collaboration_server_id,
+    logical_chat_id
+  ) REFERENCES logical_chats (
+    logical_chat_record_id,
+    collaboration_server_id,
+    logical_chat_id
+  ),
   FOREIGN KEY (cse_session_id) REFERENCES rc_sessions(cse_session_id),
   FOREIGN KEY (replaces_attachment_id)
     REFERENCES rc_transport_attachments(rc_attachment_id)
@@ -625,8 +676,8 @@ New remote-control session:
 
 Resume/re-bridge for known `cse_`:
 
-1. Load the canonical `logical_chat_id`, its current native binding/incarnation,
-   and that binding's active RC attachment.
+1. Load the canonical `(collaboration_server_id, logical_chat_id)` scope, its current native
+   binding/incarnation, and that binding's active RC attachment.
 2. Reuse its known `cse_session_id`; do not mint a replacement merely because
    the coordinator or wrapper process restarted.
 3. `/bridge` looks up `rc_sessions` and starts epoch
@@ -651,7 +702,7 @@ Proven RC attachment replacement for the same logical chat:
 3. In one durable transition, mark the old `rc_transport_attachments` row
    and its active worker lease `superseded`, allocate a new
    `rc_attachment_id`/`rc_generation` and `cse_session_id`, and map it to the
-   same `logical_chat_id` and native binding.
+   same `(collaboration_server_id, logical_chat_id)` scope and native binding.
 4. Start the new RC session at its own transport sequence and a worker epoch
    tied to the exact current native incarnation and coordinator epoch.
    Preserve the old RC log for deduplication/audit and continue logical
@@ -673,8 +724,11 @@ Viewer catch-up after wrapper restart:
 - If A1/A2 Turso broker frames exist, viewers subscribe from the broker by
   cursor and receive sealed frames from `frames`.
 - If broker frames are missing but the RC event log exists, the projector can
-  rebuild deterministic broker frames from `rc_event_parts` and then serve
-  viewers. Reprojection must be idempotent through `broker_msg_id` and part.
+  rebuild semantic projections from `rc_event_parts` and enqueue a fresh broker delivery attempt for
+  each missing projection. A0 reprojection uses its historical `broker_msg_id`/part key. Selected A1
+  preserves the stable semantic result ID separately, writes ahead one fresh `delivery_attempt_id`,
+  and makes retries of that same outbox row reuse its route-wide attempt/part key and original cursor,
+  including after rollover.
 - `HostRcRelay.#log` is only an in-memory optimization for non-durable broker
   backends.
 
@@ -759,10 +813,11 @@ worker/app:
   delivery is correlated to the existing command and never injected twice.
 - Official-client events arrive at the remote-claw-owned worker connector,
   enter the journal/actor, and only then cross the private inner RC façade.
-- Provider ingress deduplicates by the coordinator's durable logical-chat, outside-binding,
-  source-event-namespace, and event-ID identity, not by connector incarnation. Reconnect or provider
-  replacement must consult canonical source-event, observation, and correlation history across prior
-  incarnations before allocating a command. A reset namespace requires a versioned,
+- Provider ingress deduplicates by the coordinator's durable
+  `(collaboration_server_id, logical_chat_id)` scope, outside-binding, source-event-namespace, and
+  event-ID identity, not by connector incarnation. Reconnect or provider replacement must consult
+  canonical source-event, observation, and correlation history across prior incarnations before
+  allocating a command. A reset namespace requires a versioned,
   capability-pinned transition classifier plus boundary coordinates, and each observation retains its
   comparable provider coordinate and classification evidence. Proven overlap resolves to its prior
   command; only a proven post-boundary reuse becomes new, while ambiguity fails closed. The RC-local
@@ -787,17 +842,17 @@ phases are likewise superseded by the shared/Claude phases in
 section for provenance and
 test intent; re-read current code before implementing any item.
 
-Phase A1 - Durable broker frames:
+Historical branch phase called “A1” - A0-compatible durable broker frames:
 
-- Status: done on the Turso backend branch; land or rebase before dependent
-  phases.
+- Status: historical branch evidence only; its name predates the selected client-driven A1 protocol.
 - Branch basis: `feat-turso-broker-catchup` / `origin/feat-turso-backend`.
 - Files: `apps/web/lib/broker/turso.ts`,
   `apps/web/lib/broker/turso-connection.ts`,
   `apps/web/lib/broker/index.ts`,
   `apps/web/test/broker/turso-backend.test.ts`.
-- Goal: durable sealed viewer frames with idempotent
-  `UNIQUE(token, gen, msg_id, part)`.
+- Goal at the time: durable sealed A0-compatible viewer frames with idempotent
+  `UNIQUE(token, gen, msg_id, part)`. Selected A1 instead requires the generation-aware
+  delivery-attempt/digest/cursor-manifest migration described above.
 - Tests: Turso publish/subscribe, duplicate `msg_id`/part insert, generation
   close/reopen, cursor catch-up from stored `id`.
 - Gate: tests prove publish idempotency, subscribe from cursor, generation
@@ -855,7 +910,7 @@ Phase B1 - Host RC event store:
   logical-chat/native-binding/RC-attachment mapping.
 - Tests: append/replay duplicate, stale epoch reject, restart and reuse the
   known `cse_`, unknown `cse_` policy, sequence max+1 after restart, and a
-  proof-carrying replacement `cse_` that remains under the same logical chat.
+  proof-carrying replacement `cse_` that remains under the same server/chat scope.
 - Gate: duplicate upstream POST returns `duplicate:true` with original
   sequence; restart plus `--remote-control --resume <U>` continues from stored
   history with no replay required. Recovery must try the known `cse_` first;
@@ -917,8 +972,8 @@ Phase B5 - Archive/close fidelity:
   is needed, and next event sequence is max+1.
 - Integration test proven replacement: prove the old attachment contained,
   explicitly gap any missing history, allocate a replacement `cse_`, and verify
-  both attachments map to the same `logical_chat_id`/native binding while only
-  the replacement is active.
+  both attachments map to the same `(collaboration_server_id, logical_chat_id)` scope/native binding
+  while only the replacement is active.
 - Integration test unproven replacement: timeout, missing process memory, or an
   unknown `cse_` cannot silently replace the active attachment, create a
   logical chat, or cause an old command to execute again.
@@ -929,8 +984,11 @@ Phase B5 - Archive/close fidelity:
   active worker lease are superseded, every stream, event, acknowledgement, and
   heartbeat operation using the old `cse_*`/epoch is rejected even if that
   epoch remains the old session's numeric maximum.
-- Projection test: raw RC event with multiple render parts maps to stable broker
-  frames; reprojection is no-op under `UNIQUE(token, gen, msg_id, part)`.
+- Projection test: raw RC event with multiple render parts maps to stable semantic projections. In A0,
+  reprojection is a no-op under `UNIQUE(token, gen, msg_id, part)`. In selected A1, one semantic result
+  is retained separately from its delivery rows; an exact outbox retry reuses one route-wide
+  `(token, delivery_attempt_id, part)` insertion and original cursor across rollover, while a later
+  result delivery uses a fresh attempt ID.
 - Compact test: JSONL summary row creates compact marker and viewer reset.
 - Broker tests from A1/A2: Turso publish idempotency, subscribe by cursor,
   `maxSeq` continuity, retention.
@@ -945,9 +1003,9 @@ A durability PR is not complete unless it demonstrates these properties:
   depend on Claude replaying prior history.
 - Recovery reuses the known `cse_` before considering replacement. A replacement
   is accepted only after its containment proof and any recovery gap are
-  durable, preserves the same canonical logical chat and native binding, binds
-  its worker epoch to the exact current native incarnation/coordinator epoch,
-  and does not replay prior commands.
+  durable, preserves the same canonical `(collaboration_server_id, logical_chat_id)` scope and native
+  binding, binds its worker epoch to the exact current native incarnation/coordinator epoch, and does
+  not replay prior commands.
 - No code path treats `cse_session_id` as `logical_chat_id` or as Claude's
   native transcript/resume `conversationId`.
 - Viewer catch-up works without `HostRcRelay.#log`.

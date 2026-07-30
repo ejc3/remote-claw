@@ -17,9 +17,11 @@ The checked raw two-client probe closes an important ambiguity for one method. A
 - Installed binary: `codex-cli 0.146.0`, `aarch64-unknown-linux-musl`.
 - Resolved binary SHA-256: `cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6`.
 - Official [`rust-v0.146.0` release asset](https://github.com/openai/codex/releases/download/rust-v0.146.0/codex-aarch64-unknown-linux-musl.zst): 75,983,207-byte compressed SHA-256 `28453d95f8d35913e3789d10daa2b5bcbb82aa6ccc5f07bb66bd764ee1870201`; it decompresses to the installed binary's 269,098,800 bytes and SHA-256 above.
-- Checked probe SHA-256: `cab2dd56e3ff88bff664c5c58408b5e9848936af66a48252887d6bc3ee613bb5`; the evidence records the same hash.
-- Checked real-TUI probe SHA-256: `014f8bbfcc17ebf25e40598be9117d4fbbc78d83eefbbeeaad189c77bc8e5ae8`; the evidence records the same hash.
-- Checked multi-chat attachment probe SHA-256: `aaaa9c633a857c62b6527bb6d5bce3d5bb749b41eb727d02b72f0fa7c53ab5c3`; the evidence records the same hash.
+- Checked probe SHA-256: `539f92d9e72f3faf9b8abf41746f258cf8dcb346da96e0e6ae606d79fd746090`; the evidence records the same hash.
+- Checked real-TUI probe SHA-256: `698d2202c9dcaa5f1d5789fe11c7f8d27e35f430109cedd0bc6aeac3a703bc73`; the evidence records the same hash.
+- Checked multi-chat attachment probe SHA-256: `f1f6a14c69a1d8650cbc6519c129d7afc50e96c43e968d9866952615569065ba`; the evidence records the same hash.
+- Retained fixtures use `<codex-binary>` instead of an install path; the binary hash above remains the
+  executable identity.
 - Matching open-source tag: `rust-v0.146.0`.
 - Peeled source commit: [`e363b08c9175ac1cbe5893615dd2cb9ddf95043b`](https://github.com/openai/codex/commit/e363b08c9175ac1cbe5893615dd2cb9ddf95043b).
 - Protocol inspection: JSON Schemas were generated locally from this exact binary with `codex app-server generate-json-schema`; retaining and hashing the supported schema fixture remains a Phase C gate.

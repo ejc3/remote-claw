@@ -1,13 +1,13 @@
 {
-	"capturedAt": "2026-07-29T18:04:23.148Z",
+	"capturedAt": "2026-07-29T21:21:51.683Z",
 	"proofScope": "a late raw app-server client writes an empty live thread before subscribing but receives no correlated detailed projection for that command; after same-ID resume, two raw clients receive equal selected command-event projections",
 	"probe": {
-		"sha256": "cab2dd56e3ff88bff664c5c58408b5e9848936af66a48252887d6bc3ee613bb5",
+		"sha256": "539f92d9e72f3faf9b8abf41746f258cf8dcb346da96e0e6ae606d79fd746090",
 		"nodeVersion": "v22.23.1"
 	},
 	"codex": {
 		"version": "codex-cli 0.146.0",
-		"binaryPath": "/home/ubuntu/.codex/packages/standalone/releases/0.146.0-aarch64-unknown-linux-musl/bin/codex",
+		"binaryPath": "<codex-binary>",
 		"binarySha256": "cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6",
 		"platform": "linux",
 		"architecture": "arm64"
@@ -63,7 +63,7 @@
 		"independentRequestIdOneAccepted": true
 	},
 	"thread": {
-		"id": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+		"id": "019fafc1-5738-7880-a70e-22b742746641",
 		"persistent": true,
 		"emptyResumeBeforeMaterialization": {
 			"attemptedBy": "B",
@@ -83,30 +83,30 @@
 				"byteLength": 28,
 				"utf8": "codex-multiclient-pre-resume"
 			},
-			"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-			"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
-			"itemId": "92964620-1c00-4eaa-bd18-498d8c751089",
+			"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+			"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+			"itemId": "8d887783-eacd-402d-8cb1-b4246173c716",
 			"writeAccepted": true,
 			"detailedObservationByA": [
 				{
 					"method": "turn/started",
-					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
 					"status": "inProgress"
 				},
 				{
 					"method": "item/started",
-					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
-					"itemId": "92964620-1c00-4eaa-bd18-498d8c751089",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+					"itemId": "8d887783-eacd-402d-8cb1-b4246173c716",
 					"command": "/usr/bin/zsh -lc 'printf codex-multiclient-pre-resume'",
 					"status": "inProgress"
 				},
 				{
 					"method": "item/commandExecution/outputDelta",
-					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
-					"itemId": "92964620-1c00-4eaa-bd18-498d8c751089",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+					"itemId": "8d887783-eacd-402d-8cb1-b4246173c716",
 					"delta": {
 						"base64": "Y29kZXgtbXVsdGljbGllbnQtcHJlLXJlc3VtZQ==",
 						"byteLength": 28,
@@ -115,9 +115,9 @@
 				},
 				{
 					"method": "item/completed",
-					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
-					"itemId": "92964620-1c00-4eaa-bd18-498d8c751089",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
+					"itemId": "8d887783-eacd-402d-8cb1-b4246173c716",
 					"command": "/usr/bin/zsh -lc 'printf codex-multiclient-pre-resume'",
 					"status": "completed",
 					"exitCode": 0,
@@ -129,8 +129,8 @@
 				},
 				{
 					"method": "turn/completed",
-					"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-					"turnId": "019faf0c-8c10-76e0-b02c-30e3aeb4f63a",
+					"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+					"turnId": "019fafc1-5754-7063-a8c9-fe9426d1ef6a",
 					"status": "completed"
 				}
 			],
@@ -144,13 +144,13 @@
 					"response:5"
 				],
 				"correlatedDetailedProjection": [],
-				"absenceCheckedAfterPostResumeTurnId": "019faf0c-8c83-76a2-92bd-748230a5c14e"
+				"absenceCheckedAfterPostResumeTurnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc"
 			}
 		},
 		"resumeAfterMaterialization": {
 			"attemptedBy": "B",
-			"requestedId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-			"returnedId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
+			"requestedId": "019fafc1-5738-7880-a70e-22b742746641",
+			"returnedId": "019fafc1-5738-7880-a70e-22b742746641",
 			"sameThread": true
 		}
 	},
@@ -165,31 +165,31 @@
 				"byteLength": 24,
 				"utf8": "codex-multiclient-a-to-b"
 			},
-			"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-			"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
-			"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+			"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+			"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+			"itemId": "24727d44-6698-405b-9169-22fc92714a50",
 			"orderedProjectionsEqual": true,
 			"observations": {
 				"A": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
-						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
 						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
-						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
 							"byteLength": 24,
@@ -198,9 +198,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
-						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
 						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
 						"status": "completed",
 						"exitCode": 0,
@@ -212,31 +212,31 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
 						"status": "completed"
 					}
 				],
 				"B": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
-						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
 						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
-						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGljbGllbnQtYS10by1i",
 							"byteLength": 24,
@@ -245,9 +245,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
-						"itemId": "f8b5ee56-84f2-47cd-9cd0-7d56948965a6",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
+						"itemId": "24727d44-6698-405b-9169-22fc92714a50",
 						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-a-to-b'",
 						"status": "completed",
 						"exitCode": 0,
@@ -259,8 +259,8 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c5a-7452-b6d7-946134ae09f2",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-579e-7602-9f85-9383e57aad96",
 						"status": "completed"
 					}
 				]
@@ -276,31 +276,31 @@
 				"byteLength": 24,
 				"utf8": "codex-multiclient-b-to-a"
 			},
-			"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-			"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
-			"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+			"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+			"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+			"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
 			"orderedProjectionsEqual": true,
 			"observations": {
 				"A": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
-						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
 						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
-						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
 							"byteLength": 24,
@@ -309,9 +309,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
-						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
 						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
 						"status": "completed",
 						"exitCode": 0,
@@ -323,31 +323,31 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
 						"status": "completed"
 					}
 				],
 				"B": [
 					{
 						"method": "turn/started",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/started",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
-						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
 						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
 						"status": "inProgress"
 					},
 					{
 						"method": "item/commandExecution/outputDelta",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
-						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
 						"delta": {
 							"base64": "Y29kZXgtbXVsdGljbGllbnQtYi10by1h",
 							"byteLength": 24,
@@ -356,9 +356,9 @@
 					},
 					{
 						"method": "item/completed",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
-						"itemId": "a9040747-83d3-4227-9b77-5283195a9acf",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
+						"itemId": "443fe7f9-c9ba-49d9-8e0f-64c8d7c63dd8",
 						"command": "/usr/bin/zsh -lc 'printf codex-multiclient-b-to-a'",
 						"status": "completed",
 						"exitCode": 0,
@@ -370,8 +370,8 @@
 					},
 					{
 						"method": "turn/completed",
-						"threadId": "019faf0c-8bf4-79b2-9413-6372ae9964e5",
-						"turnId": "019faf0c-8c83-76a2-92bd-748230a5c14e",
+						"threadId": "019fafc1-5738-7880-a70e-22b742746641",
+						"turnId": "019fafc1-57d1-7f43-b2e3-735d44b899bc",
 						"status": "completed"
 					}
 				]

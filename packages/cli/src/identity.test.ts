@@ -278,6 +278,7 @@ describe("runIdentity — replace (--rc-confirm)", () => {
     expect(e.text()).toMatch(/replaced identity/);
     expect(e.text()).toContain(`abandoned:   ${oldId}`);
     expect(e.text()).toMatch(/NOT revoked/);
+    expect(e.text()).toContain("Stop/restart every relay using it");
     assertNoSecretLeak(e.text(), await diskIdentity()); // summary never repeats the new secret
     expect(toHex(await idOf((await diskIdentity()).secret))).not.toBe(oldId);
   });

@@ -3,44 +3,23 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import {
+	assertCapturedAt,
+	assertNoCredentialEnvironmentNames,
+	assertNoHostPaths,
+	assertUniqueIdentifiers,
+	EXPECTED_CODEX_BINARY_SHA256,
+	EXPECTED_ISOLATED_ENVIRONMENT_NAMES,
+	NAMESPACE_ID_PATTERN,
+	outputRecord,
+	SELECTED_PROJECTION_METHODS,
+	UUID_PATTERN,
+} from "./evidence-assertions.mjs";
 
-const EXPECTED_CODEX_BINARY_SHA256 =
-	"cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6";
 const EXPECTED_RAW_PROBE_SHA256 =
-	"cab2dd56e3ff88bff664c5c58408b5e9848936af66a48252887d6bc3ee613bb5";
+	"539f92d9e72f3faf9b8abf41746f258cf8dcb346da96e0e6ae606d79fd746090";
 const EXPECTED_TUI_PROBE_SHA256 =
-	"014f8bbfcc17ebf25e40598be9117d4fbbc78d83eefbbeeaad189c77bc8e5ae8";
-const EXPECTED_ISOLATED_ENVIRONMENT_NAMES = [
-	"ALL_PROXY",
-	"CODEX_HOME",
-	"HOME",
-	"HTTPS_PROXY",
-	"HTTP_PROXY",
-	"LANG",
-	"LC_ALL",
-	"LC_CTYPE",
-	"LOGNAME",
-	"NO_PROXY",
-	"PATH",
-	"RUST_LOG",
-	"TERM",
-	"USER",
-	"ZDOTDIR",
-	"all_proxy",
-	"http_proxy",
-	"https_proxy",
-	"no_proxy",
-];
-const NAMESPACE_ID_PATTERN = /^net:\[\d+\]$/;
-const UUID_PATTERN =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const SELECTED_PROJECTION_METHODS = [
-	"turn/started",
-	"item/started",
-	"item/commandExecution/outputDelta",
-	"item/completed",
-	"turn/completed",
-];
+	"698d2202c9dcaa5f1d5789fe11c7f8d27e35f430109cedd0bc6aeac3a703bc73";
 const RAW_COMMANDS = [
 	{
 		label: "A-to-B",
@@ -76,6 +55,9 @@ const [rawProbe, rawEvidenceText, tuiProbe, tuiEvidenceText] =
 const raw = JSON.parse(rawEvidenceText);
 const tui = JSON.parse(tuiEvidenceText);
 
+assertNoHostPaths(rawEvidenceText, tuiEvidenceText);
+assertCapturedAt(raw.capturedAt);
+assertCapturedAt(tui.capturedAt);
 assert.equal(sha256(rawProbe), EXPECTED_RAW_PROBE_SHA256, "raw probe drifted");
 assert.equal(
 	raw.probe.sha256,
@@ -96,6 +78,7 @@ assert.match(raw.probe.nodeVersion, /^v22\./);
 assert.match(tui.probe.nodeVersion, /^v22\./);
 assert.equal(raw.codex.version, "codex-cli 0.146.0");
 assert.equal(tui.codex.version, "codex-cli 0.146.0");
+assert.equal(raw.codex.binaryPath, "<codex-binary>");
 assert.equal(
 	raw.codex.binarySha256,
 	EXPECTED_CODEX_BINARY_SHA256,
@@ -256,6 +239,9 @@ assert.deepEqual(
 	raw.isolation.appServerEnvironmentVariableNames,
 	EXPECTED_ISOLATED_ENVIRONMENT_NAMES,
 );
+assertNoCredentialEnvironmentNames(
+	raw.isolation.appServerEnvironmentVariableNames,
+);
 assert.equal(raw.deletion.nativeDeleteAcknowledged, true);
 assert.equal(raw.deletion.readAfterDeleteFailed, true);
 assert.deepEqual(raw.deletion.readAfterDeleteError, {
@@ -293,6 +279,12 @@ assert.deepEqual(
 assert.deepEqual(
 	tui.temporaryHomes.tuiEnvironmentVariableNames,
 	EXPECTED_ISOLATED_ENVIRONMENT_NAMES,
+);
+assertNoCredentialEnvironmentNames(
+	tui.temporaryHomes.appServerEnvironmentVariableNames,
+);
+assertNoCredentialEnvironmentNames(
+	tui.temporaryHomes.tuiEnvironmentVariableNames,
 );
 assert.equal(tui.appServer.spawnCount, 1);
 assert.ok(Number.isSafeInteger(tui.appServer.pid) && tui.appServer.pid > 0);
@@ -426,25 +418,6 @@ function assertIsolation(
 	}
 }
 
-function assertUniqueIdentifiers(identifiers) {
-	for (const identifier of identifiers) {
-		assert.match(identifier, UUID_PATTERN);
-	}
-	assert.equal(
-		new Set(identifiers).size,
-		identifiers.length,
-		"native identifiers must be pairwise distinct",
-	);
-}
-
 function sha256(bytes) {
 	return createHash("sha256").update(bytes).digest("hex");
-}
-
-function outputRecord(utf8) {
-	return {
-		base64: Buffer.from(utf8).toString("base64"),
-		byteLength: Buffer.byteLength(utf8),
-		utf8,
-	};
 }

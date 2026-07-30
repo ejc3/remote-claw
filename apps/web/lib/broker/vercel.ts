@@ -1,5 +1,6 @@
 import type { WireFrame } from "@remote-claw/clawsec";
 import { getHookByToken, getRun, resumeHook, start } from "workflow/api";
+import { HookNotFoundError } from "workflow/errors";
 import { relayWorkflow } from "../../workflows/relay";
 import {
   type BrokerBackend,
@@ -128,14 +129,19 @@ export class VercelBackend implements BrokerBackend {
     return { created, channelId: await this.#deliver(token, payload, runId) };
   }
 
-  /** Deliver one payload to a resolved run; a resume failure (the run disposed between resolve and
-   *  deliver — a concurrent __close/cap-roll) becomes a PublishConflictError → 409 → client re-posts
-   *  the same (deterministic-msg_id) frame. A dropped post would strand a subscriber's ordered stream. */
+  /** Deliver one payload to a resolved run. Workflow 4.4.0 reports a hook that disappeared during
+   *  resume as HookNotFoundError; only that typed channel-turnover race becomes
+   *  PublishConflictError → 409 → client re-posts the same deterministic-msg_id frame. resumeHook
+   *  also performs serialization, event persistence, and queueing, so every other error must
+   *  propagate as a hard failure rather than being mislabeled retryable. */
   async #deliver(token: string, payload: RelayPayload, runId: string): Promise<string> {
     try {
       await resumeHook(token, payload);
     } catch (e) {
-      throw new PublishConflictError(String((e as Error)?.message ?? e));
+      if (HookNotFoundError.is(e)) {
+        throw new PublishConflictError(String((e as Error)?.message ?? e));
+      }
+      throw e;
     }
     return runId;
   }

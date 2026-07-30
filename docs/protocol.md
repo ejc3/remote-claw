@@ -17,10 +17,12 @@ bridged to the broker. OpenCode and tmux still use the flat compatibility path d
 **Identity scope.** In this as-built protocol, `Session.id` is a synthetic `cse_*` identifier used as
 the broker channel address and session-list key. It is not a Claude transcript ID, Codex thread ID,
 OpenCode `ses_*`, tmux pane identity, or durable remote-claw logical-chat ID. The A0 `rcb_*`
-registration lease is also process-local. A1 targets a separately persisted logical-chat record whose
-ID becomes the broker channel/session-list key; a private synthetic `cse_*` may then rotate beneath it
-during a proven native transport/runtime replacement. That mapping and recovery behavior are not
-implemented here.
+registration lease is also process-local. A1 targets a separately persisted
+`(collaborationServerId, logicalChatId)` scope; that pair is the canonical chat within one machine.
+The machine-facing viewer row, route, alias, wire channel, and cache keys use the full
+`(identity_id, collaborationServerId, logicalChatId)` triple. A private synthetic `cse_*` may then
+rotate beneath it during a proven native transport/runtime replacement. That mapping and recovery
+behavior are not implemented here.
 
 ---
 
@@ -59,6 +61,12 @@ differs:
 | **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | Real Claude Code TUI in the attachable pane; unmatched local prompts are projected post-hoc as `local_prompt` | `set-buffer`/`paste-buffer` + `send-keys` into the pane (`runInjectPump`) | Tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **Default attempt:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10); an unparseable user settings file disables the hook after the current optimistic announcement. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | Any, including Bedrock/Vertex |
 | **opencode** (`--rc-driver=opencode`, `opencode/driver.ts`) | A native OpenCode TUI may share the server; the driver does not enforce one attachment, and unmatched local prompts are projected post-hoc as `local_prompt` | POST the prompt to the OpenCode session → `followDownstream` (+`ack`) | OpenCode **SSE** event stream → `pushUpstream` | **Default attempt:** PATCH an ask-all rule and mirror SSE `permission.asked` (§10); setup is best-effort and currently may fail after `structuredPermissions:true` was announced. **Opt-out** `--rc-oc-skip-permissions` leaves OpenCode's own permission config | Any OpenCode provider configuration |
 
+**Selected migration contract, not current `Session` behavior.** Every remote proposal—from the web, an official client, automation, or a nested server—must enter one common ordering and decision path before any Claude, Codex, or OpenCode adapter can act. That path stores and signs one final admitted, queued, or rejected result. Only a signed admission may create one pinned executor attempt; a queued or rejected result creates none. A new message and a steer of a running turn are distinct commands, and neither timing nor native busy state may convert one into the other. The person's direct native-TUI input remains separate from this remote decision path. The native harness observes both paths and remains the authority for their final order and for what actually changed.
+
+Each native adapter must then prove the exact last mile it uses. It translates the admitted common command into one version-pinned native request, sends it through the current fenced front door, and correlates native read-back before reporting the command as applied. A changed translation, unproved route, stale owner, missing observation, or ambiguous response fails closed; a transport ACK alone is never native acceptance. The current `Session` relay does not provide these guarantees.
+
+Nested remote-claw uses the same rule at every server. Before a nested send, the source server jointly finalizes its signed common result and signed lineage; neither half may become visible alone. It accepts semantic completion only from a complete downstream receipt that ties the exact source event, command, chosen target, and target server's signed result together. Edges are installed outward from an already rooted path, commands and observations have opposite directions, and an observation is never turned back into a command. Recursion therefore adds collaborators and server boundaries without feedback loops; the only native app is at the innermost end.
+
 The selected OpenCode runtime replaces that unconstrained current attachment with one epoch-fenced
 adapter lease enforced by the private HTTP endpoint; SSE plus independent HTTP calls expose no
 persistent writer identity, so connection counting cannot provide the fence. It actively drains SSE
@@ -73,7 +81,19 @@ surface supplies a durable causal link; otherwise source remains unknown. Lease 
 for or quarantines requests admitted under the old epoch before the new adapter becomes writable.
 Outside disconnect never aborts the shared native run. The retained
 [OpenCode native proof](opencode-native-proof.md) covers only the exact creation marker and
-`noReply:true` caller-message-ID behavior, not those shared-runtime guarantees.
+`noReply:true` caller-message-ID behavior, not those shared-runtime guarantees; the selected candidate
+request does not inherit `noReply:true`. The only first-A2 families eligible after their release proof
+passes are exactly server-scoped `{new_chat}` and binding-scoped `{user_text}`. OpenCode uses the
+common signed decision,
+then deterministically builds the one allowed native request with no fields, queries, headers, or
+message parts beyond the pinned shape. It sends only through the current front door and confirms the
+matching message, content, and order from a complete, linearized history snapshot plus the matching
+live event only when that snapshot method requires one.
+Compact, interrupt, steer, blank submit, permission/question answers, attachments, clear/fork, and
+every other unproved family receive a stored ordered rejection before projection or native work.
+Stock OpenCode `1.17.5` is not yet a writable A2 tuple because the retained proof does not establish
+the real-TUI exact-process front door, complete callable front-door manifest, spawned-tool/raw-listener
+fence, or lossless observer snapshot linearization.
 
 Codex has no as-built driver. The selected host-runtime design adds one real Codex TUI client and one
 remote-claw collaborator connection on the same private app-server/thread. Any client-facing proxy
@@ -173,8 +193,9 @@ Each `recordKind` is sealed under exactly one **plane** (AEAD key), decided by `
 - **content** (`K_session`, carries `seq`) — the viewer transcript projection: `user`, `assistant`, `assistant_sub`,
   `assistant_thinking[_sub]`, `result`, `tool_use`, `tool_result`, `task`, `permission_request`,
   plus `system`/`status`/`rate_limit`/`can_use_tool` (`CONTENT_KINDS`).
-- **control** (`control_key`, `dir:"in"`) — client→host verbs: `catch_up`, `permission`, `interrupt`,
-  `set_mode`, `set_model`, `command`, `end`, and `attachment` (`CONTROL_KINDS`).
+- **control** (`control_key`, `dir:"in"`) — client→host kinds: `catch_up`, `permission`, `interrupt`,
+  `set_mode`, `set_model`, `end`, `attachment`, and the reserved but currently unused `command`
+  (`CONTROL_KINDS`; slash commands use `user` content).
 - **meta** (`K_meta`, `seq:null`, unordered) — `accepted` (acks), `session_announce` (presence), and
   replayable `permission_resolved` state (`META_KINDS`). Accepted/announce are not put in the host
   replay log; `permission_resolved` deliberately is.
@@ -291,9 +312,12 @@ floor. In either case, evicting an already handled `user` `msgId` could re-injec
 after reconnect. It grows only with distinct human-paced client frames and is freed when the session
 ends.
 
-The outbound `#post` retries a transient 409 (the run cap-rolled mid-publish) with bounded exponential
-backoff, because the `seq` is already allocated and a dropped post would strand every viewer on a
-permanent gap (`relay.ts` `#post` / `POST_RETRIES = 6`).
+The outbound `#post` retries a transient 409 (the channel disposed or was replaced mid-publish) with
+bounded exponential backoff, because the `seq` is already allocated and a dropped post would strand
+every viewer on a permanent gap (`relay.ts` `#post` / `POST_RETRIES = 6`). The Vercel backend emits
+that 409 only when Workflow 4.4.0 classifies the resume race as `HookNotFoundError`. Payload
+serialization, event-store, queue, and other `resumeHook` failures remain 500-class failures and the
+host does not retry them.
 
 ---
 
@@ -509,11 +533,15 @@ replaying or forging a control action:
   tampered frame fails `openFrame` and is dropped (even a body-less `interrupt`/`end` proves authenticity
   by opening). An earlier version that swallowed the error and fired anyway was a forge hole both
   assessors flagged (`relay.ts` `#driveControlVerb` comment).
-- **Freshness / expiry** — the viewer stamps `expiry = now + FRESH_WINDOW_MS` on control frames, and
-  `#driveControlVerb` drops a verb replayed after it. `requestHistory` also stamps `catch_up`, but the
-  current `catch_up` branch reads only `since` and does not enforce that expiry. An old authenticated
-  `catch_up` can therefore trigger redundant non-durable replay after a host restart; stable
-  `seq`/`msgId` keeps transcript rendering idempotent, but replay amplification remains a boundary.
+- **Freshness / expiry** — the viewer's direct-verb helper stamps
+  `expiry = now + FRESH_WINDOW_MS`, and `#driveControlVerb` drops an `interrupt`, `set_model`,
+  `set_mode`, or `end` replayed after it. `requestHistory` also stamps `catch_up`, but the current
+  `catch_up` branch reads only `since` and does not enforce that expiry. Current `permission` frames
+  carry no expiry, and their branch performs no expiry check; deletion of the corresponding open gate
+  is their only late/replay guard. An old authenticated `catch_up` can therefore trigger redundant
+  non-durable replay after a host restart, while a withheld permission answer can act if its gate is
+  still open. Stable `seq`/`msgId` keeps catch-up transcript rendering idempotent, but replay
+  amplification and late permission remain boundaries.
 
 **What claude's REPL bridge actually accepts.** The worker side (claude's `[bridge:repl]` handler,
 function `LW5`, verified against the 2.1.x binary) switches on `control_request.subtype` and handles
@@ -585,8 +613,9 @@ guarantees.
 ### Boundaries (NOT guaranteed — documented on purpose)
 
 1. **A `seq` allocated but never durably posted leaves a durable gap — but not a *live, stuck* session.**
-   `seq` is taken before the POST (§4). If `#post` exhausts `POST_RETRIES` (sustained broker 409/5xx) or
-   the host is `SIGKILL`ed between `this.#seq++` and the durable write, that seq is never posted. The fix
+   `seq` is taken before the POST (§4). If `#post` exhausts `POST_RETRIES` on sustained broker 409s,
+   encounters any non-409 failure such as a 5xx, or the host is `SIGKILL`ed between
+   `this.#seq++` and the durable write, that seq is never posted. The fix
    (`#fatal` + coupled `serve()`, §6/relay.ts) ensures a burned seq **tears the relay down** instead of
    `#pumpInbound` retrying and allocating seqs *past* the hole — so there is no longer a *live* session
    limping behind a mid-stream gap with a "connected" dot (the worst adversarial-review finding). What
@@ -599,9 +628,11 @@ guarantees.
 2. **Reconnect cursor behavior is backend- and incarnation-specific.** A durable viewer normally
    re-reads from index 0 and deduplicates/reorders; a non-durable incarnation change tails from its
    stream cursor and asks the host for `catch_up`. A non-durable host re-reads inbound from 0; a
-   durable host samples `frameCount` as its new-incarnation floor. That sample prevents old duplicate
-   execution but can skip a command published before the sample and never processed (§8). Durable
-   viewer re-reads remain O(N).
+   durable host samples `frameCount` as its new-incarnation floor. That sample prevents automatic
+   re-execution of already-stored pre-floor indices but can skip a command published before the sample
+   and never processed (§8). It is not a durable source-ID result map: re-appending or replaying the
+   same valid source frame above the floor meets a fresh `#seen`, and a lost pre-restart `accepted`
+   result cannot be recovered. Durable viewer re-reads remain O(N).
 3. **Unbounded growth.** The inbound `#seen` (§6) and the per-identity **bus** channel (one
    `session_announce` per 20 s keepalive, never trimmed) grow with session lifetime. Bus growth is the
    broker's to window (§6); the 20 s cadence bounds the rate. `#openPerms` is human-paced. The relay

@@ -42,6 +42,28 @@
 > streams never become native connections or writers. Only compatibility or source-lease metadata that
 > differential proof requires may accompany an admitted bridge request, without independent authority.
 >
+> Every remote-origin proposal crosses one common adjudication boundary. Its frozen decision selects
+> exactly one arm of the closed executor-evidence union: native server, native binding, nested
+> management, or nested chat edge. A native or nested attempt and its effect gate must
+> composite-foreign-key the exact immutable signed admitted-result tuple
+> `(collaborationServerId, commandId, admittingCommandResultId, canonicalCommandRecordDigest,
+> admittingCommandResultSignedRecordDigest)` and the same decision/executor evidence. An unsigned,
+> decision-reserved, queued, rejected, different-command, or different-result record cannot authorize
+> an effect. The person at a trusted direct TUI is deliberately outside this remote command path:
+> their action enters the native harness directly, and that harness interleaves it with the one
+> admitted remote-claw bridge just as it would without remote-claw.
+>
+> Nested management and nested chat decisions use a compound signing group. The common result signs
+> first; only then may the current secondary lineage preparation in that same group sign. The
+> management hop also binds the exact signed-result digest. One joint finalizer then atomically
+> publishes the signed result, signed lineage, outbox, attempt, and effect gate. The generic result
+> finalizer accepts only decisions with no secondary artifact; it cannot finalize either nested arm.
+> A downstream nested receipt is a closed
+> proof bundle that binds the exact request to the target source event, command, decision/executor
+> evidence, and signed result. That target result is terminal version `1` with a null predecessor;
+> continuing after a queued result requires a fresh authenticated source event rather than mutating
+> the acknowledged result.
+>
 > The same evidence standard applies to the other adapters. Claude worker delivery ACK is private-RC
 > replay bookkeeping, not native acceptance; permission/question resolution closes only from proved
 > native terminal evidence, and the exact RC/transcript/provider/turn join remains a retained-fixture
@@ -117,8 +139,9 @@ Goals:
 
 Non-goals (v1): forward secrecy, group/sender-key crypto, metadata privacy
 (timing/sizes/seq are visible to the broker). **Fine-grained per-viewer revocation** is
-also out of scope — viewers hold a **pass** (§4.2a), but there is no way to cut one pass
-without the others; to remove a viewer you **reset the machine** (a new secret — §4.4).
+also out of scope—viewers hold a **pass** (§4.2a), and there is no in-place way to revoke even one
+copied pass on retained old routes. To exclude it from future legitimate service, stop every old
+relay, **reset the machine** to a new identity, and re-onboard the viewers you still trust (§4.4).
 
 ## 1A. User experience & ergonomics (the flow we're building)
 
@@ -196,7 +219,10 @@ feels like a messaging app; one pass per machine, onboard as many machines as yo
 - Phone drops Wi-Fi mid-reply → on reconnect it **silently catches up**; you never
   lose the thread.
 - Host sleeps / you close the TUI → the chat you're watching **greys out** (its announces
-  stopped); sending is **rejected** ("host offline" — no server-side queue, §6/§16).
+  stopped); the client **rejects** sending as "host offline." The product has no semantic/native
+  command queue. If that client guard is bypassed, shipped A0's transport can still retain an opaque
+  relay frame without a live native attachment; that is ambiguous transport buffering, not an
+  admitted command, and is covered explicitly in §16 scenario 20.
 - Bring the host back (`remote-claw --continue` → `/remote-control`) → the chat
   goes live and **history is intact** (it lives with claude, not the cloud).
 
@@ -207,9 +233,10 @@ feels like a messaging app; one pass per machine, onboard as many machines as yo
   from `localStorage` **and** the decrypted-message cache (IndexedDB) for that
   machine, leaving no plaintext on the device. (The raw master secret is the machine's,
   shown only to the operator via `--rc-show-secret`/`--rc-identity`.)
-- Lost/leaked pass or secret → **reset the machine**: a new secret = a new, unrelated
-  identity for **that machine** (fresh chats); the old one is dead; your **other machines
-  are untouched**. No partial/per-pass revoke in v1.
+- Lost/leaked pass or secret → stop every running relay for that identity, then **reset the machine**
+  and restart: a new secret = a new, unrelated identity for **that machine** (fresh chats); your
+  **other machines are untouched**. This abandons rather than revokes the old identity. Copied old
+  credentials can still use retained old routes, so there is no partial/per-pass revoke in v1.
 - In **Sealed**/**Managed** the cloud never sees plaintext or keys — only ciphertext +
   routing metadata (who/when/sizes), which it cannot read; in **Open** it sees everything
   (you trust the server — §2A).
@@ -250,8 +277,10 @@ never a silent default).
     decrypt past/future retained ciphertext; can also reset/re-mint it). **Other machines
     are untouched** — blast radius is exactly one machine.
 
-  Mitigation either way: **reset the machine** = new secret = a new, unrelated identity for
-  that machine (a fresh, empty set of spaces); other machines keep working (§4.4).
+  Containment requires stopping every relay that captured the old identity, performing the guarded
+  machine reset, restarting on the new unrelated identity, and reconnecting trusted viewers there;
+  other machines keep working (§4.4). This moves future traffic but does not revoke copied old
+  credentials or retained old routes, which remain usable under the documented store-free model.
 - **Admission vs. confidentiality (two independent gates).** Confidentiality is the
   zero-knowledge property above (content keys; broker never reads bodies).
   *Admission* — keeping anonymous randos off the API entirely — has two parts (§4.5):
@@ -354,9 +383,10 @@ security review — §14A.)
     control, so a reset also needs a TTY unless `--rc-force-noninteractive`). **Securely deletes**
     the old secret by default (overwrite + unlink); keep a `0600` backup only with explicit
     `--rc-keep-old` (flagged as still-live). This is **abandonment, not revocation** — a leaked old
-    secret keeps working until you reconnect the viewers you still trust to the new identity (§4.4).
+    secret keeps working on retained old routes indefinitely. Reconnecting viewers you still trust to
+    the new identity moves future traffic but does not revoke a copied old credential (§4.4).
   - The secret prints **once**, at create or reset; thereafter only via `--rc-show-secret`. There
-    is **no separate `--rc-rotate` verb** (rotation was cut) — "resetting" in a store-free,
+    is **no separate symmetric-credential `--rc-rotate` verb** (that rotation was cut) — "resetting" in a store-free,
     single-secret-per-machine model is just re-creating the identity, so it lives here under the
     confirm guard.
   - **Arg rule:** allowed only alongside identity-relevant `--rc-*` flags; **errors**
@@ -496,7 +526,7 @@ human-readable *backup* export.)
 ```
 PRK           = HKDF-Extract(salt="remote-claw/v1", IKM=S)
 auth_token    = HKDF-Expand(PRK, "remote-claw/v1/auth",          32B)  → bearer to the Vercel API
-identity_id   = trunc(SHA256(auth_token), 16B)                          → PUBLIC identity id = the FIRST (leftmost) 16 bytes of SHA256(auth_token); a FUNCTION of auth_token (so the broker self-verifies the bearer with NO store — hence a leaked bearer can't be revoked without changing identity_id or adding a store, §4.4)
+identity_id   = trunc(SHA256(auth_token), 16B)                          → PUBLIC identity id = the FIRST (leftmost) 16 bytes of SHA256(auth_token); a FUNCTION of auth_token (so the broker self-verifies the bearer with NO store — changing identity abandons the old routes but does not revoke their bearer; actual revocation requires broker state, §4.4)
 content_root  = HKDF-Expand(PRK, "remote-claw/v1/content",       32B)  → CLIENT-ONLY master content key
 control_key   = HKDF-Expand(PRK, "remote-claw/v1/control",       32B)  → AEAD key for control frames (dir:in)
 K_meta        = HKDF-Expand(PRK, "remote-claw/v1/meta-frame",    32B)  → AEAD key for ALL meta frames (accepted/session_announce); their whole payload (title/cwd/identity_label/status/last_activity/sent_at) is encrypted+authenticated under it, so the broker can neither read nor forge them
@@ -530,20 +560,21 @@ distinct encoding from `rc1_` (QR/file-sized, since it carries several keys, not
 32-byte seed).
 - **One tier — read + steer.** There is **no view-only / control split**: a pass carries
   both the content key (read transcripts, see presence) and the command key (send
-  prompts/interrupts/mode changes). One pass = full operation of that one machine, minus `S`.
+  prompts/interrupts/mode changes). One pass grants full viewer/input operation for that one machine,
+  minus `S` and the server's separately held Ed25519 output-signing key.
 - **What it can't do (HKDF one-wayness).** Holding the four keys never lets a pass invert
   back to `S`/`PRK` (HMAC preimage resistance), so it can **never** re-mint `identity_id`
   or **reset/re-create** the machine — those need the master secret. The hard boundary is
   the master secret / reset, **not** write-vs-read.
-- **Revoke = reset the machine.** There is no per-pass revocation; you cut a pass off by
-  resetting the machine (a new `S` ⇒ new `identity_id`, §4.4), which cuts off **all** passes
-  for that machine at once.
-- **Honest residual (symmetric-key forge).** Because content and presence keys are
-  *symmetric*, a pass-holder can also **produce** valid-looking content/presence for that
-  machine, not only read it — on the wire a pass is about as capable as the machine itself,
-  minus `S`. Preventing a holder from injecting frames others accept as the machine's would
-  need separate per-writer signing keys, deliberately omitted to keep the scheme symmetric
-  and small.
+- **Reset switches future service; it does not revoke copied passes.** There is no per-pass or old-route
+  broker revocation. A new `S` moves the legitimate host and newly paired viewers to another
+  `identity_id`, but a copied old pass can still read retained old ciphertext and authenticate
+  publishes to retained old routes. It does not learn the new identity.
+- **Honest residual (symmetric input authority).** A pass holder can produce valid authenticated
+  inbound proposals because the command key is deliberately shared. It can also construct
+  AEAD-valid output-shaped ciphertext, but selected A1 viewers reject it without the certified
+  server Ed25519 signature. Thus the pass cannot forge a server projection, action result, or
+  discovery announcement. The shipped A0 baseline has no such asymmetric output proof.
 
 ### 4.3 Session → message key flow (answers "do we need a session→key flow?")
 Yes — a 3-level hierarchy:
@@ -574,13 +605,23 @@ crypto safety. (We will publish formal limits + cross-runtime test vectors in P1
 rather than rely on a back-of-envelope bound. Alternative for misuse-resistance
 without per-message HKDF: XChaCha20-Poly1305 — heavier; not needed.)
 
-**Which key encrypts what (three planes).** (1) **Content** (transcript) → `K_session`,
-**including an inbound `user` prompt** (`dir:in`); a `user` frame is content in *both*
-directions (web→wrapper prompt and wrapper→web echo). (2) **Control** → `control_key`:
-`catch_up`, `permission`, `interrupt`, `set_mode`, `set_model`, `command`, `end`. (3)
-**Meta** → `K_meta`: `accepted`, `session_announce` (so the broker **can't forge
-presence/announce** — AEAD-authenticated, not plaintext). The broker holds none of these
-keys, so it can forge **nothing**; `dir` is bound into AAD, so an `in` prompt and its
+**Which key encrypts what (three planes).** In shipped A0: (1) **Content** (transcript) → `K_session`:
+`user`, `assistant`, `assistant_sub`, `assistant_thinking`, `assistant_thinking_sub`, `result`,
+`system`, `status`, `rate_limit`, `can_use_tool`, `tool_use`, `tool_result`, `task`, and
+`permission_request`. This includes an inbound `user` prompt (`dir:in`); a `user` frame is content in
+both directions (web→wrapper prompt and wrapper→web echo). (2) **Control** → `control_key`:
+`catch_up`, `permission`, `interrupt`, `set_mode`, `set_model`, `end`, `attachment`, plus the reserved
+but currently unused `command` kind; slash commands use `user`. (3)
+**Meta** → `K_meta`: `accepted`, `session_announce`, and replayable native/projection state
+`permission_resolved` (so the broker **can't forge presence, acknowledgements, or gate state** —
+AEAD-authenticated, not plaintext).
+
+Selected A1 keeps those plane assignments and adds meta `action_result` for the exact coordinator
+decision payload in §6. `permission_resolved` remains a native/projection gate-state observation; it
+does not substitute for `action_result` and does not prove that a coordinator-admitted action applied.
+The broker holds none of these
+keys, so it cannot create AEAD-valid content; a pass holder does share them, so selected A1 additionally
+requires the certified host-output signature below before rendering any `dir:"out"` frame. `dir` is bound into AAD, so an `in` prompt and its
 `out` echo derive different `K_msg` and can't be confused. **Inbound frames** carry
 `msg_id` (+ `client_msg_id` for a `user` prompt) and are replay-checked.
 
@@ -594,6 +635,355 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   meaningful identity is `(collaborationServerId, logicalChatId)`, and nested edges map distinct pairs.
   The inner `cse_*` and any outward-provider session IDs remain private binding metadata and never
   select a second viewer row on that server.
+- **Selected A1 server scope is explicit and authenticated.** `collaborationServerId` is a persisted
+  random 128-bit ID encoded as `rcs_<base64url>`; it is not inferred from a title, URL, machine ID, or
+  chat. The server's identity key signs, in order,
+  `str("remote-claw/server-scope-certificate/v1")`, `uint(1)`, `str(scopeCertificateId)`,
+  `bytes(identity_id)`, `str(collaborationServerId)`, `str(subjectIdentityKeyId)`,
+  `str(subjectKeyAlgorithm)`, `bytes(rawSubjectPublicKey)`, `uint(keyGeneration)`,
+  `uint(issuedAtMs)`, `optionalStr(supersedesScopeCertificateId)`,
+  `str(signerIdentityKeyId)`, `uint(signerSequence)`,
+  `optionalUint(supersededSignerMaxSequence)`, `str(signatureAlgorithm)`, and
+  `str(canonicalPayloadDigestAlgorithm)`, using the exact A1 primitives below. A1 fixes the algorithm
+  fields to `Ed25519` and `SHA-256`. Public keys are stored as unpadded base64url of 32 raw Ed25519
+  bytes but decoded before serialization; digests are unpadded base64url of 32 bytes, and signatures
+  are unpadded base64url of 64 raw Ed25519 bytes. Wrapped, padded, or aliased encodings are rejected.
+  The record's digest and signature cover the canonical bytes; their values and mutable certificate
+  state do not. Initial enrollment/re-pair is self-signed by the out-of-band pinned subject key. A
+  continuity rotation names the new subject key separately from the old trusted signer key.
+
+  The A1 onboarding bundle carries an oldest-to-newest certificate chain and a byte-for-byte matching
+  pinned current subject key over the same out-of-band path as the viewer credential. The first
+  certificate is the operator-approved self-signed anchor; each next certificate is signed by its
+  immediate predecessor and increments the generation exactly once. An already paired viewer may
+  receive a suffix beginning with its exact locally current certificate. The verifier requires exact
+  `supersedes` links, immutable key-ID-to-public-key bindings, and an atomic compare-and-swap from its
+  locally current `(certificate ID, key generation, identity key ID)` to the chain tip; the stored
+  current key generation always equals the current certificate's `keyGeneration`. Stale, rollback,
+  skipped-generation, concurrent-fork, revoked-signer, or caller-supplied mutable-state claims fail
+  closed. The same transaction retires the prior certificate, installs intermediate chain items as
+  retired, and makes the tip the server's sole current certificate without ever overwriting a revoked
+  status. A cold client can therefore
+  verify the complete server scope before subscribing. Nested-server handshakes carry the same
+  certified scope.
+  `collaborationServerId` is routing identity, not a second bearer; broker admission still requires the
+  machine's `auth_token`. Before any route/KDF work, onboarding decodes the four canonical 32-byte key
+  strings, recomputes `identity_id = trunc16(SHA-256(auth_token))`, requires exact bundle/certificate
+  identity and server-ID equality, matches the pinned subject key, and verifies the certificate
+  digest/signature. It also verifies the current server key's versioned
+  `ViewerOnboardingKeyAttestationV1`, which binds domain-separated commitments to the decoded
+  `authToken`, `contentRoot`, `controlKey`, and `metaKey`; substituting any operational key fails before
+  a route or KDF is used. Exact current-tip replay is an idempotent no-op, while only a non-empty
+  successor suffix retires the prior certificate. A mismatch is a local splice error, not a broker-auth
+  fallback.
+
+  Server signing-key rotation is distinct from A1's deliberately fixed symmetric machine credential
+  and `key_epoch=0`. Every server signature receives one durable, globally monotonic signer sequence.
+  The old lease drains, then uses its final sequence to sign a successor certificate containing the
+  predecessor cutoff; only after that certificate and its public broker update are durable does one
+  transaction swap the key/certificate/lease and retire the old private key. Existing viewers fetch a
+  contiguous public successor chain when they encounter an unknown signer. A newly observed
+  retired-key record needs current-key historical reattestation; exact records accepted before the
+  cutoff may replay. The exact custody, canonical certificate/attestation bytes, reattestation, fork
+  boundary, and recovery rules are in
+  [Client-driven Host Runtime — Reference §4](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+- **Selected A1 routing uses the complete server/chat-or-control scope and injective addresses.** No A1 address
+  uses `logicalChatId` alone or raw delimiter concatenation. Define
+  `scopeAddress = base64url(SHA256(canonical-encode("remote-claw/a1/scope", identity_id, collaborationServerId)))`
+  ,
+  `serverControlAddress = base64url(SHA256(canonical-encode("remote-claw/a1/server-control", identity_id, collaborationServerId)))`,
+  and
+  `chatAddress = base64url(SHA256(canonical-encode("remote-claw/a1/chat", identity_id, collaborationServerId, logicalChatId)))`,
+  using the length-prefixed canonical encoding from §8. The discovery token is
+  `bus:a1:${scopeAddress}`, the server-control token is `ctl:a1:${serverControlAddress}`, the chat token
+  is `sess:a1:${chatAddress}`, and viewer-row, alias, and
+  IndexedDB keys are `(identity_id, collaborationServerId, logicalChatId)`. The session key is derived
+  from a canonical encoding of both server/chat coordinates, and A1 AAD binds
+  `identity_id`, `collaborationServerId`, and `logicalChatId` separately. The shorter
+  `bus:${identity_id}`, `sess:${identity_id}:${session_id}`, cache, and AAD forms elsewhere in this
+  historical document describe only the shipped A0 baseline.
+  A1 broker requests carry those clear routing fields alongside the opaque derived token. The broker
+  recomputes `identity_id` from `auth_token`, recomputes the matching scope, server-control, or chat address from the
+  canonical tuple, and constant-time compares both the supplied identity and token before resolving a
+  hook. That preserves store-free bearer-to-route binding; the broker need not understand the signed
+  server certificate or plaintext payload.
+- **Selected A1 has one byte-level wire contract.** It extends the landed `canonicalAad` writer rather
+  than choosing another serializer. The primitive encodings are:
+
+  ```text
+  bytes(x)         = u32be(byteLength(x)) || x
+  str(s)           = bytes(UTF8(s))
+  uint(n)          = bytes(u64be(n))
+  optionalUint(∅)  = 0x00
+  optionalUint(n)  = 0x01 || uint(n)
+  optionalStr(∅)   = 0x00
+  optionalStr(s)   = 0x01 || str(s)
+  optionalBytes(∅) = 0x00
+  optionalBytes(x) = 0x01 || bytes(x)
+  ```
+
+  Integers are non-negative and at most `2^53−1`. Wire/storage `identity_id` is exactly 32 lowercase
+  hexadecimal characters and is decoded to 16 bytes before canonical encoding.
+  `collaborationServerId` is `rcs_` plus the canonical unpadded-base64url encoding of 16 random bytes;
+  `logicalChatId` is `rcl_` plus the same 16-byte encoding. Other A1 header IDs are 1–128 ASCII bytes,
+  must match `[A-Za-z0-9._:-]+`, and are never raw provider/native IDs; adapters map unsafe external
+  identifiers to durable safe IDs. `record_kind` is one of the versioned protocol values. No Unicode
+  normalization or delimiter joining occurs. `client_msg_id` is either absent or a non-empty safe ID,
+  and `seq` is either null or an integer. Certificate IDs and identity-key IDs use the same safe
+  alphabet; `supersedesScopeCertificateId|null` uses `optionalStr`.
+
+  The A1 frame header is version 2 and has exactly this canonical-AAD order:
+
+  ```text
+  uint(v=2)
+  bytes(identity_id)
+  str(collaborationServerId)
+  optionalStr(logicalChatId)
+  str(dir)
+  str(record_kind)
+  optionalUint(seq)
+  str(msg_id)
+  str(delivery_attempt_id)
+  optionalStr(client_msg_id)
+  uint(key_epoch=0)
+  uint(part)
+  uint(parts)
+  optionalUint(server_key_generation)
+  optionalStr(host_signer_identity_key_id)
+  optionalStr(host_scope_certificate_id)
+  optionalUint(host_signature_sequence)
+  ```
+
+  `dir` is `in` or `out`; `parts >= 1`, `0 <= part < parts`; non-chunked frames use `0/1`.
+  `msg_id` is the stable semantic source/result ID. `delivery_attempt_id` is a fresh random
+  `rda_<base64url-128-bit>` for one transport attempt and is identical on all of that attempt's parts;
+  a transport retry reuses it, while a later semantic retry creates another. Every chat frame,
+  including a bus-carried announce, has a non-null `logicalChatId`. A server-control frame alone has a
+  null `logicalChatId`: inbound is typed `new_chat`, and outbound is its
+  `chat_creation_result`. For `dir: "in"`, all five host
+  authentication fields, including `host_signature`, are null. For `dir: "out"`, all five are non-null and name the certified server key and
+  globally unique signer sequence that produced the host signature. Any other combination is invalid.
+
+  The JSON transport object has exactly these fields; `client_msg_id` is omitted when absent, while
+  `seq` is present and null when absent:
+
+  ```ts
+  interface A1EncryptedFrameV2 {
+    v: 2;
+    identity_id: string;
+    collaboration_server_id: string;
+    logical_chat_id: string | null;
+    dir: "in" | "out";
+    record_kind: string;
+    seq: number | null;
+    msg_id: string;
+    delivery_attempt_id: string;
+    client_msg_id?: string;
+    key_epoch: 0;
+    salt: string;
+    nonce: string;
+    ct: string;
+    part: number;
+    parts: number;
+    server_key_generation: number | null;
+    host_signer_identity_key_id: string | null;
+    host_scope_certificate_id: string | null;
+    host_signature_sequence: number | null;
+    host_signature: string | null;
+  }
+  ```
+
+  `salt`, `nonce`, `ct`, and non-null `host_signature` are canonical unpadded base64url. `salt` decodes
+  to exactly 32 bytes, `nonce` to exactly 12 bytes, `ct` to ciphertext followed by the 16-byte AES-GCM
+  authentication tag, and the signature to exactly 64 Ed25519 bytes; `ct` is therefore at least 16
+  bytes. Unknown fields, padded or non-canonical encodings, split tag fields, and
+  wrong lengths are rejected before decryption. A parser must reject duplicate member names before
+  object construction, especially duplicate routing/AAD/signature fields; first-key/last-key behavior is
+  forbidden. Every JSON number token (`v`, non-null `seq`, `key_epoch`, `part`, `parts`, non-null
+  `server_key_generation`, and non-null `host_signature_sequence`) must use
+  canonical non-negative safe-integer spelling `0|[1-9][0-9]*`, at most `2^53−1`; signs (including
+  `-0`), leading zeroes, fractions, and exponents are rejected before numeric conversion. JSON member
+  order is not security-significant.
+
+  For an outbound frame, define
+  `hostSignaturePayload = str("remote-claw/a1/host-output-signature/v1") ||
+  str(brokerRouteId) || bytes(AAD) || bytes(salt) || bytes(nonce) || bytes(ct)`. The current fenced
+  server signing lease signs exactly that payload. The signature is excluded from its own preimage but
+  its key generation, key ID, certificate ID, and sequence are inside AAD. An inbound frame has no host
+  signature payload or signature.
+
+  `hostSignedRecordDigest` is the canonical unpadded-base64url SHA-256 of
+  `hostSignaturePayload`. Signer-sequence acceptance and historical reattestation key this digest, not
+  the transport digest that additionally includes the signature.
+
+  Define the normalized transport bytes as
+  `str("remote-claw/a1/transport-frame/v2") || bytes(AAD) || bytes(salt) || bytes(nonce) || bytes(ct) ||
+  optionalBytes(host_signature)`.
+  `transportFrameDigest` is unpadded-base64url SHA-256 of those bytes. Selected A1 requires a durable
+  ciphertext broker whose unique key is route-wide `(route token, delivery_attempt_id, part)`. The
+  broker parses the exact clear frame and recomputes normalized bytes/digest rather than trusting a
+  supplied digest. Its first insert atomically stores `(channelGeneration, frameIndex)` and that
+  `transportFrameDigest`; a retry before or after rollover returns the original cursor only if the
+  recomputed digest is identical, while unequal normalized bytes fail closed as a transport collision.
+  The host's unique lookup key is
+  `(brokerRouteId, delivery_attempt_id)`; it durably binds the
+  source namespace, result, header, and part count as immutable data and classifies a new position as
+  an exact semantic retry or a collision. The stored attempt-header digest is unpadded-base64url
+  SHA-256 of `str("remote-claw/a1/attempt-header/v1") || bytes(stableLogicalHeader)`. Multipart
+  grouping uses `(route token, delivery_attempt_id)`, while semantic adjudication uses the full
+  server/chat/source-namespace scope plus `msg_id`. Inner `cse_*`, native session IDs, and
+  outward-provider IDs never enter this header. The store-free Workflow broker remains supported for
+  shipped A0 only and cannot advertise A1 recovery.
+
+  A viewer first binds the externally selected route, validates the exact frame shape, and resolves the
+  signer through the certified server scope. For outbound frames it verifies the server sequence and
+  Ed25519 signature before AEAD open or render. A current key is accepted directly; an exact
+  previously accepted retired-key record may replay only at or below its signed cutoff, while a newly
+  observed retired-key record requires a retained current-key historical reattestation. An unknown key
+  pauses the route while the viewer fetches the retained public certificate-successor chain. Missing,
+  forked, unsigned, wrong-route, or invalidly signed output is quarantined and never rendered. A viewer
+  cannot see the server-local signing lease; the host signing service enforces that fence, and the host
+  coordinator separately requires the frame to match its immutable signed outbox row before
+  classifying it as known host output. Thus a copied A1 pass can authenticate an inbound
+  proposal but cannot forge a server projection or discovery announcement.
+
+  Physical ordering is per authenticated route, not per parsed chat. Define
+  `brokerRouteId = rcr_${base64url(SHA256(str("remote-claw/a1/broker-route/v1") ||
+  bytes(identity_id) || str(collaborationServerId) || str(routeKind) ||
+  optionalStr(logicalChatId)))}`. `routeKind` is `scope_bus` or `server_control` with a null route
+  chat, or `chat` with the exact non-null chat. The scope bus therefore has one cursor/manifest
+  sequence shared by all announcements, the server-control lane has a separate management-ingress
+  sequence, and each chat stream has another. Every position is first recorded under
+  `(brokerRouteId, channelGeneration, frameIndex)` from the authenticated request route and raw-byte
+  digest. Same cursor/same bytes is idempotent redelivery. Same cursor/different bytes durably records
+  broker equivocation, quarantines that route, and performs no parsing, decryption, semantic mutation,
+  or cursor advance.
+
+  Each route is atomically created with open generation zero. A null cursor means before `(0,0)`;
+  it never means “start at the broker's latest generation.” Mutating chat recovery requires the retained
+  contiguous cursor or the complete immutable manifest chain from genesis. The mutating
+  server-control route has the same requirement. Missing genesis or a broker
+  that starts at `N > 0` is non-writable. The scope bus alone may use a fresh, separately
+  host-signed checkpoint for discovery-only cold start: the broker first seals an exact generation and
+  opens its successor, then the host signs separate metadata over that sealed tip. It is not a frame,
+  cannot seed a chat cursor, and cannot acknowledge a mutation. Open/empty/rollover, freshness, and
+  checkpoint-equivocation rules are exact in the runtime reference.
+
+  For a new position, route matching precedes KDF selection/open. The frame identity/server must equal
+  the selected route; a chat route also requires its exact non-null chat and rejects
+  `session_announce`, `new_chat`, and `chat_creation_result`. The scope bus accepts only outbound
+  `session_announce` with a non-null announced chat belonging to its server. The server-control route
+  requires a null chat and accepts only inbound `new_chat` or outbound `chat_creation_result`.
+  Cross-machine, cross-server, cross-chat, bus↔control↔chat, and null/non-null transplants become invalid positions on the
+  selected route and are never dispatched by the transplanted header. A malformed bus position can
+  quarantine only the scope-bus cursor actor; it cannot block or be misfiled into one chat stream.
+
+  A sealed generation's digest is unpadded-base64url SHA-256 of
+  `str("remote-claw/a1/broker-generation-manifest/v1") || str(brokerRouteId) ||
+  uint(channelGeneration) || uint(frameCount) || uint(nextGeneration) || str("sealed")`; the successor
+  is exactly `generation + 1`. Open rows have null count/successor/digest, while sealed rows have all
+  three non-null. The first accepted tuple is immutable. Exact duplicate manifests are idempotent; a changed count/state/successor or a position
+  at or beyond sealed `frameCount` records durable manifest equivocation and quarantines the route
+  without rewriting order. The complete schema and recovery transition are in
+  [Client-driven Host Runtime — Reference §4](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+
+  A1 retains chat and server-control ciphertext frame bodies from genesis so newly paired clients can
+  traverse their mutating history. Only a sealed scope-bus generation covered by a fresh host-signed
+  successor checkpoint may compact its discovery-only ciphertext after every supported recovery lease
+  has passed. Every route keeps the route-wide attempt/part→original-cursor/digest tombstone and
+  generation manifest indefinitely.
+  Selected A1 defines no safe collection transition: closing a local chat or resetting one machine does
+  not revoke copied bearer/key material, and A1 has no broker-enforced route revocation or in-place key
+  epoch. A future bounded-retention design needs a separate authenticated broker-enforced revocation
+  protocol; ordinary retention, chat closure, and machine reset do not authorize collection.
+
+  Route inputs use the same primitives and exact order:
+
+  ```text
+  scopeBytes =
+    str("remote-claw/a1/scope") ||
+    bytes(identity_id) ||
+    str(collaborationServerId)
+
+  serverControlBytes =
+    str("remote-claw/a1/server-control") ||
+    bytes(identity_id) ||
+    str(collaborationServerId)
+
+  chatBytes =
+    str("remote-claw/a1/chat") ||
+    bytes(identity_id) ||
+    str(collaborationServerId) ||
+    str(logicalChatId)
+  ```
+
+  `scopeAddress`, `serverControlAddress`, and `chatAddress` are unpadded base64url SHA-256 of those
+  corresponding bytes. A scope request carries `identity_id`, `collaborationServerId`, and
+  `bus:a1:${scopeAddress}`. A server-control request carries the same identity/server coordinates and
+  `ctl:a1:${serverControlAddress}`. A chat request also carries `logicalChatId` and
+  `sess:a1:${chatAddress}`. The three token prefixes and address domains cannot alias.
+
+  Plane keys are derived byte-for-byte as follows. The onboarding bundle's serialized `metaKey` field
+  decodes to the mathematical `K_meta` input below:
+
+  ```text
+  chatInfo(label) =
+    str(label) ||
+    bytes(identity_id) ||
+    str(collaborationServerId) ||
+    str(logicalChatId)
+
+  serverControlInfo(label) =
+    str(label) ||
+    bytes(identity_id) ||
+    str(collaborationServerId)
+
+  K_session_a1 = HKDF-Expand-SHA256(content_root,
+    chatInfo("remote-claw/a1/content-key/v1"), 32)
+  K_control_a1 = HKDF-Expand-SHA256(control_key,
+    chatInfo("remote-claw/a1/control-key/v1"), 32)
+  K_meta_a1 = HKDF-Expand-SHA256(K_meta,
+    chatInfo("remote-claw/a1/meta-key/v1"), 32)
+  K_server_control_in_a1 = HKDF-Expand-SHA256(control_key,
+    serverControlInfo("remote-claw/a1/server-control-in-key/v1"), 32)
+  K_server_control_out_a1 = HKDF-Expand-SHA256(K_meta,
+    serverControlInfo("remote-claw/a1/server-control-out-key/v1"), 32)
+  ```
+
+  A scope-bus announcement uses the announced chat's `K_meta_a1`; an ordinary chat frame uses its
+  chat-scoped content/control/meta plane; an inbound server-control `new_chat` uses
+  `K_server_control_in_a1`, while its outbound `chat_creation_result` uses
+  `K_server_control_out_a1` plus the mandatory host signature. The selected authenticated route and exact nullable-chat/kind rules are
+  checked before choosing that key. Then compute the A1 canonical AAD above and derive
+  `K_msg = HKDF-SHA256(IKM=planeKey, salt=salt,
+  info=str("remote-claw/a1/msg-key/v1") || bytes(AAD), L=32)`. Encrypt with AES-256-GCM using the
+  12-byte nonce and that AAD. No A0 `session_id` KDF/AAD form is accepted when `v=2`.
+
+  Durable semantic digests deliberately exclude transport-attempt randomness. Define
+  `stableLogicalHeader` with the same writer and this exact order:
+
+  ```text
+  uint(v=2)
+  bytes(identity_id)
+  str(collaborationServerId)
+  optionalStr(logicalChatId)
+  str(dir)
+  str(record_kind)
+  optionalUint(seq)
+  str(msg_id)
+  optionalStr(client_msg_id)
+  uint(key_epoch=0)
+  ```
+
+  After a part has successfully opened under the full AAD, compute
+  `authenticatedPartDigest = SHA256(str("remote-claw/a1/stable-part/v1") ||
+  bytes(stableLogicalHeader) || uint(part) || uint(parts) || bytes(openedPart))`. Compute
+  `canonicalMessageDigest = SHA256(str("remote-claw/a1/logical-message/v1") ||
+  bytes(stableLogicalHeader) || uint(parts) || bytes(completeReassembledPlaintext))`.
+  Both stored digest strings are the canonical unpadded-base64url encoding of the 32 digest bytes.
+  These local digest values are not exposed to the broker. Fresh `delivery_attempt_id`, salt, and
+  nonce therefore change ciphertext/AAD but not the stable part or logical-message digest for an exact
+  semantic retry.
 - **Each session announces itself; clients subscribe.** A *session* has its own relay controller,
   **independent of every other session** (§1); one wrapper process may host several controllers, and
   each publishes **its own** announce. While RC is on, a session (every `ANNOUNCE_INTERVAL`, and
@@ -602,9 +992,11 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   on the identity bus — the *whole* payload AEAD under `K_meta`, `sent_at` and
   `incarnation_started_at` are the wrapper's wall clock **inside the ciphertext** (broker can't forge a
   fresh or later one). No client→wrapper request.
-- **Online = a fresh announce.** A client tails the bus, builds its list keyed by
-  `session_id` (globally unique in the shipped baseline and server-scoped in the selected target), and treats a
-  session as **online iff its latest accepted announce is fresh** —
+- **Online = a fresh announce.** A client tails the bus and builds its list keyed by `session_id` in
+  the shipped baseline or by `(collaborationServerId, logicalChatId)` in the selected target. It treats
+  a session as **online iff its latest accepted announce is fresh**. Shipped A0 acceptance means
+  route-bound AEAD validity; selected A1 additionally requires the exact server scope/key/status/
+  sequence and certified host signature before AEAD open —
   `now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW`. No fresh announce within the window ⇒ the client **greys** that session
   locally.
 - **Concrete sizing (defaults; the only knobs).** `ANNOUNCE_INTERVAL = 20 s` (capped
@@ -614,8 +1006,9 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   **slow** clock so a live session isn't false-greyed; `SKEW` (the *future* edge) absorbs a
   **fast** clock so its announces aren't false-rejected. Keep `SKEW ≪ FRESH_WINDOW` so the
   worst-case false-online (next bullet) is dominated by `FRESH_WINDOW`.
-- **The liveness check defeats stale replay.** `AEAD-valid && in-window` rejects **forgery** (no
-  `K_meta`), **replay/withhold-and-dribble** (a re-sent announce carries an old `sent_at`
+- **The liveness check defeats stale replay.** In A1,
+  `route-bound && certified-host-signature-valid && AEAD-valid && in-window` rejects server-output
+  **forgery** even by a pass holder, and rejects **replay/withhold-and-dribble** (a re-sent announce carries an old `sent_at`
   → out of window), and **stale-seeding of a fresh/late client** (same). The two-sided
   window also stops a *fast-clock* session's announces being replayable forever (future-dated
   beyond `SKEW` → rejected). Inside that window, `incarnation_started_at` and `announce_seq` prevent
@@ -630,12 +1023,13 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   ordinary wrapper/Claude restart instead mints a new synthetic RC `session_id`, so an already-open
   viewer keeps the old row as disconnected and adds a separate row; a cold reload sees only the new
   fresh row. That is a current implementation fact, not the selected recovery model.
-  A1 persists the `logicalChatId` and uses its durable coordinator epoch for restart ordering. It first
-  resumes the stored Claude conversation UUID and tries the known private `cse_*`; if Claude needs a
-  replacement `cse_*`, that value becomes a new fenced inner transport attachment under the same
-  `logicalChatId`, native binding, broker channel, and viewer row. Either way, the new worker epoch is
-  tied to the current native-process incarnation and coordinator epoch. The RC worker still supplies no
-  historical backfill.
+  A1 persists the `(collaborationServerId, logicalChatId)` scope and uses its durable coordinator
+  epoch for restart ordering. It first resumes the stored Claude conversation UUID and tries the known
+  private `cse_*`; if Claude needs a replacement `cse_*`, that value becomes a new fenced inner
+  transport attachment under the same
+  `(collaborationServerId, logicalChatId)` scope, native binding, broker channel, and viewer row.
+  Either way, the new worker epoch is tied to the current native-process incarnation and coordinator
+  epoch. The RC worker still supplies no historical backfill.
   A newly-created logical chat broadcasts immediately and appears as a new row. A late client reads the
   bus's
   **recent resumable-stream window** on subscribe (sized to span ≥ one `ANNOUNCE_INTERVAL`
@@ -645,18 +1039,21 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
 - **The one assumption, and its blast radius.** This trusts wrapper & client clocks to
   agree within approximately `FRESH_WINDOW` (NTP, seconds). It is scoped to the **online dot only** —
   message **confidentiality and integrity** are fully clock-free (`K_session`/`control_key`
-  AEAD), and **replay** defense is `msg_id`-based (also clock-free). The *only* place a
-  clock touches the message plane is a control frame's `expiry` (§6A/§8) — a generously
-  sized bound (≫ `FRESH_WINDOW`) on a *delayed-first-delivery* control command, whose worst
-  case is a stale command **rejected** (availability), never a breach. A badly-skewed clock
-  yields at worst a wrong dot / empty list / a send that bounces `409` — **never** a message
-  breach. Residual: a replayed announce can keep a dead session shown for
+  AEAD), and **replay** defense is `msg_id`-based (also clock-free). The only shipped A0
+  message-plane clock check is encrypted `expiry` on `interrupt`, `set_model`, `set_mode`, and `end`
+  (§6A/§8): a delayed first delivery is rejected, so skew costs availability, not confidentiality.
+  `catch_up` carries but does not enforce that field, and `permission` currently omits it; redundant
+  catch-up replay and a withheld answer to a still-open permission gate remain explicit clock-free
+  boundaries. A badly skewed clock otherwise yields at worst a wrong dot, empty list, or direct-verb
+  expiry rejection—never a message breach. HTTP `409` is reserved for the separately typed transient
+  channel-disposal/replacement publish race; clock skew and semantic/direct-verb rejection do not
+  produce it. Residual: a replayed announce can keep a dead session shown for
   ≤ `FRESH_WINDOW + SKEW` before it greys — the price of dropping the round-trip. (A
   zero-clock-trust challenge-handshake variant is recorded in §14A if ever needed.)
 
 ### 4.4 Machine reset (a "burn", not a true rotation) & the revocation tension
-Resetting a machine here is a credential **replace scoped to one machine**, not a key rotation
-(rotation was cut — there is no key rotation, no forward secrecy, no epoch ratchet; the master
+Resetting a machine here is a symmetric credential **replace scoped to one machine**, not an in-place
+machine-key rotation (there is no symmetric-key rotation, forward secrecy, or epoch ratchet; the master
 deterministically **re-derives** its keys, which is exactly what makes paste-to-reconnect work):
 generate a **new `S`** ⇒ new `identity_id` ⇒ a **new, unrelated identity for THIS machine** (a
 fresh, empty set of spaces) and **abandon** the old one. **Other machines, each with their own
@@ -667,14 +1064,17 @@ because in a store-free, single-secret-per-machine model "resetting" *is* re-cre
 identity. It is guarded (the confirm typo-check
 and a TTY, unless `--rc-force-noninteractive`) and **securely deletes** the old `S` by default:
 because the same `S` deterministically re-derives the *same* keys, a retained copy is a **full live
-credential** (it can still decrypt/forge any ciphertext that survives — buffered frames, the web
-IndexedDB cache).
+viewer/input credential (it can still decrypt retained ciphertext and authenticate inbound proposals
+on old routes). This statement does not preclude the separate server Ed25519 signing-key continuity
+rotation in §4.3; that rotation neither changes A1 route/KDF keys nor revokes a pass.
 
 **What a reset does and does *not* do.** It moves **this machine** to a new bus; it does **not**
 revoke the old one. Because the broker is store-free (§4.5), `bus:${old_identity_id}` is never torn
 down and the old `auth_token` still self-verifies **forever** — anyone still holding the old `S` (or
 a pass derived from it, §4.2a) keeps a live credential and can keep
-subscribing to, publishing on, and forging authenticated `session_announce` on the abandoned bus.
+subscribing to and publishing on the abandoned routes. It can forge inbound proposals, but selected A1
+viewers reject forged `session_announce` or other server output without the old server's certified
+signature.
 So this is **abandonment, not revocation**: it contains a leak only for this machine's *future*
 traffic (the attacker can't follow it to the new `identity_id`), and only once you reconnect the
 viewers you still trust to the new identity. It
@@ -684,22 +1084,23 @@ host-resident attacker reads anyway). Secure-deleting *your* copy never denies a
 already has theirs — reconnect the viewers you still want promptly. The blast radius is exactly
 **one machine**: the others, on their own secrets, never noticed.
 
-**Running relays re-read the secret file each turn** (the secret is never cached for the process's
-lifetime), so a replace — or simply deleting/replacing the file — takes effect on an
-**already-running** relay: it stops serving the now-abandoned identity the moment the file changes
-(a changed secret ⇒ a different identity its in-flight sessions don't belong to; a removed secret ⇒
-it stops broadcasting and its sessions age out). No stale process keeps a replaced-away identity
-alive.
+**Running relays capture their derived identity at launch.** Replacing or deleting the secret file
+does not notify an already-running MITM, OpenCode, or tmux relay: that process can keep broadcasting
+and accepting old-pass input under the old identity until it exits. A safe operator reset therefore
+stops every relay launched from the old secret, performs the guarded replace, and starts fresh
+processes from the new secret. Process supervision that atomically enforces that stop-before-replace
+sequence is not implemented; reset alone is neither runtime containment nor credential revocation.
 
 **The revocation tension (store-free is the constraint).** `identity_id = f(auth_token) = f(S)` and
 the broker self-verifies with **no store** (§4.5), so **{ store-free · stable `identity_id` ·
 revoke-a-leak } are mutually exclusive — pick two** (an information-theoretic result: a store-free
 broker's admit decision is a *pure function* of the bearer, and a pure function with a fixed output
 address can't have a shrinking accept-set). This holds **per machine** — each machine's identity is
-its own instance of the tradeoff. To deny a leaked credential you must *either* (a) change
-`auth_token` ⇒ change `identity_id` (this reset — sacrifices continuity), *or* (b) give the broker
-per-identity memory (a registered admission half — sacrifices store-free). The one scoped upgrade
-worth naming, spending exactly one property on purpose:
+  its own instance of the tradeoff. Changing `auth_token` and `identity_id` abandons the old identity
+  and sacrifices continuity, but it does **not** deny the leaked credential on retained old routes; it
+  only moves trusted future traffic elsewhere. Actually denying that old credential requires broker
+  memory for revocation, sacrificing store-free operation. The one scoped upgrade worth naming,
+  spending exactly one property on purpose:
 
 - **Server-registered split** — `S_server` (broker) + `S_paste` (user); delivers real
   paste-(content)-revocation with a stable identity, but **requires a broker store and weakens
@@ -710,8 +1111,14 @@ worth naming, spending exactly one property on purpose:
 from the design, so it is dropped. The `key_epoch` field still bound into the AAD (§4.3/§8) is a
 **fixed constant** for wire stability, **not** a rotatable epoch — there is no per-frame re-keying.)
 
-Re-encryption/migration is **moot** here: nothing durable is encrypted under `S` (history is
-claude's plaintext `.jsonl` on the host — §6), so there is no at-rest ciphertext to re-key. (Cf.
+Reset performs no re-encryption or migration. Native conversation history is claude's plaintext
+`.jsonl` on the host (§6), so there is no native transcript ciphertext under `S` to re-key.
+Separately, selected A1 retains broker ciphertext encrypted under chat/server-control plane keys
+ultimately rooted in the operational keys derived from `S` (§4.2–§4.3). Replacing `S` starts
+unrelated routes and protects future frames with new keys; it neither re-encrypts nor deletes or
+revokes ciphertext retained on the old routes, which an old `S` or pass can still access and
+decrypt. Any future old-route migration or revocation therefore needs an explicit stateful
+protocol. (Cf.
 the **Happy/Codex mobile app**, which *does* offer per-device revocation — but only because it is
 **account-based and not store-free**: a phone-held master secret, per-machine DEKs wrapped to an
 account content key, and "remove machine from account" revokes that machine's DEK server-side. That
@@ -743,8 +1150,9 @@ SSO**, and the broker authorizes per-identity off the user's own `auth_token`.
   no valid `auth_token` is rejected, and **no separate app-key is needed to stop blind
   scanning**. The broker sees `identity_id` + the bearer (it *could* route/replay on a bus) but
   **can't decrypt or forge** (E2E keys, §4.2). Because admission is a pure function of the bearer
-  with **no store**, the broker has **nothing to revoke** — a leaked `auth_token` is denied only by
-  changing `identity_id` (a whole-identity replace, §4.4), never per-credential.
+  with **no store**, the broker has **nothing to revoke**. A whole-identity replacement moves trusted
+  future traffic to a new `identity_id` but leaves the leaked `auth_token` valid on retained old
+  routes; denying that credential requires a stateful revocation design (§4.4).
 - **The CLI is headless:** the wrapper authenticates to the broker with the per-identity
   `auth_token` it derives from its secret (no interactive SSO, no app-key). `--rc-app` only
   names the broker/web origin.
@@ -828,8 +1236,9 @@ client `catch_up` — **never** a worker backfill, and **never** Anthropic's cur
   that joins or reconnects mid-session replays the **complete** transcript via
   `catch_up{since=seq}` from that log (the relay saw everything from the start, so the
   log is complete for the session's life — proven by the `relay.test.ts` mid-session
-  reconnect suite). The TUI owns sessions and `seq` ordering; **the cloud stores no
-  history.** Because there is nothing to backfill, there is **no completeness gate** —
+  reconnect suite). Claude owns the native session and final applied order; the wrapper allocates the
+  separate viewer-projection `seq`; **the cloud stores no history.** Because there is nothing to
+  backfill, there is **no completeness gate** —
   the wrapper joins the bus and broadcasts `session_announce` as soon as it is serving;
   a client racing in with `catch_up{since=0}` gets whatever has accumulated, which is
   the whole session so far.
@@ -837,48 +1246,203 @@ client `catch_up` — **never** a worker backfill, and **never** Anthropic's cur
     session's pre-resume turns are not replayed on the RC wire. Current A0 also loses its
     in-memory log and logical-chat binding on wrapper restart, so an ordinary relaunch
     exposes a new broker-visible session and row. A1 does not ask the worker to repair that:
-    it persists the stable `logicalChatId`, first resumes the stored Claude conversation UUID
-    and known private `cse_*`, and otherwise records a replacement `cse_*` as a new inner
-    transport attachment under the same native binding and broker row/channel. The transport
+    it persists the stable `(collaborationServerId, logicalChatId)` scope, first resumes the stored
+    Claude conversation UUID and known private `cse_*`, and otherwise records a replacement `cse_*` as
+    a new inner transport attachment under the same native binding and broker row/channel. The transport
     attachment and native-process incarnation advance independently; each worker epoch records which
     process currently owns it. History repair comes from persisted synthetic RC state and proven native
     transcript evidence, never worker backfill.
 - **`seq` is allocated solely by the wrapper.** Clients never assign transcript
   order: a web client sends a `client_msg_id`; the wrapper decrypts, commits to its
   relay path, assigns the canonical `seq`, emits `accepted{client_msg_id, seq}`, then
-  echoes/records the user frame before forwarding it to Claude. Clients retry until
-  `accepted`, but that frame is relay receipt/order rather than proof of native delivery
-  or application.
-- **Replay/idempotency:** delivery is at-least-once and the broker can *replay a
-  valid old ciphertext*, so the wrapper keeps an **in-memory seen-set** and drops
-  duplicates **before** any side effect. The seen-set
-  key is `msg_id` for whole frames and **`(msg_id, part)`** for chunked ones (so a
-  replayed middle chunk is dropped without stalling reassembly, §8). `msg_id` and
-  `client_msg_id` are **CSPRNG-unique** per send (never client-local counters), so two
-  clients can't collide. **The wrapper is a single process owning one session (§1)**, so
-  an inbound user frame follows one serialized sequence: **dedup-check → record `msg_id`
-  in the seen-set → decrypt → allocate `seq` → emit `accepted` → echo/record the user
-  frame → `pushUserInput`**. Other controls likewise enter the seen-set before their
-  action, but they do not all allocate transcript `seq` or log content. The in-memory
-  seen-set survives stream reconnects within one relay incarnation. Across a durable
-  wrapper restart, the sampled inbound floor—not a rebuilt seen-set—prevents execution
-  of older frames, with the pre-sample loss gap described in §12; a non-durable restart
-  starts a new relay session/binding.
-- **Catch-up is an encrypted control frame to the wrapper.** A client sends an
+  echoes/records the user frame before forwarding it to Claude. `accepted` is relay receipt/order
+  rather than proof of native delivery or application.
+- **Shipped A0 replay behavior has a known acknowledgement gap.** Delivery is at-least-once, and the
+  current relay uses an unbounded process-local `msg_id` `Set` (plus chunk reassembly) before acting.
+  An already-seen frame is silently dropped; the original `accepted` result is not retained or
+  re-emitted. The durable sampled inbound floor skips older broker indices after restart, but it is not
+  a semantic idempotency record: it cannot prove the outcome of a command whose acknowledgement was
+  lost, and the same source ID re-appended above the floor meets an empty set. The shipped behavior is
+  documented exactly in [Protocol & Runtime](protocol.md) §§5–6 and must not be called exactly-once.
+- **Selected A1 replay is durable, authenticated, and result-bearing.** Before forwarding a proposal,
+  the coordinator authenticates and fully reassembles it. The unique durable result key is
+  `(brokerRouteId, sourceEventNamespaceId, msg_id)` and stores the canonical
+  whole-message digest, decision, command order, explicitly separate viewer-projection `seq`, action
+  result, stable semantic result ID, exact result payload, and ingress cursor. Part rows inherit that
+  full scope through the result foreign key. Chat and server-control ciphertext/plaintext part bodies
+  are retained from genesis; only checkpointed discovery-only scope-bus bodies may be compacted. The
+  expected part count and complete part-digest vector remain with every result indefinitely. A single
+  old part never returns success: after completion, every
+  expected part of a replay candidate must match before the stored result is eligible. Changed
+  coordinates, part count, part digest, or final whole-message digest are quarantined as a collision.
+
+  The stable semantic result ID is exactly
+  `rrs_${base64url(SHA256(str("remote-claw/a1/semantic-result/v1") || bytes(identity_id) ||
+  str(collaborationServerId) || str(routeKind) || optionalStr(logicalChatId) ||
+  str(sourceEventNamespaceId) || str(msg_id)))}`.
+  The result row, outbound frame `msg_id`, and payload `result_id` all use that value. For a complete
+  semantic A1 proposal, first derive
+  `sourceCommandIdentityDigest = SHA256(str("remote-claw/command-source/a1/v1") ||
+  bytes(identity_id) || str(collaborationServerId) || str(routeKind) ||
+  optionalStr(logicalChatId) || str(sourceEventNamespaceId) || str(msg_id))`. Its common command ID is
+  `rcm_${base64url(SHA256(str("remote-claw/collaboration-command/v1") ||
+  str(collaborationServerId) || str("a1_ingress") ||
+  bytes(base64urlDecode(sourceCommandIdentityDigest))))}`. This is the same common adjudication identity
+  used by official, automation, and nested sources after each derives its source-identity digest. No
+  result, command, effect gate, or attempt is keyed by source `msg_id` alone.
+
+  The deciding transaction freezes one exact arm of the closed executor-evidence union:
+  `native_server`, `native_binding`, `nested_management`, or `nested_chat_edge`. Every later native or
+  nested attempt and command-wide effect gate composite-foreign-keys
+  `(collaborationServerId, commandId, admittingCommandResultId, canonicalCommandRecordDigest,
+  admittingCommandResultSignedRecordDigest)` to that one immutable signed
+  `disposition:"admitted"` result and repeats its decision/executor evidence. No transport ACK,
+  attempt, gate, file write, native request, or nested send can exist before the admitted result is
+  signed and atomically finalized. A decision-reserved or unsigned result, a queued/rejected result,
+  or a result from another command or executor fails closed. Actions typed directly in a trusted
+  native TUI do not masquerade as common remote commands: they enter the native harness on its
+  separate native path, and the harness remains the final arbiter of their order against remote-claw.
+
+  The A1 web `sourceEventNamespaceId` is immutable for the route's full lifetime and is derived as
+  unpadded-base64url SHA-256 of
+  `str("remote-claw/a1/web-source-namespace/v1") || bytes(identity_id) ||
+  str(collaborationServerId) || str(routeKind) || optionalStr(logicalChatId)`, prefixed `wns_`. It does not change on reconnect,
+  coordinator replacement, broker rollover, local chat closure, or machine reset. Selected A1 provides
+  no namespace-change transition for an existing route, so withholding an unseen old ciphertext cannot
+  move it into a new namespace. A reset creates a distinct new identity/routes without reclassifying or
+  garbage-collecting the old route. Official and nested connectors retain their separate authenticated
+  namespace contracts.
+
+  A retry keeps the stable `msg_id` and logical bytes but uses a fresh authenticated
+  `delivery_attempt_id`; all parts of that candidate share it. New, pending-duplicate,
+  terminal-replay, collision, incomplete-expiry, and restart behavior use the
+  atomic state machine in
+  [Client-driven Host Runtime — Reference §4](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+  Partial groups are size/count/deadline bounded; terminal incomplete tombstones let the contiguous
+  cursor advance and cannot later resurrect. A terminal exact replay creates no echo, log entry,
+  projection sequence, command, or inward delivery. Instead it enqueues the same stored semantic
+  result in a fresh persisted delivery envelope: `msg_id` remains the stable result ID and
+  `delivery_attempt_id` is new. A1 broker/viewer transport deduplication uses
+  route-wide `(route token, delivery_attempt_id, part)` and returns the original cursor across
+  generations; after opening, the viewer folds the encrypted
+  result by stable `result_id`.
+
+  An admitted `user` or `attachment` proposal uses meta `record_kind: "accepted"` and exact compact UTF-8 JSON
+  `{v:1,result_id,client_msg_id,seq}`, where `seq` is the separately stored viewer-projection order.
+  Every queued/rejected proposal, and every admitted control other than `attachment`, uses meta
+  `record_kind: "action_result"` and exact compact UTF-8 JSON
+  `{v:1,result_id,source_msg_id,source_record_kind,decision,command_seq}`. Keys are emitted in that
+  order with no extra fields; `decision` is `admitted`, `queued`, or `rejected`, and `command_seq` may
+  be null. Every string value is either one of those fixed literals or an A1 safe ID matching
+  `[A-Za-z0-9._:-]+`, so JSON escaping is never needed; quotes, backslashes, controls, non-ASCII, and
+  optional slash escaping are rejected rather than normalized. Payload `v` is exactly the token `1`.
+  `seq` and non-null `command_seq` use the canonical non-negative safe-integer token
+  `0|[1-9][0-9]*`, at most `2^53−1`; a sign, leading zero, fraction, or exponent is rejected. Null
+  `command_seq` is the literal `null`. These are coordinator admission/order results, not proof of
+  native application. An admitted attachment from any source always uses
+  `canonicalCommandPayloadSchemaId:"remote-claw/command-payload/attachment/v1"` and these exact
+  common bytes:
+
+  ```text
+  str("remote-claw/command-payload/attachment/v1") || uint(1) ||
+  optionalStr(caption) || uint(itemCount) || bytes(base64urlDecode(itemVectorDigest))
+  ```
+
+  An omitted source caption is canonical null; an explicitly present empty caption is a non-null empty
+  string, so adapters cannot silently conflate them.
+  The retained item vector contains the exact ordered filename, media type, byte length, and decoded
+  content digest for every item under the canonical item/vector schemas in the
+  [runtime reference](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters);
+  its count, every item digest, and every content ref/digest must recompute. Adapter JSON, a
+  source-base64 spelling, and an `unsupported_recognized` payload cannot substitute for that chain.
+  The selected target family must name the same common attachment schema plus its proved native
+  translator/read-back contract before the command can be admitted. Semantic validation performs no file write; the
+  decision-reservation transaction allocates exactly one viewer-projection sequence and freezes the
+  common decision/result payload, but creates no ACK, projection intent, or native attempt. After
+  protected-key signing, the non-nested generic finalizer verifies that no secondary artifact is
+  required, then atomically stores the signed common result, retained `accepted` projection payload,
+  user attachment projection intent, and write-ahead-fenced native attempt. A later dispatcher
+  performs the file write and offers the prompt to the harness. Exact replay creates no second
+  file, projection, sequence, or native attempt; it only redelivers the stored `accepted` result.
+  Changed attachment bytes under the same semantic ID are a collision. Thus neither the broker nor an
+  A0-style `msg_id` orderer suppresses a later result delivery. Controls use the same
+  identity/digest/result rule. This is the contract that makes retrying the complete exact logical frame
+  safe.
+
+  The server-control route is the only no-chat ingress. It accepts one non-chunked
+  `record_kind:"new_chat"` with null `logical_chat_id`/`seq`, required `client_msg_id`, and exact
+  compact JSON `{v:1,intent,project_id,workspace_selector_id}` in that key order. `intent` is
+  `first_bootstrap` or `new_chat`; the two selectors are safe IDs. No caller target/native ID,
+  directory/header alias, title/history match, provider coordinate, marker, or extra field is allowed.
+  Every complete proposal receives the server-wide command order. A rejected proposal returns
+  host-signed `chat_creation_result`
+  `{v:1,result_id,source_msg_id,decision:"rejected",target_logical_chat_id:null,command_seq}`.
+  An admitted one allocates one random target chat and returns the same shape with
+  `decision:"admitted"` and that non-null ID. Its header keeps null `logical_chat_id`, sets
+  `seq=command_seq`, echoes `client_msg_id`, and uses the stable result ID as `msg_id`. The
+  decision-reservation transaction atomically allocates the target chat route/genesis and recovering
+  record, freezes the selected executor, and creates the exact common-result preparation/signing
+  reservation plus its compound signing group; it creates no result output, native/nested attempt, or
+  effect gate. A terminal-native arm requires no secondary artifact: after protected-key signing, the
+  generic finalizer atomically inserts the signed common/A1 result, output intent, starting native
+  binding, fenced native creation reservation, and command-wide creation effect gate. A nested-server
+  arm instead pre-reserves its management-lineage preparation in that group. The common result signs
+  first, the secondary lineage hop binds that exact signed-result digest and signs second, and only
+  the nested joint finalizer may atomically insert the signed common/A1 result, signed lineage, output
+  intent, nested-management attempt, and effect gate. The generic result finalizer cannot finalize
+  this arm, and the nested arm creates no native binding.
+
+  The target answers a nested-management attempt with one closed receipt-proof bundle. It binds the
+  exact request and source event to the target common command, canonical command digest,
+  decision/executor evidence, and complete signed result. The target result is terminal version `1`
+  with a null predecessor; exact replay returns the same proof and bytes, while a different result,
+  another version, or a non-null predecessor quarantines the attempt. Because server-control creation
+  admits or rejects rather than queues, only an admitted target may proceed. The source installs a chat
+  edge only after that admitted proof, readiness, rooted path, two-party install, and live handshake
+  all verify. Exact source replay returns identical bytes/target/executor and cannot allocate another
+  chat, native POST, or nested send. A management binding is writable only after both servers sign the
+  same live TLS-exporter transcript and make the resulting lease current locally; a one-sided install
+  is non-writable. If a nested-management or ordinary nested-chat transport is
+  replaced before any byte could have been sent, only a signed continuation over the exact old/new
+  leases and capability snapshots, unchanged semantic target/request/family, and positive
+  never-started evidence may install a successor. The transport writer first creates one immutable
+  `armed@1` authorization. It may consume that authorization only in the final send CAS, which also
+  moves the physical child and command-wide gate to `started`; only then may a byte be written. A
+  pre-send abandonment instead CASes the still-armed authorization to `revoked@2`, leaves the gate
+  `never_started`, and produces the exact source-server-signed positive-never-started attestation.
+  Continuation installation verifies that signature and every command, result, request, target,
+  lease, capability, authorization-handle, state-version, and revocation-journal binding, then inserts
+  one fresh `armed@1` successor while the same gate remains `never_started`. It never rewrites a
+  started gate. A consumed, started, or uncertain predecessor permanently forbids another send.
+  Ordinary chat and scope-bus routes reject both creation kinds.
+
+  A complete authenticated but unsupported proposal still receives an ordered command and rejected
+  `action_result`; it receives no viewer-projection sequence, user projection, file write, or native
+  attempt. OpenCode attachments take this path until the exact binding/incarnation capability snapshot
+  proves native file-part request and read-back fidelity. Exact replay only redelivers the rejection;
+  changed bytes collide.
+- **Shipped A0 catch-up is an encrypted control frame to the wrapper.** A client sends an
   **AEAD-encrypted** `catch_up{since=<last-seen seq | 0>, msg_id, expiry}` (control
    frames use a derived control key + replay check — never plaintext the broker
    could inject); the wrapper serves the delta from its log (re-posting the logged
    frames with their original `seq`/`msg_id`; the client's orderer dedups), then live.
    **As built, `catch_up` is stamped with `expiry` but the host does not validate it**; see
    [Protocol & Runtime](protocol.md) §11.
-- **The cloud = relay + short live buffer only — no durable store** (§6B). Discovery
+  Selected A1 preserves each stored semantic `msg_id` and projection `seq`, but every catch-up
+  delivery is a fresh persisted outbox row with a fresh `delivery_attempt_id`; retries of that same row
+  reuse its attempt ID. The receiver transport-deduplicates the attempt, then folds the opened frame by
+  stable semantic result/projection identity. Reusing the original delivery attempt for catch-up is
+  forbidden because same-generation broker dedup would suppress it.
+- **Shipped A0 cloud = relay + short live buffer only — no durable store** (§6B). Discovery
   and presence are answered live on the per-identity **bus**, not a store; message
   transport is relay-only. Live ciphertext frames go out over **SSE from a streaming
   Vercel Function**, backed by the **Workflow durable resumable stream**. When the SSE
   connection hits Vercel's duration cap (or drops), the client simply **reconnects and
   resumes by `seq`** — any gap is refilled by the wrapper's `catch_up` (the wrapper is
-  the current viewer-frame history source, so this path needs no provider-side message history). Stream retention
-  (1–7 d) is irrelevant — it's an in-flight buffer, not the record.
+  the current viewer-frame history source, so this path needs no provider-side message history). In
+  shipped A0, stream retention is only an in-flight buffer concern. Selected A1 instead requires a
+  durable ciphertext frame log with atomic route-wide delivery-attempt uniqueness, generation
+  manifests, and cursor reads. The broker still receives no plaintext.
 - **The web client caches what it has seen** (IndexedDB, keyed by `seq`) purely as
   an optimization: a reconnect pulls only the delta; a fresh device asks the TUI
   for everything. In this historical baseline, the wrapper relay owns viewer-frame order while
@@ -890,7 +1454,7 @@ a live Claude session needs anyway (RC sessions end ~10 min after the worker goe
 offline). Offline history-browsing (and any durable store) is **deferred** — §6C.
 
 Historical baseline invariants across the broker backends discussed here: **the broker sees ciphertext only**; ordering is by
-TUI-assigned `seq`; live delivery is **at-least-once** so clients dedupe by
+wrapper-assigned `seq`; live delivery is **at-least-once** so clients dedupe by
 `msg_id` and reorder by `seq`; crypto happens in the TUI + browser and in thin
 Functions/steps, **never** inside the deterministic `'use workflow'` body (random
 nonces / stream reads break replay determinism).
@@ -922,11 +1486,15 @@ frame is content in **both** directions — `in` = the typed prompt (carries
 | `can_use_tool` | out | RC | permission request, *if* a mode ever gates a tool |
 
 Control frames (**in** — web client → wrapper → worker, on the **session** channel;
-encrypted under **`control_key`**, carry `msg_id` + `expiry` (both **inside** the
-ciphertext, §8), replay-checked). **Replay defense is the `msg_id` seen-set (clock-free);**
-`expiry` is only a generously-sized staleness bound (≫ `FRESH_WINDOW`) on a frame the broker
-*withheld then released late* — the one clock touch on the message plane, whose worst case is
-a stale command **rejected** (availability), never a breach (§4.3):
+encrypted under **`control_key`** and carrying `msg_id` in the authenticated header, §8).
+**Shipped A0 replay defense is the process-local `msg_id` seen-set (clock-free).** For `interrupt`,
+`set_model`, `set_mode`, and `end`, the encrypted body also carries `expiry`, a generously-sized
+staleness bound (≫ `FRESH_WINDOW`) on a frame the broker withheld then released late; those verbs
+reject a stale first delivery. `catch_up` is stamped with the same field, but the current host does not
+validate it; `permission` currently carries no expiry and its branch performs no expiry check. Thus an
+old authenticated `catch_up` can cause redundant replay after a non-durable host restart, while a
+withheld permission answer can act if its native gate is still open (§4.3 and
+[Protocol & Runtime §11](protocol.md#11-control-verbs-and-freshness)):
 | kind | maps to RC verb | notes |
 | --- | --- | --- |
 | `catch_up` | — (ours) | request history `since=seq` |
@@ -934,19 +1502,19 @@ a stale command **rejected** (availability), never a breach (§4.3):
 | `interrupt` | `interrupt` | ESC / stop the current turn |
 | `set_mode` | `set_permission_mode` | e.g. bypassPermissions toggle |
 | `set_model` | `set_model` | switch model |
-| `command` | (slash) | `/compact` `/clear` `/context` … |
 | `end` | no worker verb in the current relay | clear open relay permission gates; native session stays alive |
+| `command` | — | reserved control-plane kind; the current viewer sends slash commands as `user` content |
 
-**Ordering & acknowledgement (control plane is not FIFO).** Each control frame is an
-**independent, idempotent** command applied on arrival (deduped by `msg_id`); the broker may
-reorder, so a client that issues **order-dependent** controls **serializes** them — it sends
-the next only after observing the prior's effect on the out-stream (e.g. wait for the
-`interrupt` to land before toggling `set_mode`), so a reorder window can't invert them. A
-rejected control frame (expired or replayed) simply produces **no effect**; the client's
-contract is **bounded timeout + retry** (as content frames "retry until `accepted`") — e.g.
-a `catch_up` that yields no replayed/live frames within the timeout is re-sent with a
-fresh `msg_id`/`expiry`. (An explicit `nack{msg_id,reason}` meta frame is a possible future
-nicety; not required for correctness.)
+**Ordering & acknowledgement (control plane is not FIFO).** The broker may reorder controls, so a
+client that issues **order-dependent** controls serializes them and observes the prior native effect
+before sending the next. Shipped A0 does not provide a general safe-retry acknowledgement contract:
+an exact same-`msg_id` retry during one relay incarnation is silently dropped, while a retry with a
+fresh ID can repeat an action whose earlier outcome was merely unobserved. A read-only `catch_up` may
+be re-sent with a fresh `msg_id`, accepting redundant replay; a mutating control must instead reconcile
+native state/effect or surface an ambiguous outcome rather than blindly retry. Selected A1 stores each
+control's authenticated digest and action-specific result before advancing its ingress cursor, so an
+exact replay returns that result without applying the action again. A
+`nack{msg_id,reason}` remains an optional projection of that durable result, not a substitute for it.
 
 Our non-content meta frames (**AEAD under `K_meta`** — broker can't forge them):
 | kind | dir | notes |
@@ -965,9 +1533,10 @@ fresh, signed `session_announce` within the window, greyed client-side on stalen
   tail it via `getHookByToken→getReadable` and compute presence from `sent_at` freshness.
   **Discovery + presence only** — pure push, no client request, no control/turn frames.
 - **per-session stream** (`sess:${identity_id}:${session_id}`): the session's durable
-  resumable out-stream for live turn frames (high volume — bypasses the event cap) + an
-  inbound hook for **all per-session traffic** — prompts, `catch_up`, permissions, RC
-  verbs. Resolved the same way (token → run).
+  resumable out-stream for live turn frames plus a hook for **all per-session traffic** — prompts,
+  outputs, `catch_up`, permissions, and RC verbs. Stream bytes themselves bypass event-log storage, but
+  the shipped publisher sends every frame through `resumeHook` and one `emit` step, so every direction
+  still consumes Workflow events/steps. Resolved the same way (token → run).
 - No presence channel and no registry — both are subsumed by the bus.
 
 ### Ephemeral state a run holds — and why it's "enough"
@@ -1035,7 +1604,9 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   **`HookConflictError`** (`@workflow/errors`; verified in the bundled SDK docs, §13) — so the
   create-race loser's run dies with that error while its caller keeps polling `getHookByToken` and
   resolves (resume-tails) the winner — nothing in our code `catch`es the conflict; the losing
-  *workflow run* terminates. Within a *single* broker process, concurrent publishers to the same
+  *workflow run* terminates. This create conflict is not returned to the caller and is not an HTTP
+  `409`; only the separately typed vanished-hook race between channel resolution and publish has
+  that retryable response. Within a *single* broker process, concurrent publishers to the same
   token (one wrapper's near-simultaneous announce + serve + presence heartbeat) are collapsed by an
   **in-process singleflight** on `ensureChannel`: only one `start()` is in flight per token while
   `resolveOrStartChannel` runs (the map entry clears on settle), so the SDK conflict path is reached
@@ -1049,24 +1620,21 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   when the last session leaves, the bus run does **not** auto-end — it simply goes quiet and
   the token stays resolvable; a cold client then reads the recent window, finds **no fresh
   announce**, and renders empty (presence is "fresh announce," not "bus exists" — below), so
-  a lingering idle bus is harmless. The run therefore ends in just **one** way in normal
-  operation: (ii) **deliberate cap-roll** (below). *Optional* self-cleanup: to free the token
+  a lingering idle bus is harmless. The run ends only if the workflow returns, fails, is cancelled, or
+  is explicitly closed. *Optional* self-cleanup: to free the token
   on inactivity we can race the hook against a **durable `sleep`** (the documented pattern for
   a hook timeout, vercel/workflow#553) and complete the run if no publish arrives for, say,
   a few `ANNOUNCE_INTERVAL`s — but it's not required for correctness. ("Holds the hook"
   elsewhere = the run stays alive awaiting its hook; no wrapper owns it.)
-- **Cap-roll protocol.** Because each inbound publish is an event, before the bus nears
-  the 25k-events/run cap a connected wrapper **completes** the current run (which
-  **closes its stream and disposes the hook → frees the token**), then immediately
-  `start()`s a fresh run (re-`createHook("bus:"+identity_id)`); if two wrappers race, one
-  wins and the loser catches **`HookConflictError`** (SDK-enforced unique tokens, §13) and
-  resume-tails the winner. **No new frame kind is needed: tailing clients (and wrappers) see
-  the stream EOF**, reconnect `GET /api/stream?identity=…` → `getHookByToken` now resolves the
-  new run → re-tail (and wrappers resume broadcasting; a brief `HookNotFound` during the swap
-  → retry). Open **per-session** chats are untouched (separate runs). So "the bus never
-  completes *except* on a **deliberate roll**" (there is no idle-timeout — §13 — so an idle
-  bus just persists) — the token is always either live or re-creatable, and the bus still
-  carries only `session_announce` broadcasts.
+- **The cap-roll primitive exists; the shipped controller does not.** The internal `__close` payload
+  makes the workflow close its stream, return, and dispose the token; a later publisher can start a new
+  run under the same token. Integration tests exercise that explicit transition. Production
+  `POST /api/relay` rejects `__close`, however, and neither the host nor broker counts run events or
+  initiates a pre-cap close. Therefore current A0 must not claim a deliberate or lossless 25k-event
+  rollover. Behavior at the platform cap remains an availability release gap. A finished future
+  controller must fence publishers, close before the cap, publish a durable generation handoff, and
+  prove retry/cursor behavior. Selected A1 instead requires the durable generation-manifest broker in
+  §4.3.
 - **"Online" = a fresh announce, not mere bus existence.** A resolvable bus only means *a*
   wrapper once created it; the client treats a session as online iff it holds a
   `session_announce` whose `sent_at` is within `FRESH_WINDOW`. `HookNotFound` and "bus
@@ -1082,7 +1650,7 @@ State lives on the bus (announced live) and with claude (transcript via `catch_u
 | layer | lives in | durable? |
 | --- | --- | --- |
 | **transcript (the record)** | claude `.jsonl` + wrapper in-memory log | host-side |
-| **the bus** (identity-level: discovery + presence only) | **one Workflow run per identity**, addressed by token `bus:${identity_id}` | ephemeral (rolls; idle-persistent) |
+| **the bus** (identity-level: discovery + presence only) | **one Workflow run per identity**, addressed by token `bus:${identity_id}` | ephemeral and idle-persistent; shipped cap rollover is not implemented |
 | **per-session live frames** (high volume) | per-session Workflow out-stream | ephemeral |
 | **functions** | — | **none** |
 
@@ -1137,8 +1705,8 @@ window → it can neither keep a dead session green (beyond the **`FRESH_WINDOW 
 **not** resurrect offline *listing* — a fresh browser still won't see a session never
 connected this run (deferred store, §6C). Cost: each session's announce is a bus **event**
 (one per session per interval, broadcast even when no client is watching) → they nudge the
-bus toward a roll, so keep high-volume turn frames on per-session streams (cap-free) and the
-interval generous (§12).
+bus toward a roll. High-volume turn frames stay on separate per-session runs, isolating the bus budget,
+but they still consume hook/step events on those runs. Keep the interval generous (§12).
 
 ### Honest caveats (verified — §13)
 - **Online-only by design.** No connected wrapper ⇒ empty list (a sleeping/closed host
@@ -1154,11 +1722,11 @@ interval generous (§12).
   the resumable-streams guide — but the *cross-process bus wiring* (resolve a derived token to
   another process's runId, then tail it) is **our** composition, so it's a P3 integration
   check, not a re-derivation.
-- **Run-roll handoff.** Inbound publishes are events (25k/run cap); the bus rolls
-  occasionally. On roll the old run completes → its hook disposes → a new run re-creates
-  `bus:${identity_id}`; a brief window may `HookNotFound` → client retries. Keeping
-  high-volume frames on per-session streams (stream writes bypass the event cap) keeps
-  rolls rare.
+- **Run-roll handoff is not shipped.** Every publish in either direction enters through a hook and
+  `emit` step and approaches the 25k-event cap. The explicit-close/recreate primitive works, and a
+  publisher retries a transient disposal race, but no production component currently decides when to
+  close or proves a complete handoff. Separate per-session tokens isolate the identity-bus budget; they
+  do not solve the cap.
 - **Size/chunking** (§8): a payload over a hook ≤ **4.5 MB**, a stream chunk ≤ **10 MB**
   → chunk larger announces / `catch_up`.
 - **`getHookByToken` is server-creds + live-only** (hooks dispose at terminal state) —
@@ -1210,10 +1778,11 @@ and proven by our own `vercel.ts`**:
   live, no polling. The streaming doc confirms concurrent readers/writers on one stream; our
   `subscribe()` *is* this, one cursor per viewer. (Public docs couldn't confirm multi-reader; our
   shipped code is the proof.)
-- **Outbound frames bypass the event log.** Stream chunks "flow directly without being stored in the
-  event log," so the transcript fan-out does **not** consume the 25k-events/run budget. Only inbound
-  publishes (`hook_received`) and step events count. The relay's replies are nearly free against the
-  cap; only inbound prompts press on it.
+- **Stream bytes bypass event-log storage; frame delivery does not.** The platform writes stream chunks
+  without storing their bytes as events. Shipped `VercelBackend.publish`, however, sends every inbound
+  and outbound frame through `resumeHook`, and `relayWorkflow` runs one journaled `emit` step for it.
+  Thus output, result, announce, and catch-up traffic consume hook/step events just like prompts; the
+  payload bytes themselves are billed/stored as stream data.
 
 Publish maps onto a **reusable hook**: `relayWorkflow` runs `for await (const payload of hook)`, and
 each `resumeHook(token, frame)` delivers a `hook_received` (hook stays `active`, takes many events). A
@@ -1222,22 +1791,22 @@ hook → `HookConflictError` — which is exactly the `ensureChannel` registrati
 once created, publishing never conflicts.
 
 The **limits envelope** (Vercel pricing page, dated 2026-06-02 — current for this build) is why the
-host keeps `#log` as system-of-record and the channel is cap-rolled rather than relied on as the
-durable store:
+host keeps `#log` as system-of-record and the Workflow stream is not relied on as a durable store. A
+production pre-cap handoff is still missing:
 
 | limit | value | bearing on the relay |
 | --- | --- | --- |
 | max run duration | no limit | a channel run can live indefinitely |
-| events per run | **25,000** (replay degrades past ~2k) | inbound publishes + step events — **not** outbound frames |
-| stream storage / chunk | unlimited / 10 MB | transcript fan-out unbounded; per-frame ≤10 MB |
+| events per run | **25,000** (replay degrades past ~2k) | every shipped frame: hook receipt + emit-step events, both directions |
+| Function request / stream storage / chunk | 4.5 MB / unlimited / 10 MB | every published frame first crosses the 4.5 MB hook request; stream bytes may then use at most 10 MB |
 | stream chunks/sec/stream | 1,000 | per-channel publish-rate ceiling |
-| event creations/run/sec | 200 | inbound `resumeHook` rate ceiling per channel |
-| max replay duration | 240 s | the real reason long histories must roll |
+| event creations/run/sec | 200 | `resumeHook` publish-rate ceiling per channel, both directions |
+| max replay duration | 240 s | another reason a bounded-run handoff is required |
 | idle on a hook | no compute billed | a parked channel = storage only |
 
-There is **no `continueAsNew`**; the documented remedy for long histories is **child workflows**. We
-sidestep it entirely: the host `#log` is the history source-of-record and the channel is a bounded
-live buffer (§6).
+There is **no `continueAsNew`**; the SDK documents explicit recursion through `start()` for bounded
+runs. The host `#log` remains the history source-of-record, but that does not itself implement or prove
+the live channel's pre-cap transition.
 
 ### Temporal — durable orchestration, but a poll-read pub/sub anti-pattern (evaluated, not adopted)
 
@@ -1303,7 +1872,7 @@ instead of Vercel's managed platform; the relay doesn't need that model.
 
 | | reads | writes | who runs compute | standing process | durability | infra pieces |
 | --- | --- | --- | --- | --- | --- | --- |
-| **Vercel** (default) | **push** (`getReadable` cursor/viewer) | `resumeHook` (event-driven) | **Vercel**, per-event | **none** | capped stream + host `#log` | 1 |
+| **Vercel** (default) | **push** (`getReadable` cursor/viewer) | `resumeHook` (event-driven) | **Vercel**, per-event | **none** | capped stream + host `#log`; cap handoff not shipped | 1 |
 | **Sqlite** | poll (`id > cursor`) | `INSERT … ON CONFLICT` | nobody (DB serves reads) | **none** | **ordered log per session** (file or Turso Cloud) | 1 |
 | *Temporal (evaluated, not adopted)* | poll a query | signal (2k pending cap) | your worker | standing worker | history (capped → terminates) | 1 (wrong-shaped) / 2 with Redis |
 
@@ -1313,7 +1882,7 @@ backend (local file in dev, one Turso Cloud db per session in prod). Temporal is
 that would need an external pub/sub bolted on to be a broker — strictly more infra for no gain here, so
 it was evaluated and dropped, not shipped.
 
-### Worked example — a no-viewer fleet (the roll cycle, and the viewer-gating gap)
+### Worked example — a no-viewer fleet (the cap cliff and viewer-gating gap)
 
 A stress case that exposes the real over-time behavior: **100 channel tokens (100 `relayWorkflow`
 runs), 1000 claudes pumping ~10 frames/sec/run (~1000/sec aggregate), and *no viewers connected.***
@@ -1336,32 +1905,27 @@ What one run does over time, against the caps (25k events, 10k steps, replay deg
 | --- | --- |
 | 0 | run `start()`ed; hook loop emits into a stream nobody reads |
 | ~50 s | crosses **2,000 events** → replay slows → each `resumeHook` waits longer to resume → **publish latency creeps up** |
-| ~10 min | hits **~25,000 events** → run **terminates**; hook auto-disposes; token frees |
-| +gap | host's next `postMessage` → 409/`HookNotFound` → `ensureChannel` `start()`s a **fresh run** (409-retry budget covers the window); the old stream of unread frames is abandoned to retention |
+| ~10 min | projects to **~25,000 events**; current code has no pre-cap close/handoff controller |
+| afterward | platform response and channel availability are not retained-proven; a clean EOF/recreate, complete retry, and no-loss cursor handoff must not be assumed |
 
-So each run **rolls every ~10 min** (at 1 frame/sec — the real 1:1 topology — every ~1.7 hr). The roll
-is **reactive, not orchestrated**: nothing counts frames and sends `__close`; the platform terminating
-the capped run *is* the trigger, and resume-or-start picks it back up. No frame is lost — the host
-`#log` is the source-of-record and re-pumps on a late viewer's `catch_up`; a viewer joining mid-stream
-gets a fresh stream + catch-up.
+This is a **cap cliff**, not a working roll cycle. The explicit `__close` primitive proves that a run
+can be closed and a token reused, but no shipped production path invokes it before the cap. The host
+`#log` can rebuild viewer history after a new channel exists; it cannot by itself prove whether the
+cap-boundary publish landed or make the handoff lossless.
 
-Fleet-level, with no viewers: 100 streams fill with unread chunks; runs cross the 2k knee out of phase
-→ a rolling wave of rising publish latency; runs then terminate/roll continuously (~0.17
-run-creations/sec, far under the 1,000/sec create limit); and because nothing is consumed and Pro
-retention is **7 days**, abandoned streams **pile up for a week before GC** (Data Retained climbs then
-plateaus). Billing is full freight: ~4,000 events/sec ≈ 14.4M/hr ≈ **~$290/hr in events alone**, plus
-Data Written per frame and a week of Data Retained. The platform stays correct throughout (clean
-roll-and-restart, throttle-and-retry rather than drop on the req/min ceiling) — it's just **expensive
-and churny for the idle-fleet case.**
+Fleet-level, with no viewers, 100 streams fill with unread chunks and cross the 2k replay knee out of
+phase, producing rising latency and full event/data-written cost until the unhandled cap boundary.
+Post-cap run-creation rate, retained-data accumulation, and self-healing behavior are unknown until a
+retained production-equivalent rollover proof exists.
 
 **The gap this surfaces (tracked):** the host has **no outbound viewer-gating** — there is no mechanism
 to stop pumping the transcript when nobody is watching, because the broker exposes no viewer presence
 to the host. The honest mitigations, in order: (a) add a sealed presence beat so the host can gate
 outbound on ≥1 viewer (drops an idle fleet to the ~20 s `ANNOUNCE_KEEPALIVE_MS` announce floor); (b)
-use the **Turso** backend, which has no per-run cap and **no rolling** (publish is `INSERT`, so the
-~10-min churn and replay-degradation tax vanish — the cost shifts to libSQL write throughput and
-unbounded at-rest ciphertext needing the A2 retention/TTL sweep); (c) accept the churn (it is correct
-and self-healing, just costly). Today's default is (c); (a) is the missing mechanism.
+use the **Turso** backend, which has no per-run event cap (publish is `INSERT`, so the Workflow replay
+tax vanishes—the cost shifts to libSQL write throughput and at-rest ciphertext retention); or (c)
+implement and retain-proof a fenced pre-cap close/generation handoff. Today's Vercel default has both
+the viewer-gating and cap-handoff gaps.
 
 ## 7. Identity, "spaces" & onboarding (one machine at a time)
 Hierarchy: **machine (identity_id) → its spaces (each space = one claude instance =
@@ -1388,45 +1952,80 @@ is claude's on-disk transcript (host-side). The session's encrypted name/title/c
 in its `session_announce` frame on the bus, not a stored row. (Offline listing /
 durable stores are **deferred** — §6C.)
 
-Transient relay **frame** (rides the bus / a session stream — never a durable row):
+Shipped A0 transient relay **frame** (rides the bus / a session stream — never a durable row):
 ```
 { v, identity_id, session_id, dir, record_kind, seq|null, msg_id, client_msg_id?,
   key_epoch, salt, nonce, ct, part?, parts? }   // ct includes the GCM tag
 AAD = canonical-encode(v, identity_id, session_id, dir, record_kind, seq, msg_id, client_msg_id?, key_epoch, part, parts)   // identical to §4.3 canonical_AAD
 ```
-**Chunking (size limits, §6B).** A payload over a **hook** (inbound `POST /api/relay`,
-the Vercel Function body) is capped at **4.5 MB**; a **stream chunk** (outbound
-`writer.write`) at **10 MB**. A message whose plaintext would exceed the limit is split
+
+Selected A1 uses the version-2 frame and exact encoder in §4.3: it replaces A0 `session_id` with
+separate `collaborationServerId` and `logicalChatId`, adds `delivery_attempt_id`, derives chat-scoped
+plane keys, and never accepts one version's KDF/AAD as the other.
+**Chunking (size limits, §6B).** Every shipped publish, in either direction, first crosses the
+**hook** request and Vercel Function body capped at **4.5 MB**; its later **stream chunk**
+(`writer.write`) is capped at **10 MB**. A message whose encoded frame would exceed the smaller hook
+limit is split
 into `parts` **independently-AEAD'd chunks** sharing one `msg_id`, each its own frame with
 its own `salt`/`nonce` and `part` (0-based) bound into AAD. The receiver **decrypts each
 chunk on arrival** (AEAD-verifying `part`/`parts`/`msg_id`), then reassembles the
 **plaintext** in `part` order once all `parts` are present — so a forged/replayed chunk
-fails AEAD before it can corrupt the buffer. **Replay dedup for chunked frames keys on
-`(msg_id, part)`** (§6), so re-sending one chunk is dropped without stalling the others'
-reassembly. Use ~8 MB targets for headroom. Applies to large assistant output and full
-`catch_up` replays (over session streams). **`catch_up` is idempotent:** history is
+fails AEAD before it can corrupt the buffer. In shipped A0, replay dedup for chunked frames keys on
+`(msg_id, part)` (§6). In selected A1, transport insertion instead uses route-wide
+`(route token, delivery_attempt_id, part)` plus the normalized-frame digest from §4.3, while durable
+host replay adjudication uses the full server/chat/source scope plus `msg_id`. Target at most ~3 MB of
+encoded frame bytes so JSON/base64 and request overhead remain below the 4.5 MB Function limit.
+Applies to large assistant output and full `catch_up` replays (over session streams).
+**`catch_up` is idempotent:** history is
 immutable and `seq`-addressed, so even a re-served range is deduped by `seq` at the client —
 re-serving never corrupts the transcript.
 
-`record_kind` ∈ (aligned with §6A):
+Shipped A0 `record_kind` belongs to this closed taxonomy (aligned with §6A):
 - **content** (AEAD under `K_session`): `user` · `assistant` · `result` · `system` ·
-  `status` · `rate_limit` · `can_use_tool` — carry `seq`; `user` may be `dir:in`
-  (prompt, with `client_msg_id`) or `dir:out` (echo, carrying the assigned `seq`).
+  `assistant_sub` · `assistant_thinking` · `assistant_thinking_sub` · `status` · `rate_limit` ·
+  `can_use_tool` · `tool_use` · `tool_result` · `task` · `permission_request` — carry `seq`; `user`
+  may be `dir:in` (prompt, with `client_msg_id`) or `dir:out` (echo, carrying the assigned `seq`).
 - **control** (AEAD under `control_key`, `dir:in`, on the **session** channel,
   replay-checked by the `msg_id` seen-set): `catch_up` · `permission` · `interrupt` ·
-  `set_mode` · `set_model` · `command` · `end`. The control payload (e.g. `catch_up`'s
+  `set_mode` · `set_model` · `end` · `attachment` · reserved/unused `command`. Slash commands instead
+  ride the `user` content path. The control payload (e.g. `catch_up`'s
   `since`, and an `expiry`) lives **inside `ct`** — AEAD-authenticated by the GCM tag, **not**
-  an envelope/AAD field — so the broker can't read or alter it. `expiry` is only a generously
-  sized staleness bound on a *withheld-then-released-late* command (the lone clock touch on
-  the message plane; worst case = a stale command rejected, never a breach — §4.3/§6A); the
-  clock-free `msg_id` seen-set is the actual replay defense.
+  an envelope/AAD field — so the broker can't read or alter it. Shipped A0 validates `expiry` only
+  for `interrupt`, `set_mode`, `set_model`, and `end`; its `catch_up` branch ignores the stamped value,
+  while current `permission` frames omit it and their branch performs no expiry check. Its clock-free
+  `msg_id` seen-set is incarnation-local replay suppression, not a durable result map (§4.3/§6A).
 - **meta** (AEAD under `K_meta`, `dir:out`): `accepted` `{client_msg_id, seq}`;
+  `permission_resolved` (replayable native/projection gate state);
   `session_announce` (bus, the **periodic broadcast**)
   `{session_id, title, cwd, identity_label, status, last_activity, sent_at, incarnation, incarnation_started_at, announce_seq}`
   — **the whole payload is inside the ciphertext**, so the broker reads none of it.
 
-AAD binds **every** cleartext header field via a single canonical serialization
-(length-prefixed or CBOR) — no ad-hoc `a|b|c` concatenation (ambiguous). The presence
+Selected A1 uses the same plane taxonomy and adds meta `action_result`; its accepted/action-result
+payloads are the exact §4.3/§6 shapes. Unknown kinds fail closed. In A1, `permission_resolved` still
+means native/projection gate state and remains distinct from the coordinator's `action_result`.
+
+After plane selection, A1 enforces this closed header-validity matrix before semantic classification:
+
+| Kind family | `dir` | `seq` | `client_msg_id` |
+| --- | --- | --- | --- |
+| inbound `user` | `in` | null | required |
+| outbound `user` projection/echo | `out` | non-null | optional; present only for a correlated client proposal |
+| every other content kind | `out` | non-null | forbidden |
+| inbound `attachment` | `in` | null | required |
+| every other control kind | `in` | null | forbidden |
+| every meta kind, including A1 `action_result` | `out` | null | forbidden |
+
+An unknown kind or any other direction/sequence/client-ID combination is an invalid physical channel
+position: it produces no semantic ingress record, no acknowledgement, and follows the explicit
+invalid-frame quarantine/cursor transition in
+[Client-driven Host Runtime — Reference §4](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+Shared encryption keys do not make an inbound `accepted`, sequenced control, or outbound interrupt
+valid.
+
+AAD binds **every** cleartext header field via the landed `canonicalAad` serialization: each byte/string
+field has a u32-BE length prefix, each integer is a length-prefixed u64-BE, and each optional has a
+one-byte presence tag. A1 extends that same writer in the exact §4.3 order; CBOR and ad-hoc `a|b|c`
+concatenation are not alternatives. The presence
 fields (`sent_at`, ordering tags, names/titles/status) live **inside** the `K_meta` payload, not the
 cleartext header. Stale replay protection (§4.3) remains the liveness check: a
 `session_announce` counts as online only if AEAD-valid **and** `sent_at` is in-window
@@ -1570,14 +2169,18 @@ phase0/            unchanged — the Python reference + protocol findings
      docs-confirmed §13; note: live-stream pagination over negatives isn't exact — fine for
      "recent," §13).
   3. **One-bus-per-identity**: a duplicate `createHook` on a held token throws
-     `HookConflictError` (docs-confirmed §13) → confirm the create-race loser catches it and
-     resume-tails. (No idle-timeout exists, §13 — the run persists; only the cap-roll frees the token.)
-  4. **Cap-roll handoff** observable: readers see stream **EOF** on the old run's completion
-     and `getHookByToken` resolves the new run after re-`start()`; brief `HookNotFound` → retry.
+     `HookConflictError` (docs-confirmed §13) → confirm the losing workflow terminates while its
+     caller, which never receives or catches that error, polls the deterministic token and
+     resume-tails the winner. This create race is not an HTTP `409`. (No idle-timeout exists, §13 —
+     the winning run persists until explicit close/failure.)
+  4. **Cap-roll handoff** remains a release gate: add a production pre-cap controller and prove readers
+     see stream **EOF**, publishers are fenced across close/re-`start()`, and no accepted frame or
+     cursor is lost; the existing explicit-`__close` test proves only the primitive.
   5. Browser path: `GET /api/stream` obtains World creds (per-request vs cached — measure),
      pipes SSE within the Function `maxDuration` (300s Hobby / 800s Pro, §13 — reconnect by
      `seq` past it); `HookNotFound` ⇒ `200` empty.
-  6. Size/chunk limits (hook ≤ 4.5 MB, stream chunk ≤ 10 MB, payload ≤ 50 MB) + `(msg_id, part)` dedup.
+  6. Shipped-A0 size/chunk limits (every frame crosses hook ≤ 4.5 MB before stream chunk ≤ 10 MB,
+     payload ≤ 50 MB; target ~3 MB encoded frames) + `(msg_id, part)` dedup.
 - **P4 — CLI: host relay + a real claude (the §14/§17.5 MITM).** ✅ DONE 2026-06-09 — the **real RC
   MITM backend** is built in TypeScript (`@remote-claw/cli/rc`), a faithful port of the Phase-0
   interception (`phase0/remote_claw/{mitm,core,certs}.py`, the MANGO/KIWI/PLUM tests):
@@ -1595,8 +2198,8 @@ phase0/            unchanged — the Python reference + protocol findings
   - `relay.ts` — `HostRcRelay` bridges one RC session to the broker (the v2 replacement for Phase-0's
     localhost ClientServer): an OUTBOUND pump (worker upstream → sealed content frames: assistant,
     result, `tool_use`/`assistant_sub` for sub-agents, `permission_request`; seq + catch_up log; 409
-    cap-roll retry) and an INBOUND pump (client `user` → echo + inject, `catch_up` → replay,
-    `permission` → control_response), each re-subscribing across run-not-up / cap-roll.
+    disposed-channel retry) and an INBOUND pump (client `user` → echo + inject, `catch_up` → replay,
+    `permission` → control_response), each re-subscribing across run-not-up / explicit close or replacement.
   - `launch.ts` + `run.ts` — `remote-claw [claude args] --rc-app <broker>` runs the **real** claude
     behind the MITM (`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`, `NO_PROXY` cleared), auto-creating the
     machine identity; lazy — nothing reaches the broker until `/remote-control` registers a session.
@@ -1631,9 +2234,10 @@ phase0/            unchanged — the Python reference + protocol findings
 - **One secret per machine** (one local file; override per run with `--rc-file`) is the
   **intended boundary**, not a flaw: a steal/reset blast radius is exactly **one machine**, with
   the others untouched. The honest cost is no partial/per-pass revocation — resetting a machine =
-  a new identity that cuts off *all* its passes at once (§4.2a/§4.4). A viewer holds a **pass**, not
+  a new identity for future legitimate host service, not revocation of copied old passes or retained
+  old routes (§4.2a/§4.4). A viewer holds a **pass**, not
   `S`; onboarding a pass into a browser still exposes it to that device's XSS/extension/clipboard
-  surface (and a stolen pass can read/steer that machine until reset). `rc1_`/pass
+  surface (and a stolen pass can read/steer retained old routes even after reset). `rc1_`/pass
   high-entropy tokens trip secret scanners if pasted into a repo.
 - **Web-app admission is SSO, not a baked-in token** (§4.5): the web UI sits behind the
   Better Auth SSO plugin (OIDC via the IdP discovery document, plus SAML 2.0 / OAuth2), so
@@ -1654,9 +2258,12 @@ phase0/            unchanged — the Python reference + protocol findings
   broker can't resurrect a dead session beyond a **`FRESH_WINDOW + SKEW`** fuzz (≈65 s). The
   assumption's **blast radius is the online dot only** — message **confidentiality/integrity**
   are clock-free (`K_session`/`control_key` AEAD) and **replay** defense is `msg_id`-based
-  (clock-free); the lone clock touch on the message plane is a control `expiry` (a stale
-  command is rejected — availability, never a breach, §6A/§8). A badly-skewed clock degrades
-  to a wrong dot / empty list / a send that bounces `409`, **never** a message breach. (A
+  (clock-free). A0 checks encrypted `expiry` only for `interrupt`, `set_model`, `set_mode`, and `end`;
+  a stale direct verb is rejected—availability, never a breach. `catch_up` stamps but ignores expiry,
+  and `permission` omits it, leaving the documented late-replay/late-answer boundaries (§6A/§8). A
+  badly skewed clock degrades to a wrong dot, empty list, or direct-verb expiry rejection, **never** a
+  message breach. A `409` instead means the separately typed transient channel-disposal/replacement
+  publish race; clock skew and semantic/direct-verb rejection do not produce it. (A
   zero-clock-trust challenge-handshake variant is recorded in §14A if ever needed.)
 - **`getHookByToken→getRun→getReadable` is a verified-by-types but undocumented-as-a-
   pattern composition**, and the run-roll **hook re-bind** has a brief `HookNotFound`
@@ -1666,17 +2273,24 @@ phase0/            unchanged — the Python reference + protocol findings
   duration): a bus run, once started, lives **indefinitely** (idle = free compute, but
   storage-retained is billed), so the token stays held even with no connected sessions. This
   is benign — a cold client just sees "no fresh announce → empty" — and the token is freed
-  only by the **cap-roll** (deliberate complete + re-`start()`). If we want idle buses to
+  only by explicit completion/cancellation/failure. The internal close/re-`start()` primitive is not a
+  shipped cap controller. If we want idle buses to
   self-clean, race the hook against a durable `sleep` (§6B). One-bus-per-identity is
   SDK-enforced (a duplicate `createHook` on a held token throws `HookConflictError`,
-  docs-confirmed §13 — the create-race loser catches it and resume-tails).
+  docs-confirmed §13): the losing workflow terminates, while its caller never receives or catches
+  that error and instead polls the deterministic token until it can resume-tail the winner. The
+  create race is not an HTTP `409`.
 - **Workflow per-run caps** (25k events / 10k steps / 2 GB; replay degrades past
-  ~2k events): each **inbound publish is an event**, so the bus **rolls** before the
-  cap (re-creating `bus:${identity_id}`); keep high-volume turn frames on per-session
-  **out-streams** (stream writes bypass the event cap, billed as Data Written) so rolls
-  stay rare. Quantify Events vs Data-Written per active identity before scaling.
-- **Metadata leak:** the broker sees the cleartext **routing header** (`identity_id`,
-  `session_id`, `dir`, `record_kind`, `seq`), plus frame **sizes/timing** and the
+  ~2k events): every shipped publish in either direction creates hook/step events. Current code does not
+  roll before the cap, so production availability at that boundary is an open release blocker. Keeping
+  high-volume turn frames on separate per-session runs isolates the identity-bus budget but does not
+  make session traffic event-free. Implement and prove the pre-cap handoff, and quantify Events versus
+  Data Written per active identity before scaling.
+- **Metadata leak:** in A0 the broker sees the cleartext **routing header** (`identity_id`,
+  `session_id`, `dir`, `record_kind`, `seq`); A1 instead exposes `identity_id`,
+  `collaborationServerId`, `logicalChatId`, and the derived opaque route token. A1 admission remains
+  self-verifying—the broker can recompute and bind the token without a credential lookup—but its frame,
+  idempotency, cursor, and manifest state is durable. It also sees frame **sizes/timing** and the
   `session_announce` **broadcast cadence**. Everything *inside* a frame — titles/cwd/
   status/last_activity/identity_label as well as message bodies — is AEAD-encrypted
   (`K_meta`/`K_session`/`control_key`), so the broker reads none of it. Not fully
@@ -1686,7 +2300,7 @@ phase0/            unchanged — the Python reference + protocol findings
   regress to a shared counter nonce with stateless/multi-device senders.
 - **Vercel Queues / WDK surface** still moving (Queues beta); Workflows GA is
   stable — pin SDK versions, isolate behind a thin transport interface. The §6B caps,
-  retention, stream-event-bypass and the API primitives are now **web-verified against the
+  retention, stream-payload/event-storage behavior, and the API primitives are now **web-verified against the
   live docs** (§13, 2026-06-08) — incl. `HookConflictError` on duplicate tokens; only the
   *integration* (our cross-process token→stream wiring) remains a P3 smoke-test, and SDK
   versions can still drift — re-confirm at build (§11 P3).
@@ -1703,11 +2317,12 @@ phase0/            unchanged — the Python reference + protocol findings
   rate scales with **total live sessions** under an identity:
   `Σ sessions × 86400 / ANNOUNCE_INTERVAL`. At the 20 s default that's ~4 320/day **per session** → the
   25k-events/run cap in ~5.8 d for a single session, proportionally faster with more (e.g.
-  5 sessions → ~1.2 d). So the bus **must** roll (re-`start()` under the same token — §6B);
-  keep all high-volume turn frames on per-session out-streams (stream writes bypass the event
-  cap, billed as Data Written), and a longer `ANNOUNCE_INTERVAL` (≤ 60 s) linearly slows
-  rolls at the cost of a larger presence fuzz. Quantify Events vs Data-Written per active
-  identity in P3.
+  5 sessions → ~1.2 d). So the bus **needs** a proved pre-cap handoff (explicit close and
+  re-`start()` under the same token—§6B), which is not yet shipped;
+  keep all high-volume turn frames on separate per-session runs so they do not consume the bus's
+  budget, and a longer `ANNOUNCE_INTERVAL` (≤ 60 s) linearly slows bus rolls at the cost of a larger
+  presence fuzz. Those session frames still create hook/step events on their own runs. Quantify Events
+  versus Data Written per active identity in P3.
 
 ## 13. Sources (verified 2026-06-07; Workflow runtime semantics **web- + bundled-SDK-verified 2026-06-08**, against the installed `workflow` package's `node_modules/workflow/docs`)
 - Vercel Workflows docs / concepts / pricing+limits — https://vercel.com/docs/workflows ·
@@ -1731,9 +2346,10 @@ phase0/            unchanged — the Python reference + protocol findings
     workflows"; a duplicate `createHook` on a held token throws **`HookConflictError`**
     (`@workflow/errors`, `HookConflictError.is(e)`, `e.token`) — /docs/errors/hook-conflict.
     Hooks are **`AsyncIterable`** (`for await … of hook` per `resumeHook`) — the bus loop.
-  - **Stream data bypasses the event log** ("flows directly without being stored in the event
-    log"), so out-stream writes do **not** count toward the 25k event cap (billed as Data
-    Written; max stream storage Unlimited; **chunk ≤10 MB**, ≤1,000 chunks/s/stream).
+  - **Platform stream bytes bypass the event log** ("flows directly without being stored in the event
+    log"; max stream storage Unlimited; **chunk ≤10 MB**, ≤1,000 chunks/s/stream). In this shipped
+    relay, however, every frame first arrives through `resumeHook` and a journaled `emit` step, so both
+    directions still consume run events even though the copied stream bytes are not event payloads.
   - **No idle-timeout / no max run duration** ("Maximum run duration: No limit"; suspended
     runs wait indefinitely; **a built-in hook timeout is an open request, vercel/workflow#553**
     — the documented bound is racing the hook against a durable `sleep`). A suspended run
@@ -1753,7 +2369,8 @@ phase0/            unchanged — the Python reference + protocol findings
   `world.runs.list()` is **cursor-paginated only — no status/key filter** (workflow-sdk.dev/docs/api-reference/workflow-api/world/storage);
   no internal-state read, write-only hooks (workflow-sdk.dev/docs/api-reference/workflow-api/get-run · /docs/foundations/hooks);
   `hook_received` is a persisted event (workflow-sdk.dev/docs/how-it-works/event-sourcing);
-  out-stream bypasses the event cap (workflow-sdk.dev/docs/foundations/streaming);
+  stream payload bytes bypass event-log storage, while the shipped hook/emit lifecycle still consumes
+  events (workflow-sdk.dev/docs/foundations/streaming);
   Upstash REST `SET … EX`/pipeline, no connection mgmt (upstash.com/docs/redis/features/restapi).
 - Realtime constraints (no native WS; SSE duration caps) — Vercel Functions docs
 - HKDF RFC 5869; AES-GCM nonce limits (NIST SP 800-38D); WebCrypto SubtleCrypto
@@ -1772,11 +2389,15 @@ tightening. Accepted fixes are already folded into §3–§8 above:
   it for Claude. The acceptance frame proves relay receipt/order, not native application.
   (§6)
 - **Replay protection ≠ AEAD.** The broker can replay a valid old ciphertext →
-  an in-memory `msg_id` seen-set survives stream reconnects within one incarnation;
-  durable restart uses the sampled inbound floor. Drop duplicates before side effects.
+  shipped A0's in-memory `msg_id` seen-set drops duplicates during one incarnation, while its sampled
+  durable floor only skips older broker indices after restart and is not semantic exactly-once.
+  Selected A1 instead persists the authenticated source digest, decision, `seq`, accepted result, and
+  ingress cursor; exact replay re-emits that result without a second side effect, and
+  same-ID/different-digest input is quarantined.
   (§6)
-- **Control frames are encrypted** under a derived `control_key` with `msg_id` +
-  `expiry` + replay-check (catch_up/permission can't be server-injected). (§4.2,§8)
+- **Control frames are encrypted** under a derived `control_key` and carry authenticated `msg_id`, so
+  the broker cannot forge `catch_up` or `permission`. Shipped A0's direct verbs also enforce encrypted
+  `expiry`; `catch_up` stamps but ignores it, and `permission` currently omits it. (§4.2,§8)
 - **Cloud-history contradiction removed.** The broker stores **no message bodies**;
   catch-up is wrapper-served **purely from the in-memory log** (no worker backfill —
   grounded §17). Dropped `GET /api/messages`. (§3.2,§6,§8)
@@ -1787,9 +2408,9 @@ tightening. Accepted fixes are already folded into §3–§8 above:
   and never call it). (§6,§11,§14,§17)
 - **AAD/envelope canonicalized** (binds v, identity_id, session_id, dir, record_kind,
   seq, msg_id, key_epoch via one serialization). (§4.3,§8)
-- **Meta-frame key.** Meta frames (`accepted`/`session_announce`) are AEAD under a single
-  **`K_meta`** (the earlier per-field `K_identity_meta`/`K_session_meta` were collapsed
-  into it). (§4.2,§6A,§8)
+- **Meta-frame key.** A0 meta frames (`accepted`/`session_announce`/`permission_resolved`) are AEAD
+  under a single **`K_meta`** (the earlier per-field `K_identity_meta`/`K_session_meta` were collapsed
+  into it); selected A1 adds `action_result` on the same plane. (§4.2,§6A,§8)
 - **Honest zero-knowledge scope:** confidentiality covers `content_root`/`control_key`/
   `K_meta`; `auth_token` is authz and the **live bearer is visible to the broker** —
   there is **no stored token**: the broker recomputes
@@ -1857,15 +2478,16 @@ no worker backfill.
 Beyond §14's plan review, individual decisions are settled with small design panels
 (N independent proposals → synthesis → adversarial verification) and folded back here.
 
-- **Per-machine identity + viewer passes + trust modes; rotation cut (2026-06-08).**
+- **Per-machine identity + viewer passes + trust modes; symmetric rotation cut (2026-06-08).**
   Reversed the earlier "one user identity binding all sessions across hosts" model: **each
   machine now owns its own secret `S` → its own `identity_id` → its own bus**; `identity_id`
   is a **machine's public routing id**, not a user identity spanning hosts. Blast radius of a
   steal/reset is exactly **one machine**; to watch another machine you onboard *its* credential.
   Introduced the **pass** (§4.2a) — a viewer credential carrying the operational keys
   {address/content/command/presence} but **not** `S`/`PRK`, one read+steer tier (no view/control
-  split), uninvertible to `S` by HKDF one-wayness; revoke = reset the machine; honest
-  symmetric-key forge residual. Introduced the **three trust modes** behind one `SecurityProvider`
+  split), uninvertible to `S` by HKDF one-wayness; reset moves future service but does not revoke
+  copied old passes; honest symmetric inbound-authority residual. Selected A1 later adds a separate
+  Ed25519 server-output signature, without rotating those route/KDF keys. Introduced the **three trust modes** behind one `SecurityProvider`
   seam (§2A): **Open** (trust-server, no crypto, loud banner), **Sealed** (today's E2E), **Managed**
   (future relay-delivered wrapped keys) — identical wire/relay, only `seal`/`open` differ; every
   unconditional confidentiality claim is now Sealed/Managed-relative. **Rotation/forward-secrecy
@@ -1931,9 +2553,9 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   predicate allows `sent_at ≤ now + SKEW`); (2) **both** `FRESH_WINDOW` and `SKEW` must be
   ≥ max skew (the past edge guards a slow clock from false-grey, the future edge guards a
   fast clock from false-reject), with concrete defaults `20 s / 60 s / 5 s`; (3) the
-  "clock-free message plane" claim is scoped honestly — a control frame's `expiry` (inside
-  `ct`) is the one clock touch, bounding a *withheld-then-released-late* command, worst case
-  a rejected stale command; (4) the cold-start recent-window read is sized to span ≥ one
+  "clock-free message plane" claim is scoped honestly—encrypted `expiry` on A0's four direct verbs
+  bounds a withheld-then-released-late action, while `catch_up` ignores its stamped expiry and
+  `permission` omits it; (4) the cold-start recent-window read is sized to span ≥ one
   `ANNOUNCE_INTERVAL`, with a ≤ `ANNOUNCE_INTERVAL` fallback if it rolled; (5) §2 now lists
   **replay** among broker powers. A *mid-pass batching idea* (one announce per host covering
   many sessions) was **rejected** on the user's clarification that **a wrapper is 1:1 with a
@@ -1949,10 +2571,13 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   → one `runId`, read back `[{n:1},{n:2},{n:3}]`, `tailIndex:2`). (2) **recent window** —
   `getReadable({startIndex:-2})` returned exactly the last two. (3) **one-bus-per-identity** —
   a second `createHook` on the held token threw **`HookConflictError`** ("Hook token … is
-  already in use by another workflow"), so the create-race loser deterministically resume-tails.
-  (4) **completion → dispose → token frees** — after a `__close` the run completes, the token
-  stops resolving (`getHookByToken` → `HookNotFound`), and a subscribe renders empty — the
-  cap-roll/teardown path. So the bus is no longer just docs-confirmed but **observed working**;
+  already in use by another workflow"), proving SDK uniqueness. In the broker handshake that error
+  terminates only the losing workflow; its caller does not catch it and independently polls the
+  deterministic token until it resolves and resume-tails the winner.
+	  (4) **completion → dispose → token frees** — after a `__close` the run completes, the token
+	  stops resolving (`getHookByToken` → `HookNotFound`), and a subscribe renders empty — the
+	  explicit-close/teardown primitive. This did not test a production cap controller. So the bus
+	  primitive is no longer just docs-confirmed but **observed working**;
   the only remaining build-out is wiring it into the real broker (P3 proper) with
   per-identity `auth_token` auth, chunking, and the per-session streams.
 - **Implementation landed — the encrypted spine works end-to-end (2026-06-09, PR9–PR12).** The
@@ -1968,8 +2593,8 @@ Beyond §14's plan review, individual decisions are settled with small design pa
     bus-only-`session_announce` guard. No store.
   - **CLI BrokerClient** (PR11) — the host+viewer transport: seal on the way out / open on the way
     in (via the `SecurityProvider`), the two endpoints, a robust SSE parser, and the viewer-side
-    `FrameOrderer` (dedup by `msg_id`/`(msg_id,part)`, reorder content by `seq`, deliver control/meta
-    immediately). The host inbound command pump does not use the orderer.
+    shipped-A0 `FrameOrderer` (dedup by `msg_id`/`(msg_id,part)`, reorder content by `seq`, deliver
+    control/meta immediately). The host inbound command pump does not use the orderer.
   - **End-to-end harness** (PR12) — the real transport ↔ the real broker ↔ a viewer, only `claude`
     faked: a sealed `session_announce` is discovered on the bus; a `user` prompt (`K_session`) round-
     trips to the host, which runs the fake model and emits `accepted` + echo + `assistant` + `result`;
@@ -2047,7 +2672,7 @@ rc_api_bridge); others are specs to build/test.
    identity's bus; decrypt titles/cwd → gchat-style list. (A space is a chat; online = its
    latest announce is **fresh**, §4.3.)
 
-**History sync**
+**Shipped A0 history sync**
 
 9. **Open a session cold (full sync).** Client sends `catch_up{since=0}` on the session
    channel → wrapper replays its log (re-posting each frame with its `seq`/`msg_id`; the
@@ -2098,7 +2723,9 @@ rc_api_bridge); others are specs to build/test.
     out-stream → client Allow/Deny → encrypted `permission` control frame → wrapper →
     `control_response` to claude. (plumbed; RC auto-runs today)
 17. **Remote control verbs.** Client sends `interrupt` (ESC) / `set_mode` / `set_model`
-    / `command` (`/compact`,`/clear`) control frames (session channel) → wrapper → claude.
+    control frames (session channel) → wrapper → claude. Slash commands such as `/compact` and
+    `/clear` use the ordinary `user` content path, so Claude receives, acknowledges, echoes, and
+    replays them like prompts; the reserved `command` control kind is not emitted.
 
 **Resilience**
 
@@ -2115,14 +2742,16 @@ rc_api_bridge); others are specs to build/test.
     liveness past `FRESH_WINDOW + SKEW`. **[V]** C5 (re-scoped: the **local TUI** recovers;
     RC does not backfill)
 
-    **Selected A1 target:** reopen the persisted `logicalChatId`, acquire a new durable
-    coordinator epoch, and resume the stored Claude conversation UUID. Try the known private
-    `cse_*` first. Advance the native process through its fenced forward-incarnation transition;
+    **Selected A1 target:** reopen the persisted `(collaborationServerId, logicalChatId)` scope,
+    acquire a new durable coordinator epoch, and resume the stored Claude conversation UUID. Try the
+    known private `cse_*` first. Advance the native process through its fenced forward-incarnation transition;
     if Claude creates a replacement `cse_*`, install it through a separate fenced transport-attachment
     transition. Bind the resulting worker epoch to the current native/coordinator epochs. Reconcile
     persisted RC state and proven native transcript evidence without expecting worker backfill, then
-    broadcast the same broker-facing `session_id = logicalChatId`. The existing viewer row/channel
-    un-greys and continues; uncertain pre-crash delivery stays quarantined rather than being resent.
+    broadcast the same server/chat scope on the canonical derived tokens
+    `bus:a1:${scopeAddress}` and `sess:a1:${chatAddress}` (§4.3). The existing
+    `(identity_id, collaborationServerId, logicalChatId)` viewer row/cache un-greys and continues;
+    uncertain pre-crash delivery stays quarantined rather than being resent.
 20. **Host offline → back.** Wrapper exits (never outlives the CLI) → **stops
     broadcasting** → its announces age out of `FRESH_WINDOW` → a client *watching* its
     spaces retains them as disconnected rows; a *fresh* cold open just won't list them
@@ -2131,23 +2760,21 @@ rc_api_bridge); others are specs to build/test.
     last one gone it just goes **quiet** (token still resolvable) and a cold open reads the
     recent window, finds no fresh announce, and renders empty — "online = fresh announce," not
     "bus exists."
-    A send to the gone session is rejected **client-side** (greyed → send disabled). If a
-    frame is sent anyway it is **best-effort**: while the session run is still alive (wrapper
-    briefly offline) it *may* land when the wrapper returns and read it, deduped by `msg_id`;
-    but once the run idles out and the hook disposes, `POST /api/relay` → `HookNotFound` →
-    **`409` and the send is lost** (**no durable server queue** — idempotency only protects a
-    frame the wrapper actually receives, not one dropped at a dead hook). The client treats a
-    greyed session as send-disabled and **re-sends after it re-appears**. If the same live
+    A send to the gone session is rejected **client-side** (greyed → send disabled). If that UI guard
+    is bypassed, `POST /api/relay` does not reject an absent channel: `ensureChannel` may start a new
+    Workflow run and buffer the frame without a live native attachment. If the same relay incarnation
+    returns to the same token it may consume the frame later; an A0 relaunch under a new synthetic ID
+    leaves the old frame orphaned. The client must not automatically resend an ambiguously accepted
+    mutation. If the same live
     controller reconnects, its next fresh announce un-greys the row and `catch_up` fills the
     transport gap. A process relaunch follows scenario 19: A0 creates a separate row, while A1
-    reacquires the stable `logicalChatId` and un-greys the existing row after recovery.
-21. **Bus rolls mid-session (event cap).** The bus run nears 25k events → wrapper(s)
-    `start()` a fresh bus run under the same token `bus:${identity_id}` (1:1 token frees
-    on the old run completing). A tailing client's bus SSE ends → it reconnects
-    `GET /api/stream?identity=…` → `getHookByToken` now resolves the **new** run → it
-    re-tails (and wrappers resume broadcasting onto it). Brief `HookNotFound` during the
-    handoff → client retries. **Open per-session chats are unaffected** (their `sess:`
-    streams are separate runs).
+    reacquires the stable `(collaborationServerId, logicalChatId)` scope and un-greys the existing row
+    after recovery.
+21. **Bus reaches its event-cap boundary.** Current A0 has no production pre-cap controller. The tested
+    `__close` primitive can end the old stream and free the token, but neither wrapper nor broker counts
+    events or invokes it. A release proof must add publisher fencing, explicit close/re-`start()`, client
+    EOF/re-tail, and no-loss cursor behavior; until then, availability at this boundary is unsupported.
+    Selected A1 uses its durable per-route generation manifest instead.
 22. **Client returns after being away (cold tab).** A client that closed comes back:
     re-derive (or read `localStorage`) → subscribe bus → recent-window announces → live
     list; open a chat → `catch_up{since=cached_seq}` (delta from its IndexedDB cache, or
@@ -2173,23 +2800,31 @@ reorder/**replay**, no keys)
     only *extend* a live dot to ≤ `FRESH_WINDOW + SKEW`, never resurrect — §4.3.)
 25. **Two wrappers race the initial bus create.** Both sessions of a cold identity enable RC
     at once → both `resumeHook`→`HookNotFound`→`start()`. The 1:1 token lets one win; the
-    loser catches `HookConflictError` → resume-tails the winner (bounded backoff, §6B). Both
-    end up broadcasting on the one bus; no announce lost.
+    other workflow terminates with `HookConflictError`. That workflow's caller never receives or
+    catches the error; it keeps polling the deterministic token with bounded backoff, resolves the
+    winning run, and resume-tails it (§6B). This create race is not an HTTP `409`. Both wrappers end
+    up broadcasting on the one bus; no announce is lost.
 26. **Clean session end (vs crash).** The wrapper or local native process exiting stops that
     session's announces; it greys then drops within `FRESH_WINDOW + SKEW` — same as a crash, since
     presence is broadcast-driven (no special "left" frame needed). In the current relay an
     authenticated viewer `end` does **not** stop the native session or announcements: it emits no
     `end_session` and only clears open relay permission gates.
-27. **Mutation-control reorder / expired control.** The broker reorders or withholds mutation verbs.
+27. **Mutation-control reorder / ambiguous timeout.** The broker reorders or withholds mutation verbs.
     Order-dependent ones are **serialized client-side** (send the next only after the prior's
     effect shows on the out-stream — §6A), so e.g. `interrupt` can't be inverted with a later
-    `set_mode`. A withheld-past-`expiry` control frame is **rejected** (no effect); the client
-    **times out and re-sends** with a fresh `msg_id` (no hang). A replayed control frame is
-    dropped by the `(msg_id)` seen-set before any side effect.
+    `set_mode`. Shipped A0 rejects a late first delivery of those direct verbs, but it emits no durable
+    result: an exact-ID retry is silently dropped and a fresh ID may repeat an already-applied action.
+    The client therefore reconciles the native effect, issues a fresh intent only after proving the old
+    one did not apply, or surfaces an ambiguous outcome. A0 does not enforce `expiry` for `permission`
+    or `catch_up`; an open native permission gate is the only additional stale-answer guard, while a
+    fresh read-only `catch_up` merely risks redundant projection replay. Current permission frames
+    omit `expiry`; a withheld answer may act only while the corresponding native gate remains open.
+    Selected A1 makes exact retry safe by returning the stored action-specific result.
 
-Also covered by the same mechanisms (not numbered): **machine reset** (new `S`
-→ new `identity_id` = a new identity for that machine with a fresh, empty set of spaces; the
-old identity and all its spaces are dead, other machines untouched — §4.4), and a **broker
+Also covered by the same mechanisms (not numbered): **machine reset** (after stopping the old relays,
+new `S` → new `identity_id` = a new identity for that machine with a fresh, empty set of spaces;
+legitimate future service abandons the old identity, but copied old credentials remain live on
+retained old routes; other machines are untouched — §4.4), and a **broker
 (Vercel) outage** (the local TUI
 keeps working; remote is unavailable; clients reconnect, re-subscribe and `catch_up`
 when the broker returns — nothing lost since claude holds the transcript).
@@ -2211,8 +2846,11 @@ Channels are addressed by **derived tokens** (§6B): the identity **bus**
 `GET /api/stream?identity=|session=` = `getHookByToken(token)→getRun(runId)→getReadable()` over SSE (subscribe).
 No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 In the shipped A0 sequences below, `session_id` is the private synthetic RC `cse_*`. In the selected
-A1 target, the token and viewer announce use stable `logicalChatId`; the inner `cse_*` is a separately
-persisted transport binding and may change without changing this channel.
+A1 target, the discovery token is
+`bus:a1:${scopeAddress}`, the chat token is `sess:a1:${chatAddress}` (both canonical tuple hashes from
+§4.3), the canonical chat is `(collaborationServerId, logicalChatId)`, and the viewer
+announce/row/cache key is `(identity_id, collaborationServerId, logicalChatId)`. The inner `cse_*` is a
+separately persisted transport binding and may change without changing this channel.
 
 **1. Fresh identity bootstrap** (`remote-claw --rc-identity`)
 1. W: gen `S`; derive `identity_id, auth_token, content_root, control_key, K_meta`
@@ -2234,7 +2872,7 @@ persisted transport binding and may change without changing this channel.
 3. T→W `POST …/{rcSid}/bridge` → W `200 {worker_jwt, api_base_url}`
 4. T→W `GET …/{rcSid}/worker/events/stream` (SSE); W→T `control_request{initialize}`
 5. **No backfill** — the stream carries only **new** events from here (grounded §17: the worker does **not** re-emit pre-RC turns). W's in-memory log starts effectively empty and covers the conversation **from RC-enable forward**; the prior local turns stay in claude's `.jsonl`.
-6. W **joins the bus immediately**: `resumeHook("bus:"+identity_id, …)` (resume-or-**start** the bus run, bounded-backoff retry on `HookNotFound`/`HookConflictError`); opens the session stream `sess:${identity_id}:${rcSid}`; **broadcasts** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change). **No completeness gate** is needed — the log is complete from the moment it starts, so a client racing in with `catch_up{since=0}` gets the whole session-so-far. The selected A1 path instead binds `rcSid` beneath a stable `logicalChatId` and uses the latter for this stream and announce.
+6. W **joins the bus immediately**: `resumeHook("bus:"+identity_id, …)` (resume-or-**start** the bus run; after a start, its caller polls `getHookByToken` with bounded backoff on absence; a duplicate start's `HookConflictError` terminates only that losing workflow and is never caught by the caller); opens the session stream `sess:${identity_id}:${rcSid}`; **broadcasts** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change). **No completeness gate** is needed — the log is complete from the moment it starts, so a client racing in with `catch_up{since=0}` gets the whole session-so-far. The selected A1 path instead binds `rcSid` beneath a stable `(collaborationServerId, logicalChatId)` scope, publishes discovery on `bus:a1:${scopeAddress}`, and uses `sess:a1:${chatAddress}` for that chat.
 
 **5. Launch with RC ON** (`remote-claw --remote-control`) — as #4 steps 2–4 + the join-bus/broadcast of step 6, **no backfill** (empty history).
 
@@ -2265,13 +2903,20 @@ persisted transport binding and may change without changing this channel.
 
 1. C: encrypt `user{content}` **as a content frame under `K_session`** → C→V `POST /api/relay {kind:user, client_msg_id, msg_id}` → `resumeHook("sess:…",…)`
 2. V `hook.resume(sess token, frame)`
-3. W: hook fires → **dedup by msg_id** → decrypt → allocate `seq`
+3. W: hook fires → shipped A0 **dedups by `msg_id`** before open/decrypt; a duplicate is silently
+   dropped, while a new frame decrypts and allocates `seq`
 4. W→V session out-stream `{kind:accepted, client_msg_id, seq}` → V→C SSE → C clears "pending"; this proves relay receipt/order only
 5. W→V echoes and records the user frame, then W→T injects it on the worker SSE *(MITM downstream)*
 6. T→A `POST /v1/messages` *(inference, passthrough)*
 7. T→W `POST …/worker/events [{assistant},{result}]`
 8. W: log+encrypt → W→V session out-stream `{assistant, seq}` then `{result, seq}`
 9. V→C SSE → C decrypts + renders
+
+Selected A1 changes step 3: it authenticates and reassembles first, then consults the durable
+full-scope source-ID/digest result record. Only a complete exact logical-frame replay qualifies; one
+matching multipart chunk does not. A terminal replay enqueues the stored `accepted` in a newly
+identified delivery envelope and stops, while a same-ID/different-message collision quarantines the
+source.
 
 **12. Client-driven exchange also appears in the local TUI** *(verified C4)*
 
@@ -2313,21 +2958,25 @@ persisted transport binding and may change without changing this channel.
 
 **Selected A1 target**
 
-1. W reopens the durable coordinator journal, reacquires the stable `logicalChatId`, and resumes the stored Claude conversation UUID with input closed
-2. W advances the native process through a fenced forward-incarnation transition and tries the known private `cse_*` first; a reusable one starts a new worker epoch, while a replacement `cse_*` uses a separate fenced attachment transition under the same native binding and logical chat
+1. W reopens the durable coordinator journal, reacquires the stable
+   `(collaborationServerId, logicalChatId)` scope, and resumes the stored Claude conversation UUID with
+   input closed
+2. W advances the native process through a fenced forward-incarnation transition and tries the known private `cse_*` first; a reusable one starts a new worker epoch, while a replacement `cse_*` uses a separate fenced attachment transition under the same native binding and server/chat scope
 3. W reconciles persisted RC state plus proven native transcript evidence; the worker contributes no history backfill, and ambiguous pre-crash delivery is not retried
-4. W announces and tails `sess:${identity_id}:${logicalChatId}`; C un-greys the same row and continues its cached chat rather than receiving a second row
+4. W announces on `bus:a1:${scopeAddress}` and tails `sess:a1:${chatAddress}`; C addresses its row/cache by
+   `(identity_id, collaborationServerId, logicalChatId)`, un-greys that row, and continues the cached
+   chat rather than receiving a second row
 
 **20. Host offline → back**
 1. W/CLI exit → W **stops broadcasting**; its announces age out of `FRESH_WINDOW`
-2. C (tailing the bus) retains the session as a **disconnected** row; a fresh open reads the recent window and finds no fresh announce → empty (the bus run **persists** regardless — no idle-timeout, §6B/§13; `HookNotFound` only if the bus was *never* created or mid-roll)
-3. send is blocked **client-side** (greyed → disabled); if sent anyway it is **best-effort**: it *may* land if W returns while the run is still alive (deduped by `msg_id`), but once the session run idles out the hook disposes → `POST /api/relay` → `resumeHook` **`HookNotFound`** → **`409`, send lost** (no durable queue; idempotency can't save a frame dropped at a dead hook) → client re-sends after the session re-appears
+2. C (tailing the bus) retains the session as a **disconnected** row; a fresh open reads the recent window and finds no fresh announce → empty (the bus run persists—there is no idle-timeout)
+3. send is blocked **client-side** (greyed → disabled); if bypassed, publish may create/reuse a Workflow run and buffer a frame without a native consumer. The same relay incarnation may consume it on return; an A0 relaunch under a new synthetic ID can orphan it. Do not automatically resend an ambiguously accepted mutation.
 4. if the same live controller returns, its fresh announce un-greys the row and `catch_up` fills the gap; a process relaunch follows #19 (new row in A0, same recovered logical row in A1)
 
-**21. Bus rolls mid-session (event cap)**
-1. a connected W sees the bus run nearing 25k events → **completes** the old run (closes its stream, disposes the hook → frees the 1:1 token) → `start()`s a fresh run re-`createHook("bus:"+identity_id)` (race: loser catches `HookConflictError`, resume-tails the winner)
-2. tailing C's bus SSE hits **EOF** → C→V `GET /api/stream?identity=id` → `getHookByToken` resolves the **new** run → re-tail (wrappers resume broadcasting onto it; brief `HookNotFound` during swap → retry)
-3. open **per-session** chats untouched (separate `sess:` runs)
+**21. Bus reaches its event-cap boundary**
+1. current A0 does not count events or invoke the tested `__close` primitive before 25k
+2. clean publisher fencing, close/re-`start()`, EOF/re-tail, and no-loss cursor behavior remain a release proof, not shipped behavior
+3. selected A1 instead follows its durable route generation manifest
 
 **22. Client returns cold (was away)**
 1. C re-derives (or reads `localStorage`) → C→V `GET /api/stream?identity=id` (subscribe bus) → recent-window `session_announce`s
@@ -2373,15 +3022,15 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 16 | Tool permission | `control_request/response`, `GCM(control_key)`, session `hook`, `worker-SSE` |
 | 17 | Remote control verbs | control frames (`control_key`), session `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`) |
 | 18 | Network blip resume | `/api/stream?identity=&session=` (token→run), `wf-stream` resume(`startIndex`), `seq` reorder, `dedup` |
-| 19 | Wrapper/CLI restart recovery | **A0:** new synthetic RC id/log; an open viewer retains the old disconnected row + adds a new row, while cold reload sees only the fresh row. **A1 target:** persisted `logicalChatId`, resume UUID + known `cse_*` first, fenced replacement `cse_*` if needed, same broker channel/row, no worker backfill |
-| 20 | Host offline → back | stop-broadcast, announces age out, `grey-local`, `409`(no live session), rejoin + rebroadcast, `catch_up` |
-| 21 | Bus rolls mid-session | cap-roll: complete old run, `start()` new (same token), `HookConflictError` race, client EOF→reconnect→re-tail; sessions untouched |
+| 19 | Wrapper/CLI restart recovery | **A0:** new synthetic RC id/log; an open viewer retains the old disconnected row + adds a new row, while cold reload sees only the fresh row. **A1 target:** persisted `(collaborationServerId, logicalChatId)` scope, resume UUID + known `cse_*` first, fenced replacement `cse_*` if needed, same broker channel/row, no worker backfill |
+| 20 | Host offline → back | stop-broadcast, announces age out, `grey-local`; bypassed send may buffer on a run with no native consumer; exact-incarnation return versus A0-orphan handling |
+| 21 | Bus reaches event cap | shipped gap: explicit-close primitive exists, but pre-cap fencing, close/re-`start()`, EOF/re-tail, and no-loss proof do not |
 | 22 | Client returns cold | `localStorage`/re-derive, bus subscribe (recent window), `catch_up{since=cached}`, IndexedDB delta *(no per-client server state)* |
 | 23 | Two wrappers, one drops | both broadcast on the bus, survivor keeps broadcasting (re-wakes the run), `grey-local` only the dropped wrapper's spaces |
 | 24 | Broker replays stale announce | replayed `session_announce`, `sent_at` out of window → ignored, stays `grey-local` (replay extends a live dot ≤ `FRESH_WINDOW+SKEW`, never resurrects) |
-| 25 | Two wrappers race bus create | `resumeHook`→`HookNotFound`→`start()`, 1:1 token, `HookConflictError`→resume-tail (bounded backoff), no announce lost |
+| 25 | Two wrappers race bus create | `resumeHook`→`HookNotFound`→`start()`; 1:1 token; losing workflow terminates with `HookConflictError` while its caller polls the winning token and resume-tails it; no caller catch, no `409`, no announce lost |
 | 26 | Clean session end (vs crash) | local/wrapper exit → stop-broadcast → `grey-local`+drop within `FRESH_WINDOW+SKEW`; viewer `end` only clears open relay gates |
-| 27 | Control reorder / expired | client-serialized order-dependent controls, `dedup(msg_id)`, `expiry`-reject → timeout+re-send (no hang) |
+| 27 | Control reorder / ambiguous timeout | client-serialized order-dependent controls; A0 direct-verb `expiry` check + incarnation-local `dedup(msg_id)`, then native-effect reconciliation or visible ambiguity—never blind fresh-ID resend; A1 exact replay returns stored result |
 
 ## 17. Appendix — Claude's Remote Control protocol (reverse-engineered)
 
@@ -2567,7 +3216,7 @@ remote-claw and Happy answer the same problem with inverted primitives:
 | Durable history | optional sealed broker projection; native `.jsonl` remains separate on-host evidence | **server stores** encrypted history (timestamped, replayable) |
 | Onboarding | **paste-and-go** (any device, no account) | scan a QR → pair a device → account |
 | Steal one key | scoped to **one machine**: a stolen pass reads/steers that machine but is **not** `S`; a stolen `S` is full compromise of **that machine only** (others untouched) | scoped: one DEK reads **that machine's** content only |
-| Revoke a leak | **no per-pass revoke** — reset the machine (cuts all its passes; §4.4) | **"remove machine from account"** revokes that DEK server-side |
+| Revoke a leak | **no per-pass revoke** — stop old relays and reset to move future service; copied passes remain valid on retained old routes (§4.4) | **"remove machine from account"** revokes that DEK server-side |
 | Forward secrecy | none | future-only after a device removal |
 
 The original-profile summary: **Happy spends a server-side store + a pairing step to buy per-device,
