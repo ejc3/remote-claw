@@ -68,7 +68,8 @@ ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `
 - **`packages/clawsec`** — the crypto core: the HKDF key hierarchy, per-message AES-256-GCM,
   the §8 wire envelope, the derivable channel tokens, and the `rcp1_` viewer **pass**.
 - **`apps/web`** — the pluggable **broker** (`POST /api/relay`, `GET /api/stream`; a per-identity
-  bus + per-session relay) with ephemeral Vercel Workflow and durable SQLite/libSQL backends. The
+  bus + per-session relay) with capped Vercel Workflow run streams and durable SQLite/libSQL
+  backends. The
   current host and viewer use sealed mode with every backend, so the backend sees only ciphertext and
   routing metadata. It also serves the mobile-first **web client** (paste a pass → discover sessions →
   drive them, decrypted in-browser).
@@ -173,9 +174,11 @@ neutral seam plus Claude MITM migration, is implemented. The proof gates and per
 
 ## ⚠️ Security
 
-The v2 broker authenticates requests and sees only sealed frames plus routing metadata; the host's TLS
-proxy binds to `127.0.0.1`. Keep the machine secret/pass, provider credentials, generated CA key, and
-Vercel bypass secret private. The current default Anthropic inference path intentionally forwards
+The v2 broker authenticates identity-scoped data and recovery requests and sees only sealed frames plus
+routing metadata. The one-time handoff bootstrap is a separate, unauthenticated high-entropy capability:
+its proof, short TTL, body cap, single-read store, and required edge rate limit are its gate. The host's
+TLS proxy binds to `127.0.0.1`. Keep the machine secret/pass, provider credentials, generated CA key,
+and Vercel bypass secret private. The current default Anthropic inference path intentionally forwards
 non-RC traffic and is not yet the selected runtime's process-isolation boundary. The release target
 requires synthetic inner credentials, separate connector credentials, and a network fence that
 prevents direct provider fallback.

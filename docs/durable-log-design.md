@@ -80,7 +80,7 @@ re-verification.
 remote-control turns reportedly wrote only incomplete title/stub rows locally,
 while normal non-RC Claude wrote full local JSONL in real time. The tracked RC
 wire evidence independently establishes that the worker does not backfill
-history ([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)), so local JSONL must not
+history ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), so local JSONL must not
 be assumed to be the remote-claw server log; its exact compact role still needs the Phase B4 gate.
 
 **Historical investigation claim — resume/re-bridge.** When
@@ -90,7 +90,7 @@ The bridge body is `{}`, there is no `POST /v1/code/sessions`, and no historical
 payload is sent to the worker server. The wrapper must already have the
 history if gated re-verification confirms this behavior. The narrower tracked
 fact is that worker bridge/SSE does not provide history
-([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)).
+([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)).
 
 **Unverified client reconnect claim.** Historical traces suggested
 `lastSequenceNum`, `from_sequence_num`, or `Last-Event-ID` on client-side
@@ -254,7 +254,7 @@ cursor only when the complete normalized frame digest matches; unequal bytes fai
 transport collision. Separate sealed-generation manifest rows define frame counts, next-generation
 links, and empty generations. Stable semantic results remain host-owned and key on the full
 server/chat/source namespace plus `msg_id`; they are not collapsed into the broker transport key. The
-store-free Workflow backend remains A0-only and cannot claim this A1 contract.
+no-rollover Workflow backend remains A0-only and cannot claim this A1 contract.
 
 The physical cursor/manifest key is one immutable authenticated broker route, not a parsed chat:
 `scope_bus` has one null-chat discovery route, `server_control` has a distinct null-chat management
@@ -1030,7 +1030,7 @@ A durability PR is not complete unless it demonstrates these properties:
   from RC `sequence_num`. A simpler one-seq design is possible only if the
   projector guarantees one same-kind broker frame per RC event.
 - Compact source: tracked relay protocol describes an assistant compact-summary turn plus `result`
-  ([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)), while the unavailable
+  ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), while the unavailable
   historical native-RC investigation reportedly saw only an empty result on the
   wire and summary text in local JSONL. Treat this as version/mode dependent
   until Phase B4 reconciles it; do not require local transcript watching or

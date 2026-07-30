@@ -1,6 +1,7 @@
 import { fromHex, sha256 } from "@remote-claw/clawsec";
 
-// §4.2/§4.5 admission gate. Every /api/* request carries `Authorization: Bearer <hex(auth_token)>`
+// §4.2/§4.5 admission gate. Every identity-scoped data/recovery request carries
+// `Authorization: Bearer <hex(auth_token)>`
 // (hex, like identity_id and the rest of the routing surface — no second encoding to drift). The
 // broker RECOMPUTES `identity_id = trunc(SHA256(auth_token), 16)` from the bearer and routes by
 // THAT — never by a client-supplied id. Because identity_id is a one-way function of auth_token, a
@@ -25,7 +26,7 @@ export class AuthError extends Error {
 }
 
 /**
- * Recompute the caller's 16-byte identity_id from `Authorization: Bearer <base64url(auth_token)>`.
+ * Recompute the caller's 16-byte identity_id from `Authorization: Bearer <hex(auth_token)>`.
  * Throws AuthError (→ 401) when the header is missing/malformed or the token isn't 32 bytes. The
  * returned id is the ONLY identity this request may address.
  */

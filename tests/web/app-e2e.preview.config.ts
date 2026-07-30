@@ -6,7 +6,7 @@ import { defineConfig, devices } from "@playwright/test";
 // No webServer: the app is already deployed; `baseURL` is the preview URL (WEB_E2E_URL). The HOST runs as
 // a persistent test process (the seedHost fixture spawns host-runner.ts), talking to the deployed broker
 // via identity auth + the SSO bypass. E2E_BACKEND selects the backend to flip to via ?backend=: unset ⇒
-// the deployment default (vercel); `sqlite` ⇒ the per-session backend on real Turso Cloud. Driven by
+// the deployment default (vercel); `sqlite` ⇒ the per-channel backend on real Turso Cloud. Driven by
 // .github/workflows/web-preview.yml on a successful preview.
 
 const BASE = process.env.WEB_E2E_URL;

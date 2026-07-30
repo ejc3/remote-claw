@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SessionIndex } from "../../lib/broker/session-index";
 import { dbFileName, FileDbLocator, SqliteMultiBackend } from "../../lib/broker/sqlite-multi";
 
-// The cold session index is the scalable (cloud) retention path: a catalog written ONCE on db-create and
+// The cold channel catalog is the scalable (cloud) retention path: written ONCE on db-create and
 // deleted on drop, walked in resumable batches by the sweep. Here it's exercised over REAL libSQL file
 // dbs via a FileDbLocator that opts into the index (so we test the index sweep engine without Turso).
 

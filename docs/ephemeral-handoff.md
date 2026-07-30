@@ -73,16 +73,16 @@ to review, with round-trip / wrong-OTK / tamper / wrong-version tests.
 
 ### 3.2 Store — dedicated, isolated, cloud-primary, atomic
 
-`HandoffStore` (`apps/web/lib/broker/handoff-store.ts`), **separate** from the per-session frames DBs and the
-per-identity bus DB (coupling to the bus DB would force the broker to learn the identity; the frames log
+`HandoffStore` (`apps/web/lib/broker/handoff-store.ts`), **separate** from all per-channel frame DBs,
+including the per-identity bus DB (coupling to the bus DB would force the broker to learn the identity; the frames log
 never partial-deletes). Schema: `handoff(id TEXT PRIMARY KEY, proof_hash TEXT NOT NULL, ct TEXT NOT NULL,
 expires_at INTEGER NOT NULL)` + index on `expires_at` (`id`/`proof_hash`/`ct` are stored as **hex TEXT** — the
 OTK never reaches the server, so the bytes it does store are hex-encoded one-way hashes + an opaque box).
 
 - **Cloud primary only.** Selected by the broker's env switch via `DbLocator.handoffConfig()` → a dedicated
   Turso DB **`rc-<scope>-hx`**. The `-hx` suffix is distinct from the per-session *kinds* (`s`/`b`/`x`), so it
-  is **not** a per-session db — but it deliberately **shares the `rc-<scope>-` prefix**, so the dev/CI
-  `dropScope` sweep reclaims it alongside the scope's session dbs. That is desirable and **prod-safe**:
+  is **not** a channel db — but it deliberately **shares the `rc-<scope>-` prefix**, so the dev/CI
+  `dropScope` sweep reclaims it alongside the scope's channel dbs. That is desirable and **prod-safe**:
   `dropScope` runs only behind the dev gate (`api/dev/sweep`, which refuses to run on a production deploy) and
   only ever names dbs in the deploy's **own** scope — and a preview/dev/CI deploy's scope is `pr-<sha>`/`dev`,
   never `prod` (which takes an explicit `RC_TURSO_DB_SCOPE=prod` opt-in), so it doesn't touch the prod handoff
@@ -101,7 +101,7 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   (libSQL `"write"` opens a `BEGIN IMMEDIATE` transaction), and the dedicated handoff DB has its own client, so
   libSQL serializes the writes on the single primary.
 - **Frequent dedicated sweep** (review fix): a **separate cron** (`*/5 * * * *` in `apps/web/vercel.json`)
-  running `DELETE FROM handoff WHERE expires_at<=now` — NOT the once-daily, sqlite-gated session-retention
+  running `DELETE FROM handoff WHERE expires_at<=now` — NOT the once-daily, sqlite-gated channel-retention
   cron — plus an **opportunistic delete batched into every PUT** (`HandoffStore.put` runs the expiry-delete in
   the same write transaction as the insert), so writes reap expired rows even if the cron is degraded. ⚠️ the
   `*/5` cron needs Vercel **Pro** — Hobby silently downgrades sub-daily crons to daily, which is exactly the
@@ -145,7 +145,7 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   NAT), so the per-IP limit is set generously — 20 / 60 s ≫ the ~2 requests a real pairing needs. This
   rate-limit is an **out-of-band infra deploy gate**
   (provisioned in the Vercel Firewall, not in `vercel.json`/CI — §5 #5), atop the short TTL, single-read, and
-  the dedicated Turso DB so PUT write-contention can't touch session frames. **Abuse telemetry lives at the edge, not the app:** the WAF
+  the dedicated Turso DB so PUT write-contention can't touch relay frames. **Abuse telemetry lives at the edge, not the app:** the WAF
   dashboard (claim-rate, per-IP throttle hits, brute-force volume) is where §4's online-attack guarantees are
   observed. The serverless route deliberately does **not** log per-claim outcomes (the `id` is public and a
   per-instance function has no actionable signal); a backend fault returns an opaque `500` and self-heals the
@@ -171,9 +171,10 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   `identity_id`** for the user to confirm against the host's `--rc-pass` output **before the credential is
   trusted/used** (the binding — anti-QR-swap; RFC 8628/CIBA `binding_message`). The confirm is necessarily
   *after* the claim (the binding value lives inside the sealed box) but *before* connect; if it fails to match,
-  the user re-pairs (this is v1's viewer-side "detectable"). After a successful claim+confirm, **decrypt, then
-  store the credential as non-extractable WebCrypto `CryptoKey`s in IndexedDB** (see §3.6) — never the raw
-  pass; never the OTK. Serve the route with `Referrer-Policy: no-referrer` + the existing strict
+  the user re-pairs (this is v1's viewer-side "detectable"). After a successful claim+confirm, **decrypt,
+  wrap the pass with one non-extractable AES-256-GCM device key in IndexedDB, and store only the wrapped
+  ciphertext in tab-scoped sessionStorage** (see §3.6) — never a raw pass or OTK in browser storage. Serve
+  the route with `Referrer-Policy: no-referrer` + the existing strict
   exfil-blocking CSP. Back-compat: still *accept* a pasted/opened `#rcp1_` for one release (the viewer
   classifies it as a pass and prefills the manual-entry field), but do not *emit* it.
 
@@ -190,24 +191,22 @@ holder from forging projections or announcements; the shipped A0 envelope does n
 > get true ZK against a malicious app-delivery server (the §1 limit). These are the real residual risks the
 > OTK handoff does not by itself remove.
 
-### 3.6 Post-claim storage hardening (browser enclave) — answers "can the key be un-fetchable?"
+### 3.6 Post-claim storage hardening
 
-After claim, the viewer must **not** keep the pass as bytes. Two levels, both supported by browsers today:
+After claim, the viewer must **not** keep the raw pass in browser storage. The shipped baseline and a
+stronger optional direction are:
 
-- **Non-extractable `CryptoKey` + IndexedDB (baseline, cheap):** import the operational keys with
-  `extractable:false` and `put()` the `CryptoKey` handles into IndexedDB. `exportKey()` then throws and **no
-  JS — including injected XSS — can read the raw bytes**; the viewer can only *use* them via WebCrypto. This
-  stops *exfiltration/portability* of the forever-credential (a storage dump or later XSS can't walk away with
-  it). It does **not** stop *use-while-resident* (a live XSS can still call `decrypt()`), and it is software,
-  not hardware, isolation.
+- **Non-extractable device key + wrapped tab ciphertext (shipped baseline):**
+  `apps/web/app/lib/credential-store.ts` keeps one non-extractable AES-256-GCM device key in IndexedDB
+  and stores the wrapped pass ciphertext in tab-scoped sessionStorage. `exportKey()` cannot recover the
+  device-key bytes, so a passive dump of either store alone does not reveal the pass. Same-origin
+  malicious JavaScript that can access both stores can still ask WebCrypto to unwrap the pass and
+  exfiltrate it; this is at-rest storage hardening, not an XSS or compromised-app boundary.
 - **WebAuthn `prf` extension (optional, hardware-gated):** wrap the credential with a secret derived **inside
   the platform authenticator** (Secure Enclave / TPM / StrongBox) after a biometric/PIN gesture; IndexedDB
   then holds only a wrapped blob and the unwrap key materializes briefly, only on a hardware-gated touch.
 
-Neither makes a *server-delivered* viewer ZK against its own server (that's the §3.5(b) follow-up) — but both
-materially shrink the §3.5(a) post-claim residual, so the baseline **shipped** in v1
-(`apps/web/app/lib/credential-store.ts`): a non-extractable AES-256-GCM device key in IndexedDB wraps the
-tab-scoped (sessionStorage) ciphertext, so `exportKey()` throws and a storage dump can't recover the pass.
+Neither makes a *server-delivered* viewer ZK against its own server (that's the §3.5(b) follow-up).
 
 ## 4. Threat model (vs. today's forever-pass-in-fragment)
 
@@ -221,12 +220,12 @@ tab-scoped (sessionStorage) ciphertext, so `exportKey()` throws and a storage du
 | Edge/logs **correlation** | n/a | broker learns a handoff *exists* and can **correlate it to an identity** via claim **IP/timing** + the subsequent Bearer relay request (the *row* has no identity; the *traffic* does) |
 | Pre-emptive claim / unfurler / prefetch | n/a | needs `claimProof` (⇒ OTK) to burn ⇒ edge-only observer can't; POST + user-gesture stop bots; a failed legit claim is **detectable** viewer-side ("already used" → re-pair) and the host re-mints on lockout |
 | Online brute-force of `id` | n/a | 256-bit `id` + uniform 404 ⇒ **structurally** infeasible (these ship in-repo); the WAF rate-limit (infra deploy-gate, §3.3) is DoS/abuse defense-in-depth on top |
-| Malicious/compromised **viewer** post-claim | full forever credential | exfiltration blocked by §3.6 non-extractable storage; *use-while-resident* unchanged (→ §3.5(a)) |
+| Malicious/compromised **viewer** post-claim | full forever credential | unchanged while resident: same-origin malicious JS can use the non-extractable wrapping key to unwrap and exfiltrate the pass (→ §3.5(a)); §3.6 protects passive storage copies |
 
 **Net:** a clear win for the leaked-QR / history / shoulder-surf / lost-phone threats and it removes the
 never-expiring-capability anti-pattern — **conditional on the v1 must-haves shipping together** (§5). It does
 **not** make the web client ZK against a malicious app-delivery server, does **not** cryptographically erase
-backups, and does **not** reduce the post-claim credential's authority (only its exfiltration). Some
+backups, and does **not** reduce the post-claim credential's authority (only passive at-rest exposure). Some
 guarantees move from *structural* (secret never sent) to *operational* (atomicity + TTL + sweep + rate-limit).
 
 ## 5. Decisions, v1 must-haves, non-goals
@@ -237,7 +236,8 @@ guarantees move from *structural* (secret never sent) to *operational* (atomicit
 WAF rate-limit** (uniform fail-closed responses + pre-parse size cap are in-repo, but the **rate-limit rule
 itself is an out-of-band infra deploy-gate** — see below); (6) **user gesture before claim** +
 **`identity_id` binding** confirmation (the host's identity, recomputed from the pass's `authToken`); (7)
-**non-extractable CryptoKey + IndexedDB** for the resolved credential; (8) PUT `409`-on-conflict with host
+**non-extractable AES device key in IndexedDB + wrapped pass ciphertext in sessionStorage**; (8) PUT
+`409`-on-conflict with host
 re-mint.
 
 > **#5 is the one must-have that lives outside the repo.** The per-IP rate-limit rule can't live in `vercel.json`
@@ -277,7 +277,8 @@ PrivateBin (#174), Snappass; anti-patterns: OneTimeSecret/Password Pusher (serve
 3. **PR3 — QR + web client** (flips default): `--rc-app` emits `#otk1_…` (re-mint on 409); the forever
    `#rcp1_` **deep-link** QR is dropped (fail-closed; a bare-pass QR for manual entry still renders when no
    `--rc-app` origin is given, and the legacy `#rcp1_` fragment is accepted for one release); web client =
-   strip-fragment → user-gesture → binding-confirm → claim → **non-extractable CryptoKey + IndexedDB**;
+   strip-fragment → user-gesture → binding-confirm → claim → **non-extractable AES device key in
+   IndexedDB + wrapped pass ciphertext in sessionStorage**;
    `no-referrer` + CSP. Live e2e: scan → confirm → claim → viewer loads; second scan → "already used";
    edge-only `id` can't burn.
 
@@ -300,7 +301,7 @@ written" — it overclaimed.* This revision applies the survivors. Key resolutio
   identity; traffic does).
 - **[MEDIUM] atomic burn only on cloud primary** → fail-closed on Vercel/file + a two-client concurrent test
   (§3.2); **dropScope prefix-matches the handoff DB** → kept under the `rc-<scope>-` prefix on purpose (named
-  `rc-<scope>-hx`, distinct from the session kinds) so the dev/CI sweep reclaims it; prod-safe because
+  `rc-<scope>-hx`, distinct from the relay-channel kinds) so the dev/CI sweep reclaims it; prod-safe because
   `dropScope` is dev-gated (refuses production deploys) and bounded to the deploy's own scope (`pr-<sha>`/`dev`,
   never `prod` without an explicit opt-in), so no separate handoff cleanup is needed.
 - **[MEDIUM] unauth PUT dead-drop / clobber** → pre-parse cap + WAF + 409-on-conflict + re-mint (§3.3/§3.4).

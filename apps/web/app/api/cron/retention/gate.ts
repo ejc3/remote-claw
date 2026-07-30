@@ -32,11 +32,11 @@ export function retentionMs(): number {
   return DEFAULT_RETENTION_MS;
 }
 
-/** True when this deployment can hold per-session sqlite dbs the retention sweep must reclaim. NOT just
+/** True when this deployment can hold per-channel SQLite dbs the retention sweep must reclaim. NOT just
  *  when sqlite is the DEFAULT: `sqlite` is per-request selectable (REQUESTABLE), so a vercel-default
- *  deployment with Turso Cloud creds still provisions real per-session cloud dbs via `?backend=sqlite` —
+ *  deployment with Turso Cloud creds still provisions real per-channel cloud dbs via `?backend=sqlite` —
  *  those must be swept too, or they grow unbounded. So: sqlite is the default, OR the Turso Cloud creds
- *  are present. Both storage modes then sweep by walking a COLD session index in resumable batches (file:
+ *  are present. Both storage modes then sweep by walking a COLD channel catalog in resumable batches (file:
  *  a local `_index.db`; cloud: an `rc-index` Turso db), dropping idle dbs by each db's own MAX(created_at). */
 export function sqliteConfigured(): boolean {
   if (process.env.BROKER_BACKEND?.trim() === "sqlite") return true;

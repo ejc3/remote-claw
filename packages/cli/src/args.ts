@@ -75,8 +75,9 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
 };
 // Not reserved: starting already remote-controlled is just claude's own `--remote-control`,
 // which the wrapper forwards verbatim — no `--rc-share`. The web deep link is built from the
-// one `--rc-app` origin — no separate `--rc-web`. The web app gates on SSO and the broker on the
-// per-identity auth_token, so there is no app-wide key — no `--rc-app-key` (§4.5).
+// one `--rc-app` origin — no separate `--rc-web`. The deployment may use Vercel Deployment
+// Protection, while broker data routes use the per-identity auth_token; there is no app-wide
+// browser key and therefore no `--rc-app-key` (§4.5).
 
 export interface Classified {
   /** Parsed reserved flags (key without `--`). Value is `true` for booleans. */

@@ -3,7 +3,7 @@ import { brokerCache } from "./broker-cache";
 import { LocalBackend } from "./local";
 import { VercelBackend } from "./vercel";
 
-// The broker's durable backend is selected PER REQUEST: a `?backend=` query param (forwarded by the
+// The broker backend is selected PER REQUEST: a `?backend=` query param (forwarded by the
 // client) wins, else the BROKER_BACKEND env default, else "vercel". So one deployment defaults to
 // Vercel Workflows but a client can opt a session into another backend with `?backend=sqlite`
 // without a redeploy. The publish (relay) and subscribe (stream) for a given channel MUST name the
@@ -11,8 +11,8 @@ import { VercelBackend } from "./vercel";
 //
 //   (unset) | "vercel"  → Vercel Workflows (production; the default)
 //   "local"            → in-process fake broker (tests / Playwright e2e)
-//   "sqlite"           → per-session libSQL: ONE database per channel token; storage = local file
-//                        (RC_SQLITE_DIR, the `pnpm dev` default) or Turso Cloud (one db per session)
+//   "sqlite"           → per-channel libSQL: ONE database per channel token; storage = local file
+//                        (RC_SQLITE_DIR, the `pnpm dev` default) or Turso Cloud (one db per channel)
 //
 // Each backend is cached per-name (process-wide), so the LocalBackend's in-memory channel map persists
 // across requests. getBackend() is async only so the sqlite adapter can be DYNAMICALLY imported —
@@ -35,7 +35,7 @@ export function isKnownBackend(name: string): boolean {
   return KNOWN.has(name);
 }
 
-// Durable backends are safe to pick PER REQUEST. `local` is the lone exception: it's process MEMORY, so
+// Multi-instance-safe backends are requestable PER REQUEST. `local` is the lone exception: it is process MEMORY, so
 // on a multi-instance / serverless deploy a per-request pick would land publish + subscribe on different
 // instances — it's honoured only as the deployment's OWN default (dev / `next start`). `sqlite` IS
 // requestable: its storage is either a single local process's disk (dev / `next start` / e2e) or a
@@ -77,9 +77,9 @@ export async function getBackend(requested?: string | null): Promise<BrokerBacke
       backend = new LocalBackend();
       break;
     case "sqlite": {
-      // Per-session libSQL — ONE database per channel token (BROKER_BACKEND=sqlite, or ?backend=sqlite).
+      // Per-channel libSQL — ONE database per channel token (BROKER_BACKEND=sqlite, or ?backend=sqlite).
       // The ONLY thing that varies is the storage locator, chosen from env: Turso Cloud (one remote db
-      // per session) when the cloud creds are set, else local files under RC_SQLITE_DIR. Dynamic-imported
+      // per channel) when the cloud creds are set, else local files under RC_SQLITE_DIR. Dynamic-imported
       // so @libsql/client + node:fs stay out of the bundle unless selected.
       const { SqliteMultiBackend } = await import("./sqlite-multi");
       const { selectLocatorFromEnv } = await import("./turso-cloud-locator");

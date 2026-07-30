@@ -187,9 +187,11 @@ native collaborator identities; a person's partial draft and an injected prompt 
 > conversation or execution authority, and it does not replace the selected local coordinator's
 > command journal.
 
-**Reframe.** In the non-durable current relay, the wrapper's RAM is the viewer-frame ordering/history
-source and the broker is a dumb live relay: the wrapper alone allocates `seq`, holds the `#log`,
-echoes/acks viewer messages, and replays on `catch_up`.
+**Reframe.** The then-current design treated the wrapper's RAM as the viewer-frame
+ordering/history source: the wrapper alone allocated `seq`, held the `#log`, echoed/acked viewer
+messages, and replayed on `catch_up`. The Workflow provider nevertheless persisted opaque chunks in
+each run's resumable stream; what was missing was an explicit indexed frame-log contract, recovery
+cursors, and safe cap rollover—not all at-rest ciphertext.
 Almost every durability boundary in the gap audit (§12 of `protocol.md`) exists *because* the wrapper is
 a single, in-memory ordering authority.
 
@@ -212,11 +214,13 @@ total order. Everyone polls/subscribes `WHERE id > cursor`, syncs into memory, a
 
 ### The cost (the real blocker)
 
-This re-opens v2 **Decision #1 (store-free)**. Zero-knowledge survives *only if* every row payload is
+This re-opens the design then called v2 **Decision #1 (store-free)**. That label was imprecise:
+Workflow already persisted each run's opaque stream. Zero-knowledge survives *only if* every row payload is
 E2E-sealed and the store orders/indexes on **cleartext routing columns** while `ciphertext BLOB` stays
 opaque — doable, the store never decrypts. **But** you then hold a durable encrypted transcript at rest,
-so a key leak decrypts *everything*. That was a regression from the original store-free profile's
-“no at-rest ciphertext to re-key” property and its limited forward-secrecy posture. It is not a
+so a key leak decrypts *everything*. The real delta from Workflow is explicit indefinite/indexed
+retention and restart recovery instead of provider-backed per-run retention ending at an unsupported
+cap cliff; “no at-rest ciphertext to re-key” was never a shipped Workflow property. It is not a
 description of selected A1: current durable backends retain sealed broker frames, including chat and
 server-control history from genesis. The historical v2 choice described here was the left column of
 its comparison table; the durable-log direction chose the right column.
@@ -245,11 +249,12 @@ frames(
 backend persisting the full transcript (user + assistant + result events) as a **monotonic,
 sequence-numbered append log** (observed counting up — `1→41` in this short run, higher in longer
 captures), replayed to a late-joining client. The durable-log model is what the platform's own control
-plane already proves works; remote-claw bypasses it only to stay store-free.
+plane already proves works; remote-claw bypasses it to keep native execution and collaboration order
+host-authoritative, not to claim that Workflow stores no ciphertext.
 
 **Recommendation:** a scoped spike — a durable-log `BrokerBackend` adapter (DO or libSQL), run the
 existing contract + `rc-spine` tests against it, and measure what relay code actually *deletes* —
-before committing the architecture, which hinges on the store-free trade above.
+before committing the architecture, which hinges on the explicit retention/recovery trade above.
 
 ---
 
@@ -316,18 +321,20 @@ The three findings converge on one decision:
    instead) plus a **non-fragile control channel** (vs send-keys). That delta is the genuine
    differentiator — Happy/Happier stream a *shell* to the phone, never `claude` itself.
 3. **Spike the durable-log `BrokerBackend` adapter** (§2) to retire the seq/restart/reconnect machinery,
-   gated on the store-free trade.
+   gated on the explicit retention/recovery trade.
 4. **Add outbound viewer-gating** (the missing broker-efficiency mechanism — see `v2-architecture.md`
    §6D worked example). Today the host posts the transcript **unconditionally**: `#pumpUpstream` emits
-   every frame whether or not anyone is watching, because the zero-knowledge, store-free broker gives
-   the host **no viewer-presence back-channel**. Consequence: an idle fleet (many sessions, no viewers)
-   pays full relay price and each Vercel channel grinds to its event cap and **rolls every ~10 min** for
-   nothing. The fix is a **sealed presence beat** (a viewer→host "watching" signal on the bus) so the
-   host can gate outbound on ≥1 viewer, dropping an idle session to the ~20 s announce keepalive floor.
-   It must preserve zero-knowledge (presence is a sealed/meta-plane frame, not a broker-stored row) and
-   stay advisory (a missed beat must fail safe — keep relaying, never silently drop). Orthogonal to the
-   transport choice; the **Turso** backend sidesteps the *cost* of the gap (no per-run cap, no rolling)
-   but not the gap itself (it still accrues unbounded at-rest ciphertext absent the A2 retention sweep).
+   every frame whether or not anyone is watching, because the broker API gives the host **no
+   authenticated viewer-presence back-channel**. Consequence: an idle fleet (many sessions, no viewers)
+   pays full relay price and each Vercel channel grinds toward its event cap, where the current system
+   has an unsupported cliff—there is **no automatic roll**. The fix is a **sealed presence beat** (a
+   viewer→host "watching" signal on the bus) so the host can gate outbound on ≥1 viewer, dropping an idle
+   session to the ~20 s announce keepalive floor. It must preserve zero-knowledge: the beat remains
+   sealed rather than becoming a plaintext broker presence record, although a durable broker may retain
+   it as opaque frame data. It must also stay advisory (a missed beat must fail safe — keep relaying,
+   never silently drop). Orthogonal to the transport choice; the **Turso** backend sidesteps the *cost*
+   of the gap (no per-run cap, no rolling) but not the gap itself (it still accrues at-rest ciphertext
+   until retention reclaims the channel).
 
 The original candidates above are retained as design history. The
 [client-driven host runtime](client-driven-host-runtime.md) is now the selected next architecture; its

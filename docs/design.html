@@ -105,6 +105,11 @@
 <script id="src" type="text/markdown">
 # Watching your terminal AI from your phone — privately
 
+> **Historical overview.** This standalone page predates the shipped pluggable broker and the selected
+> client-driven host runtime. It is retained for design history, not as the current protocol contract.
+> Read the [live architecture](index.html) and
+> [Client-driven Host Runtime](client-driven-host-runtime.md) for current behavior.
+
 You run a **coding-AI agent in your terminal** — a tool like Claude Code or Codex that reads and edits files and runs commands on your computer. **remote-claw is a small program you install alongside it.** It lets you **watch that session, and send it prompts, from your phone or a browser** — over the internet — while the server that connects the two is **never able to read what you're doing**.
 
 This page explains how, in plain terms. No prior knowledge needed.
@@ -113,7 +118,7 @@ This page explains how, in plain terms. No prior knowledge needed.
 
 - **Your machine** — the computer running the AI session. It is the source of truth: it holds the real conversation, and it owns its own identity. (One machine can run several sessions at once; they all share that machine's single identity.)
 - **A viewer** — your phone, or a browser tab, watching a session (and optionally sending it prompts).
-- **The relay** — a small service in the cloud that just passes messages between your machine and your viewers. Think of it as a **mailbox**: it routes envelopes, but (in the private modes) it can't open them. It keeps **no history** of your conversations, has **no accounts**, and holds **no list of your machines**.
+- **The relay** — a small service in the cloud that passes messages between your machine and your viewers. Think of it as a **mailbox**: it routes envelopes, but (in the private modes) it can't open them. Depending on the selected backend, it keeps sealed envelopes in process memory, persists them in one Workflow run until that run reaches its fixed cap, or durably retains them in SQLite/libSQL; it never stores plaintext conversation history, has **no accounts**, and holds **no plaintext list of your machines**.
 
 ## Each machine has its own identity
 
@@ -122,13 +127,13 @@ The first time you set up remote-claw on a machine, it creates a **secret** for 
 The important rule: **you do not share one secret across all your machines.** Each machine has its own. That keeps them independent:
 
 - If someone steals one machine's secret, they get **that machine only** — not the rest.
-- If you want to cut a machine off, you reset **just that one**; the others keep working.
+- If you need to contain one machine, you move **just that one** to a new identity; the others keep working. This does not invalidate copied credentials on the abandoned old identity.
 
 ## A viewer gets a limited pass, not the master key
 
 Your machine's secret is the **master key** — it can read everything, send commands, *and* re-create the machine's identity. Your phone doesn't need all of that, and you don't want a lost phone to hand over the master key. So a viewer never receives the master secret. Instead it gets a **pass** worked out from the master: with it, a viewer can **read the live session, see which sessions are online, and send prompts** — but the pass is **not** the master key. It **cannot** be turned back into the master key, and it **cannot** reset or re-create the machine's identity.
 
-The math behind the keys is one-directional (the master can produce the narrower keys a pass carries, but those keys can never reproduce the master). So a lost phone is limited to driving the session — it can never widen into the master key or take over the machine's identity — and you cut it off by resetting the machine.
+The math behind the keys is one-directional (the master can produce the narrower keys a pass carries, but those keys can never reproduce the master). So a lost phone is limited to driving the identity its pass names — it can never widen into the master key or mint a replacement identity. Resetting moves legitimate future service to a new identity, but does not revoke the copied pass on retained old routes.
 
 ## Three privacy modes
 
@@ -147,42 +152,42 @@ In short: **Open = trust the server. Sealed = trust no one but your own devices.
 In **Sealed** and **Managed**, every message the relay handles is locked. All it ever sees is:
 
 - the **scrambled body** of a message, which it cannot unlock, and
-- a small **routing label** — which machine and which session a message is for — so it knows where to deliver it. The relay can *check* that label against the sender, but it doesn't need to **store** it, so there's no saved directory of your machines.
+- a small **routing label** — which machine and which session a message is for — so it knows where to deliver it. The relay can *check* that label against the sender and may retain it with sealed frames or in a channel catalog, but it does not keep a plaintext account directory of your machines.
 
-It **cannot** read your transcripts, your prompts, your keys, or which session you're looking at — and it **cannot write a new message, or a fake "online" notice, in your name.** But a blind mailbox can still **drop, delay, reorder, or replay** the sealed mail it's handed, or simply refuse to deliver: it can stay silent or hand you *stale* mail, even though it can't forge *new* mail. Stale "online" notices are bounded by freshness timestamps (an old one expires); outright suppression can be **noticed, but not prevented**. The relay keeps **no history** (your computer keeps that) and has **no accounts** — it's a blind mailbox.
+It **cannot** read your transcripts, your prompts, your keys, or which session you're looking at — and it **cannot write a new message, or a fake "online" notice, in your name.** But a blind mailbox can still **drop, delay, reorder, or replay** the sealed mail it's handed, or simply refuse to deliver: it can stay silent or hand you *stale* mail, even though it can't forge *new* mail. An honestly timestamped old announce ages from connected to reconnecting to disconnected. Current A0 does not reject a valid announce whose sender timestamp is far in the future, however, so only the selected next phase's two-sided clock-skew check can claim an unconditional stale-online bound. Outright suppression can be **noticed, but not prevented**. The Workflow profile persists a stream that readers can resume by frame index; it does not evict a rolling window, but its one run has a fixed 25,000-event cap and the current adapter has no pre-cap rollover. SQLite/libSQL can durably retain the opaque envelopes and expose recovery cursors. Neither gives the relay plaintext history or accounts — it remains a blind mailbox.
 
 ## If a device or secret is stolen
 
 | What's taken | What the thief can do | How you stop it |
 |---|---|---|
-| A phone's **pass** | Read and steer that machine's sessions (until you reset). Not the master key; can't reset the machine. | Reset the machine. |
-| A machine's **master secret** | They effectively *are* that machine — read and control it. | Reset that machine. Your other machines are untouched. |
+| A phone's **pass** | Read and steer sessions on that identity while the host still accepts them, and read any retained old ciphertext. Not the master key; can't mint a replacement identity. | Move the host and trusted viewers to a new identity and stop serving the old one. The copied pass remains valid for retained old routes. |
+| A machine's **master secret** | They effectively *are* that old identity — read and control it, and recreate its credentials. | Move that machine to a new identity and stop serving the old one. Your other machines are untouched; the copied old secret is not revoked. |
 
-Note that **reset is all-or-nothing** — it cuts off *every* viewer of that machine, not just the lost device; you then reconnect the devices you still trust. The blast radius is always **one machine**, never the whole fleet — that's the point of one-identity-per-machine.
+Note that **reset is all-or-nothing for legitimate future service** — the host leaves every viewer of that identity behind, then reconnects trusted devices to the replacement. It does not erase retained ciphertext or invalidate copied old credentials. The containment scope is one machine identity, never the whole fleet — that's the point of one-identity-per-machine.
 
 ## Resetting a machine
 
-To cut everyone off a machine — you lost a device, or a secret leaked — you **reset that machine's identity**. It makes a brand-new secret; the old one is abandoned. Then you reconnect the viewers you still want, using the new secret.
+To contain a lost device or leaked secret, you **reset that machine's identity**. It makes a brand-new secret, stops the host from serving the old identity, and reconnects trusted viewers to the new one. This protects the replacement service; it is not revocation of the old cryptographic capability.
 
 Two caveats:
 
 - Reset protects **what happens next**. Anyone who already watched your screen already saw it — resetting can't un-see the past.
-- Until you reset, a leaked secret keeps working on the old channel. Reset promptly.
+- After reset, a leaked pass or secret still authenticates to retained old routes and can decrypt retained old frames. It cannot control the replacement identity unless the host continues listening on the old one.
 
 ## What we deliberately left out (for now)
 
 Keeping the design small is a feature. Three things we considered and chose **not** to build yet:
 
-- **Removing one viewer without resetting the whole machine.** In a live stream, the only way to lock a single viewer out of *future* messages is to change the keys and not give that viewer the new ones — the same idea as removing someone from a group chat. It's real, but here it's only **partial** (a removed viewer would still keep its mailbox address afterward, so the cut-off isn't total), and it added a lot of moving parts for a narrow benefit. So for now: **to remove a viewer, reset the machine.** Fine-grained viewer removal can come later if it's actually needed.
+- **Removing one viewer without resetting the whole machine.** In a live stream, the only way to exclude one viewer from a replacement identity's *future* messages is to change the keys and not give that viewer the new ones — the same idea as removing someone from a group chat. Here that containment is only **partial**: the removed viewer keeps the old address and keys and can use retained old routes. So for now, removing a viewer means moving legitimate service to a new machine identity and stopping the host from serving the old one. Fine-grained revocation can come later if it is actually needed.
 - **"Forward secrecy" (old messages staying safe if a key leaks later).** Because your master secret can always re-derive its keys — that's exactly what lets you "paste the secret to reconnect on a new device" — there is no forward secrecy to be had without giving that convenience up. We chose easy reconnection.
 - **Accounts.** No login and no server-side list of your machines. The relay stays a dumb mailbox, which is what keeps it unable to learn anything about you.
 
 ## Limits
 
 - **Open mode** sees everything — it is a trust-the-server mode, and is labeled as one. (The loud "no encryption" banner is only there so you can't switch it on by accident; the banner is *not* protection.)
-- A **leaked pass or secret keeps working** until you reset that machine.
+- A **leaked pass or secret remains valid for its old identity even after reset**. Reset moves legitimate future service to a replacement identity; retention and stopping the old host path limit what the old capability can still reach.
 - Even when sealed, the relay still sees **routing metadata** — stable labels for which machine and session, plus the timing and size of traffic. It can tell *that* a session exists and *when* it's active, even though it can never read *what* is happening. remote-claw protects the contents, not the existence of a session.
-- The relay can't forge, but it can **drop, delay, reorder, or replay** sealed mail — including replaying an old "online" notice, which can show a dead session as online for a short, bounded window before its freshness timestamp expires. Suppression and stale liveness can be *detected*, not *prevented*.
+- The relay can't forge, but it can **drop, delay, reorder, or replay** sealed mail. An honestly timestamped old "online" notice ages out through the current 45-second connected and 30-second reconnecting display states. Current A0 has no future-skew admission check, so its bound is not unconditional; the selected next phase adds that check. Suppression and stale liveness can be *detected*, not *prevented*.
 - Your machine stores the AI's transcript **in the clear on its own disk**. If your machine itself is compromised, that transcript is readable no matter what the relay does — remote-claw protects the *connection*, not a hacked computer.
 - **Managed mode** (automatic key delivery) is future work: it first needs a safe way to **pair a new device** — the relay must learn a device's public key without being able to swap in its own. It isn't built yet.
 
@@ -194,7 +199,7 @@ The plain-language terms above map onto standard cryptography wired conservative
 
 A machine's secret is 256 bits of CSPRNG randomness, written as a short `rc1_…` string with a checksum (a mistyped or truncated paste fails fast, before any network call). Everything else derives from it deterministically with **HKDF-SHA256** (RFC 5869), each output domain-separated by its own label:
 
-- **address key** (`auth_token`) — the bearer presented to the relay. The routing address is `identity_id = truncate(SHA256(auth_token), 16 bytes)` — a public 128-bit id the relay **recomputes from the presented bearer and constant-time-compares**, so it needs no database and stores no per-machine record.
+- **address key** (`auth_token`) — the bearer presented to the relay. The routing address is `identity_id = truncate(SHA256(auth_token), 16 bytes)` — a public 128-bit id the relay **recomputes from the presented bearer and constant-time-compares**, so authentication needs no account database or per-machine credential record.
 - **content key** — locks and unlocks transcript content.
 - **command key** — authenticates inbound commands (prompts, interrupts, mode/model changes).
 - **presence key** — locks and authenticates the "this session is online" announces.
@@ -203,7 +208,7 @@ The four are independent one-way outputs of the secret: holding one (or all) nev
 
 ### The pass
 
-A "pass" is a bundle carrying the operational keys derived from the secret — the **address, content, command, and presence keys** — but **not the secret itself**. It's a separate serialized form from `rc1_` (QR/file-sized, since it carries several keys). A pass-holder can subscribe, decrypt transcript content, read presence, and send commands the machine accepts. What it **cannot** do: recover the secret (each key is a one-way output of it) or reset/re-mint the machine's identity (that needs the secret). You revoke a pass by resetting the machine.
+A "pass" is a bundle carrying the operational keys derived from the secret — the **address, content, command, and presence keys** — but **not the secret itself**. It's a separate serialized form from `rc1_` (QR/file-sized, since it carries several keys). A pass-holder can subscribe, decrypt transcript content, read presence, and send commands the machine accepts. What it **cannot** do: recover the secret (each key is a one-way output of it) or reset/re-mint the machine's identity (that needs the secret). Resetting does not revoke the pass; it moves the host and trusted viewers to a replacement identity while the old pass remains valid on retained old routes.
 
 One residual worth stating plainly: the content and presence keys are *symmetric*, so a pass-holder can also *produce* valid-looking content or presence for that machine, not only read it — on the wire, a pass is about as capable as the machine itself, minus the secret. Preventing a holder from injecting content that others accept as the machine's would need separate per-writer signing keys, which we deliberately omit to keep the scheme symmetric and small.
 
@@ -211,7 +216,7 @@ One residual worth stating plainly: the content and presence keys are *symmetric
 
 A session is a two-way stream carried by the relay; in Sealed/Managed every frame below is sealed and opaque to it.
 
-- **Machine → viewers (the transcript).** The wrapper watches the real AI session's output and, for each chunk, seals a frame under the **content key**, stamps it with the next **sequence number** and a unique **message id**, and posts it to the relay on that session's channel. Viewers subscribe to the channel, skip any id they've already seen, decrypt with the content key, and render live. A viewer that just joined or fell behind catches up by sequence from the wrapper's recent in-memory log (and, failing that, the on-disk transcript).
+- **Machine → viewers (the transcript).** The wrapper watches the real AI session's output and, for each chunk, seals a frame under the **content key**, stamps it with the next **sequence number** and a unique **message id**, and posts it to the relay on that session's channel. Viewers subscribe to the channel, skip any id they've already seen, decrypt with the content key, and render live. On the Workflow profile, a viewer reads the persistent run stream by frame index and a still-running wrapper can repair sequence gaps from its process-local catch-up log; after a wrapper restart the host treats this profile as non-durable because the adapter exposes no recovery cursors. On SQLite/libSQL, the viewer replays the sealed broker-frame log and the host can recover from its cursors. The native on-disk transcript is separate and is not RC backfill.
 - **Viewers → machine (prompts & control).** A viewer seals a prompt or control action (interrupt, switch model, …) under the **command key** and posts it to the same session's inbound direction. The machine subscribes, de-dupes by message id, and acts **only if the frame authenticates under the command key** — which is what stops the relay, or anyone without a pass, from injecting commands. It decrypts, feeds the prompt into the real session, and the resulting output flows back out along the machine → viewers path.
 - **Presence** rides alongside on the machine's bus — a sealed, timestamped "online" announce viewers tail (covered below).
 
@@ -223,11 +228,11 @@ Each frame is sealed with **AES-256-GCM** under a *fresh per-message key*: `K_ms
 
 ### Presence
 
-"This session is online" is a small frame **authenticated under the presence key**, carrying the sender's wall-clock `sent_at` **inside** the sealed payload. A viewer shows a session online only while its newest announce is **fresh** (within a window of roughly a minute). Because `sent_at` is sealed, the relay can't fabricate or refresh one; a **replayed** old announce carries an old `sent_at` and expires — so a dead session can appear online for at most one bounded window. Presence is **timestamp-driven**, needing no challenge or round-trip; it does assume the viewer's and machine's clocks agree within that window (NTP-level), and that assumption touches *only* the online dot — message confidentiality and replay defense are clock-free.
+"This session is online" is a small frame **authenticated under the presence key**, carrying the sender's wall-clock `sent_at` **inside** the sealed payload. The shipped viewer accepts generation-ordered announces, shows one connected while its age is under 45 seconds, then shows reconnecting for 30 seconds before retaining it as disconnected. Because `sent_at` is sealed, the relay can't edit an old announce to refresh it. A correctly timestamped replay therefore ages out, but current A0 does not reject a valid future-skewed timestamp and cannot promise a hard worst-case bound. The selected next phase adds a certified two-sided clock-skew check. Presence is **timestamp-driven**, needing no challenge or round-trip; clock assumptions touch only the online indicator — message confidentiality and message-id replay defense are clock-free.
 
 ### The relay stays blind
 
-It only ever receives ciphertext + the cleartext routing header, and authorizes a request by recomputing `identity_id` from the bearer — no store, no plaintext, no key material. It can route, briefly buffer, and (mis)handle delivery, but it can't read or forge contents or presence. It keeps no durable history; the durable transcript is the AI tool's own on-disk session, which the wrapper re-reads to backfill a reconnecting viewer.
+It only receives ciphertext + the cleartext routing header on the relay plane, and authorizes identity-scoped data/recovery requests by recomputing `identity_id` from the bearer—no plaintext or key material. It can route, retain, and (mis)handle delivery, but it cannot read or forge contents or presence. Workflow persists an absolute-index resumable stream until the fixed per-run event cap, while the live host's process-memory log repairs sequence gaps; there is no rolling eviction or automatic rollover. SQLite/libSQL retains sealed frame history and supplies a shared durability/sequence cursor plus a host-only inbound fence. Neither path re-reads the native transcript as RC backfill.
 
 ### The three modes, one interface
 

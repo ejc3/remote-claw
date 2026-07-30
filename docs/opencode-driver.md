@@ -146,8 +146,12 @@ The dispatcher calls `runOpencodeDriver` for `--rc-driver=opencode`. Relevant op
 
 When no session ID is supplied, the driver tries to use the most recently updated session from
 `GET /session`; a positive empty list creates one with `POST /session`. The current implementation also
-catches any list/auth/server failure, treats it as an empty list, and creates a session. That is an
-identity hazard: a transient discovery failure can mint a new `ses_*` beside an existing chat.
+catches any list/auth/server failure, treats it as an empty list, and creates a session. A successful
+non-array response, or an array whose entries all lack non-empty string IDs, is also normalized to
+empty and therefore triggers creation; the returned create ID is checked only as a string, not as a
+canonical `ses_*`. A configured ID is trusted without a discovery/exact-GET existence check. These are
+identity hazards: a transient or malformed discovery result can mint a new `ses_*` beside an existing
+chat, while a mistyped configured ID can be announced before native use proves it.
 
 The selected runtime never infers identity from “most recent.” An existing logical-chat binding
 reattaches only its exact stored `ses_*`; if that session is absent or has the wrong lineage, the

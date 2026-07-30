@@ -1,13 +1,15 @@
 import { AuthError, identityFromRequest } from "../../../lib/auth";
 import { backendSelector, getBackend, isRequestableBackend } from "../../../lib/broker";
+import { hasDurableRecovery } from "../../../lib/broker/backend";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
-// §6B GET /api/seq — the highest transcript `seq` the durable log holds for this channel (per-session
-// with ?session=<sid>, else the bus), or null. A host that RESTARTS a session resumes `seq = max + 1`
-// so its new frames don't collide with the durable ones (#36); it holds NO store creds, so the broker
-// reads MAX(seq) — a §8 CLEARTEXT routing column — and never decrypts. Backends with no durable log
-// (no maxSeq) return null ⇒ the host starts fresh at 0 (their old frames have rolled off). Like the
+// §6B GET /api/seq — the effective backend's durability plus the highest transcript `seq` its log
+// holds for this channel (per-session with ?session=<sid>, else the bus), or null. A host that
+// RESTARTS a durable session resumes `seq = max + 1` so its new frames don't collide with retained
+// ones (#36); the viewer also reads `durable` to select its incarnation-recovery path. Neither holds
+// store credentials, so the broker reads MAX(seq) — a §8 CLEARTEXT routing column — and never
+// decrypts. Backends with no durable log (no maxSeq) return `{maxSeq:null,durable:false}`. Like the
 // other routes, the per-request backend selector must be one this deployment allows.
 export async function GET(req: Request): Promise<Response> {
   let identityId: Uint8Array;
@@ -34,7 +36,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const backend = await getBackend(requested);
-  const durable = Boolean(backend.maxSeq);
-  const maxSeq = backend.maxSeq ? await backend.maxSeq(token) : null;
+  const durable = hasDurableRecovery(backend);
+  const maxSeq = durable ? await backend.maxSeq(token) : null;
   return json({ maxSeq, durable });
 }

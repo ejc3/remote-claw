@@ -6,16 +6,16 @@ import type { WireFrame } from "@remote-claw/clawsec";
 import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } from "./backend";
 import { SessionIndex, sqliteSweepBatch } from "./session-index";
 
-// The per-session SQLite (libSQL) durable backend — ONE database per channel token, rather than one
-// shared `frames` table for all sessions. Each token addresses its OWN database, so a session's frames
+// The per-channel SQLite (libSQL) durable backend — ONE database per channel token, rather than one
+// shared `frames` table for all channels. Each token addresses its OWN database, so a channel's frames
 // are physically isolated:
-// retention is "drop the file", there is no cross-session write contention (SQLite serializes writes per
-// database, so the write lock is per-session, not one global mutex), and a leaked/compromised channel
+// retention is "drop the file", there is no cross-channel write contention (SQLite serializes writes per
+// database, so the write lock is per channel, not one global mutex), and a leaked/compromised channel
 // can't even see another session's at-rest ciphertext. This is the broker's "dumb per-channel pipe"
 // model made physical, and the primary backend for local development (BROKER_BACKEND=sqlite).
 //
 // Storage is pluggable behind `DbLocator`: the default `FileDbLocator` maps a token to a local file:
-// database under RC_SQLITE_DIR. A future Turso-Cloud locator (one remote libSQL database per session via
+// database under RC_SQLITE_DIR. A Turso-Cloud locator (one remote libSQL database per channel token via
 // the Platform API) would slot in unchanged — the backend logic below is storage-agnostic.
 //
 // E2E preserved: `frame` stores the verbatim sealed WireFrame JSON; the broker never decrypts. The only
@@ -77,7 +77,7 @@ function isConnLevelLibsqlErrorByCode(e: unknown): boolean {
   return code !== undefined && CONNECTION_LIBSQL_CODES.has(code);
 }
 
-/** A "channel gone" error: the per-session database/namespace was deleted out from under a cached client
+/** A "channel gone" error: the per-channel database/namespace was deleted out from under a cached client
  *  — the retention sweep dropped it after long idle, or the dev `dropScope` teardown removed it. libSQL
  *  surfaces it as a generic error with NO transient/connection code, so it would otherwise hard-error
  *  (issue #111). The broker treats it as "channel absent": publish recreates + retries once, subscribe
@@ -102,9 +102,9 @@ async function waitAfterTransientPollError(e: unknown, pollMs: number): Promise<
   return true;
 }
 
-// Serialize writes against a single per-session client (SQLite is single-writer; a concurrent publish /
-// __close on the SAME database would otherwise SQLITE_BUSY). Writes to DIFFERENT sessions use different
-// clients and never contend — the whole point of one database per session.
+// Serialize writes against a single per-channel client (SQLite is single-writer; a concurrent publish /
+// __close on the SAME database would otherwise SQLITE_BUSY). Writes to DIFFERENT channels use different
+// clients and never contend — the whole point of one database per channel token.
 async function withWriteLock<T>(client: Client, fn: () => Promise<T>): Promise<T> {
   const previous = writeLocks.get(client) ?? Promise.resolve();
   let release!: () => void;
@@ -150,7 +150,7 @@ async function runWriteTransaction<T>(
   });
 }
 
-// Per-session schema. No `token` column (it IS the database); `channel` is a single row (id = 1) holding
+// Per-channel schema. No `token` column (it IS the database); `channel` is a single row (id = 1) holding
 // the live/closed flag and incarnation `gen` (bumps on a publish-after-__close so a recycled token starts
 // fresh WITHOUT deleting durable history, matching the shared-log backend). `frames` is the append-only
 // log; `id` (AUTOINCREMENT) is the total order AND the live cursor. UNIQUE(gen, msg_id, part) makes a
@@ -202,7 +202,7 @@ export interface DbLocator {
   /** Connection config for the token's database (used to OPEN it; the storage must already exist). */
   config(token: string): { url: string; authToken?: string };
   /** The opaque drop/catalog handle for a token's db (the file path, or the cloud db name). Stable; used
-   *  as the dropStored() argument and the session-index primary key. */
+   *  as the dropStored() argument and the channel-catalog primary key. */
   idFor(token: string): string;
   /** Create the token's database if absent (write path). No-op for `file:` (createClient makes it). */
   ensure(token: string): Promise<void>;
@@ -224,17 +224,17 @@ export interface DbLocator {
    *  delete it can be stale — `ensure()` would then no-op and the recreate wouldn't really happen (issue
    *  #111 / codex review). Optional; omit for locators with no such cache (`file:` recreates on open). */
   forget?(token: string): void;
-  /** Delete a stored database by its `id` (from idFor / the session index), reclaiming its space. */
+  /** Delete a stored database by its `id` (from idFor / the channel catalog), reclaiming its space. */
   dropStored?(id: string): Promise<void>;
 
-  // --- Retention via a COLD session index (both file and cloud — written once on create, walked in
+  // --- Retention via a COLD channel catalog (both file and cloud — written once on create, walked in
   //     resumable batches by the sweep; omit indexConfig ⇒ retention is a no-op). ---
   /** Connection config for the shared catalog db that the SessionIndex lives in. */
   indexConfig?(): { url: string; authToken?: string };
   /** Provision the catalog db if needed (cloud: Platform-API create the `rc-<scope>-index` db; file: no-op). */
   ensureIndex?(): Promise<void>;
 
-  // --- Ephemeral one-time-handoff store (one small table, SEPARATE from session frames; see
+  // --- Ephemeral one-time-handoff store (one small table, SEPARATE from channel frames; see
   //     docs/ephemeral-handoff.md). Omit ⇒ the handoff feature is unavailable on this locator. ---
   /** Connection config for the dedicated handoff store db (cloud: `rc-<scope>-hx`; file: `_handoff.db`). */
   handoffConfig?(): { url: string; authToken?: string };
@@ -243,7 +243,7 @@ export interface DbLocator {
 
   /** The auth token a retention probe uses to connect a catalogued db by its url (cloud: the group token). */
   probeAuthToken?(): string | undefined;
-  /** Drop the cold-index catalog db ITSELF (after its sessions are reclaimed), so a short-lived scope
+  /** Drop the cold-index catalog db ITSELF (after its channels are reclaimed), so a short-lived scope
    *  doesn't leave an empty index db behind. Used by the dev/CI cleanup; omit ⇒ no-op. */
   dropIndex?(): Promise<void>;
   /** Delete EVERY db in this locator's scope by name (cataloged or not) — the dev/CI cleanup primitive
@@ -265,11 +265,11 @@ export class FileDbLocator implements DbLocator {
   constructor(dir: string = sqliteDir()) {
     // A file: database on Vercel writes to an EPHEMERAL, per-instance disk — frames vanish between
     // invocations and two instances see different data. Fail closed with guidance rather than silently
-    // lose a "durable" session. (A future Turso-Cloud locator is the durable per-session prod story.)
+    // lose a "durable" channel. (Turso Cloud is the durable per-channel production store.)
     if (process.env.VERCEL === "1" && (process.env.RC_SQLITE_DIR ?? "") === "") {
       throw new Error(
-        "FileDbLocator: file-mode per-session sqlite is not durable on Vercel (ephemeral, per-instance " +
-          "filesystem). Configure a durable per-session store, or set RC_SQLITE_DIR to acknowledge an " +
+        "FileDbLocator: file-mode per-channel sqlite is not durable on Vercel (ephemeral, per-instance " +
+          "filesystem). Configure a durable per-channel store, or set RC_SQLITE_DIR to acknowledge an " +
           "ephemeral location.",
       );
     }
@@ -296,8 +296,8 @@ export class FileDbLocator implements DbLocator {
   // in dev and prod. WAL lets readers (the poll-tail subscribe, the sweep probe) proceed concurrently
   // with the writer instead of hitting reader↔writer SQLITE_BUSY — matching Turso's MVCC-style reads.
   // WRITE serialization is structural, not a busy_timeout: the cache opens exactly ONE writer connection
-  // per session token (create-lock + per-client write-lock), so two writers to one file never race —
-  // the same one-writer-per-session shape cloud has (one client per token + server-side single-writer).
+  // per channel token (create-lock + per-client write-lock), so two writers to one file never race —
+  // the same one-writer-per-channel shape cloud has (one client per token + server-side single-writer).
   // (@libsql/client does not honour a PRAGMA busy_timeout for transaction lock waits, so we don't rely
   // on one; the single-writer invariant is what guarantees writes serialize rather than fail.)
   async prepare(client: Client): Promise<void> {
@@ -308,14 +308,14 @@ export class FileDbLocator implements DbLocator {
     return existsSync(this.#path(token));
   }
 
-  // The cold session-index catalog db lives alongside the session dbs (`_index.db`). It can't collide
-  // with a session file (those are `<token>-<24 hex>.db`) and is never catalogued/swept itself, so the
-  // index walks only real sessions. createClient auto-creates the file, so there's no ensureIndex.
+  // The cold channel-catalog db lives alongside the channel dbs (`_index.db`). It can't collide with a
+  // channel file (those are `<token>-<24 hex>.db`) and is never catalogued/swept itself, so the index
+  // walks only real channels. createClient auto-creates the file, so there's no ensureIndex.
   indexConfig(): { url: string } {
     return { url: `file:${join(this.#dir, "_index.db")}` };
   }
 
-  // The handoff store lives alongside the session dbs (`_handoff.db`). createClient auto-creates the file,
+  // The handoff store lives alongside the channel dbs (`_handoff.db`). createClient auto-creates the file,
   // so there is no ensureHandoff. Local/dev only — single-instance.
   handoffConfig(): { url: string } {
     // HARD-FAIL on Vercel regardless of RC_SQLITE_DIR: a `file:` handoff store is per-instance, so a PUT
@@ -357,7 +357,7 @@ function sqlitePollMs(): number {
   return Number.isFinite(n) && n > 0 ? n : 150;
 }
 
-/** A borrowed per-session client; the borrower MUST call release() exactly once when done. */
+/** A borrowed per-channel client; the borrower MUST call release() exactly once when done. */
 interface Lease {
   readonly client: Client;
   release(): void;
@@ -369,7 +369,7 @@ interface CacheEntry {
   url: string; // the connection url (e.g. `file:<path>`) — lets the sweep evict by store path
 }
 
-// A bounded, ref-counted LRU of per-session libSQL clients. Opening one client per session and caching
+// A bounded, ref-counted LRU of per-channel libSQL clients. Opening one client per channel and caching
 // it (a) reuses the connection across a session's publish/subscribe/maxSeq calls and (b) bounds the
 // number of open handles on a busy deployment. A client with an active subscribe (refs > 0) is never
 // evicted; eviction only closes IDLE clients, and when all are busy we briefly exceed the cap rather
@@ -510,7 +510,7 @@ class SessionDbCache {
   async runWrite<T>(token: string, fn: (c: Client) => Promise<T>): Promise<T> {
     const lease = await this.acquire(token, true);
     // create:true never returns null.
-    if (lease === null) throw new Error("sqlite: failed to open session database");
+    if (lease === null) throw new Error("sqlite: failed to open channel database");
     try {
       return await fn(lease.client);
     } finally {
@@ -603,7 +603,7 @@ export class SqliteMultiBackend implements BrokerBackend {
   readonly #cache: SessionDbCache;
   readonly #newClient: ClientFactory;
   readonly #pollMs = sqlitePollMs();
-  // The cold session index (retention strategy B), built lazily from the locator's indexConfig. undefined
+  // The cold channel catalog (retention strategy B), built lazily from the locator's indexConfig. undefined
   // = not yet built; the promise resolves to null when the locator has no index (→ dir-scan retention).
   #indexBuild: Promise<SessionIndex | null> | undefined;
 
@@ -970,9 +970,9 @@ export class SqliteMultiBackend implements BrokerBackend {
   }
 
   /**
-   * Purge whole sessions (their entire database) idle longer than retainMs. Never partial-deletes a
-   * session, and never drops one with a live borrow (an active subscriber) — so replay never starts on a
-   * gap. Uses the COLD session index when the locator provides one (cloud — scalable, resumable), else a
+   * Purge whole channels (their entire databases) idle longer than retainMs. Never partial-deletes a
+   * channel, and never drops one with a live borrow (an active subscriber) — so replay never starts on a
+   * gap. Uses the COLD channel catalog when the locator provides one (cloud — scalable, resumable), else a
    * fleet dir-scan (file — drift-free, single-box). An empty/unreadable db is treated as stale.
    */
   async sweep(retainMs: number): Promise<number> {

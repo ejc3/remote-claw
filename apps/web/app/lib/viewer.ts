@@ -108,7 +108,7 @@ export function connStateLabel(cs: ConnState): string {
   }
 }
 
-/** Presence replay rule shared by the bus reader and React state.
+/** Announce ordering rule shared by the bus reader and React state.
  *
  * Current hosts give each relay incarnation a wall-clock start and each announce a strict sequence:
  * sequence wins within one incarnation, and the newer start wins across incarnations. That keeps a
@@ -317,8 +317,9 @@ export interface Message {
 export class Viewer {
   readonly #client: BrokerClient;
   readonly #identityId: Uint8Array;
-  /** The exact same acceptance state the UI uses. Filtering here is essential: rejected stale
-   * incarnation frames must never reach #rememberIncarnation and reset a live transcript. */
+  /** The exact same generation-order state the UI uses. Filtering here is essential: a superseded
+   * incarnation frame must never reach #rememberIncarnation and reset a live transcript. This does not
+   * filter by wall-clock age; the UI renders connection state from `sentAt`. */
   readonly #acceptedAnnounces = new Map<string, Announce>();
   readonly #incarnations = new Map<string, string>();
   readonly #incarnationListeners = new Map<string, Set<(incarnation: string) => void>>();
@@ -413,17 +414,19 @@ export class Viewer {
   }
 
   /**
-   * Tail the identity bus; yield each fresh session_announce (decrypted under K_meta). Re-subscribes
-   * when the stream ends: the bus run may not exist yet (you opened the app before any host
+   * Tail the identity bus; yield each generation-accepted session_announce (decrypted under K_meta),
+   * including an old one that seeds a disconnected row on cold replay. The UI derives
+   * connected/reconnecting/disconnected from `sentAt`; this generator only prevents delivery
+   * reordering from rolling the accepted incarnation backward. Re-subscribes
+   * when the stream ends: the bus channel may not exist yet (you opened the app before any host
    * announced) or may have been explicitly closed/replaced. The generator applies
-   * shouldAcceptAnnounce per session before
-   * yielding or notifying transcript listeners, so a replay or delayed publish cannot roll accepted
-   * presence/incarnation state backward. Loops until `signal` aborts.
+   * shouldAcceptAnnounce per session before yielding or notifying transcript listeners. Loops until
+   * `signal` aborts.
    *
    * `onError` reports the bus transport's health so a SUSTAINED outage becomes observable instead of a
    * silent retry-forever: it's called with the error when a subscribe/stream throws (broker down, a
    * wrong/stale pass that can't reach the bus, a 5xx), and with `null` the moment the transport is back
-   * up — a frame streamed, or the stream drained cleanly (the run just doesn't exist yet). Discovery
+   * up — a frame streamed, or the stream drained cleanly (the channel just doesn't exist yet). Discovery
    * itself NEVER ends on an error; it always falls through to the retry. The caller debounces (a single
    * SSE blip clears on the next subscribe; only a persistent failure should surface to the user).
    */
@@ -472,7 +475,7 @@ export class Viewer {
           this.#rememberIncarnation(sessionId, announce.incarnation);
           yield announce;
         }
-        onError?.(null); // stream drained cleanly (run absent/closed/replaced) → broker still reachable
+        onError?.(null); // stream drained cleanly (channel absent/closed/replaced) → broker still reachable
       } catch (e) {
         // A transient stream error (network blip / SSE reset / broker 5xx) must NOT end discovery — fall
         // through to the resume-or-retry sleep and re-subscribe, exactly like the relay does. But REPORT it
@@ -481,13 +484,13 @@ export class Viewer {
         onError?.(e);
       }
       if (signal.aborted) break;
-      await new Promise((r) => setTimeout(r, 150)); // bus run not up / stream closed → resume-or-retry
+      await new Promise((r) => setTimeout(r, 150)); // bus absent / stream closed → resume-or-retry
     }
   }
 
   /**
    * Tail a session's out-stream; yield decoded transcript messages (deduped + reordered by seq).
-   * Re-subscribes when the stream ends: the session run may not exist yet (you opened the session
+   * Re-subscribes when the stream ends: the session channel may not exist yet (you opened the session
    * before the host posted anything) or may have been explicitly closed/replaced. The
    * FrameOrderer persists across re-subscribes; for CONTENT frames its seq cursor (drops seq < next)
    * is what guarantees no gap and no duplicate on the re-read — the bounded msg_id window only de-dups
@@ -661,7 +664,7 @@ export class Viewer {
           // re-subscribe. The persistent FrameOrderer makes the re-read idempotent (no gap, no dup).
         }
         if (signal.aborted) break;
-        await new Promise((r) => setTimeout(r, 150)); // run not up / stream closed → resume-or-retry
+        await new Promise((r) => setTimeout(r, 150)); // channel absent / stream closed → resume-or-retry
       }
     } finally {
       stopIncarnationWatch();

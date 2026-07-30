@@ -1,7 +1,9 @@
 // The broker transport: the host (wrapper) and a viewer both reach the §3.2 routes through this.
 // It seals on the way out and opens on the way in (via the SecurityProvider), encodes/decodes the
-// §8 wire envelope, and speaks the two endpoints — POST /api/relay (publish) and GET /api/stream
-// (subscribe, SSE). The broker only ever sees ciphertext + the cleartext routing header.
+// §8 wire envelope, and speaks the two data-plane endpoints — POST /api/relay (publish) and GET
+// /api/stream (subscribe, SSE) — plus GET /api/seq for shared durability/outbound-sequence recovery
+// and GET /api/frame-count for the host-only durable inbound fence. The broker only ever sees
+// ciphertext + the cleartext routing header.
 
 import {
   concatBytes,
@@ -15,9 +17,10 @@ import {
 import type { SecurityProvider } from "../security/provider.js";
 import { planeForKind } from "./protocol.js";
 
-// Default chunk size for postMessage. A POST body (the inbound hook) is capped at 4.5 MB (§8) and
-// base64url expands ~33%, so a ~3 MB plaintext chunk stays comfortably under the limit with room for
-// the JSON envelope. Callers can override per message.
+// Default chunk size for postMessage. The shared relay route rejects decoded ciphertext at 3.3 MB
+// (§8), keeping its base64url JSON body below the deployment edge limit; a ~3 MB plaintext chunk
+// leaves room for the AEAD tag and envelope. Only the Workflow backend turns that request into an
+// inbound hook. Callers can override per message.
 const DEFAULT_MAX_CHUNK_BYTES = 3_000_000;
 
 /** A non-2xx broker reply. `status` lets callers branch (e.g. 409 = channel disposal race → retry). */
@@ -41,7 +44,7 @@ export interface BrokerClientOptions {
   /** Injectable fetch (tests / a custom agent). Defaults to the global fetch. */
   fetchFn?: typeof fetch;
   /** Pick the broker backend for this client's calls ("vercel" | "local" | "sqlite"). Sent as the
-   *  `x-broker-backend` header on every /api/relay + /api/stream request; omitted ⇒ the broker's
+   *  `x-broker-backend` header on every broker API request; omitted ⇒ the broker's
    *  default. Publish and subscribe for one channel MUST agree, so it's set per client. The host learns
    *  whether the effective server backend is durable from /api/seq, not from this flag. */
   backend?: string;
@@ -115,14 +118,14 @@ export class BrokerClient {
     return `Bearer ${toHex(this.#provider.authBearer())}`;
   }
 
-  /** The `x-broker-backend` header selecting the durable backend, when one is configured. Merged into
-   *  every /api/relay + /api/stream request so publish + subscribe address the same backend. */
+  /** The `x-broker-backend` header selecting the broker backend, when one is configured. Merged into
+   *  every broker data/recovery request so publish, subscribe, and recovery cursors address the same backend. */
   #backendHeader(): Record<string, string> {
     return this.#backend ? { "x-broker-backend": this.#backend } : {};
   }
 
   /** The `x-vercel-protection-bypass` header to pass Vercel Deployment Protection, when configured.
-   *  Merged into every request so both publish and the long-lived subscribe get through the SSO edge. */
+   *  Merged into every request so both publish and the long-lived subscribe get through the protected edge. */
   #bypassHeader(): Record<string, string> {
     return this.#bypass ? { "x-vercel-protection-bypass": this.#bypass } : {};
   }
@@ -235,7 +238,7 @@ export class BrokerClient {
   /**
    * Subscribe to a channel and yield each decoded frame as it arrives (live, until the stream ends
    * or the signal aborts). Opening each frame is the caller's job (via openFrame) — different kinds
-   * need different keys. A "nothing connected" reply (HookNotFound) simply yields nothing.
+   * need different keys. A successful empty reply for an absent channel simply yields nothing.
    */
   async *streamFrames(opts: StreamOptions = {}): AsyncGenerator<Frame> {
     const params = new URLSearchParams();

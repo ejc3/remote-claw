@@ -639,7 +639,7 @@ interface AuthenticatedIngressResultRecord {
   viewerProjectionSeq: number | null;
   readyAtJournalSeq: number | null;
   storedSemanticResultSchemaId: string | null;
-  storedSemanticResultRef: string | null; // exact retained accepted/action-result payload bytes
+  storedSemanticResultRef: string | null; // exact retained accepted/action-result/chat-creation-result payload bytes
   storedSemanticResultDigest: string | null;
   firstIngressCursor: BrokerChannelCursorV1;
   lastObservedIngressCursor: BrokerChannelCursorV1;
@@ -5117,7 +5117,7 @@ another namespace, `msgId`, header, or part count is therefore a host-side colli
 original result and a blocked observation, not a new result.
 `stableLogicalHeaderDigest` is unpadded-base64url SHA-256 of
 `str("remote-claw/a1/attempt-header/v1") || bytes(stableLogicalHeader)` using the exact
-[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow)
+[v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow)
 writer.
 Selected A1 requires a durable ciphertext broker whose route-wide transport uniqueness key is
 `(route token, deliveryAttemptId, part)`, not semantic `msgId` and not one generation. The first insert
@@ -5126,7 +5126,7 @@ normalized transport-frame bytes and digest itself; it never trusts a publisher-
 insert atomically stores its assigned `(channelGeneration, frameIndex)` and that recomputed digest. An
 exact HTTP retry before or after rollover returns that original cursor only when the recomputed digest
 matches; different bytes under the same key fail closed as a transport collision. A semantic retry
-uses a fresh delivery ID with the same `msgId`. The store-free Workflow broker remains an A0 backend
+uses a fresh delivery ID with the same `msgId`. The no-rollover Workflow broker remains an A0 backend
 and cannot advertise A1 recovery.
 
 Selected A1 retains every chat- and server-control-route ciphertext frame body indefinitely because a
@@ -5152,7 +5152,7 @@ candidate may produce a success result while that collision latch remains unreso
 
 `authenticatedPartDigest` and `canonicalMessageDigest` use the exact
 `remote-claw/a1/stable-part/v1` and `remote-claw/a1/logical-message/v1` encodings in
-[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow).
+[v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow).
 The part digest is computed only after AEAD open and excludes `deliveryAttemptId`, salt, and nonce, so
 an exact semantic retry under fresh transport encryption compares equal.
 
@@ -5171,7 +5171,8 @@ plaintext part bodies on chat and server-control routes remain retained from gen
 checkpointed discovery-only scope-bus bodies may later be compacted. The full-scope semantic result key,
 `expectedParts`, every `(part, authenticatedPartDigest)` coordinate, source payload schema, canonical
 message digest, source-event fingerprint tuple, disposition, stable semantic result ID, exact
-accepted/action-result payload bytes, transport-attempt binding, and the collision/incomplete tombstone
+accepted/action-result/chat-creation-result payload bytes, transport-attempt binding, and the
+collision/incomplete tombstone
 needed to reject replay remain indefinitely for that
 route. Neither local chat/channel closure nor machine reset authorizes collection because copied
 bearer/key material may remain valid. A late missing part links the tombstone as
@@ -5290,7 +5291,7 @@ allocates each part's salt/nonce once, seals that part once, and persists the co
 only through the current fenced signing lease and stores the exact key generation, signer ID, signature,
 scope certificate, signature sequence, host-signed-record digest, header, transport digest, and bytes.
 `hostSignedRecordDigest` is SHA-256 of the exact versioned host-signature payload from
-[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow).
+[v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow).
 `HostOutputPartRecord` is unique on both
 `(brokerRouteId, deliveryAttemptId, part)` and `(hostOutputDeliveryId, part)`; every header field,
 `parts`, digest, sealed bytes, signer coordinate, and signature is immutable. A conflicting local
@@ -5424,7 +5425,7 @@ observation owns one distinct row and random `deliveryAttemptId`. Retries of tha
 stored delivery ID, while a later ingress observation gets another one. Its A1 frame uses the stable
 semantic result ID as `msgId` and the fresh delivery ID for broker uniqueness.
 
-The encrypted UTF-8 JSON result payload has one of two exact shapes; it is compact (no insignificant
+The encrypted UTF-8 JSON result payload has one of three exact shapes; it is compact (no insignificant
 whitespace), and keys are emitted in the shown order with no extra fields:
 
 ```ts
@@ -5489,7 +5490,7 @@ freezes the decision. Only signed-result finalization creates the exact retained
 one user attachment projection intent, and its write-ahead-fenced native attempt. A later dispatcher
 writes the files and offers the prompt. Exact replay only redelivers the stored result: it does
 not write another file, allocate another projection/sequence, or start another native attempt. Changed
-attachment bytes under the same semantic ID are a collision. Both payload shapes are coordinator
+attachment bytes under the same semantic ID are a collision. All three payload shapes are coordinator
 admission/order results, not proof that the native harness applied a mutation.
 `storedSemanticResultRef` names exactly one retained payload. Broker uniqueness can suppress a
 transport retry of one envelope without suppressing the next observation's delivery, and clients fold
@@ -6661,9 +6662,11 @@ self-signed trust anchor; every later item is signed by the immediately precedin
 last item matches `serverIdentityKey`. An already paired viewer may receive only the suffix beginning
 with its exact current trusted certificate. This is a transport/serialization contract: never log it
 or persist the whole bundle as one plaintext artifact. After verification, the viewer may retain
-extracted credentials in memory or in its explicitly chosen plaintext `localStorage` reconnect mode
-under the same live-credential warnings as the existing pass; the non-secret certificate chain and
-public keys may be stored in the scoped trust registry. A cold client verifies the complete chain
+extracted credentials in memory or in a future scoped credential store at least as strong as A0's
+shipped design: a non-extractable AES-GCM key handle in IndexedDB wrapping tab-scoped ciphertext in
+`sessionStorage`. Plaintext `localStorage` is not the existing baseline and is not an acceptable
+silent fallback. The non-secret certificate chain and public keys may be stored in the scoped trust
+registry. A cold client verifies the complete chain
 before deriving the canonical A1 bus address. A nested peer receives the same chain through its
 authenticated pairing flow.
 
@@ -6866,7 +6869,7 @@ generation names the exact prior record. The broker lookup key is
 and signed-object digest rather than trusting publisher-supplied values.
 
 Here `str`, `uint`, `bytes`, `optionalStr`, and `optionalUint` are exactly the A1 primitives in
-[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow);
+[v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow);
 the stored lowercase-hex machine identity and base64url public key are decoded before their byte
 fields are serialized.
 
@@ -10084,6 +10087,24 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 
 - Route OpenCode and tmux registration through the same host-wide seam without changing their native
   command flow.
+- Make OpenCode registration fail closed before `ready`: open a `starting` lease; require a successful,
+  schema-valid session list; require an explicitly configured `ses_*` to exist exactly; and, with no
+  configured ID, create only after a valid empty list rather than adopting “most recent.” A non-empty
+  ambiguous list requires an explicit target. Confirm the selected/created session with an exact GET.
+- Treat OpenCode permission policy as an append-only native surface. Unless the operator explicitly
+  chooses `--rc-oc-skip-permissions`, require permission read/install/read-back to succeed
+  before advertising structured permissions. Do not issue another append when the exact remote-claw
+  catch-all is already installed, and never describe preparation of a de-duplicated PATCH payload as
+  proof that the native append itself was idempotent.
+- Advertise conservative OpenCode capabilities from proved setup only, then transition the lease to
+  `ready`; only after that may the broker bridge, initial announcement, capture pump, or injection pump
+  start. Cancellation closes the starting lease, aborts native setup, and uses the existing bounded
+  teardown deadline. List/GET/create/permission errors, malformed discovery, target mismatch, or
+  cancellation publish no ghost conversation.
+- Gate the slice with driver tests for discovery error, malformed successful list, non-empty
+  no-target ambiguity, missing configured target, invalid create response, exact GET mismatch,
+  permission read/PATCH/read-back failure, already-installed catch-all, cancellation at each setup
+  boundary, no announcement/pump before `ready`, and one shared bounded teardown deadline.
 - Publish actual post-setup capabilities/readiness, correcting current optimistic OpenCode/tmux
   permission, status, and attachment announcements.
 - Publish no ghost conversation when native attach/spawn fails.
@@ -10410,23 +10431,34 @@ Native-client fidelity is a differential release gate, not a prose aspiration:
     after completion. Require one write-ahead attempt and one native response stream; retry only with
     proven upstream idempotency/read-back, otherwise surface the pinned native error/retry behavior.
 14. Cold-onboard an A1 viewer from one `ViewerOnboardingBundleV2`; verify the scope certificate,
-    derive the canonical bus/chat addresses, and require the broker to recompute both from the clear
-    routing tuple plus `auth_token`. Tamper with each tuple field, certificate, key, and opaque token;
+    derive canonical `scopeAddress`, `serverControlAddress`, and `chatAddress`, and require the broker
+    to recompute all three from the clear routing tuple plus `auth_token`. Tamper with each tuple
+    field, certificate, key, and opaque token;
     fuzz field-boundary collisions; rotate the server key while preserving `collaborationServerId`;
     and require rejection, historical verification, or explicit re-pairing as appropriate. Cover a
     cold multi-certificate chain, an existing viewer's suffix, stale/forked concurrent rotations,
     rollback, skipped generation, key-ID rebinding, revoked signer, and atomic current-certificate
     compare-and-swap. Publish byte-exact Node/browser/second-language vectors for the primitive
-    encoder, route hashes, exact A1 JSON frame, AAD, all three chat-plane KDFs, message
+    encoder, route hashes, exact A1 JSON frame, AAD, all three chat-plane KDFs, both dedicated
+    inbound/outbound server-control KDFs, message
     ciphertext/tag, transport-frame digest, stable part/message digest encodings, initial self-signed
-    Ed25519 scope certificate, old-key-signed rotation chain, exact result payloads, kind-to-plane
-    mappings, every allowed/rejected direction/sequence/client-ID combination, and broker
+    Ed25519 scope certificate, old-key-signed rotation chain, exact
+    `accepted`/`action_result`/`chat_creation_result` payloads and key order, kind-to-plane mappings,
+    every allowed/rejected direction/sequence/client-ID/header-nullability/chunk-shape combination,
+    and broker
     generation/cursor encode-order-successor rules. Reject duplicate JSON members before object
     construction, including duplicate routing/AAD fields, and assert the invalid-position cursor/
     quarantine result. Include the four onboarding key commitments/attestation and transfer checksum,
     certified host-output signature preimage and signed-record digest, signer reservation/burn and
     sequence equivocation, cutoff/current/retired/revoked behavior, certificate update and historical
     reattestation publication/retrieval/fork cases, and signature transplant/omission/stale-key cases.
+    For server control specifically, vector `serverControlAddress` and its `ctl:a1:` token; the
+    null-chat inbound `new_chat` header with null sequence, required client ID, 0/1 chunk shape, null
+    host-authentication fields, and dedicated input key; and the null-chat outbound
+    `chat_creation_result` header with `seq=command_seq`, echoed client ID, stable result `msg_id`, 0/1
+    chunk shape, non-null certified host-output fields, dedicated output key, and exact signature
+    preimage/digest/verification. Require the wrong server-control key, direction, header correlation,
+    signature, address, or token to fail closed.
 15. Lose the first `accepted`/action-result delivery, then retry the complete exact input with the
     same semantic `msgId` and a fresh ingress-result `deliveryAttemptId`—not a fresh native
     attempt—before and after coordinator restart. Require

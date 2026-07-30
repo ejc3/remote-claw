@@ -1,6 +1,6 @@
 import { timingSafeEqual, utf8 } from "@remote-claw/clawsec";
 
-// Shared gate for the dev-only routes under /api/dev (today just the per-session sqlite cleanup sweep).
+// Shared gate for the dev-only routes under /api/dev (today just the per-channel SQLite cleanup sweep).
 // NEVER opens in production: local dev requires a loopback origin; a Vercel preview requires the
 // DEV_SEED_TOKEN, and the token is ignored when VERCEL_ENV=production. (Moved here from the now-removed
 // /api/dev/seed route so the sweep keeps the IDENTICAL `x-dev-seed-token` auth + loopback SSRF guard.)

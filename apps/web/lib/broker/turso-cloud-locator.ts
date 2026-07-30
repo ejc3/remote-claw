@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Client } from "@libsql/client";
 import { type DbLocator, FileDbLocator } from "./sqlite-multi";
 
-// Cloud storage for the per-session libSQL backend: ONE Turso Cloud database per channel token. This is
+// Cloud storage for the per-channel libSQL backend: ONE Turso Cloud database per channel token. This is
 // the SAME backend as the local-file mode — only the storage location differs. A token maps to a Turso
 // database created on demand via the Platform API and connected with a GROUP token (one JWT that auths
 // every database in the group), so a Vercel deployment with the Turso integration drives both the
@@ -26,7 +26,7 @@ const TURSO_API_BASE = "https://api.turso.tech";
 //   • `<scope>` — the deployment ENVIRONMENT (see scopeFromEnv): `prod`, `pr-<7-char commit sha>` for a
 //                 preview, or `dev`. This is an isolation boundary, not cosmetics: each scope catalogs
 //                 into and sweeps ONLY its own `rc-<scope>-index`, so a preview deployment can never
-//                 enumerate — let alone drop — a production session db, and two concurrent preview
+//                 enumerate — let alone drop — a production channel db, and two concurrent preview
 //                 deployments (different commits ⇒ different scopes) can't reclaim each other's dbs.
 //   • `<kind>`  — `s` (session channel) or `b` (bus channel), so the two kinds are distinguishable.
 //   • `<hash>`  — sha256(channel token) truncated; the uniqueness/addressing component.
@@ -89,7 +89,7 @@ export interface TursoCloudOptions {
   apiToken: string;
   /** Turso organization slug. */
   org: string;
-  /** Group the per-session databases live in (one group, many databases). */
+  /** Group the per-channel databases live in (one group, many databases). */
   group: string;
   /** Group token (libSQL connect credential) — auths every database in the group. */
   authToken: string;
@@ -151,7 +151,8 @@ export class TursoCloudDbLocator implements DbLocator {
     }
     this.#scope = scope;
     this.#indexName = `${APP}-${scope}-index`;
-    // `-hx` (handoff) is a fixed suffix distinct from the session kinds (s/b/x), parallel to `-index`.
+    // `-hx` (handoff) is a fixed suffix distinct from the relay-channel kinds (s/b/x), parallel to
+    // `-index`.
     // It shares the `rc-<scope>-` prefix, so the dev/CI dropScope() sweep reclaims it too (desirable —
     // dropScope is dev-gated and never runs against prod).
     this.#handoffName = `${APP}-${scope}-hx`;
@@ -246,7 +247,7 @@ export class TursoCloudDbLocator implements DbLocator {
     }
   }
 
-  /** The catalog db connection for the cold session index (retention strategy B). Per-SCOPE, so a
+  /** The catalog db connection for the cold channel catalog (retention strategy B). Per-SCOPE, so a
    *  preview/dev deployment's sweep walks ONLY its own scope's index — never production's. */
   indexConfig(): { url: string; authToken: string } {
     return this.#connect(this.#indexName);
@@ -257,7 +258,7 @@ export class TursoCloudDbLocator implements DbLocator {
     await this.#createIfAbsent(this.#indexName);
   }
 
-  /** The dedicated ephemeral-handoff store db for this scope (`rc-<scope>-hx`), separate from session dbs
+  /** The dedicated ephemeral-handoff store db for this scope (`rc-<scope>-hx`), separate from channel dbs
    *  and the cold index so its one-time/short-TTL lifecycle never entangles the frame log or retention. */
   handoffConfig(): { url: string; authToken: string } {
     return this.#connect(this.#handoffName);
@@ -312,7 +313,7 @@ export class TursoCloudDbLocator implements DbLocator {
     );
   }
 
-  // Retention uses the COLD session index (indexConfig/ensureIndex above), NOT a fleet list: Turso's
+  // Retention uses the COLD channel catalog (indexConfig/ensureIndex above), NOT a fleet list: Turso's
   // list-databases is un-paginated and exposes no last-activity, so it can't scale. The sweep reads the
   // index, probes each candidate's own MAX(created_at), and drops the idle ones via dropStored.
   async dropStored(name: string): Promise<void> {
@@ -328,13 +329,13 @@ export class TursoCloudDbLocator implements DbLocator {
     this.#known.delete(name); // forget it so a later publish re-provisions a fresh db
   }
 
-  /** Drop this scope's cold-index catalog db itself (after a scope's sessions are all reclaimed), so a
+  /** Drop this scope's cold-index catalog db itself (after a scope's channels are all reclaimed), so a
    *  short-lived preview/dev scope doesn't leave an empty `rc-<scope>-index` behind every deployment. */
   async dropIndex(): Promise<void> {
     await this.dropStored(this.#indexName);
   }
 
-  /** Platform-API names of every db in THIS scope (`rc-<scope>-*`: sessions, bus, and the index). The
+  /** Platform-API names of every db in THIS scope (`rc-<scope>-*`: session channels, bus, and the index). The
    *  trailing `-` in the prefix keeps `pr-abc` from matching `pr-abcd`. */
   async #listScopeNames(): Promise<string[]> {
     const res = await this.#fetch(this.#api("/databases"), { headers: this.#authHeader() });
@@ -366,14 +367,14 @@ export class TursoCloudDbLocator implements DbLocator {
 }
 
 /**
- * The per-session storage locator chosen from the environment — this is the single switch between
+ * The per-channel storage locator chosen from the environment — this is the single switch between
  * cloud and local-file storage. If the Turso Cloud credentials are all present we use Turso Cloud
- * (one database per session); otherwise we use local files (one db per session under RC_SQLITE_DIR).
+ * (one database per channel token); otherwise we use local files (one db per channel under RC_SQLITE_DIR).
  *
  * The connect credential is read from `TURSO_GROUP_AUTH_TOKEN`, NOT the conventional `TURSO_AUTH_TOKEN`,
  * ON PURPOSE: the Vercel↔Turso integration OWNS `TURSO_AUTH_TOKEN` (+ `TURSO_DATABASE_URL`) and sets it
  * to a PER-DATABASE token for the integration's own managed db. Our fleet needs a GROUP token (one JWT
- * that auths every per-session db in the group), so reusing that name would (a) be clobbered when the
+ * that auths every per-channel db in the group), so reusing that name would (a) be clobbered when the
  * integration re-syncs and (b) connect with the wrong-scope token. A distinct name keeps the two
  * independent. The Platform-API token / org / group names don't collide (the integration sets neither).
  */
@@ -398,7 +399,7 @@ export function selectLocatorFromEnv(): DbLocator {
  * production deployment; a self-host sets RC_TURSO_DB_SCOPE=prod). This keeps the dev-only cleanup sweep
  * SAFE — it can never resolve to `prod` off-Vercel where the dev-seed gate's `VERCEL_ENV!=="production"`
  * check would otherwise leave it open. Each scope catalogs into and sweeps ONLY its own `rc-<scope>-index`,
- * so a preview/dev deployment can never enumerate or drop a production session. Overridable with
+ * so a preview/dev deployment can never enumerate or drop a production channel db. Overridable with
  * RC_TURSO_DB_SCOPE; bounded to SCOPE_MAX.
  */
 function scopeFromEnv(): string {

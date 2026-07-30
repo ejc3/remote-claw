@@ -1,22 +1,22 @@
 # Broker backends
 
-The broker (the two routes `POST /api/relay` = publish, `GET /api/stream` = subscribe) is a dumb,
+The broker data plane (`POST /api/relay` = publish, `GET /api/stream` = subscribe) is a dumb,
 zero-knowledge relay: it moves opaque ciphertext frames on ordered, resumable, token-addressed
 channels (the per-identity **bus** and per-session streams, §6A/§6B) and never holds a key. The
-durable runtime behind it is **pluggable** via the `BrokerBackend` port (`backend.ts`):
+runtime behind it is **pluggable** via the `BrokerBackend` port (`backend.ts`):
 
 | Backend    | Selector value | What it is | Runs where |
 | ---------- | -------------- | ---------- | ---------- |
 | **Vercel** | `vercel` (default) | Vercel Workflows — one `relayWorkflow` run per channel token | Production on Vercel |
 | **Local**  | `local` | In-process `Map<token, Channel>` — an append-only frame log + live subscribers | `next start` / tests (single process) |
-| **Sqlite** | `sqlite` | Per-session libSQL — ONE database per channel token; physical isolation, retention = drop the database. The primary backend (`pnpm dev` default) | Local file **or** Turso Cloud — the only variable |
+| **Sqlite** | `sqlite` | Per-channel libSQL — ONE database per channel token; physical isolation, retention = drop the database. The primary backend (`pnpm dev` default) | Local file **or** Turso Cloud — the only variable |
 
 The backend is the only thing that changes; every client speaks the same HTTP/SSE, and the wire
-protocol, auth, and crypto are identical across backends. The **`sqlite`** backend is one per-session
-libSQL engine whose **only** deployment difference is *where each session's database lives* — a local
-file (dev) or a Turso Cloud database created on demand (prod) — chosen by env, with no code or flag
-change. Per session it gives physical isolation, per-session retention (drop the db), and a per-session
-write lock (no global mutex).
+protocol, auth, and crypto are identical across backends. The **`sqlite`** backend uses one libSQL
+database per channel token, including both identity buses and session streams. Its **only** deployment
+difference is *where each channel database lives* — a local file (dev) or a Turso Cloud database created
+on demand (prod) — chosen by env, with no code or flag change. Per channel it gives physical isolation,
+whole-database retention, and a per-channel write lock (no global mutex).
 
 ## Selecting a backend
 
@@ -34,14 +34,20 @@ once and uses it for the whole session). A selector that isn't valid for this de
 
 Only **`local`** is restricted: it's process memory, so it's honoured **only as the deployment's own
 default** (`pnpm dev` / `next start` with `BROKER_BACKEND=local`) — a per-request pick would land
-publish and subscribe on different instances. Every other backend (`vercel`, `sqlite`) is durable and
-per-request selectable; `sqlite` always reaches a consistent store — a single local process's disk
-(dev / e2e) or a SHARED Turso Cloud db (prod), with file-mode on Vercel guarded off.
+publish and subscribe on different instances. Vercel and SQLite are per-request selectable, but only
+SQLite reports `durable:true` to the host and supplies the retained frame-log cursors. Vercel stores a
+persistent run stream that subscribers resume by absolute frame index (a negative `startIndex` merely
+selects a tail starting point); it does not maintain an evicting recent window. The current adapter
+still reports it as non-durable to the host because it supplies neither `maxSeq` nor `frameCount`.
+Every publish also consumes Workflow events, so the one run reaches a fixed 25,000-event cap; there is
+currently no pre-cap rollover, making that boundary a cap cliff rather than retention. SQLite always
+reaches a consistent store—a single local process's disk (dev/e2e) or a shared Turso Cloud database
+(prod), with file mode on Vercel guarded off.
 
 ## Local development
 
 ```bash
-# Per-session SQLite — the DEFAULT for `pnpm dev` (one libSQL db per channel under ./.rc-sqlite,
+# Per-channel SQLite — the DEFAULT for `pnpm dev` (one libSQL db per channel under ./.rc-sqlite,
 # durable across a wrapper restart, no external service). RC_SQLITE_DIR overrides the directory:
 pnpm --filter @remote-claw/web dev                           # forces BROKER_BACKEND=sqlite
 
@@ -53,7 +59,7 @@ BROKER_BACKEND=local pnpm --filter @remote-claw/web dev      # or `next start` a
 
 ```bash
 cd tests/web && pnpm test:app                     # the full app e2e on the LOCAL backend
-cd tests/web && pnpm test:app:sqlite              # the SAME app e2e flipped to per-session SQLite (file)
+cd tests/web && pnpm test:app:sqlite              # the SAME app e2e flipped to per-channel SQLite (file)
 ```
 
 `test:app:sqlite` runs against one Next server (default `local`) and flips individual sessions to
@@ -62,7 +68,7 @@ SQLite with `?backend=`, proving the abstraction is swappable per-request.
 ### CI
 
 - **`web-e2e.yml`** (every PR, self-contained): installs Chromium and runs the **local** and **sqlite**
-  (per-session libSQL file) app e2e + the unit tests + the encryption stress (`test:stress`) + a
+  (per-channel libSQL files) app e2e + the unit tests + the encryption stress (`test:stress`) + a
   **heavy local stress** (`test:stress:heavy` — thousands of sealed round-trips). No Docker, no account.
   The sqlite backend additionally has unit coverage in `test/broker/sqlite-multi.test.ts` +
   `test/broker/turso-cloud-locator.test.ts`.
@@ -70,27 +76,27 @@ SQLite with `?backend=`, proving the abstraction is swappable per-request.
   `VERCEL_AUTOMATION_BYPASS_SECRET` is set (GitHub + the Vercel *Preview* env) — the Playwright UI e2e
   against the **vercel** backend. The vercel runtime (and the sqlite backend's Turso Cloud storage) only
   exist on a real deployment, which is why their e2e lives here. The sqlite/Turso-Cloud leg provisions
-  REAL per-session dbs, so a final `always()` step POSTs `/api/dev/sweep` (the dev-only sweep route,
+  REAL per-channel dbs, so a final `always()` step POSTs `/api/dev/sweep` (the dev-only sweep route,
   gated by `DEV_SEED_TOKEN` — prod-safe, 404 in production) to reclaim them — the run cleans up after
   itself instead of leaking dbs until the daily retention cron.
 
-## Production — per-session SQLite on Turso Cloud
+## Production — per-channel SQLite on Turso Cloud
 
-Set the `sqlite` backend's storage to **Turso Cloud** and it creates one libSQL database per session,
+Set the `sqlite` backend's storage to **Turso Cloud** and it creates one libSQL database per channel token,
 no code change — the same engine as local-file dev. Set these as **Vercel encrypted env vars** (e.g.
 provisioned by the Vercel↔Turso integration, plus a Platform API token) — see `.env.example`:
 
 ```
 BROKER_BACKEND=sqlite
-TURSO_API_TOKEN=<turso-platform-api-token>   # creates/looks-up per-session databases
+TURSO_API_TOKEN=<turso-platform-api-token>   # creates/looks-up per-channel databases
 TURSO_ORG=<turso-org-slug>
-TURSO_GROUP=<group-the-session-dbs-live-in>
+TURSO_GROUP=<group-the-channel-dbs-live-in>
 TURSO_GROUP_AUTH_TOKEN=<group-token>         # libSQL connect credential (auths the whole group)
 ```
 
 `TURSO_GROUP_AUTH_TOKEN` is deliberately NOT the conventional `TURSO_AUTH_TOKEN`: the Vercel↔Turso
 integration owns `TURSO_AUTH_TOKEN` (+ `TURSO_DATABASE_URL`) and points it at a *per-database* token for
-its own managed db — a different scope and a different org. The per-session fleet needs a *group* token,
+its own managed db — a different scope and a different org. The per-channel fleet needs a *group* token,
 so it reads a distinct name to stay independent of (and un-clobbered by) the integration. Mint it with
 `turso group tokens create <group>`; the Platform API token comes from `turso auth api-tokens mint`.
 
@@ -113,7 +119,7 @@ rc-prod-index   /   rc-pr-a1b2c3d-index    # the per-scope cold-index catalog db
 derived automatically from `VERCEL_ENV`/`VERCEL_GIT_COMMIT_SHA` (override with `RC_TURSO_DB_SCOPE`). It's
 an **isolation boundary**, not just cosmetics: each scope catalogs into and sweeps **only its own**
 `rc-<scope>-index`, so prod and preview can share one Turso org/group yet (a) a preview's cleanup can
-never enumerate or drop a production session db, and (b) two concurrent preview deploys of different
+never enumerate or drop a production channel db, and (b) two concurrent preview deploys of different
 commits get distinct scopes and can't reclaim each other's dbs. The production retention cron sweeps the
 `rc-prod` scope; a preview's dbs (and its scope index) are reclaimed by the web-preview cleanup step
 (`/api/dev/sweep`, which also drops the now-empty `rc-<scope>-index`). `<kind>` is `s` (session) or `b`
@@ -123,13 +129,13 @@ commits get distinct scopes and can't reclaim each other's dbs. The production r
 
 - `subscribe()` on **Sqlite** **polls** (libSQL has no server→client push): `RC_SQLITE_POLL_MS`,
   default 150ms. Knobs: `RC_SQLITE_DIR` (file storage dir), `RC_SQLITE_MAX_CLIENTS` (bounded client LRU,
-  default 256), `RC_SQLITE_POLL_MS`. Each session db opens in **WAL** so reads (the poll-tail, the
+  default 256), `RC_SQLITE_POLL_MS`. Each channel db opens in **WAL** so reads (the poll-tail, the
   retention sweep probe) run concurrently with the writer — matching remote libSQL; writes serialize
-  structurally (one writer connection per session token), not via a busy_timeout.
-- **Retention scales to an unlimited fleet via a COLD session index** — used in BOTH modes (so the same
+  structurally (one writer connection per channel token), not via a busy_timeout.
+- **Retention scales to an unlimited fleet via a COLD channel catalog** — used in BOTH modes (so the same
   engine runs locally, where it's fully testable). Turso's list-databases is un-paginated and has no
   last-activity timestamp, so a fleet-wide list+probe can't scale. Instead a catalog db (cloud:
-  `rc-index`; file: `_index.db`) — written once on session-create, deleted on drop (never on the hot
+  `rc-index`; file: `_index.db`) — written once on channel-db creation, deleted on drop (never on the hot
   publish path) — holds only `(db id, url, created_at)` (public routing metadata, no ciphertext or keys).
   The retention cron walks it in resumable batches (`RC_SQLITE_SWEEP_BATCH`, a persisted cursor rotating
   through the fleet across runs), probing only each batch's own `MAX(created_at)`.

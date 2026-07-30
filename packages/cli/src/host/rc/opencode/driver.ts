@@ -10,8 +10,9 @@
 //                  transcript seq per pushUpstream. So we BUFFER parts per messageID and pushUpstream
 //                  ONCE per completed message (on session.idle / an assistant message.updated with
 //                  time.completed), never per part.updated.
-//   #2 DEDUP     — re-pushing a uuid does NOT dedup at the relay. We track emitted message ids and never
-//                  re-emit one (covers an SSE reconnect re-delivering a finished message).
+//   #2 DEDUP     — re-pushing a uuid does NOT dedup at the relay. We track a bounded recent window of
+//                  emitted message IDs, suppressing ordinary SSE reconnect overlap while each ID
+//                  remains present; a replay larger than that window can re-emit an evicted message.
 //   #5 ACK       — followDownstream only suppresses replay for ids in #acked; a non-MITM driver has no
 //                  /worker/events/delivery, so we call session.ack(ev.eventId) after EVERY successful
 //                  transport inject, INCLUDING the leading `initialize` control_request. This ACK does
@@ -132,8 +133,10 @@ const ASK_ALL_RULE: PermissionRule = { permission: "*", pattern: "*", action: "a
 /** Merge the catch-all ask with a session's EXISTING permission rules, preserving the existing policy —
  *  especially a hard `deny`. opencode is LAST-match-wins (verified live), so the catch-all ask goes
  *  FIRST and the existing rules AFTER it: an existing specific rule (deny/allow) still wins for its tool,
- *  while every unconfigured tool falls through to ask. We drop any pre-existing copy of our OWN catch-all
- *  ask so repeated attaches stay idempotent (the array can't grow without bound). */
+ *  while every unconfigured tool falls through to ask. This de-duplicates the PATCH PAYLOAD only.
+ *  OpenCode 1.17.5 appends permission patches to native state, so calling PATCH again is not idempotent;
+ *  a registrar must detect an already-installed catch-all and skip the append. The current direct
+ *  driver does not yet provide that registration guarantee. */
 export function mergeAskRules(existing: readonly PermissionRule[]): PermissionRule[] {
   const isOurCatchAll = (r: PermissionRule) =>
     r.permission === ASK_ALL_RULE.permission &&
@@ -151,11 +154,10 @@ interface MessageBuffer {
   order: string[];
 }
 
-/** Default cap for the bounded dedup/correlation structures (#emitted, #injectedTexts, #roles). Mirrors
- *  the relay's #seen discipline: keep the WINDOW of recent ids large enough that a re-backfill after a
- *  reconnect (review #2) still finds its just-emitted ids (no truncation/dup), but bounded so a very
- *  long-lived bridge can't grow unbounded. A single turn touches O(1) ids; 4096 covers thousands of
- *  recent turns — far more than any reconnect re-backfill replays. */
+/** Default cap for the bounded dedup/correlation structures (#emitted, #injectedTexts, #roles).
+ *  A single turn touches O(1) ids, so 4096 covers thousands of recent turns without unbounded growth.
+ *  This is only a recent window: a history replay larger than the window can re-emit evicted messages
+ *  after reconnect, so it is not a durable no-duplicates guarantee. */
 const DEFAULT_EMITTED_CAP = 4096;
 
 /** Best-effort human-readable text from a `session.error` payload (OpenCode sends `error.toObject()`,
@@ -284,10 +286,9 @@ export class OpencodeDriver implements Driver {
    *  session.idle / a completed assistant message.updated. Self-bounded (cleared on flush / re-seeded
    *  per incomplete message), so it never needs an explicit cap. */
   readonly #buffers = new Map<string, MessageBuffer>();
-  /** Message ids already pushUpstream-ed — the DEDUP set (#2): never emit a message twice (an SSE
-   *  reconnect can re-deliver a finished message's parts). FIFO-bounded (review #6) so a long-lived
-   *  bridge can't grow it without limit; the window is large enough that a reconnect's re-backfill still
-   *  finds every recently-emitted id (coordinated with #2 — no truncation/dup across a reconnect). */
+  /** Recently pushUpstream-ed message IDs. This suppresses ordinary SSE/backfill overlap while an ID
+   *  remains in the FIFO-bounded window, without growing for the bridge's whole lifetime. It is not a
+   *  durable exactly-once set: a reconnect whose history exceeds the window can re-emit an evicted ID. */
   readonly #emitted = new BoundedSet(DEFAULT_EMITTED_CAP);
   /** messageID → role, learned from `message.updated` (and backfilled history). An ASSISTANT message is
    *  pushed upstream as an `assistant` payload. A USER message is handled by origin (see #injectedTexts):
@@ -424,10 +425,9 @@ export class OpencodeDriver implements Driver {
     this.#tracer.info("opencode session attached", { session: session.id, opencode: ocSessionId });
 
     // HISTORY BACKFILL / RESUME runs INSIDE #capturePump, on the first SSE event (when the subscription
-    // is LIVE) — NOT here. Backfilling before subscribing would lose any event arriving in the gap
-    // between the GET /message snapshot and the /event subscription (SSE has no replay) — e.g. a prompt
-    // another client (the TUI) sends during attach would vanish. Subscribe-first + #emitted dedup is
-    // lossless and order-preserving (history first, then live).
+    // is LIVE) — NOT here. Backfilling before subscribing would leave an obvious event gap because SSE
+    // has no replay. Subscribe-first narrows that gap, but paused generator buffering is not a durable
+    // boundary and the bounded #emitted window cannot prove lossless/exactly-once recovery.
 
     try {
       await Promise.race([
@@ -489,18 +489,18 @@ export class OpencodeDriver implements Driver {
    * HISTORY BACKFILL / RESUME: fetch the attached session's full message history (GET /…/message) and
    * replay it through the SAME flush path as the live stream — coalesce per message, dedup by messageID
    * (#emitted), emit assistant turns as `assistant` and locally-typed user turns as `local_prompt`. Run on
-   * attach AND after EACH (re)connect (review #2) — #emitted dedups what was already emitted, so a re-run
-   * re-emits nothing already shown. Because it shares #emitted, a wrapper restart re-attaches, re-fetches
-   * the same history, and re-emits it with NO duplicates beyond a fresh broker session's first pass (the
-   * broker/viewer dedup by their own seq within a session; a new session starts the log over).
+   * attach AND after EACH (re)connect (review #2). #emitted suppresses messages still in its recent
+   * window; a longer replay can re-emit evicted IDs. A wrapper restart has a fresh window and a fresh
+   * compatibility broker session, so it replays native history rather than claiming cross-process
+   * duplicate suppression.
    *
    * MID-TURN ATTACH (review #1, CRITICAL): an ASSISTANT message is flushed here ONLY when it is COMPLETE
    * (`info.time.completed`). If we attach while an assistant message is still streaming, flushing the
    * partial would mark it #emitted and the LIVE completion would then be deduped away — the viewer would
    * be stuck with truncated output forever. So for an INCOMPLETE assistant we SEED its parts into #buffers
    * + record its role WITHOUT touching #emitted; the live `message.updated` (completed) / `session.idle`
-   * then flushes the FULL message exactly once. User messages carry no `completed` flag (they settle the
-   * moment the model starts) — they flush as before.
+   * then flushes the full message once within this live capture/dedup window. User messages carry no
+   * `completed` flag (they settle the moment the model starts) — they flush as before.
    */
   async #backfillHistory(session: Session, ocSessionId: string): Promise<void> {
     const messages: HistoryMessage[] = await this.#client.getMessages(ocSessionId);
@@ -533,14 +533,16 @@ export class OpencodeDriver implements Driver {
   /**
    * CAPTURE: subscribe to GET /event (filtered to our ses_), buffer parts per messageID, and flush a
    * COMPLETED message to pushUpstream ONCE (review #1 coalesce, #2 dedup). Completion is signalled by
-   * `session.idle` (turn end) or an assistant `message.updated` carrying `time.completed`.
+   * `session.idle` (turn end) or an assistant `message.updated` carrying `time.completed`, subject to
+   * the bounded recent-ID window described above.
    *
    * RECONNECT LOOP (review #2, CRITICAL): the SSE connection can EOF/error transiently (a proxy timeout,
    * the server restarting, a dropped TCP). A single subscription ending used to end run() → teardown →
    * client.abort(), CANCELLING the user's active OpenCode turn. Instead we wrap one connection in a loop
    * that RECONNECTS with capped backoff and ONLY ends when the parent signal aborts. Each (re)connect
-   * re-runs backfill on its first event (deduped by #emitted; with fix #1 an incomplete assistant
-   * re-seeds and completes live) — subscribe-first, lossless, no truncation/dup across reconnects.
+   * re-runs backfill on its first event (deduped by the bounded #emitted window; with fix #1 an
+   * incomplete assistant re-seeds and completes live). This narrows ordinary reconnect gaps but does
+   * not prove no loss or duplication across a process failure or a replay larger than the window.
    */
   async #capturePump(session: Session, ocSessionId: string, signal: AbortSignal): Promise<void> {
     // Seed the followed-session set with the main session; child sub-agent sessions are added live as

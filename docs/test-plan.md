@@ -12,14 +12,14 @@ What we verify, how, and where. The system is a zero-knowledge, E2E-encrypted re
 | **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
 | **Retained native proof (OpenCode)** | [`spikes/opencode-native/verify-evidence.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, and same-ID `noReply:true` append behavior within one incarnation | Node over checked JSON evidence; no provider/model |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
-| **App e2e (real browser)** | `tests/web/app-e2e/*.spec.ts` (Playwright) | a real **Chromium** drives the BUILT viewer against a real Next server + broker — the full RC turn, the one-time-handoff pairing, the three drivers' capability profiles (mitm/tmux/opencode, via capability presets — not real tmux/opencode hosts), and the bus-unreachable banner; **WebKit** runs the iOS-Safari foreground-revive spec; the RC turn re-runs on the per-session SQLite backend | Playwright (Chromium + WebKit), built prod server |
+| **App e2e (real browser)** | `tests/web/app-e2e/*.spec.ts` (Playwright) | a real **Chromium** drives the BUILT viewer against a real Next server + broker — the full RC turn, the one-time-handoff pairing, the three drivers' capability profiles (mitm/tmux/opencode, via capability presets — not real tmux/opencode hosts), and the bus-unreachable banner; **WebKit** runs the iOS-Safari foreground-revive spec; the RC turn re-runs on the per-channel SQLite backend | Playwright (Chromium + WebKit), built prod server |
 | **Proof (real claude)** | `apps/web/test/prove/*.prove.test.ts` (gated `RC_PROVE_REAL_CLAUDE=1`) | a **real, logged-in `claude`** driven end-to-end through the encrypted broker — single turn and stateful multi-turn | spawns real `claude`, network |
 | **Exploratory** | manual real-`claude` runs (`tests/web/cross-mode-verify.mjs`) | a LIVE session driven through the real viewer for any bridged driver: type a prompt, assert a real assistant reply (real LLM round-trip) carrying a needle, screenshot | real, on demand |
 
 CI keeps the unit + integration layers fast and network-free, verifies retained native evidence when
 its spike or verifier changes, and on every PR that touches the
 web/CLI/crypto paths also runs the **app-e2e** layer (Chromium + WebKit; the RC turn re-runs on
-per-session SQLite) plus the encryption-stress suites (`.github/workflows/web-e2e.yml`, path-filtered);
+per-channel SQLite) plus the encryption-stress suites (`.github/workflows/web-e2e.yml`, path-filtered);
 the real-claude proofs are env-gated so they never gate CI but are run on demand. Every PR must pass
 the relevant path-filtered checks plus the repository's `biome`, `tsc`, and `vitest` gate before merge.
 
@@ -102,7 +102,8 @@ about the current A0 implementation:
 - verify byte-exact cross-runtime A1 vectors for canonical field encoding, scope-bus/server-control/chat route hashes,
   the exact version-2 JSON frame/AAD/base64url/tag contract, normalized transport-frame digest,
   chat-scoped content/control/meta KDFs plus distinct server-control inbound/outbound KDFs, message encryption, stable part/whole-message digest
-  encodings, exact accepted/action-result payloads, exact broker-route IDs and sealed-generation
+  encodings, exact accepted/action-result/chat-creation-result payloads and key order, exact
+  broker-route IDs and sealed-generation
   manifest digests, and initial/rotated Ed25519 scope-certificate
   chains; reject alternative encodings, null rules, algorithms, wrapped keys, padded base64, and A0/A1
   cross-version opens; reject quote, backslash, control, non-ASCII, and alternative-escape forms in
@@ -190,8 +191,15 @@ about the current A0 implementation:
   nested arm must create zero outer OpenCode binding, native creation reservation, or OpenCode
   front-door call;
 - exercise the server-control route from generation-zero genesis with null chat, its distinct address,
-  token, inbound control-key/outbound meta-key KDFs, typed `new_chat`/`chat_creation_result` allowlist,
-  host signature, and target allocation. Reject bus/chat/control transplants before open. Expire or
+  token, dedicated server-control input/output KDFs, typed `new_chat`/`chat_creation_result` allowlist,
+  and target allocation. Require `new_chat` to be inbound with null `seq`, a client ID, 0/1 chunk
+  shape, and null host-authentication fields. Require `chat_creation_result` to be outbound with
+  `seq=command_seq`, the echoed client ID, stable result `msg_id`, 0/1 chunk shape, and every certified
+  host-output field non-null. Before AEAD open, reject wrong route, machine/server/null-chat scope,
+  direction, header nullability, client-ID presence/correlation, chunk shape, host signature, and
+  bus/chat/control transplant. Require a wrong server-control key to fail at open. After open, reject
+  non-canonical payload bytes/key order, `seq`/`command_seq`, header/payload result-ID, decision/target,
+  or source-result correlation mismatches before semantic dispatch or target allocation. Expire or
   collide an incomplete server-control candidate and require quarantine with no fabricated command
   sequence or result;
 - create through a server-scoped nested-management binding before any inner chat edge exists; verify
@@ -616,7 +624,7 @@ pnpm --filter @remote-claw/opencode-native-proof test:run
 
 # app e2e in a real browser (Chromium + WebKit) — also runs in CI
 pnpm --filter remote-claw-web-tests test:app          # LocalBackend
-pnpm --filter remote-claw-web-tests test:app:sqlite   # per-session SQLite (?backend=sqlite)
+pnpm --filter remote-claw-web-tests test:app:sqlite   # per-channel SQLite (?backend=sqlite)
 
 # the real-claude proofs (needs a logged-in claude)
 (cd apps/web && RC_PROVE_REAL_CLAUDE=1 pnpm exec vitest run test/prove)

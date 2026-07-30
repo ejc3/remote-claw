@@ -1266,7 +1266,7 @@ describe("HostRcRelay mid-session reconnect = complete history from the relay lo
   });
 });
 
-// A2a — on a DURABLE-log backend (per-session SQLite) the broker keeps every frame, so a (re)connecting viewer's
+// A2a — on a DURABLE-log backend (per-channel SQLite) the broker keeps every frame, so a (re)connecting viewer's
 // subscribe(startIndex:0) replays the whole transcript on its own. The host then must NOT also keep an
 // in-memory `#log` or re-post it on `catch_up` (that would be pure waste — the frames are already in the
 // durable log and already delivered by subscribe). "One log, mediated by the broker."

@@ -1,5 +1,6 @@
 import { AuthError, identityFromRequest } from "../../../lib/auth";
 import { backendSelector, getBackend, isRequestableBackend } from "../../../lib/broker";
+import { hasDurableRecovery } from "../../../lib/broker/backend";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
@@ -32,7 +33,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const backend = await getBackend(requested);
-  const durable = Boolean(backend.maxSeq);
-  const frameCount = backend.frameCount ? await backend.frameCount(token) : null;
+  const durable = hasDurableRecovery(backend);
+  const frameCount = durable ? await backend.frameCount(token) : null;
   return json({ frameCount, durable });
 }

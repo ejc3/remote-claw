@@ -5,7 +5,7 @@ runtime discipline that lets a person use a host-side native TUI while one or mo
 watch and drive the same native session through a zero-knowledge broker. Every claim cites the source
 that implements it (path + symbol), so it stays honest as the code changes. Where a behaviour is a
 deliberate boundary rather than a guarantee, it is called out in
-[§12 Convergence & failure modes](#12-convergence-failure-modes).
+[§12 Convergence & failure modes](#12-convergence--failure-modes).
 
 Companion docs: [v2 Architecture](v2-architecture.md) for the design rationale (§-numbers below refer to
 its sections), [Phase 0 Findings](phase0-findings.md) for the reverse-engineered RC worker protocol, and
@@ -36,9 +36,12 @@ Three parties, one of which (the broker) is untrusted and sees only ciphertext.
   (`session.ts`) instead of Anthropic. One host-scoped `LegacyRcConversationRegistrar` allocates a
   distinct process-local lease per intercepted session. Once setup publishes validated capabilities
   and marks that lease `ready`, one `HostRcRelay` (`relay.ts`) bridges the session to the broker.
-- **Broker** — the pluggable backend (Vercel Workflows, per-session SQLite/libSQL, or local)
-  behind `POST /api/relay` and `GET /api/stream`. It is a dumb, append-only, **at-least-once, non-FIFO**
-  pipe (§12). It never holds a key; it routes by a cleartext header and stores ciphertext.
+- **Broker** — the pluggable backend (Vercel Workflows, per-channel SQLite/libSQL, or local)
+  behind the `POST /api/relay` and `GET /api/stream` data plane. `GET /api/seq` and
+  `GET /api/frame-count` expose no message body: `/api/seq` supplies effective durability to both
+  viewer and host plus the host's outbound sequence high-water, while host-only `/api/frame-count`
+  supplies the durable inbound fence. It is a dumb, append-only, **at-least-once, non-FIFO** pipe
+  (§12). It never holds a key; it routes by a cleartext header and stores ciphertext.
 - **Viewer** — the browser client (`apps/web/app/lib/viewer.ts` + `page.tsx`). It reuses the host's
   `BrokerClient` and `SecurityProvider`, plus the shared `FrameOrderer`, so the wire and security
   primitives do not have separate implementations that can drift (`viewer.ts` header comment).
@@ -222,9 +225,10 @@ Two channel kinds, both append-only logs on the broker:
   (in).
 
 `streamFrames` subscribes via SSE and yields each decoded frame (`client.ts`). `startIndex` is a
-**broker frame index**, not a transcript `seq`: a negative value reads the recent window (the bus uses
-`-64`, `viewer.ts announces()`); the session tail uses `0` and relies on the orderer, not the index, for
-correctness (`viewer.ts transcript()` comment). An `event: error` SSE record throws a terminal
+**broker frame index**, not a transcript `seq`: a negative value selects a tail-relative starting
+point (the bus asks for the last 64 retained frames with `-64`, `viewer.ts announces()`); it does not
+mean the Workflow backend evicts older chunks. The session tail uses `0` and relies on the orderer,
+not the index, for correctness (`viewer.ts transcript()` comment). An `event: error` SSE record throws a terminal
 `BrokerError` rather than stopping silently (`sseData`, `client.ts`).
 
 The broker is **at-least-once and not FIFO** (`order.ts` header). Everything below is built to make that
@@ -250,7 +254,7 @@ execute while its user text is absent from the viewer projection.
 
 A `seq` is allocated **before** the POST so the frame's `msgId` is deterministic (`${kind}-${seq}`) and a
 retry re-posts the *same* frame, which the viewer dedups (`relay.ts` `#post` / `POST_RETRIES`). The cost
-of allocating before the durable write is analysed in [§12](#12-convergence-failure-modes).
+of allocating before the durable write is analysed in [§12](#12-convergence--failure-modes).
 
 ---
 
@@ -290,11 +294,13 @@ message ID seen (`relay.ts` `#tailInbound`).
 `HostRcRelay.serve()` runs two pumps concurrently for the session's life (`relay.ts`):
 
 - **OUTBOUND** `#pumpUpstream` — tails the worker's upstream via `Session.followUpstream`, maps each
-  event to zero or more content frames (`mapUpstreamItems`), allocates a `seq`, **logs** it (for
-  `catch_up`), seals, and POSTs (`#emit` = `#post` + `#log.push`).
+  event to zero or more content frames (`mapUpstreamItems`), allocates a `seq`, seals, and POSTs it.
+  On a non-durable backend `#emit` also appends the frame to host `#log` for `catch_up`; on a durable
+  backend the broker frame log is history and host `#log` stays empty.
 - **INBOUND** `#pumpInbound` — tails the session channel for `dir:"in"` client frames, dedups by `msgId`
   in `#seen`, and drives the worker: a `user` prompt is `accepted`-acked, echoed as a `user` content
-  frame, and injected (`Session.pushUserInput`); a `catch_up` replays the log; a `permission` answers a
+  frame, and injected (`Session.pushUserInput`); a `catch_up` replays host `#log` only on a non-durable
+  backend and is ignored when durable broker subscription supplies history; a `permission` answers a
   gate; a control verb (`interrupt`/`set_model`/`set_mode`/`end`) is forwarded.
 
 The person at the native TUI is a third as-built input path outside these two relay pumps. In MITM
@@ -373,15 +379,23 @@ incarnation's inbound floor, and re-reads only from that floor so an empty post-
 re-execute earlier inbound actions. The viewer maintains its own stream/orderer recovery logic
 (`viewer.ts`; `relay.ts`). The sampled durable floor prevents duplicate old execution, but it is not a
 command inbox: a command published before the sample and not executed before a crash can be skipped.
-See [§12](#12-convergence-failure-modes).
+See [§12](#12-convergence--failure-modes).
+
+Two authenticated cursor routes expose these facts without a transcript body. `GET /api/seq` reports
+the effective backend's `durable` flag and highest transcript `seq`: the host uses the high-water to
+resume outbound allocation, and the viewer uses `durable` to choose full broker replay versus its
+non-durable incarnation-recovery path. Host-only `GET /api/frame-count` reports the publish-order
+frame count, which becomes that durable relay incarnation's fixed inbound `startIndex`. Neither is an
+alternate message or discovery API.
 
 ---
 
 ## 9. Presence: `session_announce`
 
-Presence rides the meta-plane `session_announce` on the identity bus — idempotent, `seq:null`, never
-logged, so re-announcing is cheap (`relay.ts` `#sendAnnounce`). The host folds live state onto **every**
-(re-)announce:
+Presence rides the meta-plane `session_announce` on the identity bus — idempotent and `seq:null`. It is
+never appended to the host's process-local `#log`, so re-announcing is cheap
+(`relay.ts` `#sendAnnounce`); a durable broker profile may still retain the sealed bus frame. The host
+folds live state onto **every** (re-)announce:
 
 - `title`, `cwd`, and `git` metadata (branch / dirty / ahead-behind, `gitinfo.ts`, #49).
   `startBridgeSession` exposes a whole-snapshot refresh used by the registrar after setup; the current
@@ -434,8 +448,10 @@ the **return instant**, and the page bumps `announceRevive` to re-subscribe the 
 therefore shows *reconnecting* for a full window while the re-subscribe pulls a fresh announce, never an
 instant *disconnected* (#123). Because the anchor is not re-reset by focus, a genuinely-dead host still
 reaches *disconnected* and stays there even on a phone, where unlocking/app-switching back is the normal
-sub-`window` interaction. `FRESH_WINDOW_MS` (60 s) is the **separate** control-verb / `catch_up` replay
-bound (§11), **not** the disconnect threshold — decoupled so widening disconnect can't widen replay. The
+sub-`window` interaction. `FRESH_WINDOW_MS` (60 s) is the **separate direct-control expiry-stamping
+window** (§11), **not** the disconnect threshold — decoupled so widening disconnect cannot widen
+direct-control acceptance. `catch_up` is stamped with the same value but the current host does not
+enforce it, so it is not a replay bound for that branch. The
 viewer and console use the same `shouldAcceptAnnounce` fold. Within a current incarnation, greater
 `announce_seq` wins. Across current incarnations, greater `incarnation_started_at` wins, so a delayed
 old-process request cannot flip presence back or falsely reset the transcript. Clock-regressed starts
@@ -460,12 +476,14 @@ A worker `can_use_tool` control_request is surfaced as a `permission_request` co
 3. `#pumpInbound` acts **only if** `#openPerms.delete(request_id) === true` (`relay.ts`, codex HIGH #2):
    a duplicate/stale/unknown answer (two devices both granting; a re-read after reconnect) is a no-op —
    no second `pushControlResponse`, no duplicate `permission_resolved`. On the real delete it answers the
-   worker, logs an unordered `permission_resolved` meta frame (so a reload/`catch_up` renders the request as
-   answered, not re-prompting, #56/#57), and re-announces so `needs` clears.
+   worker, emits an unordered, replayable `permission_resolved` meta frame (so a reload renders the request
+   as answered, not re-prompting, #56/#57), and re-announces so `needs` clears.
 
-The viewer's `PermissionRow` renders `effective = confirmed ?? decision`: the host-logged resolution
-(`confirmed`, folded from the transcript's `permission_resolved` frames) **wins** over the local optimistic
-`decision`, so a granted permission survives a reload (`page.tsx`).
+The viewer's `PermissionRow` renders `effective = confirmed ?? decision`: the replayed resolution
+(`confirmed`, folded from the transcript's `permission_resolved` frames) **wins** over the local
+optimistic `decision`, so a granted permission survives a reload (`page.tsx`). A durable broker replays
+that sealed frame from its log; on a non-durable profile the host retains it in `#log` and re-emits it for
+`catch_up`.
 
 Here `permission_resolved` confirms only that this relay selected and queued a response. It is not a
 native Claude terminal result: the TUI may have answered first, Claude may cancel the request, or tool
