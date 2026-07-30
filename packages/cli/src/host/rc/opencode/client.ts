@@ -6,7 +6,7 @@
 //   POST /session/{id}/prompt_async {parts, model} → HTTP 204 (EMPTY body — never JSON-parse it)
 //   POST /session/{id}/abort                       → 200 (boolean)
 //   GET  /event                                    → server-wide SSE: data: {id,type,properties}
-//   POST /session/{id}/permissions/{permID} {response:"once"|"always"|"reject"} → 200 (boolean)
+//   POST /permission/{requestID}/reply {reply:"once"|"always"|"reject"} → 200 (boolean)
 
 import type { Part } from "./translate.js";
 
@@ -52,8 +52,13 @@ export interface PermissionRule {
   action: "ask" | "allow" | "deny";
 }
 
-/** Runtime guard for a server-returned permission rule — filters malformed entries out of a GET so the
- *  driver never re-PATCHes a garbled rule (and so a non-array/absent `permission` field degrades to []). */
+/** OpenCode 1.17.5 native session IDs use this exact retained-proof shape. */
+export function isOpencodeSessionId(value: unknown): value is string {
+  return typeof value === "string" && /^ses_[A-Za-z0-9]+$/.test(value);
+}
+
+/** Runtime guard used to reject a garbled server-returned policy before the driver ever re-PATCHes
+ * native state. */
 export function isPermissionRule(v: unknown): v is PermissionRule {
   const r = v as { permission?: unknown; pattern?: unknown; action?: unknown };
   return (
@@ -61,6 +66,11 @@ export function isPermissionRule(v: unknown): v is PermissionRule {
     typeof r?.pattern === "string" &&
     (r.action === "ask" || r.action === "allow" || r.action === "deny")
   );
+}
+
+export interface OpencodeSession {
+  id: string;
+  permission: PermissionRule[];
 }
 
 /** One entry of GET /session/{id}/message — a message's `info` (id/role/time) + its `parts`. The
@@ -111,6 +121,22 @@ export class OpencodeClient {
     return h;
   }
 
+  /**
+   * Parse a successful native response without ever exposing server-controlled body text through
+   * Response.json()'s SyntaxError. These errors can be traced by callers, so only the stable endpoint
+   * name and HTTP status may leave this boundary.
+   */
+  async #parseJson(res: Response, endpoint: string): Promise<unknown> {
+    try {
+      return (await res.json()) as unknown;
+    } catch {
+      throw new OpencodeError(
+        res.status,
+        `${endpoint}: invalid JSON response (status ${res.status})`,
+      );
+    }
+  }
+
   /** Create a fresh OpenCode session, returning its `ses_…` id. */
   async createSession(title?: string, signal?: AbortSignal): Promise<string> {
     const body = title !== undefined ? JSON.stringify({ title }) : "{}";
@@ -121,16 +147,21 @@ export class OpencodeClient {
       ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) throw new OpencodeError(res.status, `createSession failed: ${res.status}`);
-    const data = (await res.json()) as { id?: unknown };
-    if (typeof data.id !== "string") throw new OpencodeError(res.status, "createSession: no id");
-    return data.id;
+    const data = await this.#parseJson(res, "POST /session");
+    const id =
+      typeof data === "object" && data !== null && !Array.isArray(data)
+        ? (data as { id?: unknown }).id
+        : undefined;
+    if (!isOpencodeSessionId(id)) {
+      throw new OpencodeError(res.status, "createSession: invalid native session id");
+    }
+    return id;
   }
 
   /**
-   * List sessions, MOST-RECENTLY-UPDATED FIRST (the server's documented order: GET /session is
-   * "sorted by most recently updated"). The driver's auto-attach picks `[0]` — the active session — so
-   * running the wrapper bridges whatever OpenCode session is in use rather than imposing a new one.
-   * Returns just the `id` (the field auto-attach needs); the full Session object is server-owned.
+   * Return one complete, schema-valid native-session identity snapshot. OpenCode orders this response
+   * by recent activity, but registration must never infer identity from that order. A successful
+   * malformed response is an error—not an empty list that could authorize accidental session creation.
    */
   async listSessions(signal?: AbortSignal): Promise<Array<{ id: string }>> {
     const res = await this.#fetch(`${this.#baseUrl}/session`, {
@@ -139,14 +170,59 @@ export class OpencodeClient {
       ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) throw new OpencodeError(res.status, `listSessions failed: ${res.status}`);
-    const data = (await res.json()) as unknown;
-    if (!Array.isArray(data)) return [];
-    return data
-      .filter((s): s is { id: string } => {
-        const id = (s as { id?: unknown })?.id;
-        return typeof id === "string" && id !== "";
-      })
-      .map((s) => ({ id: s.id }));
+    const data = await this.#parseJson(res, "GET /session");
+    if (!Array.isArray(data)) {
+      throw new OpencodeError(res.status, "listSessions: response is not an array");
+    }
+    const sessions: Array<{ id: string }> = [];
+    const seen = new Set<string>();
+    for (const item of data) {
+      const id =
+        typeof item === "object" && item !== null ? (item as { id?: unknown }).id : undefined;
+      if (!isOpencodeSessionId(id)) {
+        throw new OpencodeError(res.status, "listSessions: invalid native session entry");
+      }
+      if (seen.has(id)) {
+        throw new OpencodeError(res.status, "listSessions: duplicate native session id");
+      }
+      seen.add(id);
+      sessions.push({ id });
+    }
+    return sessions;
+  }
+
+  /**
+   * Confirm one exact native session with GET /session/{id}. The response must repeat the requested
+   * canonical ID and carry either no permission field (fresh/default policy) or a completely valid
+   * permission-rule vector. Partial filtering would make a later append capable of overriding a rule
+   * the adapter silently discarded.
+   */
+  async getSession(sessionId: string, signal?: AbortSignal): Promise<OpencodeSession> {
+    if (!isOpencodeSessionId(sessionId)) {
+      throw new OpencodeError(0, "getSession: invalid requested native session id");
+    }
+    const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}`, {
+      method: "GET",
+      headers: this.#headers(false),
+      ...(signal !== undefined ? { signal } : {}),
+    });
+    if (!res.ok) throw new OpencodeError(res.status, `getSession failed: ${res.status}`);
+    const data = await this.#parseJson(res, "GET /session/{id}");
+    if (typeof data !== "object" || data === null || Array.isArray(data)) {
+      throw new OpencodeError(res.status, "getSession: response is not an object");
+    }
+    const record = data as { id?: unknown; permission?: unknown };
+    if (record.id !== sessionId) {
+      throw new OpencodeError(res.status, "getSession: native session id mismatch");
+    }
+    if (record.permission === undefined) return { id: sessionId, permission: [] };
+    if (
+      !Array.isArray(record.permission) ||
+      !record.permission.every((rule) => isPermissionRule(rule))
+    ) {
+      throw new OpencodeError(res.status, "getSession: invalid permission policy");
+    }
+    return { id: sessionId, permission: record.permission };
   }
 
   /**
@@ -161,7 +237,7 @@ export class OpencodeClient {
       headers: this.#headers(false),
     });
     if (!res.ok) throw new OpencodeError(res.status, `getMessages failed: ${res.status}`);
-    const data = (await res.json()) as unknown;
+    const data = await this.#parseJson(res, "GET /session/{id}/message");
     if (!Array.isArray(data)) return [];
     return data.filter((m): m is HistoryMessage => {
       const mm = m as { info?: unknown; parts?: unknown };
@@ -189,8 +265,7 @@ export class OpencodeClient {
     });
     // 204 No Content is the success shape — do not read the (empty) body.
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new OpencodeError(res.status, `promptAsync failed: ${res.status} ${detail}`.trim());
+      throw new OpencodeError(res.status, `promptAsync failed: ${res.status}`);
     }
   }
 
@@ -215,24 +290,13 @@ export class OpencodeClient {
       body: JSON.stringify({ providerID: model.providerID, modelID: model.modelID, auto: false }),
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new OpencodeError(res.status, `summarize failed: ${res.status} ${detail}`.trim());
+      throw new OpencodeError(res.status, `summarize failed: ${res.status}`);
     }
   }
 
-  /** Read a session's current permission rules (GET /session/{id} → `.permission`). Returns [] when the
-   *  field is absent (a fresh session carries none) or malformed. The driver merges these with its
-   *  wildcard ask rule so an existing per-session policy — especially a hard `deny` — is PRESERVED rather
-   *  than clobbered by the mirroring PATCH. */
+  /** Read a session's complete validated permission policy. */
   async getSessionPermission(sessionId: string, signal?: AbortSignal): Promise<PermissionRule[]> {
-    const res = await this.#fetch(`${this.#baseUrl}/session/${sessionId}`, {
-      method: "GET",
-      headers: this.#headers(false),
-      ...(signal !== undefined ? { signal } : {}),
-    });
-    if (!res.ok) throw new OpencodeError(res.status, `getSessionPermission failed: ${res.status}`);
-    const data = (await res.json()) as { permission?: unknown };
-    return Array.isArray(data.permission) ? data.permission.filter(isPermissionRule) : [];
+    return (await this.getSession(sessionId, signal)).permission;
   }
 
   /** Flip a session into permission "ask" mode: PATCH /session/{id} { permission: rules }. opencode
@@ -252,29 +316,42 @@ export class OpencodeClient {
       ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new OpencodeError(
-        res.status,
-        `setSessionPermission failed: ${res.status} ${detail}`.trim(),
-      );
+      throw new OpencodeError(res.status, `setSessionPermission failed: ${res.status}`);
     }
   }
 
-  /** Answer a permission gate: POST /session/{id}/permissions/{permID} { response }. */
+  /**
+   * Answer a permission gate through OpenCode 1.17.5's retained, nondeprecated endpoint:
+   * POST /permission/{requestID}/reply { reply }. The native server must acknowledge with literal
+   * JSON true; any other successful-response body fails closed.
+   */
   async replyPermission(
-    sessionId: string,
-    permissionId: string,
+    requestId: string,
     response: "once" | "always" | "reject",
+    signal?: AbortSignal,
   ): Promise<void> {
     const res = await this.#fetch(
-      `${this.#baseUrl}/session/${sessionId}/permissions/${permissionId}`,
+      `${this.#baseUrl}/permission/${encodeURIComponent(requestId)}/reply`,
       {
         method: "POST",
         headers: this.#headers(true),
-        body: JSON.stringify({ response }),
+        body: JSON.stringify({ reply: response }),
+        ...(signal !== undefined ? { signal } : {}),
       },
     );
-    if (!res.ok) throw new OpencodeError(res.status, `replyPermission failed: ${res.status}`);
+    if (!res.ok) {
+      throw new OpencodeError(
+        res.status,
+        `POST /permission/{requestID}/reply failed: ${res.status}`,
+      );
+    }
+    const acknowledged = await this.#parseJson(res, "POST /permission/{requestID}/reply");
+    if (acknowledged !== true) {
+      throw new OpencodeError(
+        res.status,
+        `POST /permission/{requestID}/reply: invalid acknowledgement (status ${res.status})`,
+      );
+    }
   }
 
   /**

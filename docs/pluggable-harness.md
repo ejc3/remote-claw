@@ -12,8 +12,9 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 > exported but unused. The selected
 > [client-driven host runtime](client-driven-host-runtime.md) now provides a neutral host-wide
 > native-engine contract above it. A0.1 routes Claude MITM through one process-local registrar and one
-> lease per intercepted conversation; OpenCode and tmux have not migrated yet. `Session` remains a
-> legacy RC port during migration; it does not become the neutral schema. In particular, Codex is one
+> lease per intercepted conversation; the OpenCode half of A0.2 now uses the same registration seam,
+> while tmux has not migrated yet. `Session` remains a legacy RC port during migration; it does not
+> become the neutral schema. In particular, Codex is one
 > persistent multi-project app-server host, not another one-`Session` `DriverName`.
 
 **Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
@@ -28,8 +29,8 @@ today.
 The common relay port is **`Session`** (`packages/cli/src/host/rc/session.ts`). Each current harness
 path produces one or more `Session`s, fills them with Claude-shaped output, and consumes the input the
 relay delivers. `HostRcRelay` and the web frame projection remain shared; harness launch/lifecycle is
-not unified behind the exported `Driver` interface. Claude MITM lifecycle is now mediated by the
-neutral registrar; OpenCode and tmux still bridge `Session` directly.
+not unified behind the exported `Driver` interface. Claude MITM and OpenCode lifecycle are now
+mediated by the neutral registrar; tmux still bridges `Session` directly.
 
 ---
 
@@ -241,8 +242,9 @@ export function mitmDriver(ctx: DriverContext): Driver {
 
 Had it been implemented, this would have kept `launch.test.ts`'s surface unchanged. It remains
 historical: current MITM uses `LegacyRcConversationRegistrar`, which calls `startBridgeSession` at
-`ready`. The non-MITM launch functions still call the `bridgeSession` compatibility helper and follow
-the broad lifecycle below:
+`ready`. OpenCode now uses that registrar too, after strict native session selection and
+parent-permission setup unless explicitly opted out. Tmux still calls the `bridgeSession`
+compatibility helper and follows the broad lifecycle below:
 
 ```ts
 // shape every non-MITM driver follows (tmux shown):
@@ -271,11 +273,13 @@ const relayDone = bridgeSession({
 ```
 
 `bridgeSession` constructs `HostRcRelay` and starts `announce(...)` and `serve(...)` concurrently.
-That direct call is not a readiness barrier, so current OpenCode/tmux capability timing limitations
-remain as recorded in §8. Its returned `served` promise stays pending until the admitted initial
+That direct call is not a readiness barrier, so current tmux capability timing limitations remain as
+recorded in §8. Its returned `served` promise stays pending until the admitted initial
 announcement settles; the full `startBridgeSession` handle also tracks admitted lifecycle refreshes.
-For MITM, the registrar first validates generic and viewer-facing capabilities, moves the lease to
-`ready`, and only then calls `startBridgeSession`; its announcement is therefore post-setup.
+For MITM and OpenCode, the registrar first validates generic and viewer-facing capabilities, moves
+the lease to `ready`, and only then calls `startBridgeSession`; their announcements are therefore
+post-setup. OpenCode additionally confirms one exact canonical native session, requires parent
+permission read/install/read-back unless opted out, and starts its pumps only after `ready`.
 
 ---
 
@@ -473,15 +477,25 @@ complete route manifest, raw-listener/tool fence, and observer linearization are
   identical: `--rc-tmux-skip-permissions` restores hands-off auto-approve
   (`--dangerously-skip-permissions`), while `--rc-oc-skip-permissions` only skips the ask-PATCH and leaves
   OpenCode's own session permission config in place (auto-run unless that config already asks).
-  Current announcements are optimistic: OpenCode continues if its best-effort PATCH fails, and tmux
-  can disable its hook after an unparseable user settings file, after both have already announced
-  `structuredPermissions:true`. This is a known capability-advertisement bug, not a guarantee.
+  OpenCode now treats parent permission read/PATCH/read-back failure as a registration failure, skips
+  the native append when the exact catch-all already exists, and advertises
+  `structuredPermissions:true` only after that setup verifies. The opt-out performs no additional
+  permission setup or PATCH and advertises false; exact session confirmation still validates any
+  returned policy field. Child-session setup is asynchronous and cannot prove a child's first tool was
+  gated, but it now receives the run cancellation signal, is tracked, cannot PATCH after the teardown
+  fence, and joins the shared bounded teardown. OpenCode answers a gate through retained
+  `POST /permission/{requestID}/reply` with `{reply}` and requires successful JSON to be literal `true`.
+  That is transport acknowledgement only: the global route does not prove selected-session ownership,
+  a win over a native-TUI answer, or terminal `permission.replied` semantics. Tmux can disable its hook
+  after an unparseable user settings file, after it has already announced
+  `structuredPermissions:true`; that remains a known capability-advertisement bug.
 - **Attachments.** `relay.#handleAttachmentPayload` decrypts the viewer's bytes, writes them under
   `attachmentsDir`, and **injects a normal `user` prompt** containing `@"<path>"` references. The
   driver never sees an `attachment` frame — only the resulting downstream `user` event. This is
-  proven for Claude MITM/tmux. OpenCode currently receives the Claude-specific `@"<path>"` text via
-  `prompt_async`; native OpenCode file-part handling is not implemented, so its current
-  `attachments:true` announcement is also optimistic.
+  proven for Claude MITM/tmux. Native OpenCode file-part handling is not implemented, so OpenCode now
+  advertises `attachments:false`. That bit disables the normal viewer surface; the compatibility relay
+  does not enforce capabilities as an admission boundary, so a stale/custom sender can still force the
+  unsupported Claude-style path until the future command actor rejects it before file/native work.
 
 This is the central invariant: **the relay handles the broker-facing protocol; the driver handles
 the harness-facing protocol; they meet only at the `Session`.**
@@ -585,11 +599,13 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
    viewer answers (and pre-seeds claude's folder-trust bit so dropping `--dangerously-skip-permissions`
    doesn't hang a fresh cwd on the startup trust gate); **opencode** PATCHes an ask-all rule on the
    session and answers each SSE `permission.asked`. Opt out with `--rc-tmux-skip-permissions` (→
-   `--dangerously-skip-permissions` auto-approve) or `--rc-oc-skip-permissions` (skip the ask-PATCH;
-   opencode keeps its own session permission config). Current code announces capabilities before these
-   setup results are known, so a setup failure can leave `structuredPermissions:true` falsely
-   advertised. The host-runtime registration lifecycle must announce/update actual post-setup
-   capabilities before accepting remote controls.
+   `--dangerously-skip-permissions` auto-approve) or `--rc-oc-skip-permissions` (skip additional
+   permission setup and PATCH; OpenCode keeps its own session permission config). OpenCode's parent
+   setup now requires read/install/read-back before `ready`, but child setup remains asynchronous and
+   first-tool-racy. Child tasks are run-cancelled, tracked, PATCH-fenced after cancellation, and joined
+   under the shared teardown deadline. A literal-true reply response is only transport acknowledgement;
+   selected-session ownership, native-TUI races, and terminal application remain unproved. Tmux still
+   announces before its hook result is fully known.
 5. **Status accuracy.** Without ground truth (the MITM reads claude's `PUT /worker` status), tmux
    infers `running`/`idle` from a transcript-append debounce, which lags a long "think". It currently
    advertises `status:true` despite the interface saying that bit means real transitions. Treat that
@@ -615,11 +631,12 @@ user/control events (`followDownstream` or the native RC server), reports status
 lets the relay own broker-side permissions + attachments. `run.ts` directly selects
 `--rc-driver={mitm|tmux|opencode}`; the exported `Driver`/`DriverFactory` pair does not unify that
 dispatch. Above this compatibility port, the neutral host contract and process-local registrar now
-mediate Claude MITM sessions; OpenCode and tmux remain the A0.2 migration. The capability-aware part
-is implemented: each path supplies `DriverCapabilities`, the relay rides them on
-`session_announce`, and the viewer disables/labels declared unsupported controls. Claude MITM waits
-for validated readiness before it starts the bridge. Because OpenCode/tmux currently announce before
-setup is fully known, §8 records cases where those declarations can still overstate support.
+mediate Claude MITM and OpenCode sessions; tmux remains the unfinished A0.2 migration. The
+capability-aware part is implemented: each path supplies `DriverCapabilities`, the relay rides them on
+`session_announce`, and the viewer disables/labels declared unsupported controls. Claude MITM and
+OpenCode wait for validated readiness before they start the bridge. OpenCode publishes
+`status:false`, `attachments:false`, only interrupt control, and structured permissions only after
+proved parent setup; §8 retains the child/reply limitations. Tmux can still overstate support.
 
 A person can also use the harness's native TUI directly. That local path is outside the current
 `Session` relay seam: tmux/OpenCode surface unmatched prompts post-hoc, while MITM drops ordinary

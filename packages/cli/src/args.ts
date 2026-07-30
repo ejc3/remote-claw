@@ -47,14 +47,14 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // opencode server supplies AWS creds, and the `global.` profile needs no region).
   "rc-oc-url": "value",
   "rc-oc-model": "value",
-  // Which OpenCode session to ATTACH to. Omitted ⇒ the driver bridges the server's MOST-RECENT
-  // (active) session, else creates one — so the wrapper joins whatever OpenCode session is in use
-  // (env RC_OC_SESSION). Set a `ses_…` id to pin a specific session.
+  // Which OpenCode session to ATTACH to (env RC_OC_SESSION). The configured canonical `ses_…` must
+  // exist exactly. When omitted, the driver creates one only after a valid empty discovery response;
+  // one or more existing sessions are ambiguous and require this flag.
   "rc-oc-session": "value",
-  // opencode driver only: opt OUT of native permission mirroring (the driver PATCHes the session to
-  // "ask" so every tool raises a viewer gate). DEFAULT ON; the opt-out SKIPS that ask-PATCH and leaves
-  // the session's own permission config untouched — so opencode behaves exactly as it would unbridged
-  // (auto-run, UNLESS the session already carries its own ask rules, which the driver does not override).
+  // opencode driver only: opt OUT of native permission mirroring (the driver adds a catch-all "ask"
+  // rule so otherwise-unconfigured tools raise a viewer gate). DEFAULT ON; the opt-out SKIPS that
+  // ask-PATCH and leaves the session's own permission config untouched — so opencode behaves exactly
+  // as it would unbridged (auto-run, UNLESS the session already carries its own rules).
   // Env RC_OC_SKIP_PERMISSIONS truthy ("1"/"true"/"yes"/"on").
   "rc-oc-skip-permissions": "boolean",
   // tmux driver only: inject a Claude Code SessionStart HOOK (via merged `--settings`) so the spawned

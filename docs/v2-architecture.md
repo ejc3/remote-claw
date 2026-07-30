@@ -3349,14 +3349,17 @@ in the default Anthropic mode **passes** `/v1/messages` + OAuth through, so infe
 working. Bedrock mode translates inference and locally synthesizes the other required
 Anthropic-origin responses.
 
-Current A0.1 launch lifecycle is host-scoped rather than a direct per-session bridge call:
-`launch.ts` opens one `LegacyRcConversationRegistrar` lease per intercepted `Session`, and `ready`
-starts `startBridgeSession` with that lease's own abort controller. OpenCode and tmux still call the
-`bridgeSession` compatibility helper directly. Starting a bridge does not wait for its initial
-announcement as a readiness barrier, but its `served` promise remains pending until every admitted
-initial or refresh announcement settles. Each current launcher bounds that teardown wait: MITM shares
-one deadline across its cleanup stages, tmux uses a driver-local flush window, and OpenCode shares one
-driver-local deadline across its native abort request and broker settlement after stopping local pumps.
+Current registration lifecycle is host-scoped rather than always a direct per-session bridge call:
+`launch.ts` opens one `LegacyRcConversationRegistrar` lease per intercepted `Session`, while OpenCode
+opens one `starting` lease, confirms one exact canonical native session ID, and proves parent
+permission setup unless the operator explicitly skips it. In both paths, `ready` starts
+`startBridgeSession` with that lease's own abort controller. Tmux still calls the `bridgeSession`
+compatibility helper directly. Starting a bridge does not wait for its initial announcement as a
+readiness barrier, but its `served` promise remains pending until every admitted initial or refresh
+announcement settles. Each current launcher bounds that teardown wait: MITM shares one deadline
+across its cleanup stages, tmux uses a driver-local flush window, and OpenCode shares one driver-local
+deadline across tracked child permission setup, its confirmed-session abort request, and lease/relay
+settlement after stopping local pumps.
 
 The wrapper maps worker events onto its own E2E-encrypted frame types (§6A):
 

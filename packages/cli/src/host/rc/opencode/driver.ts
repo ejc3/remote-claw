@@ -1,8 +1,8 @@
 // The OpenCode driver: bridges an `opencode serve` session to our broker via the SAME Session/relay
 // contract the MITM uses (driver.ts seam). It does NOT stand up the MITM — it talks straight to the
-// OpenCode HTTP+SSE server. Lifecycle mirrors launch.ts: RelayCore.create({title}) → pushInitialize()
-// → bridgeSession(...) → run the CAPTURE + INJECT pumps concurrently → teardown (abort the run, close
-// the session, await the served promise so a final frame flushes).
+// OpenCode HTTP+SSE server. Startup creates a private compatibility Session, proves one exact native
+// session and (unless explicitly skipped) its permission policy, then moves one registration lease to
+// ready. Only that ready transition starts the broker bridge and the concurrent CAPTURE + INJECT pumps.
 //
 // The three driver obligations from the adversarial review (driver.ts "DRIVER OBLIGATIONS") are the
 // load-bearing logic here:
@@ -29,7 +29,7 @@
 //     message (an unmatched child just stays top-level). Revisit if opencode exposes a part→child id link.
 //
 // OTHER V1 LIMITATIONS (documented, intentional — not bugs):
-//   • RELAY DEATH DOES NOT END OPENCODE (review #8, intentional). bridgeSession's serve() can end (the
+//   • RELAY DEATH DOES NOT END OPENCODE (review #8, intentional). The ready lease's bridge can end (the
 //     broker dropped / the remote viewer went away); the driver KEEPS opencode running. The wrapper is
 //     thin: the local TUI stays usable and the remote view reconnects when the broker recovers. run()
 //     ends only on the PARENT signal abort — we deliberately do NOT race `served` to abort opencode (that
@@ -40,21 +40,27 @@
 //     (suppress the local one / surface the injected one). Rare and self-limited to identical text;
 //     revisit with message-id correlation if OpenCode exposes the prompt's resulting message id.
 
+import { randomUUID } from "node:crypto";
 import type { BrokerClient } from "../../../broker/client.js";
 import { type Tracer, tracerFromEnv } from "../../../trace.js";
+import type { NativeConversationCapabilities } from "../../native/adapter.js";
 import {
   type Driver,
   type DriverCapabilities,
   type DriverContext,
   OPENCODE_HARNESS,
 } from "../driver.js";
-import { bridgeSession } from "../drivers/bridge.js";
+import {
+  type LegacyRcConversationMetadata,
+  LegacyRcConversationRegistrar,
+} from "../drivers/legacy-registrar.js";
 import type { GitInfo } from "../gitinfo.js";
 import { RelayCore, type Session } from "../session.js";
 import {
   DEFAULT_OPENCODE_URL,
   eventSessionId,
   type HistoryMessage,
+  isOpencodeSessionId,
   OpencodeClient,
   type OpencodeClientOptions,
   type OpencodeEvent,
@@ -81,6 +87,28 @@ export const DEFAULT_OPENCODE_MODEL: OpencodeModel = {
   modelID: "global.anthropic.claude-sonnet-4-6",
 };
 
+/** Honest A0 evidence: OpenCode mixes coordinator-injected and direct-TUI mutations, exposes partial
+ * native history and HTTP receipts, and has no restart-fenced live reattachment yet. */
+export const OPENCODE_NATIVE_CAPABILITIES: NativeConversationCapabilities = {
+  version: 1,
+  mutationAdmission: "mixed",
+  history: "partial",
+  deliveryEvidence: "structured_receipt",
+  liveReattach: false,
+};
+
+function opencodeViewerCapabilities(structuredPermissions: boolean): DriverCapabilities {
+  return {
+    structuredPermissions,
+    // A0.2 has no proven initial GET /session/status snapshot; later SSE status events do not make the
+    // initial announcement truthful.
+    status: false,
+    controls: { interrupt: true, setModel: false, setMode: false, end: false },
+    // The compatibility prompt translator has no proved native OpenCode file-part fidelity.
+    attachments: false,
+  };
+}
+
 /** OpenCode-specific knobs the driver reads from DriverContext.extra (set by the wiring in run.ts). */
 export interface OpencodeExtra {
   /** OpenCode server origin (default http://127.0.0.1:4096). */
@@ -89,14 +117,15 @@ export interface OpencodeExtra {
   model?: OpencodeModel;
   /** Optional HTTP Basic password (OPENCODE_SERVER_PASSWORD). */
   password?: string;
-  /** Explicit OpenCode session to ATTACH to (`--rc-oc-session`). When set, the driver bridges THIS
-   *  session verbatim — no auto-pick, no create. When unset, the driver auto-picks the server's most
-   *  recent session (the active one), else creates a fresh one. THIN by default: bridge what's running. */
+  /** Explicit OpenCode session to attach to (`--rc-oc-session`). It must be canonical and appear in a
+   *  valid discovery snapshot. Without one, only a valid empty snapshot permits creating one session;
+   *  a non-empty snapshot is ambiguous and fails closed. */
   sessionId?: string;
-  /** MIRROR tool permissions to the viewer (B2 parity, DEFAULT ON). When on, the driver PATCHes the
-   *  bridged session (and each followed child) into "ask" mode so every tool raises a `permission.asked`
-   *  gate the viewer answers — instead of opencode's default auto-run. Off (`--rc-oc-skip-permissions`)
-   *  leaves the session's own permission config untouched.
+  /** MIRROR tool permissions to the viewer (B2 parity, DEFAULT ON). When on, the driver adds a catch-all
+   *  "ask" rule to the bridged session (and each followed child), so otherwise-unconfigured tools raise
+   *  a `permission.asked` gate the viewer answers instead of taking OpenCode's default. Existing later
+   *  specific allow/deny rules remain authoritative. Off (`--rc-oc-skip-permissions`) leaves the
+   *  session's own permission config untouched.
    *
    *  PERSISTENCE (documented limitation): opencode's PATCH /session/{id} { permission } is APPEND-ONLY
    *  (verified live: rules concatenate; null/[]/{} are no-ops) — there is NO clear/replace. So once we
@@ -130,13 +159,42 @@ function readExtra(extra: Record<string, unknown> | undefined): OpencodeExtra {
  *  against opencode 1.17.5 — one wildcard ask gates all tools). */
 const ASK_ALL_RULE: PermissionRule = { permission: "*", pattern: "*", action: "ask" };
 
+export function hasRemoteClawAskRule(rules: readonly PermissionRule[]): boolean {
+  return rules.some(
+    (rule) =>
+      rule.permission === ASK_ALL_RULE.permission &&
+      rule.pattern === ASK_ALL_RULE.pattern &&
+      rule.action === ASK_ALL_RULE.action,
+  );
+}
+
+function requireDiscoveredSessions(value: unknown): Array<{ id: string }> {
+  if (!Array.isArray(value)) {
+    throw new Error("OpenCode discovery did not return a session array");
+  }
+  const sessions: Array<{ id: string }> = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const id =
+      typeof item === "object" && item !== null ? (item as { id?: unknown }).id : undefined;
+    if (!isOpencodeSessionId(id)) {
+      throw new Error("OpenCode discovery returned a noncanonical session entry");
+    }
+    if (seen.has(id)) {
+      throw new Error("OpenCode discovery returned a duplicate session id");
+    }
+    seen.add(id);
+    sessions.push({ id });
+  }
+  return sessions;
+}
+
 /** Merge the catch-all ask with a session's EXISTING permission rules, preserving the existing policy —
  *  especially a hard `deny`. opencode is LAST-match-wins (verified live), so the catch-all ask goes
  *  FIRST and the existing rules AFTER it: an existing specific rule (deny/allow) still wins for its tool,
  *  while every unconfigured tool falls through to ask. This de-duplicates the PATCH PAYLOAD only.
  *  OpenCode 1.17.5 appends permission patches to native state, so calling PATCH again is not idempotent;
- *  a registrar must detect an already-installed catch-all and skip the append. The current direct
- *  driver does not yet provide that registration guarantee. */
+ *  registration first detects an already-installed catch-all and skips that append. */
 export function mergeAskRules(existing: readonly PermissionRule[]): PermissionRule[] {
   const isOurCatchAll = (r: PermissionRule) =>
     r.permission === ASK_ALL_RULE.permission &&
@@ -179,6 +237,31 @@ export function errText(error: unknown): string {
     }
   }
   return String(error);
+}
+
+/** Trace only a narrow, body-free subset of a provider error. Error names, messages, and response
+ * bodies are provider-controlled and can contain credentials or arbitrary output, so they belong only
+ * in the E2E viewer result. Numeric status and boolean retryability are the only copied fields. */
+function sessionErrorTraceFields(
+  error: unknown,
+  session: string | undefined,
+): Record<string, string | number | boolean | undefined> {
+  const outer =
+    typeof error === "object" && error !== null ? (error as Record<string, unknown>) : undefined;
+  const data =
+    typeof outer?.data === "object" && outer.data !== null
+      ? (outer.data as Record<string, unknown>)
+      : undefined;
+  const fields: Record<string, string | number | boolean | undefined> = { session };
+
+  const status = outer?.status ?? outer?.statusCode ?? data?.status ?? data?.statusCode;
+  if (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599) {
+    fields.status = status;
+  }
+
+  const retryable = outer?.retryable ?? outer?.isRetryable ?? data?.retryable ?? data?.isRetryable;
+  if (typeof retryable === "boolean") fields.retryable = retryable;
+  return fields;
 }
 
 /** SSE reconnect backoff bounds (review #2). A transient close reconnects after MIN; repeated failures
@@ -270,8 +353,8 @@ class BoundedMap<V> {
 }
 
 export class OpencodeDriver implements Driver {
-  /** Capabilities. structuredPermissions reflects whether mirroring is ON (default): on, the driver
-   *  PATCHes the session to "ask" and round-trips each gate; off, opencode auto-runs tools (no gate). */
+  /** Conservative until setup proves permission mirroring. No bridge can observe this object before the
+   *  ready transition; a successful read/install/read-back flips only structuredPermissions. */
   readonly capabilities: DriverCapabilities;
 
   readonly #ctx: DriverContext;
@@ -332,24 +415,15 @@ export class OpencodeDriver implements Driver {
   /** subtask part ids already enqueued, so a re-sent `message.part.updated` (opencode resends whole parts)
    *  doesn't enqueue the same anchor twice. Bounded (review #6). */
   readonly #notedSubtasks = new BoundedSet(DEFAULT_EMITTED_CAP);
+  /** Best-effort child permission preparations that are still running. They share the driver's abort
+   *  fence and are joined under the same bounded teardown deadline as native abort + lease closure. */
+  readonly #childPermissionTasks = new Set<Promise<void>>();
 
   constructor(ctx: DriverContext) {
     this.#ctx = ctx;
     this.#extra = readExtra(ctx.extra);
     this.#mirror = this.#extra.mirrorPermissions ?? true; // DEFAULT ON (tmux parity)
-    this.capabilities = {
-      // Mirroring on → we PATCH the session to "ask" and round-trip each gate (structured permissions).
-      // Off → opencode auto-runs tools, so there is no gate to surface.
-      structuredPermissions: this.#mirror,
-      // session.status / session.idle drive a real workerStatus.
-      status: true,
-      // interrupt → client.abort (works). set_model only accepts a "providerID/modelID" form, but the
-      // viewer's model picker sends bare aliases — so it won't take effect → setModel false (honest).
-      // set_mode/end have no opencode analogue → false (viewer disables those controls).
-      controls: { interrupt: true, setModel: false, setMode: false, end: false },
-      // Attachments are relay-owned (the driver only sees the resulting downstream `user` prompt).
-      attachments: true,
-    };
+    this.capabilities = opencodeViewerCapabilities(false);
     this.#model = this.#extra.model ?? DEFAULT_OPENCODE_MODEL;
     this.#activeModel = this.#model;
     this.#tracer = (ctx.tracer ?? tracerFromEnv("rc.opencode")).child({ driver: "opencode" });
@@ -361,9 +435,8 @@ export class OpencodeDriver implements Driver {
       } satisfies OpencodeClientOptions);
   }
 
-  /** Run until `signal` aborts (or the OpenCode stream ends). Resolves with an exit code (0 on a clean
-   *  teardown). Mirrors runRcLaunch's structure: create+initialize the Session, bridge it, run the
-   *  pumps, then tear down (abort the OpenCode run, close the session, await the served flush). */
+  /** Run until `signal` aborts. Registration is fail-closed: the compatibility Session exists privately
+   *  while native identity and policy are proved, and its broker bridge starts only at lease `ready`. */
   async run(signal: AbortSignal): Promise<number> {
     // A dead-on-arrival wrapper owns no OpenCode session. Do not create a relay Session, inspect/select
     // a native session, or issue a later abort against whatever happens to be active on the server.
@@ -374,52 +447,80 @@ export class OpencodeDriver implements Driver {
     session.pushInitialize(); // guaranteed first downstream event (idempotent)
     this.#ctx.onSession?.(session);
 
-    // Our own abort controller, chained to the parent signal, so teardown can stop the pumps + the SSE
-    // stream + the followDownstream loop together.
-    const ac = new AbortController();
-    const onAbort = () => ac.abort();
-    if (signal.aborted) ac.abort();
-    else signal.addEventListener("abort", onAbort, { once: true });
-
     const relays = new Set<Promise<void>>();
-    const served = bridgeSession({
-      session,
-      capabilities: this.capabilities,
-      harness: OPENCODE_HARNESS,
+    const registrar = new LegacyRcConversationRegistrar({
       newClient: this.#ctx.newClient,
       identityId: this.#ctx.identity.identityId,
-      title: this.#ctx.title,
-      cwd: this.#ctx.cwd,
-      git: this.#ctx.git as GitInfo | null,
-      signal: ac.signal,
       relays,
       tracer: this.#ctx.tracer ?? tracerFromEnv("rc.relay"),
     });
+    const startingMetadata: LegacyRcConversationMetadata = {
+      title: this.#ctx.title,
+      cwd: this.#ctx.cwd,
+      git: this.#ctx.git as GitInfo | null,
+      capabilities: opencodeViewerCapabilities(false),
+      harness: OPENCODE_HARNESS,
+    };
+    let lease: Awaited<ReturnType<LegacyRcConversationRegistrar["open"]>> | undefined;
 
-    // ATTACH to the OpenCode session to bridge: an explicit --rc-oc-session, else the server's most-recent
-    // (active) session, else create a fresh one. A failure here is fatal (no session to bridge); tear down
-    // and report non-zero. This is the THIN default: bridge whatever OpenCode session is in use.
+    // The parent cancellation handler both aborts in-flight native setup and synchronously requests
+    // lease drain. LegacyRcConversationRegistrar marks stopRequested before returning its Promise, so a
+    // queued ready transition cannot overtake cancellation and publish a ghost conversation.
+    const ac = new AbortController();
+    const onAbort = () => {
+      ac.abort();
+      if (lease !== undefined) {
+        void lease.close("parent cancelled").catch((error: unknown) => {
+          this.#tracer.error("opencode starting lease close failed", { error: String(error) });
+        });
+      }
+    };
+    if (signal.aborted) ac.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+
     let ocSessionId: string;
     try {
-      ocSessionId = await this.#attach(ac.signal);
-      // #attach's HTTP implementation observes this signal, but keep a commit-point check for injected
-      // clients that ignore cancellation and resolve a list/create request after the parent has stopped.
+      lease = await registrar.open({
+        bindingId: null,
+        registrationAttemptId: randomUUID(),
+        descriptor: { product: "opencode", access: "server" },
+        project: null,
+        nativeRef: null,
+        phase: "starting",
+        capabilities: null,
+        port: session,
+        metadata: startingMetadata,
+      });
       throwIfAborted(ac.signal);
 
-      // PERMISSION MIRRORING (default on): flip the bridged session into "ask" mode so every tool raises
-      // a `permission.asked` gate the viewer answers (opencode auto-runs tools otherwise). This is part
-      // of cancellable startup: its GET/PATCH share the parent signal, and the session is not considered
-      // attached until setup finishes. Non-cancellation failures remain best-effort.
-      if (this.#mirror) await this.#enableAskMirroring(ocSessionId, ac.signal);
+      ocSessionId = await this.#attach(ac.signal);
       throwIfAborted(ac.signal);
+
+      if (this.#mirror) await this.#requireAskMirroring(ocSessionId, ac.signal);
+      throwIfAborted(ac.signal);
+
+      const readyCapabilities = opencodeViewerCapabilities(this.#mirror);
+      await lease.update(
+        { ...startingMetadata, capabilities: readyCapabilities },
+        OPENCODE_NATIVE_CAPABILITIES,
+      );
+      throwIfAborted(ac.signal);
+      await lease.setPhase("ready");
+      throwIfAborted(ac.signal);
+      Object.assign(this.capabilities, readyCapabilities);
     } catch (e) {
       const cancelled = ac.signal.aborted;
       if (cancelled) this.#tracer.debug("opencode startup cancelled");
-      else this.#tracer.error("opencode attach failed", { error: String(e) });
+      else this.#tracer.error("opencode registration failed", { error: String(e) });
       signal.removeEventListener("abort", onAbort);
       ac.abort();
       session.close();
-      await boundedTeardownWait(() => served, OPENCODE_TEARDOWN_FLUSH_MS);
+      await boundedTeardownWait(
+        () =>
+          lease?.close(cancelled ? "startup cancelled" : "registration failed") ??
+          Promise.resolve(),
+        OPENCODE_TEARDOWN_FLUSH_MS,
+      );
       return cancelled ? 0 : 1;
     }
     this.#tracer.info("opencode session attached", { session: session.id, opencode: ocSessionId });
@@ -444,45 +545,57 @@ export class OpencodeDriver implements Driver {
       ac.abort();
       session.workerStatus = "idle";
       session.close();
+      const childPermissionTasks = [...this.#childPermissionTasks];
       await boundedTeardownWait(
         (deadlineSignal) =>
-          Promise.allSettled([this.#client.abort(ocSessionId, deadlineSignal), served]),
+          Promise.allSettled([
+            ...childPermissionTasks,
+            this.#client.abort(ocSessionId, deadlineSignal),
+            lease?.close("driver teardown") ?? Promise.resolve(),
+          ]),
         OPENCODE_TEARDOWN_FLUSH_MS,
       );
     }
   }
 
   /**
-   * Pick the OpenCode session to bridge (the THIN attach):
-   *   1. an explicit `--rc-oc-session` (extra.sessionId) → bridge it verbatim;
-   *   2. else the server's MOST-RECENT session (listSessions()[0], "sorted by most recently updated") →
-   *      bridge whatever's active rather than imposing a new one;
-   *   3. else (no sessions on the server) → create a fresh one.
-   * Returns the chosen `ses_…` id. A list failure falls through to create() so the driver still starts.
+   * Resolve one exact native identity. Discovery errors/malformed results fail; a configured target must
+   * exist exactly; a missing target creates only from a positively empty list. “Most recent” is never
+   * identity evidence. The final exact GET closes list/create response races before readiness.
    */
   async #attach(signal: AbortSignal): Promise<string> {
     throwIfAborted(signal);
+    const discovered: unknown = await this.#client.listSessions(signal);
+    throwIfAborted(signal);
+    const sessions = requireDiscoveredSessions(discovered);
+
+    let selected: string;
     if (this.#extra.sessionId !== undefined) {
-      this.#tracer.debug("attaching to explicit session", { opencode: this.#extra.sessionId });
-      return this.#extra.sessionId;
-    }
-    let sessions: Array<{ id: string }> = [];
-    try {
-      sessions = await this.#client.listSessions(signal);
-    } catch (e) {
+      if (!isOpencodeSessionId(this.#extra.sessionId)) {
+        throw new Error("configured OpenCode session must be a canonical ses_* id");
+      }
+      if (!sessions.some((session) => session.id === this.#extra.sessionId)) {
+        throw new Error("configured OpenCode session does not exist in the discovery snapshot");
+      }
+      selected = this.#extra.sessionId;
+    } else {
+      if (sessions.length !== 0) {
+        throw new Error("OpenCode session selection is ambiguous; configure --rc-oc-session");
+      }
+      selected = await this.#client.createSession(this.#ctx.title, signal);
       throwIfAborted(signal);
-      this.#tracer.warn("listSessions failed; creating a fresh session", { error: String(e) });
+      if (!isOpencodeSessionId(selected)) {
+        throw new Error("OpenCode create returned a noncanonical native session id");
+      }
+      this.#tracer.debug("positive empty discovery; created one session", { opencode: selected });
     }
+
+    const confirmed = await this.#client.getSession(selected, signal);
     throwIfAborted(signal);
-    const first = sessions[0];
-    if (first !== undefined) {
-      this.#tracer.debug("auto-attaching to most-recent session", { opencode: first.id });
-      return first.id;
-    }
-    const created = await this.#client.createSession(this.#ctx.title, signal);
-    throwIfAborted(signal);
-    this.#tracer.debug("no existing session; created one", { opencode: created });
-    return created;
+    if (confirmed.id !== selected)
+      throw new Error("OpenCode exact session confirmation mismatched");
+    this.#tracer.debug("confirmed exact OpenCode session", { opencode: selected });
+    return selected;
   }
 
   /**
@@ -621,12 +734,12 @@ export class OpencodeDriver implements Driver {
         session.wake();
         if (ev.type === "server.connected") continue; // pure marker — nothing to process
       }
-      this.#onEvent(session, ev);
+      this.#onEvent(session, ev, signal);
     }
   }
 
   /** Route one OpenCode SSE event. Pure dispatch — all the buffering/coalescing lives in the helpers. */
-  #onEvent(session: Session, ev: OpencodeEvent): void {
+  #onEvent(session: Session, ev: OpencodeEvent, signal: AbortSignal): void {
     // Which OpenCode session this event is for (main or a followed child) — drives per-session status/idle
     // routing so a child going idle doesn't flip the whole bridge idle while the parent waits (#102).
     // Shared derivation with the client filter (eventSessionId) so the two never drift. (undefined for
@@ -683,17 +796,15 @@ export class OpencodeDriver implements Driver {
         const childId = info?.id;
         const parentId = info?.parentID;
         if (
-          typeof childId === "string" &&
+          isOpencodeSessionId(childId) &&
           typeof parentId === "string" &&
           this.#followed.has(parentId)
         ) {
           this.#followed.add(childId);
-          // Mirror permissions on the child too (best-effort, fire-and-forget) so sub-agent tool calls
-          // raise gates like the parent's — a child may not inherit the parent's per-session ask rules.
-          // Fire-and-forget (unlike the awaited parent PATCH): a child's FIRST tool call could in theory
-          // run ungated in the small window before this PATCH lands, but the PATCH is a local ms round-trip
-          // while the child's first tool needs seconds of LLM generation, so it wins in practice.
-          if (this.#mirror) void this.#enableAskMirroring(childId);
+          // Child setup is still observational and cannot be a parent-readiness proof: OpenCode can run
+          // the child before this async append/read-back finishes. It is nevertheless run-fenced, tracked,
+          // and joined at teardown so a late read cannot start a PATCH after cancellation.
+          if (this.#mirror) this.#prepareChildAskMirroring(childId, signal);
           // Pair to the spawning subtask anchor by (PARENT session, agent) FIFO — keying by agent alone
           // would let two parents spawning the same agent steal each other's anchors (codex review).
           const agent = typeof info?.agent === "string" ? info.agent : "";
@@ -742,7 +853,10 @@ export class OpencodeDriver implements Driver {
         // flips the bridge idle; a child sub-agent error is surfaced but doesn't end the parent turn (#102).
         this.#flushSessionBuffers(session, evSession);
         const msg = errText(ev.properties.error);
-        this.#tracer.warn("session.error", { error: msg, session: evSession });
+        this.#tracer.warn(
+          "OpenCode session failed",
+          sessionErrorTraceFields(ev.properties.error, evSession),
+        );
         session.pushUpstream({ type: "result", result: `⚠ OpenCode error: ${msg}` });
         if (evSession === this.#mainSessionId) {
           session.workerStatus = "idle";
@@ -1019,48 +1133,54 @@ export class OpencodeDriver implements Driver {
       return;
     }
     if (ev.eventType === "control_response") {
-      await this.#replyPermission(ocSessionId, ev.payload);
+      await this.#replyPermission(ev.payload);
       return;
     }
     // Any other downstream event type: nothing to inject.
   }
 
-  /** Turn on permission mirroring for one session: READ its current rules, merge our catch-all ask in
-   *  (preserving any existing policy — esp. a hard `deny`), and PATCH the result. Best-effort + FAIL-SAFE:
-   *  if we cannot READ the current rules we do NOT PATCH (a blind replace could silently drop a deny —
-   *  better to leave the session ungated than to weaken its policy). A PATCH failure likewise just warns.
-   *  The bridge keeps working either way; only remote gating is affected. */
-  async #enableAskMirroring(sessionId: string, signal?: AbortSignal): Promise<void> {
+  /** Prove one session's append-only permission setup. The parent awaits this before readiness. An
+   *  already-installed exact rule is not appended again; every other path requires read/PATCH/read-back. */
+  async #requireAskMirroring(sessionId: string, signal?: AbortSignal): Promise<void> {
     if (signal !== undefined) throwIfAborted(signal);
-    let existing: PermissionRule[];
-    try {
-      existing = await this.#client.getSessionPermission(sessionId, signal);
-    } catch (e) {
-      if (signal?.aborted) throwIfAborted(signal);
-      this.#tracer.warn(
-        "could not read opencode session rules — mirroring inactive (policy preserved)",
-        {
-          sessionId,
-          error: String(e),
-        },
-      );
+    const existing = await this.#client.getSessionPermission(sessionId, signal);
+    if (signal !== undefined) throwIfAborted(signal);
+    if (hasRemoteClawAskRule(existing)) {
+      this.#tracer.info("opencode permission mirroring already installed", { sessionId });
       return;
     }
+
+    await this.#client.setSessionPermission(sessionId, mergeAskRules(existing), signal);
     if (signal !== undefined) throwIfAborted(signal);
-    try {
-      await this.#client.setSessionPermission(sessionId, mergeAskRules(existing), signal);
-      if (signal !== undefined) throwIfAborted(signal);
-      this.#tracer.info("opencode permission mirroring on (session set to ask)", {
-        sessionId,
-        preserved: existing.length,
-      });
-    } catch (e) {
-      if (signal?.aborted) throwIfAborted(signal);
-      this.#tracer.warn("could not set opencode session to ask mode — mirroring inactive", {
-        sessionId,
-        error: String(e),
-      });
+    const readBack = await this.#client.getSessionPermission(sessionId, signal);
+    if (signal !== undefined) throwIfAborted(signal);
+    if (!hasRemoteClawAskRule(readBack)) {
+      throw new Error("OpenCode permission read-back did not contain remote-claw ask rule");
     }
+    this.#tracer.info("opencode permission mirroring verified", {
+      sessionId,
+      preserved: existing.length,
+    });
+  }
+
+  /** Start one best-effort child policy preparation. The run signal is the mutation fence: if a
+   *  cancellation-unaware read resolves late, #requireAskMirroring checks it before issuing PATCH.
+   *  Keeping the caught task in #childPermissionTasks lets normal teardown join it without extending
+   *  the single shared deadline. The first-tool race remains: OpenCode may run the child immediately. */
+  #prepareChildAskMirroring(sessionId: string, signal: AbortSignal): void {
+    let task: Promise<void>;
+    task = this.#requireAskMirroring(sessionId, signal)
+      .catch((error: unknown) => {
+        if (signal.aborted) return;
+        this.#tracer.warn(
+          "could not prepare child permission mirroring",
+          sessionErrorTraceFields(error, sessionId),
+        );
+      })
+      .finally(() => {
+        this.#childPermissionTasks.delete(task);
+      });
+    this.#childPermissionTasks.add(task);
   }
 
   /** Surface an OpenCode `permission.asked` as the relay's `can_use_tool` control_request — the exact
@@ -1087,7 +1207,7 @@ export class OpencodeDriver implements Driver {
    *  FAIL-CLOSED: only an explicit "allow" → "once"; anything else (deny, or a malformed/absent behavior)
    *  → "reject". The control_response payload carries response.request_id + response.response.behavior
    *  (pushControlResponse's shape). */
-  async #replyPermission(ocSessionId: string, payload: Record<string, unknown>): Promise<void> {
+  async #replyPermission(payload: Record<string, unknown>): Promise<void> {
     const resp = payload.response as
       | { request_id?: unknown; response?: { behavior?: unknown } }
       | undefined;
@@ -1098,7 +1218,7 @@ export class OpencodeDriver implements Driver {
     // behavior to allow|deny before this, so a real viewer grant is always "allow".
     const behavior = resp?.response?.behavior;
     const reply = behavior === "allow" ? "once" : "reject";
-    await this.#client.replyPermission(ocSessionId, requestId, reply);
+    await this.#client.replyPermission(requestId, reply);
     this.#tracer.debug("permission replied", { requestId, reply });
   }
 }
@@ -1106,7 +1226,7 @@ export class OpencodeDriver implements Driver {
 /** Compose the #pendingSubtasks key from a parent session id + agent name. A NUL joiner can't appear in
  *  either field, so distinct (parent, agent) pairs never collide. */
 function pendingKey(parentSession: string, agent: string): string {
-  return `${parentSession} ${agent}`;
+  return `${parentSession}\0${agent}`;
 }
 
 /** Resolve when `signal` aborts (the pump-coupling sentinel in run()'s Promise.race). */
