@@ -9,13 +9,14 @@
 
 **Current external behavior remains compatible:** today `--rc-app` hosts an in-memory `RelayCore`
 that lazily creates one Claude-shaped `Session` per intercepted Claude RC session. A host-scoped
-process-local registrar now gives each intercepted session a distinct `rcb_*` lease, waits for
-validated capabilities and `ready`, and only then starts its broker bridge. The separate OpenCode and
-tmux launch paths still create and bridge their wrapper `Session` directly. No current path persists a
-logical-chat/native binding across an ordinary wrapper restart; the current synthetic Claude
-`Session.id` is also used as the broker/web session key, so an ordinary restart can appear as another
-row. Codex is not implemented. The selected A1 design below removes that ID alias and keeps the
-remote-claw logical chat stable across proven native recovery.
+process-local registrar now gives each intercepted Claude session a distinct `rcb_*` lease, waits for
+validated capabilities and `ready`, and only then starts its broker bridge. OpenCode also registers
+one wrapper `Session` through that lifecycle after strict setup; tmux still bridges its wrapper
+`Session` directly. No current path persists a logical-chat/native binding across an ordinary wrapper
+restart; the current synthetic compatibility `Session.id` is also used as the broker/web session key,
+so an ordinary restart can appear as another row. Codex is not implemented. The selected A1 design
+below removes that ID alias and keeps the remote-claw logical chat stable across proven native
+recovery.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
 ## 1. Decision
@@ -317,9 +318,9 @@ dispatcher still branches directly among MITM, OpenCode, and tmux launch paths, 
 create several sessions. That interface cannot be the host-wide contract because Codex needs one host
 runtime that discovers and serves many threads.
 
-The host-level lifecycle vocabulary introduced in A0.1 is the base for the target A1 boundary below.
-This excerpt intentionally includes the A1-only `NativeMutationFence` fields; it is not a claim that
-all fields shown have landed:
+The host-level lifecycle vocabulary introduced in A0.1, now also used by the OpenCode half of A0.2,
+is the base for the target A1 boundary below. This excerpt intentionally includes the A1-only
+`NativeMutationFence` fields; it is not a claim that all fields shown have landed:
 
 ```ts
 type EngineProduct = "claude-code" | "codex" | "opencode";
@@ -7343,24 +7344,28 @@ tmux clear/branch/compact transitions are classified rather than treated as mere
 The neutral adapter package does not import the current Claude `Session`. A0.1 added
 `host/native/adapter.ts` and a legacy RC registrar that specializes the generic port to `Session`.
 Claude MITM creates one registrar per wrapper process and one lease per intercepted conversation; on
-`ready`, the registrar invokes `startBridgeSession`. The older `bridgeSession` entrypoint remains a
-served-promise compatibility wrapper for OpenCode and tmux. This preserves the current data plane
-while making Claude MITM's host cardinality explicit.
+`ready`, the registrar invokes `startBridgeSession`. OpenCode now opens one lease in `starting`,
+confirms one exact canonical native session ID, proves parent permission setup unless explicitly
+opted out, publishes conservative capabilities, and moves to `ready` before the same bridge starts.
+The older `bridgeSession` entrypoint remains a served-promise compatibility wrapper for tmux. This
+preserves the current data plane while making Claude MITM's host cardinality and OpenCode's no-ghost
+setup boundary explicit.
 
 The adapter creates and owns `port`; the registrar consumes it for the bridge and returns a lease.
 `open`, late `bindNative`, update, and close can fail asynchronously. On a validation, binding, or
 lifecycle failure, the adapter closes the lease and applies the runtime-owner policy; it does not
 pretend registration succeeded. The current A0 Claude path logs the registration failure and closes
-that failed `Session`, while A1 adds the persistent recovery gap and keep-alive/resume policy. After a
-validated live `update`, an advisory projection failure is reported and retried by later presence
-publication, but it does not restore stale metadata or capabilities. A0 implements only this lifecycle
-and current metadata. The capability/evidence fields prevent that behavior-preserving bridge from
-claiming future guarantees.
+that failed `Session`; OpenCode similarly closes a failed starting lease and publishes no conversation,
+while A1 adds the persistent recovery gap and keep-alive/resume policy. After a validated live `update`,
+an advisory projection failure is reported and retried by later presence publication, but it does not
+restore stale metadata or capabilities. A0 implements only this lifecycle and current metadata. The
+capability/evidence fields prevent that behavior-preserving bridge from claiming future guarantees.
 The legacy RC registrar does not start `startBridgeSession` or announce the conversation until it has
 validated capabilities supplied at `open` or `update` and the adapter has moved the lease to `ready`.
-The current Claude launch begins with null capabilities and supplies them through `update`. `Session`
-buffers any earlier upstream events. This prevents broker input from reaching a half-configured native
-adapter.
+The current Claude launch begins with null capabilities and supplies them through `update`. OpenCode
+also begins conservatively, then updates only after confirming one exact canonical native session ID
+and, unless opted out, parent permission read/install/read-back. `Session` buffers any earlier upstream
+events. This prevents broker input from reaching a half-configured native adapter.
 
 An open lease starts in the binding's explicit `starting` or `recovering` phase. Moving to `ready`
 requires validated capabilities. A proven native identity is preferred but not fabricated: an A0
@@ -9347,18 +9352,23 @@ collaborators and sends it through the current adapter lease. A direct TUI may a
 The retained proof schema-pins the global pending list and nondeprecated reply request shape, but it
 does not create or answer a gate; current type/OpenAPI inspection reports `permission.replied` without
 proving its terminal semantics. A supported tuple may use that event only after a runtime probe proves
-it terminal, otherwise another proved native gate record wins. A 2xx boolean reply response is not
-enough until its true/false contract is parsed and correlated; false, stale, lost, or mismatched replies
-remain rejected or `outcome_unknown`, and every outward gate copy closes from the proved native
-terminal record. Additional pending-list routes must likewise be schema-pinned and runtime-probed
-rather than reimplemented from guesses.
+it terminal, otherwise another proved native gate record wins. The A0.2 compatibility client now uses
+retained `POST /permission/{requestID}/reply` with `{reply}` and requires successful JSON to be the
+literal value `true`; malformed JSON, false, or any other value fails closed. That remains transport
+acknowledgement, not native adjudication: the global route does not prove selected-session ownership,
+which actor won a TUI/remote race, or terminal gate state. Lost or mismatched replies remain rejected or
+`outcome_unknown`, and every outward gate copy closes from the proved native terminal record.
+Additional pending-list routes must likewise be schema-pinned and runtime-probed rather than
+reimplemented from guesses.
 
 Parent-session policy setup does not validate child sessions: the current post-creation PATCH can lose
-a race to a child's first tool. Shared structured permissions therefore require an atomically inherited
-owned-session policy or must advertise child tools ungated and unsupported. In the first A2 slice,
-`permission_answer` is absent from the capability vector and receives the same stored unsupported
-result as every other unavailable family; the dispatch-only adapter front door cannot reach the reply
-or policy endpoints.
+a race to a child's first tool. A0.2 now passes the run cancellation signal to each child setup, tracks
+the task, fences PATCH after cancellation, and joins it under the shared bounded teardown; those
+lifecycle guarantees do not close the first-tool race. Shared structured permissions therefore require
+an atomically inherited owned-session policy or must advertise child tools ungated and unsupported. In
+the first A2 slice, `permission_answer` is absent from the capability vector and receives the same
+stored unsupported result as every other unavailable family; the dispatch-only adapter front door
+cannot reach the reply or policy endpoints.
 
 Shutdown distinguishes ownership. Detaching one outside collaborator or an externally owned adapter
 does not abort its active turn, close the server-wide observer, or detach the TUI. Adapter replacement
@@ -10083,31 +10093,46 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 
 #### A0.2 — OpenCode and tmux migration
 
-**Status: next.**
+**Status: OpenCode implemented; tmux next.**
 
-- Route OpenCode and tmux registration through the same host-wide seam without changing their native
-  command flow.
-- Make OpenCode registration fail closed before `ready`: open a `starting` lease; require a successful,
-  schema-valid session list; require an explicitly configured `ses_*` to exist exactly; and, with no
-  configured ID, create only after a valid empty list rather than adopting “most recent.” A non-empty
-  ambiguous list requires an explicit target. Confirm the selected/created session with an exact GET.
-- Treat OpenCode permission policy as an append-only native surface. Unless the operator explicitly
-  chooses `--rc-oc-skip-permissions`, require permission read/install/read-back to succeed
-  before advertising structured permissions. Do not issue another append when the exact remote-claw
-  catch-all is already installed, and never describe preparation of a de-duplicated PATCH payload as
-  proof that the native append itself was idempotent.
-- Advertise conservative OpenCode capabilities from proved setup only, then transition the lease to
+- OpenCode now routes registration through the host-wide seam without changing its compatibility
+  command flow. It opens a `starting` lease; requires a successful schema-valid session list; requires
+  an explicitly configured canonical `ses_*` to exist exactly; and, with no configured ID, creates
+  only after a valid empty list rather than adopting “most recent.” A non-empty ambiguous list
+  requires an explicit target. An exact GET confirms the selected or created session.
+- OpenCode treats permission policy as an append-only native surface. Unless the operator explicitly
+  chooses `--rc-oc-skip-permissions`, parent permission read/install/read-back must succeed before
+  structured permissions are advertised. The exact existing remote-claw catch-all skips another
+  append; preparation of a de-duplicated PATCH payload is not claimed to make the native append
+  idempotent. Parent readiness does not prove child gating: discovered-child setup remains asynchronous
+  best effort, and the child's first tool can race it.
+- OpenCode advertises conservative capabilities from proved setup only, then transitions the lease to
   `ready`; only after that may the broker bridge, initial announcement, capture pump, or injection pump
-  start. Cancellation closes the starting lease, aborts native setup, and uses the existing bounded
+  start. It keeps `nativeRef:null` and publishes native
+  `{mutationAdmission:"mixed", history:"partial", deliveryEvidence:"structured_receipt",
+  liveReattach:false}`. Viewer capabilities are parent structured permissions only after verified
+  setup (or false on opt-out), status false, interrupt true, every other control false, and attachments
+  false. These transport receipts do not prove native application.
+- Cancellation closes the OpenCode starting lease, aborts native setup, and uses the existing bounded
   teardown deadline. List/GET/create/permission errors, malformed discovery, target mismatch, or
-  cancellation publish no ghost conversation.
-- Gate the slice with driver tests for discovery error, malformed successful list, non-empty
-  no-target ambiguity, missing configured target, invalid create response, exact GET mismatch,
-  permission read/PATCH/read-back failure, already-installed catch-all, cancellation at each setup
-  boundary, no announcement/pump before `ready`, and one shared bounded teardown deadline.
-- Publish actual post-setup capabilities/readiness, correcting current optimistic OpenCode/tmux
-  permission, status, and attachment announcements.
-- Publish no ghost conversation when native attach/spawn fails.
+  cancellation publish no ghost conversation. After `ready`, normal wrapper teardown still
+  best-effort aborts the confirmed OpenCode session, closes the lease, and joins tracked child
+  permission-setup tasks under one bounded deadline; it does not stop the external server. Each child
+  task receives cancellation and checks it before PATCH, so even an abort-ignoring injected read cannot
+  append policy after teardown, while the first native tool can still race the asynchronous setup.
+- OpenCode permission replies use retained `POST /permission/{requestID}/reply` with `{reply}` and
+  require successful JSON to be literal `true`. This is only a transport ACK: request/session ownership,
+  native-TUI-versus-remote adjudication, and terminal `permission.replied` semantics remain unproved.
+  Non-2xx responses and malformed successful JSON produce stable body-free endpoint errors. Native
+  `session.error` diagnostics log only session plus numeric status and boolean retryability;
+  provider-controlled names and messages remain out of local logs even though an E2E-encrypted viewer
+  result may carry best-effort human-readable text.
+- OpenCode's driver tests cover strict discovery and selection, exact confirmation, parent permission
+  failure/read-back/already-installed behavior, cancellation setup boundaries, tracked child teardown,
+  literal-true permission replies, body-free error handling, diagnostic redaction, no bridge or pumps
+  before `ready`, truthful capabilities, and the shared teardown deadline.
+- Tmux still needs migration through the same registration seam, post-setup capability publication,
+  and no-ghost spawn failure behavior.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 

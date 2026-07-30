@@ -2,7 +2,7 @@
 // summarize() — the /compact native equivalent added for the documented slash-command routing.
 
 import { describe, expect, it } from "vitest";
-import { isPermissionRule, OpencodeClient } from "./client.js";
+import { isPermissionRule, OpencodeClient, OpencodeError } from "./client.js";
 
 interface Captured {
   url: string;
@@ -34,12 +34,14 @@ describe("OpencodeClient cancellation-aware session endpoints", () => {
     const signals: Array<AbortSignal | null | undefined> = [];
     const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
       signals.push(init?.signal);
-      const isCreate = String(url).endsWith("/session") && init?.method === "POST";
+      const href = String(url);
+      const isCreate = href.endsWith("/session") && init?.method === "POST";
+      const isExactGet = href.endsWith("/session/ses_new") && init?.method === "GET";
       return {
         ok: true,
         status: 200,
         text: async () => "",
-        json: async () => (isCreate ? { id: "ses_new" } : []),
+        json: async () => (isCreate || isExactGet ? { id: "ses_new" } : []),
       } as unknown as Response;
     }) as unknown as typeof fetch;
     const client = new OpencodeClient({ baseUrl: "http://oc.test", fetchFn });
@@ -123,6 +125,183 @@ describe("OpencodeClient.setSessionPermission (flip a session to ask mode)", () 
   });
 });
 
+describe("OpencodeClient server-controlled error bodies", () => {
+  it("does not copy native response text into exceptions that callers may trace", async () => {
+    const secret = "Bearer should-never-reach-a-log";
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: (async () =>
+        ({
+          ok: false,
+          status: 500,
+          text: async () => secret,
+        }) as unknown as Response) as unknown as typeof fetch,
+    });
+
+    const errors = await Promise.all([
+      client
+        .promptAsync("ses_1", { text: "hello", model: { providerID: "p", modelID: "m" } })
+        .catch((error: unknown) => String(error)),
+      client
+        .summarize("ses_1", { providerID: "p", modelID: "m" })
+        .catch((error: unknown) => String(error)),
+      client
+        .setSessionPermission("ses_1", [{ permission: "*", pattern: "*", action: "ask" }])
+        .catch((error: unknown) => String(error)),
+    ]);
+
+    expect(errors.join("\n")).not.toContain(secret);
+  });
+
+  it.each([
+    {
+      name: "POST /session",
+      endpoint: "POST /session",
+      call: (client: OpencodeClient) => client.createSession(),
+    },
+    {
+      name: "GET /session",
+      endpoint: "GET /session",
+      call: (client: OpencodeClient) => client.listSessions(),
+    },
+    {
+      name: "GET /session/{id}",
+      endpoint: "GET /session/{id}",
+      call: (client: OpencodeClient) => client.getSession("ses_1"),
+    },
+    {
+      name: "GET /session/{id}/message",
+      endpoint: "GET /session/{id}/message",
+      call: (client: OpencodeClient) => client.getMessages("ses_1"),
+    },
+  ])("sanitizes a real malformed successful JSON response from $name", async ({
+    endpoint,
+    call,
+  }) => {
+    const sentinel = "SENTINEL_NATIVE_RESPONSE_BODY_MUST_NOT_ESCAPE";
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: (async () =>
+        new Response(sentinel, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    });
+
+    const error = await call(client).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(OpencodeError);
+    expect(error).toMatchObject({ status: 200 });
+    expect(String(error)).toContain(endpoint);
+    expect(String(error)).toContain("200");
+    expect(String(error)).not.toContain(sentinel);
+  });
+});
+
+describe("OpencodeClient.replyPermission (retained OpenCode 1.17.5 route)", () => {
+  it("POSTs /permission/{requestID}/reply with { reply } and threads cancellation", async () => {
+    const calls: Captured[] = [];
+    const ac = new AbortController();
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetch(calls),
+    });
+
+    await client.replyPermission("per_9", "once", ac.signal);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://oc.test/permission/per_9/reply");
+    expect(calls[0]?.method).toBe("POST");
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual({ reply: "once" });
+    expect(calls[0]?.signal).toBe(ac.signal);
+  });
+
+  it("encodes the opaque request ID as one path segment", async () => {
+    const calls: Captured[] = [];
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetch(calls),
+    });
+
+    await client.replyPermission("per_/../secret?x=#", "reject");
+
+    expect(calls[0]?.url).toBe("http://oc.test/permission/per_%2F..%2Fsecret%3Fx%3D%23/reply");
+  });
+
+  it("requires a literal true acknowledgement", async () => {
+    for (const body of [false, null, {}, "true", 1]) {
+      const client = new OpencodeClient({
+        baseUrl: "http://oc.test",
+        fetchFn: fakeFetchBody(body),
+      });
+
+      await expect(client.replyPermission("per_9", "reject")).rejects.toThrow(
+        /invalid acknowledgement/,
+      );
+    }
+  });
+
+  it("does not expose a valid but non-true acknowledgement body", async () => {
+    const sentinel = "SENTINEL_NON_TRUE_PERMISSION_REPLY_MUST_NOT_ESCAPE";
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: (async () =>
+        new Response(JSON.stringify(sentinel), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    });
+
+    const error = await client
+      .replyPermission("per_9", "reject")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(OpencodeError);
+    expect(String(error)).toContain("invalid acknowledgement");
+    expect(String(error)).not.toContain(sentinel);
+  });
+
+  it("sanitizes malformed acknowledgement JSON from a real Response body", async () => {
+    const sentinel = "SENTINEL_PERMISSION_REPLY_BODY_MUST_NOT_ESCAPE";
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: (async () =>
+        new Response(sentinel, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+    });
+
+    const error = await client
+      .replyPermission("per_9", "always")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(OpencodeError);
+    expect(error).toMatchObject({ status: 200 });
+    expect(String(error)).toContain("POST /permission/{requestID}/reply");
+    expect(String(error)).toContain("200");
+    expect(String(error)).not.toContain(sentinel);
+  });
+
+  it("throws a body-free endpoint error on a non-ok response", async () => {
+    const sentinel = "SENTINEL_PERMISSION_ERROR_BODY_MUST_NOT_ESCAPE";
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: (async () => new Response(sentinel, { status: 503 })) as typeof fetch,
+    });
+
+    const error = await client
+      .replyPermission("per_9", "reject")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(OpencodeError);
+    expect(error).toMatchObject({ status: 503 });
+    expect(String(error)).toContain("POST /permission/{requestID}/reply");
+    expect(String(error)).toContain("503");
+    expect(String(error)).not.toContain(sentinel);
+  });
+});
+
 /** A fetch double returning a JSON body (for GET endpoints that the client parses). */
 function fakeFetchBody(body: unknown, ok = true, status = 200): typeof fetch {
   return (async () =>
@@ -152,15 +331,18 @@ describe("OpencodeClient.getSessionPermission (read existing rules so mirroring 
     expect(await c.getSessionPermission("ses_9")).toEqual([]);
   });
 
-  it("filters MALFORMED rules out of the server response (never re-PATCH garbage)", async () => {
+  it("rejects a partially malformed policy instead of silently re-PATCHing only the valid subset", async () => {
     const good = { permission: "edit", pattern: "*", action: "allow" };
     const c = new OpencodeClient({
       baseUrl: "http://oc.test",
       fetchFn: fakeFetchBody({
+        id: "ses_9",
         permission: [good, { permission: "x" }, { action: "nope" }, null, "str"],
       }),
     });
-    expect(await c.getSessionPermission("ses_9")).toEqual([good]);
+    await expect(c.getSessionPermission("ses_9")).rejects.toThrow(
+      /getSession: invalid permission policy/,
+    );
   });
 
   it("throws OpencodeError on a non-ok response", async () => {
@@ -168,9 +350,90 @@ describe("OpencodeClient.getSessionPermission (read existing rules so mirroring 
       baseUrl: "http://oc.test",
       fetchFn: fakeFetchBody(null, false, 404),
     });
-    await expect(c.getSessionPermission("ses_9")).rejects.toThrow(
-      /getSessionPermission failed: 404/,
+    await expect(c.getSessionPermission("ses_9")).rejects.toThrow(/getSession failed: 404/);
+  });
+});
+
+describe("OpencodeClient fail-closed native-session identity", () => {
+  it("treats a discovery HTTP error as an error, never an empty list", async () => {
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetchBody(null, false, 503),
+    });
+    await expect(client.listSessions()).rejects.toThrow(/listSessions failed: 503/);
+  });
+
+  it("accepts only a complete list of unique canonical ses_* IDs", async () => {
+    const valid = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetchBody([{ id: "ses_A1" }, { id: "ses_b2" }]),
+    });
+    await expect(valid.listSessions()).resolves.toEqual([{ id: "ses_A1" }, { id: "ses_b2" }]);
+
+    for (const body of [
+      {},
+      [null],
+      [{ title: "missing" }],
+      [{ id: "not_native" }],
+      [{ id: "ses_same" }, { id: "ses_same" }],
+    ]) {
+      const client = new OpencodeClient({
+        baseUrl: "http://oc.test",
+        fetchFn: fakeFetchBody(body),
+      });
+      await expect(client.listSessions()).rejects.toThrow(/listSessions:/);
+    }
+  });
+
+  it("rejects a create response without one canonical native ID", async () => {
+    for (const body of [null, [], {}, { id: "session_1" }, { id: "ses_" }, { id: "ses_bad-id" }]) {
+      const client = new OpencodeClient({
+        baseUrl: "http://oc.test",
+        fetchFn: fakeFetchBody(body),
+      });
+      await expect(client.createSession()).rejects.toThrow(
+        /createSession: invalid native session id/,
+      );
+    }
+  });
+
+  it("confirms an exact GET and rejects identity or policy ambiguity", async () => {
+    const rules = [{ permission: "*", pattern: "*", action: "ask" }];
+    const valid = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetchBody({ id: "ses_exact", permission: rules }),
+    });
+    await expect(valid.getSession("ses_exact")).resolves.toEqual({
+      id: "ses_exact",
+      permission: rules,
+    });
+
+    for (const body of [
+      [],
+      {},
+      { id: "ses_other" },
+      { id: "ses_exact", permission: {} },
+      { id: "ses_exact", permission: [{ permission: "*", pattern: "*" }] },
+    ]) {
+      const client = new OpencodeClient({
+        baseUrl: "http://oc.test",
+        fetchFn: fakeFetchBody(body),
+      });
+      await expect(client.getSession("ses_exact")).rejects.toThrow(/getSession:/);
+    }
+  });
+
+  it("rejects a non-canonical requested ID before issuing the exact GET", async () => {
+    const calls: Captured[] = [];
+    const client = new OpencodeClient({
+      baseUrl: "http://oc.test",
+      fetchFn: fakeFetch(calls),
+    });
+
+    await expect(client.getSession("ses_bad-id")).rejects.toThrow(
+      /getSession: invalid requested native session id/,
     );
+    expect(calls).toEqual([]);
   });
 });
 

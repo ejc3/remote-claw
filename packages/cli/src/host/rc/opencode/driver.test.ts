@@ -2,11 +2,13 @@ import type { Frame, FrameHeader } from "@remote-claw/clawsec";
 import { deriveIdentity } from "@remote-claw/clawsec";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
+import { createTracer, type TraceRecord } from "../../../trace.js";
 import type { Session } from "../session.js";
 import {
   type HistoryMessage,
   OpencodeClient,
   type OpencodeEvent,
+  type OpencodeSession,
   type PermissionRule,
   parseSseFrame,
 } from "./client.js";
@@ -96,8 +98,11 @@ class FakeOpencodeClient extends OpencodeClient {
   captureWasAbortedAtNativeAbort: boolean | null = null;
   lastEventsSignal: AbortSignal | null = null;
   replies: Array<{ permissionId: string; response: string }> = [];
-  /** Sessions returned by listSessions (the auto-pick). Empty ⇒ the driver creates one. */
+  /** Sessions returned by strict discovery. Empty permits create; non-empty needs an explicit target. */
   sessionList: Array<{ id: string }> = [];
+  /** Inject a malformed successful discovery payload despite the method's static return type. */
+  sessionListOverride: unknown = undefined;
+  listError: Error | null = null;
   listCalls = 0;
   listSignals: AbortSignal[] = [];
   /** Park listSessions until its supplied signal aborts, like a hung cancellation-aware fetch. */
@@ -107,10 +112,16 @@ class FakeOpencodeClient extends OpencodeClient {
   createCalls = 0;
   createSignals: AbortSignal[] = [];
   createBarrier: Promise<void> | null = null;
+  createdSessionId = "ses_fake";
   /** History returned by getMessages (the attach backfill). Empty by default. */
   history: HistoryMessage[] = [];
   /** Optional create failure used to exercise the driver's attach-failure teardown. */
   createError: Error | null = null;
+  sessionGetCalls: string[] = [];
+  sessionGetSignals: AbortSignal[] = [];
+  sessionGetBarrier: Promise<void> | null = null;
+  sessionGetError: Error | null = null;
+  confirmedSessionId: string | null = null;
 
   constructor(private readonly script: OpencodeEvent[]) {
     super({ baseUrl: "http://invalid.invalid" });
@@ -120,7 +131,7 @@ class FakeOpencodeClient extends OpencodeClient {
     if (signal !== undefined) this.createSignals.push(signal);
     if (this.createBarrier !== null) await this.createBarrier;
     if (this.createError !== null) throw this.createError;
-    return "ses_fake";
+    return this.createdSessionId;
   }
   override async listSessions(signal?: AbortSignal): Promise<Array<{ id: string }>> {
     this.listCalls++;
@@ -133,7 +144,20 @@ class FakeOpencodeClient extends OpencodeClient {
       });
     }
     if (this.listBarrier !== null) await this.listBarrier;
-    return this.sessionList;
+    if (this.listError !== null) throw this.listError;
+    return (
+      this.sessionListOverride === undefined ? this.sessionList : this.sessionListOverride
+    ) as Array<{ id: string }>;
+  }
+  override async getSession(sessionId: string, signal?: AbortSignal): Promise<OpencodeSession> {
+    this.sessionGetCalls.push(sessionId);
+    if (signal !== undefined) this.sessionGetSignals.push(signal);
+    if (this.sessionGetBarrier !== null) await this.sessionGetBarrier;
+    if (this.sessionGetError !== null) throw this.sessionGetError;
+    return {
+      id: this.confirmedSessionId ?? sessionId,
+      permission: this.existingPermissions.get(sessionId) ?? [],
+    };
   }
   override async getMessages(): Promise<HistoryMessage[]> {
     return this.history;
@@ -155,9 +179,9 @@ class FakeOpencodeClient extends OpencodeClient {
     this.summarizes.push(sessionId);
   }
   override async replyPermission(
-    _sessionId: string,
     permissionId: string,
     response: "once" | "always" | "reject",
+    _signal?: AbortSignal,
   ): Promise<void> {
     this.replies.push({ permissionId, response });
   }
@@ -166,6 +190,8 @@ class FakeOpencodeClient extends OpencodeClient {
   permissionSetAttempts = 0;
   permissionSetSignals: AbortSignal[] = [];
   stallPermissionSet = false;
+  permissionSetError: Error | null = null;
+  persistPermissionSet = true;
   override async setSessionPermission(
     sessionId: string,
     rules: readonly PermissionRule[],
@@ -180,13 +206,23 @@ class FakeOpencodeClient extends OpencodeClient {
         else signal?.addEventListener("abort", fail, { once: true });
       });
     }
+    if (this.permissionSetError !== null) throw this.permissionSetError;
     this.permissionSets.push({ sessionId, rules });
+    if (this.persistPermissionSet) {
+      this.existingPermissions.set(sessionId, [
+        ...(this.existingPermissions.get(sessionId) ?? []),
+        ...rules,
+      ]);
+    }
   }
   /** Existing per-session rules getSessionPermission returns (keyed by sessionId; default []). Lets a
    *  test seed a pre-existing policy and assert the mirroring PATCH PRESERVES it. */
   existingPermissions = new Map<string, PermissionRule[]>();
   /** When true, getSessionPermission throws — to prove the fail-safe (no PATCH when rules can't be read). */
   failGetPermission = false;
+  failPermissionReadAt: number | null = null;
+  permissionReadBarrierAt: number | null = null;
+  permissionReadBarrier: Promise<void> | null = null;
   permissionReadCalls = 0;
   permissionReadSignals: AbortSignal[] = [];
   stallPermissionRead = false;
@@ -196,6 +232,12 @@ class FakeOpencodeClient extends OpencodeClient {
   ): Promise<PermissionRule[]> {
     this.permissionReadCalls++;
     if (signal !== undefined) this.permissionReadSignals.push(signal);
+    if (
+      this.permissionReadBarrierAt === this.permissionReadCalls &&
+      this.permissionReadBarrier !== null
+    ) {
+      await this.permissionReadBarrier;
+    }
     if (this.stallPermissionRead) {
       await new Promise<void>((_resolve, reject) => {
         const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
@@ -203,7 +245,12 @@ class FakeOpencodeClient extends OpencodeClient {
         else signal?.addEventListener("abort", fail, { once: true });
       });
     }
-    if (this.failGetPermission) throw new Error("getSessionPermission boom");
+    if (
+      this.failGetPermission ||
+      (this.failPermissionReadAt !== null && this.permissionReadCalls === this.failPermissionReadAt)
+    ) {
+      throw new Error("getSessionPermission boom");
+    }
     return this.existingPermissions.get(sessionId) ?? [];
   }
   /** How many times events() has been (re)subscribed — the reconnect test asserts this grows. */
@@ -388,6 +435,25 @@ function up(s: Session | null) {
   return (s as unknown as Session | null)?.snapshotUpstream() ?? [];
 }
 
+function latestAnnouncement(broker: FakeBroker): {
+  capabilities?: {
+    structuredPermissions?: boolean;
+    status?: boolean;
+    controls?: Record<string, boolean>;
+    attachments?: boolean;
+  };
+} {
+  const frame = broker.posts.filter((post) => post.recordKind === "session_announce").at(-1);
+  return JSON.parse(frame?.text ?? "{}") as {
+    capabilities?: {
+      structuredPermissions?: boolean;
+      status?: boolean;
+      controls?: Record<string, boolean>;
+      attachments?: boolean;
+    };
+  };
+}
+
 describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
   let ac: AbortController | null = null;
   afterEach(() => {
@@ -451,7 +517,7 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     ac = new AbortController();
 
     const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(client.listCalls).toBe(1);
+    expect(await waitFor(() => client.listCalls === 1)).toBe(true);
     ac.abort();
     releaseList();
 
@@ -529,28 +595,18 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     expect(client.aborts).toBe(0);
   });
 
-  it("bounds bridge teardown when attach fails behind a stalled initial announcement", async () => {
+  it("publishes no ghost conversation when native attachment fails", async () => {
     const client = new FakeOpencodeClient([]);
     client.createError = new Error("create failed");
     const broker = new FakeBroker();
     broker.stallAnnouncements = true;
     const ctx = await makeCtx(client, broker, () => {});
-    vi.useFakeTimers();
     ac = new AbortController();
 
-    let settled = false;
-    const run = new OpencodeDriver(ctx).run(ac.signal).then((code) => {
-      settled = true;
-      return code;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(broker.announcementAttempts).toBe(1);
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(OPENCODE_TEARDOWN_FLUSH_MS - 1);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(run).resolves.toBe(1);
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+    expect(broker.announcementAttempts).toBe(0);
+    expect(client.connections).toBe(0);
+    expect(client.aborts).toBe(0);
   });
 
   it("uses one deadline for a stalled native abort and stalled broker flush, after fencing pumps", async () => {
@@ -710,7 +766,8 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
   // (k)); this is the DETERMINISTIC twin — proving the gate path against the driver's own translation with
   // no model in the loop, so it runs in CI without a server:
   //   • permission.asked → the EXACT can_use_tool control_request shape mapUpstreamItems renders, and
-  //   • a viewer DENY → POST .../permissions/{id} { response: "reject" } (allow → "once" is proven above).
+  //   • a viewer DENY → POST /permission/{id}/reply { reply: "reject" }
+  //     (allow → "once" is proven above).
   it("(g) surfaces a permission gate as can_use_tool and maps deny → reject", async () => {
     const client = new FakeOpencodeClient([
       { type: "server.connected", properties: {} },
@@ -830,6 +887,198 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
   });
 });
 
+describe("OpencodeDriver fail-closed registration (A0.2)", () => {
+  let ac: AbortController | null = null;
+  afterEach(() => ac?.abort());
+
+  function expectPrivateStartup(client: FakeOpencodeClient, broker: FakeBroker): void {
+    expect(broker.announcementAttempts).toBe(0);
+    expect(client.connections).toBe(0);
+    expect(client.aborts).toBe(0);
+  }
+
+  it("fails closed when discovery errors", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.listError = new Error("discovery failed");
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.listCalls).toBe(1);
+    expect(client.createCalls).toBe(0);
+    expect(client.sessionGetCalls).toEqual([]);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("fails closed when an injected discovery client returns a malformed successful payload", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.sessionListOverride = { sessions: [] };
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.createCalls).toBe(0);
+    expect(client.sessionGetCalls).toEqual([]);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("rejects a malformed discovery entry even when the configured target is also present", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.sessionListOverride = [{ id: "ses_target" }, { id: "not_native" }];
+    const broker = new FakeBroker();
+    const base = await makeCtx(client, broker, () => {});
+    const ctx = { ...base, extra: { client, sessionId: "ses_target" } };
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.createCalls).toBe(0);
+    expect(client.sessionGetCalls).toEqual([]);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("does not guess when discovery is non-empty and no session was configured", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.sessionList = [{ id: "ses_existing" }];
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.createCalls).toBe(0);
+    expect(client.sessionGetCalls).toEqual([]);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("attaches only the configured canonical session when it exists exactly", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.sessionList = [{ id: "ses_other" }, { id: "ses_target" }];
+    const broker = new FakeBroker();
+    const base = await makeCtx(client, broker, () => {});
+    const ctx = { ...base, extra: { client, sessionId: "ses_target" } };
+    ac = new AbortController();
+
+    const driver = new OpencodeDriver(ctx);
+    const run = driver.run(ac.signal);
+    expect(await waitFor(() => client.connections === 1)).toBe(true);
+
+    expect(client.createCalls).toBe(0);
+    expect(client.sessionGetCalls).toEqual(["ses_target"]);
+    expect(client.permissionSets.map((write) => write.sessionId)).toEqual(["ses_target"]);
+    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
+    expect(driver.capabilities.structuredPermissions).toBe(true);
+
+    ac.abort();
+    await expect(run).resolves.toBe(0);
+  });
+
+  it("fails closed when the configured canonical session is absent", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.sessionList = [{ id: "ses_other" }];
+    const broker = new FakeBroker();
+    const base = await makeCtx(client, broker, () => {});
+    const ctx = { ...base, extra: { client, sessionId: "ses_target" } };
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.createCalls).toBe(0);
+    expect(client.sessionGetCalls).toEqual([]);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("fails closed before exact confirmation for a non-canonical configured session", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.sessionList = [];
+    const broker = new FakeBroker();
+    const base = await makeCtx(client, broker, () => {});
+    const ctx = { ...base, extra: { client, sessionId: "ses_bad-id" } };
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.createCalls).toBe(0);
+    expect(client.sessionGetCalls).toEqual([]);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("rejects a non-canonical create result without confirming or publishing it", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.createdSessionId = "not_a_native_session";
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.createCalls).toBe(1);
+    expect(client.sessionGetCalls).toEqual([]);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("rejects an exact GET whose returned identity does not match", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.confirmedSessionId = "ses_different";
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.sessionGetCalls).toEqual(["ses_fake"]);
+    expect(client.permissionReadCalls).toBe(0);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("keeps the broker and pumps private while exact confirmation is pending, then cancels cleanly", async () => {
+    const client = new FakeOpencodeClient([]);
+    let releaseGet!: () => void;
+    client.sessionGetBarrier = new Promise<void>((resolve) => {
+      releaseGet = resolve;
+    });
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => client.sessionGetCalls.length === 1)).toBe(true);
+    expectPrivateStartup(client, broker);
+
+    ac.abort();
+    releaseGet();
+    await expect(run).resolves.toBe(0);
+    expect(client.permissionReadCalls).toBe(0);
+    expectPrivateStartup(client, broker);
+  });
+
+  it("keeps the broker and pumps private while permission read-back is pending, then cancels cleanly", async () => {
+    const client = new FakeOpencodeClient([]);
+    let releaseReadback!: () => void;
+    client.permissionReadBarrierAt = 2;
+    client.permissionReadBarrier = new Promise<void>((resolve) => {
+      releaseReadback = resolve;
+    });
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => client.permissionReadCalls === 2)).toBe(true);
+    expect(client.permissionSetAttempts).toBe(1);
+    expectPrivateStartup(client, broker);
+
+    ac.abort();
+    releaseReadback();
+    await expect(run).resolves.toBe(0);
+    expectPrivateStartup(client, broker);
+  });
+});
+
 describe("OpencodeDriver permission mirroring (B2: flip the session to ask mode)", () => {
   let ac: AbortController | null = null;
   afterEach(() => ac?.abort());
@@ -839,11 +1088,21 @@ describe("OpencodeDriver permission mirroring (B2: flip the session to ask mode)
     const broker = new FakeBroker();
     const ctx = await makeCtx(client, broker, () => {});
     ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.permissionSets.length > 0)).toBe(true);
+    const driver = new OpencodeDriver(ctx);
+    const run = driver.run(ac.signal);
+    expect(await waitFor(() => client.connections > 0)).toBe(true);
     expect(client.permissionSets).toEqual([
       { sessionId: "ses_fake", rules: [{ permission: "*", pattern: "*", action: "ask" }] },
     ]);
+    expect(client.permissionReadCalls).toBe(2);
+    expect(driver.capabilities.structuredPermissions).toBe(true);
+    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
+    expect(latestAnnouncement(broker).capabilities).toEqual({
+      structuredPermissions: true,
+      status: false,
+      controls: { interrupt: true, setModel: false, setMode: false, end: false },
+      attachments: false,
+    });
     ac.abort();
     await run;
   });
@@ -855,23 +1114,39 @@ describe("OpencodeDriver permission mirroring (B2: flip the session to ask mode)
       ...(await makeCtx(client, broker, () => {})),
       extra: { client, mirrorPermissions: false },
     };
-    // capability reflects the opt-out without even running.
-    expect(new OpencodeDriver(ctx).capabilities.structuredPermissions).toBe(false);
+    const driver = new OpencodeDriver(ctx);
+    // Capability reflects the opt-out before setup and remains false after readiness.
+    expect(driver.capabilities.structuredPermissions).toBe(false);
     ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
+    const run = driver.run(ac.signal);
     // Wait until the capture pump has subscribed (attach finished) → if a PATCH were going to happen it
     // would have by now.
     expect(await waitFor(() => client.connections > 0)).toBe(true);
     expect(client.permissionSets).toEqual([]);
+    expect(client.permissionSetAttempts).toBe(0);
+    expect(client.permissionReadCalls).toBe(0);
+    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
+    expect(driver.capabilities.structuredPermissions).toBe(false);
+    expect(latestAnnouncement(broker).capabilities).toEqual({
+      structuredPermissions: false,
+      status: false,
+      controls: { interrupt: true, setModel: false, setMode: false, end: false },
+      attachments: false,
+    });
     ac.abort();
     await run;
   });
 
-  it("DEFAULT ON: capabilities.structuredPermissions is true", async () => {
+  it("stays conservative before setup proves structured permissions", async () => {
     const client = new FakeOpencodeClient([]);
     const broker = new FakeBroker();
     const ctx = await makeCtx(client, broker, () => {});
-    expect(new OpencodeDriver(ctx).capabilities.structuredPermissions).toBe(true);
+    expect(new OpencodeDriver(ctx).capabilities).toEqual({
+      structuredPermissions: false,
+      status: false,
+      controls: { interrupt: true, setModel: false, setMode: false, end: false },
+      attachments: false,
+    });
   });
 
   it("PRESERVES an existing per-session deny — merges it AFTER the catch-all ask (last-match-wins)", async () => {
@@ -899,18 +1174,92 @@ describe("OpencodeDriver permission mirroring (B2: flip the session to ask mode)
     await run;
   });
 
-  it("FAIL-SAFE: if the session rules can't be READ, does NOT PATCH (never blind-replaces a policy)", async () => {
+  it("FAIL-CLOSED: a permission read failure publishes no bridge and never blind-writes policy", async () => {
     const client = new FakeOpencodeClient([]);
     client.failGetPermission = true; // GET throws → we must not replace rules we couldn't read
     const broker = new FakeBroker();
     const ctx = await makeCtx(client, broker, () => {});
     ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    // Wait until attach finished (capture pump subscribed) — a PATCH would have happened by now if it were going to.
-    expect(await waitFor(() => client.connections > 0)).toBe(true);
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
     expect(client.permissionSets).toEqual([]); // nothing PATCHed — the session's own policy is untouched
+    expect(client.connections).toBe(0);
+    expect(broker.announcementAttempts).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("FAIL-CLOSED: a permission PATCH failure never publishes or starts pumps", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.permissionSetError = new Error("permission PATCH failed");
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.permissionReadCalls).toBe(1);
+    expect(client.permissionSetAttempts).toBe(1);
+    expect(client.permissionSets).toEqual([]);
+    expect(client.connections).toBe(0);
+    expect(broker.announcementAttempts).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("FAIL-CLOSED: a permission read-back error never publishes or starts pumps", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.failPermissionReadAt = 2;
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.permissionReadCalls).toBe(2);
+    expect(client.permissionSetAttempts).toBe(1);
+    expect(client.permissionSets).toHaveLength(1);
+    expect(client.connections).toBe(0);
+    expect(broker.announcementAttempts).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("FAIL-CLOSED: read-back without the exact wildcard ask rule never becomes ready", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.persistPermissionSet = false;
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
+
+    expect(client.permissionReadCalls).toBe(2);
+    expect(client.permissionSetAttempts).toBe(1);
+    expect(client.permissionSets).toHaveLength(1);
+    expect(client.connections).toBe(0);
+    expect(broker.announcementAttempts).toBe(0);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("does not append again when the exact wildcard ask rule is already installed", async () => {
+    const client = new FakeOpencodeClient([]);
+    client.existingPermissions.set("ses_fake", [
+      { permission: "*", pattern: "*", action: "ask" },
+      { permission: "bash", pattern: "rm *", action: "deny" },
+    ]);
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    const driver = new OpencodeDriver(ctx);
+    const run = driver.run(ac.signal);
+    expect(await waitFor(() => client.connections > 0)).toBe(true);
+
+    expect(client.permissionReadCalls).toBe(1);
+    expect(client.permissionSetAttempts).toBe(0);
+    expect(client.permissionSets).toEqual([]);
+    expect(driver.capabilities.structuredPermissions).toBe(true);
+    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
+
     ac.abort();
-    await run;
+    await expect(run).resolves.toBe(0);
   });
 });
 
@@ -1251,6 +1600,49 @@ describe("OpencodeDriver — documented behavior (session.error / /compact / bla
     // …and the session left the "working" state rather than hanging.
     expect((captured as unknown as Session).workerStatus).toBe("idle");
   });
+
+  it("keeps an arbitrary provider response body out of every trace sink record", async () => {
+    const sentinel = "arbitrary-provider-response-body-SENTINEL-7f06";
+    const records: TraceRecord[] = [];
+    const tracer = createTracer("rc.opencode.test", {
+      sink: (record) => records.push(record),
+      filter: () => 4,
+      now: () => 0,
+    });
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      sessionError({
+        name: sentinel,
+        data: {
+          message: `request failed: ${sentinel}`,
+          responseBody: sentinel,
+          statusCode: 503,
+          isRetryable: true,
+        },
+      }),
+    ]);
+    const broker = new FakeBroker();
+    const ctx = { ...(await makeCtx(client, broker, () => {})), tracer };
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => broker.content.some((post) => post.text.includes(sentinel)))).toBe(
+      true,
+    );
+    ac.abort();
+    await run;
+
+    // The E2E viewer result remains useful, but the local diagnostic sink gets metadata only.
+    expect(JSON.stringify(records)).not.toContain(sentinel);
+    const failureRecord = records.find((record) => record.msg === "OpenCode session failed");
+    expect(failureRecord?.level).toBe("warn");
+    expect(failureRecord?.fields).toEqual({
+      driver: "opencode",
+      session: SES,
+      status: 503,
+      retryable: true,
+    });
+  });
 });
 
 // ── SUB-AGENT (Task) BRIDGING (#102) ─────────────────────────────────────────────────────────────
@@ -1261,6 +1653,106 @@ describe("OpencodeDriver — documented behavior (session.error / /compact / bla
 describe("OpencodeDriver — sub-agent (Task) bridging", () => {
   let ac: AbortController | null = null;
   afterEach(() => ac?.abort());
+
+  it("does not follow or prepare a child whose native session ID is noncanonical", async () => {
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      sessionCreated({ id: "not-a-native-session", parentID: SES, agent: "explore" }),
+    ]);
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => client.connections === 1)).toBe(true);
+    await sleep(20);
+    ac.abort();
+    await expect(run).resolves.toBe(0);
+
+    expect(client.permissionReadCalls).toBe(2); // parent setup + read-back only
+    expect(client.permissionSets.map((write) => write.sessionId)).toEqual([SES]);
+  });
+
+  it("passes the run signal to child policy setup, tracks it through cancellation, and never PATCHes after a late read", async () => {
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
+    ]);
+    let releaseChildRead!: () => void;
+    client.permissionReadBarrierAt = 3; // parent read + read-back are 1/2; the child's first read is 3
+    client.permissionReadBarrier = new Promise<void>((resolve) => {
+      releaseChildRead = resolve;
+    });
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => client.permissionReadCalls === 3)).toBe(true);
+    expect(client.permissionSetAttempts).toBe(1); // parent only
+    expect(client.permissionReadSignals.at(-1)?.aborted).toBe(false);
+
+    let settled = false;
+    const observedRun = run.then((code) => {
+      settled = true;
+      return code;
+    });
+    ac.abort();
+    await sleep(20);
+    expect(client.permissionReadSignals.at(-1)?.aborted).toBe(true);
+    expect(settled).toBe(false); // teardown is joining the tracked child task
+
+    releaseChildRead();
+    await expect(observedRun).resolves.toBe(0);
+    expect(client.permissionSetAttempts).toBe(1);
+    expect(client.permissionSets.map((write) => write.sessionId)).toEqual([SES]);
+  });
+
+  it("shares the teardown bound with a cancellation-unaware child read and fences its very-late resolution", async () => {
+    const client = new FakeOpencodeClient([
+      { type: "server.connected", properties: {} },
+      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
+    ]);
+    let releaseChildRead!: () => void;
+    client.permissionReadBarrierAt = 3;
+    client.permissionReadBarrier = new Promise<void>((resolve) => {
+      releaseChildRead = resolve;
+    });
+    const broker = new FakeBroker();
+    const ctx = await makeCtx(client, broker, () => {});
+    ac = new AbortController();
+
+    const run = new OpencodeDriver(ctx).run(ac.signal);
+    expect(await waitFor(() => client.permissionReadCalls === 3)).toBe(true);
+    expect(client.permissionSetAttempts).toBe(1);
+
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const observedRun = run.then((code) => {
+        settled = true;
+        return code;
+      });
+      ac.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(OPENCODE_TEARDOWN_FLUSH_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(observedRun).resolves.toBe(0);
+
+      // The injected client ignored cancellation past teardown. Resolving its read now still hits the
+      // post-read run-signal fence, so it cannot begin a child PATCH after shutdown.
+      releaseChildRead();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.permissionSetAttempts).toBe(1);
+      expect(client.permissionSets.map((write) => write.sessionId)).toEqual([SES]);
+    } finally {
+      releaseChildRead();
+      vi.useRealTimers();
+    }
+  });
 
   it("subtask part → Task anchor; the child session's reply nests under it; the child's internal prompt is not surfaced", async () => {
     const SUBAGENT_SCRIPT: OpencodeEvent[] = [

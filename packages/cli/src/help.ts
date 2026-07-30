@@ -68,8 +68,8 @@ opencode driver (--rc-driver=opencode):
                      http://127.0.0.1:4096).
   --rc-oc-model <p/m>      provider/model for prompts (or set RC_OC_MODEL; default
                      amazon-bedrock/global.anthropic.claude-sonnet-4-6 — a reliable Bedrock tool-caller).
-  --rc-oc-session <id>     attach to THIS opencode session (or set RC_OC_SESSION); omitted ⇒ auto-pick the
-                     most-recent session, else create one.
+  --rc-oc-session <id>     attach to this exact existing \`ses_…\` (or set RC_OC_SESSION). When omitted,
+                     create only if discovery proves the server has no sessions; otherwise require an ID.
   --rc-oc-skip-permissions opt out of permission mirroring (or set RC_OC_SKIP_PERMISSIONS): leave the
                      session's own permission config instead of PATCHing it to "ask". Default is mirroring
                      ON.

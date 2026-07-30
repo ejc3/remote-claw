@@ -10,9 +10,10 @@ deliberate boundary rather than a guarantee, it is called out in
 Companion docs: [v2 Architecture](v2-architecture.md) for the design rationale (§-numbers below refer to
 its sections), [Phase 0 Findings](phase0-findings.md) for the reverse-engineered RC worker protocol, and
 [Client-driven Host Runtime](client-driven-host-runtime.md) for the selected native-harness ← one
-remote-claw collaborator ← many server collaborators architecture. A0.1 of that migration is now present: Claude MITM
-sessions register through the neutral, host-scoped lifecycle before their existing `Session` port is
-bridged to the broker. OpenCode and tmux still use the flat compatibility path directly.
+remote-claw collaborator ← many server collaborators architecture. A0.1 of that migration routes
+Claude MITM sessions through the neutral, host-scoped lifecycle before their existing `Session` port
+is bridged to the broker. The OpenCode half of A0.2 now uses the same lifecycle and fails closed before
+`ready`; tmux still uses the flat compatibility path directly.
 
 **Identity scope.** In this as-built protocol, `Session.id` is a synthetic `cse_*` identifier used as
 the broker channel address and session-list key. It is not a Claude transcript ID, Codex thread ID,
@@ -47,22 +48,32 @@ Three parties, one of which (the broker) is untrusted and sees only ciphertext.
   primitives do not have separate implementations that can drift (`viewer.ts` header comment).
 
 **Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the
-only driver. Every current harness produces a `Session`. Claude MITM registers that port through
-`LegacyRcConversationRegistrar`, which calls `startBridgeSession` only at `ready`; OpenCode and tmux
-still call the `bridgeSession` served-promise compatibility entrypoint directly. Both entrypoints
-construct the same `HostRcRelay` and start the same announce/serve path. **The broker, the relay
+only driver. Every current harness produces a `Session`. Claude MITM and OpenCode register that port
+through `LegacyRcConversationRegistrar`, which calls `startBridgeSession` only at `ready`; tmux still
+calls the `bridgeSession` served-promise compatibility entrypoint directly. Both entrypoints construct
+the same `HostRcRelay` and start the same announce/serve path. **The broker, the relay
 (`HostRcRelay`), and the viewer are shared across drivers.** Frames, the two pumps,
 `seq`/ordering, `catch_up`, and presence therefore use one compatibility path, while the native
 capability behind a frame can differ. Permission and attachment support are only as strong as the
-selected harness; current OpenCode/tmux announcements can overstate post-setup support (see
-[Pluggable Harness](pluggable-harness.md) §8). Only how the `Session` reaches the native harness
-differs:
+selected harness; the current tmux announcement can still overstate post-setup support (see
+[Pluggable Harness](pluggable-harness.md) §8), while OpenCode waits for proved parent setup and
+publishes a conservative vector. Only how the `Session` reaches the native harness differs:
 
 | Driver | Native surface used by the local person | Inject (downstream → native client) | Capture (native client → upstream) | Permissions | Provider |
 |---|---|---|---|---|---|
 | **MITM** (`--rc-app`, `launch.ts`) | Real Claude Code TUI in the wrapped process; local prompt text is not currently projected to viewers | Intercept Claude's RC endpoints → worker downstream | Worker upstream POSTs (`followUpstream`) | Structured `can_use_tool` gates (§10) | Default: Anthropic API; `--rc-inference=bedrock`: Bedrock inference + locally synthesized control plane |
 | **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | Real Claude Code TUI in the attachable pane; unmatched local prompts are projected post-hoc as `local_prompt` | `set-buffer`/`paste-buffer` + `send-keys` into the pane (`runInjectPump`) | Tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **Default attempt:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10); an unparseable user settings file disables the hook after the current optimistic announcement. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | Any, including Bedrock/Vertex |
-| **opencode** (`--rc-driver=opencode`, `opencode/driver.ts`) | A native OpenCode TUI may share the server; the driver does not enforce one attachment, and unmatched local prompts are projected post-hoc as `local_prompt` | POST the prompt to the OpenCode session → `followDownstream` (+`ack`) | OpenCode **SSE** event stream → `pushUpstream` | **Default attempt:** PATCH an ask-all rule and mirror SSE `permission.asked` (§10); setup is best-effort and currently may fail after `structuredPermissions:true` was announced. **Opt-out** `--rc-oc-skip-permissions` leaves OpenCode's own permission config | Any OpenCode provider configuration |
+| **opencode** (`--rc-driver=opencode`, `opencode/driver.ts`) | A native OpenCode TUI may share the server; the driver does not enforce one attachment, and unmatched local prompts are projected post-hoc as `local_prompt` | POST the prompt to the OpenCode session → `followDownstream` (+`ack`) | OpenCode **SSE** event stream → `pushUpstream` | **Default required setup:** strict parent policy read; append the ask-all rule only when absent; strict read-back before `ready`; then mirror SSE `permission.asked` (§10). **Opt-out** `--rc-oc-skip-permissions` leaves OpenCode's own permission config and advertises permissions off | Any OpenCode provider configuration |
+
+Current OpenCode permission answers use retained
+`POST /permission/{requestID}/reply` with `{reply}` and require successful JSON to be literal `true`.
+That is transport acknowledgement only: the global route does not prove selected-session ownership, a
+win over a native-TUI answer, or terminal `permission.replied` state. Child policy preparation remains
+asynchronous and can lose the first-tool race, but each task receives run cancellation, is tracked and
+PATCH-fenced after cancellation, and joins the shared bounded teardown. Native `session.error`
+warnings may carry best-effort human-readable text to the E2E viewer; local diagnostics retain only
+the session plus numeric status and boolean retryability, never provider-controlled name, message, or
+response bodies. Successful malformed endpoint JSON also becomes a stable body-free client error.
 
 **Selected migration contract, not current `Session` behavior.** Every remote proposal—from the web, an official client, automation, or a nested server—must enter one common ordering and decision path before any Claude, Codex, or OpenCode adapter can act. That path stores and signs one final admitted, queued, or rejected result. Only a signed admission may create one pinned executor attempt; a queued or rejected result creates none. A new message and a steer of a running turn are distinct commands, and neither timing nor native busy state may convert one into the other. The person's direct native-TUI input remains separate from this remote decision path. The native harness observes both paths and remains the authority for their final order and for what actually changed.
 
@@ -70,14 +81,21 @@ Each native adapter must then prove the exact last mile it uses. It translates t
 
 Nested remote-claw uses the same rule at every server. Before a nested send, the source server jointly finalizes its signed common result and signed lineage; neither half may become visible alone. It accepts semantic completion only from a complete downstream receipt that ties the exact source event, command, chosen target, and target server's signed result together. Edges are installed outward from an already rooted path, commands and observations have opposite directions, and an observation is never turned back into a command. Recursion therefore adds collaborators and server boundaries without feedback loops; the only native app is at the innermost end.
 
-The selected OpenCode runtime replaces that unconstrained current attachment with one epoch-fenced
-adapter lease enforced by the private HTTP endpoint; SSE plus independent HTTP calls expose no
-persistent writer identity, so connection counting cannot provide the fence. It actively drains SSE
-before snapshot, fails closed on discovery, never adopts “most recent,” and reattaches/imports only an
-exact selected session. Automatic creation requires explicit first-bootstrap intent, no existing
-binding, and a positive empty snapshot; explicit **New chat** is a separate operation that may create
-while sessions exist. Both creation paths use a write-ahead metadata marker. A `prompt_async` 204 or
-control response is transport evidence only.
+Current A0.2 registration already fails closed on malformed/failed discovery, never adopts “most
+recent,” requires an explicit exact target when discovery is non-empty, confirms the selected session
+with an exact GET, and withholds its broker bridge until setup reaches `ready`. It keeps
+`nativeRef:null`, advertises native `{mutationAdmission:"mixed", history:"partial",
+deliveryEvidence:"structured_receipt", liveReattach:false}`, and exposes only proved viewer
+capabilities: parent structured permissions after verified setup (or false on opt-out), status false,
+interrupt true, other controls false, and attachments false.
+
+The selected OpenCode runtime extends that process-local compatibility attachment with one
+epoch-fenced adapter lease enforced by the private HTTP endpoint; SSE plus independent HTTP calls
+expose no persistent writer identity, so connection counting cannot provide the fence. It actively
+drains SSE before snapshot and reattaches/imports only an exact durable binding. Automatic creation
+requires explicit first-bootstrap intent, no existing binding, and a positive empty snapshot; explicit
+**New chat** is a separate operation that may create while sessions exist. Both creation paths use a
+write-ahead metadata marker. A `prompt_async` 204 or control response is transport evidence only.
 OpenCode history/events/status and terminal gate state decide native acceptance and order, including
 TUI-versus-remote races. They do not prove which client caused an abort or compaction unless the pinned
 surface supplies a durable causal link; otherwise source remains unknown. Lease replacement also waits

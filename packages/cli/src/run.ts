@@ -415,8 +415,9 @@ async function runOpencodeDriverPath(
       ? { providerID: modelStr.slice(0, slash), modelID: modelStr.slice(slash + 1) }
       : DEFAULT_OPENCODE_MODEL;
   const password = (process.env.OPENCODE_SERVER_PASSWORD ?? "").trim() || undefined;
-  // Which OpenCode session to attach to (--rc-oc-session, else RC_OC_SESSION). Omitted ⇒ the driver
-  // auto-picks the server's most-recent session (else creates one) — the thin default.
+  // Which OpenCode session to attach to (--rc-oc-session, else RC_OC_SESSION). The driver confirms an
+  // explicit canonical ID exactly. If omitted, only a valid empty discovery snapshot permits creation;
+  // an existing-session list is ambiguous and fails closed.
   const ocSessionId =
     (typeof rc["rc-oc-session"] === "string" ? rc["rc-oc-session"] : "").trim() ||
     (process.env.RC_OC_SESSION ?? "").trim() ||
@@ -452,8 +453,9 @@ async function runOpencodeDriverPath(
         model,
         ...(password !== undefined ? { password } : {}),
         ...(ocSessionId !== undefined ? { sessionId: ocSessionId } : {}),
-        // Permission MIRRORING (B2 parity, DEFAULT ON): PATCH the bridged session to "ask" so every tool
-        // raises a viewer gate. Opt out with --rc-oc-skip-permissions / RC_OC_SKIP_PERMISSIONS truthy.
+        // Permission MIRRORING (B2 parity, DEFAULT ON): add a catch-all "ask" so
+        // otherwise-unconfigured tools raise a viewer gate. Opt out with
+        // --rc-oc-skip-permissions / RC_OC_SKIP_PERMISSIONS truthy.
         mirrorPermissions: resolveMirrorPermissions({
           skipFlag: rc["rc-oc-skip-permissions"] === true,
           env: process.env.RC_OC_SKIP_PERMISSIONS,

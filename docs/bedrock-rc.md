@@ -265,8 +265,10 @@ A new launch mode parallel to `runRcLaunch`, selected by a flag — e.g.
 3. Everything downstream — `RelayCore`, the host-scoped `LegacyRcConversationRegistrar`,
    `HostRcRelay`, the broker, and the viewer — is untouched by the inference choice. In the current
    Claude MITM path the registrar gives each intercepted session its own lease and abort controller,
-   then calls `startBridgeSession` when that lease reaches `ready`; OpenCode and tmux retain the direct
-   `bridgeSession` compatibility path. The viewer drives the native RC TUI exactly as today.
+   then calls `startBridgeSession` when that lease reaches `ready`. OpenCode now uses the same
+   process-local registration seam after exact session confirmation and parent-permission setup unless
+   explicitly opted out; tmux retains the direct `bridgeSession` compatibility path. The viewer drives
+   the native RC TUI exactly as today.
 
 ## Risks / open questions
 

@@ -11,8 +11,9 @@ A custom client + relay for driving a **real `claude --remote-control` session**
 > and the native harness decides the final local/remote interleaving and mutation. Wrapped inner Claude,
 > Codex, and OpenCode processes never contact their providers directly.
 > This is under implementation. A0.1 adds the neutral host registration contract and routes Claude
-> MITM sessions through one process-local registrar; OpenCode/tmux migration, durable coordination,
-> complete inner-provider isolation, Codex, and the official-client connectors remain later phases.
+> MITM sessions through one process-local registrar; the OpenCode half of A0.2 now uses that seam with
+> fail-closed setup. Tmux migration, durable coordination, complete inner-provider isolation, Codex,
+> and the official-client connectors remain later phases.
 
 ## What this is
 
@@ -167,9 +168,9 @@ Anthropic Remote session.
 
 ## Next implementation
 
-The active sequence is A0.2 OpenCode/tmux registration → A1 runtime owner/control journal → A2
-OpenCode vertical slice → wrapped Claude → wrapped Codex/ChatGPT Remote → tmux recovery. A0.1, the
-neutral seam plus Claude MITM migration, is implemented. The proof gates and per-PR boundaries are in
+The active sequence is finish A0.2 tmux registration → A1 runtime owner/control journal → A2 OpenCode
+vertical slice → wrapped Claude → wrapped Codex/ChatGPT Remote → tmux recovery. A0.1 and the OpenCode
+registration half of A0.2 are implemented. The proof gates and per-PR boundaries are in
 [Client-driven Host Runtime delivery plan](docs/client-driven-host-runtime.md#delivery-plan).
 
 ## ⚠️ Security

@@ -545,12 +545,14 @@ truth to wrapping durable state:
 
 - Keep `HostRcRelay` as the component that maps accepted RC events to broker
   `WireFrame`s.
-- Preserve the current A0.1 lifecycle boundary: Claude MITM sessions enter through
-  `LegacyRcConversationRegistrar`, which starts `startBridgeSession` only at `ready`; OpenCode and
-  tmux still use the `bridgeSession` compatibility helper directly. Each registrar lease owns its
-  relay abort signal, and the bridge's `served` promise tracks the admitted initial and lifecycle
-  refresh posts through settlement; launchers may still bound how long teardown waits for that
-  promise.
+- Preserve the current registration lifecycle boundary: Claude MITM and OpenCode sessions enter
+  through `LegacyRcConversationRegistrar`, which starts `startBridgeSession` only at `ready`; tmux
+  still uses the `bridgeSession` compatibility helper directly. OpenCode reaches `ready` only after
+  confirming one exact canonical native session ID and, unless explicitly opted out, completing
+  required parent permission setup.
+  Each registrar lease owns its relay abort signal, and the bridge's `served` promise tracks the
+  admitted initial and lifecycle refresh posts through settlement; launchers may still bound how long
+  teardown waits for that promise.
 - Keep the existing branch-A2 idea that durable broker backends do not rely on
   `HostRcRelay.#log` for catch-up. In durable mode, `#log` is not the source of
   truth.

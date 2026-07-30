@@ -1,7 +1,9 @@
 # OpenCode driver
 
-> **Status:** implemented behind `--rc-driver=opencode`. The current driver attaches remote-claw's
-> existing broker/viewer bridge to an `opencode serve` session. It is not yet the isolated,
+> **Status:** implemented behind `--rc-driver=opencode`. The current driver registers its compatibility
+> session through the process-local host seam and fails closed until one exact canonical native session
+> ID is confirmed and, unless explicitly skipped, parent-session permission setup is proved. It is not
+> yet the isolated,
 > coordinator-owned OpenCode runtime selected in
 > [client-driven-host-runtime.md](client-driven-host-runtime.md).
 
@@ -144,14 +146,18 @@ The dispatcher calls `runOpencodeDriver` for `--rc-driver=opencode`. Relevant op
 - `--rc-oc-skip-permissions` or `RC_OC_SKIP_PERMISSIONS`: do not add remote-claw's catch-all
   permission rule.
 
-When no session ID is supplied, the driver tries to use the most recently updated session from
-`GET /session`; a positive empty list creates one with `POST /session`. The current implementation also
-catches any list/auth/server failure, treats it as an empty list, and creates a session. A successful
-non-array response, or an array whose entries all lack non-empty string IDs, is also normalized to
-empty and therefore triggers creation; the returned create ID is checked only as a string, not as a
-canonical `ses_*`. A configured ID is trusted without a discovery/exact-GET existence check. These are
-identity hazards: a transient or malformed discovery result can mint a new `ses_*` beside an existing
-chat, while a mistyped configured ID can be announced before native use proves it.
+Registration always requires a successful, schema-valid `GET /session`. Every returned ID must be a
+unique canonical `ses_*`; a malformed response, authentication failure, or server error is fatal. A
+configured `--rc-oc-session` must be canonical and must exist exactly in that discovery snapshot. With
+no configured ID, a non-empty list is ambiguous and fails with an instruction to select an exact
+session; only a valid empty list permits one `POST /session`, whose returned ID must also be canonical.
+The selected or created ID is then confirmed by an exact `GET /session/{id}` before registration can
+become visible. Recent-activity ordering is never identity evidence.
+
+This A0.2 empty-list check is not yet serialized with direct-TUI creation. A person can create a
+session after the list response but before the driver's `POST /session`, leaving two native sessions;
+the driver still confirms only the ID returned by its own create and never guesses between them.
+The selected A2 workspace transition barrier below closes that race.
 
 The selected runtime never infers identity from “most recent.” An existing logical-chat binding
 reattaches only its exact stored `ses_*`; if that session is absent or has the wrong lineage, the
@@ -198,32 +204,51 @@ Typed-intent preservation and marker durability across server restart remain pin
 The current startup order is:
 
 1. Create the relay `Session`, enqueue its `initialize` request, and invoke the optional test hook.
-2. Start `bridgeSession`, including the broker announcement and serve loop.
-3. Attach to or create the native OpenCode session.
-4. Best-effort enable permission mirroring.
-5. Start capture and injection pumps.
+2. Open a process-local registration lease in `starting` with `nativeRef:null` and no claimed native
+   capabilities. No broker bridge or announcement exists yet.
+3. Run strict discovery, select or create under the rules above, and confirm the exact canonical native
+   session ID.
+4. Unless permission mirroring was explicitly skipped, require a valid permission read, install the
+   catch-all ask rule only when absent, and require a valid read-back containing that exact rule.
+5. Publish the proved compatibility capabilities and conservative native evidence, then move the lease
+   to `ready`. That transition starts `startBridgeSession` and its initial announcement.
+6. Start capture and injection pumps only after `ready`.
 
-This means the current bridge can announce optimistic capabilities before native attachment and
-permission setup finish. The future registrar must publish only validated, post-setup capabilities
-before it accepts mutations.
+The A0.2 native evidence is deliberately limited:
+`{mutationAdmission:"mixed", history:"partial", deliveryEvidence:"structured_receipt",
+liveReattach:false}`. The native TUI and the adapter can both mutate OpenCode, history is not a durable
+complete snapshot, HTTP supplies structured transport receipts rather than semantic application
+proof, and restart-safe reattachment is not implemented. The lease keeps `nativeRef:null` because the
+current driver cannot prove a durable runtime/session incarnation reference; it does not substitute
+the server URL, synthetic `cse_*`, or native `ses_*`.
 
-The `bridgeSession` result is not a readiness barrier, but its `served` promise remains pending until
-the admitted initial announcement settles. A parent cancellation that is already set when `run`
-starts returns before creating a relay session or inspecting, selecting, creating, or aborting any
-OpenCode session. Cancellation during automatic attachment is passed to the list/create HTTP requests;
-the initial permission-mirroring read/write uses the same signal. Until attachment and that setup
-finish, cancellation exits through startup cleanup without starting pumps or aborting an unconfirmed
-native session.
+A parent cancellation that is already set when `run` starts returns before creating a relay session or
+inspecting, selecting, creating, or aborting any OpenCode session. Cancellation during registration
+aborts list/create/exact-GET and parent permission setup, closes the `starting` lease, and exits without
+an announcement, pumps, or an abort against an unconfirmed native session. Discovery, exact-target,
+create-response, confirmation, permission-read, permission-PATCH, and permission-read-back failures
+follow the same no-ghost path and return a nonzero status.
+
+Fail-closed visibility cannot undo native work that already happened. If `POST /session` created a
+session before its response was lost or later confirmation/setup failed, that native session may
+remain without a broker conversation; the driver neither blindly retries nor deletes it. Likewise, a
+permission append can land before cancellation, response loss, or failed read-back and then persist.
+A later registration detects the exact installed catch-all and skips another append. A2's write-ahead
+creation marker, reconciliation, and fenced transition barrier are required to recover these cases
+without guessing.
 
 On normal driver teardown, the driver first aborts its local capture/injection pumps and closes the
-relay session. It then best-effort aborts the attached OpenCode run. That native abort request and the
-final broker settlement share one bounded two-second deadline, so an unresponsive native server and
-an unresponsive broker cannot hold exit for consecutive timeout windows. The driver does not stop the
-external `opencode serve` process. A future runtime owner must distinguish “close this bridge” from
-“stop this supervised native runtime.” A broker/relay failure alone does not enter this teardown path.
-Wrapper or parent-signal teardown does; its best-effort abort can cancel the active turn and disrupt a
-person using the native TUI even though the server, session, and TUI attachment remain. That does not
-satisfy the target detach behavior.
+relay session. It then best-effort aborts the attached OpenCode run, closes the registration lease,
+and joins every tracked child permission-setup task. Those operations share one bounded two-second
+deadline, so an unresponsive native server, child setup, or broker cannot hold exit for consecutive
+timeout windows. Teardown aborts the run signal first; each child task receives that signal and checks
+it after its initial read and before PATCH, so even an injected client that ignores abort cannot begin
+a late PATCH after its read resolves. A native request already accepted before cancellation cannot be
+undone. The driver does not stop the external `opencode serve` process. A future runtime owner must
+distinguish “close this bridge” from “stop this supervised native runtime.” A broker/relay failure alone
+does not enter this teardown path. Wrapper or parent-signal teardown does; its best-effort abort can
+cancel the active turn and disrupt a person using the native TUI even though the server, session, and
+TUI attachment remain. That does not satisfy the target detach behavior.
 
 An authenticated viewer `end` does not take that teardown path: `HostRcRelay` consumes it locally,
 clears open relay permission gates, and sends no `end_session` or native OpenCode abort.
@@ -234,27 +259,33 @@ clears open relay permission gates, and sends no `end_session` or native OpenCod
 
 | Operation | Current route and behavior |
 | --- | --- |
-| Create session | `POST /session` → native session ID |
-| List sessions | `GET /session`, most recently updated first |
+| Create session | `POST /session` with optional `{title}` → one validated canonical native `ses_*`; no A2 creation marker yet |
+| List sessions | `GET /session`; registration validates the complete ID vector and ignores recency for identity |
+| Confirm session | `GET /session/{id}` must return that exact ID and a completely valid permission vector |
 | Read history | `GET /session/{id}/message`, chronological messages with parts |
 | Send prompt | The compatibility client sends `POST /session/{id}/prompt_async` with `{model, parts}` and no caller `messageID`; pinned `1.17.5` separately accepts caller `messageID`; neither request is the selected A2 request, and an empty `204` is transport receipt, not proof of native application |
 | Interrupt | `POST /session/{id}/abort` |
 | Compact | `POST /session/{id}/summarize` with `{providerID, modelID, auto:false}` |
 | Read permission rules | `GET /session/{id}`, using its `permission` field |
 | Add permission rules | `PATCH /session/{id}` with `{permission: rules}` |
-| Answer a permission | `POST /session/{id}/permissions/{permissionId}` accepts `once`, `always`, or `reject`; the driver sends only `once`/`reject` |
+| Answer a permission | Retained OpenCode 1.17.5 route `POST /permission/{requestID}/reply` with `{reply}` set to `once`, `always`, or `reject`; the driver sends only `once`/`reject` and requires a JSON literal `true` response |
 | Follow events | `GET /event`, one server-wide SSE stream |
 
 The driver does not implement OpenCode question APIs. A question capability must remain disabled until
 the exact native request and answer lifecycle is implemented and recovery-tested.
 
+The retained model-free proof schema-pins the global pending-permission list and the nondeprecated
+permission reply request above. The current client uses the reply route but not the pending list.
 Unretained OpenAPI/manual inspection of `1.17.5` reports `GET /session/status`, additional
-pending-permission list routes, a nondeprecated permission reply route, and a v2 `/api/event` stream
-whose sampled frames carried `evt_*` IDs and increasing `seq` values. The retained model-free proof
-pins only the global pending-permission list and reply request schema, and uses legacy `/event`; it does
-not establish the other route behavior, sequence monotonicity, or reset scope. The current client uses
-none of those candidate stronger surfaces. `/api/event` advertises no replay cursor, so its sequence
-alone would not be durable recovery even after a retained probe.
+session-scoped pending-permission routes, and a v2 `/api/event` stream whose sampled frames carried
+`evt_*` IDs and increasing `seq` values. The retained proof uses legacy `/event`; it does not establish
+the other route behavior, sequence monotonicity, or reset scope. `/api/event` advertises no replay
+cursor, so its sequence alone would not be durable recovery even after a retained probe.
+
+HTTP failures are body-free: client errors retain only a stable endpoint name and status, never native
+response text. Successful malformed JSON from create, list, exact session/policy, history, or
+permission-reply endpoints is caught and converted to the same body-free endpoint error. A provider or
+server response body therefore cannot enter a caller's diagnostic through JSON parse text.
 
 The SSE client filters session events by the ID found in the event or nested message/part shapes.
 Server-level connected/heartbeat events are global. Predicate subscriptions also receive every
@@ -293,6 +324,11 @@ native status snapshot and the buffered event tail are merged.
 
 OpenCode re-sends whole parts rather than token deltas. The driver buffers parts and emits only a
 completed message, preventing one relay message per update.
+
+For `session.error`, the viewer still receives a best-effort human-readable warning in its
+E2E-encrypted result frame. Local diagnostics do not log that provider-controlled message or response
+body. They record only the affected session plus numeric status and boolean retryability when those
+structural fields are present; the provider-controlled error name is omitted too.
 
 The current translation is deliberately narrow:
 
@@ -527,17 +563,24 @@ coordinator-admitted mutation.
 
 OpenCode normally decides tools from session permission rules. With mirroring enabled, the driver:
 
-1. Reads the existing rules.
-2. Removes only an exact prior remote-claw catch-all ask rule from the payload it prepares.
-3. Prepends `{permission:"*", pattern:"*", action:"ask"}`.
-4. Appends the existing rules, preserving OpenCode's last-match-wins behavior.
-5. Patches the session, and repeats best-effort for newly discovered child sessions.
+1. Reads and validates the complete parent-session rule vector.
+2. If the exact `{permission:"*", pattern:"*", action:"ask"}` rule already exists, skips the
+   non-idempotent native append.
+3. Otherwise prepares that catch-all first, followed by the existing non-catch-all rules, preserving
+   OpenCode's last-match-wins behavior.
+4. Patches the session and reads the complete policy back.
+5. Requires the read-back to contain the exact catch-all before registration becomes `ready`.
+6. Repeats the same operation best-effort for newly discovered child sessions, using the run
+   cancellation signal and a tracked task.
 
-If the read fails, the driver does not patch because a blind write could drop a deny rule. If the patch
-fails, the session continues without reliable remote gating. The current capability announcement does
-not reflect that failure. A newly discovered child can also execute its first tool before the
-fire-and-forget child PATCH lands, so a successful parent setup still does not validate structured
-permissions for child tools.
+If the parent read, patch, or read-back fails, the driver publishes no conversation and starts no
+pump. `--rc-oc-skip-permissions` performs no additional permission-setup read/PATCH/read-back and
+advertises `structuredPermissions:false`; the exact session-confirmation GET still validates any
+returned policy field, but the driver leaves that native policy untouched. A newly discovered child
+can still execute its first tool before the asynchronous child setup lands, so successful parent setup
+does not prove structured permission gating for child tools. The task is nevertheless lifecycle-safe:
+it is retained, cancellation-fenced before PATCH, and joined under the same bounded teardown deadline,
+so it cannot issue a new policy append after the driver has torn down.
 
 The live OpenCode `PATCH` behavior is append-only: rules concatenate and an empty/null patch does not
 clear them. The driver therefore cannot safely restore a borrowed session's original rules on
@@ -549,17 +592,20 @@ permission-policy seam before advertising clean detach.
 maps to OpenCode `once`; a deny or malformed behavior with a valid request ID maps to `reject`. An
 absent/invalid request ID is a no-op that the legacy downstream pump still acknowledges. There is no
 implemented “always” choice, question flow, or durable recovery of an answer whose HTTP
-acknowledgement was lost. The native endpoint returns a boolean body, but the current client ignores
-it and treats any 2xx as success; a false or stale TUI-won reply can therefore be acknowledged by the
-legacy pump without proof OpenCode applied it.
+acknowledgement was lost. The client safely parses the nondeprecated reply endpoint's successful JSON
+and requires the literal value `true`; malformed JSON, `false`, or any other value fails closed instead
+of being treated as an acknowledgement.
 
 The current driver ignores `permission.replied`. If the native TUI answers first, the remote-claw
 viewer gate can remain open and a later viewer answer can reach OpenCode as a stale response. Current
-code therefore does not arbitrate TUI/viewer answer races. The retained proof schema-pins global
-`GET /permission` and the nondeprecated `/permission/{requestID}/reply` request shape without creating
-or answering a gate. A session-scoped list and the `permission.replied` event come only from current
-unretained OpenAPI/type inspection. Those are promising native recovery seams, but their
-list/reply/event behavior and terminal semantics must be runtime-proved before use.
+code therefore does not arbitrate TUI/viewer answer races. A literal `true` is a stronger transport ACK,
+but the reply route contains no session ID and does not by itself prove that the request belonged to
+the bridged session, that remote-claw won against the TUI, or that OpenCode reached a terminal gate
+state. The retained proof schema-pins global `GET /permission` and the
+`/permission/{requestID}/reply` request shape without creating or answering a gate. A session-scoped
+list and the `permission.replied` event come only from current unretained OpenAPI/type inspection.
+Those are promising native recovery seams, but their list/reply/event behavior and terminal semantics
+must be runtime-proved before use.
 
 The future coordinator must journal permission answers before delivery. On ambiguous delivery it must
 not send a contradictory second answer; it records `outcome_unknown` and waits for positive native
@@ -574,21 +620,22 @@ selected runtime.
 
 ## 7. Capability truth
 
-The current constructor advertises:
+The constructor begins with the conservative pre-registration vector: permissions, status, and
+attachments false, with only the implemented interrupt control true. After successful registration,
+the initial announcement contains:
 
 | Capability | Advertisement | Actual state |
 | --- | --- | --- |
-| Structured permissions | Mirrors the requested flag | Can be false after setup failure; child first-tool PATCH races and ignored reply booleans/`permission.replied` also prevent native adjudication |
-| Status | `true` | Later main-session events are real, but initial/reconnect state is fabricated `running` without `GET /session/status` and can remain wrong |
+| Structured permissions | `true` only after required parent read/install/read-back; `false` with explicit opt-out | Parent catch-all presence is proved before `ready`; child first-tool races and the still-unproved session ownership/TUI race/`permission.replied` terminal semantics prevent a stronger native-adjudication claim, even though reply JSON must now be literal `true` |
+| Status | `false` | Later main-session events are useful observations, but initial/reconnect state is fabricated without `GET /session/status` and can remain wrong |
 | Interrupt | `true` | Backed by `abort` |
 | Set model | `false` | Internal handler accepts only `providerID/modelID`; viewer aliases are incompatible |
 | Set mode | `false` | No native mapping |
 | End | `false` | No native mapping |
-| Attachments | `true` | Unsafe optimistic claim: the relay uses a Claude-style local-file prompt, not proved native OpenCode file parts |
+| Attachments | `false` | The relay's Claude-style local-file prompt is not proved native OpenCode file-part fidelity |
 
-The first host-runtime slice must stop announcing optimistic structured-permission and attachment
-support. OpenCode attachment proposals remain unsupported and non-writable until a retained fixture
-proves exact native file-part fidelity. Any future admitted attachment must first be the exact common
+OpenCode attachment proposals remain unsupported and non-writable until a retained fixture proves
+exact native file-part fidelity. Any future admitted attachment must first be the exact common
 `remote-claw/command-payload/attachment/v1` manifest with its ordered item-vector and decoded-content
 digest chain; OpenCode's native JSON/file-part request is only a later proved translation. Before that
 proof, the common A1 actor may authenticate and parse the proposal, but the adapter-capability decision deterministically rejects it as unsupported and
@@ -597,6 +644,12 @@ attempt. Its rejected command uses the common `unsupported_recognized` payload, 
 attachment payload. Exact replay only redelivers that rejection, while changed bytes collide. Only
 after the proof gate may OpenCode use the exact common-schema admitted-attachment
 accepted/result/replay path. A feature is writable only after its setup and proof gate succeed.
+
+The current compatibility relay does not enforce capability bits as an admission boundary. A stale or
+custom sender can still submit an attachment frame, causing the relay to write the image and inject its
+Claude-style `@"<path>"` prompt into OpenCode. `attachments:false` prevents the normal viewer from
+offering that unsupported path; it does not turn the legacy relay into the future fail-closed command
+actor.
 
 ## 8. Recovery and authority
 
@@ -747,8 +800,8 @@ malformed intent, noncanonical/extra metadata, zero-match, and multiple-match be
 Future-capability interrupt/compact tests pin response-body semantics and separately prove native
 outcome and causal attribution under direct-TUI-versus-remote races and lost responses before either
 family is added to an A2 vector; when the pinned surface has no causal seam, source must remain
-`unknown`. Permission tests cover child creation/first-tool policy
-races, parsed reply booleans, and TUI/remote races closed by a native terminal gate event.
+`unknown`. Permission tests cover child creation/first-tool policy races, cancellation-fenced child
+setup, literal-true reply acknowledgement, and TUI/remote races closed by a native terminal gate event.
 Detach/crash tests keep a direct-TUI turn alive, distinguish explicit interrupt from collaborator
 disconnect, exercise owned versus external server termination, and prove that a
 persistent/non-reversible permission policy cannot be advertised as clean detach. A real server
