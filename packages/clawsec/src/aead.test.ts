@@ -49,6 +49,27 @@ describe("AEAD round-trip", () => {
     expect(toHex(a.nonce)).not.toBe(toHex(b.nonce));
     expect(toHex(a.ct)).not.toBe(toHex(b.ct));
   });
+
+  it("seals an entry snapshot even if the caller mutates inputs during awaits", async () => {
+    const mutableHeader = header();
+    const plaintext = utf8("snapshot");
+    const salt = fromHex("aa".repeat(32));
+    const nonce = fromHex("bb".repeat(12));
+    const promise = sealWith(KEY, mutableHeader, plaintext, salt, nonce);
+
+    mutableHeader.sessionId = "changed";
+    mutableHeader.identityId[0] = 0xff;
+    plaintext[0] = 0xff;
+    salt[0] = 0xff;
+    nonce[0] = 0xff;
+
+    const frame = await promise;
+    expect(frame.sessionId).toBe("s1");
+    expect(toHex(frame.identityId)).toBe("00112233445566778899aabbccddeeff");
+    expect(toHex(frame.salt)).toBe("aa".repeat(32));
+    expect(toHex(frame.nonce)).toBe("bb".repeat(12));
+    expect(toHex(await open(KEY, frame))).toBe(toHex(utf8("snapshot")));
+  });
 });
 
 describe("AEAD rejection (integrity)", () => {
@@ -97,6 +118,26 @@ describe("AEAD rejection (integrity)", () => {
   it("rejects the wrong key", async () => {
     const f = await seal(KEY, header(), utf8("secret"));
     await expect(open(KEY2, f)).rejects.toBeInstanceOf(AeadError);
+  });
+
+  it("opens an entry snapshot even if the caller mutates the frame during awaits", async () => {
+    const original = await seal(KEY, header(), utf8("snapshot"));
+    const mutable: Frame = {
+      ...original,
+      identityId: original.identityId.slice(),
+      salt: original.salt.slice(),
+      nonce: original.nonce.slice(),
+      ct: original.ct.slice(),
+    };
+    const promise = open(KEY, mutable);
+
+    mutable.sessionId = "changed";
+    mutable.identityId[0] = 0xff;
+    mutable.salt[0] = 0xff;
+    mutable.nonce[0] = 0xff;
+    mutable.ct[0] = 0xff;
+
+    expect(toHex(await promise)).toBe(toHex(utf8("snapshot")));
   });
 
   it("derives independent ciphertext per plane key (no cross-plane confusion)", async () => {

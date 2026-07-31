@@ -20,6 +20,16 @@ another row. Codex is not implemented. The selected A1 design below removes that
 the remote-claw logical chat stable across proven native recovery.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
+**A1.0 has landed its contract layer:** the shared canonical field writer and the
+`packages/cli/src/host/state` ID, path, record, runtime, digest, protected-handle, dispatch, and
+backend-capability contracts are implemented and tested. The canonical writer is already used by
+shipped A0 AAD with its locked bytes unchanged. Only the host-state layer is dormant: no run, RC,
+registrar, or native-driver path imports it yet. It opens no database, acquires no lease, stores no
+protected value, signs or invokes nothing, sends no native request, advertises no A1 broker capability,
+and does not change the bytes or behavior of any previously valid canonical frame. Malformed wire and
+runtime values now fail closed at their trust or canonical boundary instead of being accepted and
+failing later or being silently coerced.
+
 ## 1. Decision
 
 The state-mutating end has exactly one native harness. One person uses its real TUI while one
@@ -337,8 +347,9 @@ create several sessions. That interface cannot be the host-wide contract because
 runtime that discovers and serves many threads.
 
 The host-level lifecycle vocabulary introduced in A0.1, now also used by both A0.2 compatibility
-drivers, is the base for the target A1 boundary below. This excerpt intentionally includes the A1-only
-`NativeMutationFence` fields; it is not a claim that all fields shown have landed:
+drivers, is the base for the target A1 boundary below. The process-local registrar and lease are used
+by the compatibility paths. `NativeEngineAdapter`, the A0 `NativeMutationFence`, and the separately
+landed `A1NativeMutationFence` are declaration-only contracts: no current driver consumes them.
 
 ```ts
 type EngineProduct = "claude-code" | "codex" | "opencode";
@@ -406,14 +417,13 @@ interface NativeConversationLease<TMetadata = unknown> {
   close(reason: string): Promise<void>;
 }
 
-interface NativeMutationFence {
+interface A1NativeMutationFence {
   collaborationServerId: string;
   logicalChatId: string;
   nativeBindingId: string;
   inwardEdgeId: string;
-  inwardLiveLeaseId: string;
-  inwardConnectionEpoch: number;
   topologyGeneration: number;
+  coordinatorLeaseId: string;
   coordinatorEpoch: number;
   attemptId: string;
   nativeRef: NativeConversationRef;
@@ -440,11 +450,44 @@ The existing `mutationAdmission` capability name describes how much evidence the
 remote-claw-origin delivery. It does not mean remote-claw admits direct TUI actions or outranks the
 native harness.
 
-The lifecycle interfaces through `NativeEngineAdapter` have landed. The current
-`NativeMutationFence` contains only `bindingId`, `coordinatorEpoch`, `attemptId`, and `nativeRef`; its
-server/chat/edge/generation/attachment fields shown above are A1 target fields. The landed A0 contract
-is deliberately lifecycle-only. Its process-local `bindingId` is an `rcb_*` lease
-key, not the canonical chat ID. A1 adds durable records above it:
+The lifecycle declarations through `NativeEngineAdapter` have landed, but only the process-local
+registrar/lease seam is wired today. The unwired A0 `NativeMutationFence` contains only `bindingId`,
+`coordinatorEpoch`, `attemptId`, and `nativeRef`. A1.0 defines and validates the separate
+`A1NativeMutationFence` above, including the server/chat/terminal-edge/topology/coordinator and native
+attachment coordinates, but no current driver accepts or enforces it. The landed A0 contract is
+deliberately lifecycle-only. Its process-local `bindingId` is an `rcb_*` lease key, not the canonical
+chat ID. A1 adds durable records above it:
+
+A1.0 validators accept only plain records whose exact selected string keys are ordinary own data
+properties: missing, extra, inherited, symbol, and accessor properties fail closed. General A1 safe
+IDs are 1–128 ASCII bytes matching
+`[A-Za-z0-9._:-]+`; digests and one-use dispatch authorizations are canonical unpadded base64url of
+exactly 32 bytes; `machineIdentityId` is exactly 32 lowercase hexadecimal characters. Other generic
+contract strings are 1–1,024 UTF-16 code units and must contain only Unicode scalar values, so a row
+accepted here cannot later collide through UTF-8 replacement. Numeric fields reject negative zero as
+well as negative, fractional, unsafe, and nonnumeric values. Runtime validation registries and
+structural parser results are frozen. These validators establish byte and row-shape contracts only:
+foreign-key, uniqueness, compare-and-swap, transaction, custody, and current-row enforcement remain
+A1.1 and later work.
+
+The selected A1 canonical ID namespaces are:
+
+| Kind | Encoding | Allocation |
+| --- | --- | --- |
+| Collaboration server | `rcs_` + canonical base64url of 16 bytes | Random |
+| Project | `rcpj_` + canonical base64url of 16 bytes | Random |
+| Logical chat | `rcl_` + canonical base64url of 16 bytes | Random |
+| Native binding | `rcnb_` + canonical base64url of 16 bytes | Random |
+| Native runtime | `rcrt_` + canonical base64url SHA-256 | Derived from the warden launch nonce and native start identity |
+| Coordinator lease | `rccl_` + canonical base64url of 16 bytes | Random |
+| Registration attempt | `rcra_` + canonical base64url of 16 bytes | Random |
+| Native conversation lease | `rcncl_` + canonical base64url of 16 bytes | Random |
+| Protected handle | `rcph_` + canonical base64url of 16 bytes | Random |
+| Project-target selector mapping | `ptm_` + canonical base64url SHA-256 | Derived from the exact mapping tuple |
+| Native delivery attempt | `nat_` + canonical base64url SHA-256 | Derived from command, binding, and native incarnation |
+
+The `nat_` identifier is the host-owned native-effect attempt below. It is not the fresh broker
+transport `deliveryAttemptId`, whose retry and rollover domain is separate.
 
 The first start for one local state profile atomically creates one random default `rcs_*`, stores it in
 `HostStateProfileRecord`, and reuses it for later invocations. It is never derived from
@@ -456,15 +499,24 @@ old server from broker or native traffic.
 Every durable A1 logical chat and native binding belongs to one current `ProjectRecord`. The project
 ID is a random grouping identity, not a hash or alias of a working directory, provider project, native
 conversation, title, or workspace selector. On the first bootstrap of a server with no project, the
-host requires one exact terminal target plus a typed `workspaceSelectorId`; one transaction allocates
-a random project, stores its allocation intent, installs generation one of the corresponding
-`ProjectTargetSelectorMappingRecord`, and only then creates the first logical chat, native binding,
-and registration intent. An exact retry of the same allocation intent returns the same project and
-mapping; changed target or selector bytes collide. Once any project exists, an invocation without an
-explicit current `(projectId, workspaceSelectorId)` fails closed. An explicit **New project**
-management intent uses the same atomic allocation rule. It never guesses from cwd or chooses the only
-or most recent project. `projectAllocationIntentId` is the already persisted
-`registrationAttemptId` for `first_bootstrap` and the admitted management `commandId` for
+host requires one exact terminal target plus a typed `workspaceSelectorId`; one storage transaction
+allocates a random project, stores its allocation intent, installs generation one of the corresponding
+`ProjectTargetSelectorMappingRecord`, and creates the first recovering logical chat, starting native
+binding, `NativeRegistrationIntentRecord`, and exact installing `InwardCollaborationEdgeRecord`. The
+chat's `currentInwardEdgeId` points to that edge; it has `targetKind:"native-harness"`, names the new
+binding, and has null root-certificate/live-lease/capability pointers. That installing edge is the
+non-writable terminal-root reservation—there is not a second unsigned `NativeRootCertificate` row.
+After runtime-owner activation, a native-harness edge may become `current` with its root certificate
+while `currentConnectionEpoch` stays zero and both connection pointers stay null. Those three fields
+belong only to an N1 remote-server edge; terminal liveness and capability fencing come from the native
+binding's exact attachment lease and capability snapshot.
+A1.2 lands that dormant compound repository operation; A1.4 is the first registration workflow allowed
+to call it. An exact retry of the same allocation intent returns the same project and mapping; changed
+target or selector bytes collide. Once any project exists, an invocation without an explicit current
+`(projectId, workspaceSelectorId)` fails closed. An explicit **New project** management intent uses the
+same atomic allocation rule. It never guesses from cwd or chooses the only or most recent project.
+`projectAllocationIntentId` is the caller-supplied `registrationAttemptId` reserved and persisted by
+that same transaction for `first_bootstrap`, and the admitted management `commandId` for
 `explicit_new_project`; neither is minted after an uncertain allocation response.
 
 The unique index is `(collaborationServerId, projectAllocationIntentId)`. Its canonical digest is:
@@ -491,14 +543,41 @@ The nullable `NativeConversationBinding.project` field is retained solely for th
 existing project after restart, and cannot be promoted by matching cwd or native IDs. A0-to-A1
 adoption must first install or select the exact durable project and target-selector mapping.
 
-A1 host control state uses one owner-only, symlink-safe local `host-state-v1.db`, opened and migrated
-only by the independently supervised host-state/runtime-owner service. Control-journal and
-runtime-transition tables remain logically separate, but native delivery attempt, front-door
-dispatch, and effect-gate creation share this one transaction boundary. The coordinator receives
-high-level epoch-fenced RPC operations, never raw SQL access. Adapter-private transport state such as
-Claude RC event bodies may use a separate adapter-local store only when no selected atomic invariant
-crosses into it. Private keys, callable port/dispatch handles, and provider credentials are referenced
-through protected handle APIs; they are not ordinary `LocalArtifactRecord` payloads.
+A1 host control state uses one owner-only, symlink-safe local database at
+`$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db`, falling back to
+`~/.local/state/remote-claw/identities/<machineIdentityId>/host-state-v1.db` when
+`XDG_STATE_HOME` is absent or relative. The fallback home must itself be absolute; a relative or empty
+home fails closed instead of resolving under the working directory. A1.0 implements only this pure,
+identity-validated path resolution and does not touch the filesystem. A1.1 lands and tests a dormant secure storage kernel; it
+does not spawn a daemon or let the coordinator open the database. A1.3 places that kernel behind the
+independently supervised runtime-owner service and is the first slice allowed to hold a live
+production handle. The coordinator receives high-level epoch-fenced RPC operations, never raw SQL
+access.
+
+The A1.1 open contract is intentionally stronger than a pathname and mode check. From the selected
+state home downward, mutable parent directories must be owned by the current UID, must not be symlinks
+or group/world-writable, and the `remote-claw` and identity directories are owner-only `0700`. The
+database and every SQLite WAL/SHM sidecar must be an owned regular `0600` file with link count one.
+Creation uses no-follow/exclusive semantics; open and migration compare descriptor and pathname
+device/inode facts before and after the operation and reject symlink, hardlink, or replacement races.
+The selected mode is WAL only: a `host-state-v1.db-journal` file or non-WAL database is inspected under
+the same ownership/type/mode/link/no-follow rules and then refused before any transaction rather than
+silently recovered through rollback-journal mode. WAL may be enabled only after proving the database is
+on a local filesystem with the required locking and durability behavior.
+
+Every connection sets and reads back `PRAGMA foreign_keys=ON`, `trusted_schema=OFF`,
+`journal_mode=WAL`, and `synchronous=FULL` (or a deliberately versioned stricter posture) before
+accessing application tables; a mismatch fails closed. Initial creation and every migration fsync the
+database and affected parent directory before success. Open also verifies the SQLite application ID,
+stored machine identity, schema version, and migration digest, and refuses partial, mismatched, or
+future state.
+
+Control-journal and runtime-transition tables remain logically separate, but native delivery attempt,
+front-door dispatch, and effect-gate creation share this one transaction boundary. Adapter-private
+transport state such as Claude RC event bodies may use a separate adapter-local store only when no
+selected atomic invariant crosses into it. Private keys, callable ports, provider credentials, and
+dispatch authorizations are referenced through protected handle APIs; they are not ordinary
+`LocalArtifactRecord` payloads.
 
 `registrationAttemptId` is durable replay identity. Its canonical intent digest covers the
 descriptor, project, expected native identity, initial phase, and versioned metadata/capability
@@ -507,13 +586,91 @@ digests, but excludes the process-local `port` object. An exact retry returns th
 port under a later coordinator epoch creates a new `NativeConversationLeaseRecord` for that same
 intent and binding, not another binding.
 
+The exact registration intent digest is:
+
+```text
+SHA256(
+  str(canonicalIntentSchemaId) ||
+  str(registrationAttemptId) ||
+  str(collaborationServerId) ||
+  str(nativeBindingId) ||
+  str(descriptorRef) ||
+  bytes(base64urlDecode(descriptorDigest)) ||
+  str(projectRef) ||
+  bytes(base64urlDecode(projectDigest)) ||
+  optionalBytes(expectedNativeRefDigest == null ? null : base64urlDecode(expectedNativeRefDigest)) ||
+  str(initialPhase) ||
+  str(metadataSchemaId) ||
+  str(metadataRef) ||
+  bytes(base64urlDecode(metadataDigest)) ||
+  optionalStr(capabilitiesRef) ||
+  optionalBytes(capabilitiesDigest == null ? null : base64urlDecode(capabilitiesDigest))
+)
+```
+
+`capabilitiesRef` and `capabilitiesDigest` are either both null or both present. `createdAtMs`, the
+process-local port, and `canonicalIntentDigest` itself are excluded. A1.0 computes and verifies these
+bytes; durable exact-retry lookup and collision enforcement land in A1.4.
+
+A1.0 also freezes the protected-handle boundary. A protected reference is exactly
+`{protectedHandleId: rcph_…, kind}`. The five kinds are `artifact`, `signing_key`,
+`provider_credential`, `callable_port`, and `dispatch_authorization`; the five operation scopes are
+`host_profile`, `collaboration_server`, `runtime`, `native_binding`, and `native_attempt`. Their IDs
+are respectively the literal `default`, `rcs_*`, `rcrt_*`, `rcnb_*`, and `nat_*`; a kind and an ID
+from another scope cannot be combined. The
+32-byte one-use dispatch authorization is a separate secret, never an `rcph_*` ID. Only these
+operation-specific capabilities exist:
+
+- put an immutable artifact and read it back only with its schema and expected digest;
+- sign one reserved digest without returning the signing key;
+- invoke one callable port with the exact binding, runtime, coordinator lease/epoch, operation
+  ref/digest, and optional connector-scoped provider credential;
+- arm, consume, or revoke one attempt-bound dispatch authorization.
+
+The byte-bearing protected fields use the nominal `ProtectedByteSnapshot` value rather than a
+`Readonly<Uint8Array>` alias. Its factory accepts only a genuine `Uint8Array`, including Node
+`Buffer` and fixed or growable `SharedArrayBuffer` views, and immediately copies the visible bytes
+into fixed `ArrayBuffer` storage. The retained storage is never exposed: `copyBytes()` returns a new
+fixed copy on every call. Mutating or growing the source, or mutating any returned copy, therefore
+cannot change the protected-operation value. This freezes the boundary's byte-ownership rule; A1.1
+still owns durable artifact storage and later slices own key, credential, port, and authorization
+custody.
+
+For dispatch, `scopeKind` is exactly `native_attempt` and `scopeId` is the sole `nat_*` attempt ID;
+there is no duplicate attempt field that could disagree. The arm request also supplies the exact
+current caller fence, ingress-lease ID, target-path digest, request digest, and translation digest. In
+the same owner transaction that creates the durable dispatch row, the protected owner generates the
+authorization and returns only its opaque `rcph_*` reference plus the resulting canonical dispatch
+digest. The stable authorization identity is the attempt scope, ingress lease, target, request,
+translation, reference, and dispatch digest; it deliberately excludes the coordinator fence. Consume
+and revoke present that same stable identity plus their caller's current fence, which the owner
+validates independently. A replacement coordinator can therefore claim the exact still-not-started
+authorization without pretending to hold its predecessor's lease. The raw 32-byte authorization
+remains protected. Only a successful consume returns it to the in-process native adapter, as part of
+the final owner transaction that marks the attempt, dispatch, and gate started.
+This makes an exact pre-start retry reconstructible from durable state without adding a generic
+protected-value lookup; after consume, recovery is evidence-only.
+
+There is deliberately no generic resolve/get/read/list/export operation. A1.0 supplies the type
+surface, immutable byte-snapshot value, and strict protected-reference parser only; durable artifact
+storage begins in A1.1, while key/credential custody, callable-port ownership, signing, and one-use
+authorization state require the later runtime-owner and dispatch slices.
+
+The A1.0 validator manifest covers the server/profile/project/coordinator lease and fence,
+registration intent/conversation lease/local artifact, logical chat/native binding/project-selector
+mapping, runtime-owner/runtime/binding-incarnation/transport/edge, backend capability, prepared
+mutation/receipt/reconciliation, and native attempt/dispatch/effect-gate shapes shown here. A caller
+must run the corresponding canonical digest or derived-ID verifier where the row has one. The
+manifest is not a claim that a database row or writable service exists.
+
 ```ts
 interface CollaborationServerRecord {
   collaborationServerId: string; // stable random rcs_<base64url-128-bit>
   machineIdentityId: string; // 32 lowercase hex characters, decoded to 16 bytes on wire
   currentKeyGeneration: number; // equals the current certificate's keyGeneration
-  currentIdentityKeyId: string;
-  currentScopeCertificateId: string;
+  // All zero/null while installing; all present before state becomes current.
+  currentIdentityKeyId: string | null;
+  currentScopeCertificateId: string | null;
   // Zero/null before the first coordinator lease. Acquiring a replacement increments the epoch.
   currentCoordinatorEpoch: number;
   currentCoordinatorLeaseId: string | null;
@@ -526,7 +683,7 @@ interface CollaborationServerRecord {
 }
 
 interface HostStateProfileRecord {
-  stateProfileId: string; // "default" for the first selected profile
+  stateProfileId: "default";
   machineIdentityId: string;
   defaultCollaborationServerId: string;
   createdAtMs: number;
@@ -541,7 +698,7 @@ interface ProjectRecord {
   allocationKind: "first_bootstrap" | "explicit_new_project";
   initialWorkspaceSelectorId: string;
   initialTargetDigest: string;
-  initialProjectTargetSelectorMappingId: string;
+  initialProjectTargetSelectorMappingId: string; // exact derived ptm_<base64url-SHA-256>
   createdAtMs: number;
   state: "current" | "closed";
 }
@@ -555,6 +712,12 @@ interface CoordinatorLeaseRecord {
   heartbeatDeadlineMs: number;
   releasedAtMs: number | null;
   state: "current" | "expired" | "released" | "superseded";
+}
+
+interface CoordinatorLeaseFence {
+  collaborationServerId: string;
+  coordinatorLeaseId: string;
+  coordinatorEpoch: number;
 }
 
 interface NativeRegistrationIntentRecord {
@@ -1251,9 +1414,24 @@ interface NativeBindingRecord {
   logicalChatId: string;
   descriptor: NativeEngineDescriptor;
   projectId: string;
+  // Both null while starting; both present before current.
   semanticConversationId: string | null;
-  currentIncarnation: number | null;
+  currentBindingIncarnationId: string | null;
   state: "starting" | "current" | "superseded" | "closed";
+}
+
+// Exact durable binding → runtime/incarnation/conversation join.
+interface NativeBindingIncarnationRecord {
+  nativeBindingIncarnationId: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  nativeBindingId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  semanticConversationId: string;
+  createdAtMs: number;
+  closedAtMs: number | null;
+  state: "current" | "superseded" | "closed";
 }
 
 interface OpenCodeBindingWorkspaceRecord {
@@ -1627,7 +1805,7 @@ interface NativeObserverTopLevelSessionBindingItem {
   nativeWorkspaceBindingId: string;
 }
 
-interface NativeTransportAttachment {
+interface NativeTransportAttachmentRecord {
   attachmentId: string;
   nativeBindingId: string;
   kind: "claude-inner-rc" | "app-server" | "server" | "tmux";
@@ -1636,10 +1814,13 @@ interface NativeTransportAttachment {
   state: "current" | "superseded" | "closed";
 }
 
-interface NativeTransportLease {
+interface NativeTransportLeaseRecord {
   attachmentLeaseId: string;
   attachmentId: string;
+  nativeBindingIncarnationId: string;
+  runtimeId: string;
   nativeIncarnation: number;
+  coordinatorLeaseId: string;
   coordinatorEpoch: number;
   transportEpoch: number;
   currentCapabilitySnapshotId: string | null;
@@ -2292,7 +2473,10 @@ interface NativeFrontDoorDispatchRecord {
   nativeTargetPathDigest: string;
   canonicalRequestDigest: string;
   nativeRequestTranslationDigest: string;
-  dispatchAuthorizationHandle: string;
+  dispatchAuthorizationRef: {
+    protectedHandleId: string;
+    kind: "dispatch_authorization";
+  };
   canonicalDispatchDigest: string;
   dispatchState: "not_started" | "started" | "completed" | "quarantined" | "outcome_unknown";
   dispatchStartedAtMs: number | null;
@@ -2319,7 +2503,7 @@ interface NativeBindingPreSendAbandonmentRecord {
   nativeIncarnation: number;
   nativeDeliveryAttemptId: string;
   canonicalDispatchDigest: string;
-  dispatchAuthorizationHandleDigest: string;
+  dispatchAuthorizationRefDigest: string;
   attemptStateBefore: "prepared" | "claimed";
   dispatchStateBefore: "not_started";
   gateStateBefore: "never_started";
@@ -2409,7 +2593,10 @@ interface NativeCreationFrontDoorDispatchRecord {
   canonicalRequestDigest: string;
   nativeRequestTranslationDigest: string;
   nativeTargetPathDigest: string;
-  dispatchAuthorizationHandle: string;
+  dispatchAuthorizationRef: {
+    protectedHandleId: string;
+    kind: "dispatch_authorization";
+  };
   dispatchState: "not_started" | "started" | "completed" | "outcome_unknown";
   dispatchStartedAtMs: number | null;
   nativeReceiptRef: string | null;
@@ -2887,7 +3074,8 @@ interface NestedDispatchAuthorizationRecord {
   capabilityEntryDigest: string;
   semanticRequestSchemaId: string;
   semanticRequestDigest: string;
-  dispatchAuthorizationHandleDigest: string;
+  dispatchAuthorizationRef: ProtectedHandleRef<"dispatch_authorization">;
+  canonicalDispatchDigest: string;
   stateVersion: number;
   state: "armed" | "consumed" | "revoked";
   revokedAtJournalSeq: number | null;
@@ -2919,7 +3107,8 @@ interface NestedPositiveNeverStartedAttestation {
   semanticRequestSchemaId: string;
   semanticRequestDigest: string;
   nestedDispatchAuthorizationId: string;
-  dispatchAuthorizationHandleDigest: string;
+  dispatchAuthorizationRef: ProtectedHandleRef<"dispatch_authorization">;
+  canonicalDispatchDigest: string;
   revokedAuthorizationStateVersion: number;
   revokedAtJournalSeq: number;
   assertion: "authorization_revoked_unconsumed_before_start";
@@ -3047,7 +3236,8 @@ interface NestedManagementDeliveryAttemptRecord {
   capabilityContinuationRef: string | null;
   capabilityContinuationDigest: string | null;
   nestedDispatchAuthorizationId: string;
-  dispatchAuthorizationHandle: string;
+  dispatchAuthorizationRef: ProtectedHandleRef<"dispatch_authorization">;
+  canonicalDispatchDigest: string;
   transportAttestationRef: string;
   transportAttestationDigest: string;
   state: "prepared" | "started" | "completed" | "outcome_unknown" | "never_started";
@@ -3104,10 +3294,35 @@ interface NestedChatCreationEffectGateRecord {
   outcomeEvidenceRef: string | null;
 }
 
+interface RuntimeOwnerServiceLeaseRecord {
+  runtimeOwnerServiceLeaseId: string;
+  machineIdentityId: string;
+  runtimeOwnerServiceEpoch: number;
+  ownerInstanceId: string;
+  acquiredAtMs: number;
+  heartbeatDeadlineMs: number;
+  releasedAtMs: number | null;
+  state: "current" | "expired" | "released" | "superseded";
+}
+
 interface NativeRuntimeIncarnationRecord {
   runtimeId: string;
   nativeIncarnation: number;
   descriptor: NativeEngineDescriptor;
+  runtimeOwnerServiceLeaseId: string;
+  runtimeOwnerServiceEpoch: number;
+  startIdentitySchemaId: string;
+  startIdentityRef: string;
+  startIdentityDigest: string;
+  startedAtMs: number;
+  closedAtMs: number | null;
+  state: "starting" | "current" | "draining" | "closed";
+}
+
+interface InferenceRuntimeBindingRecord {
+  inferenceRuntimeBindingId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
   facadeProtocolSchemaId: string;
   nativeRequestNamespaceId: string;
   nativeRequestIdExtractionSchemaId: string;
@@ -3115,7 +3330,7 @@ interface NativeRuntimeIncarnationRecord {
   nativeRequestIdUniquenessProofDigest: string;
   canonicalProviderRequestSchemaId: string;
   currentInferenceLeaseId: string | null;
-  state: "starting" | "current" | "draining" | "closed";
+  state: "current" | "superseded" | "closed";
 }
 
 interface InferenceConnectorLease {
@@ -3288,7 +3503,9 @@ interface InwardCollaborationEdgeRecord {
   targetServerId: string | null;
   targetLogicalChatId: string | null;
   targetNativeBindingId: string | null;
-  rootPathCertificateId: string;
+  // Null exactly while the non-writable edge reservation is installing.
+  rootPathCertificateId: string | null;
+  // Always zero/null for native-harness edges. These are N1 remote-server connection fields.
   currentConnectionEpoch: number;
   currentLiveLeaseId: string | null;
   currentCapabilitySnapshotId: string | null;
@@ -3440,7 +3657,8 @@ interface NestedChatDeliveryTransportAttemptRecord {
   capabilityContinuationDigest: string | null;
   mutualChannelBindingDigest: string;
   nestedDispatchAuthorizationId: string;
-  dispatchAuthorizationHandle: string;
+  dispatchAuthorizationRef: ProtectedHandleRef<"dispatch_authorization">;
+  canonicalDispatchDigest: string;
   state: "prepared" | "started" | "completed" | "never_started" | "outcome_unknown";
   positiveNeverStartedEvidenceSchemaId:
     | "remote-claw/nested-positive-never-started-attestation/v1"
@@ -4983,14 +5201,32 @@ either old or new transport. No transport row, snapshot, continuation, or attest
 
 Positive-never-started is a signed, typed fact, not a timeout, disconnect, missing receipt, or mutable
 status label. Every management or chat transport child is created in the same transaction as one
-`NestedDispatchAuthorizationRecord(state:"armed",stateVersion:1)`. Its ID is
+`NestedDispatchAuthorizationRecord(state:"armed",stateVersion:1)` and one protected
+`dispatch_authorization`. The durable records contain only that authorization's typed `rcph_*`
+reference and a canonical dispatch digest; the raw 32-byte value remains inside the protected owner.
+The authorization record's ID is
 `nda_${base64url(SHA256(str("remote-claw/nested-dispatch-authorization/v1") ||
 str(authorizationKind) || str(semanticAttemptId) || str(physicalAttemptId) ||
-str(transportAttemptId)))}`. Its handle digest is:
+str(transportAttemptId)))}`. Its canonical dispatch digest is:
 
 ```text
-SHA256(str("remote-claw/nested-dispatch-authorization-handle/v1") ||
-       str(nestedDispatchAuthorizationId) || str(dispatchAuthorizationHandle))
+SHA256(
+  str("remote-claw/nested-dispatch/v1") ||
+  str(nestedDispatchAuthorizationId) || str(authorizationKind) ||
+  str(collaborationServerId) || str(commandId) || str(admittingCommandResultId) ||
+  bytes(base64urlDecode(admittingCommandResultSignedRecordDigest)) ||
+  bytes(base64urlDecode(canonicalCommandRecordDigest)) ||
+  bytes(base64urlDecode(decisionEvidenceDigest)) ||
+  str(semanticAttemptId) || str(physicalAttemptId) || str(transportAttemptId) ||
+  str(routingBindingId) || str(targetServerId) || optionalStr(targetLogicalChatId) ||
+  str(targetOutsideBindingId) || optionalUint(sourceTopologyGeneration) ||
+  str(priorLeaseId) || str(priorCapabilitySnapshotId) ||
+  bytes(base64urlDecode(priorCapabilitySnapshotDigest)) ||
+  bytes(base64urlDecode(capabilityEntryDigest)) || str(semanticRequestSchemaId) ||
+  bytes(base64urlDecode(semanticRequestDigest)) ||
+  str(dispatchAuthorizationRef.protectedHandleId) ||
+  str(dispatchAuthorizationRef.kind)
+)
 ```
 
 `stateVersion` is exactly `1` with `state:"armed"` and null `revokedAtJournalSeq`, then exactly `2`
@@ -5014,10 +5250,14 @@ the canonical wire-envelope schema/digest; its target logical chat and source to
 non-null and exact.
 
 The transport writer has no socket-send path without consuming that one armed authorization. Its final
-pre-write transaction compare-and-swaps authorization `armed@1 → consumed@2`, child
+pre-write transaction validates the exact typed protected reference and canonical dispatch digest,
+compare-and-swaps authorization `armed@1 → consumed@2`, child
 `prepared → started`, and gate `(never_started,null) → (started,physicalAttemptId)` together; only
-after commit may the first transport byte be attempted. Therefore a consumed authorization, a started
-child/gate, an uncertain outcome, or a missing row can never produce positive-never-started evidence.
+after commit does the protected owner return the raw authorization directly to the in-process
+transport writer, which may attempt the first transport byte. The raw value is never written to a
+durable row, journal, continuation, attestation, log, environment, or wire record. Therefore a
+consumed authorization, a started child/gate, an uncertain outcome, or a missing row can never produce
+positive-never-started evidence.
 
 Before that send CAS only, an abandonment transaction may compare-and-swap the exact authorization
 `armed@1 → revoked@2`, set its non-null `revokedAtJournalSeq`, and change the child
@@ -5039,7 +5279,8 @@ str(priorLeaseId) || str(priorCapabilitySnapshotId) ||
 bytes(base64urlDecode(priorCapabilitySnapshotDigest)) ||
 bytes(base64urlDecode(capabilityEntryDigest)) || str(semanticRequestSchemaId) ||
 bytes(base64urlDecode(semanticRequestDigest)) || str(nestedDispatchAuthorizationId) ||
-bytes(base64urlDecode(dispatchAuthorizationHandleDigest)) ||
+str(dispatchAuthorizationRef.protectedHandleId) || str(dispatchAuthorizationRef.kind) ||
+bytes(base64urlDecode(canonicalDispatchDigest)) ||
 uint(revokedAuthorizationStateVersion) || uint(revokedAtJournalSeq) || str(assertion) ||
 uint(issuedAtMs) || uint(signerSequence) || uint(serverKeyGeneration) ||
 str(signerIdentityKeyId) || str(signerScopeCertificateId) || str(signatureAlgorithm) ||
@@ -5128,10 +5369,11 @@ before accepting the semantic envelope.
 The management last hop atomically marks the unique gate/attempt started before sending one typed
 nested `new_chat`. It also requires the child's current snapshot ID/digest, continuation when present,
 and capability digest to match the retained semantic attempt before sending. That same CAS consumes
-the child's exact one-time `dispatchAuthorizationHandle` by changing its matching
-`NestedDispatchAuthorizationRecord` from `armed@1` to `consumed@2`; a missing, revoked, reused, or
-cross-child ID/handle digest
-reaches no transport write. The target normalizes
+the child's exact typed `dispatchAuthorizationRef` by changing its matching
+`NestedDispatchAuthorizationRecord` from `armed@1` to `consumed@2` and matching the child's
+`canonicalDispatchDigest`; a missing, revoked, reused, or cross-child reference/digest reaches no
+transport write. Only the successful protected consume returns the raw value to the in-process writer.
+The target normalizes
 that authenticated management event into its ordinary
 server-control `CollaborationCommandRecord`; its stable source namespace/event identity is derived
 from the management binding and survives reconnect. It may recurse again through the same adjudicator.
@@ -5305,6 +5547,21 @@ interface BrokerBackendCapabilitiesV1 {
   immutableCollisionTombstones: true;
 }
 ```
+
+Its exact canonical digest is:
+
+```text
+SHA256(
+  str("remote-claw/broker-backend-capabilities/v1") ||
+  uint(1) ||
+  str("remote-claw-broker-a1") ||
+  uint(1) || uint(1) || uint(1) || uint(1) || uint(1) || uint(1)
+)
+```
+
+The six trailing `uint(1)` fields appear in interface order. A1.0 implements this exact strict parser
+and digest; capability negotiation, provider handshake, durable route storage, and conformance proof
+remain A1.6.
 
 The backend advertises it through the broker provider's versioned capability operation, and the host
 pins the returned canonical vector/digest in `BrokerRouteRecord` before first publish. An absent,
@@ -5700,7 +5957,7 @@ its encrypted-payload digest covers the retained sealed bytes, and decrypting th
 route/plane must reproduce the exact stored plaintext digest before publish or replay. A ref
 substitution or changed result bytes under one `stableSemanticResultId` quarantines the route.
 
-`NativeTransportAttachment` and `NativeTransportLease` describe remote-claw's one collaboration
+`NativeTransportAttachmentRecord` and `NativeTransportLeaseRecord` describe remote-claw's one collaboration
 attachment to the native harness, not the person's TUI connection or the inference connector. The
 client-facing endpoint and `InferenceConnectorLease` are supervised by the native runtime owner so a
 collaboration-coordinator restart does not tear down local work.
@@ -5718,7 +5975,7 @@ under its pinned historical snapshot; if that implementation is unavailable, it 
 reinterpreting the request under new rules.
 
 Capability generation is monotonic within one attachment lease. Installation atomically
-compare-and-swaps `NativeTransportLease.currentCapabilitySnapshotId`, marks the prior snapshot
+compare-and-swaps `NativeTransportLeaseRecord.currentCapabilitySnapshotId`, marks the prior snapshot
 superseded, and makes exactly one snapshot current; withdrawal may instead revoke it and clear the
 pointer. The decision and the pre-send attempt claim both revalidate that pointer, lease, incarnation,
 and coordinator fence. Once an attempt is `started`, recovery keeps its historical schema only to
@@ -6275,16 +6532,22 @@ A compare-and-swap claims a `prepared` attempt for one current coordinator epoch
 `claimed`; claiming alone grants no permission to send. The final transaction described below
 advances it to `started` before the first byte that might mutate the native engine.
 A transport receipt advances only `transport_receipt`. Only exact native read-back under the pinned
-fingerprint schema advances `native_observed`/`completed`; a negative result can become `rejected`.
-After `started`, ambiguity becomes `outcome_unknown` and quarantines later remote writes. Neither
-coordinator replacement nor stored-result replay may allocate or send a second attempt.
+fingerprint schema advances `native_observed`/`completed`. A proved negative result after `started`
+can become `rejected`: it retains the non-null claiming coordinator epoch and complete outcome
+evidence, never positive native read-back evidence, and may retain a transport receipt when one
+preceded the negative result. After `started`, ambiguity becomes `outcome_unknown` and quarantines
+later remote writes. Neither coordinator replacement nor stored-result replay may allocate or send a
+second attempt.
+
+A1.0 implements this derived-ID function and verifier. Stored-row uniqueness, immutable request
+retention, state transitions, and one-time dispatch remain A1.8 work.
 
 The command-wide `NativeCommandEffectGateRecord` prevents a native replacement from becoming a retry
 loophole. The only final pre-write transaction locks the attempt, its unique dispatch row, and the
 unique command gate together. It requires attempt `claimed` by the current coordinator epoch,
 dispatch `not_started` with null start/receipt/outcome fields, gate
 `(never_started,null)` with null outcome fields, no abandonment record, and the entire current
-executor/translation/handle join. In one commit it moves the attempt to `started`, the dispatch to
+executor/translation/protected-authorization-reference join. In one commit it moves the attempt to `started`, the dispatch to
 `started` with its one start time, and the gate to `(started,nativeDeliveryAttemptId)`. Only after that
 commit may the first socket byte be written. No other path may start any of the three rows.
 
@@ -6299,10 +6562,11 @@ runtime-local operator request or deliberate shutdown policy:
   outcome evidence on the attempt; and the exact signed
   runtime/incarnation/attachment/ingress/capability executor still current.
   Coordinator fencing may transfer ownership of that row, but it does not allocate a new attempt,
-  request, action ID, handle, or authorization.
+  request, action ID, protected reference, or authorization.
 - Explicit pre-send abandonment is one runtime-owner journal transaction. It locks the attempt,
   dispatch, and command gate; rechecks all of the crash-recovery preconditions above; requires the
-  attempt's unique dispatch row's exact current `canonicalDispatchDigest` and handle; allocates one
+  attempt's unique dispatch row's exact current `canonicalDispatchDigest` and protected authorization
+  reference; allocates one
   journal sequence; and inserts one `NativeBindingPreSendAbandonmentRecord`. In that same commit it
   moves the attempt, dispatch, and gate to `quarantined`; leaves `dispatchStartedAtMs`,
   `nativeReceiptRef`, `startedAttemptId`, transport receipt, and native read-back null; sets all three
@@ -6310,8 +6574,9 @@ runtime-local operator request or deliberate shutdown policy:
   `remote-claw/native-binding-pre-send-abandonment/v1`; sets all three `outcomeEvidenceRef` fields to
   the exact `nativePreSendAbandonmentId`; and sets all three `outcomeEvidenceDigest` fields to its
   `canonicalEvidenceDigest`. Before the transaction, each schema/ref/digest triple must be all null;
-  afterward, each is that exact all-non-null triple. The dispatch handle remains immutable but is no
-  longer accepted because the front door accepts only `not_started`.
+  afterward, each is that exact all-non-null triple. The dispatch row's protected reference remains
+  immutable, while the protected owner revokes its one-use authorization; the front door also accepts
+  only `not_started`.
 
 `explicit_runtime_shutdown` means a deliberate, configured cancellation decision committed before
 shutdown. A disconnect, process death, signal, ordinary graceful restart, or missing record never
@@ -6326,7 +6591,7 @@ the abandonment preconditions fail without changing any state; if abandonment wi
 state check fails before a socket write. A stale precheck cannot commit either transition.
 
 The abandonment record is unique by both `nativePreSendAbandonmentId` and
-`nativeDeliveryAttemptId`. Its ID and authorization-handle digest are:
+`nativeDeliveryAttemptId`. Its ID and protected-authorization-reference digest are:
 
 ```text
 nativePreSendAbandonmentId =
@@ -6334,12 +6599,14 @@ nativePreSendAbandonmentId =
     str("remote-claw/native-binding-pre-send-abandonment-id/v1") ||
     str(commandId) || str(nativeDeliveryAttemptId)))
 
-dispatchAuthorizationHandleDigest =
-  SHA256(str("remote-claw/native-front-door-dispatch-authorization-handle/v1") ||
-         str(nativeDeliveryAttemptId) || str(dispatchAuthorizationHandle))
+dispatchAuthorizationRefDigest =
+  SHA256(str("remote-claw/native-front-door-dispatch-authorization-ref/v1") ||
+         str(nativeDeliveryAttemptId) || str(protectedHandleId) ||
+         str("dispatch_authorization"))
 ```
 
-The ID's hash suffix and the handle digest are encoded as canonical unpadded base64url SHA-256. Its
+The ID's hash suffix and the protected-reference digest are encoded as canonical unpadded base64url
+SHA-256. Its
 `canonicalEvidenceDigest` is unpadded-base64url SHA-256 of:
 
 ```text
@@ -6352,13 +6619,13 @@ str(decisionEvidenceSchemaId) || bytes(base64urlDecode(decisionEvidenceDigest)) 
 str(collaborationServerId) || str(logicalChatId) || str(nativeBindingId) ||
 str(runtimeId) || uint(nativeIncarnation) || str(nativeDeliveryAttemptId) ||
 bytes(base64urlDecode(canonicalDispatchDigest)) ||
-bytes(base64urlDecode(dispatchAuthorizationHandleDigest)) ||
+bytes(base64urlDecode(dispatchAuthorizationRefDigest)) ||
 str(attemptStateBefore) || str(dispatchStateBefore) || str(gateStateBefore) ||
 str(abandonmentReason) || uint(abandonedAtJournalSeq) || str(assertion)
 ```
 
 Verification resolves the retained attempt, dispatch, gate, admitted result, command, and decision;
-recomputes every digest including the protected dispatch handle; and requires every coordinate to
+recomputes every digest including the opaque protected dispatch reference; and requires every coordinate to
 match the rows changed by that one journal commit. This local atomic fact is not a signed portable
 positive-never-started attestation. Exact replay looks up the unique attempt/abandonment row before
 allocating a journal sequence and returns the one existing record. A changed reason, coordinate, or
@@ -6668,9 +6935,10 @@ match.
 
 The runtime-owned front door has a second, last-hop one-time boundary:
 `NativeFrontDoorDispatchRecord` is unique by `nativeDeliveryAttemptId` and immutably binds the admitted
-ingress lease, target path, request digest, and one-time opaque dispatch authorization. The front door
-does not accept arbitrary traffic from a current adapter credential: it resolves that handle to the
-exact attempt, revalidates the current admitted-result tuple, decision/executor evidence,
+ingress lease, target path, request digest, and opaque reference to a one-use dispatch authorization.
+The durable row never contains the authorization itself. The front door does not accept arbitrary
+traffic from a current adapter credential: it presents that reference to the protected owner for the
+exact attempt and revalidates the current admitted-result tuple, decision/executor evidence,
 command/effect gate, pinned family/translator entry, capability/attachment/ingress leases, method,
 route, path, request and translation digests, recomputes the translation from the retained common
 payload plus generated coordinates, and runs the one three-row final pre-write transaction above:
@@ -6684,13 +6952,20 @@ Its immutable digest is SHA-256 of
 `str("remote-claw/native-front-door-dispatch/v1") || str(nativeDeliveryAttemptId) ||
 str(nativeClientIngressLeaseId) || bytes(base64urlDecode(nativeTargetPathDigest)) ||
 bytes(base64urlDecode(canonicalRequestDigest)) ||
-bytes(base64urlDecode(nativeRequestTranslationDigest)) || str(dispatchAuthorizationHandle)`.
-The runtime owner allocates the handle as canonical unpadded base64url of 32 random bytes in the same
-transaction as the dispatch row. It is globally unique across binding and creation dispatches, retained
-only in protected owner state, never caller-chosen or reassigned to another dispatch, and never exposed
-in argv, environment, files readable by the inner process, or logs. After a crash, the adapter may
-present the same handle only for the same still-`not_started` attempt under the exact recovery
-preconditions above. A handle/digest transplant or collision fails before the dispatch CAS.
+bytes(base64urlDecode(nativeRequestTranslationDigest)) ||
+str(dispatchAuthorizationRef.protectedHandleId) || str(dispatchAuthorizationRef.kind)`.
+A1.0 implements this digest and verifies it against the strict dispatch row; it does not create,
+store, arm, consume, or send that row.
+The runtime owner allocates an `rcph_*` dispatch-authorization reference and its protected 32 random
+bytes in the same transaction as the dispatch row. The durable row stores only the reference; the raw
+authorization is globally unique across binding and creation dispatches, never caller-chosen or
+reassigned, and never exposed in argv, environment, files readable by the inner process, or logs.
+After a crash, the coordinator reconstructs the same stable authorization identity from the
+still-`not_started` row, attempt join, and reference, then supplies its own current caller fence; it
+does not look up or copy out the raw value. The final owner transaction validates that current fence,
+consumes the reference, marks all three native-effect rows started, and returns the raw authorization
+only to the in-process adapter. A stale fence, reference/digest transplant, or collision fails before
+that CAS.
 
 For Codex, each managed top-level chat-thread binding has its own logical attachment and lease, but all
 of those attachments reference the same daemon-wide physical app-server connection through one shared
@@ -6715,7 +6990,7 @@ change owner on lease replacement. It names the local native-conversation record
 already known; otherwise a later immutable `InferenceConversationCorrelationRecord` may link it only
 after native evidence proves the relationship. This correlation never replays or moves the attempt.
 
-`NativeRuntimeIncarnationRecord.nativeRequestNamespaceId` is
+`InferenceRuntimeBindingRecord.nativeRequestNamespaceId` is
 `irn_${base64url(SHA256(str("remote-claw/inference-native-request-namespace/v1") ||
 str(runtimeId) || uint(nativeIncarnation) || str(facadeProtocolSchemaId)))}`. It is stable across
 inference-connector lease replacement and is immutable for that native incarnation. Changing the
@@ -6755,10 +7030,12 @@ restart performs this lookup and verification before allocating anything.
 
 Exactly one inference lease is current per runtime incarnation. Installation first fences the old
 connector and classifies every started upstream/native delivery, then compare-and-swaps
-`NativeRuntimeIncarnationRecord.currentInferenceLeaseId`; a uniqueness constraint forbids two current
+`InferenceRuntimeBindingRecord.currentInferenceLeaseId`; a uniqueness constraint forbids two current
 leases. A replacement lease is valid only when its runtime/incarnation, façade schema, request
 namespace, extraction schema, canonical provider-request schema, and uniqueness-proof digest exactly
-equal the incarnation record.
+equal the inference binding. The provider-neutral `NativeRuntimeIncarnationRecord` contains only
+runtime ownership and start-identity evidence; runtimes that do not host an inference façade need no
+inference binding.
 Changing any of those fields requires closing the old incarnation and completing its ambiguity audit
 before a higher incarnation may start. Each physical send/resume uses a new immutable
 `InferenceConnectorTransportAttemptRecord`, and `currentTransportAttemptId` advances by CAS. If every
@@ -7533,7 +7810,8 @@ allowed. A late `bindNative` must match the registered descriptor and either est
 reference or replay the existing one; it never repoints a logical chat. Native replacement uses the
 separate proof-carrying A1 recovery transition described above.
 
-`runtimeId` is derived from a warden-issued launch nonce plus a non-reusable native start identity:
+`runtimeId` uses the distinct `rcrt_*` namespace and is derived from a warden-issued launch nonce plus
+a non-reusable native start identity:
 Claude process start identity, Codex app-server instance epoch, OpenCode server instance epoch, or
 tmux pane plus child-process start identity. A PID, URL, or pane name alone is not sufficient.
 Before `bindNative`, each adapter classifies transport reconnect versus new chat versus child/fork
@@ -7600,6 +7878,15 @@ attached session's active run. An uncertain tmux kill retains the private runtim
 diagnosis or manual attachment, but the wrapper still has no durable reattachment policy. None
 provides the selected persistent-runtime contract yet; live reattachment remains proof-gated.
 
+The runtime owner has its own host-wide `RuntimeOwnerServiceLeaseRecord` and monotonic service epoch,
+distinct from every collaboration-server coordinator lease/epoch. Each
+`NativeRuntimeIncarnationRecord` pins the exact service lease/epoch and process start-identity
+schema/ref/digest that created or recovered it. A stale owner service therefore cannot mutate runtime
+or protected state merely by presenting a current server coordinator epoch. A1.0 validates these
+records. A1.2 may persist only a starting native binding with no current binding-incarnation pointer;
+A1.3 owns service supervision, authenticated RPC, lease acquisition/takeover, protected custody, and
+creation or recovery of every runtime and binding incarnation.
+
 The coordinator epoch is enforced, not informational. Acquiring it is an atomic compare-and-swap in the
 server journal. Every server journal transition, remote-claw-origin delivery before native acceptance,
 outward collaboration write, ingress ACK, and outbox claim is conditional on that epoch; the runtime
@@ -7622,13 +7909,15 @@ and it does not retroactively control a remote proposal after the native harness
 loss of the local façade or inference connector can still make new model-backed work unavailable; that
 is a native-runtime availability failure, not a collaboration admission decision.
 
-Every future remote-claw-origin mutating engine-port call carries `NativeMutationFence`; its
-write-ahead `attemptId`, server/chat scope, durable `nativeBindingId`, inward edge and connection epoch,
-topology generation, exact native reference, coordinator epoch, and attachment lease are validated
-immediately before the native side effect. This is never the process-local A0 `rcb_*` registration
-lease. A private collaboration-transport operation resolves the named attachment lease and rejects it
-if the attachment, native incarnation, coordinator epoch, transport epoch, edge generation, or
-topology generation is no longer current.
+Every future remote-claw-origin mutating engine-port call carries `A1NativeMutationFence`; its
+write-ahead `attemptId`, server/chat scope, durable `nativeBindingId`, proved terminal inward edge,
+topology generation, exact native reference, coordinator lease/epoch, attachment lease, and native
+capability snapshot are
+validated immediately before the native side effect. This is never the process-local A0 `rcb_*`
+registration lease. A private collaboration-transport operation resolves the named attachment lease
+and rejects it if the attachment, native incarnation, coordinator lease/epoch, transport epoch,
+terminal edge/root, capability snapshot, or topology generation is no longer current. N1 remote-server
+connection epochs and live-lease IDs are not part of this terminal-native fence.
 
 The adapter boundary accepts an immutable, already-translated request—not generic text to reinterpret
 after admission—and separates first dispatch from evidence-only reconciliation:
@@ -7637,15 +7926,21 @@ after admission—and separates first dispatch from evidence-only reconciliation
 interface PreparedNativeMutation {
   attemptId: string;
   dispatchAuthorizationHandle: string;
-  fence: NativeMutationFence;
+  canonicalDispatchDigest: string;
+  fence: A1NativeMutationFence;
   canonicalRequestSchemaId: string;
   canonicalRequestRef: string;
   canonicalRequestDigest: string;
 }
 
+interface NativeDispatchReceiptExpectation {
+  attemptId: string;
+  canonicalDispatchDigest: string;
+}
+
 interface NativeDispatchReceipt {
   attemptId: string;
-  dispatchAuthorizationHandle: string;
+  canonicalDispatchDigest: string;
   dispatchState:
     | "started"
     | "transport_receipt"
@@ -7663,21 +7958,35 @@ interface NativeReconciliationEvidence {
   nativeEvidenceDigest: string;
 }
 
-interface NativeMutationDispatcher {
-  // Consumes the one-time authorization in the last transaction before the first possible native byte.
+interface NativeFirstDispatchCapability {
+  // Receives the raw authorization only after the final owner consume transaction succeeds.
   dispatch(prepared: PreparedNativeMutation): Promise<NativeDispatchReceipt>;
+}
+
+interface NativeReconciliationCapability {
   // Reads/attaches positive evidence only. This operation has no native send capability.
   reconcile(evidence: NativeReconciliationEvidence): Promise<NativeDispatchReceipt>;
 }
 ```
 
-The host-state service atomically creates the selected signed result,
-`NativeDeliveryAttemptRecord`, `NativeFrontDoorDispatchRecord`, and
-`NativeCommandEffectGateRecord`, then issues the protected one-time authorization. `dispatch` validates
-the exact request ref/digest and current fence immediately before use and can consume that
-authorization once. After any possible start, retry is forbidden; only `reconcile` may advance the
-attempt from retained positive native evidence. Neither the coordinator nor an adapter may construct
-a replacement request from current chat text after admission.
+The host-state/runtime-owner service atomically creates the selected signed result,
+`NativeDeliveryAttemptRecord`, `NativeFrontDoorDispatchRecord`,
+`NativeCommandEffectGateRecord`, and armed protected authorization. The durable dispatch stores its
+opaque reference and canonical digest, never the raw secret. `dispatch` validates the exact request
+ref/digest and current fence immediately before use; the final owner transaction consumes that one
+authorization, moves all three rows to started, and only then returns the raw handle to the in-process
+adapter. After any possible start, retry is forbidden; only `reconcile` may advance the attempt from
+retained positive native evidence. Both adapter operations return the nonsecret attempt ID and
+canonical dispatch digest; a reconciliation receipt never needs or exposes the consumed raw
+authorization. Both first-dispatch and post-restart reconciliation verify a receipt against the same
+strict, raw-free `NativeDispatchReceiptExpectation` reconstructed from the durable dispatch row.
+The receipt evidence pair is also state-exact: `started` has both fields null;
+`transport_receipt`, `native_observed`, and `completed` have both fields present; and
+`outcome_unknown` may have both null when uncertainty arose before any receipt or both present when a
+prior receipt is the last proved progress. A partial pair is always invalid.
+Neither the coordinator nor an adapter may construct a replacement
+request from current chat text after admission. The interfaces are deliberately separate: an evidence
+reconciler has no `dispatch` method or native-send capability.
 
 ## 5. Normalized command path
 
@@ -8462,19 +8771,21 @@ process lease. Replacement closes the old endpoint/credential and proves already
 terminal or contained before advancing the pointer, so a second TUI never overlaps.
 The adapter front door
 accepts only the credential handle and epoch on the current `NativeClientIngressLease` and
-`NativeTransportLease`, but is dispatch-only rather than a general HTTP proxy. Every mutating adapter
-request also presents the one-time opaque authorization from the exact current
-`NativeFrontDoorDispatchRecord`. Immediately before the socket write, the front door revalidates the
+`NativeTransportLeaseRecord`, but is dispatch-only rather than a general HTTP proxy. Every mutating
+adapter request names the protected authorization reference from the exact current
+`NativeFrontDoorDispatchRecord`; it cannot read or supply the raw authorization itself. Immediately
+before the socket write, the front door revalidates the
 command/effect gate, immutable per-family capability entry, binding/incarnation/session, attachment and
 ingress leases, method/path/body and target digests, then performs the same atomic final pre-write
 transaction defined above: attempt `claimed → started`, dispatch `not_started → started`, and gate
 `(never_started,null) → (started,nativeDeliveryAttemptId)`, while requiring no abandonment record.
-The handle is consumed by that transaction. A current adapter credential without a current dispatch
-row cannot mutate anything.
+That transaction asks the protected owner to consume the matching armed reference. Only a successful
+consume returns the raw one-use authorization to the process-local native call; no general lookup can
+return it. A current adapter credential without a current dispatch row cannot mutate anything.
 
 Exactly one `NativeClientIngressLease` is current per binding transport lease. Installation fences and
 closes the old endpoint/credential, settles or quarantines every old dispatch, and only then
-compare-and-swaps `NativeTransportLease.currentNativeClientIngressLeaseId`; a uniqueness constraint
+compare-and-swaps `NativeTransportLeaseRecord.currentNativeClientIngressLeaseId`; a uniqueness constraint
 forbids two current rows for one attachment lease. A stale credential remains rejected even if its
 coordinator is still alive.
 
@@ -8982,7 +9293,9 @@ uint(mappingGeneration) || bytes(base64urlDecode(targetDigest))))}`. `targetDige
 digest of exactly one closed union arm: terminal-native includes kind, descriptor, terminal project
 ref, and optional workspace binding; nested-server includes kind, current server-scoped nested
 management binding, target server/project, and target selector. Its `projectId` must foreign-key one
-current `ProjectRecord` in the same server. The first mapping is created atomically with that project
+current `ProjectRecord` in the same server. A nested target whose `targetServerId` equals the mapping's
+own `collaborationServerId` is an immediate cycle and fails in the A1.0 parser; longer cycles remain a
+rooted-topology installation check. The first mapping is created atomically with that project
 under the project's unique allocation intent; later mappings cannot allocate, infer, or resurrect a
 project. Exactly one current row may exist for
 `(collaborationServerId, projectId, workspaceSelectorId)`. Initial OpenCode A2 forbids one native
@@ -9008,6 +9321,10 @@ nested_server:
 The tagged arm is parsed before hashing; extra fields, null aliases, a terminal-only field in the
 nested arm, or a nested-only field in the terminal arm reject. Every decoded digest is canonical
 unpadded base64url SHA-256.
+
+A1.0 implements the strict closed-union and immediate-self-cycle parser and recomputes both
+`targetDigest` and the derived `ptm_*` mapping ID. The same-project foreign key, one-current-row uniqueness, generation
+compare-and-swap, and atomic first-project allocation remain A1.2 persistence rules.
 
 Initial A2 allows exactly one current workspace binding per OpenCode server attachment. Multi-workspace
 support moves observer/discovery pointers to `(server attachment, workspace)` and is not implied by
@@ -9194,10 +9511,11 @@ backfilled as though remote-claw had admitted its creation.
 `str("remote-claw/native-creation-dispatch/v1") || str(nativeCreationReservationId) ||
 str(serverFrontDoorLeaseId) || bytes(base64urlDecode(canonicalRequestDigest)) ||
 bytes(base64urlDecode(nativeRequestTranslationDigest)) ||
-bytes(base64urlDecode(nativeTargetPathDigest)) || str(dispatchAuthorizationHandle)`. The handle is an
-opaque random value retained only in protected owner state; the digest, reservation, and front-door
-request must all agree before the CAS. Lifecycle fields and receipts are excluded from this immutable
-pre-send digest.
+bytes(base64urlDecode(nativeTargetPathDigest)) ||
+str(dispatchAuthorizationRef.protectedHandleId) || str(dispatchAuthorizationRef.kind)`. The row stores
+only that opaque protected reference; its random authorization remains in protected owner state. The
+digest, reservation, and front-door request must all agree before the CAS. Lifecycle fields and
+receipts are excluded from this immutable pre-send digest.
 
 The pre-create discovery snapshot need be current only through the dispatch CAS. Its digest commits
 the original store coordinate and signed open/read attachment attestation. The creation reservation
@@ -10453,30 +10771,38 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: planned.** A1 is provider-neutral. It owns generic collaboration-server, chat, native,
-runtime, source, outside-binding, capability, decision, attempt, outbox, and inference records. It
-does not own Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat
-mapping, or official-client compatibility; B and C add those records on the generic A1 seams.
+**Status: A1.0 implemented as a dormant contract layer; A1.1–A1.11 planned.** A1 is
+provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
+outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
+Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
+official-client compatibility; B and C add those records on the generic A1 seams.
 
 **PR slices**
 
-- **A1.0 — Contract freeze:** close the selected record, canonical-ID, coordinator-lease,
+- **A1.0 — Contract freeze (implemented, dormant):** close the selected record, canonical-ID, coordinator-lease,
   registration-intent, protected-handle, immutable-dispatch, reconciliation, and backend-capability
-  gaps in docs and TypeScript validators. No persistence or writable capability lands here.
-- **A1.1 — Secure local state kernel:** owner-only `host-state-v1.db`, migrations, transaction API,
-  protected artifact handles, reopen behavior, rollback, symlink/mode checks, and future-version
-  refusal.
-- **A1.2 — Server/project/chat/binding/epoch state:** default `rcs_*` bootstrap, idempotent
-  `ProjectRecord` allocation plus initial selector mapping, many concurrent logical chats, native
-  bindings/incarnations, non-writable terminal-root/edge reservation per terminal chat, coordinator
-  lease compare-and-swap, journal offsets, per-chat actor lanes, and unique-current-owner constraints.
+  gaps in docs and TypeScript validators. No persistence or writable capability lands here, and no
+  active A0 path imports this layer.
+- **A1.1 — Secure local state kernel (dormant library):** owner-only `host-state-v1.db`, migrations,
+  transaction API, protected artifact handles, reopen behavior, rollback, safe owned directory and
+  regular-file creation, no-follow/inode/hardlink and WAL/SHM checks, local-filesystem durability,
+  fsync, application/machine identity validation, migration-digest validation, and future-version
+  refusal. It opens no production database outside its tests.
+- **A1.2 — Server/project/chat/binding/epoch state (dormant repository):** default `rcs_*` bootstrap,
+  idempotent `ProjectRecord` allocation plus initial selector mapping, many concurrent logical chats,
+  starting native bindings, the registration-intent row required by the atomic first-bootstrap
+  transaction, non-writable terminal-root/edge reservation per terminal chat, coordinator lease
+  compare-and-swap, journal offsets, per-chat actor lanes, and unique-current-owner constraints. It
+  creates no current runtime or binding incarnation and exposes no live registration entry point.
 - **A1.3 — Runtime owner service:** independently supervised owner RPC, authentication,
   protected `RuntimeOwnerIdentityKeyRecord` custody/signing, multi-runtime/multi-conversation registry,
-  attachment leases, per-binding lifecycle gates, takeover fencing, shared-daemon resource isolation,
-  and detach versus terminate.
-- **A1.4 — Durable registration:** stable intent digest, exact retry/collision behavior, binding reuse,
-  mandatory durable project resolution, fresh epoch-fenced process leases, post-setup capabilities,
-  current binding/attachment prerequisites for a native root, and no ghost readiness.
+  service lease and takeover, runtime and binding incarnation creation/recovery, attachment leases,
+  per-binding lifecycle gates, takeover fencing, shared-daemon resource isolation, and detach versus
+  terminate.
+- **A1.4 — Durable registration orchestration:** invoke A1.2's atomic first-bootstrap transaction,
+  stable intent digest, exact retry/collision behavior, binding reuse, mandatory durable project
+  resolution, fresh epoch-fenced process leases, post-setup capabilities, current
+  binding/attachment prerequisites for a native root, and no ghost readiness.
 - **A1.5 — Canonical A1 wire and signing:** canonical encodings, IDs/KDFs, scope certificates,
   runtime-owner-signed terminal-root certificates and activation, signatures, browser/Node vectors,
   and noncanonical or transplanted-signature rejection. Pure encodings and vectors may be developed
@@ -10517,14 +10843,18 @@ conformance can proceed in parallel without prematurely activating a terminal ro
   records.
   Never alias one server's `logicalChatId` to another server's chat, the A0 `rcb_*`, Claude `cse_*`,
   Codex/OpenCode ID, broker channel, or provider ID.
-- In A1.2, allocate each terminal chat's non-writable root reservation and
-  `targetKind:"native-harness"` inward edge atomically with its native binding. A1.3 supplies the
+- In A1.2, allocate each terminal chat's exact installing
+  `targetKind:"native-harness"` inward edge atomically with its native binding and point the recovering
+  chat at it. That edge, with null root-certificate/live-lease/capability pointers, is the non-writable
+  terminal-root reservation; no root certificate exists yet. A1.3 supplies the
   protected runtime-owner key and attachment-lease service; A1.4 makes the exact durable binding and
   matching runtime/incarnation attachment lease current. Only then may A1.5 have that
   `RuntimeOwnerIdentityKeyRecord` sign and activate the terminal root. A server identity key cannot
-  substitute. A1.8 may dispatch only through that current proved edge. N1 later adds remote-server
-  targets and multi-server path installation; it does not retroactively create the terminal edge
-  required by A1/A2.
+  substitute. The activated native edge keeps its remote-server connection epoch at zero and its live
+  lease/capability pointers null; its attachment lease and native capability snapshot prove liveness.
+  A1.8 may dispatch only through that current proved edge. N1 later adds remote-server targets,
+  `InwardEdgeLiveLeaseRecord`, and multi-server path installation; it does not retroactively create the
+  terminal edge required by A1/A2.
 - Route canonical command/chat sequences and native/outward bindings by the complete
   `(collaborationServerId, logicalChatId)` chat scope. Machine-facing web presence, broker
   channel/key derivation, visible rows, aliases, and client caches use
@@ -11070,10 +11400,11 @@ Native-client fidelity is a differential release gate, not a prose aspiration:
     native send; extra/mismatched native parts are a collision/gap. Before dispatch, exercise explicit
     operator cancellation and a deliberately configured shutdown cancellation: atomically retain one
     `NativeBindingPreSendAbandonmentRecord`, move the attempt/dispatch/gate to `quarantined` with the
-    same exact evidence schema/ref/digest triple and all start/receipt/read-back fields null, reject the
-    old handle, and emit no native send, replacement, terminal continuation, or successor. Race that transaction
-    against dispatch in both orders; crash on both sides; replay it exactly; substitute every state,
-    reason, executor, handle, coordinate, sequence, and digest; and require all-or-nothing state with
+    same exact evidence schema/ref/digest triple and all start/receipt/read-back fields null, revoke the
+    old protected authorization, and emit no native send, replacement, terminal continuation, or
+    successor. Race that transaction against dispatch in both orders; crash on both sides; replay it
+    exactly; substitute every state, reason, executor, protected reference, coordinate, sequence, and
+    digest; and require all-or-nothing state with
     no downgrade. Process death or restart without the record instead resumes only the original
     attempt. Require terminal `user_text` positive-never-started capability null, reject the local
     record as nested continuation evidence, and prove a distinct authenticated source event can still

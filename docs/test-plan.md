@@ -9,8 +9,8 @@ native evidence separately from future release gates.
 
 | Layer | Where | What it proves | Runtime |
 | --- | --- | --- | --- |
-| **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking — pure functions, no network | Node + WebCrypto |
-| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough | Node, mock fetch / fixture |
+| **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking, the shared canonical field writer with strict-null optionals and defensive snapshots, and the locked A0 AAD regression vector — pure functions, no network | Node + WebCrypto |
+| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, and dormant A1.0 ID/path/record/runtime/protected-operation/dispatch/backend contract parsers and digest builders | Node, mock fetch / fixture |
 | **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
 | **Retained native proof (OpenCode)** | [`spikes/opencode-native/verify-evidence.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, and same-ID `noReply:true` append behavior within one incarnation | Node over checked JSON evidence; no provider/model |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
@@ -101,7 +101,8 @@ about the current A0 implementation:
 | --- | --- | --- |
 | A0.1 | Implemented | Neutral registrar lifecycle, multi-session isolation, ready-before-bridge, and exact-replay/first-bind tests |
 | A0.2 | Implemented (process-local) | OpenCode and tmux driver tests for post-setup capabilities, cancellation and bounded teardown, no pre-ready broker client/announcement/remote mutation, and no ghost registration after setup or spawn failure; tmux additionally proves mandatory native readiness, private socket/runtime and owner-only launch artifacts, prompt/environment/settings absence from tmux argv and public errors, concurrent wrapper isolation, failed permission-decision persistence withholding ACK, and runtime retention when pane termination is uncertain |
-| A1.0–A1.11 | Planned | Contract validators, local-state reopen/migration, server/project bootstrap and selector mapping, server/lease races, owner takeover, durable registration, runtime-owner native-root activation, many-session host inventory and per-chat isolation, cross-runtime wire vectors, broker conformance, ingress/dedup, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
+| A1.0 | Implemented (dormant contracts only) | Exact canonical primitive, ID namespace, path-resolution, record-shape, digest, fence, protected-operation, dispatch/reconciliation-separation, and backend-capability unit tests; no persistence, effect, or A1 capability is advertised |
+| A1.1–A1.11 | Planned | Local-state secure open/reopen/migration, server/project bootstrap and selector mapping, server/lease races, owner takeover, durable registration, runtime-owner native-root activation, many-session host inventory and per-chat isolation, cross-runtime wire vectors, broker conformance, ingress/dedup, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
 | A2.1–A2.4 | Planned after A1 | Retained real OpenCode TUI/front-door/isolation fixture and the signed `{new_chat}`/`{user_text}` adjudication matrix; unavailable connector kinds use authenticated stand-ins only |
 | N1.1–N1.3 | Planned after A1 | Two live nested servers, rooted edge installation, complete signed downstream receipt, reconnect/reparent recovery, and cycle/reflection/duplicate-execution rejection |
 | B.1–B.5 | Planned after A1 | Pinned Claude differential fixtures, durable private RC recovery, native correlation/gate races, and live outward Anthropic Remote parity |
@@ -114,6 +115,14 @@ official-client, automation, or nested-server source mean an authenticated colla
 the common ingress until its real connector lands. Such a stand-in proves source normalization,
 ordering, signing, and executor isolation only; B, C, the applicable automation connector, or N1 owns
 transport, reconnect, rendering, and fidelity proof.
+
+A1.0's unit tests prove only the dormant in-memory and pure-function contracts. They do not prove a
+database transaction, owner-only secure open or symlink refusal, lease compare-and-swap or takeover,
+protected-value custody, native dispatch, broker conformance, driver integration, or restart recovery.
+They include negative-zero, lone-surrogate, overlong-string, accessor/TOCTOU snapshot, immutable
+validator-registry, symbol-key, noncanonical base64url alias, pre-decode size rejection, protected
+byte snapshots across `Buffer`, fixed and growable `SharedArrayBuffer`, and returned-copy mutation,
+cross-scope canonical-ID, and dormant-import/non-advertisement vectors.
 
 ### One-host/many-session acceptance matrix
 
@@ -132,30 +141,60 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   broker, or native IDs;
 - bootstrap a server's first random `rcpj_*` and generation-one
   `ProjectTargetSelectorMappingRecord` atomically from one exact allocation intent and terminal target;
-  retry the exact intent and return the same project/mapping, collide changed selector/target bytes,
-  and require explicit project creation or exact `(projectId, workspaceSelectorId)` selection after
-  any project exists. Reject `project:null`, a missing/closed project, cwd/title inference, and
-  only/most-recent fallback before writing any A1 registration intent, logical chat, or native binding;
-- reopen and migrate one owner-only `host-state-v1.db`; reject symlinks, insecure modes, partial
-  migrations, and unknown future versions; roll back a transaction spanning native attempt,
-  front-door dispatch, and effect gate as one unit;
+  in that same transaction create the recovering logical chat, starting native binding, registration
+  intent, and its installing native-harness inward edge, with the chat pointing to the edge and every
+  root-certificate/live-lease/capability pointer null. Retry the exact intent and return the same
+  project/mapping/chat/binding/edge, collide changed selector/target bytes, and require explicit project
+  creation or exact `(projectId, workspaceSelectorId)` selection after any project exists. Reject
+  `project:null`, a missing/closed project, cwd/title inference, only/most-recent fallback, and a nested
+  selector target whose target server equals its own server before writing any A1 registration intent,
+  logical chat, or native binding;
+- reopen and migrate one owner-only `host-state-v1.db`; require owned, non-symlink parents below the
+  selected state home that are not group- or world-writable, owner-only `0700` state/identity
+  directories, and owned
+  regular `0600` database/WAL/SHM files with link count one. Exercise no-follow/exclusive create,
+  reject a relative or empty fallback home before resolving any path,
+  descriptor-versus-path device/inode checks before and after open/migration, symlink/hardlink/path
+  replacement races, local-filesystem/WAL refusal, and a safely inspected but refused
+  `host-state-v1.db-journal`. On every connection require and read back `foreign_keys=ON`,
+  `trusted_schema=OFF`, `journal_mode=WAL`, and `synchronous=FULL` or a versioned stricter posture.
+  Exercise database and parent-directory fsync, wrong SQLite application ID, wrong stored machine
+  identity, wrong migration digest, partial migrations, and unknown future versions. Roll back a
+  transaction spanning native attempt, front-door dispatch, and effect gate as one unit;
 - race two coordinator acquisitions and require one current lease, one monotonic epoch, and one
   allocated journal offset per committed entry; every stale `(leaseId, epoch)` RPC fails before a
   mutation while the native TUI remains usable;
-- allocate each terminal chat's non-writable terminal-root reservation and native inward edge with
-  its binding. Prove activation is impossible before the A1.3 runtime owner has a current protected
+- allocate each terminal chat's installing native inward edge with its binding and point the recovering
+  chat at it; that one edge is the non-writable terminal-root reservation and has no certificate yet.
+  Prove activation is impossible before the A1.3 runtime owner has a current protected
   `RuntimeOwnerIdentityKeyRecord` and attachment lease and A1.4 has made the exact matching durable
   binding/runtime/incarnation current. Then activate only with that runtime-owner signature; reject a
   server-key signature, stale/revoked runtime-owner key, stale or cross-binding attachment, and every
   pre-A1.4 attempt. Reject A1/A2 native dispatch when the terminal edge is absent, unsigned, stale, or
-  points to another chat. N1 must extend that existing root rather than create or replace it;
+  points to another chat. A current native-harness edge must keep its remote-server connection epoch at
+  zero and both live-lease/capability pointers null; its current attachment lease and native capability
+  snapshot are the terminal live proof. N1 must extend that existing root rather than create or replace
+  it, and only N1 remote-server edges may install an `InwardEdgeLiveLeaseRecord`;
 - retry one durable native registration intent after process restart and return the same binding;
   change any descriptor/project/native/phase/metadata/capability byte under the same attempt ID and
   require collision; replace only the protected process port under a newer epoch and require a new
   lease for the same binding;
-- dispatch one immutable prepared native request through its one-time authorization, then crash at
-  each pre-byte/post-byte boundary; require evidence-only reconciliation and prove it has no native
-  send capability;
+- atomically arm one protected dispatch authorization with its immutable attempt, front-door dispatch,
+  and command gate. Persist only its typed `rcph_*` reference, never the raw 32-byte value. Crash and
+  reopen before consume, reconstruct the exact stable request from the row, and require the same
+  reference and digest without a generic protected lookup. Let a replacement coordinator present its
+  own current fence for that unchanged identity; reject the predecessor, a stale replacement, and a
+  forged fence. In the final owner transaction, consume once, move all three rows to started, and
+  return the raw authorization only to the in-process adapter. Crash at each pre-byte/post-byte
+  boundary; after consume require evidence-only reconciliation and prove it has no native send
+  capability and returns no raw authorization. Correlate both first-dispatch and post-restart
+  reconciliation receipts through the same strict raw-free attempt-ID plus canonical-dispatch-digest
+  expectation reconstructed from the durable dispatch row. Require receipt evidence to be absent at
+  `started`, present at `transport_receipt`/`native_observed`/`completed`, atomic and explicitly
+  optional at `outcome_unknown`. A `rejected` delivery attempt must retain its claiming epoch and
+  complete negative outcome evidence, reject positive native read-back evidence, and permit a prior
+  transport receipt without requiring one. Changed scope, attempt, reference kind/ID, ingress lease,
+  target, request, or translation bytes must fail before consume;
 - negotiate the exact A1 broker capability vector, reject A0/partial/changed vectors, and independently
   prove route-wide uniqueness, broker-recomputed digests, exact retry cursor, manifests, and collision
   tombstones across restart and rollover;
@@ -285,13 +324,17 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   signed management continuation with unchanged binding, target, request/receipt schemas, semantic
   request, and `newChatCapabilityDigest`. Substitute an old/new lease, snapshot ID/digest, target,
   capability, or positive-never-started proof and reject. Create the physical child and its exact
-  `armed@1` nested-dispatch authorization together. Prove that the final send CAS consumes it while
+  `armed@1` nested-dispatch authorization together, persisting only its typed `rcph_*` reference and
+  canonical dispatch digest. Prove that the final send CAS consumes it while returning the raw value
+  only to the in-process transport writer and
   moving both child and command-wide gate to `started` before any byte, whereas pre-send abandonment
   alone may revoke it to `revoked@2`, mark the child `never_started`, and leave the gate
   `(never_started,null)`. Sign the exact version-one positive-never-started payload with the current
   certified source-server key and reserved signer purpose, then verify its command/result/decision,
   semantic/physical/transport attempt, route/target/topology, prior lease/snapshot/capability,
-  request, authorization ID/handle digest, revocation version/journal sequence, and literal assertion.
+  request, authorization ID/protected reference/canonical dispatch digest, revocation
+  version/journal sequence, and literal assertion. Assert that no durable child, authorization row,
+  continuation, attestation, log, environment, or wire payload contains the raw value.
   Exercise current-key, permitted retired-key, and historical-reattestation verification; reject a
   revoked/too-new/unreattested signer, bad purpose/schema/encoding/signature, or any substituted
   binding. Install the successor only by CASing the still-revoked predecessor, exact signed evidence,
@@ -646,12 +689,12 @@ positive evidence:
   started-attempt ID, transport receipt, and native read-back; and zero `prompt_async`. Crash on each
   side of the journal commit and require either the complete quarantine or the original resumable
   attempt, never a partial state. Exact replay returns the same record; a changed reason, sequence,
-  coordinate, or digest collides. The old handle stays unusable and no replacement, terminal
+  coordinate, or digest collides. The old protected authorization stays unusable and no replacement, terminal
   continuation, or successor may start. Assert the selected terminal family has null
   `positiveNeverStartedSchemaId`; the nested signed continuation fixture remains distinct and rejects
   this local record as a transplant. Race abandonment against dispatch in both commit orders, and
   substitute a started attempt, receipt/read-back, started dispatch/time, started gate/attempt ID,
-  stale executor, handle, or digest; abandonment must fail without downgrading any row. A disconnect,
+  stale executor, protected reference, or digest; abandonment must fail without downgrading any row. A disconnect,
   process death, signal, or ordinary restart with no committed record follows crash recovery rather
   than inferred abandonment. Finally, admit a distinct authenticated source event through the same
   otherwise-current binding to prove the quarantine is command-local.

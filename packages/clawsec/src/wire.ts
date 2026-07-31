@@ -47,9 +47,25 @@ export class WireError extends Error {
 
 const MAX_ROUTING_STRING = 256;
 const MAX_MSG_ID = 1024;
+const REQUIRED_WIRE_KEYS = [
+  "v",
+  "identity_id",
+  "session_id",
+  "dir",
+  "record_kind",
+  "seq",
+  "msg_id",
+  "key_epoch",
+  "salt",
+  "nonce",
+  "ct",
+  "part",
+  "parts",
+] as const;
 
 /** Serialize a Frame to its JSON-safe wire form. */
 export function encodeFrame(frame: Frame): WireFrame {
+  const clientMsgId = frame.clientMsgId;
   const wire: WireFrame = {
     v: frame.v,
     identity_id: toHex(frame.identityId),
@@ -66,21 +82,63 @@ export function encodeFrame(frame: Frame): WireFrame {
     parts: frame.parts,
   };
   // exactOptionalPropertyTypes: only attach client_msg_id when actually present.
-  if (frame.clientMsgId !== undefined) wire.client_msg_id = frame.clientMsgId;
+  if (clientMsgId !== undefined) wire.client_msg_id = clientMsgId;
   return wire;
 }
 
-function asObject(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+/**
+ * Copy the selected wire fields without invoking caller-controlled accessors or retaining the
+ * caller's object. Extra fields remain ignored, as they were before this boundary was hardened.
+ */
+function snapshotWireObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
     throw new WireError("frame must be a JSON object");
   }
-  return value as Record<string, unknown>;
+
+  let isArray: boolean;
+  try {
+    isArray = Array.isArray(value);
+  } catch {
+    throw new WireError("frame could not be inspected safely");
+  }
+  if (isArray) throw new WireError("frame must be a JSON object");
+
+  const snapshot = Object.create(null) as Record<string, unknown>;
+  for (const key of REQUIRED_WIRE_KEYS) {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key);
+    } catch {
+      throw new WireError("frame could not be inspected safely");
+    }
+    if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) {
+      throw new WireError(`${key} must be an own data property`);
+    }
+    snapshot[key] = descriptor.value as unknown;
+  }
+
+  let clientMsgIdDescriptor: PropertyDescriptor | undefined;
+  try {
+    clientMsgIdDescriptor = Object.getOwnPropertyDescriptor(value, "client_msg_id");
+  } catch {
+    throw new WireError("frame could not be inspected safely");
+  }
+  if (clientMsgIdDescriptor !== undefined) {
+    if (!Object.hasOwn(clientMsgIdDescriptor, "value")) {
+      throw new WireError("client_msg_id must be an own data property");
+    }
+    snapshot.client_msg_id = clientMsgIdDescriptor.value as unknown;
+  }
+  return snapshot;
+}
+
+function parseString(v: unknown, key: string): string {
+  if (typeof v !== "string") throw new WireError(`${key} must be a string`);
+  return v;
 }
 
 function reqString(o: Record<string, unknown>, key: string): string {
-  const v = o[key];
-  if (typeof v !== "string") throw new WireError(`${key} must be a string`);
-  return v;
+  return parseString(o[key], key);
 }
 
 function hasControlChar(s: string): boolean {
@@ -91,18 +149,44 @@ function hasControlChar(s: string): boolean {
   return false;
 }
 
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const codeUnit = s.charCodeAt(i);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const trailing = s.charCodeAt(i + 1);
+      if (!(trailing >= 0xdc00 && trailing <= 0xdfff)) return true;
+      i++;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parseBoundedString(
+  value: unknown,
+  key: string,
+  max: number,
+  opts: { noControlChars?: boolean } = {},
+): string {
+  const s = parseString(value, key);
+  if (s.length > max) throw new WireError(`${key} must be at most ${max} characters`);
+  if (hasLoneSurrogate(s)) {
+    throw new WireError(`${key} must contain only Unicode scalar values`);
+  }
+  if (opts.noControlChars && hasControlChar(s)) {
+    throw new WireError(`${key} must not contain ASCII control characters`);
+  }
+  return s;
+}
+
 function reqBoundedString(
   o: Record<string, unknown>,
   key: string,
   max: number,
   opts: { noControlChars?: boolean } = {},
 ): string {
-  const s = reqString(o, key);
-  if (s.length > max) throw new WireError(`${key} must be at most ${max} characters`);
-  if (opts.noControlChars && hasControlChar(s)) {
-    throw new WireError(`${key} must not contain ASCII control characters`);
-  }
-  return s;
+  return parseBoundedString(o[key], key, max, opts);
 }
 
 /**
@@ -111,7 +195,13 @@ function reqBoundedString(
  * out-of-range value is a clean WireError instead of a RangeError thrown later inside canonicalAad.
  */
 function isNonNegSafeInt(v: unknown): v is number {
-  return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER;
+  return (
+    typeof v === "number" &&
+    Number.isInteger(v) &&
+    v >= 0 &&
+    !Object.is(v, -0) &&
+    v <= Number.MAX_SAFE_INTEGER
+  );
 }
 
 function reqUint(o: Record<string, unknown>, key: string): number {
@@ -122,6 +212,9 @@ function reqUint(o: Record<string, unknown>, key: string): number {
 
 function reqBytes(o: Record<string, unknown>, key: string, len?: number): Uint8Array {
   const s = reqString(o, key);
+  if (len !== undefined && s.length !== Math.ceil((len * 4) / 3)) {
+    throw new WireError(`${key} must decode to ${len} bytes`);
+  }
   let bytes: Uint8Array;
   try {
     bytes = base64urlDecode(s);
@@ -131,12 +224,18 @@ function reqBytes(o: Record<string, unknown>, key: string, len?: number): Uint8A
   if (len !== undefined && bytes.length !== len) {
     throw new WireError(`${key} must decode to ${len} bytes, got ${bytes.length}`);
   }
+  if (base64urlEncode(bytes) !== s) {
+    throw new WireError(`${key} must use canonical unpadded base64url`);
+  }
   return bytes;
 }
 
 /** Parse a hex-encoded byte field (identity_id) to exactly `len` bytes — the canonical id form. */
 function reqHexBytes(o: Record<string, unknown>, key: string, len: number): Uint8Array {
   const s = reqString(o, key);
+  if (s.length !== len * 2) {
+    throw new WireError(`${key} must decode to ${len} bytes`);
+  }
   let bytes: Uint8Array;
   try {
     bytes = fromHex(s);
@@ -156,7 +255,7 @@ function reqHexBytes(o: Record<string, unknown>, key: string, len: number): Uint
  * reaches the AEAD layer; dir is constrained to "in"/"out"; seq is `number|null`.
  */
 export function decodeFrame(value: unknown): Frame {
-  const o = asObject(value);
+  const o = snapshotWireObject(value);
 
   const dir = reqString(o, "dir");
   if (dir !== "in" && dir !== "out") throw new WireError(`dir must be "in" or "out", got ${dir}`);
@@ -187,10 +286,11 @@ export function decodeFrame(value: unknown): Frame {
     parts: reqUint(o, "parts"),
   };
 
-  // exactOptionalPropertyTypes: client_msg_id is set only when present (string) — reject other
-  // non-undefined types so a `{client_msg_id: 5}` can't slip through unchecked.
-  if (o.client_msg_id !== undefined) {
-    header.clientMsgId = reqBoundedString(o, "client_msg_id", MAX_ROUTING_STRING);
+  // Snapshot and parse this optional field once. An explicit own `undefined` remains equivalent to
+  // absence for compatibility with the JSON wire shape.
+  const clientMsgIdRaw = o.client_msg_id;
+  if (clientMsgIdRaw !== undefined) {
+    header.clientMsgId = parseBoundedString(clientMsgIdRaw, "client_msg_id", MAX_ROUTING_STRING);
   }
 
   return {

@@ -507,7 +507,8 @@ immutable attempt while its dispatch is still `not_started`, its command gate is
 `never_started`, and its original authorization and signed executor remain current. Explicit
 operator cancellation or a configured shutdown policy deliberately committed before that CAS is
 different: one atomic runtime-owner transaction writes the typed pre-send abandonment record, moves
-the attempt, dispatch, and command gate to `quarantined`, and makes the old dispatch handle unusable.
+the attempt, dispatch, and command gate to `quarantined`, and revokes the old protected dispatch
+authorization.
 A disconnect, process death, signal, ordinary restart, or missing record never implies this
 abandonment. It sends no
 `prompt_async`, creates no replacement, and cannot later be treated as crash-stranded work. A crash
@@ -749,12 +750,13 @@ start in one commit with no partial state or second forward. A separate explicit
 pre-send cancellation vector requires one atomic abandonment record and one transition of the
 attempt, front-door dispatch, and command gate to `quarantined`, with null dispatch-start time,
 receipt, started-attempt ID, and native read-back and with the exact same abandonment
-schema/ref/digest triple on all three rows. It proves zero native call, an unusable old handle, no
+schema/ref/digest triple on all three rows. It proves zero native call, a revoked old protected
+authorization, no
 replacement/continuation/successor, all-or-nothing crash recovery on both sides of the transaction,
 byte-identical exact replay, and collision on a changed reason, sequence, coordinate, or digest. The
 crash-stranded no-record case still resumes only the original immutable attempt. Tests race
 abandonment against dispatch in both orders and reject any downgrade from a started/receipted/read-back
-attempt, started dispatch, started gate, stale executor, or changed handle/digest. A process exit
+attempt, started dispatch, started gate, stale executor, or changed protected reference/digest. A process exit
 without the record never implies cancellation; a later distinct authenticated source event may still
 use the otherwise-current binding. A nested continuation rejects the local abandonment record.
 Capability tests race

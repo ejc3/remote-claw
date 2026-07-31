@@ -27,7 +27,11 @@ local transcript completeness or replay.
 > not proof of what a particular device rendered. One paired host contains many independent logical
 > chats and native sessions; this document's per-`cse_*` RC state repeats independently for every
 > wrapped Claude session and must not become a host-wide current-session slot. This document's full RC
-> log remains relevant to the current synthetic server, not a universal semantic authority.
+> log remains relevant to the current synthetic server, not a universal semantic authority. A1.0 has
+> landed only the canonical writer plus dormant host-state IDs, strict records, digest builders,
+> protected/dispatch interfaces, and a pure database-path resolver. It creates or opens no database,
+> runs no migration or transaction, acquires no owner/coordinator lease, persists no RC state, and is
+> not imported by a current driver.
 
 ## Source Map
 
@@ -47,6 +51,11 @@ local transcript completeness or replay.
   `packages/cli/src/host/rc/anthropic/*.ts`,
   `packages/cli/src/broker/{client,protocol,order}.ts`, and
   `apps/web/lib/broker/{backend,local,vercel,sqlite-multi,turso-cloud-locator}.ts`.
+- Active shared canonical primitive and locked A0 consumer:
+  `packages/clawsec/src/{canonical,aad}.ts`.
+- Dormant A1.0 host-state contract code:
+  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`.
+  These host-state modules do not implement the storage schema proposed below.
 - The A1/A2 branch names and table snapshots later in this document record the
   historical review basis. The durable broker backends have since landed;
   re-check current migrations/code before implementing a dependent host schema.
@@ -162,12 +171,14 @@ unavailable; the tracked client API evidence is in
 
 Use two durable logs with different trust and replay roles:
 
-1. RC server event log: **cleartext, host-owned, kept LOCAL on the host** (SQLite/libSQL under the CLI
-   config dir). Nothing on the host needs encryption — it is the user's own machine, with no
-   zero-knowledge requirement — and this log is **never sent to the broker**. It is the authoritative
-   server state for `mitm.ts` and `session.ts`. It stores canonical RC event ids, RC sequence numbers,
-   raw event bodies, downstream delivery state, worker epoch, close/archive metadata, and compact
-   boundaries. This log is required even when no viewer is connected.
+1. RC server event log: **cleartext, host-owned, kept LOCAL on the host**. In the selected future
+   runtime, invariant-bearing rows use the identity-namespaced `host-state-v1.db`; transport-only raw
+   bodies may use a separate adapter-private database under that same identity's XDG state directory.
+   Nothing on the host needs encryption — it is the user's own machine, with no zero-knowledge
+   requirement — and this log is **never sent to the broker**. It is the authoritative server state
+   for `mitm.ts` and `session.ts`. It stores canonical RC event ids, RC sequence numbers, raw event
+   bodies, downstream delivery state, worker epoch, close/archive metadata, and compact boundaries.
+   This log is required even when no viewer is connected.
 
 2. Broker frame log: sealed viewer transport, prototyped by the historical A0-compatible Turso
    `frames` table and migrated for selected A1 as described below. It stores encrypted frame JSON and
@@ -189,6 +200,8 @@ native-binding, attachment, delivery-attempt, dispatch, or effect-gate invariant
 owner-only `host-state-v1.db` transaction boundary as the narrow coordinator control journal. A
 separate adapter-local store is permitted only for raw transport material whose loss or update cannot
 cross one of those atomic invariants; it retains immutable refs and digests back to the host-state row.
+That physical database, its secure open/migration path, and all transactions remain A1.1 and later
+work. A1.0 defines row and digest contracts and resolves the intended path without creating a file.
 The journal's `command_seq` is the definitive decision order for proposals that remote-claw server
 received from its direct collaborators, including forwarded, queued, and rejected decisions. It is a
 globally unique audit position, not a host-wide execution queue: each logical chat offers only its own
@@ -290,13 +303,19 @@ copied bearer/key material may remain valid, and A1 has neither an in-place key 
 broker-enforced permanent route-revocation protocol. A future bounded-retention version must add and
 prove that protocol before it may collect these records.
 
-The selected design still adds host-owned RC tables to the owner-only **LOCAL**
-`host-state-v1.db` SQLite/libSQL database under the CLI config directory, in **cleartext** — nothing on
-the host needs encryption, and the broker never holds RC plaintext (only sealed frames cross to the
-cloud). The interface should hide the storage choice from `mitm.ts` and `session.ts`. Large raw
-adapter-only payloads may move to a separate local store only under the no-cross-store-invariant rule
-above. (Decided: do NOT put RC payloads in the broker Turso — there is no host-encryption hedge to make,
-because the RC log simply stays local.)
+The selected A1.1 design supplies the dormant secure transaction/storage kernel for the owner-only
+**LOCAL**
+`$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite/libSQL database,
+falling back under `~/.local/state` when `XDG_STATE_HOME` is absent or relative. The fallback home
+must be absolute; a relative or empty value is rejected rather than resolved under the working
+directory. A1.2 adds generic
+host-state tables; B.2 adds private Claude RC event tables/projection state. The database is in
+**cleartext** — nothing on the host needs encryption, and the broker never holds RC plaintext (only
+sealed frames cross to the cloud). A1.0 implements only pure path resolution; no physical store or
+table exists yet. The eventual interface should hide the storage choice from `mitm.ts` and
+`session.ts`. Large raw adapter-only payloads may move to a separate local store only under the
+no-cross-store-invariant rule above. (Decided: do NOT put RC payloads in the broker Turso — there is
+no host-encryption hedge to make, because the RC log simply stays local.)
 
 The RC event store records each semantic projection/result separately from its broker delivery attempt,
 part, and cursor. The A0 historical table can remain for A0 channels, but it cannot be relabeled A1 or
@@ -1071,11 +1090,13 @@ demonstrates every property below:
 ## Assigned Decisions and Proof-Owned Questions
 
 - **A1.1 / B.2 — storage placement: DECIDED.** Use the owner-only local
-  `host-state-v1.db` SQLite/libSQL transaction boundary in the CLI for every RC row that participates
-  in a control-state invariant, in cleartext. A separate local adapter store may hold only raw
-  transport payloads with immutable host-state refs/digests and no cross-store atomic invariant.
-  Nothing on the host needs encryption, and the RC event log is never sent to the broker, so there is
-  no host-encryption question. The broker holds only sealed frames; RC plaintext stays on the host.
+  `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite/libSQL
+  transaction boundary in the CLI, with the absolute-home `~/.local/state` fallback above, for every RC row that
+  participates in a control-state invariant, in cleartext. A1.0 resolves but does not create this
+  path. A separate local adapter store may hold only raw transport payloads with immutable host-state
+  refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
+  event log is never sent to the broker, so there is no host-encryption question. The broker holds
+  only sealed frames; RC plaintext stays on the host.
 - **B.2 — unknown resume policy: DECIDED.** Production rejects unknown `cse_` resumes by default.
   Explicit debug adoption may be retained, but it must mark history incomplete and name
   an existing logical-chat/native-binding target explicitly. An unknown `cse_`

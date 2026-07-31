@@ -88,6 +88,15 @@
 > outward-provider session IDs remain separate bindings. Detailed A1 Claude resume/`cse_*` recovery
 > passages later in this historical document describe only the terminal Claude edge; outer layers
 > reconnect server/chat edges and never create another native app.
+>
+> A1.0 has now landed the shared canonical writer and dormant host-state contract layer. Shipped A0
+> AAD already uses the shared writer with its locked bytes unchanged; only the strict host-state
+> parsers, pure digest/ID builders, protected-operation interfaces, and database-path resolver are
+> dormant. No run path imports that host-state layer; it creates or opens no database, acquires no
+> lease, performs no protected operation or native effect, advertises no A1 capability, and leaves
+> the bytes and behavior of every previously valid canonical A0 frame unchanged. Malformed wire and
+> runtime values now fail closed at their trust or canonical boundary instead of being accepted and
+> failing later or being silently coerced.
 
 ## 1. What changes and why
 
@@ -740,8 +749,10 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   canonical tuple, and constant-time compares both the supplied identity and token before resolving a
   hook. That preserves credential-registry-free bearer-to-route binding; the broker need not understand the signed
   server certificate or plaintext payload.
-- **Selected A1 has one byte-level wire contract.** It extends the landed `canonicalAad` writer rather
-  than choosing another serializer. The primitive encodings are:
+- **Selected A1 has one byte-level wire contract.** The public
+  `@remote-claw/clawsec` `CanonicalWriter` now implements the selected primitive field encoding, and
+  shipped A0 `canonicalAad` uses that same writer with its locked byte vector unchanged. This does not
+  mean the A1 frame parser, encryption route, or signing path has landed. The primitive encodings are:
 
   ```text
   bytes(x)         = u32be(byteLength(x)) || x
@@ -755,15 +766,34 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   optionalBytes(x) = 0x01 || bytes(x)
   ```
 
-  Integers are non-negative and at most `2^53−1`. Wire/storage `identity_id` is exactly 32 lowercase
-  hexadecimal characters and is decoded to 16 bytes before canonical encoding.
-  `collaborationServerId` is `rcs_` plus the canonical unpadded-base64url encoding of 16 random bytes;
-  `logicalChatId` is `rcl_` plus the same 16-byte encoding. Other A1 header IDs are 1–128 ASCII bytes,
-  must match `[A-Za-z0-9._:-]+`, and are never raw provider/native IDs; adapters map unsafe external
-  identifiers to durable safe IDs. `record_kind` is one of the versioned protocol values. No Unicode
-  normalization or delimiter joining occurs. `client_msg_id` is either absent or a non-empty safe ID,
-  and `seq` is either null or an integer. Certificate IDs and identity-key IDs use the same safe
-  alphabet; `supersedesScopeCertificateId|null` uses `optionalStr`.
+  In this public writer, `∅` is explicit JavaScript `null`; `undefined` is not an A1 absence encoding.
+  The older A0 `FrameHeader` may omit `clientMsgId`, so `canonicalAad` alone adapts that legacy property
+  to `null` at its boundary. Integers are non-negative, are not negative zero, and are at most
+  `2^53−1`; one encoded bytes/string field is at most `2^32−1` bytes because its length prefix is u32. `finish()` seals the writer and
+  returns a fresh defensive copy; caller mutation of input or returned bytes cannot change its
+  canonical snapshot. Strings must be well-formed Unicode scalar sequences; lone UTF-16 surrogates
+  are rejected. No Unicode normalization or delimiter joining occurs.
+
+  Emitted wire and stored `identity_id` values are exactly 32 lowercase hexadecimal characters.
+  The legacy A0 wire decoder also accepts upper- or mixed-case hex and immediately reduces it to the
+  same 16 identity bytes; selected A1 storage remains lowercase-only. Selected A1 has these exact
+  canonical ID namespaces:
+
+  - random 16-byte bodies: `rcs_` collaboration server, `rcpj_` project, `rcl_` logical chat, `rcnb_`
+    native binding, `rccl_` coordinator lease, `rcra_` registration attempt, `rcncl_` native
+    conversation lease, and `rcph_` protected handle;
+  - SHA-256-derived 32-byte bodies: `rcrt_` native runtime, `ptm_` project-target-selector mapping,
+    and `nat_` native delivery attempt.
+
+  Every body is canonical unpadded base64url. Other selected A1 safe IDs are 1–128 ASCII bytes, must
+  match `[A-Za-z0-9._:-]+`, and are never raw provider/native IDs; adapters map unsafe external
+  identifiers to durable safe IDs. A1 digests and one-use dispatch authorizations are canonical
+  unpadded base64url of exactly 32 bytes. Generic strings accepted by the dormant A1.0 host-state
+  parser are 1–1,024 UTF-16 code units and contain only Unicode scalar values. `record_kind` is one of
+  the versioned protocol values.
+  `client_msg_id` is either absent or a non-empty safe ID, and `seq` is either null or an integer.
+  Certificate IDs and identity-key IDs use the same safe alphabet;
+  `supersedesScopeCertificateId|null` uses `optionalStr`.
 
   The A1 frame header is version 2 and has exactly this canonical-AAD order:
 
@@ -1461,10 +1491,10 @@ call). See §14.)
   pre-send abandonment instead CASes the still-armed authorization to `revoked@2`, leaves the gate
   `never_started`, and produces the exact source-server-signed positive-never-started attestation.
   Continuation installation verifies that signature and every command, result, request, target,
-  lease, capability, authorization-handle, state-version, and revocation-journal binding, then inserts
-  one fresh `armed@1` successor while the same gate remains `never_started`. It never rewrites a
-  started gate. A consumed, started, or uncertain predecessor permanently forbids another send.
-  Ordinary chat and scope-bus routes reject both creation kinds.
+  lease, capability, typed authorization reference, canonical dispatch digest, state-version, and
+  revocation-journal binding, then inserts one fresh `armed@1` successor while the same gate remains
+  `never_started`. It never rewrites a started gate. A consumed, started, or uncertain predecessor
+  permanently forbids another send. Ordinary chat and scope-bus routes reject both creation kinds.
 
   A complete authenticated but unsupported proposal still receives an ordered command and rejected
   `action_result`; it receives no viewer-projection sequence, user projection, file write, or native
@@ -2148,10 +2178,11 @@ The server-control rows also require null `logical_chat_id`, `part=0`, and `part
 direction, sequence, client-ID, signature, or chunk-shape mismatch is quarantined rather than
 reclassified as meta or chat traffic.
 
-AAD binds **every** cleartext header field via the landed `canonicalAad` serialization: each byte/string
-field has a u32-BE length prefix, each integer is a length-prefixed u64-BE, and each optional has a
-one-byte presence tag. A1 extends that same writer in the exact §4.3 order; CBOR and ad-hoc `a|b|c`
-concatenation are not alternatives. The presence
+AAD binds **every** cleartext header field through shipped A0 `canonicalAad`, which now uses the public
+shared canonical writer: each byte/string field has a u32-BE length prefix, each integer is a
+length-prefixed u64-BE, and each optional has a one-byte presence tag. Selected A1 is specified to use
+that same writer in the exact §4.3 order, but its frame parser and encryption route are not implemented
+by A1.0; CBOR and ad-hoc `a|b|c` concatenation are not alternatives. The presence
 fields (`sent_at`, ordering tags, names/titles/status) live **inside** the `K_meta` payload, not the
 cleartext header. Shipped A0 opens an AEAD-valid announce, folds it by
 `incarnation_started_at`/`announce_seq`, and applies the 45 s connected + 30 s reconnecting display
