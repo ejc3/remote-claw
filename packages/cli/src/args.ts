@@ -57,11 +57,11 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // as it would unbridged (auto-run, UNLESS the session already carries its own rules).
   // Env RC_OC_SKIP_PERMISSIONS truthy ("1"/"true"/"yes"/"on").
   "rc-oc-skip-permissions": "boolean",
-  // tmux driver only: inject a Claude Code SessionStart HOOK (via merged `--settings`) so the spawned
-  // claude reports its EXACT transcript_path + session_id on startup and every rotation (/clear,/compact)
-  // — exact discovery with no scan, and rotation-follow for free. Merges with any user `--settings`.
-  // DEFAULT ON; disable with `--rc-no-session-hook` (or RC_SESSION_HOOK=0). When the hook can't fire
-  // (e.g. `--bare`) the driver falls back to the --session-id pin + transcript lookup.
+  // tmux driver only: control whether the private SessionStart marker remains the authoritative source
+  // for ongoing exact transcript discovery + rotation-follow (/clear, /compact, resume). DEFAULT ON;
+  // disable ongoing follow with `--rc-no-session-hook` (or RC_SESSION_HOOK=0), which falls back to the
+  // pinned id / transcript scan. This NEVER disables the private SessionStart hook used once for
+  // mandatory native-readiness proof; hook-disabling Claude modes (--bare/--safe-mode) are rejected.
   "rc-session-hook": "boolean",
   "rc-no-session-hook": "boolean",
   // tmux driver only: opt OUT of permission mirroring (mirror the picker to the viewer), restoring the

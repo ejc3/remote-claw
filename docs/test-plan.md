@@ -1,7 +1,9 @@
 # remote-claw — test plan
 
-What we verify, how, and where. The system is a zero-knowledge, E2E-encrypted relay for driving
-`claude` sessions from a phone/browser; the test strategy mirrors the trust boundaries.
+What we verify, how, and where. The current system is a zero-knowledge, E2E-encrypted relay with
+Claude, OpenCode, and tmux compatibility paths; the selected host runtime also targets Codex and
+official-client collaborators. The test strategy mirrors those trust boundaries and labels retained
+native evidence separately from future release gates.
 
 ## Strategy — the pyramid
 
@@ -93,6 +95,70 @@ the relevant path-filtered checks plus the repository's `biome`, `tsc`, and `vit
 These are design gates for [Client-driven Host Runtime](client-driven-host-runtime.md), not claims
 about the current A0 implementation:
 
+### Milestone status and proof ownership
+
+| Milestone | Current status | Required proof before its advertised capability |
+| --- | --- | --- |
+| A0.1 | Implemented | Neutral registrar lifecycle, multi-session isolation, ready-before-bridge, and exact-replay/first-bind tests |
+| A0.2 | Implemented (process-local) | OpenCode and tmux driver tests for post-setup capabilities, cancellation and bounded teardown, no pre-ready broker client/announcement/remote mutation, and no ghost registration after setup or spawn failure; tmux additionally proves mandatory native readiness, private socket/runtime and owner-only launch artifacts, prompt/environment/settings absence from tmux argv and public errors, concurrent wrapper isolation, failed permission-decision persistence withholding ACK, and runtime retention when pane termination is uncertain |
+| A1.0–A1.11 | Planned | Contract validators, local-state reopen/migration, server/project bootstrap and selector mapping, server/lease races, owner takeover, durable registration, runtime-owner native-root activation, many-session host inventory and per-chat isolation, cross-runtime wire vectors, broker conformance, ingress/dedup, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
+| A2.1–A2.4 | Planned after A1 | Retained real OpenCode TUI/front-door/isolation fixture and the signed `{new_chat}`/`{user_text}` adjudication matrix; unavailable connector kinds use authenticated stand-ins only |
+| N1.1–N1.3 | Planned after A1 | Two live nested servers, rooted edge installation, complete signed downstream receipt, reconnect/reparent recovery, and cycle/reflection/duplicate-execution rejection |
+| B.1–B.5 | Planned after A1 | Pinned Claude differential fixtures, durable private RC recovery, native correlation/gate races, and live outward Anthropic Remote parity |
+| C.1–C.5 | Planned after A1 | Pinned Codex direct-versus-front-door fixtures, one bridge/subscription model, and live paired ChatGPT Remote mapping/reconnect parity |
+| D.1–D.4 | Planned after A1 | Durable pane/injection ambiguity, transcript correlation, gate/handoff, clear/branch identity, and unified discovery presentation |
+
+Every numbered slice is a separate reviewed PR. A schema-only or stand-in proof may land with the
+capability disabled; it cannot satisfy a later live-connector gate. In A2, references below to an
+official-client, automation, or nested-server source mean an authenticated collaborator stand-in at
+the common ingress until its real connector lands. Such a stand-in proves source normalization,
+ordering, signing, and executor isolation only; B, C, the applicable automation connector, or N1 owns
+transport, reconnect, rendering, and fidelity proof.
+
+### One-host/many-session acceptance matrix
+
+This is an integrated release gate across A1, A2, B, and C, not a claim that one early slice proves every native product:
+
+- pair one host once, then concurrently launch at least two wrapper invocations for each of Claude, Codex, and OpenCode. Use different directories for at least one pair and the same directory for another pair. For Codex and OpenCode, run the matrix once with separate private daemons and once with two conversations sharing one pinned daemon. Require one stable logical-chat row and distinct native binding for every semantic native conversation; directory, title, product, wrapper registration, daemon ID, and provider IDs must not merge or replace a row;
+- for every row, prove one live local TUI and one remote-claw collaborator can act on the same native conversation. Join two additional remote collaborators to one selected row and a live nested remote-claw collaborator to another; neither join may create another native connection where the adapter contract allows only one bridge, nor alter collaborator membership on a sibling row;
+- reuse identical source event IDs, viewer `msg_id`s, native request IDs where their namespaces permit, prompt text, and project names across rows while interleaving submissions. Require independent source namespaces, per-chat actor order, attempts, effect gates, broker routes, projections, native read-back, and filesystem effects with no cross-row lookup or deduplication. Each chat's admitted provisional rows must use its own dense `viewerProjectionSeq` starting at zero even when the server-wide `command_seq` interleaves other chats; one chat's sequence gap must not block another;
+- hold chat A busy, chat B at a permission gate, chat C in `outcome_unknown`, and crash chat D's wrapper or adapter while continuously submitting to chats E and F. E and F must admit, dispatch, observe, and project without waiting for A–D. No error, cancellation, quarantine, teardown, or shared-daemon subscription cleanup may change another chat's writable state, native history, TUI, runtime generation, or working directory;
+- restart the coordinator and host inventory while native runtimes survive. Reattach A to the same live process, cold-resume B to the same native conversation, replace only C's proved private transport, and make D fail native identity proof. Require A–C to keep the same visible rows, logical-chat IDs, bindings, histories, collaborators, and per-chat ordering; quarantine only D without minting a replacement row. E/F local TUIs and runtime-scoped inference remain available throughout. While no coordinator lease is current their remote mutations fail unavailable; each remote path is re-enabled independently only after its own lease, binding, and attachment proof passes;
+- stop or close one Codex thread lease and one OpenCode session lease while sibling conversations share their daemon. Require the shared daemon, bridge/observer resources still demanded by siblings, sibling TUIs, subscriptions, and chats to remain alive. Then stop the last owning lease and require only the explicitly selected daemon policy to run;
+- disconnect and reconnect the nested collaborator on its one row, replay its last exact command/result, and attempt to reflect or transplant it into every sibling row. Require one stored replay result on the original edge, no second native execution, rejection of every transplant before dispatch, and no change to any sibling's lineage or readiness.
+
+- bootstrap one random default `rcs_*` per local state profile, reopen it across process restart, and
+  require an explicit new-profile/re-pair event after loss; never derive it from machine, project,
+  broker, or native IDs;
+- bootstrap a server's first random `rcpj_*` and generation-one
+  `ProjectTargetSelectorMappingRecord` atomically from one exact allocation intent and terminal target;
+  retry the exact intent and return the same project/mapping, collide changed selector/target bytes,
+  and require explicit project creation or exact `(projectId, workspaceSelectorId)` selection after
+  any project exists. Reject `project:null`, a missing/closed project, cwd/title inference, and
+  only/most-recent fallback before writing any A1 registration intent, logical chat, or native binding;
+- reopen and migrate one owner-only `host-state-v1.db`; reject symlinks, insecure modes, partial
+  migrations, and unknown future versions; roll back a transaction spanning native attempt,
+  front-door dispatch, and effect gate as one unit;
+- race two coordinator acquisitions and require one current lease, one monotonic epoch, and one
+  allocated journal offset per committed entry; every stale `(leaseId, epoch)` RPC fails before a
+  mutation while the native TUI remains usable;
+- allocate each terminal chat's non-writable terminal-root reservation and native inward edge with
+  its binding. Prove activation is impossible before the A1.3 runtime owner has a current protected
+  `RuntimeOwnerIdentityKeyRecord` and attachment lease and A1.4 has made the exact matching durable
+  binding/runtime/incarnation current. Then activate only with that runtime-owner signature; reject a
+  server-key signature, stale/revoked runtime-owner key, stale or cross-binding attachment, and every
+  pre-A1.4 attempt. Reject A1/A2 native dispatch when the terminal edge is absent, unsigned, stale, or
+  points to another chat. N1 must extend that existing root rather than create or replace it;
+- retry one durable native registration intent after process restart and return the same binding;
+  change any descriptor/project/native/phase/metadata/capability byte under the same attempt ID and
+  require collision; replace only the protected process port under a newer epoch and require a new
+  lease for the same binding;
+- dispatch one immutable prepared native request through its one-time authorization, then crash at
+  each pre-byte/post-byte boundary; require evidence-only reconciliation and prove it has no native
+  send capability;
+- negotiate the exact A1 broker capability vector, reject A0/partial/changed vectors, and independently
+  prove route-wide uniqueness, broker-recomputed digests, exact retry cursor, manifests, and collision
+  tombstones across restart and rollover;
 - persist a distinct `(collaborationServerId, logicalChatId)` canonical chat, native
   binding/conversation, private transport, broker channel, and outward-provider IDs, and assert that
   none is silently aliased; chat route/row/alias/cache keys additionally include `identity_id`, while
@@ -176,20 +242,21 @@ about the current A0 implementation:
   route-wide bus cursor/manifest sequence, distinct from both chat routes; inject a malformed bus
   position and require only the bus actor to quarantine while both chat actors continue, then clear it
   only through explicit bus-position recovery;
-- interleave web, official-client, automation, and nested-server `new_chat` sources through the one
-  server-wide common command sequencer; require each proven-new event to receive one command and signed
-  common result before exactly one terminal-native or nested-management effect. Exact replay links the
-  same command/result, changed bytes collide, and direct OpenCode/Codex/Claude adapter calls without an
-  admitted common command composite FK fail;
+- interleave live web and authenticated official-client, automation, and nested-server stand-ins for
+  `new_chat` through the one server-wide common command sequencer; require each proven-new event to
+  receive one command and signed common result before exactly one enabled terminal-native effect.
+  Exact replay links the same command/result, changed bytes collide, and direct
+  OpenCode/Codex/Claude adapter calls without an admitted common command composite FK fail. N1 repeats
+  the same actor test with a live nested target and its nested-management effect;
 - crash after common decision reservation but before signing, and after signature persistence but
   before signed-result finalization. Abort/burn one signing reservation and require a higher
   `preparationGeneration` for the same result version and byte-identical frozen decision; race two
   finalizers. Before finalization there must be no source ACK, protocol result delivery, projection
   intent, native/nested attempt, or effect gate. After recovery, require exactly one immutable signed
-  common result, one causal source outbox, and exactly one selected terminal-native or
-  nested-management executor arm. The terminal arm must create zero nested-management attempts; the
-  nested arm must create zero outer OpenCode binding, native creation reservation, or OpenCode
-  front-door call;
+  common result, one causal source outbox, and exactly one selected enabled executor arm. In A1/A2,
+  only the terminal arm is enabled and it creates zero nested-management attempts. N1 separately
+  enables the nested arm and requires it to create zero outer OpenCode binding, native creation
+  reservation, or OpenCode front-door call;
 - exercise the server-control route from generation-zero genesis with null chat, its distinct address,
   token, dedicated server-control input/output KDFs, typed `new_chat`/`chat_creation_result` allowlist,
   and target allocation. Require `new_chat` to be inbound with null `seq`, a client ID, 0/1 chunk
@@ -202,7 +269,7 @@ about the current A0 implementation:
   or source-result correlation mismatches before semantic dispatch or target allocation. Expire or
   collide an incomplete server-control candidate and require quarantine with no fabricated command
   sequence or result;
-- create through a server-scoped nested-management binding before any inner chat edge exists; verify
+- in N1, create through a server-scoped nested-management binding before any inner chat edge exists; verify
   stable target outside-binding namespace/event identity, authenticated acyclic management lineage,
   one write-ahead physical child, target common result, target-ready/root proof, two-party edge
   installation, and mutual live lease before the outer chat becomes ready. Race reconnect, reject
@@ -232,7 +299,7 @@ about the current A0 implementation:
   authorization while leaving the gate never-started. Crash/race before and after each CAS and prove
   at most one child can send; a consumed, started, uncertain, or partially populated evidence tuple
   can never continue, and no transition rewrites `started` to `never_started`;
-- send ordinary `user_text` through two nested servers and require a common command at each server,
+- in N1, send ordinary `user_text` through two live nested servers and require a common command at each server,
   one edge capability/semantic attempt, immutable physical transport children, stable source event,
   verified target result chain, and one terminal OpenCode attempt. Reorder/fork target results,
   replace the edge lease before/after send, verify the exact signed capability-continuation payload and
@@ -269,7 +336,7 @@ about the current A0 implementation:
   reject any adapter that conflates them. Require the target family capability to name that same common schema and its
   proved translator/read-back contract; adapter-shaped JSON, source-base64 spelling, a substituted
   item/ref/digest/order/count, or `unsupported_recognized` payload cannot receive an admitted result.
-  For the nested-source path, require the selected edge family to hash both the distinct common
+  For the N1 live nested-source path, require the selected edge family to hash both the distinct common
   payload schema and wire-request schema, then transmit the exact portable payload-transfer bytes:
   common payload bytes plus every canonical item-record byte and decoded content byte. Make every
   source-local ref unavailable at the target and require successful target-local rematerialization;
@@ -480,10 +547,12 @@ substitution failure asserts that no byte reaches the private OpenCode listener.
 after the dispatch CAS asserts no duplicate send and no inferred native effect without the selected
 positive evidence:
 
-- Prove one canonical `user_text` payload vector from each of web A1, official-client, automation, and
-  nested-server input. The source-independent payload bytes/digest must match; the source-specific
-  event, command, decision, and signed-result vectors must recompute exactly. Interleave all four
-  sources at one ready boundary and require the server-wide `(readyAtJournalSeq, commandId)` order.
+- Prove one canonical `user_text` payload vector from live web A1 and authenticated collaborator
+  stand-ins for official-client, automation, and nested-server input until those connectors land. The
+  source-independent payload bytes/digest must match; the source-specific event, command, decision,
+  and signed-result vectors must recompute exactly. Interleave all four sources at one ready boundary
+  and require the server-wide `(readyAtJournalSeq, commandId)` order. Do not count a stand-in vector as
+  live connector evidence.
   Substitute the source parser/normalizer capability entry, verification digest, source epoch,
   payload schema, payload digest, or event fingerprint under the same source ID and require collision
   or rejection before command admission.
@@ -586,29 +655,32 @@ positive evidence:
   process death, signal, or ordinary restart with no committed record follows crash recovery rather
   than inferred abandonment. Finally, admit a distinct authenticated source event through the same
   otherwise-current binding to prove the quarantine is command-local.
+- Substitute the native workspace transition classification, provider canonical request schema,
+  provider request-ID extraction/uniqueness proof, or replacement inference lease coordinates after
+  admission. Require exact positive-never-started or proved resume evidence for any provider child;
+  uncertainty never creates a second model request.
+
+### N1 signed-nesting release matrix
+
+This gate belongs to live N1 and is not satisfied by A2's authenticated nested-source stand-in:
+
 - For nested management and ordinary nested chat, crash at every result-first/secondary-signature/
   joint-finalization boundary and require no partial result, ACK, lineage, attempt, or effect.
   Substitute a same-ID management capability snapshot, `newChatCapabilityDigest`, request/receipt
   schema, proof ref/digest, lease/generation/state, or canonical snapshot digest. Exercise readiness
   `maxWaitMs` at zero, one, 120000, 120001, overflow, stale/current policy replacement, and
   deadline derivation. Then substitute a same-ID nested-edge capability snapshot or its
-  family/proof/live-lease/topology/
-  namespace digest, then substitute core, hop, wire, request schema, receipt-proof schema, source
-  event, command payload, decision/executor evidence, signed result, target command/result ID, result
-  version/predecessor, ready-attestation result signed-record digest, or readiness policy/deadline. The
-  nested family capability must carry exactly one envelope-schema field, `targetRequestSchemaId`, and
-  the distinct common `canonicalCommandPayloadSchemaId`; both participate in its family digest. Derive
-  the attempt's `canonicalEnvelopeSchemaId` from `targetRequestSchemaId` and require exact equality.
-  Reject any independent second family envelope-schema field, payload-schema substitution, transfer
-  schema/ref/digest substitution, or attempt-level envelope-schema substitution before source
-  normalization. The
-  complete downstream receipt proof must verify as one chain; queued
-  creation is invalid, ordinary queued chat is terminal for that event, exact replay is idempotent,
-  and every fork quarantines without another send.
-- Substitute the native workspace transition classification, provider canonical request schema,
-  provider request-ID extraction/uniqueness proof, or replacement inference lease coordinates after
-  admission. Require exact positive-never-started or proved resume evidence for any provider child;
-  uncertainty never creates a second model request.
+  family/proof/live-lease/topology/namespace digest, then substitute core, hop, wire, request schema,
+  receipt-proof schema, source event, command payload, decision/executor evidence, signed result,
+  target command/result ID, result version/predecessor, ready-attestation result signed-record digest,
+  or readiness policy/deadline. The nested family capability must carry exactly one envelope-schema
+  field, `targetRequestSchemaId`, and the distinct common `canonicalCommandPayloadSchemaId`; both
+  participate in its family digest. Derive the attempt's `canonicalEnvelopeSchemaId` from
+  `targetRequestSchemaId` and require exact equality. Reject any independent second family
+  envelope-schema field, payload-schema substitution, transfer schema/ref/digest substitution, or
+  attempt-level envelope-schema substitution before source normalization. The complete downstream
+  receipt proof must verify as one chain; queued creation is invalid, ordinary queued chat is terminal
+  for that event, exact replay is idempotent, and every fork quarantines without another send.
 
 ## How to run
 

@@ -1,10 +1,8 @@
-// Claude Code SessionStart HOOK injection for the tmux driver (`--rc-session-hook`). We register a hook
-// via an inline `--settings` JSON so the spawned claude reports its EXACT `transcript_path` + `session_id`
-// (+ `source`) on session start AND on every rotation (`/clear`, `/compact`, resume) — verified live
-// (the hook fires even in `-p`, payload carries the absolute, already-hashed transcript path). The hook
-// command appends each payload as one NDJSON line to a SENTINEL file the driver tails: exact discovery
-// (no scan, no long-cwd project-dir-hash problem) and clean rotation-follow (a new line = a rotation,
-// unambiguous — no concurrent-sibling guesswork).
+// Claude Code SessionStart HOOK support for the tmux driver. The driver ALWAYS registers one private hook
+// through merged `--settings` and requires its first marker as native-readiness proof. The
+// `--rc-session-hook` knob controls only whether capture keeps consuming that marker file for exact
+// transcript discovery and rotations (`/clear`, `/compact`, resume). Each event reports the exact
+// `transcript_path` + `session_id` (+ `source`) and appends one NDJSON line to the private sentinel.
 //
 // The injected settings DEEP-MERGE with any `--settings` the user passed (a file path OR inline JSON):
 // our SessionStart hook is APPENDED to their `hooks.SessionStart`, every other key preserved. The pure
@@ -45,9 +43,7 @@ export function sessionHookFragment(sentinelPath: string): {
  *   - `{}` when ABSENT/blank (no user settings → we inject our hook fresh),
  *   - the parsed OBJECT when usable,
  *   - `null` when the user passed a NON-EMPTY value we can't parse into an object (missing file / invalid
- *     JSON / non-object). On `null` the caller passes the user's args through UNCHANGED and skips hook
- *     injection, so claude behaves natively (incl. its own error on a bad settings file) rather than us
- *     silently masking it.
+ *     JSON / non-object). The tmux driver fails closed because its readiness hook is mandatory.
  *  Never throws. */
 export async function parseUserSettings(
   value: string | null,
@@ -71,7 +67,7 @@ export async function parseUserSettings(
   } catch {
     /* not a readable file either — fall through to the unparseable signal */
   }
-  return null; // non-empty but unparseable → caller falls back (no hook injection)
+  return null; // non-empty but unparseable → caller decides; tmux readiness fails closed
 }
 
 /** A settings fragment that registers one or more hooks (e.g. `{ hooks: { SessionStart: [...] } }` or
@@ -104,19 +100,18 @@ export function mergeHookFragments(
 }
 
 /** Deep-merge our hook fragment(s) into the user's `--settings` → a single `--settings` JSON string, or
- *  `null` when the user passed a NON-EMPTY `--settings` we can't parse (the caller then SKIPS injection
- *  and passes the user's args through unchanged — see parseUserSettings). */
+ *  `null` when the user passed a NON-EMPTY `--settings` we can't parse. */
 export async function mergeHooksIntoSettings(
   userSettings: string | null,
   fragments: readonly HookFragment[],
 ): Promise<string | null> {
   const base = await parseUserSettings(userSettings);
-  if (base === null) return null; // user passed an unparseable --settings → caller falls back, no hook
+  if (base === null) return null; // caller must not claim any hook-dependent capability
   return JSON.stringify(mergeHookFragments(base, fragments));
 }
 
 /** Deep-merge our SessionStart hook into the user's settings → a single `--settings` JSON string, or
- *  `null` when the user passed an unparseable `--settings` (the caller falls back). Thin wrapper over
+ *  `null` when the user passed an unparseable `--settings`. Thin wrapper over
  *  mergeHooksIntoSettings for the common single-hook case. */
 export async function mergeSessionHookSettings(
   userSettings: string | null,
@@ -135,9 +130,9 @@ export function insertSettingsArg(rest: readonly string[], value: string): strin
   return [...rest.slice(0, at), "--settings", value, ...rest.slice(at)];
 }
 
-/** Resolve whether to inject the SessionStart hook (DEFAULT ON). Precedence, highest first:
- *  `--rc-no-session-hook` → off; `--rc-session-hook` → on; `RC_SESSION_HOOK` in the falsey set → off;
- *  else on. Pure + unit-tested so the precedence AND the disable-value set (incl. "off") can't drift. */
+/** Resolve whether capture keeps using SessionStart markers for ongoing transcript discovery and
+ * rotation-follow (DEFAULT ON). This does NOT control the mandatory private readiness hook. Precedence:
+ * `--rc-no-session-hook` → off; `--rc-session-hook` → on; `RC_SESSION_HOOK` falsey → off; else on. */
 export function resolveInjectSessionHook(o: {
   noFlag: boolean;
   yesFlag: boolean;

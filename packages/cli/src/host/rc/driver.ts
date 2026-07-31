@@ -73,7 +73,8 @@ export interface HarnessDescriptor {
 
 /** The MITM driver runs the real `claude` under native remote-control. */
 export const MITM_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "rc" };
-/** The tmux driver runs a plain `claude` in a tmux pane, bridged via the permission hook + transcript. */
+/** The tmux driver runs a plain `claude` in a private tmux server, proved ready by SessionStart and
+ * bridged through pane injection, transcript capture, and (by default) a permission hook. */
 export const TMUX_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "tmux" };
 /** The opencode driver peer-attaches to an `opencode serve`. */
 export const OPENCODE_HARNESS: HarnessDescriptor = { agent: "opencode", mode: "opencode" };
@@ -108,8 +109,8 @@ export interface DriverContext {
   tracer?: Tracer;
   /** Notified the instant a Session registers (test parity with launch.ts's onSession). */
   onSession?: (s: Session) => void;
-  /** Driver-specific knobs (e.g. { certsDir, spawnClaude } for mitm; { dangerouslySkipPermissions }
-   *  for tmux). Keeps the common context clean while letting each driver carry its own config. */
+  /** Driver-specific knobs. Keeps the common context clean while letting each driver carry config
+   *  that is not shared across harnesses. */
   extra?: Record<string, unknown>;
 }
 
@@ -126,10 +127,9 @@ export interface DriverContext {
  *      control_request; apply an answer by observing the matching control_response in
  *      followDownstream. The relay's existing permission_request ⇄ permission round-trip does the
  *      broker side — no relay change.
- * Current compatibility drivers pass the Session to bridgeSession(...), which starts
- * relay.announce(...) and relay.serve(signal) concurrently. Announce performs its presence post;
- * serve owns the two command/content pumps and durable-cursor prepare. The driver tears the harness
- * and relay down on exit.
+ * Current compatibility drivers register the Session through the process-local registrar. They keep
+ * the registration in `starting` with no broker client until native readiness is proved, then `ready`
+ * creates the relay and publishes presence. The driver tears the harness and relay down on exit.
  */
 export interface Driver {
   readonly capabilities: DriverCapabilities;
@@ -231,9 +231,9 @@ export interface ToolResultBlock {
 //    blocks (images) surface as a "[type]" marker (host holds the image; SendUserFile is the
 //    worker→viewer image path).
 //  • system events surface ONLY when subtype starts "task_"; thinking_tokens etc. are dropped.
-//  • a "user" event's TEXT is intentionally dropped by the relay (only tool_result blocks relay) —
-//    the inbound pump already echoes every viewer prompt. Drivers pushUpstream user/tool_result
-//    as-is; do NOT re-add the text.
+//  • a "user" event's TEXT is normally dropped by the relay (the inbound pump already echoes every
+//    viewer prompt). A non-MITM driver may set `local_prompt:true` to surface text entered directly in
+//    its native UI. Tool-result blocks relay normally.
 //
 // ── DRIVER OBLIGATIONS (adversarial-review-hardened; codex + Claude) ──────────────────────────────
 // The relay/viewer are unchanged ONLY if a driver upholds these. The relay allocates a FRESH transcript
@@ -257,6 +257,6 @@ export interface ToolResultBlock {
 //  5. TEARDOWN cleanly (review #10). bridgeSession returns the served promise; on teardown abort the
 //     signal, session.close(), and await it (mirrors runRcLaunch) so a final frame flushes and the
 //     relay's death is observable rather than swallowed.
-// Known v1 limitations (documented, not bugs): a prompt typed into a LOCAL tmux TUI is upstream `user`
-// text and the relay drops it, so it won't appear in the web transcript (review #6); and tool_use `id`
-// is dropped by the relay so the viewer can't correlate a tool_result to its row (review #7).
+// Known v1 limitation (documented, not a bug): tool_use `id` is dropped by the relay, so the viewer
+// cannot correlate a tool_result to its row (review #7). Local native prompts are surfaced by drivers
+// with `local_prompt:true`.

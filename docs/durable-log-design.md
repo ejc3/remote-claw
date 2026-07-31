@@ -24,8 +24,10 @@ local transcript completeness or replay.
 > correlation, delivery, and recovery evidence. Direct TUI input stays on the native path.
 > Native Claude/Codex/OpenCode state owns conversation context, final local/remote interleaving, and
 > completed execution; the provider transport owns the representation it accepted and can read back,
-> not proof of what a particular device rendered. This document's full RC log remains relevant to the
-> current synthetic server, not a universal semantic authority.
+> not proof of what a particular device rendered. One paired host contains many independent logical
+> chats and native sessions; this document's per-`cse_*` RC state repeats independently for every
+> wrapped Claude session and must not become a host-wide current-session slot. This document's full RC
+> log remains relevant to the current synthetic server, not a universal semantic authority.
 
 ## Source Map
 
@@ -181,17 +183,30 @@ The raw RC order remains `(sequence_num, part_index)`; broker `seq` remains a
 dense viewer-order cursor because the viewer-side `FrameOrderer` treats `seq` as
 the viewer stream order and chunk parts as fragments of one same-kind message.
 
-For the future host runtime, this RC-specific schema remains an adapter-local private-Claude transport
-store alongside the narrow coordinator control journal; it does not become the semantic transcript.
+For the future host runtime, this RC-specific schema remains an adapter-owned private-Claude transport
+schema and does not become the semantic transcript. Tables participating in the logical-chat,
+native-binding, attachment, delivery-attempt, dispatch, or effect-gate invariants live in the same
+owner-only `host-state-v1.db` transaction boundary as the narrow coordinator control journal. A
+separate adapter-local store is permitted only for raw transport material whose loss or update cannot
+cross one of those atomic invariants; it retains immutable refs and digests back to the host-state row.
 The journal's `command_seq` is the definitive decision order for proposals that remote-claw server
-received from its direct collaborators, including forwarded, queued, and rejected decisions. Only the
-forwarded subset is offered inward in that order; `command_seq` neither orders direct native-TUI
-actions nor replaces the native harness's final applied interleaving. Rebuildable projection
+received from its direct collaborators, including forwarded, queued, and rejected decisions. It is a
+globally unique audit position, not a host-wide execution queue: each logical chat offers only its own
+forwarded subsequence inward, and an uncertain delivery in one chat does not block another.
+`command_seq` neither orders direct native-TUI actions nor replaces the native harness's final applied
+interleaving. Rebuildable projection
 `chat_seq`, Claude `sequence_num`, Codex thread/turn/item IDs, and broker `seq` are mappings/cursors in
 their separate domains. An adapter or provider incarnation may be replaced without changing the
 `(collaboration_server_id, logical_chat_id)` scope.
 
-The durable identity join is:
+Every join shown below is one session lane. One paired host may hold many such joins concurrently,
+including multiple Claude sessions in the same or different directories and sibling Codex/OpenCode
+bindings in their adapter stores. RC event, worker-epoch, delivery, projection, compaction, and
+recovery queries always begin from the exact logical-chat/native-binding/attachment tuple or its
+unique `cse_session_id`; they never select a host-wide “latest” session. Closing, superseding, or
+quarantining one attachment cannot change another lane or close a shared native daemon.
+
+The durable identity join for one Claude session is:
 
 ```text
 (collaboration_server_id, logical_chat_id)  remote-claw's canonical user chat
@@ -275,11 +290,13 @@ copied bearer/key material may remain valid, and A1 has neither an in-place key 
 broker-enforced permanent route-revocation protocol. A future bounded-retention version must add and
 prove that protocol before it may collect these records.
 
-The selected design still adds host-owned RC tables in a **LOCAL** SQLite/libSQL database under the CLI
-config directory, in **cleartext** — nothing on the host needs encryption, and the broker never holds RC
-plaintext (only sealed frames cross to the cloud). The interface should hide the storage choice from
-`mitm.ts` and `session.ts`. (Decided: do NOT put RC payloads in the broker Turso — there is no
-host-encryption hedge to make, because the RC log simply stays local.)
+The selected design still adds host-owned RC tables to the owner-only **LOCAL**
+`host-state-v1.db` SQLite/libSQL database under the CLI config directory, in **cleartext** — nothing on
+the host needs encryption, and the broker never holds RC plaintext (only sealed frames cross to the
+cloud). The interface should hide the storage choice from `mitm.ts` and `session.ts`. Large raw
+adapter-only payloads may move to a separate local store only under the no-cross-store-invariant rule
+above. (Decided: do NOT put RC payloads in the broker Turso — there is no host-encryption hedge to make,
+because the RC log simply stays local.)
 
 The RC event store records each semantic projection/result separately from its broker delivery attempt,
 part, and cursor. The A0 historical table can remain for A0 channels, but it cannot be relabeled A1 or
@@ -545,11 +562,14 @@ truth to wrapping durable state:
 
 - Keep `HostRcRelay` as the component that maps accepted RC events to broker
   `WireFrame`s.
-- Preserve the current registration lifecycle boundary: Claude MITM and OpenCode sessions enter
-  through `LegacyRcConversationRegistrar`, which starts `startBridgeSession` only at `ready`; tmux
-  still uses the `bridgeSession` compatibility helper directly. OpenCode reaches `ready` only after
-  confirming one exact canonical native session ID and, unless explicitly opted out, completing
-  required parent permission setup.
+- Preserve the current registration lifecycle boundary: Claude MITM, OpenCode, and tmux sessions
+  enter through `LegacyRcConversationRegistrar`, which starts `startBridgeSession` only at `ready`.
+  OpenCode reaches `ready` only after confirming one exact canonical native session ID and, unless
+  explicitly opted out, completing required parent permission setup. Tmux reaches `ready` only after
+  its private server/socket and owner-only launch artifacts exist, a positive pane probe and required
+  SessionStart marker prove native startup, and its post-setup capabilities are known. Native tmux
+  pumps may exist before publication, but no broker client, announcement, or remote mutation is
+  possible before `ready`.
   Each registrar lease owns its relay abort signal, and the bridge's `served` promise tracks the
   admitted initial and lifecycle refresh posts through settlement; launchers may still bound how long
   teardown waits for that promise.
@@ -668,6 +688,11 @@ Archive/close:
   bumps epoch and continues with `max(sequence_num)+1`.
 
 ## Lifecycle Behavior
+
+Every lifecycle below is scoped to one exact logical-chat/native-binding/RC-attachment lane. A host
+restart enumerates all current lanes and may recover them concurrently with bounded work; one failed
+or ambiguous lane remains non-writable without delaying another lane's local TUI, bridge, event
+sequence, or projection.
 
 New remote-control session:
 
@@ -862,7 +887,7 @@ Historical branch phase called “A1” - A0-compatible durable broker frames:
 
 Phase A2a - Retire host memory as viewer catch-up source:
 
-- Status: landing after A1.
+- Status: historical integrated/superseded snapshot, not an active selected-A1 phase.
 - Branch basis: `feat-turso-broker-catchup`.
 - Files: `packages/cli/src/broker/client.ts`,
   `packages/cli/src/host/rc/relay.ts`.
@@ -875,7 +900,7 @@ Phase A2a - Retire host memory as viewer catch-up source:
 
 Phase A2b - Broker sequence continuity:
 
-- Status: revived and landing after A2a.
+- Status: historical integrated/superseded snapshot, not an active selected-A1 phase.
 - Branch basis: `feat-turso-seq-continuity`.
 - Files: `apps/web/lib/broker/backend.ts`,
   `apps/web/lib/broker/turso.ts`,
@@ -889,6 +914,7 @@ Phase A2b - Broker sequence continuity:
 
 Phase A2c - Broker retention:
 
+- Status: historical planning snapshot; selected retention ownership is assigned below.
 - Files: `apps/web/lib/broker/turso.ts`,
   `apps/web/lib/broker/turso-connection.ts`, deployment cron or maintenance
   route if needed.
@@ -901,6 +927,7 @@ Phase A2c - Broker retention:
 
 Phase B1 - Host RC event store:
 
+- Status: unbuilt historical Claude-only slice; selected implementation ownership is B.2.
 - Files: new `packages/cli/src/host/rc/event-store.ts`, new storage adapter
   such as `packages/cli/src/host/rc/event-store-sqlite.ts`,
   `packages/cli/src/host/rc/session.ts`,
@@ -921,6 +948,7 @@ Phase B1 - Host RC event store:
 
 Phase B2 - Durable downstream delivery and epoch fencing:
 
+- Status: unbuilt historical Claude-only slice; selected implementation ownership is B.2/B.3.
 - Files: `session.ts`, `mitm.ts`, event-store adapter tests.
 - Goal: pending downstream events survive restart; worker epoch rejects stale
   writers; delivery acks are durable.
@@ -931,6 +959,8 @@ Phase B2 - Durable downstream delivery and epoch fencing:
 
 Phase B3 - RC event to broker projection:
 
+- Status: unbuilt historical Claude-only slice; generic outbox/projection ownership is A1.8/A1.10 and
+  private-Claude event projection ownership is B.2.
 - Files: `packages/cli/src/host/rc/relay.ts`, optional new
   `packages/cli/src/host/rc/event-projector.ts`,
   `packages/cli/src/broker/protocol.ts` if new frame metadata is needed.
@@ -943,6 +973,7 @@ Phase B3 - RC event to broker projection:
 
 Phase B4 - Compact watcher and reset projection:
 
+- Status: unbuilt historical Claude-only slice; selected family-proof ownership is B.5.
 - Files: new `packages/cli/src/host/rc/transcript-watcher.ts`,
   `session.ts`, `relay.ts`.
 - Goal: detect local JSONL `isCompactSummary:true`, insert durable
@@ -954,6 +985,7 @@ Phase B4 - Compact watcher and reset projection:
 
 Phase B5 - Archive/close fidelity:
 
+- Status: unbuilt historical Claude-only slice; selected family-proof ownership is B.5.
 - Files: `mitm.ts`, `session.ts`, event-store adapter.
 - Goal: persist archive/close and allow later re-bridge to continue.
 - Tests: `/exit` input plus archive, resume closed session, append after reopen,
@@ -976,6 +1008,17 @@ Phase B5 - Archive/close fidelity:
   explicitly gap any missing history, allocate a replacement `cse_`, and verify
   both attachments map to the same `(collaboration_server_id, logical_chat_id)` scope/native binding
   while only the replacement is active.
+- Integration test host multiplicity: run at least three Claude sessions under one paired host, with
+  two distinct working directories and two sessions sharing one directory. Reuse the same RC event
+  IDs and viewer `msg_id`s in different sessions, interleave traffic, leave one turn busy, and make a
+  second session's worker response ambiguous. Require distinct logical chats, bindings,
+  `cse_session_id`s, worker epochs, sequences, delivery rows, broker routes, projections, and local TUI
+  histories; the third session must continue without waiting for or reading either sibling.
+- Integration test multiplicity recovery: restart the host with all three native sessions still
+  available, make one exact reattachment succeed, one cold-resume the same native conversation, and
+  one fail identity proof. Require the first two to retain their existing visible rows and histories,
+  quarantine only the failed row without minting a replacement chat, and keep all healthy local TUIs
+  and remote lanes usable.
 - Integration test unproven replacement: timeout, missing process memory, or an
   unknown `cse_` cannot silently replace the active attachment, create a
   logical chat, or cause an old command to execute again.
@@ -995,9 +1038,12 @@ Phase B5 - Archive/close fidelity:
 - Broker tests from A1/A2: Turso publish idempotency, subscribe by cursor,
   `maxSeq` continuity, retention.
 
-## PR Gate
+## Combined Claude Durability Release Gate
 
-A durability PR is not complete unless it demonstrates these properties:
+The numbered B PR slices in [Client-driven Host Runtime](client-driven-host-runtime-reference.md#13-delivery-plan)
+land independently and pass the relevant subset of these checks while keeping dependent capabilities
+disabled. The combined Claude durability capability is not complete until the integrated B release
+demonstrates every property below:
 
 - The wrapper can be killed and restarted without losing the ability to answer
   duplicate `/worker/events` POSTs with the original sequence numbers.
@@ -1008,6 +1054,9 @@ A durability PR is not complete unless it demonstrates these properties:
   durable, preserves the same canonical `(collaboration_server_id, logical_chat_id)` scope and native
   binding, binds its worker epoch to the exact current native incarnation/coordinator epoch, and does
   not replay prior commands.
+- One paired host can recover several independent Claude lanes at once. Busy, uncertain, quarantined,
+  replaced, or stopped state in one lane cannot change another lane's RC sequence, worker epoch,
+  binding, broker route, visible row, local TUI, or writability.
 - No code path treats `cse_session_id` as `logical_chat_id` or as Claude's
   native transcript/resume `conversationId`.
 - Viewer catch-up works without `HostRcRelay.#log`.
@@ -1019,33 +1068,38 @@ A durability PR is not complete unless it demonstrates these properties:
 - Outward-provider connector tests use only sessions created for the test and
   never human live sessions.
 
-## Open Decisions
+## Assigned Decisions and Proof-Owned Questions
 
-- Storage placement: **DECIDED — local SQLite/libSQL in the CLI**, cleartext. Nothing on the host needs
-  encryption, and the RC event log is never sent to the broker, so there is no host-encryption question.
-  The broker holds only sealed frames; RC plaintext stays on the host.
-- Unknown resume policy: production should reject unknown `cse_` resumes by
-  default; debug adoption is useful but must mark history incomplete and name
+- **A1.1 / B.2 — storage placement: DECIDED.** Use the owner-only local
+  `host-state-v1.db` SQLite/libSQL transaction boundary in the CLI for every RC row that participates
+  in a control-state invariant, in cleartext. A separate local adapter store may hold only raw
+  transport payloads with immutable host-state refs/digests and no cross-store atomic invariant.
+  Nothing on the host needs encryption, and the RC event log is never sent to the broker, so there is
+  no host-encryption question. The broker holds only sealed frames; RC plaintext stays on the host.
+- **B.2 — unknown resume policy: DECIDED.** Production rejects unknown `cse_` resumes by default.
+  Explicit debug adoption may be retained, but it must mark history incomplete and name
   an existing logical-chat/native-binding target explicitly. An unknown `cse_`
   is never sufficient evidence to allocate or select a logical chat.
-- Broker sequence mapping: recommended design keeps dense broker `seq` separate
-  from RC `sequence_num`. A simpler one-seq design is possible only if the
-  projector guarantees one same-kind broker frame per RC event.
-- Compact source: tracked relay protocol describes an assistant compact-summary turn plus `result`
+- **A1.10 / B.2 — broker sequence mapping: DECIDED.** Keep dense broker `seq` separate from private Claude
+  RC `sequence_num`; the projector retains their explicit mapping and never substitutes one for the
+  other.
+- **B.5 — compact source: PROOF-OWNED.** Tracked relay protocol describes an assistant compact-summary turn plus `result`
   ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), while the unavailable
   historical native-RC investigation reportedly saw only an empty result on the
   wire and summary text in local JSONL. Treat this as version/mode dependent
-  until Phase B4 reconciles it; do not require local transcript watching or
+  until B.5 retains the selected fixture; do not require local transcript watching or
   expose compact as result-only based on either observation alone.
-- Retention: raw RC logs are needed for idempotency and audit longer than
-  viewer frames. Define separate retention for raw events, compacted visible
-  history, and sealed broker frames.
-- Outward connector credentials: brokered native mode needs a separately
+- **A1.6 / A1.8 / B.2 — retention: ASSIGNED.** A1.6 owns sealed broker-frame retention, A1.8 owns generic outbox retention,
+  B.2 owns private raw RC events, delivery rows, and compacted visible-history retention. Raw RC logs
+  remain longer than viewer frames because idempotency and audit depend on them. Each slice must
+  choose and test its concrete policy before enabling destructive collection.
+- **B.4/B.5 and C.4/C.5 — outward connector credentials: ASSIGNED.** Brokered native mode needs a separately
   secured OAuth source and explicit test-session guardrails. Remote-claw owns
   the real worker/app credentials; the isolated inner Claude receives only
   synthetic/local auth and never refreshes or reads the real provider secret.
-  Rotation and revocation behavior remain a release gate.
-- Native client stream endpoint: decide whether relay mode should expose its
-  own `/events/stream` endpoint for native-compatible clients, or keep
-  `/events/stream` support limited to reads served/reconciled by the outward
-  connector and remote-claw viewers on the E2E broker.
+  B.4/C.4 implement isolated credential storage and leases; B.5/C.5 own rotation, revocation, and live
+  official-client release proof.
+- **B.4 — native client stream endpoint: DECIDED.** The A0 relay does not add a general
+  native-compatible `/events/stream`. B.4 owns any provider-client-facing history/SSE surface needed
+  by the outward Anthropic connector and its reconciliation path; remote-claw viewers continue to use
+  the E2E broker, while the private Claude worker keeps its distinct worker stream.

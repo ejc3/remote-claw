@@ -39,7 +39,8 @@ function signalExitCode(signal: NodeJS.Signals): number {
  *  own "unknown --rc-driver" error, not a second misapplied-flag nag. A reserved VALUE flag counts as
  *  "passed" only when it carries a non-empty (trimmed) value — an empty/blank value is absent everywhere.
  *  Each group names the driver it DOES apply to:
- *    • tmux: --rc-session-hook / --rc-no-session-hook / --rc-tmux-skip-permissions
+ *    • tmux: --rc-session-hook / --rc-no-session-hook (ongoing transcript/rotation follow only) /
+ *      --rc-tmux-skip-permissions
  *    • opencode: --rc-oc-url / --rc-oc-model / --rc-oc-session / --rc-oc-skip-permissions
  *    • mitm (inference): --rc-inference / --rc-bedrock-region / --rc-bedrock-model / --rc-accountless
  *      (tmux/opencode reach Bedrock via their own provider, NOT our MITM translation). */
@@ -233,10 +234,10 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   const bin = opts.claudeBin || process.env.RC_CLAUDE_BIN || "claude";
 
   // Remote control needs a broker to relay to (`--rc-app` / RC_APP). With one configured, launch the
-  // REAL claude behind our MITM so a `/remote-control` inside it wires into the broker (§3.1). Without
-  // one, there's nothing to relay to — run claude transparently (identical to plain `claude`). A bare
-  // `--help` short-circuits the launch: never create an identity or stand up the MITM just to print
-  // claude's help — fall through to a plain spawn.
+  // selected capture/inject driver and wire its sessions into the broker (§3.1). Without one, there's
+  // nothing to relay to — run claude transparently (identical to plain `claude`). A bare `--help`
+  // short-circuits the launch: never create an identity or start a driver just to print claude's help —
+  // fall through to a plain spawn.
   const rcApp = (typeof rc["rc-app"] === "string" ? rc["rc-app"] : "") || process.env.RC_APP || "";
   if (rcApp !== "" && !helpWanted) {
     // Which capture/inject driver runs the harness: --rc-driver / RC_DRIVER, default "mitm" (the real
@@ -485,7 +486,8 @@ async function runOpencodeDriverPath(
  * MITM, no certs (provider-agnostic, Bedrock-capable). Builds the same DriverContext shape as the
  * launch path (identity / brokerUrl / backend / newClient with the Vercel bypass / title / cwd / git),
  * minus the MITM-only certsDir, and runs runTmuxDriver under a SIGINT/SIGTERM-coupled AbortController
- * (the tmux pane runs detached, so Ctrl-C the wrapper tears the bridge down + kills the pane).
+ * (the tmux pane runs detached, so Ctrl-C tears the bridge down and requests pane termination; uncertain
+ * termination retains the private runtime for recovery).
  */
 async function runTmuxDriverPath(
   brokerUrl: string,
@@ -529,8 +531,9 @@ async function runTmuxDriverPath(
       tracer: tracerFromEnv("rc.tmux"),
       ...(backend !== undefined ? { backend } : {}),
     };
-    // SessionStart hook (merged with any --settings) for exact transcript discovery + rotation-follow,
-    // no scan. DEFAULT ON; precedence (pure + unit-tested in sessionhook.ts):
+    // Whether capture keeps following the private SessionStart marker for exact transcript discovery +
+    // rotations after startup. The driver ALWAYS injects and waits for that marker once as mandatory
+    // native-readiness proof; this knob controls only ongoing follow. DEFAULT ON; precedence:
     // --rc-no-session-hook > --rc-session-hook > RC_SESSION_HOOK (0/false/no/off) > default(on).
     const injectSessionHook = resolveInjectSessionHook({
       noFlag: rc["rc-no-session-hook"] === true,

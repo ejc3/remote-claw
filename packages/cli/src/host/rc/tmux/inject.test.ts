@@ -1,4 +1,4 @@
-// Inject tests: injectUserText records exactly [setBuffer, pasteBuffer, sleep, sendKeys Enter] in
+// Inject tests: injectUserText records exactly [stdin loadBuffer, pasteBuffer, sleep, sendKeys Enter] in
 // order; runInjectPump drains a real Session's downstream queue (prompt → paste+Enter, interrupt →
 // Escape), acks after each, and ignores control_response/initialize. The tmux exec is a spy, the
 // settle sleep a no-op — no real tmux, no real timers.
@@ -17,20 +17,27 @@ import {
   runInjectPump,
   settleMs,
 } from "./inject.js";
-import { TmuxCtl, type TmuxExec, type TmuxExecResult } from "./tmuxctl.js";
+import { TmuxCtl, type TmuxExec, type TmuxExecOptions, type TmuxExecResult } from "./tmuxctl.js";
 
 const noSleep = (): Promise<void> => Promise.resolve();
 
-/** A spy exec recording the tmux subcommand of each call (calls[i] = the verb, e.g. "set-buffer"). */
-function spyTmux(): { tmux: TmuxCtl; verbs: string[]; calls: string[][] } {
+/** A spy exec recording each tmux subcommand and its process-local options (including stdin). */
+function spyTmux(): {
+  tmux: TmuxCtl;
+  verbs: string[];
+  calls: string[][];
+  options: Array<TmuxExecOptions | undefined>;
+} {
   const verbs: string[] = [];
   const calls: string[][] = [];
-  const exec: TmuxExec = (args): Promise<TmuxExecResult> => {
+  const options: Array<TmuxExecOptions | undefined> = [];
+  const exec: TmuxExec = (args, execOptions): Promise<TmuxExecResult> => {
     calls.push([...args]);
+    options.push(execOptions);
     verbs.push(args[0] ?? "");
     return Promise.resolve({ code: 0, stdout: "", stderr: "" });
   };
-  return { tmux: new TmuxCtl(exec), verbs, calls };
+  return { tmux: new TmuxCtl(exec), verbs, calls, options };
 }
 
 describe("downstreamUserText / isInterrupt", () => {
@@ -100,8 +107,10 @@ describe("downstreamControlResponse / downstreamSetModel (pure)", () => {
 describe("injectUserText", () => {
   it("runs setBuffer → pasteBuffer → settle → send Enter, in order", async () => {
     const order: string[] = [];
-    const exec: TmuxExec = (args) => {
+    const inputs: Array<string | undefined> = [];
+    const exec: TmuxExec = (args, options) => {
       order.push(args[0] ?? "");
+      inputs.push(options?.stdin);
       return Promise.resolve({ code: 0, stdout: "", stderr: "" });
     };
     const sleep = (): Promise<void> => {
@@ -109,17 +118,18 @@ describe("injectUserText", () => {
       return Promise.resolve();
     };
     await injectUserText(new TmuxCtl(exec), "rc-cse_x", "hi", "rcin-cse_x", sleep);
-    // loadAndPaste (set-buffer, paste-buffer) then submitPrompt (settle, send Enter). No pane read-back:
+    // loadAndPaste (stdin load-buffer, paste-buffer) then submitPrompt (settle, send Enter). No read-back:
     // a single Enter after the length-scaled settle — the capture-confirm/resend was removed because its
     // TUI parse had false-"submitted" reads that silently dropped prompts (codex review).
-    expect(order).toEqual(["set-buffer", "paste-buffer", "sleep", "send-keys"]);
+    expect(order).toEqual(["load-buffer", "paste-buffer", "sleep", "send-keys"]);
+    expect(inputs).toEqual(["hi", undefined, undefined]);
   });
 });
 
 describe("runInjectPump", () => {
   it("injects a user prompt (paste+Enter), acks it, and stops on abort", async () => {
     const s = new Session("cse_1", "t", null);
-    const { tmux, verbs } = spyTmux();
+    const { tmux, verbs, calls, options } = spyTmux();
     const ac = new AbortController();
     const ev = s.pushUserInput("drive this");
     const pump = runInjectPump({
@@ -134,7 +144,10 @@ describe("runInjectPump", () => {
     ac.abort();
     s.wake();
     await pump;
-    expect(verbs).toEqual(["set-buffer", "paste-buffer", "send-keys"]);
+    expect(verbs).toEqual(["load-buffer", "paste-buffer", "send-keys"]);
+    expect(calls[0]).toEqual(["load-buffer", "-b", "rcin", "-"]);
+    expect(options[0]).toEqual({ stdin: "drive this" });
+    expect(JSON.stringify(calls)).not.toContain("drive this");
     // After ack, a reclaimed stream must NOT replay the prompt.
     expect(await replayedEventIds(s, ev.eventId)).toBe(false);
   });
@@ -178,7 +191,7 @@ describe("runInjectPump", () => {
     ac.abort();
     s.wake();
     await pump;
-    expect(verbs).toEqual([]); // no set-buffer / paste-buffer / send-keys — the box is untouched
+    expect(verbs).toEqual([]); // no load-buffer / paste-buffer / send-keys — the box is untouched
     expect(await replayedEventIds(s, ev.eventId)).toBe(false); // acked, so not replayed
   });
 
@@ -221,7 +234,7 @@ describe("runInjectPump", () => {
     s.wake();
     await pump;
     // initialize / control_response produced NO tmux verbs; only the prompt did.
-    expect(verbs).toEqual(["set-buffer", "paste-buffer", "send-keys"]);
+    expect(verbs).toEqual(["load-buffer", "paste-buffer", "send-keys"]);
     // initialize was acked (review #5) → not replayed.
     expect(init).not.toBeNull();
     if (init) expect(await replayedEventIds(s, init.eventId)).toBe(false);
@@ -229,7 +242,7 @@ describe("runInjectPump", () => {
 
   it("verb fidelity (B2): set_model → types `/model <id>` and records it in the ledger", async () => {
     const s = new Session("cse_1", "t", null);
-    const { tmux, verbs, calls } = spyTmux();
+    const { tmux, verbs, options } = spyTmux();
     const ac = new AbortController();
     const recorded: string[] = [];
     s.pushControlRequest("set_model", { model: "opus" });
@@ -246,8 +259,8 @@ describe("runInjectPump", () => {
     s.wake();
     await pump;
     // The slash command was pasted + submitted like a prompt …
-    expect(verbs).toEqual(["set-buffer", "paste-buffer", "send-keys"]);
-    expect(calls.find((c) => c[0] === "set-buffer")?.join(" ")).toContain("/model opus");
+    expect(verbs).toEqual(["load-buffer", "paste-buffer", "send-keys"]);
+    expect(options.find((option) => option?.stdin !== undefined)?.stdin).toBe("/model opus");
     // … and recorded in the local-prompt ledger so claude's transcript echo of it is suppressed.
     expect(recorded).toEqual(["/model opus"]);
   });
@@ -308,12 +321,12 @@ describe("runInjectPump", () => {
 
   it("retries the PASTE phase as a unit and acks once it lands (codex #4)", async () => {
     const s = new Session("cse_1", "t", null);
-    // set-buffer fails the FIRST time, then succeeds — a transient tmux hiccup BEFORE any paste.
+    // load-buffer fails the FIRST time, then succeeds — a transient tmux hiccup BEFORE any paste.
     const verbs: string[] = [];
     let failedOnce = false;
     const exec: TmuxExec = (args) => {
       verbs.push(args[0] ?? "");
-      if (args[0] === "set-buffer" && !failedOnce) {
+      if (args[0] === "load-buffer" && !failedOnce) {
         failedOnce = true;
         return Promise.resolve({ code: 1, stdout: "", stderr: "boom" });
       }
@@ -336,10 +349,10 @@ describe("runInjectPump", () => {
     ac.abort();
     s.wake();
     await pump;
-    // One transient PASTE failure; the retry re-ran the paste unit (set-buffer x2), paste-buffer once
-    // (attempt 1 threw at set-buffer, before paste). Submit happened once.
+    // One transient PASTE failure; the retry re-ran the paste unit (load-buffer x2), paste-buffer once
+    // (attempt 1 threw at load-buffer, before paste). Submit happened once.
     expect(errors).toEqual([{ attempt: 1, phase: "paste" }]);
-    expect(verbs.filter((v) => v === "set-buffer").length).toBe(2);
+    expect(verbs.filter((v) => v === "load-buffer").length).toBe(2);
     expect(verbs.filter((v) => v === "paste-buffer").length).toBe(1);
     expect(await replayedEventIds(s, ev.eventId)).toBe(false); // landed → acked
   });
@@ -376,7 +389,7 @@ describe("runInjectPump", () => {
     s.wake();
     await pump;
     // CRITICAL: the prompt was pasted EXACTLY ONCE despite the Enter retry (no double-paste).
-    expect(verbs.filter((v) => v === "set-buffer").length).toBe(1);
+    expect(verbs.filter((v) => v === "load-buffer").length).toBe(1);
     expect(verbs.filter((v) => v === "paste-buffer").length).toBe(1);
     expect(verbs.filter((v) => v === "send-keys").length).toBe(2);
     expect(errors).toEqual([{ attempt: 1, phase: "submit" }]);
@@ -385,13 +398,13 @@ describe("runInjectPump", () => {
 
   it("retries the paste until abort with NO silent give-up (prompt not dropped)", async () => {
     const s = new Session("cse_1", "t", null);
-    // set-buffer ALWAYS fails; after 3 failures the test aborts (mimicking a teardown / pane death).
+    // load-buffer ALWAYS fails; after 3 failures the test aborts (mimicking a teardown / pane death).
     const verbs: string[] = [];
     const ac = new AbortController();
     let fails = 0;
     const exec: TmuxExec = (args) => {
       verbs.push(args[0] ?? "");
-      if (args[0] === "set-buffer") {
+      if (args[0] === "load-buffer") {
         fails++;
         if (fails >= 3) ac.abort(); // the pane-watch would abort a genuinely dead pane
         return Promise.resolve({ code: 1, stdout: "", stderr: "always fails" });

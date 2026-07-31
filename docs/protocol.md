@@ -13,7 +13,8 @@ its sections), [Phase 0 Findings](phase0-findings.md) for the reverse-engineered
 remote-claw collaborator ← many server collaborators architecture. A0.1 of that migration routes
 Claude MITM sessions through the neutral, host-scoped lifecycle before their existing `Session` port
 is bridged to the broker. The OpenCode half of A0.2 now uses the same lifecycle and fails closed before
-`ready`; tmux still uses the flat compatibility path directly.
+`ready`; the tmux half now does too, after a live pane and mandatory Claude `SessionStart` marker prove
+its native setup.
 
 **Identity scope.** In this as-built protocol, `Session.id` is a synthetic `cse_*` identifier used as
 the broker channel address and session-list key. It is not a Claude transcript ID, Codex thread ID,
@@ -24,6 +25,17 @@ The machine-facing viewer row, route, alias, wire channel, and cache keys use th
 `(identity_id, collaborationServerId, logicalChatId)` triple. A private synthetic `cse_*` may then
 rotate beneath it during a proven native transport/runtime replacement. That mapping and recovery
 behavior are not implemented here.
+
+**Host multiplicity.** Current A0 already gives each in-process `Session` its own registrar lease,
+relay instance, inbound dedup set, projection log, broker chat channel, permission map, and teardown
+controller; one MITM registrar can serve several intercepted sessions. That is process-local
+isolation, not the selected durable host inventory. A1 must make one paired host discover and recover
+many independently wrapped Claude, Codex, and OpenCode conversations across equal or different
+directories. Each keeps its own native identity/history, local TUI, collaborators, actor lane,
+delivery gates, and recovery outcome. Global journal counters remain audit positions; native
+serialization and quarantine are per logical chat, and restart of one lane cannot create a new row or
+block another. The exact target contract is
+[Client-driven Host Runtime § One paired host, many independent sessions](client-driven-host-runtime.md#one-paired-host-many-independent-sessions).
 
 ---
 
@@ -48,22 +60,28 @@ Three parties, one of which (the broker) is untrusted and sees only ciphertext.
   primitives do not have separate implementations that can drift (`viewer.ts` header comment).
 
 **Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the
-only driver. Every current harness produces a `Session`. Claude MITM and OpenCode register that port
-through `LegacyRcConversationRegistrar`, which calls `startBridgeSession` only at `ready`; tmux still
-calls the `bridgeSession` served-promise compatibility entrypoint directly. Both entrypoints construct
-the same `HostRcRelay` and start the same announce/serve path. **The broker, the relay
+only driver. Every current harness produces a `Session`. Claude MITM, OpenCode, and tmux register that
+port through `LegacyRcConversationRegistrar`, which calls `startBridgeSession` only at `ready`.
+**The broker, the relay
 (`HostRcRelay`), and the viewer are shared across drivers.** Frames, the two pumps,
 `seq`/ordering, `catch_up`, and presence therefore use one compatibility path, while the native
 capability behind a frame can differ. Permission and attachment support are only as strong as the
-selected harness; the current tmux announcement can still overstate post-setup support (see
-[Pluggable Harness](pluggable-harness.md) §8), while OpenCode waits for proved parent setup and
-publishes a conservative vector. Only how the `Session` reaches the native harness differs:
+selected harness. Both A0.2 paths wait for native setup evidence and publish conservative capability
+vectors. Only how the `Session` reaches the native harness differs:
 
 | Driver | Native surface used by the local person | Inject (downstream → native client) | Capture (native client → upstream) | Permissions | Provider |
 |---|---|---|---|---|---|
 | **MITM** (`--rc-app`, `launch.ts`) | Real Claude Code TUI in the wrapped process; local prompt text is not currently projected to viewers | Intercept Claude's RC endpoints → worker downstream | Worker upstream POSTs (`followUpstream`) | Structured `can_use_tool` gates (§10) | Default: Anthropic API; `--rc-inference=bedrock`: Bedrock inference + locally synthesized control plane |
-| **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | Real Claude Code TUI in the attachable pane; unmatched local prompts are projected post-hoc as `local_prompt` | `set-buffer`/`paste-buffer` + `send-keys` into the pane (`runInjectPump`) | Tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **Default attempt:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10); an unparseable user settings file disables the hook after the current optimistic announcement. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | Any, including Bedrock/Vertex |
+| **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | Real Claude Code TUI in a private-socket attachable pane; unmatched local prompts are projected post-hoc as `local_prompt` | Prompt bytes over stdin to `load-buffer`, then `paste-buffer` + `send-keys` (`runInjectPump`) | Tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **Default:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10), published only after settings/trust and the mandatory startup marker succeed. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | Any, including Bedrock/Vertex |
 | **opencode** (`--rc-driver=opencode`, `opencode/driver.ts`) | A native OpenCode TUI may share the server; the driver does not enforce one attachment, and unmatched local prompts are projected post-hoc as `local_prompt` | POST the prompt to the OpenCode session → `followDownstream` (+`ack`) | OpenCode **SSE** event stream → `pushUpstream` | **Default required setup:** strict parent policy read; append the ask-all rule only when absent; strict read-back before `ready`; then mirror SSE `permission.asked` (§10). **Opt-out** `--rc-oc-skip-permissions` leaves OpenCode's own permission config and advertises permissions off | Any OpenCode provider configuration |
+
+Tmux's readiness hook is not optional: Claude must execute one `SessionStart` marker from the exact
+private merged-settings file before the registrar can enter `ready`. `--rc-no-session-hook` /
+`RC_SESSION_HOOK=0` disables only continued marker-based transcript discovery and rotation following.
+Hook-disabling modes and unmergeable settings fail startup without a broker-visible row. The driver
+advertises viewer `status:false` and native
+`{mutationAdmission:"post_hoc", history:"partial", deliveryEvidence:"best_effort",
+liveReattach:false}`. Its transcript debounce remains heuristic evidence, not a native status promise.
 
 Current OpenCode permission answers use retained
 `POST /permission/{requestID}/reply` with `{reply}` and require successful JSON to be literal `true`.
@@ -75,7 +93,7 @@ warnings may carry best-effort human-readable text to the E2E viewer; local diag
 the session plus numeric status and boolean retryability, never provider-controlled name, message, or
 response bodies. Successful malformed endpoint JSON also becomes a stable body-free client error.
 
-**Selected migration contract, not current `Session` behavior.** Every remote proposal—from the web, an official client, automation, or a nested server—must enter one common ordering and decision path before any Claude, Codex, or OpenCode adapter can act. That path stores and signs one final admitted, queued, or rejected result. Only a signed admission may create one pinned executor attempt; a queued or rejected result creates none. A new message and a steer of a running turn are distinct commands, and neither timing nor native busy state may convert one into the other. The person's direct native-TUI input remains separate from this remote decision path. The native harness observes both paths and remains the authority for their final order and for what actually changed.
+**Selected migration contract, not current `Session` behavior.** Every remote proposal—from the web, an official client, automation, or a nested server—must enter one common ordering and decision path before any Claude, Codex, or OpenCode adapter can act. That path stores and signs one final admitted, queued, or rejected result. It records a globally unique journal/command position, but forwards through an independent per-logical-chat actor so unrelated sessions do not wait for one another. Only a signed admission may create one pinned executor attempt; a queued or rejected result creates none. A new message and a steer of a running turn are distinct commands, and neither timing nor native busy state may convert one into the other. The person's direct native-TUI input remains separate from this remote decision path. The native harness observes both paths and remains the authority for their final order and for what actually changed.
 
 Each native adapter must then prove the exact last mile it uses. It translates the admitted common command into one version-pinned native request, sends it through the current fenced front door, and correlates native read-back before reporting the command as applied. A changed translation, unproved route, stale owner, missing observation, or ambiguous response fails closed; a transport ACK alone is never native acceptance. The current `Session` relay does not provide these guarantees.
 
@@ -172,8 +190,9 @@ Because the relay owns the attachment write+inject, attachments work across the 
 unchanged—the tmux driver never even sees an `attachment` frame
 (`TMUX_CAPABILITIES.attachments = true`); the relay writes the file and injects the `@"path"` reference,
 which the pane's Claude attaches natively just as the MITM-driven worker does. OpenCode currently
-receives that Claude-specific text, not a native file part; its attachment support is unproven despite
-the current optimistic capability bit.
+receives that Claude-specific text, not a native file part, so its current conservative capability
+vector advertises `attachments:false`. OpenCode attachments remain unavailable until a retained native
+file-part fixture proves their request, observation, and recovery behavior.
 
 ```
  person
@@ -198,6 +217,10 @@ the current optimistic capability bit.
                                           │ announces()                  ▼ transcript()
                                               Viewer (phone / laptop)
 ```
+
+The diagram shows one current session lane. The registrar/relay/channel portion repeats independently
+for every intercepted session; selected A1 replaces its synthetic session-list identity with a
+durable host inventory and stable per-chat mapping rather than collapsing those lanes.
 
 ---
 
@@ -510,6 +533,11 @@ native terminal evidence. The selected runtime persists remote choice, worker de
 cancel/tool/gate outcome separately, and closes every outward copy from the proved native terminal
 record rather than treating local deletion as adjudication.
 
+For tmux, the downstream response is ACKed only after the private decision file is written. A write
+failure throws, leaves that response unacknowledged, and tears down the inject pump. The helper may
+remain blocked and the relay may already have projected its own resolution, so this is fail-closed
+transport behavior rather than proof of Claude's terminal permission outcome.
+
 ---
 
 ## 10a. Attachment lifecycle (#44)
@@ -678,13 +706,24 @@ guarantees.
    be a dead host or just a stalled bus subscription; the viewer can't distinguish them, and a transcript
    frame can still arrive on the session channel while presence reads `disconnected` (different channels).
    Advisory, not a transactional "the session ended" signal.
-5. **Presence reflects worker honesty.** `phase`/`needs` mirror the worker's `PUT …/worker`
-   (`worker_status` + `requires_action_details`) — there is no host-side timeout. If the worker finishes
-   a turn but never PUTs `idle`, `phase` shows *thinking* until the next status change. Captured live
-   claude always PUTs the final `idle`, so this is a worker-fidelity bound, not a host bug.
+5. **Presence reflects only the driver's evidence.** On Claude MITM, `phase`/`needs` mirror the
+   worker's `PUT …/worker` (`worker_status` + `requires_action_details`) and there is no host-side
+   timeout. If the worker finishes a turn but never PUTs `idle`, `phase` shows *thinking* until the
+   next status change. Tmux has no equivalent signal: it uses transcript timing internally and
+   advertises `capabilities.status:false`, so consumers must not treat that projection as native
+   busy/idle truth.
 6. **`git` is a launch-time snapshot** (`launch.ts`) — a mid-session branch switch isn't reflected until
    the native process is relaunched. Current A0 also creates a new broker-visible session; A1 may retain
    the logical chat while refreshing this launch snapshot for the new native incarnation.
+7. **There is no durable host-wide session inventory in A0.** Process-local registrar leases keep live
+   sessions separate, but a wrapper/coordinator restart cannot enumerate all prior Claude, Codex, and
+   OpenCode bindings and independently reattach them. The selected A1 host inventory and per-chat
+   recovery lanes must land before restart multiplicity can be advertised.
+8. **Tmux cleanup preserves uncertainty but does not recover it.** Each launch has a private `0700`
+   runtime, private socket, and private settings/hook files. Teardown removes them only after a proved
+   kill or proved absence. An unknown tmux outcome retains the runtime and emits the exact
+   `tmux -S <socket> attach -t <session>` command; a new wrapper still cannot adopt that pane because
+   the A0.2 registrar/binding is process-local and `liveReattach:false`.
 
 ### Capture-grounded protocol surfaces (observed via `--rc-trace`)
 
