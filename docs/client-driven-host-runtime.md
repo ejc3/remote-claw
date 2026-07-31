@@ -8,7 +8,7 @@ This page explains the design from the user's point of view. The [technical refe
 
 Unless a paragraph or status label says otherwise, the behavior below is the target rather than a claim about the current wrappers.
 
-**Today:** the process-local A0.1 registration seam and the OpenCode half of A0.2 have landed. In its default Anthropic-inference mode, Claude `--rc-app` intercepts Remote Control traffic while tunneling other Anthropic calls; its Bedrock mode terminates the Anthropic-shaped surface locally. OpenCode now fails closed through the same seam before its compatibility bridge becomes visible, while tmux still uses its older direct bridge path. Ordinary wrapper restarts do not preserve a stable logical-chat binding, and Codex and the outward official-client connectors are not implemented.
+**Today:** the process-local A0.1 and A0.2 registration work has landed. In its default Anthropic-inference mode, Claude `--rc-app` intercepts Remote Control traffic while tunneling other Anthropic calls; its Bedrock mode terminates the Anthropic-shaped surface locally. OpenCode and tmux now fail closed through the same registration seam before their compatibility bridges become visible. Tmux uses one private per-launch server/socket and permits many independent wrapper invocations on one host, but the registration and synthetic broker chat remain process-local: an ordinary wrapper restart does not recover the same stable logical-chat/native binding. Codex and the outward official-client connectors are not implemented.
 
 <a id="1-decision"></a>
 
@@ -63,6 +63,25 @@ configured model service
 ```
 
 An official-client connector is not the native harness's model connection. Official Claude and ChatGPT apps still use the provider-facing protocol expected by those apps; remote-claw terminates or participates in the corresponding host/worker connection and represents those clients as collaborators. The private native harness receives neither those credentials nor those sockets.
+
+## One paired host, many independent sessions
+
+Pairing names the host, not one coding session. One paired remote-claw host must discover and serve every independently wrapped Claude Code, Codex, and OpenCode session running on that machine:
+
+```text
+paired host “fcvm”
+├─ Claude Code · /work/remote-claw · chat A
+├─ Claude Code · /work/other       · chat B
+├─ Codex       · /work/remote-claw · chat C
+├─ Codex       · /work/experiment  · chat D
+└─ OpenCode    · /work/site        · chat E
+```
+
+Each row keeps its own logical-chat ID, native conversation ID and history, working directory and project mapping, runtime or daemon attachment, local TUI path, remote collaborators, recovery state, and delivery gates. Two sessions may use the same product or even the same directory without becoming the same chat; a directory is useful display and routing metadata, never conversation identity.
+
+Remote work is serialized only within the destination logical chat and its current inward binding. The host may assign global journal positions for durable bookkeeping, but a busy turn, uncertain delivery, restart, permission gate, or failed adapter in chat A must not delay, quarantine, reconnect, or mutate chats B–E. Each wrapper launch may own a separate native process or daemon, while native daemons that legitimately serve several conversations, such as Codex or OpenCode, may also be shared underneath. In either topology, closing one conversation lease must not close another runtime, the shared daemon, or another conversation.
+
+After a host or coordinator restart, remote-claw enumerates every durable binding and independently reattaches its exact native session before making that row writable. It neither chooses a “most recent” native session nor creates a replacement visible chat just because one wrapper, bridge, or coordinator restarted. Local TUIs and runtime-scoped inference remain available while no coordinator lease is current; remote mutations report unavailable and each healthy remote path is re-enabled independently only after its own lease, binding, and attachment proof passes. A failed recovery quarantines only that row. A nested remote-claw server can occupy one collaborator binding on any one of these chats without changing this isolation.
 
 ## Drop-in native-client compatibility
 
@@ -155,7 +174,7 @@ one bridge connection
 native harness
 ```
 
-The server assigns stable source identity, turns every web, official-client, automation, or nested proposal into the same common command shape, gives it a server-wide order, and signs one final admitted, queued, or rejected result before any adapter may act. Claude, Codex, and OpenCode all use this decision path for remote input. Starting a chat and writing to an existing chat choose different destinations, but they do not bypass the common decision. If delivery may have started but the outcome is unknown, the server does not blindly retry. With nested remote-claw servers, each server performs the same job and the whole server behind an edge appears as one collaborator to the next layer inward.
+The server assigns stable source identity, turns every web, official-client, automation, or nested proposal into the same common command shape, records its durable server journal position, and signs one final admitted, queued, or rejected result before any adapter may act. Within one logical chat, proposals are offered inward in that chat's stable order; different chats have independent actors and delivery gates. Claude, Codex, and OpenCode all use this decision path for remote input. Starting a chat and writing to an existing chat choose different destinations, but they do not bypass the common decision. If delivery may have started but the outcome is unknown, the server does not blindly retry that chat, while unrelated chats continue. With nested remote-claw servers, each server performs the same job and the whole server behind an edge appears as one collaborator to the next layer inward.
 
 An admitted result is permission for exactly one pinned adapter action, not proof that the coding engine accepted it. The adapter must translate the common command into the exact native request allowed by its checked version and capability, send it only through the fenced native front door, and match the native response or read-back to that command. A missing route, changed translation, stale front door, incomplete read-back, or ambiguous outcome stops the path and records uncertainty; it never falls back to a similar-looking request.
 
@@ -227,6 +246,7 @@ Each layer has its own identity:
 
 | Identity | Meaning | Restart behavior |
 | --- | --- | --- |
+| Server + project ID | Stable project grouping and selector scope on one paired host | Allocated durably; never reconstructed from cwd, title, provider IDs, or whichever session is newest |
 | Server + logical chat ID | Canonical chat within one remote-claw server | Stays stable across that server's infrastructure and transport restarts; never aliases another server's chat |
 | Machine identity + server + logical chat ID | Broker route, visible viewer row, alias, channel, and cache coordinates | Stays stable across reconnects and prevents equal server/chat IDs under another machine credential from colliding |
 | Terminal native binding ID | Relationship between the innermost server chat and its native conversation | Exists only at the terminal edge and stays stable while the same native conversation is resumed |
@@ -237,6 +257,8 @@ Each layer has its own identity:
 | Inward edge | One remote-claw server represented as one collaborator to the next layer toward the native harness | Reconnects without duplicating the represented subtree or its commands |
 
 IDs are never aliases. A Claude `cse_*`, Codex thread ID, OpenCode `ses_*`, tmux pane, broker channel, and remote-claw logical chat ID remain distinct. A nested edge explicitly maps two servers' distinct chat IDs.
+
+A durable project is selected before a durable chat or native binding is created. The first project and its initial target selector are allocated together; later launches name an exact existing project/selector or explicitly create another project. The current A0 compatibility wrappers may report no project, but that means only “unresolved in this process” and cannot be used to recover or silently assign an A1 chat.
 
 At the terminal edge, exactly one native binding is current for a logical chat at a time. An outer server chat instead has exactly one current inward edge to another server/chat pair. Old edges, bindings, and delivery attempts remain in the journal so a late process or connector cannot act as the current owner.
 
@@ -313,7 +335,7 @@ These are target guarantees unless the status column says they are implemented.
 - **Control:** one directly attached Claude TUI pane plus remote injection and transcript observation.
 - **Recovery evidence:** the pane/process identity and the wrapped engine's transcript.
 - **Key rule:** person and injector write one pane/editor keystream, not two native collaborator connections. Claude arbitrates only the resulting submitted buffer; simultaneous local drafts and remote paste/Enter can merge, and tmux command receipt is not native acceptance.
-- **Status:** the existing Claude-specific fallback remains lower fidelity. Response-loss retries, write-ahead origin correlation, local/remote permission parity, keep-pane detach, and clear/branch identity are unresolved; migration to the host-wide seam is next.
+- **Status:** the Claude-specific compatibility driver now opens a process-local registration in `starting`, prepares an isolated private tmux runtime/socket, and publishes only after a positive pane probe plus a SessionStart marker from its required merged settings. Before `ready` it creates no broker client or announcement, so no remote mutation can reach the pane. Its published capabilities are deliberately limited: heuristic status is not advertised, native delivery evidence is best-effort, history is partial, and live reattachment is false. Independent wrapper invocations use distinct private servers and can run concurrently, but response-loss reconciliation, write-ahead origin correlation, local/remote permission first-winner parity, keep-pane detach, durable restart binding, and clear/branch identity remain unresolved.
 
 The [technical reference](client-driven-host-runtime-reference.md#9-native-adapter-recovery) contains the per-engine startup and recovery algorithms. Current OpenCode and tmux behavior is documented in [OpenCode Driver](opencode-driver.md) and [Tmux Driver](tmux-driver.md).
 
@@ -381,23 +403,27 @@ These are release requirements, not claims about the current wrappers:
 <a id="a02-opencode-and-tmux-migration"></a>
 <a id="a1-runtime-ownership-control-journal-and-command-actor"></a>
 <a id="a2-opencode-vertical-slice"></a>
+<a id="n1-nested-remote-claw-collaboration"></a>
 <a id="b-claude-code-wrapped-client"></a>
 <a id="c-codex-wrapped-client"></a>
 <a id="d-tmux-recovery-and-unified-product"></a>
 
-Each milestone lands as separate reviewed pull requests.
+Milestones group dependency-ordered work; they are not promises to put an entire milestone into one pull request. Each numbered slice in the [delivery-plan reference](client-driven-host-runtime-reference.md#13-delivery-plan) lands as its own reviewed pull request and leaves capabilities disabled until that slice's proof gate passes. A0.1 and A0.2 are complete process-local compatibility milestones; A1, A2, N1, B, C, and D are deliberately split and own durable coordination, native recovery, and the outward connectors.
 
 | Milestone | Outcome | Status |
 | --- | --- | --- |
 | A0.1 | Neutral host-wide registration seam; migrate Claude MITM without changing its data path | Implemented |
-| A0.2 | Move OpenCode and tmux registration onto the same seam and publish truthful readiness/capabilities | OpenCode implemented; tmux next |
-| A1 | Durable logical chats, native bindings, collaborator journal, fenced runtime ownership, and remote-proposal actor | Planned |
-| A2 | First complete end-to-end shared chat through OpenCode | Planned after A1 |
+| A0.2 | Move OpenCode and tmux registration onto the same seam and publish truthful readiness/capabilities | Implemented (process-local; no durable recovery claim) |
+| A1 | Durable many-session host inventory, logical chats, native bindings, per-chat collaborator actors, and fenced runtime ownership | Planned |
+| A2 | First complete end-to-end shared chat through OpenCode; unavailable live connector kinds use authenticated collaborator stand-ins only at common ingress | Planned after A1 |
+| N1 | Live nested remote-claw server collaboration, lineage, edge recovery, and loop prevention | Planned after A1; not required for the A2 stand-in proof |
 | B | Fully brokered Claude wrapper, native recovery, and outward Anthropic Remote connector | Planned |
 | C | Fully brokered Codex wrapper and one outward ChatGPT Remote host with many projects/chats | Planned |
 | D | Durable tmux recovery and unified host/project/chat discovery | Planned |
 
-The exact work items and gates remain in the [delivery-plan reference](client-driven-host-runtime-reference.md#13-delivery-plan).
+Authenticated A2 stand-ins prove only that a source kind is normalized, ordered, and adjudicated through the common actor. They do not claim Anthropic, ChatGPT, automation, or nested-transport compatibility; only B, C, the applicable automation connector, or N1 can make that live-connector claim. Proof capture for B and C may proceed while A1 is built, but their writable integrations still depend on the A1 actor and fencing.
+
+The exact PR slices and gates remain in the [delivery-plan reference](client-driven-host-runtime-reference.md#13-delivery-plan).
 
 ## Proof gates
 
@@ -405,7 +431,10 @@ The exact work items and gates remain in the [delivery-plan reference](client-dr
 
 The design does not claim a capability until tests establish it. The largest open proofs are:
 
+- durable project bootstrap: one random server-scoped project plus its initial selector mapping are allocated atomically and replay-idempotently, while `project:null`, cwd/title inference, and only/most-recent fallback cannot create or select an A1 chat or binding;
+- one paired host concurrently serving many independent Claude Code, Codex, and OpenCode sessions in equal and different directories, with isolated native identity/history, TUI and collaborator membership, per-chat command delivery, shared-daemon lifetime, and restart recovery;
 - stable chat identity and direct-collaborator order across every restart boundary;
+- terminal native-root activation only after the independently supervised runtime owner proves the exact durable binding and matching attachment lease current and signs with its current protected runtime-owner key; a server key or pre-registration reservation cannot activate it;
 - exact native identity, history completeness, live reattachment, and safe replacement for each engine;
 - full native-TUI-plus-remote-claw coexistence for Claude Code and OpenCode, and for the untested Codex method, race, reconnect, and recovery families; the selected one-thread Codex model-free shell path is proved;
 - Codex native multi-thread subscription/routing parity plus official-stream request-ID/handle remapping, cleanup, and client-profile parity through exactly one native bridge, with `RemoteControlService` limited to management;
@@ -419,7 +448,7 @@ The design does not claim a capability until tests establish it. The largest ope
 - tmux response-loss after applied paste/Enter, local-draft collisions, transcript-UUID acceptance/origin correlation, a durable local permission-answer path, keep-pane detach, and clear/branch identity;
 - drop-in native-client fidelity: changing only the native app's endpoint or Claude wrapper route preserves the complete supported protocol and product behavior, and every unexplained difference fails the release gate;
 - many server-side collaborators represented inward as one collaborator without losing source identity;
-- recursively nested remote-claw servers without feedback loops, reflected commands, or duplicate native execution;
+- N1 live recursively nested remote-claw servers without feedback loops, reflected commands, or duplicate native execution; A2 authenticated stand-ins do not satisfy this gate;
 - provider-route termination, credential isolation, and process-tree network fencing;
 - delivery correlation and no automatic duplicate execution after an uncertain outcome;
 - coordinator-independent local cold start and direct-TUI conversation changes while collaboration is offline;

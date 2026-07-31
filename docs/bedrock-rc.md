@@ -267,8 +267,11 @@ A new launch mode parallel to `runRcLaunch`, selected by a flag — e.g.
    Claude MITM path the registrar gives each intercepted session its own lease and abort controller,
    then calls `startBridgeSession` when that lease reaches `ready`. OpenCode now uses the same
    process-local registration seam after exact session confirmation and parent-permission setup unless
-   explicitly opted out; tmux retains the direct `bridgeSession` compatibility path. The viewer drives
-   the native RC TUI exactly as today.
+   explicitly opted out. Tmux now uses it too: its lease remains `starting` while it creates a private
+   tmux runtime/socket and merged settings, launches plain Claude, and requires both a live pane and
+   Claude's mandatory `SessionStart` marker. Only then does it publish its conservative capabilities
+   and enter `ready`. This is process-local A0.2 isolation, not durable pane reattachment
+   (`liveReattach:false`). The viewer drives the native RC TUI exactly as today.
 
 ## Risks / open questions
 

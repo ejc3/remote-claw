@@ -10,13 +10,14 @@
 **Current external behavior remains compatible:** today `--rc-app` hosts an in-memory `RelayCore`
 that lazily creates one Claude-shaped `Session` per intercepted Claude RC session. A host-scoped
 process-local registrar now gives each intercepted Claude session a distinct `rcb_*` lease, waits for
-validated capabilities and `ready`, and only then starts its broker bridge. OpenCode also registers
-one wrapper `Session` through that lifecycle after strict setup; tmux still bridges its wrapper
-`Session` directly. No current path persists a logical-chat/native binding across an ordinary wrapper
-restart; the current synthetic compatibility `Session.id` is also used as the broker/web session key,
-so an ordinary restart can appear as another row. Codex is not implemented. The selected A1 design
-below removes that ID alias and keeps the remote-claw logical chat stable across proven native
-recovery.
+validated capabilities and `ready`, and only then starts its broker bridge. OpenCode and tmux also
+register one wrapper `Session` through that lifecycle after strict setup. Tmux gives each wrapper
+invocation a private server/socket, so many independent invocations can coexist without sharing tmux
+state. This is still process-local compatibility infrastructure: no current path persists a
+logical-chat/native binding across an ordinary wrapper restart, and the current synthetic
+compatibility `Session.id` is also used as the broker/web session key, so a restart can appear as
+another row. Codex is not implemented. The selected A1 design below removes that ID alias and keeps
+the remote-claw logical chat stable across proven native recovery.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
 ## 1. Decision
@@ -268,14 +269,28 @@ another server-scoped chat; only the final innermost edge targets a native bindi
 IDs from one layer never become IDs for another:
 
 - a Claude `cse_*`, Codex thread ID, OpenCode `ses_*`, tmux pane, and remote-claw chat ID are distinct;
-- one Codex host registration contains many projects and threads;
+- one paired remote-claw host contains many independent Claude, Codex, and OpenCode sessions across many projects and directories;
+- a shared Codex or OpenCode daemon may contain many native conversations, while each conversation still has its own logical chat, binding, TUI relationship, collaborators, and recovery lane;
 - one Claude outward Remote session normally represents one logical chat;
 - replacing or resuming a native process updates its binding without silently merging another chat.
+
+### 3.1 One host, many isolated session lanes
+
+`CollaborationServerRecord` identifies the paired host service. It is a container for discovery and management, not a singleton conversation. Under one current server record, any number of `LogicalChatRecord`s may be ready at the same time, and each terminal logical chat resolves through exactly one current `NativeBindingRecord` to its own semantic native conversation. Every wrapper invocation registers or reattaches only the native runtime/conversation named by its durable intent. Claude may use one supervised process per conversation; separate Codex/OpenCode wrappers may own separate daemons, and a pinned Codex or OpenCode daemon may also share its proved native conversations. Runtime sharing never makes their histories, local TUI connections, collaborators, delivery attempts, gates, cursors, or recovery state interchangeable.
+
+The complete isolation key for chat work is `(collaborationServerId, logicalChatId)`. Native work adds `nativeBindingId`, runtime/incarnation, semantic conversation ID, and attachment lease. Working directory, title, product, and project are attributes and routing evidence, not uniqueness keys: two sessions in the same directory remain independent, and two sessions in different directories cannot be merged merely because a provider or native ID resembles another.
+
+The coordinator may allocate globally monotonic journal offsets and command sequence numbers so every durable record has a unique audit position. Those counters are not a host-wide execution lock. Admission, uncertainty quarantine, native-effect gates, causal outboxes, and recovery barriers run in a per-chat actor lane; a stalled or ambiguous attempt blocks only later writes to that same chat. Server-control operations such as `new_chat` use their separately scoped management actor and may take a short project/workspace transition lock where the native server requires it, but they do not serialize turns already running in unrelated chats.
+
+Shared-daemon resources have their own narrow locks. For example, one Codex bridge may reconcile subscriptions for several threads and one OpenCode server may serialize a workspace identity transition. Such a lock protects only the named daemon resource or workspace transition; it cannot repoint a binding, consume another chat's effect gate, close another chat's TUI path, or turn one session failure into host-wide quarantine.
+
+Host recovery enumerates every current logical chat and native binding, then reattaches or quarantines each lane independently. A recovered lane must prove the exact native conversation and runtime lineage before it becomes writable. Failure to recover chat A leaves chat A visible and non-writable without creating a replacement row; it does not stop healthy local TUIs or runtime-scoped inference for chats B–N. While no coordinator lease is current, remote mutations report unavailable; each healthy remote lane becomes writable independently after its own lease, binding, and attachment proof and does not wait for chat A. Reconnecting or replacing a nested collaborator on one chat follows the same rule and does not alter another chat's edge.
 
 The durable identity layers are:
 
 | ID | Meaning | Restart rule |
 | --- | --- | --- |
+| `(collaborationServerId, projectId)` | Stable project grouping and public selector scope within one paired host | Allocated durably through an exact project intent; never reconstructed from cwd, title, provider IDs, or a native conversation |
 | `(collaborationServerId, logicalChatId)` | Canonical chat within one remote-claw server | Stable across that server's coordinator, connector, and proven native-edge restarts; never aliased to another server's chat ID |
 | `(identity_id, collaborationServerId, routeKind: "scope_bus", logicalChatId: null)` | One machine/server discovery-bus route and cursor | Stable across reconnects; never aliases a chat route |
 | `(identity_id, collaborationServerId, routeKind: "server_control", logicalChatId: null)` | One authenticated machine/server management-ingress route for typed **New chat** | Stable source/dedup scope; never carries chat mutations or discovery announcements |
@@ -292,12 +307,15 @@ The durable identity layers are:
 first collaborator mutation. A terminal server may adopt a proven native conversation whose local
 history predates remote-claw; adoption does not replay or relabel that history. The ID is never derived
 from a title, working directory, message text, `cse_*`, Codex/OpenCode ID, pane, broker channel, or
-provider ID. `command_seq` orders proposals at one remote-claw server; it is not the native harness's
-final applied order. Normalized `chat_seq` follows correlated native observations where those exist.
-`viewerProjectionSeq` is a separate coordinator receipt/provisional-display order used only to fold an
-admitted caller's optimistic row; it is never `chat_seq` and does not claim native application. A
-direct TUI action may therefore receive an earlier final `chat_seq` even when a remote proposal already
-has a projection receipt. Neither sequence resets when a transport changes. At a terminal edge,
+provider ID. `command_seq` gives proposals at one remote-claw server unique durable positions; each
+chat actor offers only its own forwarded subsequence inward, so the global counter is not a
+cross-chat scheduler or the native harness's final applied order. Normalized `chat_seq` follows
+correlated native observations where those exist.
+`viewerProjectionSeq` is a separate dense per-logical-chat receipt/provisional-display order allocated
+from that chat's `nextViewerProjectionSeq`; it is never the server-wide `command_seq`, never
+`chat_seq`, and does not claim native application. A direct TUI action may therefore receive an earlier
+final `chat_seq` even when a remote proposal already has a projection receipt. Neither sequence resets
+when a transport changes. At a terminal edge,
 exactly one native binding/incarnation is
 current; an outer chat instead has one current inward server/chat edge. Superseded records remain
 immutable because delivery attempts name the exact target reference they might have reached.
@@ -318,8 +336,8 @@ dispatcher still branches directly among MITM, OpenCode, and tmux launch paths, 
 create several sessions. That interface cannot be the host-wide contract because Codex needs one host
 runtime that discovers and serves many threads.
 
-The host-level lifecycle vocabulary introduced in A0.1, now also used by the OpenCode half of A0.2,
-is the base for the target A1 boundary below. This excerpt intentionally includes the A1-only
+The host-level lifecycle vocabulary introduced in A0.1, now also used by both A0.2 compatibility
+drivers, is the base for the target A1 boundary below. This excerpt intentionally includes the A1-only
 `NativeMutationFence` fields; it is not a claim that all fields shown have landed:
 
 ```ts
@@ -342,7 +360,9 @@ interface NativeConversationRef {
 }
 
 interface NativeProjectRef {
+  // In A1 this must reference a current ProjectRecord in the same collaboration server.
   projectId: string;
+  // Routing/evidence only; never the durable project identity.
   cwd: string | null;
 }
 
@@ -363,6 +383,8 @@ interface NativeConversationBinding<TPort = unknown, TMetadata = unknown> {
   // Stable for retries of this registration attempt.
   registrationAttemptId: string;
   descriptor: NativeEngineDescriptor;
+  // null is accepted only by the landed A0 process-local compatibility seam. A1 must resolve a
+  // current ProjectRecord before it writes a registration intent, logical chat, or native binding.
   project: NativeProjectRef | null;
   nativeRef: NativeConversationRef | null;
   phase: "starting" | "recovering";
@@ -424,6 +446,67 @@ server/chat/edge/generation/attachment fields shown above are A1 target fields. 
 is deliberately lifecycle-only. Its process-local `bindingId` is an `rcb_*` lease
 key, not the canonical chat ID. A1 adds durable records above it:
 
+The first start for one local state profile atomically creates one random default `rcs_*`, stores it in
+`HostStateProfileRecord`, and reuses it for later invocations. It is never derived from
+`machineIdentityId`, a project, or a native session. Additional named server profiles require a later
+explicit selection surface; until that lands, an invocation either reopens the stored default or
+fails. Losing that profile/server record is a new-server and re-pair event, not permission to infer the
+old server from broker or native traffic.
+
+Every durable A1 logical chat and native binding belongs to one current `ProjectRecord`. The project
+ID is a random grouping identity, not a hash or alias of a working directory, provider project, native
+conversation, title, or workspace selector. On the first bootstrap of a server with no project, the
+host requires one exact terminal target plus a typed `workspaceSelectorId`; one transaction allocates
+a random project, stores its allocation intent, installs generation one of the corresponding
+`ProjectTargetSelectorMappingRecord`, and only then creates the first logical chat, native binding,
+and registration intent. An exact retry of the same allocation intent returns the same project and
+mapping; changed target or selector bytes collide. Once any project exists, an invocation without an
+explicit current `(projectId, workspaceSelectorId)` fails closed. An explicit **New project**
+management intent uses the same atomic allocation rule. It never guesses from cwd or chooses the only
+or most recent project. `projectAllocationIntentId` is the already persisted
+`registrationAttemptId` for `first_bootstrap` and the admitted management `commandId` for
+`explicit_new_project`; neither is minted after an uncertain allocation response.
+
+The unique index is `(collaborationServerId, projectAllocationIntentId)`. Its canonical digest is:
+
+```text
+SHA256(
+  str("remote-claw/project-allocation-intent/v1") ||
+  str(projectAllocationIntentId) ||
+  str(collaborationServerId) ||
+  str(projectId) ||
+  str(allocationKind) ||
+  str(initialWorkspaceSelectorId) ||
+  bytes(base64urlDecode(initialTargetDigest))
+)
+```
+
+The transaction recomputes that digest and the initial selector mapping ID/target digest on every
+retry. An exact match returns the existing project; any changed field is an intent collision and
+creates no second project or mapping.
+
+The nullable `NativeConversationBinding.project` field is retained solely for the landed A0 seam:
+`project:null` means “unresolved process-local compatibility metadata.” It cannot be copied into a
+`NativeRegistrationIntentRecord`, `LogicalChatRecord`, or `NativeBindingRecord`, cannot select an
+existing project after restart, and cannot be promoted by matching cwd or native IDs. A0-to-A1
+adoption must first install or select the exact durable project and target-selector mapping.
+
+A1 host control state uses one owner-only, symlink-safe local `host-state-v1.db`, opened and migrated
+only by the independently supervised host-state/runtime-owner service. Control-journal and
+runtime-transition tables remain logically separate, but native delivery attempt, front-door
+dispatch, and effect-gate creation share this one transaction boundary. The coordinator receives
+high-level epoch-fenced RPC operations, never raw SQL access. Adapter-private transport state such as
+Claude RC event bodies may use a separate adapter-local store only when no selected atomic invariant
+crosses into it. Private keys, callable port/dispatch handles, and provider credentials are referenced
+through protected handle APIs; they are not ordinary `LocalArtifactRecord` payloads.
+
+`registrationAttemptId` is durable replay identity. Its canonical intent digest covers the
+descriptor, project, expected native identity, initial phase, and versioned metadata/capability
+digests, but excludes the process-local `port` object. An exact retry returns the same
+`nativeBindingId`; changed intent bytes under the same attempt ID collide. Reacquiring a process-local
+port under a later coordinator epoch creates a new `NativeConversationLeaseRecord` for that same
+intent and binding, not another binding.
+
 ```ts
 interface CollaborationServerRecord {
   collaborationServerId: string; // stable random rcs_<base64url-128-bit>
@@ -431,10 +514,91 @@ interface CollaborationServerRecord {
   currentKeyGeneration: number; // equals the current certificate's keyGeneration
   currentIdentityKeyId: string;
   currentScopeCertificateId: string;
+  // Zero/null before the first coordinator lease. Acquiring a replacement increments the epoch.
+  currentCoordinatorEpoch: number;
+  currentCoordinatorLeaseId: string | null;
+  // Allocated transactionally for every control-journal entry; never inferred from row count.
+  nextJournalOffset: number;
   nextServerSignatureSeq: number;
   nextCommandSeq: number;
   createdAtMs: number;
   state: "installing" | "current" | "repairing" | "closed";
+}
+
+interface HostStateProfileRecord {
+  stateProfileId: string; // "default" for the first selected profile
+  machineIdentityId: string;
+  defaultCollaborationServerId: string;
+  createdAtMs: number;
+}
+
+interface ProjectRecord {
+  projectId: string; // stable random rcpj_<base64url-128-bit>
+  collaborationServerId: string;
+  projectAllocationIntentId: string; // unique within the server; exact retry returns this row
+  projectAllocationIntentSchemaId: "remote-claw/project-allocation-intent/v1";
+  projectAllocationIntentDigest: string;
+  allocationKind: "first_bootstrap" | "explicit_new_project";
+  initialWorkspaceSelectorId: string;
+  initialTargetDigest: string;
+  initialProjectTargetSelectorMappingId: string;
+  createdAtMs: number;
+  state: "current" | "closed";
+}
+
+interface CoordinatorLeaseRecord {
+  coordinatorLeaseId: string;
+  collaborationServerId: string;
+  coordinatorEpoch: number;
+  ownerInstanceId: string;
+  acquiredAtMs: number;
+  heartbeatDeadlineMs: number;
+  releasedAtMs: number | null;
+  state: "current" | "expired" | "released" | "superseded";
+}
+
+interface NativeRegistrationIntentRecord {
+  registrationAttemptId: string;
+  collaborationServerId: string;
+  nativeBindingId: string;
+  canonicalIntentSchemaId: "remote-claw/native-registration-intent/v1";
+  descriptorRef: string;
+  descriptorDigest: string;
+  projectRef: string;
+  projectDigest: string;
+  expectedNativeRefDigest: string | null;
+  initialPhase: "starting" | "recovering";
+  metadataSchemaId: string;
+  metadataRef: string;
+  metadataDigest: string;
+  capabilitiesRef: string | null;
+  capabilitiesDigest: string | null;
+  canonicalIntentDigest: string;
+  createdAtMs: number;
+}
+
+interface NativeConversationLeaseRecord {
+  nativeConversationLeaseId: string;
+  collaborationServerId: string;
+  nativeBindingId: string;
+  registrationAttemptId: string;
+  coordinatorLeaseId: string;
+  coordinatorEpoch: number;
+  protectedPortHandleId: string;
+  acquiredAtMs: number;
+  closedAtMs: number | null;
+  state: "starting" | "recovering" | "ready" | "draining" | "closed";
+}
+
+interface LocalArtifactRecord {
+  artifactId: string;
+  artifactKind: string;
+  canonicalSchemaId: string;
+  digestAlgorithm: "SHA-256";
+  artifactDigest: string;
+  byteLength: number;
+  protectedStorageHandleId: string;
+  createdAtMs: number;
 }
 
 interface ServerScopeCertificateRecord {
@@ -533,6 +697,7 @@ interface LogicalChatRecord {
   currentInwardEdgeId: string | null;
   currentNativeBindingId: string | null;
   parentChatId: string | null;
+  nextViewerProjectionSeq: number;
 }
 
 interface BrokerChannelCursorV1 {
@@ -551,6 +716,8 @@ interface BrokerRouteRecord {
   logicalChatId: string | null; // null exactly for scope_bus/server_control; required exactly for chat
   routeToken: string;
   genesisGeneration: 0;
+  brokerBackendCapabilitiesRef: string;
+  brokerBackendCapabilitiesDigest: string;
   createdAtMs: number;
   state: "current" | "quarantined" | "closed";
 }
@@ -3032,6 +3199,9 @@ interface OutsideBindingRecord {
   state: "current" | "closed";
 }
 
+// The provider-specific records below describe the end-state B/C extensions. A1 defines only their
+// provider-neutral outside-binding, source-event, capability, and actor seams; it does not migrate,
+// enroll, or make Anthropic/ChatGPT connectors writable.
 interface ProviderServerControlBindingRecord {
   providerServerControlBindingId: string;
   collaborationServerId: string;
@@ -5120,6 +5290,29 @@ original result and a blocked observation, not a new result.
 `str("remote-claw/a1/attempt-header/v1") || bytes(stableLogicalHeader)` using the exact
 [v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow)
 writer.
+
+Before opening an A1 route, the versioned broker client requires this complete backend contract:
+
+```ts
+interface BrokerBackendCapabilitiesV1 {
+  schemaVersion: 1;
+  protocol: "remote-claw-broker-a1";
+  durableCiphertext: true;
+  routeWideDeliveryAttemptUniqueness: true;
+  brokerRecomputesTransportDigest: true;
+  exactRetryReturnsOriginalCursor: true;
+  generationManifests: true;
+  immutableCollisionTombstones: true;
+}
+```
+
+The backend advertises it through the broker provider's versioned capability operation, and the host
+pins the returned canonical vector/digest in `BrokerRouteRecord` before first publish. An absent,
+partial, unknown-version, or changed vector fails A1 route readiness. The declaration is not accepted
+as proof by itself: the A1 broker conformance suite verifies every property against the configured
+backend, including restart and rollover. An A0 client never requests this contract, and an A0 backend
+must reject the A1 operation rather than imitate it with weaker `msgId` deduplication.
+
 Selected A1 requires a durable ciphertext broker whose route-wide transport uniqueness key is
 `(route token, deliveryAttemptId, part)`, not semantic `msgId` and not one generation. The first insert
 first parses the exact clear frame schema, rejects duplicate or noncanonical fields, and recomputes the
@@ -5214,8 +5407,10 @@ observation:
    signing reservation, and leaves the ingress in `deciding`. Every complete authenticated semantic
    proposal, including a rejected unsupported one, receives a `commandId` and `commandSeq`; malformed,
    incomplete, and colliding input does not. It reserves `viewerProjectionSeq` only for an admitted kind
-   that will actually be projected. An unsupported OpenCode attachment, or any other capability
-   rejection, keeps that sequence null. This transaction creates no source ACK, stored A1 result,
+   that will actually be projected, by atomically consuming the destination
+   `LogicalChatRecord.nextViewerProjectionSeq`. Another chat has its own dense sequence and lock. An
+   unsupported OpenCode attachment, or any other capability rejection, keeps that sequence null. This
+   transaction creates no source ACK, stored A1 result,
    result delivery, projection intent, native/nested attempt, or external effect.
 6. After protected-key signing, the signed-result-finalization transaction rechecks the frozen command
    digest, inserts the immutable common result and exact A1 semantic result, advances the terminal
@@ -6615,10 +6810,13 @@ remote-claw collaborator visible at the native boundary.
 
 Edges are installed from the native root outward, never by linking two unrooted chats. The runtime
 owner bootstraps the terminal edge with a short-lived signed `NativeRootCertificate` only after the
-exact native binding is current; one local transaction compare-and-swaps the terminal server/chat
-generation and installs that binding, certificate, and edge together. Only a server target that already
-has such a current path may issue a signed `ServerRootedTopologyCertificate`. It commits the target's
-complete server/chat/edge path and every topology generation.
+exact durable native binding and its runtime-owner attachment lease are both current for the same
+runtime/incarnation. The runtime owner's current `RuntimeOwnerIdentityKeyRecord`, not a server identity
+key, signs that certificate. One local transaction revalidates those prerequisites, compare-and-swaps
+the terminal server/chat generation, and installs the certificate and reserved native edge together.
+Only a server target that already has such a current path may issue a signed
+`ServerRootedTopologyCertificate`. It commits the target's complete server/chat/edge path and every
+topology generation.
 
 For a server-to-server edge, the source verifies that it is absent from the certified path and has no
 current inward edge, then writes its signed prepare receipt against its expected generation. The target
@@ -6884,7 +7082,9 @@ The runtime owner has a separately protected local `RuntimeOwnerIdentityKeyRecor
 rotation are explicit local-owner operations recorded in `localTrustEvidenceRef`; exactly one key is
 current, and revoked keys cannot sign a new native root. Its private key follows the same protected
 handle/no-argv/no-log custody rule as server keys. It may sign a native root only after its local
-registry proves the exact binding current. That evidence digest is:
+registry proves the exact durable binding, runtime/incarnation, and attachment lease are all current
+and mutually linked. A coordinator or server key cannot substitute for this runtime-owner gate. That
+evidence digest is:
 
 ```text
 SHA256(
@@ -7347,25 +7547,32 @@ Claude MITM creates one registrar per wrapper process and one lease per intercep
 `ready`, the registrar invokes `startBridgeSession`. OpenCode now opens one lease in `starting`,
 confirms one exact canonical native session ID, proves parent permission setup unless explicitly
 opted out, publishes conservative capabilities, and moves to `ready` before the same bridge starts.
-The older `bridgeSession` entrypoint remains a served-promise compatibility wrapper for tmux. This
-preserves the current data plane while making Claude MITM's host cardinality and OpenCode's no-ghost
-setup boundary explicit.
+Tmux now opens the same kind of `starting` lease, creates its private runtime/server/socket and
+owner-only launch artifacts, requires a positive pane probe plus a SessionStart marker from the exact
+merged settings, publishes its conservative post-setup capabilities, and only then moves to `ready`.
+The older `bridgeSession` entrypoint remains as a served-promise compatibility API, but no current
+harness bypasses the registrar through it. This preserves the current data plane while making each
+harness's no-ghost setup boundary explicit.
 
 The adapter creates and owns `port`; the registrar consumes it for the bridge and returns a lease.
 `open`, late `bindNative`, update, and close can fail asynchronously. On a validation, binding, or
 lifecycle failure, the adapter closes the lease and applies the runtime-owner policy; it does not
 pretend registration succeeded. The current A0 Claude path logs the registration failure and closes
-that failed `Session`; OpenCode similarly closes a failed starting lease and publishes no conversation,
-while A1 adds the persistent recovery gap and keep-alive/resume policy. After a validated live `update`,
-an advisory projection failure is reported and retried by later presence publication, but it does not
-restore stale metadata or capabilities. A0 implements only this lifecycle and current metadata. The
-capability/evidence fields prevent that behavior-preserving bridge from claiming future guarantees.
+that failed `Session`; OpenCode and tmux similarly close a failed starting lease and publish no
+conversation, while A1 adds the persistent recovery gap and keep-alive/resume policy. After a validated
+live `update`, an advisory projection failure is reported and retried by later presence publication,
+but it does not restore stale metadata or capabilities. A0 implements only this lifecycle and current
+metadata. The capability/evidence fields prevent that behavior-preserving bridge from claiming future
+guarantees.
 The legacy RC registrar does not start `startBridgeSession` or announce the conversation until it has
 validated capabilities supplied at `open` or `update` and the adapter has moved the lease to `ready`.
 The current Claude launch begins with null capabilities and supplies them through `update`. OpenCode
 also begins conservatively, then updates only after confirming one exact canonical native session ID
-and, unless opted out, parent permission read/install/read-back. `Session` buffers any earlier upstream
-events. This prevents broker input from reaching a half-configured native adapter.
+and, unless opted out, parent permission read/install/read-back. Tmux likewise opens with null
+capabilities and `nativeRef:null`, then updates only after its private launch boundary and required
+native readiness evidence are proved. Its native capture, injection, and permission pumps may already
+exist at that point, and `Session` can buffer earlier native observations, but the registrar has not
+created a broker client or announcement; no remote mutation can reach the pane before `ready`.
 
 An open lease starts in the binding's explicit `starting` or `recovering` phase. Moving to `ready`
 requires validated capabilities. A proven native identity is preferred but not fabricated: an A0
@@ -7381,11 +7588,17 @@ must ensure that closing one Codex thread lease never closes the shared host-sco
 Native process ownership is separate from a conversation lease. A small host runtime owner—an OS
 service, daemon, or per-engine warden—keeps eligible native processes and private protocol endpoints
 alive across coordinator reconnection, saves their locators/start identities, and grants one
-epoch-fenced remote-collaboration mutation lease. If an adapter cannot reattach safely, it advertises cold native resume or
-successor-chat recovery instead. Today's cleanup differs by path: Claude wrapper teardown ends its
-child, tmux kills its pane, and OpenCode leaves the external server alive but best-effort aborts the
-attached session's active run. None provides the selected persistent-runtime contract yet; live
-reattachment remains proof-gated.
+epoch-fenced remote-collaboration mutation lease per current native binding. Its registry may contain
+many concurrent Claude processes and many conversations inside shared Codex or OpenCode daemons. A
+registration, teardown, takeover, or recovery operation names the exact runtime, conversation, and
+binding; an unscoped “current session” slot is forbidden. If an adapter cannot reattach safely, it
+advertises cold native resume or successor-chat recovery instead. Today's cleanup differs by path:
+Claude wrapper teardown ends its child; tmux spends one bounded deadline settling pumps and its
+lease/relay, then attempts to kill the pane with the remaining time and removes the private runtime
+only when termination is proved; OpenCode leaves the external server alive but best-effort aborts the
+attached session's active run. An uncertain tmux kill retains the private runtime and socket for
+diagnosis or manual attachment, but the wrapper still has no durable reattachment policy. None
+provides the selected persistent-runtime contract yet; live reattachment remains proof-gated.
 
 The coordinator epoch is enforced, not informational. Acquiring it is an atomic compare-and-swap in the
 server journal. Every server journal transition, remote-claw-origin delivery before native acceptance,
@@ -7393,6 +7606,14 @@ outward collaboration write, ingress ACK, and outbox claim is conditional on tha
 owner and connectors reject stale epochs. This prevents an old coordinator and its replacement from
 both delivering. Direct native-TUI mutations remain on the native product path and are not
 coordinator-epoch fenced.
+
+Acquiring a coordinator lease is one compare-and-swap transaction: the service proves the current
+lease absent, released, or expired; increments `currentCoordinatorEpoch`; creates the matching
+`CoordinatorLeaseRecord`; updates `currentCoordinatorLeaseId`; and appends the next journal entry by
+consuming `nextJournalOffset`. Heartbeats may extend only that exact current
+`(coordinatorLeaseId, coordinatorEpoch)` pair. Expiry permits takeover but does not rewrite or delete
+the old lease. Every mutating owner RPC supplies both values and fails before touching state when
+either is stale.
 
 Inference has a separate runtime/warden lease. Provider-shaped calls already accepted by the native
 harness name the current native runtime and inference-connector generations, not the collaboration
@@ -7409,6 +7630,55 @@ lease. A private collaboration-transport operation resolves the named attachment
 if the attachment, native incarnation, coordinator epoch, transport epoch, edge generation, or
 topology generation is no longer current.
 
+The adapter boundary accepts an immutable, already-translated request—not generic text to reinterpret
+after admission—and separates first dispatch from evidence-only reconciliation:
+
+```ts
+interface PreparedNativeMutation {
+  attemptId: string;
+  dispatchAuthorizationHandle: string;
+  fence: NativeMutationFence;
+  canonicalRequestSchemaId: string;
+  canonicalRequestRef: string;
+  canonicalRequestDigest: string;
+}
+
+interface NativeDispatchReceipt {
+  attemptId: string;
+  dispatchAuthorizationHandle: string;
+  dispatchState:
+    | "started"
+    | "transport_receipt"
+    | "native_observed"
+    | "completed"
+    | "outcome_unknown";
+  nativeReceiptRef: string | null;
+  nativeReceiptDigest: string | null;
+}
+
+interface NativeReconciliationEvidence {
+  attemptId: string;
+  nativeEvidenceSchemaId: string;
+  nativeEvidenceRef: string;
+  nativeEvidenceDigest: string;
+}
+
+interface NativeMutationDispatcher {
+  // Consumes the one-time authorization in the last transaction before the first possible native byte.
+  dispatch(prepared: PreparedNativeMutation): Promise<NativeDispatchReceipt>;
+  // Reads/attaches positive evidence only. This operation has no native send capability.
+  reconcile(evidence: NativeReconciliationEvidence): Promise<NativeDispatchReceipt>;
+}
+```
+
+The host-state service atomically creates the selected signed result,
+`NativeDeliveryAttemptRecord`, `NativeFrontDoorDispatchRecord`, and
+`NativeCommandEffectGateRecord`, then issues the protected one-time authorization. `dispatch` validates
+the exact request ref/digest and current fence immediately before use and can consume that
+authorization once. After any possible start, retry is forbidden; only `reconcile` may advance the
+attempt from retained positive native evidence. Neither the coordinator nor an adapter may construct
+a replacement request from current chat text after admission.
+
 ## 5. Normalized command path
 
 The first selected families are intentionally small: chat-scoped `user_text` and server-control
@@ -7423,7 +7693,7 @@ command
 ├── source event namespace + event ID + source-identity/source-record digests
 ├── typed mutation family
 ├── canonical typed payload reference + digest
-├── ready journal position + server-wide command sequence
+├── ready journal position + globally unique command sequence (audit, not a cross-chat lock)
 ├── decision + admitted target kind
 ├── target capability snapshot + family digest
 ├── result version/current-result pointer
@@ -7614,9 +7884,9 @@ they never reinterpret an existing command or projection item through an incarna
 
 Namespace-transition installation is an epoch-fenced compare-and-swap that atomically installs its
 boundary/classifier evidence and advances the namespace pointer before the connector becomes writable.
-For each ingress, one serialized actor turn revalidates that transition, current capability
-verification, and coordinator epoch. One durable transaction then records the observation's
-classification and does exactly one of these:
+For each ingress, one serialized turn in that chat or server-control actor revalidates the transition,
+current capability verification, and coordinator epoch. Actors for other chats proceed independently.
+One durable transaction then records the observation's classification and does exactly one of these:
 
 - proven new: insert the unique canonical source-event row and `command.proposed` together;
 - proven replay: link the observation to the existing canonical row/command without a proposal; or
@@ -7642,10 +7912,8 @@ neutral schema.
 
 Ordering fields have one job each:
 
-- `journal_offset` totally orders all control records;
-- `command_seq` orders the proposals this server received and decided, including queued and rejected
-  proposals. Only the forwarded subset is offered inward, in that server order; `command_seq` is not
-  the native execution order;
+- `journal_offset` totally orders all control records for audit and recovery, but does not serialize execution across chats;
+- `command_seq` gives every proposal this server received and decided a unique durable position, including queued and rejected proposals. Within one closed chat scope, the forwarded subsequence is offered inward in that chat's order. Another chat does not wait for a missing, busy, or uncertain position; `command_seq` is neither a host-wide execution queue nor the native execution order;
 - `chat_seq` orders the rebuildable viewer projection according to correlated native observations
   where available, with explicit provisional or gap state where native order is unknown; the
   control store persists only stable source-ID → `chat_seq`/message-ID mappings, not assistant content,
@@ -7727,7 +7995,7 @@ person's direct native-TUI path.
 
 ## 8. Restart and recovery
 
-When the coordinator restarts:
+When the coordinator restarts, it runs the following recovery lane independently for every durable logical chat, with bounded parallelism. A lane may become writable as soon as its own prerequisites pass; it does not wait for an unrelated failed lane:
 
 1. Stop forwarding new remote proposals inward.
 2. Reopen the small control journal and acquire a new coordinator epoch.
@@ -7780,8 +8048,7 @@ When the coordinator restarts:
 13. Announce and route the same `(collaborationServerId, logicalChatId)` scope. A rotated nested or
     native transport must not allocate a second web row, broker channel, provider session/chat,
     represented subtree, or command sequence.
-14. Reopen forwarding only when the next inward proposal cannot overtake an uncertain older attempt.
-    Merely displaying a gap does not make delivery safe.
+14. Reopen forwarding for this chat only when its next inward proposal cannot overtake an uncertain older attempt in the same chat. Merely displaying a gap does not make that lane safe; an uncertain attempt in another chat is not a reason to hold this one.
 
 The broker stream is the encrypted physical inbox for web commands, but it is not their semantic
 forwarding/order authority. Current durable-relay preparation, when reusing a session channel, samples
@@ -8714,7 +8981,10 @@ str(collaborationServerId) || str(projectId) || str(workspaceSelectorId) ||
 uint(mappingGeneration) || bytes(base64urlDecode(targetDigest))))}`. `targetDigest` is the canonical
 digest of exactly one closed union arm: terminal-native includes kind, descriptor, terminal project
 ref, and optional workspace binding; nested-server includes kind, current server-scoped nested
-management binding, target server/project, and target selector. Exactly one current row may exist for
+management binding, target server/project, and target selector. Its `projectId` must foreign-key one
+current `ProjectRecord` in the same server. The first mapping is created atomically with that project
+under the project's unique allocation intent; later mappings cannot allocate, infer, or resurrect a
+project. Exactly one current row may exist for
 `(collaborationServerId, projectId, workspaceSelectorId)`. Initial OpenCode A2 forbids one native
 workspace binding from being current under two public selectors in the same project. Mapping
 replacement is a generation-incrementing compare-and-swap. The target logical chat, creation command/
@@ -9394,14 +9664,21 @@ injection acquires a proved quiescent/exclusive editor lease or the native trans
 unambiguous command boundary.
 
 Direct pane submissions are observed only after Claude records them, so this mode has lower-confidence
-post-acceptance attribution rather than a pre-execution source identity. Startup or reattach scrubs
-inherited Claude session variables, validates the intended pane and child process, installs durable
-transcript/permission hooks, binds the exact Claude session/transcript, and starts tailing before
-remote input is accepted. Paste and Enter are separate possible side effects. A tmux command error can
-arrive after the server applied paste or Enter, so automatic retry is unsafe. Before the first send,
-the target writes ahead the source/attempt, transcript cursor, pane/process identity, and intended
-payload. Tmux success is only control receipt; native application and source require a correlated
-Claude transcript UUID/row. Identical text does not prove either fact.
+post-acceptance attribution rather than a pre-execution source identity. Current A0.2 startup opens a
+process-local `starting` lease, scrubs inherited Claude session variables, creates an owner-only
+per-launch runtime and private tmux socket, writes the merged settings and launcher outside tmux argv,
+and streams prompt text to `load-buffer` over stdin. It rejects hook-disabling modes and unmergeable
+settings rather than launching without its readiness proof. A positive pane probe plus the required
+SessionStart marker must identify the expected native session before it publishes capabilities or
+creates a broker client and announcement. Native capture, injection, and permission pumps may exist
+before publication, but without that broker path no remote mutation can reach the pane. The current
+registration deliberately keeps `nativeRef:null`; it is readiness, not a durable native binding.
+
+Paste and Enter remain separate possible side effects. A tmux command error can arrive after the
+server applied paste or Enter, so automatic retry is unsafe. Before the first send, the target writes
+ahead the source/attempt, transcript cursor, pane/process identity, and intended payload. Tmux success
+is only control receipt; native application and source require a correlated Claude transcript
+UUID/row. Identical text does not prove either fact.
 
 A persistent process owner may reattach a surviving pane using saved pane/process identity,
 Claude session ID, transcript path, inode, and offset. If it cannot prove whether an injected command
@@ -9409,14 +9686,17 @@ started, that command becomes `outcome_unknown`.
 
 The current PreToolUse helper is a remote viewer gate, not a native TUI-versus-remote first-winner
 surface. A person at the pane has no equivalent local answer path through that helper. If decision-file
-persistence fails, the helper may remain blocked even though the injection pump currently ACKs the
-answer. Structured permission parity remains unsupported until a durable local decision seam and
-native terminal observation exist; failed answer persistence is never acknowledged as success.
+persistence fails, the helper may remain blocked; the current decision callback throws and the
+injection pump withholds its relay ACK. Structured permission parity remains unsupported until a
+durable local decision seam and native terminal observation exist.
 
 `/compact` remains the same chat only when its native identity proves that; `/clear` starts a new
 chat, and `/branch` creates fork lineage. Hook scratch paths, request/decision cursors, and orphaned
-permission gates are recovery state. Graceful stop explicitly chooses keep-pane or kill-pane after
-draining; closing the chat lease alone does neither.
+permission gates are recovery state. Current wrapper teardown settles pumps and its lease/relay under
+one deadline, then tries to kill the pane with the remaining time. It removes the private runtime only
+after termination is proved and otherwise retains the socket and owner-only artifacts, but it cannot
+durably reattach after wrapper restart. The target graceful stop instead makes keep-pane versus
+kill-pane an explicit persisted policy; closing a chat lease alone does neither.
 
 Tmux remains a compatibility path. It must not advertise the same delivery or recovery guarantees as
 structured Claude, Codex, or OpenCode adapters.
@@ -9934,8 +10214,10 @@ Cold start proceeds from the inside out:
    Remote-management endpoint, official-stream mapping/cleanup path, native subscription/routing
    observation, and network policy before any inner process. The outward provider connection remains
    non-writable until its host connector lease and coordinator epoch are current.
-3. Start or adopt each native runtime, restore the real local TUI path, and establish native
-   observation. This local path does not require a collaboration coordinator.
+3. Enumerate and start or adopt every eligible native runtime and conversation, restore each real
+   local TUI path, and establish native observation. Each runtime/conversation/binding has an
+   independent lifecycle; one failed adoption remains isolated. These local paths do not require a
+   collaboration coordinator.
 4. Attempt to open the collaboration control journal, acquire one coordinator epoch, and fence stale
    remote writers. If that fails, keep the local TUI, façade, inference, and native state available,
    but advertise remote collaboration as unavailable and accept no remote-claw mutation.
@@ -10028,8 +10310,9 @@ supported on the official binding.
 
 ### 11.4 Concurrent writers
 
-- Web, official-client, automation, and nested-server proposals compete for this server's next
-  `command_seq`.
+- Web, official-client, automation, and nested-server proposals receive a globally unique
+  `command_seq` for audit, but only proposals targeting the same logical chat compete for that chat's
+  actor and inward delivery lane.
 - The native harness separately arbitrates its one direct TUI participant against its one remote-claw
   collaborator; native order is the applied order.
 - One native turn runs at a time per logical chat unless the native API proves a different safe
@@ -10068,7 +10351,11 @@ OpenCode, or tmux isolation:
 
 ## 13. Delivery plan
 
-Each item lands as a separate reviewed PR.
+Milestones group related work; no milestone below is intended to land as one pull request. Each
+numbered PR slice lands as a separate reviewed PR, may introduce dormant schema or read-only evidence,
+and must leave every dependent capability disabled until its own proof gate passes. Detailed bullets
+under a milestone constrain those slices; they do not silently enlarge one slice into the whole
+milestone.
 
 ### A0 — Host-wide registration seam
 
@@ -10080,7 +10367,7 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 - Add a native engine adapter package that is independent of Claude `Session`.
 - Add two-phase conversation registration.
 - Add a legacy RC registrar that maps today's `Session` into `startBridgeSession` while retaining
-  `bridgeSession` as the direct-driver compatibility entrypoint.
+  `bridgeSession` as the older served-promise compatibility API.
 - Route Claude MITM registration through one host-scoped registrar without changing native command
   flow, and prove that one registrar can serve several intercepted conversations.
 - Accept only first-bind/exact-replay native identity; defer proof-carrying replacement to A1.
@@ -10093,7 +10380,10 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 
 #### A0.2 — OpenCode and tmux migration
 
-**Status: OpenCode implemented; tmux next.**
+**Status: implemented as process-local compatibility infrastructure.**
+
+OpenCode and tmux now share the A0 registrar lifecycle without claiming A1 durability, stable
+logical-chat identity across wrapper restart, or native effect fencing.
 
 - OpenCode now routes registration through the host-wide seam without changing its compatibility
   command flow. It opens a `starting` lease; requires a successful schema-valid session list; requires
@@ -10131,26 +10421,121 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
   failure/read-back/already-installed behavior, cancellation setup boundaries, tracked child teardown,
   literal-true permission replies, body-free error handling, diagnostic redaction, no bridge or pumps
   before `ready`, truthful capabilities, and the shared teardown deadline.
-- Tmux still needs migration through the same registration seam, post-setup capability publication,
-  and no-ghost spawn failure behavior.
+- Tmux opens a `starting` lease with null published capabilities and `nativeRef:null`. It prepares an
+  owner-only per-launch runtime, private tmux socket, merged settings, permission/readiness artifacts,
+  and launcher; every tmux control verb after the version check addresses that socket. The child
+  environment is supplied through process options, forwarded arguments remain in the private launcher,
+  merged settings remain in the private settings file, and prompt text reaches `load-buffer` over
+  stdin. Those values are absent from tmux argv and from the driver's redacted public error surface.
+- Tmux fails closed before publication when settings or folder-trust preparation cannot safely carry
+  the required hooks, when a forwarded mode disables hooks, when the pane cannot be started or proved
+  present, when the mandatory SessionStart marker is absent or identifies the wrong session, or when
+  cancellation wins. Native capture, injection, and permission pumps may exist after native readiness
+  and before publication, but the registrar creates no broker client or announcement until `ready`;
+  consequently no remote mutation can reach the pane during setup and every failed start publishes no
+  ghost conversation.
+- Tmux publishes viewer capabilities only from proved setup:
+  `{structuredPermissions:mirror,status:false,controls:{interrupt:true,setModel:true,setMode:false,end:false},attachments:true}`.
+  Its native evidence is
+  `{mutationAdmission:"post_hoc",history:"partial",deliveryEvidence:"best_effort",liveReattach:false}`.
+  Permission-decision persistence is atomic and owner-only; a failed write throws and withholds the
+  relay ACK rather than claiming delivery.
+- Pumps and registrar/relay closure share one teardown deadline, and pane termination receives only
+  the remaining time. Private files are removed only when the pane is proved terminated or already
+  gone; an unknown outcome retains the private runtime/socket. Distinct private servers and
+  session-scoped buffers let many independent wrapper invocations coexist on one host, including in
+  the same working directory, without implying the durable host inventory or restart recovery owned
+  by A1 and D.
+- Tmux driver tests cover readiness and cancellation races, no pre-ready broker client/announcement,
+  no-ghost failures, exact capabilities, private file modes/socket selection, argv/environment/prompt
+  isolation and redacted errors, permission persistence, tri-state liveness and teardown retention,
+  transcript selection/rotation, and concurrent wrapper isolation.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-- Add durable `logical_chat`, `native_binding`, native-incarnation, runtime-local
+**Status: planned.** A1 is provider-neutral. It owns generic collaboration-server, chat, native,
+runtime, source, outside-binding, capability, decision, attempt, outbox, and inference records. It
+does not own Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat
+mapping, or official-client compatibility; B and C add those records on the generic A1 seams.
+
+**PR slices**
+
+- **A1.0 — Contract freeze:** close the selected record, canonical-ID, coordinator-lease,
+  registration-intent, protected-handle, immutable-dispatch, reconciliation, and backend-capability
+  gaps in docs and TypeScript validators. No persistence or writable capability lands here.
+- **A1.1 — Secure local state kernel:** owner-only `host-state-v1.db`, migrations, transaction API,
+  protected artifact handles, reopen behavior, rollback, symlink/mode checks, and future-version
+  refusal.
+- **A1.2 — Server/project/chat/binding/epoch state:** default `rcs_*` bootstrap, idempotent
+  `ProjectRecord` allocation plus initial selector mapping, many concurrent logical chats, native
+  bindings/incarnations, non-writable terminal-root/edge reservation per terminal chat, coordinator
+  lease compare-and-swap, journal offsets, per-chat actor lanes, and unique-current-owner constraints.
+- **A1.3 — Runtime owner service:** independently supervised owner RPC, authentication,
+  protected `RuntimeOwnerIdentityKeyRecord` custody/signing, multi-runtime/multi-conversation registry,
+  attachment leases, per-binding lifecycle gates, takeover fencing, shared-daemon resource isolation,
+  and detach versus terminate.
+- **A1.4 — Durable registration:** stable intent digest, exact retry/collision behavior, binding reuse,
+  mandatory durable project resolution, fresh epoch-fenced process leases, post-setup capabilities,
+  current binding/attachment prerequisites for a native root, and no ghost readiness.
+- **A1.5 — Canonical A1 wire and signing:** canonical encodings, IDs/KDFs, scope certificates,
+  runtime-owner-signed terminal-root certificates and activation, signatures, browser/Node vectors,
+  and noncanonical or transplanted-signature rejection. Pure encodings and vectors may be developed
+  after A1.0, but activation is disabled until A1.3 and A1.4 prove the exact current binding and
+  attachment lease.
+- **A1.6 — A1 broker contract:** versioned backend capability handshake, durable ciphertext routes,
+  route-wide delivery-attempt uniqueness, exact retry cursors, generation sealing/manifests, and
+  collision tombstones.
+- **A1.7 — Durable ingress and common actor:** cursor recovery, multipart reconstruction,
+  source-event dedup/collision, scope-bus/server-control/chat routes, command ordering, and immutable
+  signed admitted/queued/rejected results.
+- **A1.8 — Outbox and one-time native dispatch:** atomic result/attempt/dispatch/effect-gate creation,
+  causal outboxes, protected one-use authorization, epoch/fence checks, uncertainty quarantine, and
+  evidence-only reconciliation.
+- **A1.9 — Runtime-scoped inference recovery:** provider-request identity, encrypted exact request
+  bytes and response chunks, connector leases, and no silent retry after ambiguous upstream receipt.
+- **A1.10 — Viewer onboarding and projection:** certificate-chain verification, scoped discovery,
+  result redelivery, broker catch-up, projection rebuild, and no duplicate optimistic row.
+- **A1.11 — Recovery gauntlet:** kill/restart at every commit/send boundary, stale-coordinator
+  takeover, broker rollover, projection rebuild, and proof that the local TUI remains usable while
+  remote collaboration is unavailable.
+
+The stateful critical path is `A1.0 → A1.1 → A1.2 → A1.3 → A1.4 → A1.5 terminal-root activation`.
+A1.5's pure encoding/vector work may start after A1.0, but its runtime-owner signing and activation
+integration waits for A1.3 and A1.4. A1.6 may start after A1.1; A1.7 waits for A1.2, completed A1.5
+signing/verification, and A1.6; A1.8 waits for A1.3, A1.4, and A1.7; A1.9 waits for A1.3 and the
+protected-handle kernel; A1.10 waits for A1.5–A1.8; A1.11 is the integrated gate. A1.0–A1.4 are
+therefore the immediate sequential state work after A0.2, while pure wire vectors and broker
+conformance can proceed in parallel without prematurely activating a terminal root.
+
+- Add durable `project`, project-allocation/selector mapping, `logical_chat`, `native_binding`,
+  native-incarnation, runtime-local
   native-conversation/transition/mapping, private-transport-attachment and attachment-lease,
   runtime-scoped inference-attempt/chunk-outbox/correlation, outside-binding,
-  collaboration-server/scope-certificate, ChatGPT-Remote-host/connector-lease/transport-state/chat-mapping,
-  outside-capability-snapshot, outside-capability-verification, and connection-epoch records, plus
-  inward-collaboration-edge, rooted-topology-certificate/reservation, signed event-lineage,
-  server-identity-key, source-event namespace/transition/observation, canonical source-event, and
-  cross-incarnation correlation records.
+  collaboration-server/scope-certificate, outside-capability-snapshot,
+  outside-capability-verification, connection-epoch, source-event
+  namespace/transition/observation, canonical source-event, and cross-incarnation correlation
+  records.
   Never alias one server's `logicalChatId` to another server's chat, the A0 `rcb_*`, Claude `cse_*`,
   Codex/OpenCode ID, broker channel, or provider ID.
+- In A1.2, allocate each terminal chat's non-writable root reservation and
+  `targetKind:"native-harness"` inward edge atomically with its native binding. A1.3 supplies the
+  protected runtime-owner key and attachment-lease service; A1.4 makes the exact durable binding and
+  matching runtime/incarnation attachment lease current. Only then may A1.5 have that
+  `RuntimeOwnerIdentityKeyRecord` sign and activate the terminal root. A server identity key cannot
+  substitute. A1.8 may dispatch only through that current proved edge. N1 later adds remote-server
+  targets and multi-server path installation; it does not retroactively create the terminal edge
+  required by A1/A2.
 - Route canonical command/chat sequences and native/outward bindings by the complete
   `(collaborationServerId, logicalChatId)` chat scope. Machine-facing web presence, broker
   channel/key derivation, visible rows, aliases, and client caches use
   `(identity_id, collaborationServerId, logicalChatId)`. A transport replacement must update that one
   scoped row rather than create another.
+- Treat one paired server as a collection of independent session lanes. Register and recover many
+  simultaneous Claude processes and many Codex/OpenCode conversations, including sessions in equal or
+  different directories, without an unscoped current-session pointer. Global journal/command
+  allocation remains bookkeeping; admission, delivery quarantine, native gates, projection, and
+  restart readiness are per chat, and teardown of one shared-daemon conversation never tears down its
+  siblings.
 - Add an epoch-fenced runtime owner/warden and local native-transition registry that keep the native
   client endpoint, provider façade, inference connector, and real TUI usable across coordinator
   unavailability without changing native semantic authority. Import exact transitions into
@@ -10161,13 +10546,8 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
   shutdown.
 - Persist text command receipt, order, decision, native/outside delivery, binding, and recovery gap.
 - Make receipt, server forwarding, inward delivery, native acceptance, and observation distinct.
-- Bootstrap the terminal native root atomically, then enforce one inward edge per `(server, chat)` with
-  rooted path certificates, two-party generation-fenced reservations, non-writable installed receipts,
-  a separate mutual live-writability handshake, split-commit recovery, and containment before
-  reparenting.
-- Bind versioned event-envelope digests and every server/chat/edge/direction hop into an authenticated
-  lineage chain; implement server-key enrollment, rotation, historical verification, and revocation,
-  plus the no-reflection rule before nested bindings become writable.
+- Bind versioned source and result envelope digests to the exact collaboration-server/chat scope;
+  keep edge-hop lineage and nested server-key exchange in N1.
 - Write ahead every native/outward attempt, atomically enqueue causal outbox items, and quarantine a
   chat behind unresolved native delivery.
 - Write ahead every runtime-scoped inference request and encrypted response chunk separately from
@@ -10178,6 +10558,25 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 - Gate: crash every transaction/delivery boundary without silent loss or automatic duplicate execution.
 
 ### A2 — OpenCode vertical slice
+
+**Status: planned after A1.** A2 proves the common actor with a live web collaborator and the exact
+OpenCode terminal adapter. For an official-client, automation, or nested-server source whose live
+connector has not landed, A2 uses an authenticated collaborator stand-in at the common ingress
+boundary. A stand-in must carry the source's typed authenticated identity and capability snapshot, but
+it proves only normalization, ordering, decision, and executor isolation—not the absent connector's
+transport, reconnect, rendering, or fidelity. B, C, the applicable automation connector, or N1 must
+replace that stand-in before the corresponding live source is advertised.
+
+**PR slices**
+
+- **A2.1 — Retained OpenCode boundary proof:** exact real-TUI, role-manifest, front-door, observer,
+  provider/process isolation, and generated-schema fixture.
+- **A2.2 — Binding, observation, and creation:** stable `ses_*` binding, SSE-before-snapshot recovery,
+  direct-TUI transition serialization, and two-phase `{new_chat}`.
+- **A2.3 — Text adjudication:** exact `{user_text}` translation, effect gate, caller message ID,
+  204-as-receipt-only handling, native read-back, cancellation, and crash recovery.
+- **A2.4 — End-to-end release fixture:** private inference, restart, concurrent direct-TUI input,
+  source stand-ins, stored rejections, and projection rebuild with only proved families enabled.
 
 - Persist a stable binding from `(collaborationServerId, logicalChatId)` to the native OpenCode
   `ses_*`; do not use `ses_*` as either remote-claw chat coordinate or the broker ID.
@@ -10221,11 +10620,12 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
   native status snapshot before readiness, and classify orphaned incomplete messages across a real
   server kill/restart. A complete snapshot requires a proved native watermark, same-stream
   post-snapshot barrier, or atomic store boundary; drained legacy SSE alone is not sufficient.
-- Route every web, official, automation, or nested proposal through the common command and signed-result
-  adjudicator. The selected writable families are exactly server `{new_chat}` and binding
-  `{user_text}`; compact, interrupt, permissions/questions, attachments, clear/fork, and every other
-  unproved family receive a stored ordered rejection with no admitted user-content/native projection,
-  attempt, or effect; the signed rejection `action_result` is still delivered.
+- Route every live web proposal and every authenticated collaborator stand-in through the common
+  command and signed-result adjudicator. The selected writable families are exactly server
+  `{new_chat}` and binding `{user_text}`; compact, interrupt, permissions/questions, attachments,
+  clear/fork, and every other unproved family receive a stored ordered rejection with no admitted
+  user-content/native projection, attempt, or effect; the signed rejection `action_result` is still
+  delivered. Replacing a stand-in with a live connector changes no common decision or executor path.
 - Route admitted text through a write-ahead caller-supplied native `msg_*`, treat
   `204` as transport receipt only, advance native acceptance/order solely from exact correlated
   OpenCode evidence, and never retry the non-idempotent same ID blindly.
@@ -10247,7 +10647,58 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 - Reconcile the persisted coordinator journal with OpenCode history and rebuild its projection.
 - Treat ambiguous HTTP 204 delivery as `outcome_unknown` rather than retrying.
 
+### N1 — Nested remote-claw collaboration
+
+**Status: planned after A1.** N1 is the live nested-server connector. A2's authenticated nested-source
+stand-in is not N1 evidence and cannot advertise a nested edge, transport, or recovery capability.
+
+**PR slices**
+
+- **N1.1 — Server identity and rooted topology:** server-key enrollment/rotation/revocation, extension
+  from an existing A1 terminal root, multi-server rooted path certificates, acyclic reservations, and
+  one current nested inward edge.
+- **N1.2 — Edge installation and lifecycle:** two-party generation-fenced installation, non-writable
+  receipts, mutual live-writability, reconnect, split-commit recovery, containment, and reparenting.
+- **N1.3 — Nested command and result delivery:** direction-typed lineage, management/chat commands,
+  one-time send authorization, complete signed downstream receipts, positive-never-started
+  continuation, causal observations, and no reflection or duplicate traversal.
+
+- Extend A1's terminal inward-edge and root records with multi-server topology reservations, signed
+  event-lineage, server-identity keys, nested-management attempts, nested-chat attempts,
+  edge-capability snapshots, and downstream receipts without aliasing either server's logical chat.
+- Starting from the already committed A1 terminal root, install a nested inward edge per
+  `(server, chat)` with rooted path certificates, two-party generation-fenced reservations,
+  non-writable installed receipts, a separate mutual live-writability handshake, split-commit
+  recovery, and containment before reparenting.
+- Bind every server/chat/edge/direction hop into an authenticated lineage chain; verify historical
+  server keys, reject cycles and reflected observations before command allocation, and append exactly
+  one new authenticated hop at each server.
+- Require a complete downstream proof joining the source event, source command/result, selected target,
+  target command/result, edge capability, and physical delivery attempt. A transport ACK or partial
+  target receipt never completes the source command.
+- Consume the one-time send authorization in the last pre-byte transaction. Permit transport
+  replacement only from exact signed positive-never-started evidence; a started or uncertain
+  predecessor can never be reset or replaced.
+- Gate: crash every edge installation, finalization, and send boundary; reconnect and reparent without
+  a second inward execution; reject reciprocal/cyclic binding and any observation converted back into
+  a proposal.
+
 ### B — Claude Code wrapped client
+
+**Status: planned after A1; the A0 synthetic RC seam remains a compatibility adapter.**
+
+**PR slices**
+
+- **B.1 — Retained native boundary fixtures:** version-, binary-, schema-, and probe-hashed Claude
+  keyboard-plus-Remote, reconnect, gate, control, resume, and takeover evidence.
+- **B.2 — Private façade and durable RC recovery:** terminate inner Anthropic routes, add the private
+  RC event store, reuse the known UUID/`cse_*`, fence epochs, and recover exact delivery state.
+- **B.3 — Native correlation and takeover:** join RC receipt, transcript/provider/native evidence,
+  adjudicate permission/question races, and keep child/TUI/inference work alive across connector loss.
+- **B.4 — Outward Anthropic Remote transport:** enrollment, worker/session state, cursor/ACK/reconnect,
+  history repair, and isolated credentials.
+- **B.5 — Family-by-family release:** prove controls, permissions, questions, uploads, reconnect, and
+  official-client rendering before advertising each family.
 
 - Keep the current synthetic RC seam as a migration adapter.
 - Keep one real Claude Code TUI and one remote-claw private RC collaborator on the same session, and
@@ -10276,6 +10727,21 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 - Add controls, permissions, questions, and uploads one proven family at a time.
 
 ### C — Codex wrapped client
+
+**Status: planned after A1; the retained 0.146.0 evidence closes only its named narrow fixtures.**
+
+**PR slices**
+
+- **C.1 — Retained daemon/front-door fixtures:** pin Unix and experimental transports, real-TUI
+  coexistence, subscriptions, server requests, child lineage, cleanup, and generated schemas.
+- **C.2 — Private daemon and façades:** one managed app-server, local TUI-equivalent front door,
+  isolated OpenAI façade, provider network fence, and one authenticated daemon-wide bridge.
+- **C.3 — Native management and bindings:** host-scoped thread discovery, logical bindings, aggregate
+  native subscriptions, and one injected management-only `RemoteControlService`.
+- **C.4 — Outward ChatGPT Remote gateway:** provider-specific enrollment, host/project/chat mappings,
+  per-stream transport state, collision-safe request/handle maps, tombstones, and cleanup.
+- **C.5 — Official-client parity and recovery:** live pairing, multi-project/chat behavior,
+  reconnect/ACK/cursor repair, backpressure, replacement fencing, and differential fidelity.
 
 - Retain the pinned `0.146.0` source, checked two-raw-client probe, checked
   real-TUI-plus-raw-client fixture, and checked three-connection/two-top-level-thread fixture as the
@@ -10324,6 +10790,19 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 
 ### D — tmux recovery and unified product
 
+**Status: planned after A1; this does not change the current lower-fidelity tmux compatibility
+status.**
+
+**PR slices**
+
+- **D.1 — Durable pane ownership:** pane/process/transcript identity, lifecycle, and honest recovery.
+- **D.2 — Fenced injection and observation:** write-ahead paste/Enter attempts, ambiguity quarantine,
+  transcript correlation, and explicit simultaneous-draft limits.
+- **D.3 — Gates and handoff:** durable permission answers/terminal observation, keep-pane detach,
+  decision/cursor/orphan transfer, and active-turn preservation.
+- **D.4 — Chat transitions and presentation:** `/clear`/`/branch` identity plus the unified
+  host/project/chat view and separate native/provider/web delivery states.
+
 - Add persistent pane ownership and honest recovery state.
 - Compose tmux with the wrapped engine's provider façade. Treat person and injector as writers to one
   editor keystream, not native peer collaborators; require a proved quiescent/exclusive injection
@@ -10344,11 +10823,23 @@ do not claim A1 persistence, restart adoption, or native delivery fencing.
 
 The following remain unproven until a test says otherwise:
 
+- durable project identity and bootstrap: one random server-scoped `ProjectRecord` plus its initial
+  selector mapping are allocated atomically and replay-idempotently, while `project:null`, cwd/title
+  inference, and only/most-recent fallback cannot create or select an A1 registration, chat, or binding;
 - durable separation of server-scoped `logicalChatId`, native binding/conversation/incarnation, inward
   collaboration edge, nested-server chat mapping, private transport, broker channel, and outward
   provider IDs;
+- one paired host concurrently serving many independent Claude, Codex, and OpenCode conversations
+  across equal and different directories, with one local TUI and one remote-claw collaborator per
+  native session, per-chat mutation serialization, sibling-safe shared-daemon teardown, independent
+  restart/reattach/quarantine, and no cross-chat IDs, history, commands, gates, projections, or side
+  effects;
 - runtime-local conversation/inference identity while the coordinator is absent, plus exact atomic
   import into a server-scoped chat without replay, reassignment, or old-chat proposal leakage;
+- terminal native-root activation only after the A1.3 runtime owner proves its current protected
+  `RuntimeOwnerIdentityKeyRecord` and exact attachment lease and A1.4 proves the matching durable
+  binding/runtime/incarnation current; a server-key signature, stale attachment, or earlier
+  non-writable reservation cannot activate it;
 - stable `(collaborationServerId, logicalChatId)` scope, `command_seq`, `chat_seq`, and one visible row
   across a known-transport re-bridge or a proven replacement private transport;
 - exact native history completeness and stable IDs for every adapter;
@@ -10368,9 +10859,11 @@ The following remain unproven until a test says otherwise:
 - behavioral equivalence between each native app using the remote-claw-controlled local service and
   using its normal native server, including notifications, busy/steer, controls, permissions, questions,
   and reconnect;
-- multiple direct collaborators collapsed into one inward collaborator, plus recursively nested
-  remote-claw servers, without cycles, reflection, or duplicate native execution;
-- installed-but-non-writable nested edges and the mutual live handshake at every split finalization;
+- multiple direct collaborators collapsed into one inward collaborator by A1; authenticated A2
+  stand-ins prove source-independent adjudication only;
+- N1 live recursively nested remote-claw servers without cycles, reflection, or duplicate native
+  execution, including installed-but-non-writable edges and the mutual live handshake at every split
+  finalization;
 - complete provider-route termination and process-tree network isolation for every inner engine;
 - busy turn, steer, interrupt, approval, and question semantics;
 - live process reattachment versus lossy native resume;
@@ -10436,7 +10929,7 @@ Native-client fidelity is a differential release gate, not a prose aspiration:
    Classify in-flight requests, preserve the same conversation/history/subscriptions as native reconnect
    permits, and create no silent new thread, UUID, or visible chat. A coordinator-only restart must not
    drop the separately supervised local client endpoint.
-10. Repeat with two nested remote-claw servers and assert one native execution, exactly one outward
+10. In N1, repeat with two live nested remote-claw servers and assert one native execution, exactly one outward
    return traversal per edge, no same-direction reflection, no observation-to-proposal promotion, and
    stable origin lineage through disconnect/reconnect. Delete/reorder a hop, substitute a payload under
    an intact chain, rotate a server key, and revoke it; require tamper rejection, old-record

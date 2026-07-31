@@ -12,8 +12,8 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 > exported but unused. The selected
 > [client-driven host runtime](client-driven-host-runtime.md) now provides a neutral host-wide
 > native-engine contract above it. A0.1 routes Claude MITM through one process-local registrar and one
-> lease per intercepted conversation; the OpenCode half of A0.2 now uses the same registration seam,
-> while tmux has not migrated yet. `Session` remains a legacy RC port during migration; it does not
+> lease per intercepted conversation; A0.2 now routes both OpenCode and tmux through the same
+> registration seam. `Session` remains a legacy RC port during migration; it does not
 > become the neutral schema. In particular, Codex is one
 > persistent multi-project app-server host, not another one-`Session` `DriverName`.
 
@@ -29,8 +29,8 @@ today.
 The common relay port is **`Session`** (`packages/cli/src/host/rc/session.ts`). Each current harness
 path produces one or more `Session`s, fills them with Claude-shaped output, and consumes the input the
 relay delivers. `HostRcRelay` and the web frame projection remain shared; harness launch/lifecycle is
-not unified behind the exported `Driver` interface. Claude MITM and OpenCode lifecycle are now
-mediated by the neutral registrar; tmux still bridges `Session` directly.
+not unified behind the exported `Driver` interface. Claude MITM, OpenCode, and tmux lifecycle are now
+mediated by the neutral process-local registrar.
 
 ---
 
@@ -193,12 +193,10 @@ export interface DriverCapabilities {
  *      control_request; apply an answer by observing the matching control_response in
  *      followDownstream. The relay's existing permission_request ⇄ permission round-trip does the
  *      broker side — no relay change.
- * The current non-MITM implementations pass the session to bridgeSession(...), which starts
- * relay.announce(...) and relay.serve(signal) concurrently. Announce performs its presence post
- * separately; serve owns the two pumps and durable-cursor prepare. The returned served promise tracks
- * the admitted initial announcement (and any lifecycle refresh when using the full handle) through
- * settlement during teardown. The driver tears the harness + relay down on exit. Claude MITM instead
- * registers the Session and starts the same relay at ready.
+ * The current harness paths open a process-local registrar lease in `starting`, publish validated
+ * metadata/capabilities, and enter `ready`; that transition creates the broker client and starts the
+ * shared relay. Each driver must finish its own readiness checks first. The registrar owns the bridge
+ * lifecycle but not the native Session, and this process-local seam is not durable reattachment.
  */
 export interface Driver {
   readonly capabilities: DriverCapabilities;
@@ -243,43 +241,37 @@ export function mitmDriver(ctx: DriverContext): Driver {
 Had it been implemented, this would have kept `launch.test.ts`'s surface unchanged. It remains
 historical: current MITM uses `LegacyRcConversationRegistrar`, which calls `startBridgeSession` at
 `ready`. OpenCode now uses that registrar too, after strict native session selection and
-parent-permission setup unless explicitly opted out. Tmux still calls the `bridgeSession`
-compatibility helper and follows the broad lifecycle below:
+parent-permission setup unless explicitly opted out. Tmux uses it after proving its private pane and
+required startup hook:
 
 ```ts
-// shape every non-MITM driver follows (tmux shown):
+// process-local compatibility registration (tmux shown):
 const core = new RelayCore();
 const session = core.create({ title: ctx.title });
 session.pushInitialize();
 ctx.onSession?.(session);
 
-const relays = new Set<Promise<void>>();
-const relayDone = bridgeSession({
-  session,
-  capabilities,
-  harness,
-  newClient: ctx.newClient,
-  identityId: ctx.identity.identityId,
-  title: ctx.title,
-  cwd: ctx.cwd,
-  git: ctx.git,
-  signal: ac.signal,
-  relays,
-  tracer,
+const lease = await registrar.open({
+  phase: "starting",
+  port: session,
+  nativeRef: null,
+  capabilities: null,
+  // descriptor, attempt identity, and metadata omitted
 });
 
-// CAPTURE + INJECT + STATUS pumps run concurrently against `session` (see §4), then on exit:
-//   ac.abort(); session.close(); await relayDone; <harness teardown>
+// Prepare private tmux runtime/settings, spawn, require a live pane and the
+// SessionStart marker, and construct the native pumps.
+await lease.update(metadataWithProvedCapabilities, TMUX_NATIVE_CAPABILITIES);
+await lease.setPhase("ready"); // only now starts HostRcRelay and announces
 ```
 
-`bridgeSession` constructs `HostRcRelay` and starts `announce(...)` and `serve(...)` concurrently.
-That direct call is not a readiness barrier, so current tmux capability timing limitations remain as
-recorded in §8. Its returned `served` promise stays pending until the admitted initial
-announcement settles; the full `startBridgeSession` handle also tracks admitted lifecycle refreshes.
-For MITM and OpenCode, the registrar first validates generic and viewer-facing capabilities, moves
-the lease to `ready`, and only then calls `startBridgeSession`; their announcements are therefore
-post-setup. OpenCode additionally confirms one exact canonical native session, requires parent
-permission read/install/read-back unless opted out, and starts its pumps only after `ready`.
+For all three migrated paths, the registrar validates generic and viewer-facing capabilities and
+calls `startBridgeSession` only at `ready`. OpenCode first confirms one exact native session and
+requires parent permission read/install/read-back unless opted out. Tmux first creates private
+runtime/settings state, confirms a live pane, and requires Claude's `SessionStart` marker from the
+exact merged settings source. Its optional session-hook flag controls continued exact
+transcript/rotation following after startup, not the mandatory first marker. These leases isolate
+live bridges inside one process; none is a persisted A1 inventory or restart attachment.
 
 ---
 
@@ -532,8 +524,10 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   `DriverCapabilities` / `UpstreamPayload` / `ContentBlock` types + `DriverName`. It is a partial
   contract, not the dispatch mechanism.
 - `packages/cli/src/host/rc/tmux/{driver,tmuxctl,transcript,inject}.ts` — `runTmuxDriver(ctx)` spawns
-  plain `claude` in tmux, tails transcript JSONL, injects via tmux, and reports heuristic status. It
-  also exports the currently unused `tmuxDriver(ctx)` façade.
+  plain `claude` on a private tmux server, tails transcript JSONL, and injects via an stdin-backed tmux
+  paste buffer. Its process-local registrar lease stays `starting` until a live pane plus Claude's
+  mandatory `SessionStart` marker prove the exact settings/native session; only then does it publish
+  capabilities and enter `ready`. It also exports the currently unused `tmuxDriver(ctx)` façade.
 - `packages/cli/src/host/rc/opencode/driver.ts` — `runOpencodeDriver(ctx)` bridges an `opencode serve`
   HTTP+SSE session by constructing the exported-interface implementation `OpencodeDriver`.
 - `packages/cli/src/host/native/{adapter,index}.ts` — the neutral native-engine descriptors,
@@ -587,13 +581,14 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 2. **`runRcLaunch` changes regressing the MITM path.** Mitigation: keep its direct tests as the guard.
    The historical `mitmDriver` wrapper proposal was not implemented.
 3. **Injection ambiguity / send-keys failures (tmux).** `runInjectPump` serializes the downstream
-   stream, so a burst cannot interleave prompts. It retries load+paste as one phase, retries Enter
-   separately so a post-paste failure cannot double-paste, uses a length-scaled settle (40 ms base,
-   capped at 1 s), and ACKs prompt/key actions only after they succeed. Tmux command success is still
-   not a structural receipt from Claude. It maps `interrupt` (→ ESC) and `set_model` (→ `/model <id>`
-   inject); `set_mode`/`end` have no faithful pane analogue (the viewer disables those controls,
-   #149), so they safely no-op. Permission-decision persistence is a separate callback; its current
-   logging-only write-failure behavior is not a durable delivery receipt.
+   stream, so a burst cannot interleave prompts. Prompt text reaches `tmux load-buffer` over stdin,
+   never argv; bracketed paste and Enter are separate phases with a length-scaled settle. It ACKs
+   prompt/key actions only after the tmux command succeeds, but tmux success is still not structural
+   acceptance evidence from Claude, and a lost post-dispatch completion remains ambiguous. It maps
+   `interrupt` (→ ESC) and `set_model` (→ `/model <id>` inject); `set_mode`/`end` have no faithful pane
+   analogue (the viewer disables those controls, #149), so they safely no-op. A permission-decision
+   write failure throws, leaves the response unacknowledged, and tears down the pump; it does not
+   produce a false delivery receipt.
 4. **Permission fidelity on non-MITM drivers.** Both non-MITM drivers attempt mirroring by default.
    **tmux** injects a **PreToolUse hook** that blocks each tool until the
    viewer answers (and pre-seeds claude's folder-trust bit so dropping `--dangerously-skip-permissions`
@@ -604,13 +599,12 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
    setup now requires read/install/read-back before `ready`, but child setup remains asynchronous and
    first-tool-racy. Child tasks are run-cancelled, tracked, PATCH-fenced after cancellation, and joined
    under the shared teardown deadline. A literal-true reply response is only transport acknowledgement;
-   selected-session ownership, native-TUI races, and terminal application remain unproved. Tmux still
-   announces before its hook result is fully known.
+   selected-session ownership, native-TUI races, and terminal application remain unproved. Tmux now
+   withholds its broker bridge until settings/trust setup, a live pane, and its mandatory startup
+   `SessionStart` marker are proved. Hook-disabling modes and unmergeable settings fail closed.
 5. **Status accuracy.** Without ground truth (the MITM reads claude's `PUT /worker` status), tmux
-   infers `running`/`idle` from a transcript-append debounce, which lags a long "think". It currently
-   advertises `status:true` despite the interface saying that bit means real transitions. Treat that
-   as a known overclaim; the new capability model must distinguish heuristic status or advertise it
-   false until a stronger signal exists.
+   infers `running`/`idle` from a transcript-append debounce, which lags a long "think". It advertises
+   `status:false`; the internal heuristic is display/evidence only, not a promised native transition.
 6. **Durable-restart cursors.** The relay's `serve()` calls `prepare()` to sample broker cursors
    before pumping; a driver must call `relay.serve(signal)` (not hand-roll the pumps). The sampled
    floor prevents replay of older inbound frames but can skip an unprocessed prompt that arrived
@@ -620,6 +614,11 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 7. **Launch cardinality.** Tmux and OpenCode launch one wrapper `Session`; one MITM launch can accept
    several intercepted Claude RC sessions. The dispatcher still selects one harness mode per wrapper
    process.
+8. **Tmux teardown/restart.** The driver uses a private `0700` runtime and private tmux socket. Teardown
+   deletes them only after a proved kill or proved absence; an unknown probe/kill retains them and logs
+   the exact `tmux -S <socket> attach -t <session>` command. That preserves a possibly-live pane but
+   does not make it recoverable by a new wrapper: its registrar and binding are process-local and
+   `liveReattach:false`. Durable adoption is A1 work.
 
 ---
 
@@ -631,12 +630,15 @@ user/control events (`followDownstream` or the native RC server), reports status
 lets the relay own broker-side permissions + attachments. `run.ts` directly selects
 `--rc-driver={mitm|tmux|opencode}`; the exported `Driver`/`DriverFactory` pair does not unify that
 dispatch. Above this compatibility port, the neutral host contract and process-local registrar now
-mediate Claude MITM and OpenCode sessions; tmux remains the unfinished A0.2 migration. The
+mediate Claude MITM, OpenCode, and tmux sessions. The
 capability-aware part is implemented: each path supplies `DriverCapabilities`, the relay rides them on
 `session_announce`, and the viewer disables/labels declared unsupported controls. Claude MITM and
-OpenCode wait for validated readiness before they start the bridge. OpenCode publishes
+both A0.2 drivers wait for validated readiness before they start the bridge. OpenCode publishes
 `status:false`, `attachments:false`, only interrupt control, and structured permissions only after
-proved parent setup; §8 retains the child/reply limitations. Tmux can still overstate support.
+proved parent setup; §8 retains the child/reply limitations. Tmux publishes `status:false`,
+records native `liveReattach:false` plus best-effort delivery evidence, and publishes structured
+permissions only after its required hook/settings/trust readiness proof (or false after explicit
+auto-approve opt-out).
 
 A person can also use the harness's native TUI directly. That local path is outside the current
 `Session` relay seam: tmux/OpenCode surface unmatched prompts post-hoc, while MITM drops ordinary

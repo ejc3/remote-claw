@@ -33,8 +33,8 @@ app origin, which uploads a one-time handoff, noted below):
                      entry. --rc-json adds it as a "qr" field instead.
 
 Remote control (relay sessions to the broker so a phone/laptop can watch + steer):
-  --rc-app <origin>  the app origin whose /api is the broker (or set RC_APP). With it, launching claude
-                     wraps it in the MITM and bridges each session to the broker; without it, claude runs
+  --rc-app <origin>  the app origin whose /api is the broker (or set RC_APP). With it, remote-claw runs
+                     the selected driver and bridges each session to the broker; without it, claude runs
                      transparently.
   --rc-backend <n>   pick the broker backend this host targets (or set RC_BACKEND): vercel | local |
                      sqlite. Omitted ⇒ the broker's default. Must match what your viewers use.
@@ -60,8 +60,11 @@ tmux driver (--rc-driver=tmux):
   --rc-tmux-skip-permissions   auto-approve tools (\`claude --dangerously-skip-permissions\`) instead of
                      mirroring each tool gate to the viewer (or set RC_TMUX_SKIP_PERMISSIONS). Default is
                      mirroring ON (the viewer is the gate).
-  --rc-session-hook / --rc-no-session-hook   enable/disable the SessionStart hook used to discover the
-                     pane's transcript (or set RC_SESSION_HOOK; default ON).
+  --rc-session-hook / --rc-no-session-hook   enable/disable using the private SessionStart marker for
+                     ongoing exact transcript discovery + rotation-follow (or set RC_SESSION_HOOK;
+                     default ON). Native startup readiness always requires that private hook once;
+                     --bare/--safe-mode and truthy CLAUDE_CODE_SIMPLE or CLAUDE_CODE_SAFE_MODE are
+                     rejected.
 
 opencode driver (--rc-driver=opencode):
   --rc-oc-url <origin>     the \`opencode serve\` origin (or set OPENCODE_URL; default

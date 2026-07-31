@@ -107,7 +107,11 @@ export {
   TmuxCtl,
   TmuxError,
   type TmuxExec,
+  type TmuxExecOptions,
   type TmuxExecResult,
+  type TmuxKillOutcome,
+  type TmuxOperation,
+  type TmuxSessionState,
 } from "./tmux/tmuxctl.js";
 export {
   findNewestTranscript,

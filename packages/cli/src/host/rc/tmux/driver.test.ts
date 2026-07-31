@@ -2,22 +2,21 @@
 // relay.test.ts FakeClient discipline). Asserts the full bridge:
 //   • onSession fires a fresh cse_ and the announce posts the title/cwd.
 //   • an appended transcript assistant line round-trips a sealed `assistant` content frame.
-//   • a viewer `user` inbound frame drives the fake tmux pane (set-buffer → paste → send Enter).
+//   • a viewer `user` inbound frame drives the fake tmux pane (stdin load-buffer → paste → send Enter).
 //   • the child env scrubs the stub-gotcha ids + host secrets but PRESERVES the user's proxy/CA vars
 //     (this driver never sets a proxy, so it leaves the user's egress/Bedrock proxy alone).
 //   • abort tears down: the tmux session is killed.
 // No real tmux, no real claude, no real broker — every side effect is injected.
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFile, chmod, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { deriveIdentity, type Frame, type FrameHeader, type Identity } from "@remote-claw/clawsec";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
-import type { Tracer } from "../../../trace.js";
 import { parseUserSession, runTmuxDriver, tmuxCapabilities } from "./driver.js";
-import type { TmuxExec, TmuxExecResult } from "./tmuxctl.js";
+import type { TmuxExec, TmuxExecOptions, TmuxExecResult } from "./tmuxctl.js";
 import { projectSlug, subagentDir } from "./transcript.js";
 
 const dirs: string[] = [];
@@ -130,63 +129,96 @@ function inFrame(id: Identity, recordKind: string, msgId: string, text: string):
   } as Frame;
 }
 
-/** A tmux exec spy: records every argv, captures the new-session env + command, returns success. */
+interface TmuxCall {
+  /** Exact argv received by execFile, including a private `-S <socket>` prefix when present. */
+  rawArgs: string[];
+  /** The tmux verb and its arguments, with the private-socket prefix removed for concise assertions. */
+  args: string[];
+  options: TmuxExecOptions | undefined;
+}
+
+function normalizeTmuxArgs(args: readonly string[]): string[] {
+  return args[0] === "-S" && args[1] !== undefined ? [...args.slice(2)] : [...args];
+}
+
+/** Simulate the one native behavior a fake tmux process cannot produce on its own: Claude loading the
+ * private merged settings and executing its SessionStart hook. The marker path comes from that settings
+ * source (not a filename guess), and the native id comes from the driver's pinned launcher argument. */
+function simulateReadinessMarker(
+  rawArgs: readonly string[],
+  nativeSessionIdOverride?: string,
+): void {
+  const args = normalizeTmuxArgs(rawArgs);
+  if (args[0] !== "new-session" || rawArgs[0] !== "-S" || rawArgs[1] === undefined) return;
+  const runtimeDir = dirname(rawArgs[1]);
+  const settings = JSON.parse(readFileSync(join(runtimeDir, "settings.json"), "utf8")) as {
+    hooks?: { SessionStart?: Array<{ hooks?: Array<{ command?: string }> }> };
+  };
+  const command = settings.hooks?.SessionStart?.at(-1)?.hooks?.at(-1)?.command;
+  const markerPath = command?.match(/>> '([^']+)'$/)?.[1];
+  if (markerPath === undefined) throw new Error("fake tmux could not find readiness hook path");
+
+  const launcher = readFileSync(join(runtimeDir, "launch.sh"), "utf8");
+  const nativeSessionId =
+    nativeSessionIdOverride ??
+    launcher.match(/'--session-id'\s+'([^']+)'/)?.[1] ??
+    launcher.match(/'(?:--resume|-r)'\s+'([^']+)'/)?.[1] ??
+    "fake-native-session";
+  appendFileSync(
+    markerPath,
+    `${JSON.stringify({
+      session_id: nativeSessionId,
+      transcript_path: join(runtimeDir, `${nativeSessionId}.jsonl`),
+      source: "startup",
+    })}\n`,
+    "utf8",
+  );
+}
+
+/** A tmux exec spy: retains raw argv/options, exposes normalized verb calls, and reads the private
+ * launcher/settings files. Sensitive environment and hook JSON are intentionally absent from argv. */
 function tmuxSpy(): {
   exec: TmuxExec;
   calls: string[][];
+  rawCalls: TmuxCall[];
   env: () => Record<string, string>;
   command: () => string;
+  settings: () => string;
   killed: () => boolean;
   started: () => boolean;
 } {
   const calls: string[][] = [];
-  const exec: TmuxExec = (args): Promise<TmuxExecResult> => {
-    calls.push([...args]);
+  const rawCalls: TmuxCall[] = [];
+  const exec: TmuxExec = (rawArgs, options): Promise<TmuxExecResult> => {
+    const args = normalizeTmuxArgs(rawArgs);
+    calls.push(args);
+    rawCalls.push({ rawArgs: [...rawArgs], args, options });
+    simulateReadinessMarker(rawArgs);
     return Promise.resolve({ code: 0, stdout: args[0] === "-V" ? "tmux 3.4" : "", stderr: "" });
   };
-  const newSession = () => calls.find((c) => c[0] === "new-session");
+  const newSession = () => rawCalls.find((call) => call.args[0] === "new-session");
+  const privateFile = (name: string): string => {
+    const call = newSession();
+    const socketPath = call?.rawArgs[0] === "-S" ? call.rawArgs[1] : undefined;
+    if (socketPath === undefined) return "";
+    try {
+      return readFileSync(join(dirname(socketPath), name), "utf8");
+    } catch {
+      return "";
+    }
+  };
   return {
     exec,
     calls,
-    // The driver announces (bridgeSession) BEFORE it spawns the pane (newSession), so `announces.length`
-    // is NOT a safe barrier for asserting spawn state (env/command/new-session): under parallel load the
-    // spawn coroutine may not have run yet. `started` waits for the actual spawn — and since the spawn
-    // happens after the announce, it implies the announce already fired too.
+    rawCalls,
+    // Readiness and announcement happen only after both new-session and a positive has-session proof.
+    // `started` deliberately means spawn was attempted, not that the public conversation is ready.
     started: () => calls.some((c) => c[0] === "new-session"),
-    env: () => {
-      const e: Record<string, string> = {};
-      const ns = newSession() ?? [];
-      for (let i = 0; i < ns.length - 1; i++) {
-        if (ns[i] === "-e") {
-          const kv = ns[i + 1] ?? "";
-          const eq = kv.indexOf("=");
-          if (eq > 0) e[kv.slice(0, eq)] = kv.slice(eq + 1);
-        }
-      }
-      return e;
-    },
-    command: () => {
-      const ns = newSession() ?? [];
-      return ns[ns.length - 1] ?? "";
-    },
+    env: () => ({ ...(newSession()?.options?.env ?? {}) }),
+    command: () => privateFile("launch.sh"),
+    settings: () => privateFile("settings.json"),
     killed: () => calls.some((c) => c[0] === "kill-session"),
   };
-}
-
-/** A Tracer that records every emitted record; child() returns the same recorder so nested fields still
- *  land in one list. Lets tests assert a warn/info actually fired (e.g. the folder-trust bail warning). */
-function recordingTracer(): { tracer: Tracer; records: { level: string; msg: string }[] } {
-  const records: { level: string; msg: string }[] = [];
-  const make = (): Tracer => ({
-    error: (msg) => records.push({ level: "error", msg }),
-    warn: (msg) => records.push({ level: "warn", msg }),
-    info: (msg) => records.push({ level: "info", msg }),
-    debug: (msg) => records.push({ level: "debug", msg }),
-    trace: (msg) => records.push({ level: "trace", msg }),
-    child: () => make(),
-    enabled: () => true,
-  });
-  return { tracer: make(), records };
 }
 
 async function makeIdentity(): Promise<Identity> {
@@ -201,6 +233,366 @@ async function waitFor(pred: () => boolean, ms = 4000): Promise<void> {
 }
 
 describe("runTmuxDriver wiring", () => {
+  it("does zero work when the parent signal is already aborted", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const ac = new AbortController();
+    ac.abort();
+    let execCalls = 0;
+    let clientCalls = 0;
+    let sessionCalls = 0;
+    let runtimeCalls = 0;
+    const exec: TmuxExec = () => {
+      execCalls += 1;
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+
+    await expect(
+      runTmuxDriver(
+        {
+          harnessArgs: [],
+          identity,
+          brokerUrl: "https://broker.example",
+          title: "t",
+          cwd: tmp("rc-aborted-cwd-"),
+          git: null,
+          newClient: () => {
+            clientCalls += 1;
+            return client as unknown as BrokerClient;
+          },
+          onSession: () => {
+            sessionCalls += 1;
+          },
+        },
+        ac.signal,
+        {
+          tmuxExec: exec,
+          onRuntimeDir: () => {
+            runtimeCalls += 1;
+          },
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(execCalls).toBe(0);
+    expect(clientCalls).toBe(0);
+    expect(sessionCalls).toBe(0);
+    expect(runtimeCalls).toBe(0);
+    expect(client.announces).toEqual([]);
+  });
+
+  it("does not create a broker client or announce until the native marker and pane probe are both positive", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    let newClientCalls = 0;
+    let releaseProbe: ((result: TmuxExecResult) => void) | undefined;
+    const probe = new Promise<TmuxExecResult>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const calls: string[][] = [];
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      calls.push(args);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      if (args[0] === "has-session") return probe;
+      simulateReadinessMarker(rawArgs);
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd: tmp("rc-spawn-gate-cwd-"),
+        git: null,
+        newClient: () => {
+          newClientCalls += 1;
+          return client as unknown as BrokerClient;
+        },
+      },
+      ac.signal,
+      {
+        tmuxExec: exec,
+        mirrorPermissions: false,
+        parentEnv: { PATH: "/usr/bin", SECRET_NOT_FOR_ARGV: "spawn-secret" },
+      },
+    );
+
+    await waitFor(() => calls.some((args) => args[0] === "has-session"));
+    expect(calls.some((args) => args[0] === "new-session")).toBe(true);
+    expect(newClientCalls).toBe(0);
+    expect(client.announces).toEqual([]);
+    releaseProbe?.({ code: 0, stdout: "", stderr: "" });
+    await waitFor(() => client.announces.length === 1);
+    expect(newClientCalls).toBe(1);
+    ac.abort();
+    await expect(run).resolves.toBe(0);
+  });
+
+  it("a parent cancellation while the readiness probe is pending cannot publish a late ghost session", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    let newClientCalls = 0;
+    let releaseProbe: ((result: TmuxExecResult) => void) | undefined;
+    const probe = new Promise<TmuxExecResult>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const calls: string[][] = [];
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      calls.push(args);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      if (args[0] === "has-session") return probe;
+      simulateReadinessMarker(rawArgs);
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd: tmp("rc-cancel-probe-cwd-"),
+        git: null,
+        newClient: () => {
+          newClientCalls += 1;
+          return client as unknown as BrokerClient;
+        },
+      },
+      ac.signal,
+      { tmuxExec: exec, mirrorPermissions: false },
+    );
+
+    await waitFor(() => calls.some((args) => args[0] === "has-session"));
+    ac.abort();
+    releaseProbe?.({ code: 0, stdout: "", stderr: "" });
+
+    await expect(run).resolves.toBe(0);
+    expect(newClientCalls).toBe(0);
+    expect(client.announces).toEqual([]);
+    expect(calls.some((args) => args[0] === "kill-session")).toBe(true);
+  });
+
+  it("one positive pane probe without a native SessionStart marker never announces", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    let newClientCalls = 0;
+    const calls: string[][] = [];
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      calls.push(args);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      if (args[0] === "has-session") {
+        return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+      }
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+
+    await expect(
+      runTmuxDriver(
+        {
+          harnessArgs: [],
+          identity,
+          brokerUrl: "https://broker.example",
+          title: "t",
+          cwd: tmp("rc-unknown-probe-cwd-"),
+          git: null,
+          newClient: () => {
+            newClientCalls += 1;
+            return client as unknown as BrokerClient;
+          },
+        },
+        new AbortController().signal,
+        {
+          tmuxExec: exec,
+          mirrorPermissions: false,
+          readinessTimeoutMs: 5,
+          readinessPollMs: 1,
+        },
+      ),
+    ).rejects.toThrow("did not execute the required SessionStart readiness hook");
+
+    expect(calls.some((args) => args[0] === "new-session")).toBe(true);
+    expect(calls.some((args) => args[0] === "has-session")).toBe(true);
+    expect(newClientCalls).toBe(0);
+    expect(client.announces).toEqual([]);
+  });
+
+  it("a short-lived launcher cannot announce after one momentarily positive pane probe", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    let probes = 0;
+    let newClientCalls = 0;
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      if (args[0] === "has-session") {
+        probes += 1;
+        return Promise.resolve({
+          code: probes === 1 ? 0 : 1,
+          stdout: "",
+          stderr: probes === 1 ? "" : "can't find session: short-lived",
+        });
+      }
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+
+    await expect(
+      runTmuxDriver(
+        {
+          harnessArgs: [],
+          identity,
+          brokerUrl: "https://broker.example",
+          title: "short lived",
+          cwd: tmp("rc-short-lived-cwd-"),
+          git: null,
+          newClient: () => {
+            newClientCalls += 1;
+            return client as unknown as BrokerClient;
+          },
+        },
+        new AbortController().signal,
+        {
+          tmuxExec: exec,
+          mirrorPermissions: false,
+          readinessTimeoutMs: 100,
+          readinessPollMs: 1,
+        },
+      ),
+    ).rejects.toThrow("tmux pane exited before Claude reported native readiness");
+
+    expect(probes).toBe(2);
+    expect(newClientCalls).toBe(0);
+    expect(client.announces).toEqual([]);
+  });
+
+  it("a native marker without a provably live pane never announces", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    let newClientCalls = 0;
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      if (args[0] === "has-session") {
+        return Promise.resolve({ code: 127, stdout: "", stderr: "probe unavailable" });
+      }
+      simulateReadinessMarker(rawArgs);
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+
+    await expect(
+      runTmuxDriver(
+        {
+          harnessArgs: [],
+          identity,
+          brokerUrl: "https://broker.example",
+          title: "unknown pane",
+          cwd: tmp("rc-unknown-probe-cwd-"),
+          git: null,
+          newClient: () => {
+            newClientCalls += 1;
+            return client as unknown as BrokerClient;
+          },
+        },
+        new AbortController().signal,
+        {
+          tmuxExec: exec,
+          mirrorPermissions: false,
+          readinessTimeoutMs: 5,
+          readinessPollMs: 1,
+        },
+      ),
+    ).rejects.toThrow("did not execute the required SessionStart readiness hook");
+
+    expect(newClientCalls).toBe(0);
+    expect(client.announces).toEqual([]);
+  });
+
+  it("a marker for a different native session cannot satisfy readiness", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    let newClientCalls = 0;
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      simulateReadinessMarker(rawArgs, "wrong-native-session");
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+
+    await expect(
+      runTmuxDriver(
+        {
+          harnessArgs: [],
+          identity,
+          brokerUrl: "https://broker.example",
+          title: "wrong native id",
+          cwd: tmp("rc-wrong-native-id-cwd-"),
+          git: null,
+          newClient: () => {
+            newClientCalls += 1;
+            return client as unknown as BrokerClient;
+          },
+        },
+        new AbortController().signal,
+        {
+          tmuxExec: exec,
+          mirrorPermissions: false,
+          sessionId: "93939393-9393-4393-8393-939393939393",
+        },
+      ),
+    ).rejects.toThrow("Claude readiness reported an unexpected native session");
+
+    expect(newClientCalls).toBe(0);
+    expect(client.announces).toEqual([]);
+  });
+
+  it("treats a non-UUID --resume value as picker search and accepts Claude's resolved UUID", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const resolvedId = "12121212-1212-4121-8121-121212121212";
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      simulateReadinessMarker(rawArgs, resolvedId);
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: ["--resume", "billing migration"],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "searched resume",
+        cwd: tmp("rc-resume-search-cwd-"),
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      { tmuxExec: exec, mirrorPermissions: false },
+    );
+
+    await waitFor(() => client.announces.length === 1);
+    ac.abort();
+    await expect(run).resolves.toBe(0);
+  });
+
   it("bridges a session: announce, transcript→assistant frame, viewer prompt→pane, scrubbed env, teardown kill", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();
@@ -220,9 +612,10 @@ describe("runTmuxDriver wiring", () => {
     const ac = new AbortController();
     let sessionId: string | null = null;
 
+    const FORWARDED_ARG_SECRET = "FORWARDED_ARG_SECRET_SENTINEL";
     const run = runTmuxDriver(
       {
-        harnessArgs: ["--model", "sonnet"],
+        harnessArgs: ["--model", "sonnet", "--append-system-prompt", FORWARDED_ARG_SECRET],
         identity,
         brokerUrl: "https://broker.example",
         title: "my session",
@@ -268,14 +661,16 @@ describe("runTmuxDriver wiring", () => {
     await waitFor(() => client.announces.length > 0);
     expect(client.announces[0]?.title).toBe("my session");
     expect(client.announces[0]?.cwd).toBe(cwd);
+    expect(client.announces[0]?.capabilities).toEqual(tmuxCapabilities(false));
 
     // The spawned command is plain claude with --dangerously-skip-permissions + forwarded args,
     // prefixed by an `env -u …` scrub that unsets the stub-gotcha ids even if a stale tmux server env
-    // holds them (codex review #1). Wait for the spawn first — it happens AFTER the announce.
+    // holds them (codex review #1). Readiness guarantees the private launcher already exists.
     await waitFor(spy.started);
     expect(spy.command()).toContain("claude");
     expect(spy.command()).toContain("--dangerously-skip-permissions");
     expect(spy.command()).toContain("--model");
+    expect(spy.command()).toContain(FORWARDED_ARG_SECRET);
     expect(spy.command()).toContain("env");
     expect(spy.command()).toContain("CLAUDE_CODE_CHILD_SESSION");
     // The pinned id is passed as --session-id, so the transcript path is deterministic.
@@ -305,11 +700,11 @@ describe("runTmuxDriver wiring", () => {
     const asst = client.content.find((p) => p.recordKind === "assistant");
     expect(asst?.text).toBe("PINEAPPLE");
 
-    // INJECT: a viewer `user` inbound frame drives the pane (set-buffer → paste-buffer → send Enter).
+    // INJECT: a viewer `user` inbound frame drives the pane (stdin load-buffer → paste → send Enter).
     client.pushInbound(inFrame(identity, "user", "msg-user-1", "say hi"));
     await waitFor(() => spy.calls.some((c) => c[0] === "send-keys" && c.includes("Enter")));
     const verbs = spy.calls.map((c) => c[0]);
-    const sb = verbs.indexOf("set-buffer");
+    const sb = verbs.indexOf("load-buffer");
     const pb = verbs.indexOf("paste-buffer");
     const sk = verbs.findIndex(
       (v, i) => v === "send-keys" && (spy.calls[i] ?? []).includes("Enter"),
@@ -317,6 +712,9 @@ describe("runTmuxDriver wiring", () => {
     expect(sb).toBeGreaterThanOrEqual(0);
     expect(pb).toBeGreaterThan(sb);
     expect(sk).toBeGreaterThan(pb);
+    const promptLoad = spy.rawCalls.find(({ args }) => args[0] === "load-buffer");
+    expect(promptLoad?.options).toEqual({ stdin: "say hi" });
+    expect(JSON.stringify(promptLoad?.rawArgs)).not.toContain("say hi");
 
     // The relay also ECHOES the viewer prompt as a `user` content frame (so every device sees it).
     await waitFor(() => client.content.some((p) => p.recordKind === "user"));
@@ -326,6 +724,247 @@ describe("runTmuxDriver wiring", () => {
     const code = await run;
     expect(code).toBe(0);
     expect(spy.killed()).toBe(true);
+
+    // The binary check is intentionally socket-free; every launch/control/teardown verb shares one
+    // per-launch private socket. Environment values stay in exec options, never `-e` or any argv.
+    expect(spy.rawCalls[0]?.rawArgs).toEqual(["-V"]);
+    const controlledCalls = spy.rawCalls.filter(({ args }) => args[0] !== "-V");
+    expect(controlledCalls.length).toBeGreaterThan(0);
+    expect(controlledCalls.every(({ rawArgs }) => rawArgs[0] === "-S")).toBe(true);
+    expect(new Set(controlledCalls.map(({ rawArgs }) => rawArgs[1])).size).toBe(1);
+    expect(controlledCalls[0]?.rawArgs[1]).toMatch(/\/tmux\.sock$/);
+    const spawnCall = controlledCalls.find(({ args }) => args[0] === "new-session");
+    expect(spawnCall?.rawArgs).not.toContain("-e");
+    const rawArgv = JSON.stringify(spy.rawCalls.map(({ rawArgs }) => rawArgs));
+    expect(rawArgv).not.toContain("shhh");
+    expect(rawArgv).not.toContain("http://127.0.0.1:9");
+    expect(rawArgv).not.toContain("/x/ca.pem");
+    expect(rawArgv).not.toContain(FORWARDED_ARG_SECRET);
+  });
+
+  it("keeps concurrent wrapped sessions isolated by cwd, runtime, socket, target, and paste buffer", async () => {
+    const identity = await makeIdentity();
+    const clients = [new FakeClient(), new FakeClient()] as const;
+    const spies = [tmuxSpy(), tmuxSpy()] as const;
+    const controllers = [new AbortController(), new AbortController()] as const;
+    const cwd = [tmp("rc-many-a-cwd-"), tmp("rc-many-b-cwd-")] as const;
+    const runtime = [tmp("rc-many-a-runtime-"), tmp("rc-many-b-runtime-")] as const;
+    const sessionIds: Array<string | null> = [null, null];
+
+    const runs = ([0, 1] as const).map((index) =>
+      runTmuxDriver(
+        {
+          harnessArgs: [],
+          identity,
+          brokerUrl: "https://broker.example",
+          title: `session ${index}`,
+          cwd: cwd[index],
+          git: null,
+          newClient: () => clients[index] as unknown as BrokerClient,
+          onSession: (session) => {
+            sessionIds[index] = session.id;
+          },
+        },
+        controllers[index].signal,
+        {
+          tmuxExec: spies[index].exec,
+          runtimeDir: runtime[index],
+          mirrorPermissions: false,
+          pollMs: 10,
+          paneWatchMs: 5,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+        },
+      ),
+    );
+
+    try {
+      await waitFor(() => clients.every((client) => client.announces.length === 1));
+      clients[0].pushInbound(inFrame(identity, "user", "many-a", "prompt for A"));
+      clients[1].pushInbound(inFrame(identity, "user", "many-b", "prompt for B"));
+      await waitFor(() =>
+        spies.every((spy) =>
+          spy.calls.some((call) => call[0] === "send-keys" && call.includes("Enter")),
+        ),
+      );
+
+      expect(sessionIds[0]).toMatch(/^cse_/);
+      expect(sessionIds[1]).toMatch(/^cse_/);
+      expect(sessionIds[0]).not.toBe(sessionIds[1]);
+      for (const index of [0, 1] as const) {
+        const controlled = spies[index].rawCalls.filter(({ args }) => args[0] !== "-V");
+        expect(
+          controlled.every(({ rawArgs }) => rawArgs[1] === join(runtime[index], "tmux.sock")),
+        ).toBe(true);
+        const spawn = controlled.find(({ args }) => args[0] === "new-session");
+        expect(spawn?.args).toContain(cwd[index]);
+        expect(spawn?.args).toContain(`rc-${sessionIds[index]}`);
+        const setBuffer = controlled.find(({ args }) => args[0] === "load-buffer");
+        expect(setBuffer?.args).toContain(`rcin-${sessionIds[index]}`);
+        expect(setBuffer?.options?.stdin).toBe(`prompt for ${index === 0 ? "A" : "B"}`);
+        const paste = controlled.find(({ args }) => args[0] === "paste-buffer");
+        expect(paste?.args).toContain(`rc-${sessionIds[index]}`);
+      }
+      expect(join(runtime[0], "tmux.sock")).not.toBe(join(runtime[1], "tmux.sock"));
+    } finally {
+      controllers[0].abort();
+      controllers[1].abort();
+      await Promise.all(runs);
+    }
+  });
+
+  it("creates every wrapper-owned runtime artifact with owner-only permissions", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-private-cwd-");
+    const home = tmp("rc-private-home-");
+    const runtime = tmp("rc-private-runtime-");
+    await chmod(runtime, 0o777);
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "private files",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        runtimeDir: runtime,
+        sessionId: "91919191-9191-4191-8191-919191919191",
+        pollMs: 10,
+        paneWatchMs: 5,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+        injectSessionHook: true,
+      },
+    );
+
+    try {
+      await waitFor(() => client.announces.length === 1);
+      const mode = async (path: string): Promise<number> => (await stat(path)).mode & 0o777;
+      await expect(mode(runtime)).resolves.toBe(0o700);
+      await expect(mode(join(runtime, "launch.sh"))).resolves.toBe(0o700);
+      await expect(mode(join(runtime, "settings.json"))).resolves.toBe(0o600);
+      await expect(mode(join(runtime, "session-events.ndjson"))).resolves.toBe(0o600);
+      await expect(mode(join(runtime, "permission-requests.ndjson"))).resolves.toBe(0o600);
+      await expect(mode(join(runtime, "permission-hook.mjs"))).resolves.toBe(0o600);
+      await expect(mode(join(runtime, "permission-decisions"))).resolves.toBe(0o700);
+    } finally {
+      ac.abort();
+      await run;
+    }
+  });
+
+  it("retains an owned private runtime when tmux kill cannot confirm whether the pane survived", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const ac = new AbortController();
+    let runtime = "";
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      if (args[0] === "kill-session") {
+        return Promise.resolve({ code: 127, stdout: "", stderr: "transport unavailable" });
+      }
+      simulateReadinessMarker(rawArgs);
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "retain uncertain pane",
+        cwd: tmp("rc-retain-cwd-"),
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+      },
+      ac.signal,
+      {
+        tmuxExec: exec,
+        mirrorPermissions: false,
+        onRuntimeDir: (path) => {
+          runtime = path;
+          dirs.push(path);
+        },
+      },
+    );
+
+    await waitFor(() => client.announces.length === 1);
+    ac.abort();
+    await expect(run).resolves.toBe(0);
+    expect(runtime).not.toBe("");
+    await expect(stat(runtime)).resolves.toBeDefined();
+    await expect(readFile(join(runtime, "launch.sh"), "utf8")).resolves.toContain("claude");
+  });
+
+  it("prints the retained runtime and private attach command when pre-readiness teardown is uncertain", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    let runtime = "";
+    let sessionId = "";
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      if (args[0] === "-V") {
+        return Promise.resolve({ code: 0, stdout: "tmux 3.4", stderr: "" });
+      }
+      if (args[0] === "kill-session") {
+        return Promise.resolve({ code: 127, stdout: "", stderr: "kill outcome unknown" });
+      }
+      // Keep the short-lived pane apparently present, but intentionally never write the mandatory
+      // SessionStart marker: registration must fail before ready, then uncertain kill retains recovery.
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+
+    try {
+      await expect(
+        runTmuxDriver(
+          {
+            harnessArgs: [],
+            identity,
+            brokerUrl: "https://broker.example",
+            title: "pre-ready recovery",
+            cwd: tmp("rc-pre-ready-recovery-cwd-"),
+            git: null,
+            newClient: () => client as unknown as BrokerClient,
+            onSession: (session) => {
+              sessionId = session.id;
+            },
+          },
+          new AbortController().signal,
+          {
+            tmuxExec: exec,
+            mirrorPermissions: false,
+            readinessTimeoutMs: 5,
+            readinessPollMs: 1,
+            onRuntimeDir: (path) => {
+              runtime = path;
+              dirs.push(path);
+            },
+          },
+        ),
+      ).rejects.toThrow("did not execute the required SessionStart readiness hook");
+
+      const output = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(runtime).not.toBe("");
+      expect(sessionId).toMatch(/^cse_/);
+      expect(output).toContain(`retained runtime: ${runtime}`);
+      expect(output).toContain(
+        `'tmux' '-S' '${join(runtime, "tmux.sock")}' 'attach' '-t' 'rc-${sessionId}'`,
+      );
+      expect(client.announces).toEqual([]);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it("permission mirroring (DEFAULT on): spawns WITHOUT --dangerously-skip-permissions, injects the PreToolUse hook, writes the helper + decisions dir", async () => {
@@ -374,10 +1013,16 @@ describe("runTmuxDriver wiring", () => {
       const cmd = spy.command();
       // Mirroring on → the viewer decides, so claude must NOT skip permissions.
       expect(cmd).not.toContain("--dangerously-skip-permissions");
-      // The PreToolUse hook is injected via a merged --settings, wired to our helper.
+      // The launcher references a private settings file; hook JSON and paths do not ride in tmux argv.
       expect(cmd).toContain("--settings");
-      expect(cmd).toContain("PreToolUse");
-      expect(cmd).toContain("perm-hook.mjs");
+      const settings = spy.settings();
+      expect(settings).toContain("PreToolUse");
+      expect(settings).toContain("perm-hook.mjs");
+      const rawArgv = JSON.stringify(spy.rawCalls.map(({ rawArgs }) => rawArgs));
+      expect(rawArgv).not.toContain("PreToolUse");
+      expect(rawArgv).not.toContain(permHelperPath);
+      await waitFor(() => client.announces.length > 0);
+      expect(client.announces[0]?.capabilities).toEqual(tmuxCapabilities(true));
       // The helper script was written to disk (it's the blocking PreToolUse bridge).
       expect(await readFile(permHelperPath, "utf8")).toContain("PreToolUse");
       // The decisions dir was created so the helper has somewhere to poll for its answer.
@@ -476,9 +1121,8 @@ describe("runTmuxDriver wiring", () => {
     }
   });
 
-  it("mirror ON but user FORWARDED --dangerously-skip-permissions does NOT touch folder trust (no gate to seed)", async () => {
-    // The user can pass claude's own flag through harnessArgs; we don't strip it, so the child bypasses the
-    // trust gate regardless. Seeding would write the user's real config for nothing — so we must not call it.
+  it("mirror ON rejects a forwarded --dangerously-skip-permissions before spawn or announce", async () => {
+    // Publishing structured permission support while forwarding auto-approve would be a capability lie.
     const identity = await makeIdentity();
     const client = new FakeClient();
     const cwd = tmp("rc-trustfwd-cwd-");
@@ -511,14 +1155,79 @@ describe("runTmuxDriver wiring", () => {
         },
       },
     );
-    try {
-      await waitFor(spy.started);
-      expect(spy.command()).toContain("--dangerously-skip-permissions"); // the user's flag survives
-      expect(trustCalls).toEqual([]); // not seeded — the forwarded flag already bypasses the gate
-    } finally {
-      ac.abort();
-      await run;
-    }
+    await expect(run).rejects.toThrow(/permission mirroring conflicts/);
+    expect(spy.started()).toBe(false);
+    expect(client.announces).toEqual([]);
+    expect(trustCalls).toEqual([]);
+  });
+
+  it.each([
+    "--bare",
+    "--safe-mode",
+    "--safe-mode=true",
+  ])("rejects hook-disabling argument %s before spawn or announce in every permission mode", async (hookDisablingArg) => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const spy = tmuxSpy();
+    let newClientCalls = 0;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [hookDisablingArg],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd: tmp("rc-hooks-disabled-arg-cwd-"),
+        git: null,
+        newClient: () => {
+          newClientCalls += 1;
+          return client as unknown as BrokerClient;
+        },
+      },
+      new AbortController().signal,
+      { tmuxExec: spy.exec, mirrorPermissions: false },
+    );
+
+    await expect(run).rejects.toThrow(/tmux remote readiness requires Claude hooks/);
+    expect(spy.started()).toBe(false);
+    expect(newClientCalls).toBe(0);
+    expect(client.announces).toEqual([]);
+  });
+
+  it.each([
+    ["CLAUDE_CODE_SIMPLE", "1"],
+    ["CLAUDE_CODE_SIMPLE", "yes"],
+    ["CLAUDE_CODE_SAFE_MODE", "true"],
+    ["CLAUDE_CODE_SAFE_MODE", "on"],
+  ])("rejects truthy hook-disabling environment %s=%s before spawn or announce", async (name, value) => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const spy = tmuxSpy();
+    let newClientCalls = 0;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "t",
+        cwd: tmp("rc-hooks-disabled-env-cwd-"),
+        git: null,
+        newClient: () => {
+          newClientCalls += 1;
+          return client as unknown as BrokerClient;
+        },
+      },
+      new AbortController().signal,
+      {
+        tmuxExec: spy.exec,
+        mirrorPermissions: false,
+        parentEnv: { PATH: "/usr/bin", [name]: value },
+      },
+    );
+
+    await expect(run).rejects.toThrow(new RegExp(`remove ${name}`));
+    expect(spy.started()).toBe(false);
+    expect(newClientCalls).toBe(0);
+    expect(client.announces).toEqual([]);
   });
 
   it("CLAUDE_CONFIG_DIR coherence: UNSET in parent → unset for the child (stale tmux-server value can't leak)", async () => {
@@ -596,7 +1305,7 @@ describe("runTmuxDriver wiring", () => {
     );
     try {
       await waitFor(spy.started);
-      expect(spy.env().CLAUDE_CONFIG_DIR).toBe("/custom/cfg"); // passed through via -e (pane == writer)
+      expect(spy.env().CLAUDE_CONFIG_DIR).toBe("/custom/cfg"); // exec env makes pane == writer
       expect(spy.command()).not.toContain("CLAUDE_CONFIG_DIR"); // NOT in the `env -u` unset list
     } finally {
       ac.abort();
@@ -604,13 +1313,12 @@ describe("runTmuxDriver wiring", () => {
     }
   });
 
-  it("a THROWING ensureCwdTrusted is best-effort: warns and the spawn still proceeds", async () => {
+  it("a throwing trust prerequisite fails closed before spawn or announce", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();
     const cwd = tmp("rc-trustthrow-cwd-");
     const home = tmp("rc-trustthrow-home-");
     await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
-    const { tracer, records } = recordingTracer();
     const spy = tmuxSpy();
     const ac = new AbortController();
     const run = runTmuxDriver(
@@ -622,7 +1330,6 @@ describe("runTmuxDriver wiring", () => {
         cwd,
         git: null,
         newClient: () => client as unknown as BrokerClient,
-        tracer,
       },
       ac.signal,
       {
@@ -637,23 +1344,17 @@ describe("runTmuxDriver wiring", () => {
         },
       },
     );
-    try {
-      await waitFor(spy.started); // spawn proceeded despite the throw
-      expect(spy.calls.some((c) => c[0] === "new-session")).toBe(true);
-      expect(records.some((r) => r.level === "warn" && r.msg.includes("folder trust"))).toBe(true);
-    } finally {
-      ac.abort();
-      await run;
-    }
+    await expect(run).rejects.toThrow(/could not prepare Claude folder trust/);
+    expect(spy.started()).toBe(false);
+    expect(client.announces).toEqual([]);
   });
 
-  it("a BAILED ensureCwdTrusted (unreadable/malformed config) WARNS — not a silent no-op — and spawns", async () => {
+  it("a bailed trust prerequisite fails closed before spawn or announce", async () => {
     const identity = await makeIdentity();
     const client = new FakeClient();
     const cwd = tmp("rc-trustbail-cwd-");
     const home = tmp("rc-trustbail-home-");
     await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
-    const { tracer, records } = recordingTracer();
     const spy = tmuxSpy();
     const ac = new AbortController();
     const run = runTmuxDriver(
@@ -665,7 +1366,6 @@ describe("runTmuxDriver wiring", () => {
         cwd,
         git: null,
         newClient: () => client as unknown as BrokerClient,
-        tracer,
       },
       ac.signal,
       {
@@ -678,13 +1378,9 @@ describe("runTmuxDriver wiring", () => {
         ensureCwdTrusted: () => ({ changed: false, bailed: true, path: "/stub/.claude.json" }),
       },
     );
-    try {
-      await waitFor(spy.started);
-      expect(records.some((r) => r.level === "warn" && r.msg.includes("folder trust"))).toBe(true);
-    } finally {
-      ac.abort();
-      await run;
-    }
+    await expect(run).rejects.toThrow(/could not safely update Claude folder trust/);
+    expect(spy.started()).toBe(false);
+    expect(client.announces).toEqual([]);
   });
 
   it("permission mirroring round-trip: a tool request raises a can_use_tool gate; a viewer allow writes the decision file", async () => {
@@ -772,10 +1468,98 @@ describe("runTmuxDriver wiring", () => {
       }
       if (decision === null) throw new Error("decision file never written");
       expect(JSON.parse(decision)).toEqual({ behavior: "allow" });
+      expect((await stat(decFile)).mode & 0o777).toBe(0o600);
     } finally {
       ac.abort();
       await run;
     }
+  });
+
+  it("a failed permission-decision write fails the driver and leaves that answer unacknowledged", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-perm-write-fail-cwd-");
+    const home = tmp("rc-perm-write-fail-home-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const runtime = tmp("rc-perm-write-fail-runtime-");
+    const permReqPath = join(runtime, "permission-requests.ndjson");
+    const permDecDir = join(runtime, "permission-decisions");
+    const permHelperPath = join(runtime, "permission-hook.mjs");
+    const spy = tmuxSpy();
+    const exec: TmuxExec = (args, options) => {
+      if (normalizeTmuxArgs(args)[0] === "kill-session") {
+        // Retain the runtime after the induced pump failure so the failed decision target is inspectable.
+        return Promise.resolve({ code: 127, stdout: "", stderr: "kill outcome unknown" });
+      }
+      return spy.exec(args, options);
+    };
+    const ac = new AbortController();
+    let ackCount = 0;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "decision persistence failure",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+        onSession: (session) => {
+          const originalAck = session.ack.bind(session);
+          session.ack = (eventId: string): void => {
+            ackCount += 1;
+            originalAck(eventId);
+          };
+        },
+      },
+      ac.signal,
+      {
+        tmuxExec: exec,
+        home,
+        runtimeDir: runtime,
+        sessionId: "92929292-9292-4292-8292-929292929292",
+        pollMs: 10,
+        paneWatchMs: 5,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+        permReqPath,
+        permDecDir,
+        permHelperPath,
+      },
+    );
+
+    await waitFor(() => client.announces.length === 1);
+    await waitFor(() => ackCount >= 1); // the initialize event was successfully handled
+    await appendFile(
+      permReqPath,
+      `${JSON.stringify({
+        toolUseId: "tu_write_fail",
+        toolName: "Bash",
+        toolInput: { command: "echo no" },
+        sessionId: "s",
+        permissionMode: "default",
+      })}\n`,
+    );
+    await waitFor(() =>
+      client.content.some(
+        (post) => post.recordKind === "permission_request" && post.text.includes("tu_write_fail"),
+      ),
+    );
+    const ackCountBeforeAnswer = ackCount;
+    const finalPath = join(permDecDir, "tu_write_fail.json");
+    await mkdir(finalPath);
+
+    client.pushInbound(
+      inFrame(
+        identity,
+        "permission",
+        "msg-perm-write-fail",
+        JSON.stringify({ request_id: "tu_write_fail", behavior: "allow" }),
+      ),
+    );
+
+    await expect(run).resolves.toBe(1);
+    expect(ackCount).toBe(ackCountBeforeAnswer);
+    expect((await stat(finalPath)).isDirectory()).toBe(true);
   });
 
   it("AskUserQuestion round-trip (#42): the viewer's answers reach the decision file as updatedInput {questions, answers}", async () => {
@@ -1109,14 +1893,20 @@ describe("runTmuxDriver wiring", () => {
     await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
 
     const calls: string[][] = [];
-    let up = false;
-    const exec: TmuxExec = (args) => {
-      calls.push([...args]);
-      if (args[0] === "new-session") up = true;
-      // has-session reports the session GONE (exit 1) once the pane has been "started" then closed.
+    let probes = 0;
+    const exec: TmuxExec = (rawArgs) => {
+      const args = normalizeTmuxArgs(rawArgs);
+      calls.push(args);
+      // The readiness probe is positive; subsequent watcher probes report a confirmed pane death.
       if (args[0] === "has-session") {
-        return Promise.resolve({ code: up ? 1 : 0, stdout: "", stderr: "no session" });
+        probes += 1;
+        return Promise.resolve({
+          code: probes === 1 ? 0 : 1,
+          stdout: "",
+          stderr: probes === 1 ? "" : "can't find session: rc-dead",
+        });
       }
+      simulateReadinessMarker(rawArgs);
       return Promise.resolve({ code: 0, stdout: args[0] === "-V" ? "tmux 3.4" : "", stderr: "" });
     };
 
@@ -1340,13 +2130,15 @@ describe("runTmuxDriver wiring", () => {
     );
     try {
       await waitFor(spy.started);
-      // The spawned command carries a single merged --settings that preserves the user's model AND adds
-      // our SessionStart hook writing to the sentinel.
+      await waitFor(() => client.announces.length === 1);
+      // The launcher carries only the private --settings path. The file preserves the user's model and
+      // adds our SessionStart hook without placing either JSON or the sentinel path in tmux argv.
       const cmd = spy.command();
       expect(cmd).toContain("--settings");
-      expect(cmd).toContain("SessionStart");
-      expect(cmd).toContain("sonnet"); // user's --settings preserved
-      expect(cmd).toContain("hook.ndjson"); // our sentinel path
+      const settings = spy.settings();
+      expect(settings).toContain("SessionStart");
+      expect(settings).toContain("sonnet"); // user's --settings preserved
+      expect(settings).toContain("hook.ndjson"); // our sentinel path
       // SessionStart fires → sentinel reports t1. Driver attaches to it (no scan) and relays its lines.
       await writeFile(sentinel, ev("h1", t1, "startup"));
       await appendFile(t1, asst("a1", "FIRST from session one"));
@@ -1401,7 +2193,7 @@ describe("runTmuxDriver wiring", () => {
       await waitFor(spy.started);
       const cmd = spy.command();
       expect(cmd).toContain("--settings");
-      expect(cmd).toContain("SessionStart");
+      expect(spy.settings()).toContain("SessionStart");
       expect(cmd).toContain("helloprompt");
       // --settings lands in the OPTIONS region — BEFORE the `--`-separated positional (the buggy version
       // appended it AFTER, making claude treat it as a literal prompt token and drop the hook).
@@ -1412,9 +2204,9 @@ describe("runTmuxDriver wiring", () => {
     }
   });
 
-  it("--rc-session-hook: a user --settings we can't parse DISABLES the hook (args passed through, claude errors natively)", async () => {
-    // Regression (codex): don't mask claude's own bad-settings error — pass the user's --settings through
-    // verbatim and skip hook injection (discovery falls back to the pin).
+  it("unreadable user --settings fails closed when it cannot carry the native-readiness hook", async () => {
+    // Native readiness is required in every permission mode. An unmergeable settings input must not
+    // silently launch without the SessionStart proof and publish a writable remote conversation.
     const identity = await makeIdentity();
     const client = new FakeClient();
     const cwd = tmp("rc-hookbad-cwd-");
@@ -1444,22 +2236,14 @@ describe("runTmuxDriver wiring", () => {
         paneWatchMs: 5,
       },
     );
-    try {
-      await waitFor(spy.started);
-      const cmd = spy.command();
-      expect(cmd).toContain("/no/such/settings/file.json"); // user's --settings passed through unchanged
-      expect(cmd).not.toContain("SessionStart"); // no hook injected
-      expect(cmd).not.toContain("hook.ndjson"); // no sentinel-based merge
-    } finally {
-      ac.abort();
-      await run;
-    }
+    await expect(run).rejects.toThrow(/could not merge the required tmux readiness hook/);
+    expect(spy.started()).toBe(false);
+    expect(client.announces).toEqual([]);
   });
 
-  it("--rc-session-hook: FALLS BACK to the pinned transcript when the hook never fires (e.g. --bare)", async () => {
-    // Verified live: claude --bare skips the hook (sentinel never written) but STILL writes the pinned
-    // <uuid>.jsonl. So with the hook enabled, if the sentinel never appears, discovery must fall back to
-    // findTranscriptById on the pinned id and still bridge.
+  it("capture falls back to the pinned transcript when optional rotation-follow is disabled", async () => {
+    // The always-on SessionStart marker proves native readiness. When optional rotation-follow is off,
+    // capture remains independent and safely locates the exact transcript through the driver's pinned id.
     const identity = await makeIdentity();
     const client = new FakeClient();
     const cwd = tmp("rc-hookfb-cwd-");
@@ -1468,7 +2252,6 @@ describe("runTmuxDriver wiring", () => {
     await mkdir(projDir, { recursive: true });
     const PINNED = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
     const transcript = join(projDir, `${PINNED}.jsonl`);
-    const sentinel = join(tmp("rc-hookfb-sent-"), "never-written.ndjson");
     const spy = tmuxSpy();
     const ac = new AbortController();
     let discovered: string | null = null;
@@ -1486,8 +2269,7 @@ describe("runTmuxDriver wiring", () => {
       {
         tmuxExec: spy.exec,
         home,
-        injectSessionHook: true, // hook ENABLED…
-        sentinelPath: sentinel, // …but we NEVER write the sentinel (hook didn't fire)
+        injectSessionHook: false,
         sessionId: PINNED, // pin is still passed alongside the hook
         pollMs: 10,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms == null ? 0 : Math.min(ms, 5))),
@@ -1499,14 +2281,14 @@ describe("runTmuxDriver wiring", () => {
     );
     try {
       await waitFor(spy.started);
-      expect(spy.command()).toContain("--settings"); // hook was injected
-      // The pinned transcript appears (the hook never wrote the sentinel) → fallback discovers it.
+      expect(spy.command()).toContain("--settings"); // the readiness hook is always injected
+      // The pinned transcript appears → capture finds it without consuming the readiness marker.
       await writeFile(
         transcript,
         `${JSON.stringify({ type: "assistant", uuid: "fb1", message: { role: "assistant", content: [{ type: "text", text: "FALLBACK works" }] } })}\n`,
       );
       await waitFor(() => client.content.some((p) => p.text.includes("FALLBACK works")));
-      expect(discovered).toBe(transcript); // discovered via the pin, not the (absent) sentinel
+      expect(discovered).toBe(transcript);
     } finally {
       ac.abort();
       await run;
@@ -1610,21 +2392,28 @@ describe("tmuxCapabilities — mirroring flips structuredPermissions", () => {
 
 describe("parseUserSession — does the user already drive the session, and what id", () => {
   const p = parseUserSession;
+  const UUID = "11111111-1111-4111-8111-111111111111";
   it("no session flags → not owned, no id (we pin)", () => {
     expect(p([])).toEqual({ ownsSession: false, explicitId: null });
     expect(p(["--model", "sonnet"])).toEqual({ ownsSession: false, explicitId: null });
   });
-  it("explicit --resume / --session-id (space and = forms) → owned + the id", () => {
-    expect(p(["--resume", "abc"])).toEqual({ ownsSession: true, explicitId: "abc" });
-    expect(p(["--resume=abc"])).toEqual({ ownsSession: true, explicitId: "abc" });
+  it("explicit UUID --resume / --session-id (space and = forms) → owned + the id", () => {
+    expect(p(["--resume", UUID])).toEqual({ ownsSession: true, explicitId: UUID });
+    expect(p([`--resume=${UUID}`])).toEqual({ ownsSession: true, explicitId: UUID });
     expect(p(["--session-id", "xyz"])).toEqual({ ownsSession: true, explicitId: "xyz" });
     expect(p(["--session-id=xyz"])).toEqual({ ownsSession: true, explicitId: "xyz" });
-    expect(p(["-r", "abc"])).toEqual({ ownsSession: true, explicitId: "abc" });
+    expect(p(["-r", UUID])).toEqual({ ownsSession: true, explicitId: UUID });
   });
-  it("a picker (--continue / -c / bare --resume) → owned, id unknown", () => {
+  it("a picker or resume search term → owned, id unknown", () => {
     expect(p(["--continue"])).toEqual({ ownsSession: true, explicitId: null });
     expect(p(["-c"])).toEqual({ ownsSession: true, explicitId: null });
     expect(p(["--resume"])).toEqual({ ownsSession: true, explicitId: null }); // no following id
+    expect(p(["--resume", "billing migration"])).toEqual({
+      ownsSession: true,
+      explicitId: null,
+    });
+    expect(p(["--resume=billing"])).toEqual({ ownsSession: true, explicitId: null });
+    expect(p(["-r", "billing"])).toEqual({ ownsSession: true, explicitId: null });
   });
   it("does NOT false-trigger on a flag VALUE that looks like a flag", () => {
     // `--model=-r` is a single token, not the resume flag → not owned.
