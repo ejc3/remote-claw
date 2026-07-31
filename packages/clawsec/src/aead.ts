@@ -8,6 +8,7 @@
 
 import { canonicalAad, type FrameHeader } from "./aad.js";
 import { concatBytes, utf8 } from "./bytes.js";
+import { canonicalByteSnapshot } from "./canonical.js";
 import { hkdfExpand, hkdfExtract } from "./hkdf.js";
 
 const MSG_INFO = utf8("remote-claw/v1/msg");
@@ -15,6 +16,40 @@ const SALT_LEN = 32;
 const NONCE_LEN = 12;
 const KEY_LEN = 32;
 const TAG_BITS = 128;
+
+function snapshotBytes(value: Uint8Array): Uint8Array {
+  return canonicalByteSnapshot(value);
+}
+
+function snapshotHeader(header: FrameHeader): FrameHeader {
+  const {
+    v,
+    identityId,
+    sessionId,
+    dir,
+    recordKind,
+    seq,
+    msgId,
+    clientMsgId,
+    keyEpoch,
+    part,
+    parts,
+  } = header;
+  const snapshot: FrameHeader = {
+    v,
+    identityId: snapshotBytes(identityId),
+    sessionId,
+    dir,
+    recordKind,
+    seq,
+    msgId,
+    keyEpoch,
+    part,
+    parts,
+  };
+  if (clientMsgId !== undefined) snapshot.clientMsgId = clientMsgId;
+  return snapshot;
+}
 
 /** The §8 wire frame: the header fields + the per-message salt/nonce + ciphertext (incl. tag). */
 export interface Frame extends FrameHeader {
@@ -59,21 +94,26 @@ export async function sealWith(
   salt: Uint8Array,
   nonce: Uint8Array,
 ): Promise<Frame> {
-  if (salt.length !== SALT_LEN) throw new AeadError(`salt must be ${SALT_LEN} bytes`);
-  if (nonce.length !== NONCE_LEN) throw new AeadError(`nonce must be ${NONCE_LEN} bytes`);
-  const aad = canonicalAad(header);
-  const key = await deriveMsgKey(planeKey, salt, aad);
+  const headerSnapshot = snapshotHeader(header);
+  const planeKeySnapshot = snapshotBytes(planeKey);
+  const plaintextSnapshot = snapshotBytes(plaintext);
+  const saltSnapshot = snapshotBytes(salt);
+  const nonceSnapshot = snapshotBytes(nonce);
+  if (saltSnapshot.length !== SALT_LEN) throw new AeadError(`salt must be ${SALT_LEN} bytes`);
+  if (nonceSnapshot.length !== NONCE_LEN) throw new AeadError(`nonce must be ${NONCE_LEN} bytes`);
+  const aad = canonicalAad(headerSnapshot);
+  const key = await deriveMsgKey(planeKeySnapshot, saltSnapshot, aad);
   const ct = await crypto.subtle.encrypt(
     {
       name: "AES-GCM",
-      iv: nonce as BufferSource,
+      iv: nonceSnapshot as BufferSource,
       additionalData: aad as BufferSource,
       tagLength: TAG_BITS,
     },
     key,
-    plaintext as BufferSource,
+    plaintextSnapshot as BufferSource,
   );
-  return { ...header, salt, nonce, ct: new Uint8Array(ct) };
+  return { ...headerSnapshot, salt: saltSnapshot, nonce: nonceSnapshot, ct: new Uint8Array(ct) };
 }
 
 /** Seal a plaintext into a Frame with a fresh random salt + nonce (§4.3). */
@@ -89,11 +129,15 @@ export async function seal(
 
 /** Open a Frame, returning the plaintext or throwing AeadError on any authentication failure. */
 export async function open(planeKey: Uint8Array, frame: Frame): Promise<Uint8Array> {
-  if (frame.salt.length !== SALT_LEN) throw new AeadError(`salt must be ${SALT_LEN} bytes`);
-  if (frame.nonce.length !== NONCE_LEN) throw new AeadError(`nonce must be ${NONCE_LEN} bytes`);
-  const { salt, nonce, ct, ...header } = frame;
+  const header = snapshotHeader(frame);
+  const planeKeySnapshot = snapshotBytes(planeKey);
+  const salt = snapshotBytes(frame.salt);
+  const nonce = snapshotBytes(frame.nonce);
+  const ct = snapshotBytes(frame.ct);
+  if (salt.length !== SALT_LEN) throw new AeadError(`salt must be ${SALT_LEN} bytes`);
+  if (nonce.length !== NONCE_LEN) throw new AeadError(`nonce must be ${NONCE_LEN} bytes`);
   const aad = canonicalAad(header);
-  const key = await deriveMsgKey(planeKey, salt, aad);
+  const key = await deriveMsgKey(planeKeySnapshot, salt, aad);
   try {
     const pt = await crypto.subtle.decrypt(
       {

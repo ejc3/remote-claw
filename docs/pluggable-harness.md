@@ -17,6 +17,12 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 > become the neutral schema. In particular, Codex is one
 > persistent multi-project app-server host, not another one-`Session` `DriverName`.
 
+A1.0 has now landed the shared canonical writer plus dormant host-state types, strict parsers, digest
+builders, protected-operation interfaces, and a pure database-path resolver. No launch, registrar,
+native adapter, `Session`, or relay path imports those contracts; they create no database, acquire no
+lease, perform no protected operation or native effect, advertise no A1 capability, and do not change
+the three compatibility drivers described here.
+
 **Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
 the A0 registrar's `rcb_*` is only a process-local lease. Neither is the stable logical-chat ID
 targeted by A1, and neither may stand in for an engine's semantic conversation ID. The future durable
@@ -543,6 +549,16 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 - `packages/cli/src/host/rc/relay.ts` — the shared relay; its announcement metadata and capabilities
   can now be replaced as one post-setup snapshot without restarting the pumps. That validated local
   snapshot survives an advisory publish failure and is retried by later presence publication.
+- `packages/clawsec/src/{canonical,aad}.ts` — the public cross-runtime canonical field writer and the
+  A0 `canonicalAad` user of it. The extraction preserves the locked A0 byte vector. Canonical optional
+  fields require explicit `null`; the older A0 DTO's omitted or `undefined` `clientMsgId` alone is
+  adapted at the AAD boundary, while explicit `null` and other runtime values are rejected.
+- `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
+  — A1.0's dormant exact-shape parsers, canonical ID and digest contracts, pure database-path resolver,
+  record/runtime shapes, protected-operation interfaces, separated first-dispatch and evidence-only
+  reconciliation capabilities, and digest builders. They are not imported by a run path and contain no
+  database open, persistence, lease acquisition, protected-value implementation, broker handshake, or
+  native send.
 
 ### Dispatcher
 
@@ -668,9 +684,10 @@ Each edge carries commands inward and observations outward without converting on
 other, so recursion cannot feed an echo back as a command. Nesting adds server boundaries only;
 Claude, Codex, or OpenCode appears once, at the innermost end.
 
-Stable host → project → logical-chat identity remains an A1 target above this seam. It must be
-persisted separately from `Session.id`, the `rcb_*` lease, engine-native IDs, and provider/broker
-connection IDs.
+A1.0 freezes the selected host → project → logical-chat identity and record contracts above this seam.
+Persisting and integrating them remains A1.1 and later work. They stay separate from `Session.id`, the
+`rcb_*` lease, engine-native IDs, and provider/broker connection IDs; the current `Session` seam does
+not use A1 IDs or protected operations.
 
 Alongside capabilities, each harness path supplies a `HarnessDescriptor` —
 `{ agent: "claude-code" | "opencode"; mode: "rc" | "tmux" | "opencode" }` (the consts `MITM_HARNESS` /

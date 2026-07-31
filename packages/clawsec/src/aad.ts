@@ -4,7 +4,7 @@
 // always produce distinct bytes (no ad-hoc "a|b|c" ambiguity). The same bytes are used as
 // the AES-GCM AAD and folded into the per-message K_msg `info` (§4.3).
 
-import { concatBytes, utf8 } from "./bytes.js";
+import { CanonicalWriter, canonicalByteLength, canonicalByteSnapshot } from "./canonical.js";
 
 export type Dir = "in" | "out";
 
@@ -28,62 +28,6 @@ export interface FrameHeader {
   parts: number;
 }
 
-const U32_MAX = 0xffffffff;
-
-class Writer {
-  private chunks: Uint8Array[] = [];
-
-  private push(b: Uint8Array): void {
-    this.chunks.push(b);
-  }
-
-  /** Length-prefixed bytes: [u32 BE length][bytes]. */
-  bytes(b: Uint8Array): void {
-    if (b.length > U32_MAX) throw new RangeError("field too large");
-    const prefix = new Uint8Array(4);
-    new DataView(prefix.buffer).setUint32(0, b.length, false);
-    this.push(prefix);
-    this.push(b);
-  }
-
-  str(s: string): void {
-    this.bytes(utf8(s));
-  }
-
-  /** A non-negative safe integer as a length-prefixed u64 BE (uniform with bytes()). */
-  uint(n: number): void {
-    if (!Number.isInteger(n) || n < 0 || n > Number.MAX_SAFE_INTEGER) {
-      throw new RangeError(`expected a non-negative safe integer, got ${n}`);
-    }
-    const b = new Uint8Array(8);
-    new DataView(b.buffer).setBigUint64(0, BigInt(n), false);
-    this.bytes(b);
-  }
-
-  /** Presence byte (0=absent) then the value, so null/undefined is distinct from any value. */
-  optionalUint(n: number | null): void {
-    if (n === null) {
-      this.push(Uint8Array.of(0));
-      return;
-    }
-    this.push(Uint8Array.of(1));
-    this.uint(n);
-  }
-
-  optionalStr(s: string | undefined): void {
-    if (s === undefined) {
-      this.push(Uint8Array.of(0));
-      return;
-    }
-    this.push(Uint8Array.of(1));
-    this.str(s);
-  }
-
-  concat(): Uint8Array {
-    return concatBytes(...this.chunks);
-  }
-}
-
 /**
  * Canonical AAD for a frame header (§4.3/§8). Field order is fixed:
  * v, identity_id, session_id, dir, record_kind, seq, msg_id, client_msg_id?, key_epoch, part, parts.
@@ -92,23 +36,44 @@ class Writer {
  * constraints (parts ≥ 1, part < parts) are enforced by the chunking layer, not here.
  */
 export function canonicalAad(h: FrameHeader): Uint8Array {
-  if (h.identityId.length !== 16) {
-    throw new RangeError(`identityId must be 16 bytes, got ${h.identityId.length}`);
+  // Snapshot every potentially accessor-backed field once before validation.
+  const {
+    v,
+    identityId,
+    sessionId,
+    dir,
+    recordKind,
+    seq,
+    msgId,
+    clientMsgId,
+    keyEpoch,
+    part,
+    parts,
+  } = h;
+  const identityIdSnapshot = canonicalByteSnapshot(identityId);
+  const identityIdLength = canonicalByteLength(identityIdSnapshot);
+  if (identityIdLength !== 16) {
+    throw new RangeError(`identityId must be 16 bytes, got ${identityIdLength}`);
   }
-  if (h.dir !== "in" && h.dir !== "out") {
-    throw new RangeError(`dir must be "in" or "out", got ${h.dir}`);
+  if (dir !== "in" && dir !== "out") {
+    throw new RangeError('dir must be "in" or "out"');
   }
-  const w = new Writer();
-  w.uint(h.v);
-  w.bytes(h.identityId);
-  w.str(h.sessionId);
-  w.str(h.dir);
-  w.str(h.recordKind);
-  w.optionalUint(h.seq);
-  w.str(h.msgId);
-  w.optionalStr(h.clientMsgId);
-  w.uint(h.keyEpoch);
-  w.uint(h.part);
-  w.uint(h.parts);
-  return w.concat();
+  const w = new CanonicalWriter();
+  w.uint(v);
+  w.bytes(identityIdSnapshot);
+  w.str(sessionId);
+  w.str(dir);
+  w.str(recordKind);
+  w.optionalUint(seq);
+  w.str(msgId);
+  // The A0 DTO predates A1's explicit-null optional fields. Adapt its omitted property at
+  // this boundary while rejecting explicit null or non-string runtime values.
+  if (clientMsgId !== undefined && typeof clientMsgId !== "string") {
+    throw new TypeError("clientMsgId must be a string when present");
+  }
+  w.optionalStr(clientMsgId === undefined ? null : clientMsgId);
+  w.uint(keyEpoch);
+  w.uint(part);
+  w.uint(parts);
+  return w.finish();
 }

@@ -1,7 +1,9 @@
 // @remote-claw/clawsec — the crypto core. Public surface grows one unit per PR.
 export { canonicalAad, type Dir, type FrameHeader } from "./aad.js";
 export { AeadError, type Frame, open, seal } from "./aead.js";
+export { base64urlDecode, base64urlEncode } from "./base64url.js";
 export { concatBytes, fromHex, sha256, timingSafeEqual, toHex, utf8 } from "./bytes.js";
+export { CanonicalWriter, canonicalByteSnapshot } from "./canonical.js";
 export { normalizeChecksum } from "./checksum.js";
 export {
   ChunkError,

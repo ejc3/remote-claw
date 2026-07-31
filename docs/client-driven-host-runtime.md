@@ -10,6 +10,8 @@ Unless a paragraph or status label says otherwise, the behavior below is the tar
 
 **Today:** the process-local A0.1 and A0.2 registration work has landed. In its default Anthropic-inference mode, Claude `--rc-app` intercepts Remote Control traffic while tunneling other Anthropic calls; its Bedrock mode terminates the Anthropic-shaped surface locally. OpenCode and tmux now fail closed through the same registration seam before their compatibility bridges become visible. Tmux uses one private per-launch server/socket and permits many independent wrapper invocations on one host, but the registration and synthetic broker chat remain process-local: an ordinary wrapper restart does not recover the same stable logical-chat/native binding. Codex and the outward official-client connectors are not implemented.
 
+**A1.0 today:** the canonical field writer and dormant host-state ID, path, record, digest, protected-handle, dispatch, and backend-capability contracts have landed. They are not connected to a run, registrar, RC, or native-driver path and create no database, coordinator lease, durable registration, protected service, broker handshake, or writable A1 behavior.
+
 <a id="1-decision"></a>
 
 ## The design in one minute
@@ -408,13 +410,14 @@ These are release requirements, not claims about the current wrappers:
 <a id="c-codex-wrapped-client"></a>
 <a id="d-tmux-recovery-and-unified-product"></a>
 
-Milestones group dependency-ordered work; they are not promises to put an entire milestone into one pull request. Each numbered slice in the [delivery-plan reference](client-driven-host-runtime-reference.md#13-delivery-plan) lands as its own reviewed pull request and leaves capabilities disabled until that slice's proof gate passes. A0.1 and A0.2 are complete process-local compatibility milestones; A1, A2, N1, B, C, and D are deliberately split and own durable coordination, native recovery, and the outward connectors.
+Milestones group dependency-ordered work; they are not promises to put an entire milestone into one pull request. Each numbered slice in the [delivery-plan reference](client-driven-host-runtime-reference.md#13-delivery-plan) lands as its own reviewed pull request and leaves capabilities disabled until that slice's proof gate passes. A0.1 and A0.2 are complete process-local compatibility milestones; A1.0 is a complete but dormant contract slice; A1.1 onward, A2, N1, B, C, and D own durable coordination, native recovery, and the outward connectors.
 
 | Milestone | Outcome | Status |
 | --- | --- | --- |
 | A0.1 | Neutral host-wide registration seam; migrate Claude MITM without changing its data path | Implemented |
 | A0.2 | Move OpenCode and tmux registration onto the same seam and publish truthful readiness/capabilities | Implemented (process-local; no durable recovery claim) |
-| A1 | Durable many-session host inventory, logical chats, native bindings, per-chat collaborator actors, and fenced runtime ownership | Planned |
+| A1.0 | Canonical IDs/encodings, strict host-state records and digests, protected operation boundaries, and immutable dispatch/reconciliation contracts | Implemented (dormant; no persistence or effects) |
+| A1.1–A1.11 | Durable many-session host inventory, logical chats, native bindings, per-chat collaborator actors, fenced runtime ownership, broker/ingress/outbox/inference/projection, and recovery | Planned |
 | A2 | First complete end-to-end shared chat through OpenCode; unavailable live connector kinds use authenticated collaborator stand-ins only at common ingress | Planned after A1 |
 | N1 | Live nested remote-claw server collaboration, lineage, edge recovery, and loop prevention | Planned after A1; not required for the A2 stand-in proof |
 | B | Fully brokered Claude wrapper, native recovery, and outward Anthropic Remote connector | Planned |

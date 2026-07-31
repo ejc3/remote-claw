@@ -1,0 +1,68 @@
+import { readdir, readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const SOURCE_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const STATE_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)));
+const PACKAGE_JSON = fileURLToPath(new URL("../../../package.json", import.meta.url));
+const PACKAGE_ROOT = dirname(PACKAGE_JSON);
+
+async function sourceFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) return sourceFiles(path);
+      return entry.isFile() && /\.[cm]?[jt]sx?$/.test(entry.name) ? [path] : [];
+    }),
+  );
+  return nested.flat();
+}
+
+function packageExportTargets(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(packageExportTargets);
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value).flatMap(packageExportTargets);
+  }
+  return [];
+}
+
+describe("dormant A1 host-state boundary", () => {
+  it("is not imported or advertised by an active CLI source path", async () => {
+    const activeFiles = (await sourceFiles(SOURCE_ROOT)).filter(
+      (path) => !path.startsWith(`${STATE_ROOT}/`),
+    );
+    const importSpecifier =
+      /(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"']+)["']/g;
+    const brokerA1Protocol = ["remote-claw", "broker-a1"].join("-");
+
+    for (const path of activeFiles) {
+      const source = await readFile(path, "utf8");
+      expect(source, path).not.toContain(brokerA1Protocol);
+      for (const match of source.matchAll(importSpecifier)) {
+        const specifier = match[1];
+        if (specifier?.startsWith(".")) {
+          const resolvedImport = resolve(dirname(path), specifier.replace(/\.[cm]?[jt]sx?$/, ""));
+          expect(
+            resolvedImport === STATE_ROOT || resolvedImport.startsWith(`${STATE_ROOT}/`),
+            `${path}: ${specifier}`,
+          ).toBe(false);
+        }
+      }
+    }
+
+    const packageJson = JSON.parse(await readFile(PACKAGE_JSON, "utf8")) as {
+      exports?: unknown;
+    };
+    for (const target of packageExportTargets(packageJson.exports)) {
+      if (!target.startsWith(".")) continue;
+      const resolvedTarget = resolve(PACKAGE_ROOT, target.replace(/\.[cm]?[jt]sx?$/, ""));
+      expect(
+        resolvedTarget === STATE_ROOT || resolvedTarget.startsWith(`${STATE_ROOT}/`),
+        `package export: ${target}`,
+      ).toBe(false);
+    }
+  });
+});
