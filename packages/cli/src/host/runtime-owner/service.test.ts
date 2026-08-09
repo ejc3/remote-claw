@@ -175,7 +175,7 @@ async function stopQuietly(service: RuntimeOwnerService<FakeDatabase> | undefine
   await service?.stop().catch(() => undefined);
 }
 
-describe("runtime-owner service lifecycle", () => {
+describe.skipIf(process.platform !== "linux")("runtime-owner service lifecycle", () => {
   it("opens once, validates custody, serves fenced operations, and closes in order", async () => {
     const events: string[] = [];
     const machineIdentityId = machineIdentity();
@@ -421,6 +421,96 @@ describe("runtime-owner service lifecycle", () => {
     expect(controller.heartbeatRequests).toHaveLength(0);
     expect(events).toContain("rpc.close");
     expect(events).not.toContain("lease.release");
+  });
+
+  it("observes an automatic poison-shutdown rejection while preserving it for stop", async () => {
+    const events: string[] = [];
+    const machineIdentityId = machineIdentity();
+    const controller = new FakeLeaseController({ events });
+    const unhandledRejections: unknown[] = [];
+    const observeUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason);
+    };
+    let listening = true;
+    const rpcServer: RuntimeOwnerRpcServerHandle = {
+      get listening() {
+        return listening;
+      },
+      close: async () => {
+        listening = false;
+        throw new Error("injected RPC close failure");
+      },
+    };
+    process.on("unhandledRejection", observeUnhandledRejection);
+    try {
+      const service = await startRuntimeOwnerService({
+        machineIdentityId,
+        identitySecret: secret(),
+        ownerIdentity: ownerIdentity(machineIdentityId),
+        databaseFactory: databaseFactory(events),
+        leaseController: controller,
+        keyCustodyValidator: custody(events),
+        leaseDurationMs: 100,
+        heartbeatIntervalMs: 10,
+        startRpcServer: async () => rpcServer,
+      });
+
+      listening = false;
+      await service.completed;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandledRejections).toEqual([]);
+      await expect(service.stop()).rejects.toMatchObject({ code: "SHUTDOWN_FAILED" });
+      expect(service.state).toBe("poisoned");
+      expect(events).not.toContain("lease.release");
+      expect(events.at(-1)).toBe("database.close");
+    } finally {
+      process.off("unhandledRejection", observeUnhandledRejection);
+    }
+  });
+
+  it("bounds shutdown draining when an active operation ignores abort", async () => {
+    const events: string[] = [];
+    const machineIdentityId = machineIdentity();
+    const rootSecret = secret();
+    const controller = new FakeLeaseController({ events });
+    let operationStarted = false;
+    const service = await startRuntimeOwnerService({
+      machineIdentityId,
+      identitySecret: rootSecret,
+      ownerIdentity: ownerIdentity(machineIdentityId),
+      databaseFactory: databaseFactory(events),
+      leaseController: controller,
+      keyCustodyValidator: custody(events),
+      leaseDurationMs: 10_000,
+      heartbeatIntervalMs: 3_000,
+      operationDrainTimeoutMs: 25,
+      operations: [
+        {
+          name: "ignore_abort",
+          execute: async () => {
+            operationStarted = true;
+            await new Promise<void>(() => undefined);
+            return null;
+          },
+        },
+      ],
+    });
+    const client = await connectRuntimeOwnerRpc({ machineIdentityId, identitySecret: rootSecret });
+    const dispatch = client
+      .dispatch({ operation: "ignore_abort", payload: null })
+      .catch((error: unknown) => error);
+    try {
+      await waitFor(() => operationStarted);
+      await expect(service.stop()).rejects.toMatchObject({ code: "SHUTDOWN_FAILED" });
+      await expect(service.completed).resolves.toBeUndefined();
+      await expect(dispatch).resolves.toBeInstanceOf(Error);
+      expect(service.state).toBe("poisoned");
+      expect(events).not.toContain("lease.release");
+      expect(events.at(-1)).toBe("database.close");
+    } finally {
+      client.close();
+      await stopQuietly(service);
+    }
   });
 
   it("never releases a mismatched acquire result that could belong to an incumbent", async () => {

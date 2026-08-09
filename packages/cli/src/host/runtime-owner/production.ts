@@ -58,6 +58,9 @@ const SAFE_ENVIRONMENT_KEYS = Object.freeze([
   "XDG_STATE_HOME",
 ] as const);
 
+export const RUNTIME_OWNER_DEFAULT_SPAWN_SETTLE_TIMEOUT_MS = 5_000;
+const RUNTIME_OWNER_MAX_SPAWN_SETTLE_TIMEOUT_MS = 60_000;
+
 type OpenDatabase = (options: OpenHostStateDatabaseOptions) => HostStateDatabase;
 
 interface ProductionRuntimeOwnerDatabaseFactoryOptions {
@@ -628,6 +631,7 @@ export function sanitizedRuntimeOwnerDaemonEnvironment(
 }
 
 interface DetachedChild {
+  kill(signal?: NodeJS.Signals | number): boolean;
   once(event: "error", listener: (error: Error) => void): this;
   once(event: "spawn", listener: () => void): this;
   removeListener(event: "error", listener: (error: Error) => void): this;
@@ -648,6 +652,7 @@ type SpawnDetachedProcess = (
 
 export interface CreateRuntimeOwnerDetachedSpawnerOptions {
   readonly secretFilePath: string;
+  readonly spawnSettleTimeoutMs?: number;
   readonly executablePath?: string;
   readonly executableArgv?: readonly string[];
   readonly environment?: NodeJS.ProcessEnv;
@@ -713,6 +718,15 @@ export function createRuntimeOwnerDetachedSpawner(
     throw new TypeError("runtime-owner secret file path must be absolute");
   }
   const executablePath = options.executablePath ?? process.execPath;
+  const spawnSettleTimeoutMs =
+    options.spawnSettleTimeoutMs ?? RUNTIME_OWNER_DEFAULT_SPAWN_SETTLE_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(spawnSettleTimeoutMs) ||
+    spawnSettleTimeoutMs <= 0 ||
+    spawnSettleTimeoutMs > RUNTIME_OWNER_MAX_SPAWN_SETTLE_TIMEOUT_MS
+  ) {
+    throw new TypeError("runtime-owner spawn settle timeout is invalid");
+  }
   const environment = sanitizedRuntimeOwnerDaemonEnvironment(options.environment ?? process.env);
   const productionModuleUrl = options.productionModuleUrl ?? import.meta.url;
   const entry = runtimeOwnerCliEntry(productionModuleUrl);
@@ -747,17 +761,58 @@ export function createRuntimeOwnerDetachedSpawner(
         reject(error);
         return;
       }
-      const onError = (error: Error): void => {
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      const cleanup = (): void => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        child.removeListener("error", onError);
         child.removeListener("spawn", onSpawn);
+      };
+      const onError = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         reject(error);
       };
       const onSpawn = (): void => {
-        child.removeListener("error", onError);
-        child.unref();
-        resolve();
+        if (settled) return;
+        settled = true;
+        cleanup();
+        try {
+          child.unref();
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
       };
       child.once("error", onError);
       child.once("spawn", onSpawn);
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        // The process object can settle after our deadline. Terminate both now and on a late spawn,
+        // then detach and consume one late error so fallback cannot leave an ambiguous owner alive.
+        const terminate = (): void => {
+          try {
+            child.kill("SIGTERM");
+          } catch {
+            // The fixed timeout remains the outcome; a late spawn invokes this same termination.
+          }
+        };
+        child.once("error", () => undefined);
+        child.once("spawn", terminate);
+        terminate();
+        try {
+          child.unref();
+        } catch {
+          // The fixed timeout remains the only outcome; no child or provider detail escapes.
+        }
+        reject(new Error("runtime-owner detached spawn timed out"));
+      }, spawnSettleTimeoutMs);
     });
   };
 }

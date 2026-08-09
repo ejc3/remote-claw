@@ -36,6 +36,9 @@ describe("runtime-owner RPC authentication", () => {
     const firstClientProof = server.createClientProof(first.challenge);
 
     expect(wrong.verifyServerProof(first.challenge, first.serverProof)).toBe(false);
+    expect(
+      server.verifyClientProof(first.challenge, wrong.createClientProof(first.challenge)),
+    ).toBe(false);
     expect(server.verifyClientProof(second.challenge, firstClientProof)).toBe(false);
 
     server.close();

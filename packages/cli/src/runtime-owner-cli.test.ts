@@ -1,6 +1,10 @@
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Identity } from "@remote-claw/clawsec";
 import { describe, expect, it, vi } from "vitest";
-import { runRuntimeOwnerCli } from "./runtime-owner-cli.js";
+import { isRuntimeOwnerCliDirectInvocation, runRuntimeOwnerCli } from "./runtime-owner-cli.js";
 
 function identity(machineByte: number): Identity {
   return {
@@ -13,6 +17,25 @@ function identity(machineByte: number): Identity {
 }
 
 describe("private runtime-owner CLI", () => {
+  it.skipIf(process.platform === "win32")(
+    "recognizes direct invocation through an argv symlink",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "remote-claw-runtime-owner-cli-"));
+      try {
+        const target = fileURLToPath(new URL("./runtime-owner-cli.ts", import.meta.url));
+        const entry = join(root, "runtime-owner-entry");
+        symlinkSync(target, entry);
+
+        expect(isRuntimeOwnerCliDirectInvocation(entry, pathToFileURL(target).href)).toBe(true);
+        expect(
+          isRuntimeOwnerCliDirectInvocation(join(root, "missing"), pathToFileURL(target).href),
+        ).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("rejects malformed private argv without reading a secret or reflecting argv", async () => {
     const output: string[] = [];
     const readSecret = vi.fn();

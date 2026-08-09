@@ -18,6 +18,7 @@ const MACHINE_IDENTITY = /^[0-9a-f]{32}$/;
 const OPERATION_NAME = /^[a-z][a-z0-9_.:-]{0,127}$/;
 const DEFAULT_LEASE_DURATION_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
+const DEFAULT_OPERATION_DRAIN_TIMEOUT_MS = 10_000;
 
 export const RUNTIME_OWNER_LINUX_PROCESS_START_IDENTITY_SCHEMA_ID =
   "remote-claw/linux-process-start-identity/v1" as const;
@@ -141,6 +142,7 @@ export interface StartRuntimeOwnerServiceOptions<
   readonly operations?: readonly RuntimeOwnerOperationDefinition[];
   readonly leaseDurationMs?: number;
   readonly heartbeatIntervalMs?: number;
+  readonly operationDrainTimeoutMs?: number;
   readonly rpcHandshakeTimeoutMs?: number;
   readonly rpcRequestTimeoutMs?: number;
   readonly rpcMaxInFlight?: number;
@@ -364,6 +366,7 @@ export class RuntimeOwnerService<
   readonly #operations: ReadonlyMap<string, RuntimeOwnerOperationDefinition["execute"]>;
   readonly #leaseDurationMs: number;
   readonly #heartbeatIntervalMs: number;
+  readonly #operationDrainTimeoutMs: number;
   readonly #custodySigner: RuntimeOwnerKeyCustodySigner;
   readonly #custodySigningCapability: RuntimeOwnerKeyCustodySigningCapability;
   readonly #now: () => number;
@@ -387,6 +390,7 @@ export class RuntimeOwnerService<
     custodySigningCapability: RuntimeOwnerKeyCustodySigningCapability,
     leaseDurationMs: number,
     heartbeatIntervalMs: number,
+    operationDrainTimeoutMs: number,
   ) {
     let resolveCompleted: (() => void) | undefined;
     this.completed = new Promise<void>((resolve) => {
@@ -405,6 +409,7 @@ export class RuntimeOwnerService<
     this.#lease = lease;
     this.#leaseDurationMs = leaseDurationMs;
     this.#heartbeatIntervalMs = heartbeatIntervalMs;
+    this.#operationDrainTimeoutMs = operationDrainTimeoutMs;
     this.#now = options.now ?? Date.now;
   }
 
@@ -429,6 +434,11 @@ export class RuntimeOwnerService<
     if (heartbeatIntervalMs >= leaseDurationMs) {
       throw new RuntimeOwnerServiceLifecycleError("INVALID_CONFIGURATION");
     }
+    const operationDrainTimeoutMs = safeInteger(
+      options.operationDrainTimeoutMs,
+      DEFAULT_OPERATION_DRAIN_TIMEOUT_MS,
+      300_000,
+    );
     const operations = operationMap(options.operations);
     if (!(options.identitySecret instanceof Uint8Array) || options.identitySecret.length !== 32) {
       throw new RuntimeOwnerServiceLifecycleError("INVALID_CONFIGURATION");
@@ -483,6 +493,7 @@ export class RuntimeOwnerService<
         custodySigningCapability,
         leaseDurationMs,
         heartbeatIntervalMs,
+        operationDrainTimeoutMs,
       );
       const rpcOptions = {
         machineIdentityId: identity,
@@ -722,7 +733,11 @@ export class RuntimeOwnerService<
     if (this.#state === "stopped" || this.#leaseLost) return;
     this.#leaseLost = true;
     this.#state = "poisoned";
-    if (this.#shutdownPromise === undefined) this.#shutdownPromise = this.#shutdown(false);
+    if (this.#shutdownPromise === undefined) {
+      const shutdownPromise = this.#shutdown(false);
+      this.#shutdownPromise = shutdownPromise;
+      void shutdownPromise.catch(() => undefined);
+    }
   }
 
   async #shutdown(releaseRequested: boolean): Promise<void> {
@@ -749,7 +764,21 @@ export class RuntimeOwnerService<
     } catch (error) {
       errors.push(error);
     }
-    await Promise.all(activeOperations.map((operation) => operation.completed));
+    if (activeOperations.length > 0) {
+      let drainTimer: NodeJS.Timeout | undefined;
+      const drained = Promise.all(activeOperations.map((operation) => operation.completed)).then(
+        () => true,
+      );
+      const timedOut = new Promise<false>((resolve) => {
+        drainTimer = setTimeout(() => resolve(false), this.#operationDrainTimeoutMs);
+      });
+      const operationsDrained = await Promise.race([drained, timedOut]);
+      if (drainTimer !== undefined) clearTimeout(drainTimer);
+      if (!operationsDrained) {
+        errors.push(new RuntimeOwnerServiceLifecycleError("SHUTDOWN_FAILED"));
+        this.#leaseLost = true;
+      }
+    }
     try {
       await this.#heartbeatPromise;
     } catch (error) {

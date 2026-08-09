@@ -22,13 +22,16 @@ import {
   HOST_STATE_TEST_FILESYSTEM_SUPPORTED,
   HOST_STATE_TEST_TEMPORARY_DIRECTORY,
 } from "../state/test-environment.js";
+import { bootstrapRuntimeOwner } from "./bootstrap.js";
 import { generateWrappedRuntimeOwnerIdentityKey } from "./key-custody.js";
 import {
   createRuntimeOwnerDetachedSpawner,
+  RUNTIME_OWNER_DEFAULT_SPAWN_SETTLE_TIMEOUT_MS,
   sanitizedRuntimeOwnerDaemonEnvironment,
   sanitizedRuntimeOwnerExecutableArgv,
   startProductionRuntimeOwnerDaemon,
 } from "./production.js";
+import { RuntimeOwnerRpcError } from "./protocol.js";
 
 const linuxWithUid = process.platform === "linux" && typeof process.getuid === "function";
 const describeLinux = describe.runIf(linuxWithUid && HOST_STATE_TEST_FILESYSTEM_SUPPORTED);
@@ -183,6 +186,61 @@ describe("runtime-owner detached process boundary", () => {
     expect(child.unref).toHaveBeenCalledOnce();
     expect(JSON.stringify(captured)).not.toContain("provider-token-super-secret");
     expect(JSON.stringify(captured)).not.toContain("--inspect");
+  });
+
+  it("bounds spawn settlement, cleans up, and preserves fail-soft bootstrap", async () => {
+    vi.useFakeTimers();
+    expect(RUNTIME_OWNER_DEFAULT_SPAWN_SETTLE_TIMEOUT_MS).toBe(5_000);
+    for (const spawnSettleTimeoutMs of [0, 60_001]) {
+      expect(() =>
+        createRuntimeOwnerDetachedSpawner({
+          secretFilePath: "/state/remote-claw/secret",
+          spawnSettleTimeoutMs,
+        }),
+      ).toThrow(TypeError);
+    }
+
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      unref: ReturnType<typeof vi.fn>;
+    };
+    child.kill = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    child.unref = vi.fn();
+    const spawnDetached = createRuntimeOwnerDetachedSpawner({
+      secretFilePath: "/state/remote-claw/secret",
+      executablePath: "/usr/bin/node",
+      executableArgv: [],
+      productionModuleUrl: "file:///opt/remote-claw/src/host/runtime-owner/production.js",
+      spawnProcess: (() => child) as never,
+    });
+    const result = bootstrapRuntimeOwner({
+      machineIdentityId: "66".repeat(16),
+      identitySecret: new Uint8Array(32).fill(6),
+      spawnDetached,
+      connect: async () => {
+        throw new RuntimeOwnerRpcError("UNAVAILABLE");
+      },
+    });
+    const outcome = expect(result).resolves.toEqual({
+      status: "unavailable",
+      client: null,
+      spawnAttempted: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(child.listenerCount("spawn")).toBe(1);
+    await vi.advanceTimersByTimeAsync(RUNTIME_OWNER_DEFAULT_SPAWN_SETTLE_TIMEOUT_MS);
+    await outcome;
+
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(child.listenerCount("spawn")).toBe(1);
+    expect(() => child.emit("spawn")).not.toThrow();
+    expect(child.kill).toHaveBeenCalledTimes(2);
+    expect(child.listenerCount("spawn")).toBe(0);
+    expect(child.listenerCount("error")).toBe(1);
+    expect(() => child.emit("error", new Error("late child failure"))).not.toThrow();
+    expect(child.listenerCount("error")).toBe(0);
   });
 });
 

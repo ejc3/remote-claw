@@ -285,7 +285,10 @@ async function authenticateSocket(
       }
     };
     const onError = (): void => finish(new RuntimeOwnerRpcError("UNAVAILABLE"));
-    const onClose = (): void => finish(new RuntimeOwnerRpcError("AUTHENTICATION_FAILED"));
+    const onClose = (): void =>
+      finish(
+        new RuntimeOwnerRpcError(challenge === undefined ? "UNAVAILABLE" : "AUTHENTICATION_FAILED"),
+      );
     const timer = setTimeout(() => finish(new RuntimeOwnerRpcError("TIMEOUT")), timeoutMs);
     timer.unref();
     socket.on("data", onData);

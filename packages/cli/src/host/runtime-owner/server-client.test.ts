@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { createConnection, type Socket } from "node:net";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { base64urlEncode } from "@remote-claw/clawsec";
 import { describe, expect, it } from "vitest";
 import { RuntimeOwnerRpcAuthenticator, runtimeOwnerRpcSocketAddress } from "./auth.js";
@@ -122,7 +122,28 @@ async function closeServer(server: RuntimeOwnerRpcServer | undefined): Promise<v
   await server?.close();
 }
 
-describe("runtime-owner RPC server and client", () => {
+async function listenRawServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => reject(error);
+    server.once("error", onError);
+    server.listen(runtimeOwnerRpcSocketAddress(machineIdentityId), () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+}
+
+async function closeRawServer(server: Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error === undefined) resolve();
+      else reject(error);
+    });
+  });
+}
+
+describe.skipIf(process.platform !== "linux")("runtime-owner RPC server and client", () => {
   it("authenticates, serves only health/typed dispatch, and redacts handler errors", async () => {
     const thrownSecret = "HANDLER_SECRET_SENTINEL";
     const server = await startRuntimeOwnerRpcServer({
@@ -190,6 +211,51 @@ describe("runtime-owner RPC server and client", () => {
       ).rejects.toBeInstanceOf(RuntimeOwnerRpcError);
     } finally {
       await server.close();
+    }
+  });
+
+  it("classifies a close before the challenge as unavailable", async () => {
+    const server = createServer((socket) => socket.end());
+    await listenRawServer(server);
+    try {
+      await expect(
+        connectRuntimeOwnerRpc({
+          machineIdentityId,
+          identitySecret: secret(),
+          handshakeTimeoutMs: 1_000,
+        }),
+      ).rejects.toMatchObject({ code: "UNAVAILABLE" });
+    } finally {
+      await closeRawServer(server);
+    }
+  });
+
+  it("classifies a close after a verified challenge as authentication failure", async () => {
+    const authenticator = await RuntimeOwnerRpcAuthenticator.create(machineIdentityId, secret());
+    const server = createServer((socket) => {
+      const challenge = authenticator.createChallenge(() => new Uint8Array(32).fill(7));
+      socket.write(
+        encodeRuntimeOwnerRpcFrame({
+          version: RUNTIME_OWNER_RPC_VERSION,
+          type: "challenge",
+          challenge: challenge.challenge,
+          serverProof: challenge.serverProof,
+        }),
+      );
+      socket.once("data", () => socket.end());
+    });
+    await listenRawServer(server);
+    try {
+      await expect(
+        connectRuntimeOwnerRpc({
+          machineIdentityId,
+          identitySecret: secret(),
+          handshakeTimeoutMs: 1_000,
+        }),
+      ).rejects.toMatchObject({ code: "AUTHENTICATION_FAILED" });
+    } finally {
+      authenticator.close();
+      await closeRawServer(server);
     }
   });
 

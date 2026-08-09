@@ -1234,7 +1234,7 @@ describe("A1 host-state migrations", () => {
              WHERE native_binding_id = ?`,
           )
           .run(BINDING_ID),
-      ).toThrow();
+      ).toThrow(/phase <> 'ready' OR current_attachment_lease_id IS NOT NULL/);
       expect(() =>
         database
           .prepare(

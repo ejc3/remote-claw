@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { deriveIdentity, type Identity, toHex } from "@remote-claw/clawsec";
@@ -105,12 +106,18 @@ export async function runRuntimeOwnerCli(
   }
 }
 
-function isDirectInvocation(): boolean {
-  const entry = process.argv[1];
+export function isRuntimeOwnerCliDirectInvocation(
+  entry: string | undefined = process.argv[1],
+  moduleUrl: string = import.meta.url,
+): boolean {
   if (entry === undefined) return false;
-  return import.meta.url === pathToFileURL(resolve(entry)).href;
+  try {
+    return moduleUrl === pathToFileURL(realpathSync(resolve(entry))).href;
+  } catch {
+    return false;
+  }
 }
 
-if (isDirectInvocation()) {
+if (isRuntimeOwnerCliDirectInvocation()) {
   process.exitCode = await runRuntimeOwnerCli();
 }

@@ -7312,16 +7312,19 @@ child thread stays nested evidence under its classified parent until a retained 
 another user-visible mapping.
 
 `LocalNativeConversationRecord` and its transition log belong to that runtime owner, not to a
-collaboration server, but every such record names one already durable `projectId`. The owner may
+collaboration server, but every such record names one already durable `projectId`. A1.3 freezes and
+validates this repository model; its production activation is health-only and creates no local
+conversation records. Once a later owner-dispatch milestone admits these operations, the owner may
 allocate a local record before the native semantic ID is known, then bind exact native evidence later.
-This lets a direct TUI create, clear, fork, switch, archive, or use a conversation while every
-collaboration coordinator is unavailable after that project exists. The runtime owner cannot allocate
-the first project or invent one from a directory; first-project and later explicit-project allocation
-remain coordinator-owned. A local record grants no remote authority and cannot allocate or repoint a
-`logicalChatId`; only the coordinator's later `LocalNativeConversationMappingRecord` does that.
+That future dispatch surface lets a direct TUI create, clear, fork, switch, archive, or use a
+conversation while every collaboration coordinator is unavailable after that project exists. The
+runtime owner cannot allocate the first project or invent one from a directory; first-project and later
+explicit-project allocation remain coordinator-owned. A local record grants no remote authority and
+cannot allocate or repoint a `logicalChatId`; only the coordinator's later
+`LocalNativeConversationMappingRecord` does that.
 
-Inference delivery has its own write-ahead boundary. Before an isolated connector can send a
-provider request, the runtime owner durably creates an `InferenceAttemptRecord` with upstream state
+A1.9 inference delivery has its own target write-ahead boundary. Before an isolated connector can send
+a provider request, the runtime owner will durably create an `InferenceAttemptRecord` with upstream state
 `prepared` and native delivery `not_started`. The inference lease and attempt are scoped to the exact
 runtime/incarnation rather than a `nativeBindingId`, `logicalChatId`, or coordinator epoch. The
 attempt pins the exact native request, request digest, response-stream identity, and any upstream
@@ -8793,13 +8796,15 @@ Only the separately signed nested-transport positive-never-started contract may 
 command onto a replacement transport. Recovery never manufactures native state by replaying
 historical actions.
 
-The runtime owner observes native conversation changes even while every collaboration coordinator is
-offline and writes a monotonic local transition log before depending on that transition for recovery.
-Within an already durable project, it allocates only runtime-local conversation IDs and inference
-attempts; it does not allocate the first project, a server-scoped chat, or a remote writer. New local
-model work therefore remains recoverable through the runtime-scoped inference lease even when no
-`nativeBindingId` can yet be resolved. If no durable project exists, local native use may continue,
-but A1.3 cannot persist that conversation into this registry until a coordinator allocates the project.
+The selected post-A1.3 owner-dispatch target observes native conversation changes even while every
+collaboration coordinator is offline and writes a monotonic local transition log before depending on
+that transition for recovery. Within an already durable project, it allocates only runtime-local
+conversation IDs; it does not allocate the first project, a server-scoped chat, or a remote writer.
+Once A1.9 enables runtime-scoped inference, new local model work remains recoverable through its
+inference lease even when no `nativeBindingId` can yet be resolved. The current health-only production
+path creates neither local-conversation nor inference-attempt records. If no durable project exists,
+local native use may continue, but the future dispatch path cannot persist that conversation into this
+registry until a coordinator allocates the project.
 
 Before reopening remote writes, the recovered coordinator consumes every unimported local transition
 from its last committed cursor and classifies it using exact native IDs, lineage, and history. One
