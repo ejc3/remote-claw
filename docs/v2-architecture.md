@@ -89,17 +89,21 @@
 > passages later in this historical document describe only the terminal Claude edge; outer layers
 > reconnect server/chat edges and never create another native app.
 >
-> A1.0 has landed the shared canonical writer and dormant host-state contracts. A1.1 has landed the
-> dormant Linux secure-SQLite kernel, schema-v2 migration registry, synchronous high-level
-> transaction boundary, and verified protected-artifact store. No run path imports or opens that
-> kernel; it creates no production database, acquires no lease, performs no native effect, advertises
-> no A1 capability, and leaves the bytes and behavior of every previously valid canonical A0 frame
-> unchanged. Existing state is validated as one read-only WAL-aware snapshot before writable SQLite
-> open. FULL migration commits use a non-blocking passive checkpoint plus guarded fsync; a reader or
-> competing checkpoint may defer the checkpoint work. Migration
-> committed/unknown outcomes are retry-open-safe, unlike an unknown ordinary command commit. Generic
-> server/project/chat/binding state begins in A1.2. The exact `rcrt_*` runtime-ID derivation formula and
-> locked vector remain deliberately assigned to the A1.3 runtime owner.
+> A1.0 through A1.2 have landed as dormant libraries. A1.0 supplies the shared canonical writer and
+> host-state contracts; A1.1 supplies the Linux secure-SQLite kernel and verified protected artifacts;
+> A1.2 supplies schema v3 and its high-level server/project/chat/binding/edge/coordinator repository.
+> Migration `003-durable-host-records` has 81 ordered statements and digest
+> `cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4`; the exact full v3 manifest has 91 objects: 13 tables,
+> 24 indexes, and 54 triggers. It can bootstrap and inventory many recovering chats, replace a
+> terminal selector generation without retargeting old chats, reconcile persistence outcomes, and
+> validate an existing supported v3 graph in one coherent read-only snapshot before writable open;
+> a newly migrated graph is validated before the handle returns.
+> Persisted chats name their exact selector mapping and use random `rcie_*` installing native edges.
+> Evidence refs/digests remain opaque until A1.4; actor scopes are addresses only until A1.7; nested
+> mappings and remote-server edges remain rejected until N1. No run path imports or opens the kernel;
+> production creates no database or A1 row, acquires no lease, performs no native effect, advertises
+> no A1 capability, and leaves every previously valid canonical A0 frame unchanged. A1.3 is next; the
+> exact `rcrt_*` runtime-ID derivation formula and locked vector remain assigned to that runtime owner.
 
 ## 1. What changes and why
 
@@ -782,9 +786,9 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   same 16 identity bytes; selected A1 storage remains lowercase-only. Selected A1 has these exact
   canonical ID namespaces:
 
-  - random 16-byte bodies: `rcs_` collaboration server, `rcpj_` project, `rcl_` logical chat, `rcnb_`
-    native binding, `rccl_` coordinator lease, `rcra_` registration attempt, `rcncl_` native
-    conversation lease, and `rcph_` protected handle;
+  - random 16-byte bodies: `rcs_` collaboration server, `rcpj_` project, `rcl_` logical chat, `rcie_`
+    inward collaboration edge, `rcnb_` native binding, `rccl_` coordinator lease, `rcra_` registration
+    attempt, `rcncl_` native conversation lease, and `rcph_` protected handle;
   - SHA-256-derived 32-byte bodies: `rcrt_` native runtime, `ptm_` project-target-selector mapping,
     and `nat_` native delivery attempt. A1.0 validates the `rcrt_*` shape only; A1.3 must freeze its
     exact domain-separated derivation and locked vector before allocating runtime IDs.
@@ -793,7 +797,8 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   match `[A-Za-z0-9._:-]+`, and are never raw provider/native IDs; adapters map unsafe external
   identifiers to durable safe IDs. A1 digests and one-use dispatch authorizations are canonical
   unpadded base64url of exactly 32 bytes. Generic strings accepted by the dormant A1.0 host-state
-  parser are 1–1,024 UTF-16 code units and contain only Unicode scalar values. `record_kind` is one of
+  parser are 1–1,024 UTF-16 code units, contain only Unicode scalar values, and exclude `U+0000`.
+  `record_kind` is one of
   the versioned protocol values.
   `client_msg_id` is either absent or a non-empty safe ID, and `seq` is either null or an integer.
   Certificate IDs and identity-key IDs use the same safe alphabet;

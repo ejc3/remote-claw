@@ -20,6 +20,8 @@ const collaborationServerId = parseA1CanonicalId("collaborationServer", `rcs_${e
 const targetServerId = parseA1CanonicalId("collaborationServer", `rcs_${encoded(16, 2)}`);
 const logicalChatId = parseA1CanonicalId("logicalChat", `rcl_${encoded(16, 3)}`);
 const targetLogicalChatId = parseA1CanonicalId("logicalChat", `rcl_${encoded(16, 4)}`);
+const inwardEdgeId = parseA1CanonicalId("inwardEdge", `rcie_${encoded(16, 8)}`);
+const targetInwardEdgeId = parseA1CanonicalId("inwardEdge", `rcie_${encoded(16, 9)}`);
 const nativeBindingId = parseA1CanonicalId("nativeBinding", `rcnb_${encoded(16, 5)}`);
 const coordinatorLeaseId = parseA1CanonicalId("coordinatorLease", `rccl_${encoded(16, 6)}`);
 const nativeRuntimeId = parseA1CanonicalId("nativeRuntime", `rcrt_${encoded(32, 7)}`);
@@ -239,7 +241,7 @@ describe("native transport attachment and lease records", () => {
 
 describe("inward collaboration edge records", () => {
   const installingNative = {
-    inwardEdgeId: "inward-edge-1",
+    inwardEdgeId,
     representedServerId: collaborationServerId,
     representedLogicalChatId: logicalChatId,
     targetKind: "native-harness",
@@ -309,7 +311,7 @@ describe("inward collaboration edge records", () => {
 
   it("accepts a current nested-server edge with its complete live connection", () => {
     const value = {
-      inwardEdgeId: "inward-edge-2",
+      inwardEdgeId: targetInwardEdgeId,
       representedServerId: collaborationServerId,
       representedLogicalChatId: logicalChatId,
       targetKind: "remote-claw-server",
@@ -326,6 +328,15 @@ describe("inward collaboration edge records", () => {
     const parsed = parseInwardCollaborationEdgeRecord(value);
     expect(parsed).toEqual(value);
     expect(Object.isFrozen(parsed)).toBe(true);
+  });
+
+  it("rejects a generic safe ID where a canonical inward-edge ID is required", () => {
+    expect(() =>
+      parseInwardCollaborationEdgeRecord({
+        ...installingNative,
+        inwardEdgeId: "inward-edge-1",
+      }),
+    ).toThrow(/rcie_/);
   });
 
   it("rejects target-kind mixing and partial or unfenced live connections", () => {

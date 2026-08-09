@@ -13,6 +13,7 @@ import {
   type CoordinatorLeaseId,
   type DispatchAuthorization,
   HostStateContractError,
+  type InwardEdgeId,
   type LogicalChatId,
   type NativeBindingId,
   type NativeDeliveryAttemptId,
@@ -47,7 +48,7 @@ export interface A1NativeMutationFence {
   readonly collaborationServerId: CollaborationServerId;
   readonly logicalChatId: LogicalChatId;
   readonly nativeBindingId: NativeBindingId;
-  readonly inwardEdgeId: A1SafeId;
+  readonly inwardEdgeId: InwardEdgeId;
   readonly topologyGeneration: number;
   readonly coordinatorLeaseId: CoordinatorLeaseId;
   readonly coordinatorEpoch: number;
@@ -277,7 +278,11 @@ export function parseA1NativeMutationFence(value: unknown): A1NativeMutationFenc
       row.nativeBindingId,
       "nativeMutationFence.nativeBindingId",
     ),
-    inwardEdgeId: parseA1SafeId(row.inwardEdgeId, "nativeMutationFence.inwardEdgeId"),
+    inwardEdgeId: parseA1CanonicalId(
+      "inwardEdge",
+      row.inwardEdgeId,
+      "nativeMutationFence.inwardEdgeId",
+    ),
     topologyGeneration: parsePositiveSafeInteger(
       row.topologyGeneration,
       "nativeMutationFence.topologyGeneration",

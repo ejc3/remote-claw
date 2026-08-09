@@ -30,6 +30,17 @@ import type {
   ReadVerifiedArtifactResult,
 } from "./protected.js";
 import {
+  createHostStateRepositoryTransactionOperations,
+  HostStateRepository,
+  type HostStateRepositoryOperations,
+  HostStateRepositoryPersistenceError,
+  type HostStateRepositorySqlRunResult,
+  type HostStateRepositorySqlTransaction,
+  type HostStateRepositorySqlValue,
+  type HostStateRepositoryTransactionExecutor,
+  validateHostStateRepositorySnapshot,
+} from "./repository.js";
+import {
   openSecureHostStateFilesystem,
   type SecureHostStateFilesystem,
 } from "./secure-filesystem.js";
@@ -40,6 +51,39 @@ export {
   MAX_PROTECTED_ARTIFACT_SCHEMA_ID_UTF8_BYTES,
   ProtectedArtifactPersistenceError,
 } from "./artifacts.js";
+export type {
+  AcquireCoordinatorLeaseRequest,
+  AcquireCoordinatorLeaseResult,
+  AllocateExplicitProjectRequest,
+  AllocateExplicitProjectResult,
+  DefaultCollaborationServerResult,
+  HostStateActorScope,
+  HostStateJournalEntry,
+  HostStateRepositoryOperations,
+  ProjectTargetMappingFence,
+  ReconcileCoordinatorReleaseResult,
+  ReconcileCoordinatorRenewalRequest,
+  ReconcileCoordinatorRenewalResult,
+  ReconcileProjectTargetMappingReplacementResult,
+  ReleaseCoordinatorLeaseRequest,
+  ReleaseCoordinatorLeaseResult,
+  RenewCoordinatorLeaseRequest,
+  RenewCoordinatorLeaseResult,
+  ReplaceProjectTargetMappingRequest,
+  ReplaceProjectTargetMappingResult,
+  ReserveAdditionalTerminalChatRequest,
+  ReserveFirstTerminalChatRequest,
+  TerminalChatReservationResult,
+  TerminalRegistrationInput,
+} from "./repository.js";
+export {
+  HOST_STATE_JOURNAL_SCHEMA_IDS,
+  HOST_STATE_REPOSITORY_MAX_ID_ATTEMPTS,
+  HostStateRepositoryConflictError,
+  HostStateRepositoryPersistenceError,
+  HostStateStaleCoordinatorError,
+  parseHostStateActorScope,
+} from "./repository.js";
 
 export const HOST_STATE_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const INTRINSIC_PROMISE_THEN = Promise.prototype.then;
@@ -129,19 +173,22 @@ export interface OpenHostStateDatabaseOptions {
 }
 
 /**
- * The dormant A1.1 surface. It exposes only protected artifact operations and
- * lifecycle metadata; SQLite and arbitrary SQL remain private to the kernel.
+ * The dormant A1 host-state surface. It exposes only protected artifacts and
+ * high-level record operations; SQLite and arbitrary SQL remain private to the kernel.
  */
 export interface HostStateDatabase extends ProtectedArtifactOperations {
   readonly machineIdentityId: string;
   readonly databasePath: string;
   readonly schemaVersion: typeof HOST_STATE_SCHEMA_VERSION;
+  readonly records: HostStateRepositoryOperations;
   transaction<T>(operation: (transaction: HostStateTransaction) => T): T;
   close(): void;
 }
 
 /** High-level operations available atomically; no SQL handle crosses this boundary. */
-export type HostStateTransaction = ProtectedArtifactTransactionOperations;
+export interface HostStateTransaction extends ProtectedArtifactTransactionOperations {
+  readonly records: HostStateRepositoryOperations;
+}
 
 type SqliteRow = Readonly<Record<string, unknown>>;
 
@@ -646,6 +693,16 @@ function validateDatabaseContentsAtVersion(
   validateMetadata(database, machineIdentityId, schemaVersion);
   validateMigrationHistory(database, schemaVersion);
   validateIntegrity(database);
+  if (schemaVersion >= 3) {
+    const snapshot = new ActiveArtifactSqlTransaction(database);
+    try {
+      validateHostStateRepositorySnapshot(snapshot, machineIdentityId);
+    } catch (error) {
+      reject("durable host records failed semantic validation", error);
+    } finally {
+      snapshot.invalidate();
+    }
+  }
   if (HOST_STATE_SCHEMA_MANIFEST.applicationId !== HOST_STATE_APPLICATION_ID) {
     reject("compiled schema manifest is internally inconsistent");
   }
@@ -710,7 +767,9 @@ function statement(database: DatabaseSync, sql: string): StatementSync {
   }
 }
 
-class ActiveArtifactSqlTransaction implements ArtifactSqlTransaction {
+class ActiveArtifactSqlTransaction
+  implements ArtifactSqlTransaction, HostStateRepositorySqlTransaction
+{
   readonly #database: DatabaseSync;
   #active = true;
 
@@ -733,14 +792,24 @@ class ActiveArtifactSqlTransaction implements ArtifactSqlTransaction {
     return statement(this.#database, sql).get(...parameters);
   }
 
-  run(sql: string, parameters: readonly ArtifactSqlValue[]): ArtifactSqlRunResult {
+  all(sql: string, parameters: readonly HostStateRepositorySqlValue[]): readonly unknown[] {
+    this.#assertActive();
+    return statement(this.#database, sql).all(...parameters);
+  }
+
+  run(
+    sql: string,
+    parameters: readonly ArtifactSqlValue[],
+  ): ArtifactSqlRunResult & HostStateRepositorySqlRunResult {
     this.#assertActive();
     const result = statement(this.#database, sql).run(...parameters);
     return Object.freeze({ changes: Number(result.changes) });
   }
 }
 
-class SqliteArtifactTransactionExecutor implements ArtifactTransactionExecutor {
+class SqliteArtifactTransactionExecutor
+  implements ArtifactTransactionExecutor, HostStateRepositoryTransactionExecutor
+{
   readonly #database: DatabaseSync;
   readonly #filesystem: SecureHostStateFilesystem;
   #closed = false;
@@ -764,7 +833,9 @@ class SqliteArtifactTransactionExecutor implements ArtifactTransactionExecutor {
     }
   }
 
-  transaction<T>(operation: (transaction: ArtifactSqlTransaction) => T): T {
+  transaction<T>(operation: (transaction: ArtifactSqlTransaction) => T): T;
+  transaction<T>(operation: (transaction: HostStateRepositorySqlTransaction) => T): T;
+  transaction<T>(operation: (transaction: ActiveArtifactSqlTransaction) => T): T {
     this.assertUsable();
     if (this.#inTransaction) reject("nested transactions are not supported");
     if (typeof operation !== "function") reject("transaction callback must be a function");
@@ -829,7 +900,12 @@ class SqliteArtifactTransactionExecutor implements ArtifactTransactionExecutor {
       }
       return result;
     } catch (error) {
-      if (error instanceof ProtectedArtifactPersistenceError) this.#poisoned = true;
+      if (
+        error instanceof ProtectedArtifactPersistenceError ||
+        error instanceof HostStateRepositoryPersistenceError
+      ) {
+        this.#poisoned = true;
+      }
       if (began && !committed && !rollback(this.#database)) this.#poisoned = true;
       if (commitAttempted || committed) this.#poisoned = true;
       try {
@@ -865,6 +941,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
   readonly machineIdentityId: string;
   readonly databasePath: string;
   readonly schemaVersion = HOST_STATE_SCHEMA_VERSION;
+  readonly records: HostStateRepositoryOperations;
   readonly #database: DatabaseSync;
   readonly #filesystem: SecureHostStateFilesystem;
   readonly #executor: SqliteArtifactTransactionExecutor;
@@ -884,6 +961,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
     this.#filesystem = filesystem;
     this.#executor = new SqliteArtifactTransactionExecutor(database, filesystem);
     this.#artifacts = new ProtectedArtifactRepository(this.#executor);
+    this.records = new HostStateRepository(this.#executor, machineIdentityId);
     Object.freeze(this);
   }
 
@@ -902,9 +980,23 @@ class SqliteHostStateDatabase implements HostStateDatabase {
   transaction<T>(operation: (transaction: HostStateTransaction) => T): T {
     this.#executor.assertUsable();
     if (typeof operation !== "function") reject("transaction callback must be a function");
-    return this.#executor.transaction((transaction) =>
-      operation(createProtectedArtifactTransactionOperations(transaction) as HostStateTransaction),
-    );
+    return this.#executor.transaction((transaction) => {
+      const artifacts = createProtectedArtifactTransactionOperations(transaction);
+      const records = createHostStateRepositoryTransactionOperations(
+        transaction,
+        this.machineIdentityId,
+      );
+      return operation(
+        Object.freeze({
+          putArtifact: (request: PutArtifactRequest): PutArtifactResult =>
+            artifacts.putArtifact(request),
+          readVerifiedArtifact: (
+            request: ReadVerifiedArtifactRequest,
+          ): ReadVerifiedArtifactResult => artifacts.readVerifiedArtifact(request),
+          records,
+        }),
+      );
+    });
   }
 
   close(): void {
@@ -942,7 +1034,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
   }
 }
 
-/** Open the dormant A1.1 local-state kernel. No active CLI path imports this function. */
+/** Open the dormant A1 host-state kernel. No active CLI path imports this function. */
 export function openHostStateDatabase(options: OpenHostStateDatabaseOptions): HostStateDatabase {
   assertHostStateNodeVersion();
   const machineIdentityId = parseMachineIdentityId(options.machineIdentityId);

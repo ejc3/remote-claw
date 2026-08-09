@@ -45,6 +45,7 @@ function noncanonicalTailAlias(value: string): string {
 
 const collaborationServerId = parseA1CanonicalId("collaborationServer", `rcs_${encoded(16, 1)}`);
 const logicalChatId = parseA1CanonicalId("logicalChat", `rcl_${encoded(16, 2)}`);
+const inwardEdgeId = parseA1CanonicalId("inwardEdge", `rcie_${encoded(16, 8)}`);
 const nativeBindingId = parseA1CanonicalId("nativeBinding", `rcnb_${encoded(16, 3)}`);
 const coordinatorLeaseId = parseA1CanonicalId("coordinatorLease", `rccl_${encoded(16, 4)}`);
 const nativeRuntimeId = parseA1CanonicalId("nativeRuntime", `rcrt_${encoded(32, 4)}`);
@@ -75,7 +76,7 @@ const fence = {
   collaborationServerId,
   logicalChatId,
   nativeBindingId,
-  inwardEdgeId: "inward-edge-1",
+  inwardEdgeId,
   topologyGeneration: 2,
   coordinatorLeaseId,
   coordinatorEpoch: 3,
@@ -213,6 +214,12 @@ describe("native mutation boundary records", () => {
     expect(() => parseA1NativeMutationFence({ ...fence, topologyGeneration: 0 })).toThrow(
       /greater than zero/,
     );
+    expect(() =>
+      parseA1NativeMutationFence({
+        ...fence,
+        inwardEdgeId: "inward-edge-1",
+      }),
+    ).toThrow(/rcie_/);
     expect(() =>
       parsePreparedNativeMutation({
         ...prepared,

@@ -62,7 +62,9 @@ export function parseNonEmptyString(value: unknown, field: string): string {
   }
   for (let index = 0; index < value.length; index++) {
     const codeUnit = value.charCodeAt(index);
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+    if (codeUnit === 0) {
+      reject(field, "must not contain U+0000");
+    } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
       const trailing = value.charCodeAt(index + 1);
       if (!(trailing >= 0xdc00 && trailing <= 0xdfff)) {
         reject(field, "must contain only Unicode scalar values");

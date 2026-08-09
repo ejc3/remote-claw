@@ -108,6 +108,7 @@ describe("exact host-state records", () => {
 
   it("bounds contract strings and accepts only Unicode scalar values", () => {
     expect(parseNonEmptyString("schema-😀", "fixture")).toBe("schema-😀");
+    expect(() => parseNonEmptyString("\0schema", "fixture")).toThrow(/U\+0000/);
     expect(() => parseNonEmptyString("x".repeat(1025), "fixture")).toThrow(
       /at most 1024 UTF-16 code units/,
     );

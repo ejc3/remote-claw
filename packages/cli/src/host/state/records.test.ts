@@ -47,6 +47,7 @@ const targetServerId = parseA1CanonicalId("collaborationServer", `rcs_${encoded(
 const projectId = parseA1CanonicalId("project", `rcpj_${encoded(16, 2)}`);
 const logicalChatId = parseA1CanonicalId("logicalChat", `rcl_${encoded(16, 3)}`);
 const parentChatId = parseA1CanonicalId("logicalChat", `rcl_${encoded(16, 4)}`);
+const inwardEdgeId = parseA1CanonicalId("inwardEdge", `rcie_${encoded(16, 11)}`);
 const nativeBindingId = parseA1CanonicalId("nativeBinding", `rcnb_${encoded(16, 5)}`);
 const coordinatorLeaseId = parseA1CanonicalId("coordinatorLease", `rccl_${encoded(16, 6)}`);
 const registrationAttemptId = parseA1CanonicalId("registrationAttempt", `rcra_${encoded(16, 7)}`);
@@ -58,6 +59,10 @@ const protectedPortHandleId = parseA1CanonicalId("protectedHandle", `rcph_${enco
 const alternateProjectTargetSelectorMappingId = parseA1CanonicalId(
   "projectTargetSelectorMapping",
   `ptm_${encoded(32, 10)}`,
+);
+const logicalChatMappingId = parseA1CanonicalId(
+  "projectTargetSelectorMapping",
+  `ptm_${encoded(32, 12)}`,
 );
 const machineIdentityId = "0123456789abcdef".repeat(2);
 
@@ -321,9 +326,13 @@ describe("selected A1 durable host records", () => {
       releasedAtMs: 140,
       state: "released",
     };
+    const expired = { ...current, state: "expired" } as const;
+    const superseded = { ...current, state: "superseded" } as const;
 
     expect(parseCoordinatorLeaseRecord(current)).toEqual(current);
     expect(parseCoordinatorLeaseRecord(released)).toEqual(released);
+    expect(parseCoordinatorLeaseRecord(expired)).toEqual(expired);
+    expect(parseCoordinatorLeaseRecord(superseded)).toEqual(superseded);
     expect(
       parseCoordinatorLeaseFence({
         collaborationServerId,
@@ -331,15 +340,31 @@ describe("selected A1 durable host records", () => {
         coordinatorEpoch: 1,
       }),
     ).toEqual({ collaborationServerId, coordinatorLeaseId, coordinatorEpoch: 1 });
-    expect(() => parseCoordinatorLeaseRecord({ ...current, heartbeatDeadlineMs: 99 })).toThrow(
-      /must not precede acquisition/,
-    );
+    for (const heartbeatDeadlineMs of [99, 100]) {
+      expect(() => parseCoordinatorLeaseRecord({ ...current, heartbeatDeadlineMs })).toThrow(
+        /must be after acquisition/,
+      );
+    }
     expect(() => parseCoordinatorLeaseRecord({ ...current, releasedAtMs: 120 })).toThrow(
       /must be null while the lease is current/,
     );
     expect(() => parseCoordinatorLeaseRecord({ ...released, releasedAtMs: null })).toThrow(
       /must be present for a released lease/,
     );
+    for (const releasedAtMs of [150, 151]) {
+      expect(() => parseCoordinatorLeaseRecord({ ...released, releasedAtMs })).toThrow(
+        /must precede lease expiry/,
+      );
+    }
+    for (const state of ["expired", "superseded"] as const) {
+      expect(() =>
+        parseCoordinatorLeaseRecord({
+          ...current,
+          state,
+          releasedAtMs: 140,
+        }),
+      ).toThrow(new RegExp(`must be null while the lease is ${state}`));
+    }
     expect(() =>
       parseCoordinatorLeaseFence({
         collaborationServerId,
@@ -653,9 +678,10 @@ describe("selected A1 durable host records", () => {
       logicalChatId,
       collaborationServerId,
       projectId,
+      projectTargetSelectorMappingId: logicalChatMappingId,
       state: "ready",
       topologyGeneration: 3,
-      currentInwardEdgeId: "inward-edge-1",
+      currentInwardEdgeId: inwardEdgeId,
       currentNativeBindingId: nativeBindingId,
       parentChatId,
       nextViewerProjectionSeq: 4,
@@ -668,6 +694,15 @@ describe("selected A1 durable host records", () => {
         projectId: logicalChatId,
       }),
     ).toThrow(/rcpj_/);
+    expect(() =>
+      parseLogicalChatRecord({
+        ...value,
+        projectTargetSelectorMappingId: projectId,
+      }),
+    ).toThrow(/ptm_/);
+    const withoutMapping = { ...value } as Record<string, unknown>;
+    Reflect.deleteProperty(withoutMapping, "projectTargetSelectorMappingId");
+    expect(() => parseLogicalChatRecord(withoutMapping)).toThrow(/exactly the selected fields/);
     expect(() =>
       parseLogicalChatRecord({
         ...value,
@@ -698,12 +733,30 @@ describe("selected A1 durable host records", () => {
       parentChatId: null,
     } as const;
     expect(parseLogicalChatRecord(recoveringWithoutTarget)).toEqual(recoveringWithoutTarget);
+    expect(() =>
+      parseLogicalChatRecord({
+        ...recoveringWithoutTarget,
+        topologyGeneration: 1,
+      }),
+    ).toThrow(/generation zero exactly when no current inward edge/);
+    expect(() =>
+      parseLogicalChatRecord({
+        ...value,
+        topologyGeneration: 0,
+      }),
+    ).toThrow(/generation zero exactly when no current inward edge/);
     expect(
       parseLogicalChatRecord({
         ...value,
         currentNativeBindingId: null,
       }).currentInwardEdgeId,
-    ).toBe("inward-edge-1");
+    ).toBe(inwardEdgeId);
+    expect(() =>
+      parseLogicalChatRecord({
+        ...value,
+        currentInwardEdgeId: "inward-edge-1",
+      }),
+    ).toThrow(/rcie_/);
   });
 
   it("accepts only the selected native product/access combinations", () => {

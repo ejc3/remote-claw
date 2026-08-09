@@ -92,30 +92,47 @@ function inspect(path: string): DatabaseSync {
   });
 }
 
-function downgradeFixtureToSchemaVersionOne(databasePath: string): void {
-  const versionOneDigest = expectedHostStateMigrationDigest(1);
-  const deleteTrigger = expectedHostStateSqliteSchemaManifest(1).find(
-    (entry) => entry.name === "host_state_migrations_no_delete",
-  );
-  if (deleteTrigger === undefined) throw new Error("missing version-one delete trigger fixture");
+function downgradeFixture(databasePath: string, targetVersion: 1 | 2): void {
+  const targetDigest = expectedHostStateMigrationDigest(targetVersion);
+  const targetManifest = expectedHostStateSqliteSchemaManifest(targetVersion);
+  const targetByName = new Map(targetManifest.map((entry) => [entry.name, entry]));
+  const currentManifest = expectedHostStateSqliteSchemaManifest(HOST_STATE_SCHEMA_VERSION);
   const editor = new DatabaseSync(databasePath);
   try {
+    editor.exec("PRAGMA foreign_keys=OFF");
     editor.exec("BEGIN IMMEDIATE");
-    editor.exec("DROP TRIGGER protected_artifacts_no_update");
-    editor.exec("DROP TRIGGER protected_artifacts_no_delete");
-    editor.exec("DROP TRIGGER protected_artifacts_no_replace");
-    editor.exec("DROP TRIGGER host_state_migrations_no_replace");
+    // The downgrade fixture must rewrite compiled migration history before
+    // restoring the target version's append-only guard.
     editor.exec("DROP TRIGGER host_state_migrations_no_delete");
-    editor.prepare("DELETE FROM host_state_migrations WHERE schema_version = 2").run();
-    editor.exec(deleteTrigger.sql);
+    for (const type of ["trigger", "index", "table"] as const) {
+      for (const entry of [...currentManifest].reverse()) {
+        if (entry.type !== type) continue;
+        if (entry.name === "host_state_migrations_no_delete") continue;
+        const target = targetByName.get(entry.name);
+        if (target?.sql === entry.sql && target.type === entry.type) continue;
+        editor.exec(`DROP ${type.toUpperCase()} "${entry.name}"`);
+      }
+    }
+    const remaining = new Set(
+      editor
+        .prepare("SELECT name FROM sqlite_schema")
+        .all()
+        .map((row) => String(row.name)),
+    );
+    editor.prepare("DELETE FROM host_state_migrations WHERE schema_version > ?").run(targetVersion);
     editor
       .prepare(
         `UPDATE host_state_metadata
-         SET schema_version = 1, migration_digest = ?
+         SET schema_version = ?, migration_digest = ?
          WHERE singleton = 1`,
       )
-      .run(versionOneDigest);
-    editor.exec("PRAGMA user_version=1");
+      .run(targetVersion, targetDigest);
+    for (const type of ["table", "index", "trigger"] as const) {
+      for (const entry of targetManifest) {
+        if (entry.type === type && !remaining.has(entry.name)) editor.exec(entry.sql);
+      }
+    }
+    editor.exec(`PRAGMA user_version=${targetVersion}`);
     editor.exec("COMMIT");
   } catch (error) {
     try {
@@ -299,10 +316,10 @@ describeLinux("A1.1 secure host-state database", () => {
     reopened.close();
   });
 
-  it("validates a locked version-one database before migrating it atomically to version two", () => {
+  it("validates a locked version-one database before migrating it atomically to the current schema", () => {
     const state = temporaryState();
     openTestDatabase(state).close();
-    downgradeFixtureToSchemaVersionOne(state.paths.databasePath);
+    downgradeFixture(state.paths.databasePath, 1);
 
     const before = inspect(state.paths.databasePath);
     try {
@@ -321,13 +338,48 @@ describeLinux("A1.1 secure host-state database", () => {
         user_version: HOST_STATE_SCHEMA_VERSION,
       });
       expect(after.prepare("SELECT count(*) AS count FROM host_state_migrations").get()).toEqual({
-        count: 2,
+        count: HOST_STATE_SCHEMA_VERSION,
       });
       expect(
         after
-          .prepare("SELECT migration_digest FROM host_state_migrations WHERE schema_version = 2")
-          .get(),
+          .prepare("SELECT migration_digest FROM host_state_migrations WHERE schema_version = ?")
+          .get(HOST_STATE_SCHEMA_VERSION),
       ).toEqual({ migration_digest: HOST_STATE_SCHEMA_MANIFEST.migrationDigest });
+    } finally {
+      after.close();
+    }
+  });
+
+  it("validates schema version two before adding the dormant durable-record repository", () => {
+    const state = temporaryState();
+    openTestDatabase(state).close();
+    downgradeFixture(state.paths.databasePath, 2);
+
+    const before = inspect(state.paths.databasePath);
+    try {
+      expect(before.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(before.prepare("SELECT count(*) AS count FROM host_state_migrations").get()).toEqual({
+        count: 2,
+      });
+      expect(() => before.prepare("SELECT count(*) AS count FROM collaboration_servers")).toThrow(
+        /no such table/,
+      );
+    } finally {
+      before.close();
+    }
+
+    openTestDatabase(state).close();
+    const after = inspect(state.paths.databasePath);
+    try {
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: HOST_STATE_SCHEMA_VERSION,
+      });
+      expect(after.prepare("SELECT count(*) AS count FROM host_state_migrations").get()).toEqual({
+        count: HOST_STATE_SCHEMA_VERSION,
+      });
+      expect(after.prepare("SELECT count(*) AS count FROM collaboration_servers").get()).toEqual({
+        count: 0,
+      });
     } finally {
       after.close();
     }
@@ -336,7 +388,7 @@ describeLinux("A1.1 secure host-state database", () => {
   it("keeps a committed migration successful when an older reader defers its checkpoint", () => {
     const state = temporaryState();
     openTestDatabase(state).close();
-    downgradeFixtureToSchemaVersionOne(state.paths.databasePath);
+    downgradeFixture(state.paths.databasePath, 1);
     const reader = new DatabaseSync(state.paths.databasePath, { readOnly: true });
     reader.exec("BEGIN");
     expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
@@ -381,7 +433,7 @@ describeLinux("A1.1 secure host-state database", () => {
       expect(
         inspection.prepare("SELECT count(*) AS count FROM host_state_migrations").get(),
       ).toEqual({
-        count: 2,
+        count: HOST_STATE_SCHEMA_VERSION,
       });
     } finally {
       inspection.close();
@@ -790,9 +842,9 @@ describeLinux("A1.1 secure host-state database", () => {
           .prepare(
             `INSERT INTO host_state_migrations
                (schema_version, migration_id, migration_digest, applied_at_ms)
-             VALUES (3, '003-unexpected', ?, 1)`,
+             VALUES (?, 'unexpected-extra', ?, 1)`,
           )
-          .run("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+          .run(HOST_STATE_SCHEMA_VERSION + 1, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
     ];
 
     for (const mutate of mutations) {
