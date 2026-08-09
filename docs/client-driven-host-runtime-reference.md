@@ -20,15 +20,16 @@ another row. Codex is not implemented. The selected A1 design below removes that
 the remote-claw logical chat stable across proven native recovery.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
-**A1.0 has landed its contract layer:** the shared canonical field writer and the
+**A1.0 and A1.1 have landed as dormant libraries:** the shared canonical field writer and the
 `packages/cli/src/host/state` ID, path, record, runtime, digest, protected-handle, dispatch, and
-backend-capability contracts are implemented and tested. The canonical writer is already used by
-shipped A0 AAD with its locked bytes unchanged. Only the host-state layer is dormant: no run, RC,
-registrar, or native-driver path imports it yet. It opens no database, acquires no lease, stores no
-protected value, signs or invokes nothing, sends no native request, advertises no A1 broker capability,
-and does not change the bytes or behavior of any previously valid canonical frame. Malformed wire and
-runtime values now fail closed at their trust or canonical boundary instead of being accepted and
-failing later or being silently coerced.
+backend-capability contracts are implemented and tested. A1.1 adds the secure local SQLite kernel,
+migration registry, synchronous high-level transaction boundary, and immutable protected-artifact
+store described below. The canonical writer is already used by shipped A0 AAD with its locked bytes
+unchanged. No run, RC, registrar, coordinator, or native-driver path imports or opens the A1.1 kernel;
+it acquires no lease, signs or invokes nothing, sends no native request, advertises no A1 broker
+capability, and does not change the bytes or behavior of any previously valid canonical frame.
+Malformed wire and runtime values fail closed at their trust or canonical boundary instead of being
+accepted and failing later or being silently coerced.
 
 ## 1. Decision
 
@@ -467,8 +468,9 @@ contract strings are 1–1,024 UTF-16 code units and must contain only Unicode s
 accepted here cannot later collide through UTF-8 replacement. Numeric fields reject negative zero as
 well as negative, fractional, unsafe, and nonnumeric values. Runtime validation registries and
 structural parser results are frozen. These validators establish byte and row-shape contracts only:
-foreign-key, uniqueness, compare-and-swap, transaction, custody, and current-row enforcement remain
-A1.1 and later work.
+foreign-key, uniqueness, compare-and-swap, and current-row enforcement for the generic A1 records
+remain A1.2 and later work. A1.1 enforces only its schema/migration metadata and protected-artifact
+tables through its dormant transaction kernel.
 
 The selected A1 canonical ID namespaces are:
 
@@ -478,7 +480,7 @@ The selected A1 canonical ID namespaces are:
 | Project | `rcpj_` + canonical base64url of 16 bytes | Random |
 | Logical chat | `rcl_` + canonical base64url of 16 bytes | Random |
 | Native binding | `rcnb_` + canonical base64url of 16 bytes | Random |
-| Native runtime | `rcrt_` + canonical base64url SHA-256 | Derived from the warden launch nonce and native start identity |
+| Native runtime | `rcrt_` + canonical base64url SHA-256 | Exact derivation formula and locked vector are deferred to A1.3; the inputs will be a warden launch nonce and native start identity |
 | Coordinator lease | `rccl_` + canonical base64url of 16 bytes | Random |
 | Registration attempt | `rcra_` + canonical base64url of 16 bytes | Random |
 | Native conversation lease | `rcncl_` + canonical base64url of 16 bytes | Random |
@@ -547,30 +549,106 @@ A1 host control state uses one owner-only, symlink-safe local database at
 `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db`, falling back to
 `~/.local/state/remote-claw/identities/<machineIdentityId>/host-state-v1.db` when
 `XDG_STATE_HOME` is absent or relative. The fallback home must itself be absolute; a relative or empty
-home fails closed instead of resolving under the working directory. A1.0 implements only this pure,
-identity-validated path resolution and does not touch the filesystem. A1.1 lands and tests a dormant secure storage kernel; it
-does not spawn a daemon or let the coordinator open the database. A1.3 places that kernel behind the
-independently supervised runtime-owner service and is the first slice allowed to hold a live
-production handle. The coordinator receives high-level epoch-fenced RPC operations, never raw SQL
-access.
+home fails closed instead of resolving under the working directory. A1.0 implements the pure,
+identity-validated path resolver. A1.1 implements and tests the dormant secure storage kernel on
+Linux with Node.js `^22.13.0 || >=23.5.0` and `node:sqlite`; it does not spawn a daemon, and no
+production path opens it. Runtime version admission requires an exact stable `X.Y.Z` string in that
+range and rejects prerelease or build-like suffixes. A1.3 places the kernel behind the independently
+supervised runtime-owner service and is the first slice allowed to hold a live production handle. The
+coordinator receives high-level epoch-fenced RPC operations, never a SQLite handle or raw SQL access.
 
-The A1.1 open contract is intentionally stronger than a pathname and mode check. From the selected
-state home downward, mutable parent directories must be owned by the current UID, must not be symlinks
-or group/world-writable, and the `remote-claw` and identity directories are owner-only `0700`. The
-database and every SQLite WAL/SHM sidecar must be an owned regular `0600` file with link count one.
+The A1.1 open contract is intentionally stronger than a pathname and mode check. It is Linux-only and
+anchors traversal and the SQLite open to held descriptors through `/proc/self/fd`. From the selected
+state home downward, mutable parent directories must be owned by the current UID and must not be
+symlinks; the state home must not be group- or world-writable. The `remote-claw`, `identities`, and
+machine-identity directories are exactly `0700`. The database and its reserved SQLite WAL/SHM
+sidecars are owned regular `0600` files with link count one on the identity directory's filesystem.
 Creation uses no-follow/exclusive semantics; open and migration compare descriptor and pathname
 device/inode facts before and after the operation and reject symlink, hardlink, or replacement races.
-The selected mode is WAL only: a `host-state-v1.db-journal` file or non-WAL database is inspected under
-the same ownership/type/mode/link/no-follow rules and then refused before any transaction rather than
-silently recovered through rollback-journal mode. WAL may be enabled only after proving the database is
-on a local filesystem with the required locking and durability behavior.
+Both migration and ordinary transaction paths revalidate every guardian immediately after
+`BEGIN IMMEDIATE` acquires the writer lock and before running migration SQL or a public callback, so a
+path swap during the lock wait cannot reach mutable work.
+The selected mode is WAL only: any `host-state-v1.db-journal` file or existing non-WAL database is
+refused before an application transaction rather than silently recovered through rollback-journal
+mode.
 
-Every connection sets and reads back `PRAGMA foreign_keys=ON`, `trusted_schema=OFF`,
-`journal_mode=WAL`, and `synchronous=FULL` (or a deliberately versioned stricter posture) before
-accessing application tables; a mismatch fails closed. Initial creation and every migration fsync the
-database and affected parent directory before success. Open also verifies the SQLite application ID,
-stored machine identity, schema version, and migration digest, and refuses partial, mismatched, or
-future state.
+Local-filesystem policy v1 allows only Linux filesystem magic values for ext, XFS, Btrfs, F2FS, and
+ZFS. tmpfs, NFS, CIFS/SMB, 9p, FUSE, overlay, and every unknown filesystem fail closed. A new local
+filesystem must be added through a versioned policy change with retained locking/durability proof;
+the kernel never guesses from a pathname or mount label.
+
+Every connection establishes and reads back `PRAGMA foreign_keys=ON`, `trusted_schema=OFF`,
+`journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000`, `temp_store=MEMORY`, and
+`recursive_triggers=ON` before accessing application tables; the initial validation connection also
+requires `query_only=ON`. Every connection also disables double-quoted string literals and proves the
+setting behaviorally: a single-quoted control query must return the selected token, while
+`SELECT "remote_claw_dqs_probe"` must fail with `ERR_SQLITE_ERROR` and `errcode=1`.
+After descriptor/header preflight, an existing database is opened through that read-only, WAL-aware
+connection and its application ID, logical `user_version`, exact schema, metadata, migration history,
+and integrity are validated in one coherent SQLite transaction snapshot. No writable SQLite
+connection opens unless that validation succeeds. A future version committed only in a crash-surviving
+WAL is therefore rejected without rewriting the main database or WAL. SHM is transient SQLite
+coordination state and may be created or changed by this read-only validation, but its path, ownership,
+mode, link count, and inode remain guarded. A safe SHM-only remnant beside an existing database may be
+reconstructed with a new WAL; a WAL or SHM without a database is refused.
+
+`synchronous=FULL` WAL `COMMIT` is each migration's durability boundary. After a migration commits,
+the kernel validates a coherent snapshot, attempts a non-blocking `wal_checkpoint(PASSIVE)`, and
+fsyncs the guarded database/WAL/SHM inodes and directories. An active reader may defer copying some
+WAL frames; that is not a rollback or migration failure. A post-commit validation/checkpoint/fsync
+failure raises `HostStateMigrationCommittedError` with `committed=true` and `retryOpenSafe=true`. A
+failed `COMMIT` whose rollback cannot prove the outcome raises
+`HostStateMigrationOutcomeUnknownError` with `outcome="unknown"` and `retryOpenSafe=true`. Retrying the
+database open is therefore explicit and safe in either case because exact validation makes migration
+completion idempotent. Neither outcome authorizes blindly replaying an ordinary command.
+
+Ordinary high-level writes rely on WAL plus `synchronous=FULL` at `COMMIT`, perform no mandatory
+checkpoint or extra fsync, and then recheck every filesystem guardian. A guardian failure after commit
+raises `HostStateCommittedStateError` with `committed=true` and poisons the handle. A failed ordinary
+`COMMIT` with unknown outcome raises `HostStateCommitOutcomeUnknownError` with `outcome="unknown"` and
+`retrySafe=false`, and also poisons the handle. `ProtectedArtifactPersistenceError` remains distinct
+from an unverified-artifact response and poisons the live handle. The public database opener accepts
+only the machine identity and optional path environment; it exposes no entropy or clock injection.
+
+Close disables further transactions before closing SQLite and releases descriptor guardians only
+after SQLite reports the connection closed. If SQLite remains live, `HostStateCloseIncompleteError`
+reports `guardiansRetained=true` and `retryCloseSafe=true`; the caller may retry close, but may not use
+the handle. If cleanup after a failed open cannot close every SQLite connection, the kernel retains the
+connections and filesystem guardians in a fail-stop quarantine until process restart and raises
+`HostStateOpenCleanupError` with `guardiansRetained=true` and `retryOpenSafe=false`. The quarantine is
+keyed by canonical database path: every later open of that path fails until process restart, while a
+different database path remains independent. The kernel never drops guardians while SQLite may still
+own the canonical database or sidecars.
+
+Current schema v2 uses SQLite
+`application_id=0x52434c57` (ASCII `RCLW`). Its append-only migration history is a SHA-256
+chain over the previous digest, version, migration ID, statement count, and exact ordered SQL text,
+encoded with the shared `CanonicalWriter` under
+`remote-claw/host-state/migration-chain/v1`. Migration 1 (`001-initial-host-state`) is locked to
+`Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec`; migration 2
+(`002-protected-artifact-immutability`) is locked to
+`yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`. Open verifies the application ID, `user_version`,
+stored machine identity, exact schema manifest for that historical version, every migration-history
+row, and migration digest before applying the next compiled migration. Partial, mismatched,
+extra-object, corrupt, or future state is refused; a valid v1 database migrates to v2. Every
+`sqlite_schema` row is matched exactly, including names beginning with `sqlite_`; no hidden extra is
+ignored. A newly created database must have `application_id=0` and literally zero `sqlite_schema`
+rows before migration 1 begins; any preexisting application object fails closed. Schema v1 has three
+tables, the explicit unique migration-ID index, and migration-history
+no-update/no-delete triggers in an exact six-object manifest. Schema v2 adds migration-history
+no-replace and protected-artifact no-update/no-delete/no-replace triggers, producing the current exact
+ten-object manifest of three tables, one index, and six triggers.
+
+The public kernel transaction callback is synchronous, forbids nesting and promise returns, and
+exposes only high-level operations. Its transaction object cannot escape the callback; raw SQL and the
+`DatabaseSync` handle remain private. Database-level asynchronous artifact operations reject
+synchronously when called inside this callback; atomic work must use the transaction-bound operations,
+so ignoring a returned Promise cannot let the outer transaction commit. A Promise/thenable callback
+result or a failure while safely inspecting one rolls back and poisons the handle; authority is
+poisoned before a forbidden async continuation or hostile Promise-species/thenability path can reuse
+it. A1.1 proves commit and generic multiwrite rollback with protected artifacts. The
+native-attempt/front-door-dispatch/effect-gate all-or-nothing rollback is an A1.8 proof after those
+tables and operations exist.
 
 Control-journal and runtime-transition tables remain logically separate, but native delivery attempt,
 front-door dispatch, and effect-gate creation share this one transaction boundary. Adapter-private
@@ -632,9 +710,12 @@ The byte-bearing protected fields use the nominal `ProtectedByteSnapshot` value 
 `Buffer` and fixed or growable `SharedArrayBuffer` views, and immediately copies the visible bytes
 into fixed `ArrayBuffer` storage. The retained storage is never exposed: `copyBytes()` returns a new
 fixed copy on every call. Mutating or growing the source, or mutating any returned copy, therefore
-cannot change the protected-operation value. This freezes the boundary's byte-ownership rule; A1.1
-still owns durable artifact storage and later slices own key, credential, port, and authorization
-custody.
+cannot change the protected-operation value. This freezes the boundary's byte-ownership rule. A1.1
+now stores immutable artifacts up to 16 MiB, recomputes their SHA-256 digest before insert and after
+read, binds each read to the exact scope, schema, reference, and expected digest, validates the stored
+length against the stored bytes, and returns a fresh snapshot. It allocates a random 16-byte `rcph_*`
+handle and fails after at most eight collisions instead of looping. Later slices own key, credential,
+port, and authorization custody.
 
 For dispatch, `scopeKind` is exactly `native_attempt` and `scopeId` is the sole `nat_*` attempt ID;
 there is no duplicate attempt field that could disagree. The arm request also supplies the exact
@@ -652,9 +733,10 @@ This makes an exact pre-start retry reconstructible from durable state without a
 protected-value lookup; after consume, recovery is evidence-only.
 
 There is deliberately no generic resolve/get/read/list/export operation. A1.0 supplies the type
-surface, immutable byte-snapshot value, and strict protected-reference parser only; durable artifact
-storage begins in A1.1, while key/credential custody, callable-port ownership, signing, and one-use
-authorization state require the later runtime-owner and dispatch slices.
+surface, immutable byte-snapshot value, and strict protected-reference parser; A1.1 implements only
+the scoped `putArtifact` and `readVerifiedArtifact` operations. Key/credential custody, callable-port
+ownership, signing, and one-use authorization state require the later runtime-owner and dispatch
+slices.
 
 The A1.0 validator manifest covers the server/profile/project/coordinator lease and fence,
 registration intent/conversation lease/local artifact, logical chat/native binding/project-selector
@@ -7810,10 +7892,12 @@ allowed. A late `bindNative` must match the registered descriptor and either est
 reference or replay the existing one; it never repoints a logical chat. Native replacement uses the
 separate proof-carrying A1 recovery transition described above.
 
-`runtimeId` uses the distinct `rcrt_*` namespace and is derived from a warden-issued launch nonce plus
-a non-reusable native start identity:
-Claude process start identity, Codex app-server instance epoch, OpenCode server instance epoch, or
-tmux pane plus child-process start identity. A PID, URL, or pane name alone is not sufficient.
+`runtimeId` uses the distinct `rcrt_*` namespace. A1.3 must freeze its exact domain-separated
+`CanonicalWriter` derivation and locked vector before creating one; A1.0 intentionally implements
+only the strict `rcrt_*` parser. The selected derivation inputs are a warden-issued launch nonce plus
+a non-reusable native start identity: Claude process start identity, Codex app-server instance epoch,
+OpenCode server instance epoch, or tmux pane plus child-process start identity. A PID, URL, or pane
+name alone is not sufficient.
 Before `bindNative`, each adapter classifies transport reconnect versus new chat versus child/fork
 lineage. A synthetic Claude RC `cse_*` maps to the real transcript/resume identity; OpenCode child
 sessions remain nested evidence; Codex create/fork results create distinct thread identities; and
@@ -10771,7 +10855,7 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: A1.0 implemented as a dormant contract layer; A1.1–A1.11 planned.** A1 is
+**Status: A1.0 and A1.1 implemented as dormant libraries; A1.2–A1.11 planned.** A1 is
 provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
 outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
 Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
@@ -10783,11 +10867,17 @@ official-client compatibility; B and C add those records on the generic A1 seams
   registration-intent, protected-handle, immutable-dispatch, reconciliation, and backend-capability
   gaps in docs and TypeScript validators. No persistence or writable capability lands here, and no
   active A0 path imports this layer.
-- **A1.1 — Secure local state kernel (dormant library):** owner-only `host-state-v1.db`, migrations,
-  transaction API, protected artifact handles, reopen behavior, rollback, safe owned directory and
-  regular-file creation, no-follow/inode/hardlink and WAL/SHM checks, local-filesystem durability,
-  fsync, application/machine identity validation, migration-digest validation, and future-version
-  refusal. It opens no production database outside its tests.
+- **A1.1 — Secure local state kernel (implemented, dormant):** Linux-only, descriptor-anchored,
+  owner-only `host-state-v1.db`; schema-v2 migrations and digest chain; synchronous high-level
+  transactions; verified protected artifacts; reopen and generic multiwrite rollback; secure
+  directory/database/WAL/SHM creation and guardians; local-filesystem policy; read-only WAL-aware
+  validation before writable open; coherent validation snapshots; FULL migration commits with
+  reader-deferable passive checkpoint and guardian fsync; typed reopen-safe migration outcomes;
+  non-retry-safe unknown ordinary commits; distinct persistence failure/poisoning; fail-stop,
+  guardian-retaining open/close cleanup; and application, machine, schema-manifest, migration,
+  corruption, and future-version refusal. It opens
+  no production database outside its tests. The native attempt/dispatch/effect-gate transaction and
+  rollback proof remain A1.8.
 - **A1.2 — Server/project/chat/binding/epoch state (dormant repository):** default `rcs_*` bootstrap,
   idempotent `ProjectRecord` allocation plus initial selector mapping, many concurrent logical chats,
   starting native bindings, the registration-intent row required by the atomic first-bootstrap
@@ -10830,8 +10920,8 @@ A1.5's pure encoding/vector work may start after A1.0, but its runtime-owner sig
 integration waits for A1.3 and A1.4. A1.6 may start after A1.1; A1.7 waits for A1.2, completed A1.5
 signing/verification, and A1.6; A1.8 waits for A1.3, A1.4, and A1.7; A1.9 waits for A1.3 and the
 protected-handle kernel; A1.10 waits for A1.5–A1.8; A1.11 is the integrated gate. A1.0–A1.4 are
-therefore the immediate sequential state work after A0.2, while pure wire vectors and broker
-conformance can proceed in parallel without prematurely activating a terminal root.
+therefore the sequential state foundation; A1.2 is the immediate next state slice, while pure wire
+vectors and broker conformance can proceed in parallel without prematurely activating a terminal root.
 
 - Add durable `project`, project-allocation/selector mapping, `logical_chat`, `native_binding`,
   native-incarnation, runtime-local

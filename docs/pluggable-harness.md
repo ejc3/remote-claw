@@ -17,11 +17,14 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 > become the neutral schema. In particular, Codex is one
 > persistent multi-project app-server host, not another one-`Session` `DriverName`.
 
-A1.0 has now landed the shared canonical writer plus dormant host-state types, strict parsers, digest
-builders, protected-operation interfaces, and a pure database-path resolver. No launch, registrar,
-native adapter, `Session`, or relay path imports those contracts; they create no database, acquire no
-lease, perform no protected operation or native effect, advertise no A1 capability, and do not change
-the three compatibility drivers described here.
+A1.0 has landed the shared canonical writer plus dormant host-state contracts. A1.1 has landed the
+dormant Linux secure-SQLite kernel, schema-v2 migrations, synchronous high-level transactions, and
+verified protected-artifact storage. Existing state is validated as one read-only WAL-aware snapshot
+before writable SQLite open; migration committed/unknown outcomes are retry-open-safe, while an unknown
+ordinary transaction is not. No launch, registrar, native adapter, `Session`, coordinator, or relay
+path imports or opens that kernel; it creates no production database, acquires no lease, performs no
+native effect, advertises no A1 capability, and does not change the three compatibility drivers
+described here. Generic durable server/project/chat/binding state begins in A1.2.
 
 **Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
 the A0 registrar's `rcb_*` is only a process-local lease. Neither is the stable logical-chat ID
@@ -556,9 +559,22 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 - `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
   — A1.0's dormant exact-shape parsers, canonical ID and digest contracts, pure database-path resolver,
   record/runtime shapes, protected-operation interfaces, separated first-dispatch and evidence-only
-  reconciliation capabilities, and digest builders. They are not imported by a run path and contain no
-  database open, persistence, lease acquisition, protected-value implementation, broker handshake, or
-  native send.
+  reconciliation capabilities, and digest builders.
+- `packages/cli/src/host/state/{secure-filesystem,migrations,artifacts,sqlite}.ts` — A1.1's dormant,
+  Linux-only, descriptor-anchored SQLite kernel and protected-artifact operations. The supported Node
+  range is `^22.13.0 || >=23.5.0`, admitted only from an exact stable `X.Y.Z` runtime string; the
+  kernel exposes synchronous high-level transactions rather than raw SQL, and database-level
+  asynchronous artifact methods reject inside a transaction callback. It behavior-probes disabled
+  double-quoted string literals on every connection and validates an existing database through a
+  coherent read-only WAL snapshot before a
+  writable SQLite open, uses FULL migration commits followed by a reader-deferable passive checkpoint
+  and guardian fsync, and types migration outcomes separately from non-retry-safe ordinary commit
+  ambiguity. Its public opener exposes neither entropy nor clock injection, and artifact persistence
+  failure poisons the live handle instead of masquerading as an unverified artifact. Forbidden async
+  callback results poison before late continuation can reuse authority. Close retains guardians until
+  SQLite is closed and permits a safe close retry; a failed open that leaves SQLite live quarantines
+  that canonical database path until process restart without blocking other paths. Neither A1
+  host-state group is imported by an active run path.
 
 ### Dispatcher
 
@@ -685,7 +701,9 @@ other, so recursion cannot feed an echo back as a command. Nesting adds server b
 Claude, Codex, or OpenCode appears once, at the innermost end.
 
 A1.0 freezes the selected host → project → logical-chat identity and record contracts above this seam.
-Persisting and integrating them remains A1.1 and later work. They stay separate from `Session.id`, the
+A1.1 supplies dormant local persistence/migration machinery and verified artifacts, but no generic
+server/project/chat/binding row or production owner uses it. Persisting those records and integrating
+them begins in A1.2 and later work. They stay separate from `Session.id`, the
 `rcb_*` lease, engine-native IDs, and provider/broker connection IDs; the current `Session` seam does
 not use A1 IDs or protected operations.
 

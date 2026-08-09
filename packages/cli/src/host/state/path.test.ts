@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { HOST_STATE_DATABASE_BASENAME, resolveHostStateDatabasePath } from "./path.js";
+import {
+  HOST_STATE_DATABASE_BASENAME,
+  resolveHostStateDatabasePath,
+  resolveHostStatePaths,
+} from "./path.js";
 
 const identity = "01".repeat(16);
 
@@ -11,6 +15,24 @@ describe("A1 host-state path", () => {
         homeDirectory: "/home/example",
       }),
     ).toBe(`/state/remote-claw/identities/${identity}/${HOST_STATE_DATABASE_BASENAME}`);
+  });
+
+  it("resolves every guarded database and sidecar path from one snapshot", () => {
+    const paths = resolveHostStatePaths(identity, {
+      xdgStateHome: "/state/../state",
+      homeDirectory: "/home/example",
+    });
+    expect(paths).toEqual({
+      stateHomePath: "/state",
+      applicationDirectoryPath: "/state/remote-claw",
+      identitiesDirectoryPath: "/state/remote-claw/identities",
+      identityDirectoryPath: `/state/remote-claw/identities/${identity}`,
+      databasePath: `/state/remote-claw/identities/${identity}/${HOST_STATE_DATABASE_BASENAME}`,
+      walPath: `/state/remote-claw/identities/${identity}/${HOST_STATE_DATABASE_BASENAME}-wal`,
+      shmPath: `/state/remote-claw/identities/${identity}/${HOST_STATE_DATABASE_BASENAME}-shm`,
+      journalPath: `/state/remote-claw/identities/${identity}/${HOST_STATE_DATABASE_BASENAME}-journal`,
+    });
+    expect(Object.isFrozen(paths)).toBe(true);
   });
 
   it("falls back to ~/.local/state when XDG_STATE_HOME is absent or relative", () => {

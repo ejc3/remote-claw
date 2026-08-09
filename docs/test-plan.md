@@ -10,7 +10,7 @@ native evidence separately from future release gates.
 | Layer | Where | What it proves | Runtime |
 | --- | --- | --- | --- |
 | **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking, the shared canonical field writer with strict-null optionals and defensive snapshots, and the locked A0 AAD regression vector — pure functions, no network | Node + WebCrypto |
-| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, and dormant A1.0 ID/path/record/runtime/protected-operation/dispatch/backend contract parsers and digest builders | Node, mock fetch / fixture |
+| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, dormant A1.0 contracts, and the dormant A1.1 secure-filesystem/migration/SQLite/protected-artifact kernel | Node, mock fetch / fixture |
 | **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
 | **Retained native proof (OpenCode)** | [`spikes/opencode-native/verify-evidence.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, and same-ID `noReply:true` append behavior within one incarnation | Node over checked JSON evidence; no provider/model |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
@@ -102,7 +102,8 @@ about the current A0 implementation:
 | A0.1 | Implemented | Neutral registrar lifecycle, multi-session isolation, ready-before-bridge, and exact-replay/first-bind tests |
 | A0.2 | Implemented (process-local) | OpenCode and tmux driver tests for post-setup capabilities, cancellation and bounded teardown, no pre-ready broker client/announcement/remote mutation, and no ghost registration after setup or spawn failure; tmux additionally proves mandatory native readiness, private socket/runtime and owner-only launch artifacts, prompt/environment/settings absence from tmux argv and public errors, concurrent wrapper isolation, failed permission-decision persistence withholding ACK, and runtime retention when pane termination is uncertain |
 | A1.0 | Implemented (dormant contracts only) | Exact canonical primitive, ID namespace, path-resolution, record-shape, digest, fence, protected-operation, dispatch/reconciliation-separation, and backend-capability unit tests; no persistence, effect, or A1 capability is advertised |
-| A1.1–A1.11 | Planned | Local-state secure open/reopen/migration, server/project bootstrap and selector mapping, server/lease races, owner takeover, durable registration, runtime-owner native-root activation, many-session host inventory and per-chat isolation, cross-runtime wire vectors, broker conformance, ingress/dedup, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
+| A1.1 | Implemented (dormant storage kernel only) | Linux descriptor-anchored secure create/open/reopen, read-only WAL-aware validation before writable SQLite open, exact schema-v2 migration/digest/manifest validation, FULL migration commits with reader-deferable passive checkpoint and guardian fsync, typed commit and guardian-retaining cleanup outcomes, synchronous high-level transactions with generic multiwrite rollback, and immutable protected artifacts with verified scope, schema, reference, digest, and stored length; no production open, lease, generic state row, or A1 capability is advertised |
+| A1.2–A1.11 | Planned | Server/project bootstrap and selector mapping, server/lease races, owner takeover, durable registration, runtime-owner native-root activation, many-session host inventory and per-chat isolation, cross-runtime wire vectors, broker conformance, ingress/dedup, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
 | A2.1–A2.4 | Planned after A1 | Retained real OpenCode TUI/front-door/isolation fixture and the signed `{new_chat}`/`{user_text}` adjudication matrix; unavailable connector kinds use authenticated stand-ins only |
 | N1.1–N1.3 | Planned after A1 | Two live nested servers, rooted edge installation, complete signed downstream receipt, reconnect/reparent recovery, and cycle/reflection/duplicate-execution rejection |
 | B.1–B.5 | Planned after A1 | Pinned Claude differential fixtures, durable private RC recovery, native correlation/gate races, and live outward Anthropic Remote parity |
@@ -117,12 +118,38 @@ ordering, signing, and executor isolation only; B, C, the applicable automation 
 transport, reconnect, rendering, and fidelity proof.
 
 A1.0's unit tests prove only the dormant in-memory and pure-function contracts. They do not prove a
-database transaction, owner-only secure open or symlink refusal, lease compare-and-swap or takeover,
-protected-value custody, native dispatch, broker conformance, driver integration, or restart recovery.
+lease compare-and-swap or takeover, non-artifact protected-value custody, native dispatch, broker
+conformance, driver integration, or restart recovery.
 They include negative-zero, lone-surrogate, overlong-string, accessor/TOCTOU snapshot, immutable
 validator-registry, symbol-key, noncanonical base64url alias, pre-decode size rejection, protected
 byte snapshots across `Buffer`, fixed and growable `SharedArrayBuffer`, and returned-copy mutation,
 cross-scope canonical-ID, and dormant-import/non-advertisement vectors.
+
+A1.1's dormant Linux/`node:sqlite` kernel accepts only an exact stable Node.js `X.Y.Z` version in
+`^22.13.0 || >=23.5.0`. Its tests cover version boundaries and prerelease-like suffix refusal;
+`/proc/self/fd`
+descriptor anchoring; owner/mode/link/inode and filesystem-policy-v1 checks; rollback-journal and
+non-WAL refusal; the required writable posture and `query_only` read-only posture; application,
+machine, version, full `sqlite_schema`,
+integrity, locked migration-digest, and disabled-double-quoted-string behavior checks; read-only
+validation of crash-surviving WAL before any writable SQLite open; rejection of a future version in
+WAL without changing the main file or WAL;
+safe SHM-only reconstruction; v1→v2 FULL commit with reader-deferable passive checkpoint and guardian
+fsync; and reopen after a typed committed migration-finalization failure. The kernel also types an
+unproved migration-commit outcome as retry-open-safe, but never makes an unknown ordinary transaction
+retry-safe. Ordinary transaction tests cover pre-commit guardian rollback/poisoning, distinct
+committed-state reporting and poisoning after a post-commit guardian failure, success while an active
+reader defers checkpointing, guardian revalidation after the writer-lock wait and before the callback,
+escaped/async/nested-transaction rejection, poisoning before hostile Promise-species or thenability
+handling can reuse authority, synchronous rejection of database-level asynchronous artifact calls
+inside the callback, generic protected-artifact multiwrite rollback, and retry-close-safe guardian
+retention when SQLite initially remains open. Failed-open cleanup tests prove that an incompletely
+closed canonical database path stays quarantined until process restart while another path can open.
+Artifact vectors cover the 16 MiB limit, random `rcph_*`
+allocation with an eight-collision ceiling, immutability, exact scope/schema/reference/digest and
+stored-length verification, append-only database triggers, distinct persistence failures, and
+live-handle poisoning. The public opener's type test excludes entropy and clock injection. Tests open
+only temporary databases; active CLI imports and production state creation remain forbidden.
 
 ### One-host/many-session acceptance matrix
 
@@ -149,18 +176,58 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   `project:null`, a missing/closed project, cwd/title inference, only/most-recent fallback, and a nested
   selector target whose target server equals its own server before writing any A1 registration intent,
   logical chat, or native binding;
-- reopen and migrate one owner-only `host-state-v1.db`; require owned, non-symlink parents below the
-  selected state home that are not group- or world-writable, owner-only `0700` state/identity
-  directories, and owned
-  regular `0600` database/WAL/SHM files with link count one. Exercise no-follow/exclusive create,
+- reopen and migrate one owner-only `host-state-v1.db` on Linux with an exact stable Node.js `X.Y.Z`
+  version in `^22.13.0 || >=23.5.0`; reject unsupported versions and any prerelease/build-like suffix;
+  require owned, non-symlink parents below the selected state home, a state
+  home that is not group- or world-writable, exact `0700` application/identities/identity directories,
+  and owned regular `0600` database/WAL/SHM files with link count one. Exercise `/proc/self/fd`
+  descriptor anchoring and no-follow/exclusive create,
   reject a relative or empty fallback home before resolving any path,
   descriptor-versus-path device/inode checks before and after open/migration, symlink/hardlink/path
-  replacement races, local-filesystem/WAL refusal, and a safely inspected but refused
-  `host-state-v1.db-journal`. On every connection require and read back `foreign_keys=ON`,
-  `trusted_schema=OFF`, `journal_mode=WAL`, and `synchronous=FULL` or a versioned stricter posture.
-  Exercise database and parent-directory fsync, wrong SQLite application ID, wrong stored machine
-  identity, wrong migration digest, partial migrations, and unknown future versions. Roll back a
-  transaction spanning native attempt, front-door dispatch, and effect gate as one unit;
+  replacement races, policy-v1 refusal for everything except ext/XFS/Btrfs/F2FS/ZFS, non-WAL refusal,
+  and a safely inspected but refused `host-state-v1.db-journal`. On every connection require and read
+  back `foreign_keys=ON`, `trusted_schema=OFF`, `journal_mode=WAL`, `synchronous=FULL`,
+  `busy_timeout=5000`, `temp_store=MEMORY`, and `recursive_triggers=ON`; require `query_only=ON` on the
+  initial existing-state validator. Validate the logical WAL state in one read-only transaction
+  snapshot only after behavior-probing that double-quoted string literals are disabled on every
+  connection. Open a writable SQLite connection only after that validation. Recover a valid older
+  version committed only in WAL even when the main header remains at zero. Reject a future version
+  committed only in WAL without changing the main database or WAL; treat SHM as transient state that may change while its
+  path and file contract remain guarded. Reconstruct a safe SHM-only remnant beside an existing
+  database, but refuse either sidecar without a database.
+
+  Treat FULL WAL `COMMIT` as migration durability, then validate a coherent snapshot, attempt
+  `wal_checkpoint(PASSIVE)`, and fsync guarded database/sidecar/directory descriptors. Prove that an
+  active reader may defer copying WAL frames without turning a committed migration into rollback.
+  For both migrations and ordinary transactions, swap a guarded path while `BEGIN IMMEDIATE` waits and
+  require guardian revalidation after writer-lock acquisition to fail before migration SQL or a public
+  callback runs.
+  Distinguish typed committed and unknown migration outcomes and make both retry-open-safe; reopening
+  must validate and complete the exact migration. Ordinary writes have no mandatory checkpoint or
+  extra fsync: force a guardian failure after `COMMIT`, report committed state, and poison the handle;
+  type an unknown ordinary commit as not retry-safe. Keep protected-artifact persistence failures
+  distinct from verification failures and poison the live handle. Expose no entropy or clock injection
+  through the public database opener. Release descriptor guardians only after SQLite proves closed;
+  make an incomplete close guardian-retaining and retry-close-safe. If cleanup after a failed open
+  leaves any SQLite connection live, retain the connection and guardians in fail-stop quarantine until
+  process restart, reject every later open of that canonical database path while allowing another path
+  to open independently, and mark that open failure not retry-safe. Poison before forbidden async
+  Promise-species or thenability handling can reenter the transaction authority.
+
+  Refuse a wrong SQLite `application_id` (expected `0x52434c57`); wrong stored machine identity; a
+  changed exact per-version schema manifest; a changed, partial, or future migration history; and a
+  corrupt database. Before migration 1, require a newly created database to retain
+  `application_id=0` and literally zero `sqlite_schema` rows. Lock migration 1 to
+  `Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec` and current migration 2 to
+  `yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; require the exact v1 six-object manifest of three
+  tables, one explicit unique index, and two triggers, plus the current v2 ten-object manifest with six
+  triggers. Match every `sqlite_schema` row and reject
+  even a hidden `sqlite_*` extra; reject update, delete, or replacement of migration/artifact rows.
+  Expose no raw SQL; reject nested/async/escaped transactions and database-level asynchronous artifact
+  calls inside a transaction callback; and roll back multiple protected-artifact writes as one unit.
+  Exercise the 16 MiB limit, immutable artifact rows, exact
+  scope/schema/reference/digest reads with stored-length validation, fresh returned snapshots, and
+  failure after eight random handle collisions;
 - race two coordinator acquisitions and require one current lease, one monotonic epoch, and one
   allocated journal offset per committed entry; every stale `(leaseId, epoch)` RPC fails before a
   mutation while the native TUI remains usable;
@@ -194,7 +261,9 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   optional at `outcome_unknown`. A `rejected` delivery attempt must retain its claiming epoch and
   complete negative outcome evidence, reject positive native read-back evidence, and permit a prior
   transport receipt without requiring one. Changed scope, attempt, reference kind/ID, ingress lease,
-  target, request, or translation bytes must fail before consume;
+  target, request, or translation bytes must fail before consume. Roll back a transaction spanning the
+  native attempt, front-door dispatch, and effect gate as one unit; this is an A1.8 proof, not an A1.1
+  protected-artifact-kernel claim;
 - negotiate the exact A1 broker capability vector, reject A0/partial/changed vectors, and independently
   prove route-wide uniqueness, broker-recomputed digests, exact retry cursor, manifests, and collision
   tombstones across restart and rollover;
