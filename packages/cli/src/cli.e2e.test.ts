@@ -46,6 +46,8 @@ describe("remote-claw CLI (e2e)", () => {
     });
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual(["chat", "--model", "opus", "--", "--rc-identity"]);
+    expect(r.stderr).not.toContain("ExperimentalWarning");
+    expect(r.stderr).not.toContain("node:sqlite");
   });
 
   it("--help prints the rc help banner THEN claude's help (both layers)", () => {

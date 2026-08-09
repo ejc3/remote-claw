@@ -3,7 +3,13 @@
 import { runWrapper } from "./run.js";
 
 try {
-  process.exit(await runWrapper(process.argv.slice(2)));
+  process.exit(
+    await runWrapper(process.argv.slice(2), {
+      // Keep node:sqlite and the A1 owner graph completely unloaded on plain/help/trace/local paths.
+      runtimeOwnerBootstrap: async (input) =>
+        (await import("./host/runtime-owner/production.js")).bootstrapProductionRuntimeOwner(input),
+    }),
+  );
 } catch (err) {
   // Defensive: runWrapper resolves a code rather than throwing, but never crash with an
   // unhandled rejection — report and exit 2.

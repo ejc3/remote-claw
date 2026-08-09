@@ -5,7 +5,7 @@
 > page unless you need record shapes, adapter contracts, recovery algorithms, or crash-boundary proof
 > requirements.
 
-**Status:** selected next architecture; implementation in progress.
+**Status:** selected architecture; A1.3 is complete at its production health-only boundary, and A1.4 is next.
 
 **Current external behavior remains compatible:** today `--rc-app` hosts an in-memory `RelayCore`
 that lazily creates one Claude-shaped `Session` per intercepted Claude RC session. A host-scoped
@@ -20,7 +20,7 @@ another row. Codex is not implemented. The selected A1 design below removes that
 the remote-claw logical chat stable across proven native recovery.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
-**A1.0 through A1.2 have landed as dormant libraries:** the shared canonical field writer and the
+**A1.0 through A1.3 have landed:** the shared canonical field writer and the
 `packages/cli/src/host/state` ID, path, record, runtime, digest, protected-handle, dispatch, and
 backend-capability contracts are implemented and tested. A1.1 adds the secure local SQLite kernel,
 migration registry, synchronous high-level transaction boundary, and immutable protected-artifact
@@ -28,11 +28,26 @@ store described below. A1.2 adds schema v3 and its high-level repository for the
 projects and selector generations, recovering logical chats, starting bindings and registration
 intents, installing terminal inward edges, coordinator leases, and the bootstrap/control journal. It
 also validates an existing supported v3 graph in a coherent read-only snapshot before writable open,
-and validates a newly migrated graph before returning its handle.
-The canonical writer is already used by shipped A0 AAD with its locked bytes unchanged. No run, RC,
-registrar, coordinator, or native-driver path imports or opens this kernel; production acquires no A1
-lease, signs or invokes nothing, sends no native request, advertises no A1 broker capability, and does
-not change the bytes or behavior of any previously valid canonical frame. A1.3 is the next state slice.
+and validates a newly migrated graph before returning its handle. A1.3 adds schema v4 and its
+runtime-owner repository, an independently supervised Linux daemon, authenticated local RPC,
+service-lease takeover and unknown-commit reconciliation, wrapped Ed25519 key custody, and durable
+runtime/incarnation, assignment, containment, local-conversation, binding-incarnation, attachment,
+lease, gate, and signing state. Migration 4 has 141 ordered statements and digest
+`zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0`; the complete v4 manifest has 231 rows: 30 tables,
+57 indexes, and 144 triggers.
+
+The canonical writer is already used by shipped A0 AAD with its locked bytes unchanged. Production
+now connects to or best-effort starts the owner only for wrapped `--rc-app` MITM, OpenCode, and tmux
+driver paths after identity load. Its only successful production RPC operation is health; the dispatch
+registry is empty, and health reports `ownerOperationsWritable:false` and
+`nativeRegistrationEnabled:false`. A0 driver behavior remains unchanged, and no durable owner
+registration, A1 binding activation, terminal-root signing, owner dispatch, or new A1 remote mutation,
+inference, or broker capability is enabled. Owner unavailability silently preserves the exact A0 path.
+Plain wrapper launches, help, `--rc-trace`, and the local `--rc-identity` action never start it. On
+wrapper exit, remote-claw closes only that owner's RPC collaborator; the independently supervised
+daemon and its service lease survive. This owner-lifetime rule does not replace any A0 driver's
+existing native teardown behavior.
+The next state slice is A1.4.
 Malformed wire and runtime values fail closed at their trust or canonical boundary instead of being
 accepted and failing later or being silently coerced.
 
@@ -478,10 +493,11 @@ contain `U+0000`, so a row
 accepted here cannot later collide through UTF-8 replacement. Numeric fields reject negative zero as
 well as negative, fractional, unsafe, and nonnumeric values. Runtime validation registries and
 structural parser results are frozen. A1.0's parsers establish byte and row-shape contracts. A1.2's
-dormant schema and repository now add the selected foreign keys, uniqueness, append-only/monotonic
-triggers, exact-retry and compare-and-swap operations, and full-graph semantic validation for the
-narrow v3 states described below. Later slices may widen those states only with their own retained
-evidence and migrations.
+schema and repository add the selected server/project/chat foreign keys, uniqueness,
+append-only/monotonic triggers, exact-retry and compare-and-swap operations, and full-graph semantic
+validation for the narrow v3 states described below. A1.3's schema v4 and runtime-owner repository add
+their own runtime, owner, custody, attachment, gate, and signing invariants. Later slices may widen
+those states only with their own retained evidence and migrations.
 
 The selected A1 canonical ID namespaces are:
 
@@ -492,7 +508,7 @@ The selected A1 canonical ID namespaces are:
 | Logical chat | `rcl_` + canonical base64url of 16 bytes | Random |
 | Inward collaboration edge | `rcie_` + canonical base64url of 16 bytes | Random |
 | Native binding | `rcnb_` + canonical base64url of 16 bytes | Random |
-| Native runtime | `rcrt_` + canonical base64url SHA-256 | Exact derivation formula and locked vector are deferred to A1.3; the inputs will be a warden launch nonce and native start identity |
+| Native runtime | `rcrt_` + canonical base64url SHA-256 | A1.3 derives it from the founding warden launch nonce, start-identity schema, and start-identity digest; the exact formula and vector are below |
 | Coordinator lease | `rccl_` + canonical base64url of 16 bytes | Random |
 | Registration attempt | `rcra_` + canonical base64url of 16 bytes | Random |
 | Native conversation lease | `rcncl_` + canonical base64url of 16 bytes | Random |
@@ -563,11 +579,11 @@ A1 host control state uses one owner-only, symlink-safe local database at
 `~/.local/state/remote-claw/identities/<machineIdentityId>/host-state-v1.db` when
 `XDG_STATE_HOME` is absent or relative. The fallback home must itself be absolute; a relative or empty
 home fails closed instead of resolving under the working directory. A1.0 implements the pure,
-identity-validated path resolver. A1.1 implements and tests the dormant secure storage kernel on
-Linux with Node.js `^22.13.0 || >=23.5.0` and `node:sqlite`; it does not spawn a daemon, and no
-production path opens it. Runtime version admission requires an exact stable `X.Y.Z` string in that
-range and rejects prerelease or build-like suffixes. A1.3 places the kernel behind the independently
-supervised runtime-owner service and is the first slice allowed to hold a live production handle. The
+identity-validated path resolver. A1.1 implements and tests the secure storage kernel on Linux with
+Node.js `^22.13.0 || >=23.5.0` and `node:sqlite`; by itself that slice did not spawn a daemon or open a
+production handle. Runtime version admission requires an exact stable `X.Y.Z` string in that range and
+rejects prerelease or build-like suffixes. A1.3 now places the kernel behind the independently
+supervised runtime-owner service and holds the first live production handle. The
 coordinator receives high-level epoch-fenced RPC operations, never a SQLite handle or raw SQL access.
 
 The A1.1 open contract is intentionally stronger than a pathname and mode check. It is Linux-only and
@@ -635,7 +651,7 @@ keyed by canonical database path: every later open of that path fails until proc
 different database path remains independent. The kernel never drops guardians while SQLite may still
 own the canonical database or sidecars.
 
-Current schema v3 uses SQLite
+Current schema v4 uses SQLite
 `application_id=0x52434c57` (ASCII `RCLW`). Its append-only migration history is a SHA-256
 chain over the previous digest, version, migration ID, statement count, and exact ordered SQL text,
 encoded with the shared `CanonicalWriter` under
@@ -644,10 +660,12 @@ encoded with the shared `CanonicalWriter` under
 (`002-protected-artifact-immutability`) is locked to
 `yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; migration 3 is
 `003-durable-host-records`, contains 81 ordered statements, and is locked to
-`cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4`. Open verifies the application ID, `user_version`,
+`cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4`; migration 4
+(`004-runtime-owner-durability`) contains 141 ordered statements and is locked to
+`zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0`. Open verifies the application ID, `user_version`,
 stored machine identity, exact schema manifest for that historical version, every migration-history
 row, and migration digest before applying the next compiled migration. Partial, mismatched,
-extra-object, corrupt, or future state is refused; a valid v1 or v2 database migrates to v3. Every
+extra-object, corrupt, or future state is refused; a valid v1, v2, or v3 database migrates to v4. Every
 `sqlite_schema` row is matched exactly, including names beginning with `sqlite_`; no hidden extra is
 ignored. A newly created database must have `application_id=0` and literally zero `sqlite_schema`
 rows before migration 1 begins; any preexisting application object fails closed. Schema v1 has three
@@ -659,7 +677,15 @@ ten-object manifest of three tables, one index, and six triggers. Schema v3 adds
 `project_target_selector_mappings`, `logical_chats`, `native_bindings`,
 `native_registration_intents`, `inward_collaboration_edges`, `coordinator_leases`, and
 `control_journal_entries`. The complete v3 `sqlite_schema` manifest is exactly 91 objects: 13 tables,
-24 indexes, and 54 triggers.
+24 indexes, and 54 triggers. Schema v4 adds `runtime_owner_state`,
+`runtime_owner_service_leases`, `runtime_owner_journal_entries`, `native_runtimes`,
+`native_runtime_incarnations`, `runtime_owner_assignments`, `native_runtime_containments`,
+`runtime_owner_identity_keys`, `runtime_owner_private_keys`,
+`runtime_owner_signature_reservations`, `runtime_owner_signed_record_acceptances`,
+`local_native_conversations`, `local_native_conversation_transitions`,
+`native_binding_incarnations`, `native_transport_attachments`, `native_transport_leases`, and
+`binding_lifecycle_gates`. The complete v4 manifest is exactly 231 objects: 30 tables, 57 indexes,
+and 144 triggers.
 
 The supported v3 graph is deliberately narrower than the full record unions. A database is either
 unbootstrapped or contains exactly one linked `default` profile and dormant `installing` server.
@@ -672,9 +698,30 @@ it. It points to one unresolved `starting` binding with exactly one registration
 semantic-conversation, and binding-incarnation pointers remain null. Explicit projects may exist
 without a chat after the first bootstrap. Nested selector targets and `remote-claw-server` edges are
 valid future record shapes but fail v3 semantic validation; N1 must add its own migration and proof
-before either may persist.
+before either may persist. The v4 semantic validator preserves all of those A1.2 restrictions and
+additionally validates the runtime-owner state, service-lease/journal history, derived runtime roots,
+incarnation/assignment/containment lineage, wrapped-key and signing state, project-scoped local
+conversation transitions, and binding-incarnation/attachment/lease/gate joins described below.
 
-The dormant repository exposes only high-level synchronous operations. It ensures/reads the default
+Every v4 journaled effect is claimed by exactly one matching durable fact, and every journal entry is
+claimed: kind and subject, semantic IDs, owner lease/epoch, effect timestamp, and the required
+lifecycle order must agree. A lease-scoped effect is at or after acquisition and before the heartbeat
+deadline; after explicit release it is also no later than `releasedAtMs`. The release entry itself is
+at exactly `releasedAtMs` and is the last journal effect for that lease. An ordinary effect may share
+that millisecond only when its journal offset precedes the release. Runtime-scoped effects also bind
+the exact assignment active at that journal position and its native incarnation. Assignment activation
+precedes containment, and replacement or termination uses the predecessor incarnation's assignment
+fence rather than a later owner's unproved authority.
+
+Local-conversation validation replays each runtime's contiguous transition order. A source must have
+been introduced earlier, each conversation has exactly one creating transition, a fork's target parent
+is its exact source, and non-fork creation cannot invent parent lineage. Parent chains stay within one
+runtime incarnation and are acyclic; replayed clear/archive/unarchive changes must agree with current
+conversation state. Each prepared binding incarnation likewise owns one exact
+attachment/lease/lifecycle-gate graph, with its paired preparation and lease-acquisition journal facts
+sharing the same owner fence and timestamp in the required order.
+
+The A1.2 repository exposes only high-level synchronous operations. It ensures/reads the default
 server; acquires, renews, releases, and reconciles coordinator leases; atomically creates the first
 project/chat/binding/intent/edge graph; allocates a later explicit project only after that first
 bootstrap; replaces a terminal selector mapping by compare-and-swap; reserves additional terminal
@@ -1618,7 +1665,10 @@ interface LocalNativeConversationTransitionRecord {
   sourceLocalNativeConversationId: string | null;
   targetLocalNativeConversationId: string;
   observedSemanticConversationId: string | null;
+  nativeEvidenceSchemaId: string;
   nativeEvidenceRef: string;
+  nativeEvidenceDigest: string;
+  observedAtMs: number;
 }
 
 interface LocalNativeConversationMappingRecord {
@@ -1965,6 +2015,10 @@ interface NativeTransportAttachmentRecord {
   kind: "claude-inner-rc" | "app-server" | "server" | "tmux";
   transportId: string;
   generation: number;
+  currentAttachmentLeaseId: string | null;
+  resourceOwnership: "dedicated_runtime" | "shared_runtime";
+  createdAtMs: number;
+  closedAtMs: number | null;
   state: "current" | "superseded" | "closed";
 }
 
@@ -1974,12 +2028,31 @@ interface NativeTransportLeaseRecord {
   nativeBindingIncarnationId: string;
   runtimeId: string;
   nativeIncarnation: number;
+  runtimeOwnerServiceLeaseId: string;
+  runtimeOwnerServiceEpoch: number;
   coordinatorLeaseId: string;
   coordinatorEpoch: number;
   transportEpoch: number;
   currentCapabilitySnapshotId: string | null;
   currentNativeClientIngressLeaseId: string | null;
+  acquiredAtMs: number;
+  releasedAtMs: number | null;
   state: "current" | "superseded" | "closed";
+}
+
+interface NativeBindingRuntimeGateRecord {
+  collaborationServerId: string;
+  logicalChatId: string;
+  nativeBindingId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  nativeBindingIncarnationId: string;
+  attachmentId: string;
+  currentAttachmentLeaseId: string | null;
+  phase: "starting" | "recovering" | "ready" | "draining" | "closed";
+  disconnectPolicy: "detach" | "terminate_when_idle";
+  gateGeneration: number;
+  updatedAtMs: number;
 }
 
 type NativeMutationFamily =
@@ -3448,15 +3521,79 @@ interface NestedChatCreationEffectGateRecord {
   outcomeEvidenceRef: string | null;
 }
 
+interface RuntimeOwnerStateRecord {
+  machineIdentityId: string;
+  currentRuntimeOwnerServiceEpoch: number;
+  currentRuntimeOwnerServiceLeaseId: string | null;
+  nextJournalOffset: number;
+  createdAtMs: number;
+}
+
 interface RuntimeOwnerServiceLeaseRecord {
   runtimeOwnerServiceLeaseId: string;
   machineIdentityId: string;
   runtimeOwnerServiceEpoch: number;
   ownerInstanceId: string;
+  ownerProcessStartIdentitySchemaId: string;
+  ownerProcessStartIdentityRef: string;
+  ownerProcessStartIdentityDigest: string;
   acquiredAtMs: number;
   heartbeatDeadlineMs: number;
   releasedAtMs: number | null;
   state: "current" | "expired" | "released" | "superseded";
+}
+
+interface RuntimeOwnerServiceFence {
+  runtimeOwnerServiceLeaseId: string;
+  runtimeOwnerServiceEpoch: number;
+  ownerInstanceId: string;
+  ownerProcessStartIdentitySchemaId: string;
+  ownerProcessStartIdentityRef: string;
+  ownerProcessStartIdentityDigest: string;
+}
+
+interface RuntimeOwnerJournalEntry {
+  journalOffset: number;
+  entryKind:
+    | "service_lease_acquired"
+    | "service_lease_released"
+    | "runtime_registered"
+    | "runtime_reassigned"
+    | "runtime_replaced"
+    | "runtime_terminated"
+    | "runtime_key_rotated"
+    | "local_conversation_transitioned"
+    | "binding_incarnation_prepared"
+    | "attachment_lease_acquired"
+    | "attachment_detached";
+  subjectKind:
+    | "service_lease"
+    | "native_runtime"
+    | "runtime_owner_identity_key"
+    | "local_native_transition"
+    | "native_binding_incarnation"
+    | "native_transport_lease";
+  subjectId: string;
+  operationId: string;
+  operationSchemaId: string;
+  operationDigest: string;
+  runtimeOwnerServiceLeaseId: string;
+  runtimeOwnerServiceEpoch: number;
+  committedAtMs: number;
+}
+
+interface NativeRuntimeRecord {
+  runtimeId: string;
+  descriptor: NativeEngineDescriptor;
+  wardenLaunchNonce: string;
+  initialStartIdentitySchemaId: string;
+  initialStartIdentityRef: string;
+  initialStartIdentityDigest: string;
+  currentNativeIncarnation: number | null;
+  currentRuntimeOwnerAssignmentId: string | null;
+  createdAtMs: number;
+  closedAtMs: number | null;
+  state: "current" | "closed";
 }
 
 interface NativeRuntimeIncarnationRecord {
@@ -3471,6 +3608,35 @@ interface NativeRuntimeIncarnationRecord {
   startedAtMs: number;
   closedAtMs: number | null;
   state: "starting" | "current" | "draining" | "closed";
+}
+
+interface RuntimeOwnerAssignmentRecord {
+  runtimeOwnerAssignmentId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  assignmentGeneration: number;
+  runtimeOwnerServiceLeaseId: string;
+  runtimeOwnerServiceEpoch: number;
+  assignedAtMs: number;
+  supersedesRuntimeOwnerAssignmentId: string | null;
+  reason: "creation" | "takeover";
+  assignmentEvidenceSchemaId: string;
+  assignmentEvidenceRef: string;
+  assignmentEvidenceDigest: string;
+}
+
+interface NativeRuntimeContainmentRecord {
+  nativeRuntimeContainmentId: string;
+  runtimeId: string;
+  predecessorNativeIncarnation: number;
+  successorNativeIncarnation: number | null;
+  kind: "replacement" | "termination";
+  evidenceSchemaId: string;
+  evidenceRef: string;
+  evidenceDigest: string;
+  runtimeOwnerServiceLeaseId: string;
+  runtimeOwnerServiceEpoch: number;
+  containedAtMs: number;
 }
 
 interface InferenceRuntimeBindingRecord {
@@ -3917,9 +4083,26 @@ interface RuntimeOwnerIdentityKeyRecord {
   keyGeneration: number;
   algorithm: "Ed25519";
   publicKey: string;
+  signingKeyRef: ProtectedHandleRef<"signing_key"> | null;
   nextSignerSequence: number;
   localTrustEvidenceRef: string;
+  localTrustEvidenceDigest: string;
   state: "current" | "retired" | "revoked";
+}
+
+interface RuntimeOwnerPrivateKeyEnvelopeRecord {
+  signingKeyRef: ProtectedHandleRef<"signing_key">;
+  runtimeId: string;
+  runtimeOwnerIdentityKeyId: string;
+  keyGeneration: number;
+  wrappingSchemaId: "remote-claw/runtime-owner-key-wrap/aes-256-gcm/v1";
+  wrapNonce: ProtectedByteSnapshot; // 12 bytes
+  wrappedPkcs8: ProtectedByteSnapshot; // 1..1024 bytes
+  authTag: ProtectedByteSnapshot; // 16 bytes
+  pkcs8Digest: string; // canonical SHA-256
+  createdAtMs: number;
+  destroyedAtMs: number | null;
+  state: "current" | "destroyed";
 }
 
 interface RuntimeOwnerSignatureReservationRecord {
@@ -3941,6 +4124,7 @@ interface RuntimeOwnerSignatureReservationRecord {
     | "remote-claw/native-listener-registration-attestation/v1"
     | "remote-claw/native-runtime-isolation-attestation/v1"
     | "remote-claw/native-capability-snapshot-attestation/v1"
+    | "remote-claw/native-tui-policy-snapshot-attestation/v1"
     | "remote-claw/opencode-native-store-attachment-attestation/v1"
     | "remote-claw/opencode-native-store-predecessor-stop-fence/v1"
     | "remote-claw/opencode-native-store-successor-exclusive-open/v1"
@@ -7128,14 +7312,19 @@ child thread stays nested evidence under its classified parent until a retained 
 another user-visible mapping.
 
 `LocalNativeConversationRecord` and its transition log belong to that runtime owner, not to a
-collaboration server. The owner may allocate a local record before the native semantic ID is known,
-then bind exact native evidence later. This lets a direct TUI create, clear, fork, switch, archive, or
-use a conversation while every collaboration coordinator is unavailable. A local record grants no
-remote authority and cannot allocate or repoint a `logicalChatId`; only the coordinator's later
+collaboration server, but every such record names one already durable `projectId`. A1.3 freezes and
+validates this repository model; its production activation is health-only and creates no local
+conversation records. Once a later owner-dispatch milestone admits these operations, the owner may
+allocate a local record before the native semantic ID is known, then bind exact native evidence later.
+That future dispatch surface lets a direct TUI create, clear, fork, switch, archive, or use a
+conversation while every collaboration coordinator is unavailable after that project exists. The
+runtime owner cannot allocate the first project or invent one from a directory; first-project and later
+explicit-project allocation remain coordinator-owned. A local record grants no remote authority and
+cannot allocate or repoint a `logicalChatId`; only the coordinator's later
 `LocalNativeConversationMappingRecord` does that.
 
-Inference delivery has its own write-ahead boundary. Before an isolated connector can send a
-provider request, the runtime owner durably creates an `InferenceAttemptRecord` with upstream state
+A1.9 inference delivery has its own target write-ahead boundary. Before an isolated connector can send
+a provider request, the runtime owner will durably create an `InferenceAttemptRecord` with upstream state
 `prepared` and native delivery `not_started`. The inference lease and attempt are scoped to the exact
 runtime/incarnation rather than a `nativeBindingId`, `logicalChatId`, or coordinator epoch. The
 attempt pins the exact native request, request digest, response-stream identity, and any upstream
@@ -7510,9 +7699,21 @@ fields, duplicate members, noncanonical strings/numbers, unsupported algorithms,
 signature lengths fail before trust or topology mutation.
 
 The runtime owner has a separately protected local `RuntimeOwnerIdentityKeyRecord`. Initial pinning and
-rotation are explicit local-owner operations recorded in `localTrustEvidenceRef`; exactly one key is
-current, and revoked keys cannot sign a new native root. Its private key follows the same protected
-handle/no-argv/no-log custody rule as server keys. It may sign a native root only after its local
+rotation are explicit local-owner operations bound by `localTrustEvidenceRef` and
+`localTrustEvidenceDigest`; exactly one key is current, and revoked keys cannot sign a new native
+root. Schema v4 stores only an AES-256-GCM-wrapped PKCS#8 envelope under
+`remote-claw/runtime-owner-key-wrap/aes-256-gcm/v1`, with the wrap key derived from the machine root
+secret. The public record holds an opaque `signing_key` handle; neither the root secret, wrap key, nor
+private-key plaintext is exposed by the repository or RPC. Startup self-tests every current wrapped
+key before the service becomes writable. Implemented rotation performs logical retained-state
+destruction: the retired key's append-only ciphertext envelope remains for audit and must not be
+described as physical erasure. Schema v4 also represents a `revoked` public-key state, but A1.3 exposes
+no separate revocation repository operation; a later revocation operation must preserve the same
+retained-ciphertext rule. A rotation atomically binds the predecessor's destruction time, the
+successor key and envelope creation time, and the exact journal time and active runtime-owner
+assignment.
+
+It may sign a native root only after its local
 registry proves the exact durable binding, runtime/incarnation, and attachment lease are all current
 and mutually linked. A coordinator or server key cannot substitute for this runtime-owner gate. That
 evidence digest is:
@@ -7964,12 +8165,24 @@ allowed. A late `bindNative` must match the registered descriptor and either est
 reference or replay the existing one; it never repoints a logical chat. Native replacement uses the
 separate proof-carrying A1 recovery transition described above.
 
-`runtimeId` uses the distinct `rcrt_*` namespace. A1.3 must freeze its exact domain-separated
-`CanonicalWriter` derivation and locked vector before creating one; A1.0 intentionally implements
-only the strict `rcrt_*` parser. The selected derivation inputs are a warden-issued launch nonce plus
-a non-reusable native start identity: Claude process start identity, Codex app-server instance epoch,
-OpenCode server instance epoch, or tmux pane plus child-process start identity. A PID, URL, or pane
-name alone is not sufficient.
+`runtimeId` uses the distinct `rcrt_*` namespace. A1.3 freezes it as:
+
+```text
+rcrt_${base64url(SHA256(str("remote-claw/native-runtime-id/v1") || bytes(base64urlDecode(wardenLaunchNonce)) || str(startIdentitySchemaId) || bytes(base64urlDecode(startIdentityDigest))))}
+```
+
+The launch nonce and digest are each exactly 32 bytes; the start schema is non-empty; all encodings
+are canonical and unpadded. The locked vector uses nonce
+`CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws`, schema
+`remote-claw/codex-start-identity/v1`, and digest
+`DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw`, producing
+`rcrt_9eXZ6t2i1B6q6KnTszDoABv6BWYw0blCRXoNgPxF1WM`.
+
+The founding inputs are a warden-issued launch nonce plus a non-reusable native start identity:
+Claude process start identity, Codex app-server instance epoch, OpenCode server instance epoch, or
+tmux pane plus child-process start identity. A PID, URL, or pane name alone is not sufficient. A
+replacement advances `nativeIncarnation` under the same runtime root; it does not derive another
+runtime ID from the successor process identity.
 Before `bindNative`, each adapter classifies transport reconnect versus new chat versus child/fork
 lineage. A synthetic Claude RC `cse_*` maps to the real transcript/resume identity; OpenCode child
 sessions remain nested evidence; Codex create/fork results create distinct thread identities; and
@@ -8031,8 +8244,9 @@ Claude wrapper teardown ends its child; tmux spends one bounded deadline settlin
 lease/relay, then attempts to kill the pane with the remaining time and removes the private runtime
 only when termination is proved; OpenCode leaves the external server alive but best-effort aborts the
 attached session's active run. An uncertain tmux kill retains the private runtime and socket for
-diagnosis or manual attachment, but the wrapper still has no durable reattachment policy. None
-provides the selected persistent-runtime contract yet; live reattachment remains proof-gated.
+diagnosis or manual attachment, but the wrapper still has no durable reattachment policy. A1.3 now
+supplies the persistent owner service and registry foundation; no A0 driver has yet registered its
+native runtime through that service, so live reattachment remains proof-gated.
 
 The runtime owner has its own host-wide `RuntimeOwnerServiceLeaseRecord` and monotonic service epoch,
 distinct from every collaboration-server coordinator lease/epoch. Each
@@ -8040,8 +8254,45 @@ distinct from every collaboration-server coordinator lease/epoch. Each
 schema/ref/digest that created or recovered it. A stale owner service therefore cannot mutate runtime
 or protected state merely by presenting a current server coordinator epoch. A1.0 validates these
 records. A1.2 may persist only a starting native binding with no current binding-incarnation pointer;
-A1.3 owns service supervision, authenticated RPC, lease acquisition/takeover, protected custody, and
-creation or recovery of every runtime and binding incarnation.
+A1.3 implements service supervision, authenticated RPC, lease acquisition/takeover, protected custody,
+and repository operations for creation or recovery of every runtime and binding incarnation. Owner
+assignment is append-only; takeover appends a successor assignment rather than rewriting who created
+the native incarnation. Replacing or terminating an incarnation requires a separate positive
+containment record. In the dormant durable graph, closing a transport lease detaches only that exact
+binding and does not terminate a shared runtime. No A0 driver uses this graph yet, so this rule does not
+replace its current wrapper teardown.
+
+Service takeover alone does not make the successor owner authoritative for an existing runtime. Until
+it appends the exact next runtime-owner assignment, runtime mutation, key/signature work, local
+conversation transitions, replacement, and termination under the successor lease conflict without
+poisoning the service. Operations under the predecessor lease remain stale.
+
+The production service uses one machine-scoped Linux abstract Unix socket, so there is no filesystem
+socket path to replace or symlink-race. Client and server derive one HKDF key from the machine identity
+secret and mutually authenticate a fresh 32-byte challenge with separately domain-tagged server and
+client HMAC proof inputs. The server
+admits at most 64 total live connections. Before authentication, each connection may send at most
+1,024 bytes and exactly one authentication frame; pre-authentication request pipelining closes it.
+Frames are canonical closed-shape JSON with a four-byte length prefix, a 1 MiB limit, at most 32
+concurrent requests, and at most 4,096 request IDs per connection; duplicate request IDs, replay,
+malformed authentication, unknown methods, oversized frames, and listener loss fail closed. A silent
+handshake timeout closes the connection; an authenticated request timeout returns the fixed `TIMEOUT`
+error for only that request and leaves the connection usable.
+The RPC surface is exactly health plus a closed dispatch operation registry. A1.3 production installs no
+dispatch operations, so only authenticated health succeeds and it explicitly reports
+`ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`.
+
+Wrapped `--rc-app` drivers connect first and may start one detached owner daemon if none answers. The
+daemon receives only the absolute secret-file path and derived machine ID, not secret bytes. Its
+environment and Node loader arguments are allowlisted, and its working directory is pinned to the
+trusted CLI entry directory so a project-controlled cwd or `tsconfig` cannot influence the retained
+tsx loader. It loads the secret itself, verifies the
+derived identity, opens schema v4, acquires the exact process-start-identity-bound service lease,
+self-tests current wrapped keys, binds RPC, and renews the lease. An unknown SQLite commit closes the
+poisoned handle, reopens the same identity database, and reconciles the exact operation before any
+retry. Lease loss, clock failure, key-custody failure, or listener loss poisons and stops the service;
+another owner may take over only through the durable epoch plus explicit-release or expiry-deadline
+rules.
 
 The coordinator epoch is enforced, not informational. Acquiring it is an atomic compare-and-swap in the
 server journal. Every server journal transition, remote-claw-origin delivery before native acceptance,
@@ -8545,11 +8796,15 @@ Only the separately signed nested-transport positive-never-started contract may 
 command onto a replacement transport. Recovery never manufactures native state by replaying
 historical actions.
 
-The runtime owner observes native conversation changes even while every collaboration coordinator is
-offline and writes a monotonic local transition log before depending on that transition for recovery.
-It allocates only runtime-local conversation IDs and inference attempts; it does not allocate a
-server-scoped chat or grant a remote writer. New local model work therefore remains recoverable through
-the runtime-scoped inference lease even when no `nativeBindingId` can yet be resolved.
+The selected post-A1.3 owner-dispatch target observes native conversation changes even while every
+collaboration coordinator is offline and writes a monotonic local transition log before depending on
+that transition for recovery. Within an already durable project, it allocates only runtime-local
+conversation IDs; it does not allocate the first project, a server-scoped chat, or a remote writer.
+Once A1.9 enables runtime-scoped inference, new local model work remains recoverable through its
+inference lease even when no `nativeBindingId` can yet be resolved. The current health-only production
+path creates neither local-conversation nor inference-attempt records. If no durable project exists,
+local native use may continue, but the future dispatch path cannot persist that conversation into this
+registry until a coordinator allocates the project.
 
 Before reopening remote writes, the recovered coordinator consumes every unimported local transition
 from its last committed cursor and classifies it using exact native IDs, lineage, and history. One
@@ -10931,7 +11186,7 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: A1.0 through A1.2 implemented as dormant libraries; A1.3–A1.11 planned.** A1 is
+**Status: A1.0 through A1.3 implemented; A1.4–A1.11 planned.** A1 is
 provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
 outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
 Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
@@ -10939,11 +11194,11 @@ official-client compatibility; B and C add those records on the generic A1 seams
 
 **PR slices**
 
-- **A1.0 — Contract freeze (implemented, dormant):** close the selected record, canonical-ID, coordinator-lease,
+- **A1.0 — Contract freeze (implemented foundation):** close the selected record, canonical-ID, coordinator-lease,
   registration-intent, protected-handle, immutable-dispatch, reconciliation, and backend-capability
   gaps in docs and TypeScript validators. No persistence or writable capability lands here, and no
   active A0 path imports this layer.
-- **A1.1 — Secure local state kernel (implemented, dormant):** Linux-only, descriptor-anchored,
+- **A1.1 — Secure local state kernel (implemented; activated by A1.3):** Linux-only, descriptor-anchored,
   owner-only `host-state-v1.db`; schema-v2 migrations and digest chain; synchronous high-level
   transactions; verified protected artifacts; reopen and generic multiwrite rollback; secure
   directory/database/WAL/SHM creation and guardians; local-filesystem policy; read-only WAL-aware
@@ -10951,8 +11206,8 @@ official-client compatibility; B and C add those records on the generic A1 seams
   non-blocking passive checkpoint and guardian fsync; typed reopen-safe migration outcomes;
   non-retry-safe unknown ordinary commits; distinct persistence failure/poisoning; fail-stop,
   guardian-retaining open/close cleanup; and application, machine, schema-manifest, migration,
-  corruption, and future-version refusal. It opens
-  no production database outside its tests. The native attempt/dispatch/effect-gate transaction and
+  corruption, and future-version refusal. A1.3 now opens this kernel in the owner daemon. The native
+  attempt/dispatch/effect-gate transaction and
   rollback proof remain A1.8.
 - **A1.2 — Server/project/chat/binding/epoch state (implemented, dormant):** schema v3, default
   `rcs_*`/profile bootstrap, exact first-project compound bootstrap, explicit later projects,
@@ -10964,13 +11219,20 @@ official-client compatibility; B and C add those records on the generic A1 seams
   and validation of a newly migrated graph before the handle returns. The schema accepts only
   the narrow dormant states above and rejects nested targets/edges until N1. Actor scopes are durable
   addresses only; A1.7 owns queues and serialization. Evidence refs/digests remain opaque until A1.4.
-  No active path imports the repository; it creates no current runtime or binding incarnation and
-  exposes no live registration entry point.
-- **A1.3 — Runtime owner service:** independently supervised owner RPC, authentication,
-  protected `RuntimeOwnerIdentityKeyRecord` custody/signing, multi-runtime/multi-conversation registry,
-  service lease and takeover, runtime and binding incarnation creation/recovery, attachment leases,
-  per-binding lifecycle gates, takeover fencing, shared-daemon resource isolation, and detach versus
-  terminate.
+  A1.3 opens the shared database but does not invoke these server/project/chat operations; A1.2 still
+  creates no current runtime or binding incarnation and exposes no live registration entry point.
+- **A1.3 — Runtime owner service (implemented; production health only):** schema v4 and its complete
+  semantic validator/repository; exact `rcrt_*` derivation; independently supervised Linux owner
+  daemon; mutually authenticated, bounded local RPC; process-start-bound service lease, heartbeat,
+  takeover, and exact unknown-commit reconciliation; wrapped Ed25519 custody and purpose/sequence
+  signing discipline; multi-runtime/multi-conversation inventory; append-only owner assignments;
+  positive replacement/termination containment; runtime and binding incarnations; transport
+  attachments/leases; per-binding lifecycle gates; shared-daemon resource isolation; and detach versus
+  terminate. Production wrapped `--rc-app` drivers connect/autostart best-effort and close only their
+  owner RPC collaborator without changing A0 native teardown. Health reports
+  `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`; no durable driver
+  registration, installed dispatch operation, A1 binding activation, terminal root, remote mutation,
+  or broker capability is enabled before A1.4+.
 - **A1.4 — Durable registration orchestration:** resolve and verify A1.2's opaque registration evidence,
   invoke its atomic reservation operations and persistence reconciliation, own the callable port and
   live setup, reuse the exact durable binding, require durable project/mapping resolution, create fresh
@@ -10978,9 +11240,9 @@ official-client compatibility; B and C add those records on the generic A1 seams
   binding/attachment prerequisites for a native root, and no ghost readiness.
 - **A1.5 — Canonical A1 wire and signing:** canonical encodings, IDs/KDFs, scope certificates,
   runtime-owner-signed terminal-root certificates and activation, signatures, browser/Node vectors,
-  and noncanonical or transplanted-signature rejection. Pure encodings and vectors may be developed
-  after A1.0, but activation is disabled until A1.3 and A1.4 prove the exact current binding and
-  attachment lease.
+  and noncanonical or transplanted-signature rejection. The A1.3 owner/key/attachment foundation is
+  now proved, but activation remains disabled until A1.4 integrates and proves the exact current
+  binding and attachment lease.
 - **A1.6 — A1 broker contract:** versioned backend capability handshake, durable ciphertext routes,
   route-wide delivery-attempt uniqueness, exact retry cursors, generation sealing/manifests, and
   collision tombstones.
@@ -11003,7 +11265,7 @@ A1.5's pure encoding/vector work may start after A1.0, but its runtime-owner sig
 integration waits for A1.3 and A1.4. A1.6 may start after A1.1; A1.7 waits for A1.2, completed A1.5
 signing/verification, and A1.6; A1.8 waits for A1.3, A1.4, and A1.7; A1.9 waits for A1.3 and the
 protected-handle kernel; A1.10 waits for A1.5–A1.8; A1.11 is the integrated gate. A1.0–A1.4 are
-therefore the sequential state foundation; A1.3 is the immediate next state slice, while pure wire
+therefore the sequential state foundation; A1.4 is the immediate next state slice, while pure wire
 vectors and broker conformance can proceed in parallel without prematurely activating a terminal root.
 
 - Add durable `project`, project-allocation/selector mapping, `logical_chat`, `native_binding`,
@@ -11039,7 +11301,7 @@ vectors and broker conformance can proceed in parallel without prematurely activ
   allocation remains bookkeeping; admission, delivery quarantine, native gates, projection, and
   restart readiness are per chat, and teardown of one shared-daemon conversation never tears down its
   siblings.
-- Add an epoch-fenced runtime owner/warden and local native-transition registry that keep the native
+- Add an epoch-fenced runtime owner/warden and already-project-scoped local native-transition registry that keep the native
   client endpoint, provider façade, inference connector, and real TUI usable across coordinator
   unavailability without changing native semantic authority. Import exact transitions into
   server-scoped bindings atomically; leave ambiguity locally usable but remotely unbound.
@@ -11324,9 +11586,13 @@ status.**
 
 ## 14. Proof gates
 
-The following integrated/live behaviors remain unproven. A1.2's dormant repository tests already prove
-the persistence-only default server, project/mapping bootstrap and replacement, many-chat inventory,
-lease/journal reconciliation, and v3 semantic-validation subset described above.
+The following integrated/live behaviors remain unproven. A1.2's repository tests prove the
+persistence-only default server, project/mapping bootstrap and replacement, many-chat inventory,
+coordinator lease/journal reconciliation, and v3 semantic-validation subset described above. A1.3's
+tests additionally prove schema v4, runtime-owner repository replay/collision/fencing and semantic
+validation, key wrapping/self-test/signing, authenticated bounded RPC, service lease loss/takeover,
+daemon/bootstrap failure cleanup, multi-runtime isolation, and the health-only production activation
+boundary. They do not prove live native registration or mutation.
 
 - live A1.4 registration must resolve/verify the stored opaque evidence and call A1.2's exact project,
   mapping, and terminal-reservation operations without adding `project:null`, cwd/title inference, or
@@ -11339,7 +11605,7 @@ lease/journal reconciliation, and v3 semantic-validation subset described above.
   native session, per-chat mutation serialization, sibling-safe shared-daemon teardown, independent
   restart/reattach/quarantine, and no cross-chat IDs, history, commands, gates, projections, or side
   effects;
-- runtime-local conversation/inference identity while the coordinator is absent, plus exact atomic
+- runtime-local conversation/inference identity inside an already durable project while the coordinator is absent, plus exact atomic
   import into a server-scoped chat without replay, reassignment, or old-chat proposal leakage;
 - terminal native-root activation only after the A1.3 runtime owner proves its current protected
   `RuntimeOwnerIdentityKeyRecord` and exact attachment lease and A1.4 proves the matching durable
@@ -11444,8 +11710,8 @@ Native-client fidelity is a differential release gate, not a prose aspiration:
     Require at most one rooted installed edge, generation-certificate rejection for the stale attempt,
     and no delivery until both installed receipts and the mutual current-generation live handshake
     succeed.
-12. Cold-start with the collaboration journal/coordinator unavailable. Create and use a new local
-    conversation through the direct TUI while the native endpoint, provider façade, and runtime-scoped
+12. With an already durable project, cold-start with the collaboration journal/coordinator unavailable.
+    Create and use a new local conversation through the direct TUI while the native endpoint, provider façade, and runtime-scoped
     inference connector remain usable and every remote-claw mutation is rejected as unavailable. Then
     recover the coordinator, atomically import the local transition log, map the correct logical chat
     and lineage, and prove that neither an inference attempt nor an old-chat queued proposal is moved

@@ -33,6 +33,7 @@ describeLinux("A1.1 failed-open quarantine", () => {
 
     const paths = resolveHostStatePaths(machineIdentityId, pathEnvironment);
     const editor = new DatabaseSync(paths.databasePath);
+    editor.exec("PRAGMA foreign_keys=OFF");
     editor.exec(`UPDATE host_state_metadata SET machine_identity_id='${"00".repeat(16)}'`);
     editor.close();
 

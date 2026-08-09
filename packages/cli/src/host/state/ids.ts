@@ -8,6 +8,9 @@ declare const safeIdBrand: unique symbol;
 declare const canonicalIdBrand: unique symbol;
 declare const digestBrand: unique symbol;
 declare const dispatchAuthorizationBrand: unique symbol;
+declare const wardenLaunchNonceBrand: unique symbol;
+declare const ed25519PublicKeyBrand: unique symbol;
+declare const ed25519SignatureBrand: unique symbol;
 
 function frozenCanonicalIdSpec<
   const T extends {
@@ -106,6 +109,15 @@ export type NativeDeliveryAttemptId = A1CanonicalId<"nativeDeliveryAttempt">;
 /** Canonical unpadded-base64url SHA-256. */
 export type A1Digest = string & { readonly [digestBrand]: true };
 
+/** Canonical unpadded-base64url encoding of one exact 32-byte warden launch nonce. */
+export type WardenLaunchNonce = string & { readonly [wardenLaunchNonceBrand]: true };
+
+/** Canonical unpadded-base64url encoding of a raw 32-byte Ed25519 public key. */
+export type Ed25519PublicKey = string & { readonly [ed25519PublicKeyBrand]: true };
+
+/** Canonical unpadded-base64url encoding of a raw 64-byte Ed25519 signature. */
+export type Ed25519Signature = string & { readonly [ed25519SignatureBrand]: true };
+
 /** A one-use 32-byte secret held only by the runtime owner's protected handle service. */
 export type DispatchAuthorization = string & {
   readonly [dispatchAuthorizationBrand]: true;
@@ -175,6 +187,27 @@ export function parseMachineIdentityId(value: unknown, field = "machineIdentityI
 
 export function parseA1Digest(value: unknown, field = "digest"): A1Digest {
   return canonicalBase64urlBytes(value, 32, field) as A1Digest;
+}
+
+export function parseWardenLaunchNonce(
+  value: unknown,
+  field = "wardenLaunchNonce",
+): WardenLaunchNonce {
+  return canonicalBase64urlBytes(value, 32, field) as WardenLaunchNonce;
+}
+
+export function parseEd25519PublicKey(
+  value: unknown,
+  field = "ed25519PublicKey",
+): Ed25519PublicKey {
+  return canonicalBase64urlBytes(value, 32, field) as Ed25519PublicKey;
+}
+
+export function parseEd25519Signature(
+  value: unknown,
+  field = "ed25519Signature",
+): Ed25519Signature {
+  return canonicalBase64urlBytes(value, 64, field) as Ed25519Signature;
 }
 
 export function parseDispatchAuthorization(

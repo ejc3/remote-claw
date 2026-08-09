@@ -7,6 +7,20 @@ const SOURCE_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const STATE_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const PACKAGE_JSON = fileURLToPath(new URL("../../../package.json", import.meta.url));
 const PACKAGE_ROOT = dirname(PACKAGE_JSON);
+const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
+  [
+    resolve(SOURCE_ROOT, "host/runtime-owner/key-custody.ts"),
+    new Set([resolve(STATE_ROOT, "ids"), resolve(STATE_ROOT, "protected")]),
+  ],
+  [
+    resolve(SOURCE_ROOT, "host/runtime-owner/production.ts"),
+    new Set([
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "runtime-repository"),
+      resolve(STATE_ROOT, "sqlite"),
+    ]),
+  ],
+]);
 
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -29,10 +43,10 @@ function packageExportTargets(value: unknown): string[] {
   return [];
 }
 
-describe("dormant A1 host-state boundary", () => {
-  it("is not imported or advertised by an active CLI source path", async () => {
+describe("A1 host-state boundary", () => {
+  it("has an exact direct-import surface for active runtime-owner modules", async () => {
     const activeFiles = (await sourceFiles(SOURCE_ROOT)).filter(
-      (path) => !path.startsWith(`${STATE_ROOT}/`),
+      (path) => !path.startsWith(`${STATE_ROOT}/`) && !/\.test\.[cm]?[jt]sx?$/.test(path),
     );
     const importSpecifier =
       /(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"']+)["']/g;
@@ -45,10 +59,14 @@ describe("dormant A1 host-state boundary", () => {
         const specifier = match[1];
         if (specifier?.startsWith(".")) {
           const resolvedImport = resolve(dirname(path), specifier.replace(/\.[cm]?[jt]sx?$/, ""));
-          expect(
-            resolvedImport === STATE_ROOT || resolvedImport.startsWith(`${STATE_ROOT}/`),
-            `${path}: ${specifier}`,
-          ).toBe(false);
+          const importsState =
+            resolvedImport === STATE_ROOT || resolvedImport.startsWith(`${STATE_ROOT}/`);
+          if (importsState) {
+            expect(
+              ACTIVE_STATE_IMPORT_ALLOWLIST.get(path)?.has(resolvedImport) ?? false,
+              `${path}: ${specifier}`,
+            ).toBe(true);
+          }
         }
       }
     }

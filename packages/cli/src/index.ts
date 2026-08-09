@@ -31,7 +31,14 @@ export {
 export { HostRelay, type HostRelayOptions } from "./host/relay.js";
 export { type IdentityOptions, runIdentity } from "./identity.js";
 export { type PassOptions, runPass } from "./pass.js";
-export { type RunOptions, runWrapper, type SpawnFn } from "./run.js";
+export {
+  type RunOptions,
+  type RuntimeOwnerBootstrap,
+  type RuntimeOwnerBootstrapInput,
+  type RuntimeOwnerCollaborator,
+  runWrapper,
+  type SpawnFn,
+} from "./run.js";
 export {
   type Level,
   type Plane,
