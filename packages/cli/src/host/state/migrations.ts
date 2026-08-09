@@ -273,6 +273,8 @@ const CREATE_PROJECTS_SQL = `CREATE TABLE projects (
   ) DEFERRABLE INITIALLY DEFERRED
 ) STRICT, WITHOUT ROWID`;
 
+// Schema v3 retains the future nested-server columns but deliberately narrows persisted targets to
+// terminal_native. N1 must replace that narrowing in a later migration before using the dormant arm.
 const CREATE_PROJECT_TARGET_SELECTOR_MAPPINGS_SQL = `CREATE TABLE project_target_selector_mappings (
   project_target_selector_mapping_id TEXT PRIMARY KEY NOT NULL CHECK (
     length(project_target_selector_mapping_id) = 47
@@ -597,6 +599,8 @@ const CREATE_NATIVE_REGISTRATION_INTENTS_SQL = `CREATE TABLE native_registration
     REFERENCES native_bindings (collaboration_server_id, native_binding_id)
 ) STRICT, WITHOUT ROWID`;
 
+// Schema v3 likewise retains the future remote-server columns while permitting only native-harness
+// edges. N1 must migrate and prove that currently unreachable arm before it may persist.
 const CREATE_INWARD_COLLABORATION_EDGES_SQL = `CREATE TABLE inward_collaboration_edges (
   inward_edge_id TEXT PRIMARY KEY NOT NULL CHECK (
     length(inward_edge_id) = 27
@@ -751,6 +755,8 @@ const CREATE_COORDINATOR_LEASES_SQL = `CREATE TABLE coordinator_leases (
     REFERENCES collaboration_servers (collaboration_server_id)
 ) STRICT, WITHOUT ROWID`;
 
+// Every immutable v3 journal kind is a server-control transition. The exhaustive SQL list below is
+// part of the locked v3 migration; a future chat-scoped entry kind requires its own schema migration.
 const CREATE_CONTROL_JOURNAL_ENTRIES_SQL = `CREATE TABLE control_journal_entries (
   collaboration_server_id TEXT NOT NULL CHECK (
     length(collaboration_server_id) = 26

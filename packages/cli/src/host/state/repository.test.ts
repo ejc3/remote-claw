@@ -11,7 +11,7 @@ import {
   projectTargetSelectorMappingId,
 } from "./digests.js";
 import { type A1CanonicalId, parseA1CanonicalId, parseA1Digest, parseA1SafeId } from "./ids.js";
-import { HOST_STATE_MIGRATIONS } from "./migrations.js";
+import { HOST_STATE_MIGRATIONS, HOST_STATE_SCHEMA_VERSION } from "./migrations.js";
 import {
   HOST_STATE_REPOSITORY_MAX_ID_ATTEMPTS,
   type HostStateJournalEntry,
@@ -194,9 +194,9 @@ function openExecutor(path = ":memory:", initialize = true): SqlExecutor {
       .prepare(
         `INSERT INTO host_state_metadata
          (singleton, machine_identity_id, schema_version, migration_digest, created_at_ms)
-         VALUES (1, ?, 3, ?, 0)`,
+         VALUES (1, ?, ?, ?, 0)`,
       )
-      .run(MACHINE_IDENTITY_ID, "A".repeat(43));
+      .run(MACHINE_IDENTITY_ID, HOST_STATE_SCHEMA_VERSION, "A".repeat(43));
   }
   return new SqlExecutor(database);
 }

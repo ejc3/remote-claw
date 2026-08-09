@@ -209,6 +209,7 @@ non-first terminal reservation, terminal selector replacement, and coordinator a
 It also provides exact-retry/read-side reconciliation and full restart inventory without opening the
 database from production. Command proposal/decision entries, ingress queues, and actors remain A1.7;
 A1.2's server-control/chat actor scope is durable addressing only.
+
 The journal's `command_seq` is the definitive decision order for proposals that remote-claw server
 received from its direct collaborators, including forwarded, queued, and rejected decisions. It is a
 globally unique audit position, not a host-wide execution queue: each logical chat offers only its own

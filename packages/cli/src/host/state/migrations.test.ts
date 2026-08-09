@@ -364,9 +364,9 @@ describe("A1 host-state migrations", () => {
       ).toHaveLength(10);
 
       const migration = HOST_STATE_MIGRATIONS[2];
-      expect(migration?.id).toBe("003-durable-host-records");
-      expect(migration?.statements).toHaveLength(81);
       if (migration === undefined) throw new Error("missing v3 migration");
+      expect(migration.id).toBe("003-durable-host-records");
+      expect(migration.statements).toHaveLength(81);
       for (const statement of migration.statements) database.exec(statement);
 
       const actual = database
