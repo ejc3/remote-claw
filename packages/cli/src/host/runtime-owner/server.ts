@@ -7,8 +7,18 @@ import {
   runtimeOwnerRpcSocketAddress,
 } from "./auth.js";
 import {
+  type RuntimeOwnerCallablePortEntry,
+  type RuntimeOwnerCallablePortRegistration,
+  RuntimeOwnerCallablePortRegistry,
+  type RuntimeOwnerCallablePortRegistryOptions,
+} from "./port-registry.js";
+import {
+  encodeRuntimeOwnerRpcCanonicalJson,
   encodeRuntimeOwnerRpcFrame,
+  parseRuntimeOwnerInvokePortRequest,
   parseRuntimeOwnerRpcAuthentication,
+  parseRuntimeOwnerRpcPortInvocation,
+  parseRuntimeOwnerRpcPortResponse,
   parseRuntimeOwnerRpcRequest,
   RUNTIME_OWNER_RPC_DEFAULT_HANDSHAKE_TIMEOUT_MS,
   RUNTIME_OWNER_RPC_DEFAULT_REQUEST_TIMEOUT_MS,
@@ -16,12 +26,19 @@ import {
   RUNTIME_OWNER_RPC_MAX_IN_FLIGHT,
   RUNTIME_OWNER_RPC_MAX_PREAUTH_BYTES,
   RUNTIME_OWNER_RPC_MAX_REQUESTS_PER_CONNECTION,
+  RUNTIME_OWNER_RPC_MAX_REVERSE_IN_FLIGHT,
+  RUNTIME_OWNER_RPC_MAX_REVERSE_REQUESTS_PER_CONNECTION,
   RUNTIME_OWNER_RPC_VERSION,
+  type RuntimeOwnerRpcCallablePortRef,
   type RuntimeOwnerRpcDispatchRequest,
   RuntimeOwnerRpcError,
   RuntimeOwnerRpcFrameDecoder,
   type RuntimeOwnerRpcJsonValue,
+  type RuntimeOwnerRpcPortInvocation,
+  type RuntimeOwnerRpcPortResult,
   runtimeOwnerRpcErrorResponse,
+  runtimeOwnerRpcMessageType,
+  runtimeOwnerRpcReverseRequestId,
   runtimeOwnerRpcSuccessResponse,
 } from "./protocol.js";
 
@@ -53,12 +70,24 @@ export interface StartRuntimeOwnerRpcServerOptions {
   readonly handshakeTimeoutMs?: number;
   readonly requestTimeoutMs?: number;
   readonly maxInFlight?: number;
+  readonly reverseRequestTimeoutMs?: number;
+  readonly maxReverseInFlight?: number;
+  readonly maxReverseRequestsPerConnection?: number;
+  readonly maxCallablePorts?: number;
+  readonly maxCallablePortsPerConnection?: number;
   /** Internal/test seam may lower, but never raise, the fixed protocol request-ID budget. */
   readonly maxRequestsPerConnection?: number;
 }
 
 interface ActiveRequest {
   readonly abortController: AbortController;
+  readonly timer: NodeJS.Timeout;
+}
+
+interface PendingPortRequest {
+  readonly invocation: RuntimeOwnerRpcPortInvocation;
+  readonly resolve: (value: RuntimeOwnerRpcPortResult) => void;
+  readonly reject: (error: RuntimeOwnerRpcError) => void;
   readonly timer: NodeJS.Timeout;
 }
 
@@ -69,6 +98,8 @@ interface ConnectionState {
   readonly challenge: string;
   readonly seenRequestIds: Set<string>;
   readonly activeRequests: Map<string, ActiveRequest>;
+  readonly usedReverseRequestIds: Set<string>;
+  readonly pendingPortRequests: Map<string, PendingPortRequest>;
   readonly handshakeTimer: NodeJS.Timeout;
   authenticated: boolean;
   detached: boolean;
@@ -116,6 +147,10 @@ export class RuntimeOwnerRpcServer {
   readonly #requestTimeoutMs: number;
   readonly #maxInFlight: number;
   readonly #maxRequestsPerConnection: number;
+  readonly #reverseRequestTimeoutMs: number;
+  readonly #maxReverseInFlight: number;
+  readonly #maxReverseRequestsPerConnection: number;
+  readonly #callablePorts: RuntimeOwnerCallablePortRegistry;
   readonly #connections = new Set<ConnectionState>();
   #listening = false;
   #closed = false;
@@ -147,6 +182,28 @@ export class RuntimeOwnerRpcServer {
       RUNTIME_OWNER_RPC_MAX_REQUESTS_PER_CONNECTION,
       RUNTIME_OWNER_RPC_MAX_REQUESTS_PER_CONNECTION,
     );
+    this.#reverseRequestTimeoutMs = boundedInteger(
+      options.reverseRequestTimeoutMs,
+      RUNTIME_OWNER_RPC_DEFAULT_REQUEST_TIMEOUT_MS,
+      300_000,
+    );
+    this.#maxReverseInFlight = boundedInteger(
+      options.maxReverseInFlight,
+      RUNTIME_OWNER_RPC_MAX_REVERSE_IN_FLIGHT,
+      RUNTIME_OWNER_RPC_MAX_REVERSE_IN_FLIGHT,
+    );
+    this.#maxReverseRequestsPerConnection = boundedInteger(
+      options.maxReverseRequestsPerConnection,
+      RUNTIME_OWNER_RPC_MAX_REVERSE_REQUESTS_PER_CONNECTION,
+      RUNTIME_OWNER_RPC_MAX_REVERSE_REQUESTS_PER_CONNECTION,
+    );
+    const portRegistryOptions: RuntimeOwnerCallablePortRegistryOptions = {
+      ...(options.maxCallablePorts === undefined ? {} : { maxPorts: options.maxCallablePorts }),
+      ...(options.maxCallablePortsPerConnection === undefined
+        ? {}
+        : { maxPortsPerConnection: options.maxCallablePortsPerConnection }),
+    };
+    this.#callablePorts = new RuntimeOwnerCallablePortRegistry(portRegistryOptions);
     this.#server = createServer((socket) => this.#accept(socket));
     this.#server.on("error", () => {
       if (!this.#listening) return;
@@ -175,11 +232,96 @@ export class RuntimeOwnerRpcServer {
     return this.#listening && !this.#closed;
   }
 
+  get callablePortCount(): number {
+    return this.#callablePorts.size;
+  }
+
+  registerCallablePort(
+    registration: RuntimeOwnerCallablePortRegistration,
+  ): RuntimeOwnerCallablePortEntry {
+    const state = this.#findAuthenticatedConnection(registration.connectionId);
+    if (state === undefined) throw new RuntimeOwnerRpcError("UNAVAILABLE");
+    return this.#callablePorts.register(registration);
+  }
+
+  unregisterCallablePort(
+    connectionId: string,
+    callablePortRef: RuntimeOwnerRpcCallablePortRef,
+  ): boolean {
+    return this.#callablePorts.unregister(connectionId, callablePortRef);
+  }
+
+  invokeCallablePort(
+    invocation: RuntimeOwnerRpcPortInvocation,
+  ): Promise<RuntimeOwnerRpcPortResult> {
+    let parsed: RuntimeOwnerRpcPortInvocation;
+    let entry: RuntimeOwnerCallablePortEntry;
+    try {
+      parsed = parseRuntimeOwnerRpcPortInvocation(invocation);
+      entry = this.#callablePorts.authorize(parsed);
+    } catch {
+      return Promise.reject(new RuntimeOwnerRpcError("UNAVAILABLE"));
+    }
+    const state = this.#findAuthenticatedConnection(entry.connectionId);
+    if (state === undefined || state.socket.destroyed) {
+      return Promise.reject(new RuntimeOwnerRpcError("UNAVAILABLE"));
+    }
+    if (state.pendingPortRequests.size >= this.#maxReverseInFlight) {
+      return Promise.reject(new RuntimeOwnerRpcError("TOO_MANY_IN_FLIGHT"));
+    }
+    if (state.usedReverseRequestIds.size >= this.#maxReverseRequestsPerConnection) {
+      state.socket.destroy();
+      return Promise.reject(new RuntimeOwnerRpcError("CLOSED"));
+    }
+    let reverseRequestId: string;
+    try {
+      reverseRequestId = this.#allocateReverseRequestId(state);
+    } catch {
+      state.socket.destroy();
+      return Promise.reject(new RuntimeOwnerRpcError("UNAVAILABLE"));
+    }
+    return new Promise<RuntimeOwnerRpcPortResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const pending = state.pendingPortRequests.get(reverseRequestId);
+        if (pending === undefined) return;
+        state.pendingPortRequests.delete(reverseRequestId);
+        pending.reject(new RuntimeOwnerRpcError("TIMEOUT"));
+        // No retry may reuse this channel after an outcome whose response arrived late.
+        state.socket.destroy();
+      }, this.#reverseRequestTimeoutMs);
+      timer.unref();
+      state.pendingPortRequests.set(reverseRequestId, {
+        invocation: parsed,
+        resolve,
+        reject,
+        timer,
+      });
+      if (
+        !safeWrite(state.socket, {
+          version: RUNTIME_OWNER_RPC_VERSION,
+          type: "port_request",
+          reverseRequestId,
+          invocation: parsed,
+        })
+      ) {
+        clearTimeout(timer);
+        state.pendingPortRequests.delete(reverseRequestId);
+        reject(new RuntimeOwnerRpcError("CLOSED"));
+      }
+    });
+  }
+
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
     this.#listening = false;
-    for (const state of this.#connections) state.socket.destroy();
+    // Detach synchronously before the server-close callback can settle. The service uses detach to
+    // register bounded durable cleanup in its shutdown drain; waiting for a later socket `close`
+    // event could otherwise release the owner lease before that cleanup even exists.
+    for (const state of [...this.#connections]) {
+      this.#detach(state);
+      state.socket.destroy();
+    }
     await new Promise<void>((resolve) => {
       if (!this.#server.listening) {
         resolve();
@@ -223,6 +365,8 @@ export class RuntimeOwnerRpcServer {
       challenge: challenge.challenge,
       seenRequestIds: new Set<string>(),
       activeRequests: new Map<string, ActiveRequest>(),
+      usedReverseRequestIds: new Set<string>(),
+      pendingPortRequests: new Map<string, PendingPortRequest>(),
       handshakeTimer,
       authenticated: false,
       detached: false,
@@ -290,7 +434,12 @@ export class RuntimeOwnerRpcServer {
           }
           continue;
         }
-        this.#request(state, parseRuntimeOwnerRpcRequest(value));
+        const messageType = runtimeOwnerRpcMessageType(value);
+        if (messageType === "port_response") {
+          this.#portResponse(state, parseRuntimeOwnerRpcPortResponse(value));
+        } else {
+          this.#request(state, parseRuntimeOwnerRpcRequest(value));
+        }
       }
     } catch {
       state.socket.destroy();
@@ -364,6 +513,72 @@ export class RuntimeOwnerRpcServer {
     safeWrite(state.socket, runtimeOwnerRpcErrorResponse(requestId, "HANDLER_ERROR"));
   }
 
+  #portResponse(
+    state: ConnectionState,
+    response: ReturnType<typeof parseRuntimeOwnerRpcPortResponse>,
+  ): void {
+    const pending = state.pendingPortRequests.get(response.reverseRequestId);
+    if (pending === undefined) {
+      // Unknown, replayed, or late reverse responses poison only this collaborator channel.
+      state.socket.destroy();
+      return;
+    }
+    state.pendingPortRequests.delete(response.reverseRequestId);
+    clearTimeout(pending.timer);
+    if (!response.ok) {
+      pending.reject(new RuntimeOwnerRpcError(response.error.code));
+      return;
+    }
+    try {
+      const echoedRequest = parseRuntimeOwnerInvokePortRequest({
+        scopeKind: response.result.scopeKind,
+        scopeId: response.result.scopeId,
+        callablePortRef: response.result.callablePortRef,
+        providerCredential: response.result.providerCredential,
+        nativeBindingId: response.result.nativeBindingId,
+        runtimeId: response.result.runtimeId,
+        fence: response.result.fence,
+        operationSchemaId: response.result.operationSchemaId,
+        operationRef: response.result.operationRef,
+        operationDigest: response.result.operationDigest,
+      });
+      const expected = encodeRuntimeOwnerRpcCanonicalJson(pending.invocation.request);
+      const actual = encodeRuntimeOwnerRpcCanonicalJson(echoedRequest);
+      if (!Buffer.from(expected).equals(Buffer.from(actual))) {
+        throw new RuntimeOwnerRpcError("PROTOCOL_ERROR");
+      }
+      pending.resolve(response.result);
+    } catch {
+      pending.reject(new RuntimeOwnerRpcError("PROTOCOL_ERROR"));
+      state.socket.destroy();
+    }
+  }
+
+  #allocateReverseRequestId(state: ConnectionState): string {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const candidate = runtimeOwnerRpcReverseRequestId(randomBytes(16));
+      if (!state.usedReverseRequestIds.has(candidate)) {
+        state.usedReverseRequestIds.add(candidate);
+        return candidate;
+      }
+    }
+    throw new RuntimeOwnerRpcError("UNAVAILABLE");
+  }
+
+  #findAuthenticatedConnection(connectionId: string): ConnectionState | undefined {
+    for (const state of this.#connections) {
+      if (
+        state.connectionId === connectionId &&
+        state.authenticated &&
+        !state.detached &&
+        !state.socket.destroyed
+      ) {
+        return state;
+      }
+    }
+    return undefined;
+  }
+
   #detach(state: ConnectionState): void {
     if (state.detached) return;
     state.detached = true;
@@ -374,6 +589,12 @@ export class RuntimeOwnerRpcServer {
       active.abortController.abort(new RuntimeOwnerRpcError("CLOSED"));
     }
     state.activeRequests.clear();
+    for (const pending of state.pendingPortRequests.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new RuntimeOwnerRpcError("CLOSED"));
+    }
+    state.pendingPortRequests.clear();
+    this.#callablePorts.dropConnection(state.connectionId);
     try {
       state.decoder.end();
     } catch {

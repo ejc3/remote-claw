@@ -58,6 +58,10 @@ export interface WrappedRuntimeOwnerPrivateKey {
 
 /** Narrow daemon-lifetime capability. It never exports a root secret, wrap key, or private key. */
 export interface RuntimeOwnerKeyCustodySigningCapability {
+  generateIdentityKey(
+    runtimeId: NativeRuntimeId,
+    keyGeneration: number,
+  ): WrappedRuntimeOwnerPrivateKey;
   sign(
     envelope: WrappedRuntimeOwnerPrivateKey,
     canonicalPayload: ProtectedByteSnapshot,
@@ -234,6 +238,23 @@ export function generateWrappedRuntimeOwnerIdentityKey(
   runtimeIdInput: NativeRuntimeId,
   keyGenerationInput: number,
 ): WrappedRuntimeOwnerPrivateKey {
+  const wrapKey = deriveWrapKey(rootSecret);
+  try {
+    return generateWrappedRuntimeOwnerIdentityKeyWithKey(
+      wrapKey,
+      runtimeIdInput,
+      keyGenerationInput,
+    );
+  } finally {
+    wrapKey.fill(0);
+  }
+}
+
+function generateWrappedRuntimeOwnerIdentityKeyWithKey(
+  wrapKey: Uint8Array,
+  runtimeIdInput: NativeRuntimeId,
+  keyGenerationInput: number,
+): WrappedRuntimeOwnerPrivateKey {
   const runtimeId = parseA1CanonicalId("nativeRuntime", runtimeIdInput);
   const keyGeneration = requirePositiveSafeInteger(keyGenerationInput, "keyGeneration");
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -254,12 +275,9 @@ export function generateWrappedRuntimeOwnerIdentityKey(
   });
   publicBytes.fill(0);
   const pkcs8 = privateKey.export({ format: "der", type: "pkcs8" });
-  let wrapKey: Buffer | undefined;
   try {
-    wrapKey = deriveWrapKey(rootSecret);
     return wrapPkcs8WithKey(wrapKey, binding, pkcs8);
   } finally {
-    wrapKey?.fill(0);
     pkcs8.fill(0);
   }
 }
@@ -283,6 +301,14 @@ class DerivedWrapKeyRuntimeOwnerSigner implements RuntimeOwnerKeyCustodySigner {
 
   get closed(): boolean {
     return this.#closed;
+  }
+
+  generateIdentityKey(
+    runtimeId: NativeRuntimeId,
+    keyGeneration: number,
+  ): WrappedRuntimeOwnerPrivateKey {
+    this.#assertOpen();
+    return generateWrappedRuntimeOwnerIdentityKeyWithKey(this.#wrapKey, runtimeId, keyGeneration);
   }
 
   sign(

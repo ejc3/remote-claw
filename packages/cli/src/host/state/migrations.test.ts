@@ -20,6 +20,7 @@ const PINNED_VERSION_ONE_DIGEST = "Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec";
 const PINNED_VERSION_TWO_DIGEST = "yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY";
 const PINNED_VERSION_THREE_DIGEST = "cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4";
 const PINNED_VERSION_FOUR_DIGEST = "zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0";
+const PINNED_VERSION_FIVE_DIGEST = "l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE";
 
 function encoded(byteLength: number, fill: number): string {
   return base64urlEncode(new Uint8Array(byteLength).fill(fill));
@@ -42,6 +43,14 @@ const SIGNATURE = encoded(64, 13);
 const SIGNING_KEY_HANDLE_ID = `rcph_${encoded(16, 14)}`;
 const RUNTIME_OWNER_LEASE_ID = "runtime-owner-lease-1";
 const RUNTIME_OWNER_ASSIGNMENT_ID = "runtime-owner-assignment-1";
+const NATIVE_CONVERSATION_LEASE_ID = `rcncl_${encoded(16, 18)}`;
+const SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID = `rcncl_${encoded(16, 22)}`;
+const PROTECTED_PORT_HANDLE_ID = `rcph_${encoded(16, 19)}`;
+const SUCCESSOR_PROTECTED_PORT_HANDLE_ID = `rcph_${encoded(16, 23)}`;
+const METADATA_HANDLE_ID = `rcph_${encoded(16, 20)}`;
+const CAPABILITIES_HANDLE_ID = `rcph_${encoded(16, 21)}`;
+const METADATA_DIGEST = encoded(32, 20);
+const CAPABILITIES_DIGEST = encoded(32, 21);
 
 function applyMigrations(database: DatabaseSync, through = HOST_STATE_SCHEMA_VERSION): void {
   for (const migration of HOST_STATE_MIGRATIONS.slice(0, through)) {
@@ -195,6 +204,21 @@ function openedV4Database(): DatabaseSync {
   return database;
 }
 
+function openedV5Database(): DatabaseSync {
+  const database = openedV4Database();
+  const migration = HOST_STATE_MIGRATIONS[4];
+  if (migration === undefined) throw new Error("missing v5 migration");
+  for (const statement of migration.statements) database.exec(statement);
+  database
+    .prepare(
+      `UPDATE host_state_metadata
+       SET schema_version = 5, migration_digest = ?
+       WHERE singleton = 1`,
+    )
+    .run(PINNED_VERSION_FIVE_DIGEST);
+  return database;
+}
+
 function acquireRuntimeOwner(database: DatabaseSync): void {
   database.exec("BEGIN");
   try {
@@ -233,6 +257,31 @@ function acquireRuntimeOwner(database: DatabaseSync): void {
     database.exec("ROLLBACK");
     throw error;
   }
+}
+
+function takeOverRuntimeOwner(database: DatabaseSync): void {
+  database
+    .prepare(
+      `INSERT INTO runtime_owner_service_leases
+         (runtime_owner_service_lease_id, machine_identity_id,
+          runtime_owner_service_epoch, owner_instance_id,
+          owner_process_start_identity_schema_id, owner_process_start_identity_ref,
+          owner_process_start_identity_digest, acquired_at_ms,
+          initial_heartbeat_deadline_ms, heartbeat_deadline_ms,
+          released_at_ms, state)
+       VALUES ('runtime-owner-lease-2', ?, 2, 'owner-instance-2',
+               'process-start/v1', 'process-start-2', ?, 100, 200, 200,
+               NULL, 'current')`,
+    )
+    .run(MACHINE_IDENTITY_ID, DIGEST);
+  database
+    .prepare(
+      `UPDATE runtime_owner_state
+       SET current_runtime_owner_service_epoch = 2,
+           current_runtime_owner_service_lease_id = 'runtime-owner-lease-2'
+       WHERE singleton = 1`,
+    )
+    .run();
 }
 
 function insertInitialRuntime(database: DatabaseSync): void {
@@ -280,26 +329,200 @@ function insertInitialRuntime(database: DatabaseSync): void {
   }
 }
 
+function prepareDurableRegistrationGraph(database: DatabaseSync): void {
+  acquireRuntimeOwner(database);
+  insertInitialProject(database);
+  insertTerminalChat(database);
+  insertInitialRuntime(database);
+  database
+    .prepare(
+      `INSERT INTO coordinator_leases
+         (coordinator_lease_id, collaboration_server_id, coordinator_epoch,
+          owner_instance_id, acquired_at_ms, initial_heartbeat_deadline_ms,
+          heartbeat_deadline_ms, released_at_ms, state)
+       VALUES (?, ?, 1, 'coordinator-1', 10, 200, 200, NULL, 'current')`,
+    )
+    .run(COORDINATOR_LEASE_ID, SERVER_ID);
+  database
+    .prepare(
+      `UPDATE collaboration_servers
+       SET current_coordinator_epoch = 1, current_coordinator_lease_id = ?
+       WHERE collaboration_server_id = ?`,
+    )
+    .run(COORDINATOR_LEASE_ID, SERVER_ID);
+  database
+    .prepare(
+      `INSERT INTO native_binding_incarnations
+         (native_binding_incarnation_id, collaboration_server_id, logical_chat_id,
+          native_binding_id, runtime_id, native_incarnation, semantic_conversation_id,
+          created_at_ms, closed_at_ms, state)
+       VALUES ('registration-binding-incarnation', ?, ?, ?, ?, 1, 'codex-thread-1',
+               20, NULL, 'current')`,
+    )
+    .run(SERVER_ID, CHAT_ID, BINDING_ID, RUNTIME_ID);
+  database
+    .prepare(
+      `INSERT INTO native_transport_attachments
+         (attachment_id, native_binding_id, kind, transport_id, generation,
+          current_attachment_lease_id, resource_ownership,
+          created_at_ms, closed_at_ms, state)
+       VALUES ('registration-attachment', ?, 'app-server', 'codex-app-server-1', 1,
+               NULL, 'shared_runtime', 20, NULL, 'current')`,
+    )
+    .run(BINDING_ID);
+  database
+    .prepare(
+      `INSERT INTO native_transport_leases
+         (attachment_lease_id, attachment_id, native_binding_incarnation_id,
+          runtime_id, native_incarnation, runtime_owner_service_lease_id,
+          runtime_owner_service_epoch, coordinator_lease_id, coordinator_epoch,
+          transport_epoch, current_capability_snapshot_id,
+          current_native_client_ingress_lease_id, acquired_at_ms, released_at_ms, state)
+       VALUES ('registration-attachment-lease', 'registration-attachment',
+               'registration-binding-incarnation', ?, 1, ?, 1, ?, 1, 1,
+               NULL, NULL, 20, NULL, 'current')`,
+    )
+    .run(RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, COORDINATOR_LEASE_ID);
+  database
+    .prepare(
+      `UPDATE native_transport_attachments
+       SET current_attachment_lease_id = 'registration-attachment-lease'
+       WHERE attachment_id = 'registration-attachment'`,
+    )
+    .run();
+}
+
+function insertRegistrationArtifacts(database: DatabaseSync): void {
+  const insert = database.prepare(
+    `INSERT INTO protected_artifacts
+       (protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+        artifact_digest, byte_length, artifact_bytes, created_at_ms)
+     VALUES (?, 'artifact', 'native_binding', ?, ?, ?, 1, ?, 24)`,
+  );
+  insert.run(
+    METADATA_HANDLE_ID,
+    BINDING_ID,
+    "remote-claw/native-registration-metadata-evidence/v1",
+    METADATA_DIGEST,
+    Uint8Array.of(20),
+  );
+  insert.run(
+    CAPABILITIES_HANDLE_ID,
+    BINDING_ID,
+    "remote-claw/native-conversation-capabilities/v1",
+    CAPABILITIES_DIGEST,
+    Uint8Array.of(21),
+  );
+}
+
+function insertStartingConversationLease(
+  database: DatabaseSync,
+  options: {
+    readonly leaseId?: string;
+    readonly portHandleId?: string;
+    readonly ownerLeaseId?: string;
+    readonly ownerEpoch?: number;
+    readonly acquiredAtMs?: number;
+    readonly leaseGeneration?: number;
+    readonly supersedesLeaseId?: string | null;
+    readonly state?: "starting" | "recovering";
+  } = {},
+): void {
+  database
+    .prepare(
+      `INSERT INTO native_conversation_leases
+         (native_conversation_lease_id, collaboration_server_id, logical_chat_id,
+          native_binding_id, registration_attempt_id, runtime_id, native_incarnation,
+          native_binding_incarnation_id, attachment_lease_id,
+          runtime_owner_service_lease_id, runtime_owner_service_epoch,
+          coordinator_lease_id, coordinator_epoch, protected_port_handle_id,
+          lease_generation, supersedes_native_conversation_lease_id,
+          current_publication_id, next_operation_sequence,
+          acquired_at_ms, updated_at_ms, closed_at_ms, state)
+       VALUES (?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?, 1, ?, ?, ?,
+               NULL, 1, ?, ?, NULL, ?)`,
+    )
+    .run(
+      options.leaseId ?? NATIVE_CONVERSATION_LEASE_ID,
+      SERVER_ID,
+      CHAT_ID,
+      BINDING_ID,
+      REGISTRATION_ATTEMPT_ID,
+      RUNTIME_ID,
+      options.ownerLeaseId ?? RUNTIME_OWNER_LEASE_ID,
+      options.ownerEpoch ?? 1,
+      COORDINATOR_LEASE_ID,
+      options.portHandleId ?? PROTECTED_PORT_HANDLE_ID,
+      options.leaseGeneration ?? 1,
+      options.supersedesLeaseId ?? null,
+      options.acquiredAtMs ?? 25,
+      options.acquiredAtMs ?? 25,
+      options.state ?? "starting",
+    );
+}
+
+function insertRegistrationOperation(
+  database: DatabaseSync,
+  operationId: string,
+  operationSequence: number,
+  kind: string,
+  committedAtMs: number,
+  fences: {
+    readonly ownerLeaseId?: string;
+    readonly ownerEpoch?: number;
+    readonly coordinatorLeaseId?: string;
+    readonly coordinatorEpoch?: number;
+    readonly leaseId?: string;
+  } = {},
+): void {
+  database
+    .prepare(
+      `INSERT INTO native_registration_operations
+         (operation_id, operation_sequence, kind, operation_schema_id,
+          operation_digest, native_conversation_lease_id, native_binding_id,
+          runtime_owner_service_lease_id, runtime_owner_service_epoch,
+          coordinator_lease_id, coordinator_epoch,
+          committed_at_ms)
+       VALUES (?, ?, ?, 'remote-claw/native-registration-operation/v1', ?, ?, ?,
+               ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      operationId,
+      operationSequence,
+      kind,
+      DIGEST,
+      fences.leaseId ?? NATIVE_CONVERSATION_LEASE_ID,
+      BINDING_ID,
+      fences.ownerLeaseId ?? RUNTIME_OWNER_LEASE_ID,
+      fences.ownerEpoch ?? 1,
+      fences.coordinatorLeaseId ?? COORDINATOR_LEASE_ID,
+      fences.coordinatorEpoch ?? 1,
+      committedAtMs,
+    );
+}
+
 describe("A1 host-state migrations", () => {
   it("pins the application id, schema version, and exact migration digests", () => {
     expect(HOST_STATE_APPLICATION_ID).toBe(0x52434c57);
-    expect(HOST_STATE_SCHEMA_VERSION).toBe(4);
+    expect(HOST_STATE_SCHEMA_VERSION).toBe(5);
     expect(HOST_STATE_MIGRATION_DIGESTS).toEqual([
       PINNED_VERSION_ONE_DIGEST,
       PINNED_VERSION_TWO_DIGEST,
       PINNED_VERSION_THREE_DIGEST,
       PINNED_VERSION_FOUR_DIGEST,
+      PINNED_VERSION_FIVE_DIGEST,
     ]);
     expect(HOST_STATE_SCHEMA_MANIFEST).toEqual({
       applicationId: 0x52434c57,
-      schemaVersion: 4,
-      migrationDigest: PINNED_VERSION_FOUR_DIGEST,
+      schemaVersion: 5,
+      migrationDigest: PINNED_VERSION_FIVE_DIGEST,
       sqliteSchema: HOST_STATE_SQLITE_SCHEMA_MANIFEST,
     });
     expect(expectedHostStateSqliteSchemaManifest(1)).toHaveLength(6);
     expect(expectedHostStateSqliteSchemaManifest(2)).toHaveLength(10);
     expect(expectedHostStateSqliteSchemaManifest(3)).toHaveLength(91);
     expect(expectedHostStateSqliteSchemaManifest(4)).toHaveLength(231);
+    expect(expectedHostStateSqliteSchemaManifest(5)).toHaveLength(269);
   });
 
   it("commits every exact historical SQL byte into the chained digest", () => {
@@ -352,12 +575,13 @@ describe("A1 host-state migrations", () => {
     expect(expectedHostStateMigrationDigest(2)).toBe(PINNED_VERSION_TWO_DIGEST);
     expect(expectedHostStateMigrationDigest(3)).toBe(PINNED_VERSION_THREE_DIGEST);
     expect(expectedHostStateMigrationDigest(4)).toBe(PINNED_VERSION_FOUR_DIGEST);
+    expect(expectedHostStateMigrationDigest(5)).toBe(PINNED_VERSION_FIVE_DIGEST);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 1)).toBe(true);
     expect(isExpectedHostStateMigrationDigest(`${PINNED_VERSION_ONE_DIGEST}=`, 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest("A".repeat(43), 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 2)).toBe(false);
     expect(() => expectedHostStateMigrationDigest(0)).toThrow(/not supported/);
-    expect(() => expectedHostStateMigrationDigest(5)).toThrow(/not supported/);
+    expect(() => expectedHostStateMigrationDigest(6)).toThrow(/not supported/);
   });
 
   it("creates exactly the declared application schema", () => {
@@ -403,9 +627,9 @@ describe("A1 host-state migrations", () => {
         "created_at_ms",
       ]);
 
-      expect(rows.filter((row) => row.type === "table")).toHaveLength(30);
-      expect(rows.filter((row) => row.type === "index")).toHaveLength(57);
-      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(144);
+      expect(rows.filter((row) => row.type === "table")).toHaveLength(33);
+      expect(rows.filter((row) => row.type === "index")).toHaveLength(67);
+      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(169);
       expect(rows.some((row) => String(row.name).startsWith("sqlite_autoindex"))).toBe(false);
       expect(
         database
@@ -597,6 +821,289 @@ describe("A1 host-state migrations", () => {
       ]) {
         expect(database.prepare(`SELECT * FROM ${table}`).all(), table).toEqual([]);
       }
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("migrates the exact v4 manifest to the empty v5 registration graph", () => {
+    const database = openedV4Database();
+    try {
+      const migration = HOST_STATE_MIGRATIONS[4];
+      if (migration === undefined) throw new Error("missing v5 migration");
+      expect(migration.id).toBe("005-durable-native-registration");
+      expect(migration.statements).toHaveLength(38);
+      for (const statement of migration.statements) database.exec(statement);
+
+      const actual = database
+        .prepare(
+          `SELECT type, name, tbl_name AS tableName, sql
+           FROM sqlite_schema
+           ORDER BY type, name`,
+        )
+        .all();
+      const expected = [...expectedHostStateSqliteSchemaManifest(5)].sort((left, right) =>
+        left.type === right.type
+          ? left.name.localeCompare(right.name)
+          : left.type.localeCompare(right.type),
+      );
+      expect(actual).toEqual(expected);
+      for (const table of [
+        "native_conversation_leases",
+        "native_registration_publications",
+        "native_registration_operations",
+      ]) {
+        expect(database.prepare(`SELECT * FROM ${table}`).all()).toEqual([]);
+      }
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("orders same-millisecond durable registration effects by a contiguous lease sequence", () => {
+    const database = openedV5Database();
+    try {
+      prepareDurableRegistrationGraph(database);
+      insertRegistrationArtifacts(database);
+      insertStartingConversationLease(database);
+
+      expect(() => insertRegistrationOperation(database, "operation-gap", 2, "bind", 25)).toThrow(
+        /next lease sequence/,
+      );
+      insertRegistrationOperation(database, "operation-open", 1, "open", 25);
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE native_conversation_leases
+             SET native_binding_incarnation_id = 'registration-binding-incarnation',
+                 attachment_lease_id = 'registration-attachment-lease',
+                 updated_at_ms = 25
+             WHERE native_conversation_lease_id = ?`,
+          )
+          .run(NATIVE_CONVERSATION_LEASE_ID),
+      ).toThrow(/correlated operation/);
+      insertRegistrationOperation(database, "operation-bind", 2, "bind", 30);
+      database
+        .prepare(
+          `UPDATE native_conversation_leases
+           SET native_binding_incarnation_id = 'registration-binding-incarnation',
+               attachment_lease_id = 'registration-attachment-lease',
+               updated_at_ms = 30
+           WHERE native_conversation_lease_id = ?`,
+        )
+        .run(NATIVE_CONVERSATION_LEASE_ID);
+
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO native_registration_publications
+               (native_registration_publication_id, native_conversation_lease_id,
+                native_binding_id, runtime_id, native_incarnation,
+                native_binding_incarnation_id, attachment_lease_id,
+                publication_generation, metadata_schema_id, metadata_ref,
+                metadata_digest, capabilities_schema_id, capabilities_ref,
+                capabilities_digest, published_at_ms, state)
+             VALUES ('registration-publication-bad', ?, ?, ?, 1,
+                     'registration-binding-incarnation', 'registration-attachment-lease',
+                     1, 'provider-metadata/v1', ?, ?,
+                     'remote-claw/native-conversation-capabilities/v1', ?, ?, 30, 'current')`,
+          )
+          .run(
+            NATIVE_CONVERSATION_LEASE_ID,
+            BINDING_ID,
+            RUNTIME_ID,
+            METADATA_HANDLE_ID,
+            DIGEST,
+            CAPABILITIES_HANDLE_ID,
+            CAPABILITIES_DIGEST,
+          ),
+      ).toThrow(/exact lease and artifacts/);
+      database
+        .prepare(
+          `INSERT INTO native_registration_publications
+             (native_registration_publication_id, native_conversation_lease_id,
+              native_binding_id, runtime_id, native_incarnation,
+              native_binding_incarnation_id, attachment_lease_id,
+              publication_generation, metadata_schema_id, metadata_ref,
+              metadata_digest, capabilities_schema_id, capabilities_ref,
+              capabilities_digest, published_at_ms, state)
+           VALUES ('registration-publication-1', ?, ?, ?, 1,
+                   'registration-binding-incarnation', 'registration-attachment-lease',
+                   1, 'provider-metadata/v1', ?, ?,
+                   'remote-claw/native-conversation-capabilities/v1', ?, ?, 30, 'current')`,
+        )
+        .run(
+          NATIVE_CONVERSATION_LEASE_ID,
+          BINDING_ID,
+          RUNTIME_ID,
+          METADATA_HANDLE_ID,
+          METADATA_DIGEST,
+          CAPABILITIES_HANDLE_ID,
+          CAPABILITIES_DIGEST,
+        );
+      insertRegistrationOperation(database, "operation-publish", 3, "publish", 30);
+      database
+        .prepare(
+          `UPDATE native_conversation_leases
+           SET current_publication_id = 'registration-publication-1', updated_at_ms = 30
+           WHERE native_conversation_lease_id = ?`,
+        )
+        .run(NATIVE_CONVERSATION_LEASE_ID);
+      insertRegistrationOperation(database, "operation-ready", 4, "ready", 30);
+      database
+        .prepare(
+          `UPDATE native_conversation_leases
+           SET state = 'ready', updated_at_ms = 30
+           WHERE native_conversation_lease_id = ?`,
+        )
+        .run(NATIVE_CONVERSATION_LEASE_ID);
+
+      expect(
+        database
+          .prepare(
+            `SELECT next_operation_sequence, updated_at_ms, state
+             FROM native_conversation_leases
+             WHERE native_conversation_lease_id = ?`,
+          )
+          .get(NATIVE_CONVERSATION_LEASE_ID),
+      ).toEqual({ next_operation_sequence: 5, updated_at_ms: 30, state: "ready" });
+      expect(
+        database
+          .prepare(
+            `SELECT operation_sequence, kind
+             FROM native_registration_operations
+             WHERE native_conversation_lease_id = ?
+             ORDER BY operation_sequence`,
+          )
+          .all(NATIVE_CONVERSATION_LEASE_ID),
+      ).toEqual([
+        { operation_sequence: 1, kind: "open" },
+        { operation_sequence: 2, kind: "bind" },
+        { operation_sequence: 3, kind: "publish" },
+        { operation_sequence: 4, kind: "ready" },
+      ]);
+
+      insertRegistrationOperation(database, "operation-close", 5, "close", 30);
+      database
+        .prepare(
+          `UPDATE native_conversation_leases
+           SET updated_at_ms = 30, closed_at_ms = 30, state = 'closed'
+           WHERE native_conversation_lease_id = ?`,
+        )
+        .run(NATIVE_CONVERSATION_LEASE_ID);
+      expect(() =>
+        insertRegistrationOperation(database, "operation-after-close", 6, "recover", 30),
+      ).toThrow(/exact lease/);
+      insertStartingConversationLease(database, {
+        leaseId: SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+        portHandleId: SUCCESSOR_PROTECTED_PORT_HANDLE_ID,
+        acquiredAtMs: 30,
+        leaseGeneration: 2,
+        supersedesLeaseId: NATIVE_CONVERSATION_LEASE_ID,
+        state: "recovering",
+      });
+      expect(() =>
+        insertRegistrationOperation(database, "operation-successor-open", 1, "open", 30, {
+          leaseId: SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+        }),
+      ).toThrow(/exact lease/);
+      insertRegistrationOperation(database, "operation-reattach", 1, "reattach", 30, {
+        leaseId: SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+      });
+      expect(
+        database
+          .prepare(
+            `SELECT next_operation_sequence
+             FROM native_conversation_leases
+             WHERE native_conversation_lease_id = ?`,
+          )
+          .get(SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID),
+      ).toEqual({ next_operation_sequence: 2 });
+      expect(() =>
+        database
+          .prepare(
+            "UPDATE native_registration_operations SET committed_at_ms = 31 WHERE operation_id = 'operation-open'",
+          )
+          .run(),
+      ).toThrow(/append-only/);
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO protected_artifacts
+               (protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+                artifact_digest, byte_length, artifact_bytes, created_at_ms)
+             VALUES (?, 'artifact', 'native_binding', ?, 'test/v1', ?, 1, ?, 31)`,
+          )
+          .run(PROTECTED_PORT_HANDLE_ID, BINDING_ID, DIGEST, Uint8Array.of(1)),
+      ).toThrow(/callable port/);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects a globally current owner that is stale for the selected runtime", () => {
+    const database = openedV5Database();
+    try {
+      prepareDurableRegistrationGraph(database);
+      takeOverRuntimeOwner(database);
+
+      expect(() =>
+        insertStartingConversationLease(database, {
+          ownerLeaseId: "runtime-owner-lease-2",
+          ownerEpoch: 2,
+          acquiredAtMs: 110,
+        }),
+      ).toThrow(/exact active graph/);
+      expect(() => insertStartingConversationLease(database, { acquiredAtMs: 110 })).toThrow(
+        /current owner and coordinator fences/,
+      );
+      expect(database.prepare("SELECT * FROM native_conversation_leases").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fences every operation and lets the current successor close an orphaned lease", () => {
+    const database = openedV5Database();
+    try {
+      prepareDurableRegistrationGraph(database);
+      insertStartingConversationLease(database);
+      insertRegistrationOperation(database, "operation-open", 1, "open", 25);
+      takeOverRuntimeOwner(database);
+
+      expect(() =>
+        insertRegistrationOperation(database, "operation-stale-close", 2, "close", 110),
+      ).toThrow(/current unexpired fences/);
+      insertRegistrationOperation(database, "operation-successor-close", 2, "close", 110, {
+        ownerLeaseId: "runtime-owner-lease-2",
+        ownerEpoch: 2,
+      });
+      database
+        .prepare(
+          `UPDATE native_conversation_leases
+           SET updated_at_ms = 110, closed_at_ms = 110, state = 'closed'
+           WHERE native_conversation_lease_id = ?`,
+        )
+        .run(NATIVE_CONVERSATION_LEASE_ID);
+
+      expect(
+        database
+          .prepare(
+            `SELECT runtime_owner_service_lease_id, runtime_owner_service_epoch,
+                    coordinator_lease_id, coordinator_epoch
+             FROM native_registration_operations
+             WHERE operation_id = 'operation-successor-close'`,
+          )
+          .get(),
+      ).toEqual({
+        runtime_owner_service_lease_id: "runtime-owner-lease-2",
+        runtime_owner_service_epoch: 2,
+        coordinator_lease_id: COORDINATOR_LEASE_ID,
+        coordinator_epoch: 1,
+      });
       expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       database.close();

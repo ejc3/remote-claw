@@ -1493,6 +1493,7 @@ function loadTerminalReservation(
   transaction: HostStateRepositorySqlTransaction,
   serverId: CollaborationServerId,
   registrationAttemptId: RegistrationAttemptId,
+  allowActivatedBinding = true,
 ): ParsedReservationGraph | null {
   const intentRow = sqlGet(transaction, SELECT_INTENT, [serverId, registrationAttemptId]);
   if (intentRow === undefined) return null;
@@ -1520,13 +1521,20 @@ function loadTerminalReservation(
   const edge = findEdge(transaction, serverId, chat.currentInwardEdgeId);
   if (edge === null)
     throw new HostStateRepositoryPersistenceError("logical chat has no inward edge");
+  const bindingIsDormant =
+    binding.state === "starting" &&
+    binding.semanticConversationId === null &&
+    binding.currentBindingIncarnationId === null;
+  const bindingIsActivated =
+    allowActivatedBinding &&
+    binding.state === "current" &&
+    binding.semanticConversationId !== null &&
+    binding.currentBindingIncarnationId !== null;
   if (
     binding.collaborationServerId !== serverId ||
     binding.logicalChatId !== chat.logicalChatId ||
     binding.projectId !== project.projectId ||
-    binding.state !== "starting" ||
-    binding.semanticConversationId !== null ||
-    binding.currentBindingIncarnationId !== null ||
+    (!bindingIsDormant && !bindingIsActivated) ||
     chat.currentNativeBindingId !== binding.nativeBindingId ||
     chat.state !== "recovering" ||
     chat.nextViewerProjectionSeq !== 0 ||
@@ -3961,6 +3969,7 @@ function validateServerLeasePointer(
 function validateChatLinkage(
   transaction: HostStateRepositorySqlTransaction,
   chat: LogicalChatRecord,
+  allowActivatedBinding = true,
 ): void {
   const project = findProject(transaction, chat.collaborationServerId, chat.projectId);
   const mapping = findMapping(
@@ -3996,14 +4005,21 @@ function validateChatLinkage(
   }
   const binding = findBinding(transaction, chat.collaborationServerId, chat.currentNativeBindingId);
   const edge = findEdge(transaction, chat.collaborationServerId, chat.currentInwardEdgeId);
+  const bindingIsDormant =
+    binding?.state === "starting" &&
+    binding.semanticConversationId === null &&
+    binding.currentBindingIncarnationId === null;
+  const bindingIsActivated =
+    allowActivatedBinding &&
+    binding?.state === "current" &&
+    binding.semanticConversationId !== null &&
+    binding.currentBindingIncarnationId !== null;
   if (
     binding === null ||
     edge === null ||
     binding.logicalChatId !== chat.logicalChatId ||
     binding.projectId !== chat.projectId ||
-    binding.state !== "starting" ||
-    binding.semanticConversationId !== null ||
-    binding.currentBindingIncarnationId !== null ||
+    (!bindingIsDormant && !bindingIsActivated) ||
     !sameDescriptor(binding.descriptor, mapping.target.descriptor) ||
     edge.representedLogicalChatId !== chat.logicalChatId ||
     edge.targetKind !== "native-harness" ||
@@ -4028,8 +4044,10 @@ function validateChatLinkage(
 export function validateHostStateRepositorySnapshot(
   transaction: HostStateRepositorySqlTransaction,
   machineIdentityId: string,
+  schemaVersion = 3,
 ): void {
   const machineId = parseMachineIdentityId(machineIdentityId);
+  const allowActivatedBinding = schemaVersion >= 5;
   const servers = sqlAll(
     transaction,
     `SELECT ${selectColumns(SERVER_ROW_KEYS)} FROM collaboration_servers
@@ -4203,7 +4221,12 @@ export function validateHostStateRepositorySnapshot(
           { cause: error },
         );
       }
-      const graph = loadTerminalReservation(transaction, project.collaborationServerId, attemptId);
+      const graph = loadTerminalReservation(
+        transaction,
+        project.collaborationServerId,
+        attemptId,
+        allowActivatedBinding,
+      );
       if (
         graph === null ||
         graph.project.projectId !== project.projectId ||
@@ -4330,7 +4353,7 @@ export function validateHostStateRepositorySnapshot(
       }
     }
   }
-  for (const chat of chats) validateChatLinkage(transaction, chat);
+  for (const chat of chats) validateChatLinkage(transaction, chat, allowActivatedBinding);
 
   // Parent lineage is acyclic within one project/server scope.
   for (const chat of chats) {
@@ -4382,6 +4405,7 @@ export function validateHostStateRepositorySnapshot(
       transaction,
       intent.collaborationServerId,
       intent.registrationAttemptId,
+      allowActivatedBinding,
     );
     if (graph === null) {
       throw new HostStateRepositoryPersistenceError(

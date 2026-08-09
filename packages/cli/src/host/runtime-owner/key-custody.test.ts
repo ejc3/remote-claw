@@ -101,6 +101,11 @@ describe("runtime-owner wrapped Ed25519 custody", () => {
     rootSecret.fill(0);
     expect(signer.closed).toBe(false);
     expect(Object.keys(signer)).toEqual([]);
+    const generated = signer.generateIdentityKey(runtimeId, 2);
+    expect(generated.binding).toMatchObject({ runtimeId, keyGeneration: 2 });
+    expect(generated.binding.runtimeOwnerIdentityKeyId).toMatch(/^roik_/);
+    expect(base64urlDecode(generated.binding.publicKey)).toHaveLength(32);
+    expect(() => signer.assertUsable(generated)).not.toThrow();
     expect(() => signer.assertUsable(envelope)).not.toThrow();
     expect(signer.sign(envelope, payload).byteLength).toBe(64);
     const wrongSigner = createRuntimeOwnerKeyCustodySigner(Uint8Array.from(originalRoot).fill(1));
@@ -113,6 +118,7 @@ describe("runtime-owner wrapped Ed25519 custody", () => {
     signer.close();
     signer.close();
     expect(signer.closed).toBe(true);
+    expect(() => signer.generateIdentityKey(runtimeId, 3)).toThrow(/signer is closed/);
     expect(() => signer.assertUsable(envelope)).toThrow(/signer is closed/);
     expect(() => signer.sign(envelope, payload)).toThrow(/signer is closed/);
   });

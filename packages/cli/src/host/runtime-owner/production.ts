@@ -1,11 +1,12 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { base64urlEncode, CanonicalWriter, deriveIdentity, toHex } from "@remote-claw/clawsec";
 import {
   type A1Digest,
   type A1SafeId,
+  parseA1CanonicalId,
   parseA1Digest,
   parseA1SafeId,
   parseMachineIdentityId,
@@ -21,6 +22,8 @@ import type {
   RuntimeOwnerOperationEvidence,
 } from "../state/runtime-repository.js";
 import {
+  type AcquireCoordinatorLeaseRequest,
+  type CoordinatorLeaseFence,
   HostStateCommitOutcomeUnknownError,
   type HostStateDatabase,
   type OpenHostStateDatabaseOptions,
@@ -34,6 +37,13 @@ import {
   type RuntimeOwnerKeyCustodySigningCapability,
   type WrappedRuntimeOwnerPrivateKey,
 } from "./key-custody.js";
+import {
+  createNativeRegistrationOrchestrator,
+  type NativeRegistrationAdapter,
+  type NativeRegistrationCoordinatorAuthority,
+  type NativeRegistrationDatabaseAccess,
+  type NativeRegistrationOrchestrator,
+} from "./registration-service.js";
 import {
   type HostStateDatabaseFactory,
   RUNTIME_OWNER_LINUX_PROCESS_START_IDENTITY_SCHEMA_ID,
@@ -49,6 +59,8 @@ const RUNTIME_OWNER_SERVICE_LEASE_ACQUIRE_OPERATION_SCHEMA_ID =
   "remote-claw/runtime-owner-service-lease-acquire/v1" as const;
 const RUNTIME_OWNER_SERVICE_LEASE_RELEASE_OPERATION_SCHEMA_ID =
   "remote-claw/runtime-owner-service-lease-release/v1" as const;
+const PRODUCTION_COORDINATOR_LEASE_DURATION_MS = 15_000;
+const PRODUCTION_COORDINATOR_HEARTBEAT_INTERVAL_MS = 5_000;
 
 const SAFE_ENVIRONMENT_KEYS = Object.freeze([
   "HOME",
@@ -79,6 +91,7 @@ class ProductionRuntimeOwnerDatabase {
   #database: HostStateDatabase | undefined;
   #closed = false;
   #recoveryBlocked = false;
+  #beforeClose: (() => void) | undefined;
 
   constructor(
     machineIdentityId: string,
@@ -95,6 +108,13 @@ class ProductionRuntimeOwnerDatabase {
       throw new RuntimeOwnerProductionRecoveryError("DATABASE_UNAVAILABLE");
     }
     return operation(this.#database);
+  }
+
+  setBeforeClose(hook: () => void): void {
+    if (this.#closed || this.#beforeClose !== undefined || typeof hook !== "function") {
+      throw new RuntimeOwnerProductionRecoveryError("DATABASE_UNAVAILABLE");
+    }
+    this.#beforeClose = hook;
   }
 
   /** Close the poisoned handle completely, then reopen the same identity namespace. */
@@ -120,14 +140,33 @@ class ProductionRuntimeOwnerDatabase {
 
   close(): void {
     if (this.#closed) return;
+    const beforeClose = this.#beforeClose;
+    this.#beforeClose = undefined;
     const database = this.#database;
-    if (database === undefined) {
-      this.#closed = true;
-      return;
+    let hookError: unknown;
+    let closeError: unknown;
+    try {
+      beforeClose?.();
+    } catch (error) {
+      hookError = error;
     }
-    database.close();
+    if (database !== undefined) {
+      try {
+        database.close();
+      } catch (error) {
+        closeError = error;
+      }
+    }
     this.#database = undefined;
     this.#closed = true;
+    if (hookError !== undefined && closeError !== undefined) {
+      throw new AggregateError(
+        [hookError, closeError],
+        "runtime owner registration cleanup and database close both failed",
+      );
+    }
+    if (hookError !== undefined) throw hookError;
+    if (closeError !== undefined) throw closeError;
   }
 
   #open(): HostStateDatabase {
@@ -168,6 +207,258 @@ function createProductionRuntimeOwnerDatabaseFactory(
     open: (machineIdentityId: string) =>
       new ProductionRuntimeOwnerDatabase(machineIdentityId, options),
   });
+}
+
+class DeferredNativeRegistrationDatabaseAccess implements NativeRegistrationDatabaseAccess {
+  #database: ProductionRuntimeOwnerDatabase | undefined;
+
+  bind(database: ProductionRuntimeOwnerDatabase): void {
+    if (this.#database !== undefined) {
+      throw new RuntimeOwnerProductionRecoveryError("RESULT_MISMATCH");
+    }
+    this.#database = database;
+  }
+
+  use<T>(operation: (database: HostStateDatabase) => T): T {
+    const database = this.#database;
+    if (database === undefined) {
+      throw new RuntimeOwnerProductionRecoveryError("DATABASE_UNAVAILABLE");
+    }
+    return database.use(operation);
+  }
+
+  reopenAfterUnknownCommit(): void {
+    const database = this.#database;
+    if (database === undefined) {
+      throw new RuntimeOwnerProductionRecoveryError("DATABASE_UNAVAILABLE");
+    }
+    database.reopenAfterUnknownCommit();
+  }
+}
+
+class ProductionNativeRegistrationCoordinator implements NativeRegistrationCoordinatorAuthority {
+  readonly #database: DeferredNativeRegistrationDatabaseAccess;
+  readonly #now: () => number;
+  #fence: CoordinatorLeaseFence | undefined;
+  #heartbeatDeadlineMs = 0;
+  #timer: NodeJS.Timeout | undefined;
+  #lost = false;
+  #released = false;
+  #onLost: (() => void) | undefined;
+
+  constructor(database: DeferredNativeRegistrationDatabaseAccess, now: () => number = Date.now) {
+    this.#database = database;
+    this.#now = now;
+  }
+
+  get fence(): CoordinatorLeaseFence {
+    const fence = this.#fence;
+    if (fence === undefined) throw new RuntimeOwnerProductionRecoveryError("DATABASE_UNAVAILABLE");
+    return fence;
+  }
+
+  setOnLost(onLost: () => void): void {
+    this.#onLost = onLost;
+    if (this.#lost) onLost();
+  }
+
+  acquire(): void {
+    let server: NonNullable<
+      ReturnType<HostStateDatabase["records"]["readDefaultCollaborationServer"]>
+    >;
+    try {
+      server = this.#database.use((current) => current.records.ensureDefaultCollaborationServer());
+    } catch (error) {
+      if (!(error instanceof HostStateCommitOutcomeUnknownError)) throw error;
+      this.#database.reopenAfterUnknownCommit();
+      const reconciled = this.#database.use((current) =>
+        current.records.readDefaultCollaborationServer(),
+      );
+      if (reconciled === null) {
+        throw new RuntimeOwnerProductionRecoveryError("COMMIT_NOT_RECONCILED", { cause: error });
+      }
+      server = reconciled;
+    }
+    const request: AcquireCoordinatorLeaseRequest = Object.freeze({
+      collaborationServerId: server.server.collaborationServerId,
+      candidateLeaseId: parseA1CanonicalId(
+        "coordinatorLease",
+        `rccl_${base64urlEncode(randomBytes(16))}`,
+      ),
+      ownerInstanceId: parseA1SafeId(`rco_${base64urlEncode(randomBytes(16))}`),
+      expectedCurrentLeaseId: server.server.currentCoordinatorLeaseId,
+      expectedCoordinatorEpoch: server.server.currentCoordinatorEpoch,
+      leaseDurationMs: PRODUCTION_COORDINATOR_LEASE_DURATION_MS,
+    });
+    let acquired: NonNullable<
+      ReturnType<HostStateDatabase["records"]["reconcileCoordinatorAcquisition"]>
+    >;
+    try {
+      acquired = this.#database.use((current) => current.records.acquireCoordinatorLease(request));
+    } catch (error) {
+      if (!(error instanceof HostStateCommitOutcomeUnknownError)) throw error;
+      this.#database.reopenAfterUnknownCommit();
+      const reconciled = this.#database.use((current) =>
+        current.records.reconcileCoordinatorAcquisition(request),
+      );
+      if (reconciled === null) {
+        throw new RuntimeOwnerProductionRecoveryError("COMMIT_NOT_RECONCILED", { cause: error });
+      }
+      acquired = reconciled;
+    }
+    if (
+      !acquired.isCurrent ||
+      !acquired.unexpired ||
+      acquired.lease.state !== "current" ||
+      acquired.lease.releasedAtMs !== null ||
+      acquired.lease.coordinatorLeaseId !== request.candidateLeaseId ||
+      acquired.lease.coordinatorEpoch !== request.expectedCoordinatorEpoch + 1 ||
+      acquired.lease.ownerInstanceId !== request.ownerInstanceId
+    ) {
+      throw new RuntimeOwnerProductionRecoveryError("RESULT_MISMATCH");
+    }
+    this.#fence = Object.freeze({
+      collaborationServerId: acquired.lease.collaborationServerId,
+      coordinatorLeaseId: acquired.lease.coordinatorLeaseId,
+      coordinatorEpoch: acquired.lease.coordinatorEpoch,
+    });
+    this.#heartbeatDeadlineMs = acquired.lease.heartbeatDeadlineMs;
+    this.#schedule();
+  }
+
+  assertCurrent(): CoordinatorLeaseFence {
+    const now = this.#now();
+    if (
+      this.#lost ||
+      this.#released ||
+      !Number.isSafeInteger(now) ||
+      now < 0 ||
+      now >= this.#heartbeatDeadlineMs
+    ) {
+      throw new RuntimeOwnerProductionRecoveryError("RESULT_MISMATCH");
+    }
+    return this.fence;
+  }
+
+  release(): void {
+    if (this.#released) return;
+    this.#stopTimer();
+    if (this.#lost || this.#fence === undefined) {
+      this.#released = true;
+      return;
+    }
+    const fence = this.#fence;
+    try {
+      this.#database.use((current) => current.records.releaseCoordinatorLease({ fence }));
+    } catch (error) {
+      if (!(error instanceof HostStateCommitOutcomeUnknownError)) {
+        this.#lose();
+        throw error;
+      }
+      this.#database.reopenAfterUnknownCommit();
+      const reconciled = this.#database.use((current) =>
+        current.records.reconcileCoordinatorRelease(
+          fence.collaborationServerId,
+          fence.coordinatorLeaseId,
+        ),
+      );
+      if (reconciled?.status !== "released") {
+        this.#lose();
+        throw new RuntimeOwnerProductionRecoveryError("COMMIT_NOT_RECONCILED", { cause: error });
+      }
+    }
+    this.#released = true;
+  }
+
+  closeFallback(): void {
+    this.#stopTimer();
+    if (this.#released || this.#lost || this.#fence === undefined) return;
+    const fence = this.#fence;
+    const server = this.#database.use((current) =>
+      current.records.readDefaultCollaborationServer(),
+    );
+    const lease = this.#database.use((current) =>
+      current.records.readCoordinatorLease(fence.collaborationServerId, fence.coordinatorLeaseId),
+    );
+    if (
+      server?.server.currentCoordinatorLeaseId !== fence.coordinatorLeaseId ||
+      server.server.currentCoordinatorEpoch !== fence.coordinatorEpoch ||
+      lease?.state !== "current" ||
+      lease.releasedAtMs !== null
+    ) {
+      this.#lost = true;
+      return;
+    }
+    this.release();
+  }
+
+  #schedule(): void {
+    this.#stopTimer();
+    this.#timer = setTimeout(() => this.#heartbeat(), PRODUCTION_COORDINATOR_HEARTBEAT_INTERVAL_MS);
+    this.#timer.unref();
+  }
+
+  #heartbeat(): void {
+    this.#timer = undefined;
+    if (this.#released || this.#lost) return;
+    const fence = this.fence;
+    const now = this.#now();
+    if (!Number.isSafeInteger(now) || now < 0) {
+      this.#lose();
+      return;
+    }
+    const newHeartbeatDeadlineMs = checkedAdd(now, PRODUCTION_COORDINATOR_LEASE_DURATION_MS);
+    const request = Object.freeze({
+      fence,
+      expectedHeartbeatDeadlineMs: this.#heartbeatDeadlineMs,
+      newHeartbeatDeadlineMs,
+    });
+    try {
+      let renewed: ReturnType<HostStateDatabase["records"]["renewCoordinatorLease"]>;
+      try {
+        renewed = this.#database.use((current) => current.records.renewCoordinatorLease(request));
+      } catch (error) {
+        if (!(error instanceof HostStateCommitOutcomeUnknownError)) throw error;
+        this.#database.reopenAfterUnknownCommit();
+        const reconciled = this.#database.use((current) =>
+          current.records.reconcileCoordinatorRenewal({
+            collaborationServerId: fence.collaborationServerId,
+            coordinatorLeaseId: fence.coordinatorLeaseId,
+            expectedHeartbeatDeadlineMs: request.expectedHeartbeatDeadlineMs,
+            newHeartbeatDeadlineMs,
+          }),
+        );
+        if (reconciled?.status !== "applied") {
+          throw new RuntimeOwnerProductionRecoveryError("COMMIT_NOT_RECONCILED", { cause: error });
+        }
+        renewed = Object.freeze({ lease: reconciled.lease, replayed: true });
+      }
+      if (
+        renewed.lease.coordinatorLeaseId !== fence.coordinatorLeaseId ||
+        renewed.lease.coordinatorEpoch !== fence.coordinatorEpoch ||
+        renewed.lease.heartbeatDeadlineMs !== newHeartbeatDeadlineMs ||
+        renewed.lease.state !== "current"
+      ) {
+        throw new RuntimeOwnerProductionRecoveryError("RESULT_MISMATCH");
+      }
+      this.#heartbeatDeadlineMs = newHeartbeatDeadlineMs;
+      this.#schedule();
+    } catch {
+      this.#lose();
+    }
+  }
+
+  #lose(): void {
+    if (this.#lost) return;
+    this.#lost = true;
+    this.#stopTimer();
+    this.#onLost?.();
+  }
+
+  #stopTimer(): void {
+    if (this.#timer !== undefined) clearTimeout(this.#timer);
+    this.#timer = undefined;
+  }
 }
 
 function checkedAdd(left: number, right: number): number {
@@ -404,7 +695,7 @@ class ProductionRuntimeOwnerLeaseController
   acquireOrReconcile(
     database: ProductionRuntimeOwnerDatabase,
     request: RuntimeOwnerLeaseAcquireRequest,
-  ): RuntimeOwnerLease {
+  ): RuntimeOwnerLease | Promise<RuntimeOwnerLease> {
     const machineIdentityId = parseMachineIdentityId(request.machineIdentityId);
     if (machineIdentityId !== database.machineIdentityId) {
       throw new RuntimeOwnerProductionRecoveryError("RESULT_MISMATCH");
@@ -449,7 +740,7 @@ class ProductionRuntimeOwnerLeaseController
   heartbeatOrReconcile(
     database: ProductionRuntimeOwnerDatabase,
     request: RuntimeOwnerLeaseHeartbeatRequest,
-  ): RuntimeOwnerLease {
+  ): RuntimeOwnerLease | Promise<RuntimeOwnerLease> {
     const machineIdentityId = parseMachineIdentityId(request.machineIdentityId);
     if (machineIdentityId !== database.machineIdentityId) {
       throw new RuntimeOwnerProductionRecoveryError("RESULT_MISMATCH");
@@ -533,6 +824,44 @@ function createProductionRuntimeOwnerLeaseController(
   return new ProductionRuntimeOwnerLeaseController(options.now ?? Date.now);
 }
 
+class RegistrationAwareRuntimeOwnerLeaseController
+  implements RuntimeOwnerLeaseController<ProductionRuntimeOwnerDatabase>
+{
+  readonly #delegate: RuntimeOwnerLeaseController<ProductionRuntimeOwnerDatabase>;
+  readonly #coordinator: ProductionNativeRegistrationCoordinator;
+
+  constructor(
+    delegate: RuntimeOwnerLeaseController<ProductionRuntimeOwnerDatabase>,
+    coordinator: ProductionNativeRegistrationCoordinator,
+  ) {
+    this.#delegate = delegate;
+    this.#coordinator = coordinator;
+  }
+
+  acquireOrReconcile(
+    database: ProductionRuntimeOwnerDatabase,
+    request: RuntimeOwnerLeaseAcquireRequest,
+  ): RuntimeOwnerLease | Promise<RuntimeOwnerLease> {
+    return this.#delegate.acquireOrReconcile(database, request);
+  }
+
+  heartbeatOrReconcile(
+    database: ProductionRuntimeOwnerDatabase,
+    request: RuntimeOwnerLeaseHeartbeatRequest,
+  ): RuntimeOwnerLease | Promise<RuntimeOwnerLease> {
+    this.#coordinator.assertCurrent();
+    return this.#delegate.heartbeatOrReconcile(database, request);
+  }
+
+  releaseOrReconcile(
+    database: ProductionRuntimeOwnerDatabase,
+    request: RuntimeOwnerLeaseReleaseRequest,
+  ): void | Promise<void> {
+    this.#coordinator.release();
+    return this.#delegate.releaseOrReconcile(database, request);
+  }
+}
+
 class ProductionRuntimeOwnerKeyCustodyValidator
   implements RuntimeOwnerKeyCustodyValidator<ProductionRuntimeOwnerDatabase>
 {
@@ -596,6 +925,8 @@ function createProductionRuntimeOwnerKeyCustodyValidator(): RuntimeOwnerKeyCusto
 export interface StartProductionRuntimeOwnerDaemonOptions {
   readonly machineIdentityId: string;
   readonly identitySecret: Uint8Array;
+  /** Trusted development/profile seam. Omit to keep the production registration surface dormant. */
+  readonly registrationAdapter?: NativeRegistrationAdapter;
 }
 
 export async function startProductionRuntimeOwnerDaemon(
@@ -604,15 +935,64 @@ export async function startProductionRuntimeOwnerDaemon(
   const secret = Uint8Array.from(options.identitySecret);
   try {
     await assertSecretMatchesMachineIdentity(options.machineIdentityId, secret);
-    return await startRuntimeOwnerDaemon({
+    const machineIdentityId = parseMachineIdentityId(options.machineIdentityId);
+    if (options.registrationAdapter === undefined) {
+      return await startRuntimeOwnerDaemon({
+        service: {
+          machineIdentityId,
+          identitySecret: secret,
+          databaseFactory: createProductionRuntimeOwnerDatabaseFactory(),
+          leaseController: createProductionRuntimeOwnerLeaseController(),
+          keyCustodyValidator: createProductionRuntimeOwnerKeyCustodyValidator(),
+        },
+      });
+    }
+    const access = new DeferredNativeRegistrationDatabaseAccess();
+    const coordinator = new ProductionNativeRegistrationCoordinator(access);
+    const orchestrator: NativeRegistrationOrchestrator = createNativeRegistrationOrchestrator({
+      database: access,
+      coordinator,
+      adapter: options.registrationAdapter,
+    });
+    const databaseFactory: HostStateDatabaseFactory<ProductionRuntimeOwnerDatabase> = Object.freeze(
+      {
+        open: (identity: string) => {
+          const database = new ProductionRuntimeOwnerDatabase(identity);
+          access.bind(database);
+          database.setBeforeClose(() => coordinator.closeFallback());
+          try {
+            coordinator.acquire();
+            return database;
+          } catch (error) {
+            try {
+              database.close();
+            } catch {
+              // Preserve the coordinator acquisition failure.
+            }
+            throw error;
+          }
+        },
+      },
+    );
+    const leaseController = new RegistrationAwareRuntimeOwnerLeaseController(
+      createProductionRuntimeOwnerLeaseController(),
+      coordinator,
+    );
+    const daemon = await startRuntimeOwnerDaemon({
       service: {
-        machineIdentityId: parseMachineIdentityId(options.machineIdentityId),
+        machineIdentityId,
         identitySecret: secret,
-        databaseFactory: createProductionRuntimeOwnerDatabaseFactory(),
-        leaseController: createProductionRuntimeOwnerLeaseController(),
+        databaseFactory,
+        leaseController,
         keyCustodyValidator: createProductionRuntimeOwnerKeyCustodyValidator(),
+        operations: orchestrator.operations,
+        onCollaboratorDetach: orchestrator.onCollaboratorDetach,
       },
     });
+    coordinator.setOnLost(() => {
+      void daemon.stop().catch(() => undefined);
+    });
+    return daemon;
   } finally {
     secret.fill(0);
   }

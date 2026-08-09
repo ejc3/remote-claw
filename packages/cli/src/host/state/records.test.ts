@@ -21,6 +21,8 @@ import {
   parseNativeConversationLeaseRecord,
   parseNativeEngineDescriptor,
   parseNativeRegistrationIntentRecord,
+  parseNativeRegistrationOperationRecord,
+  parseNativeRegistrationPublicationRecord,
   parseProjectRecord,
   parseProjectTarget,
   parseProjectTargetSelectorMappingRecord,
@@ -55,7 +57,14 @@ const nativeConversationLeaseId = parseA1CanonicalId(
   "nativeConversationLease",
   `rcncl_${encoded(16, 8)}`,
 );
+const successorNativeConversationLeaseId = parseA1CanonicalId(
+  "nativeConversationLease",
+  `rcncl_${encoded(16, 18)}`,
+);
+const nativeRuntimeId = parseA1CanonicalId("nativeRuntime", `rcrt_${encoded(32, 19)}`);
 const protectedPortHandleId = parseA1CanonicalId("protectedHandle", `rcph_${encoded(16, 9)}`);
+const metadataHandleId = parseA1CanonicalId("protectedHandle", `rcph_${encoded(16, 20)}`);
+const capabilitiesHandleId = parseA1CanonicalId("protectedHandle", `rcph_${encoded(16, 21)}`);
 const alternateProjectTargetSelectorMappingId = parseA1CanonicalId(
   "projectTargetSelectorMapping",
   `ptm_${encoded(32, 10)}`,
@@ -449,27 +458,174 @@ describe("selected A1 durable host records", () => {
     const active = {
       nativeConversationLeaseId,
       collaborationServerId,
+      logicalChatId,
       nativeBindingId,
       registrationAttemptId,
+      runtimeId: nativeRuntimeId,
+      nativeIncarnation: 1,
+      nativeBindingIncarnationId: parseA1SafeId("binding-incarnation-1"),
+      attachmentLeaseId: parseA1SafeId("attachment-lease-1"),
+      runtimeOwnerServiceLeaseId: parseA1SafeId("runtime-owner-lease-1"),
+      runtimeOwnerServiceEpoch: 1,
       coordinatorLeaseId,
       coordinatorEpoch: 1,
       protectedPortHandleId,
+      leaseGeneration: 1,
+      supersedesNativeConversationLeaseId: null,
+      currentPublicationId: parseA1SafeId("registration-publication-1"),
+      nextOperationSequence: 5,
       acquiredAtMs: 300,
+      updatedAtMs: 325,
       closedAtMs: null,
       state: "ready",
-    };
-    const closed = { ...active, closedAtMs: 350, state: "closed" };
+    } as const;
+    const closed = { ...active, updatedAtMs: 350, closedAtMs: 350, state: "closed" } as const;
 
     expect(parseNativeConversationLeaseRecord(active)).toEqual(active);
     expect(parseNativeConversationLeaseRecord(closed)).toEqual(closed);
     expect(() => parseNativeConversationLeaseRecord({ ...active, closedAtMs: 350 })).toThrow(
       /exactly when the lease is closed/,
     );
-    expect(() => parseNativeConversationLeaseRecord({ ...closed, closedAtMs: 299 })).toThrow(
-      /must not precede acquisition/,
+    expect(() => parseNativeConversationLeaseRecord({ ...closed, closedAtMs: 349 })).toThrow(
+      /must equal the final update time/,
     );
     expect(() => parseNativeConversationLeaseRecord({ ...active, coordinatorEpoch: 0 })).toThrow(
       /greater than zero/,
+    );
+    expect(() =>
+      parseNativeConversationLeaseRecord({ ...active, runtimeOwnerServiceEpoch: 0 }),
+    ).toThrow(/greater than zero/);
+    expect(() =>
+      parseNativeConversationLeaseRecord({ ...active, attachmentLeaseId: null }),
+    ).toThrow(/must either both be null or both be present/);
+    expect(() =>
+      parseNativeConversationLeaseRecord({
+        ...active,
+        nativeBindingIncarnationId: null,
+        attachmentLeaseId: null,
+        state: "recovering",
+      }),
+    ).toThrow(/currentPublicationId.*requires/);
+    expect(() =>
+      parseNativeConversationLeaseRecord({
+        ...active,
+        nativeBindingIncarnationId: null,
+        attachmentLeaseId: null,
+        currentPublicationId: null,
+      }),
+    ).toThrow(/ready.*requires/);
+    expect(() =>
+      parseNativeConversationLeaseRecord({
+        ...active,
+        leaseGeneration: 2,
+        supersedesNativeConversationLeaseId: null,
+      }),
+    ).toThrow(/must be null exactly at lease generation one/);
+    const successor = {
+      ...active,
+      nativeConversationLeaseId: successorNativeConversationLeaseId,
+      protectedPortHandleId: capabilitiesHandleId,
+      leaseGeneration: 2,
+      supersedesNativeConversationLeaseId: nativeConversationLeaseId,
+    } as const;
+    expect(parseNativeConversationLeaseRecord(successor)).toEqual(successor);
+    expect(() =>
+      parseNativeConversationLeaseRecord({
+        ...successor,
+        supersedesNativeConversationLeaseId: successorNativeConversationLeaseId,
+      }),
+    ).toThrow(/must not reference the lease itself/);
+  });
+
+  it("parses exact immutable native registration publications", () => {
+    const publication = {
+      nativeRegistrationPublicationId: parseA1SafeId("registration-publication-1"),
+      nativeConversationLeaseId,
+      nativeBindingId,
+      runtimeId: nativeRuntimeId,
+      nativeIncarnation: 1,
+      nativeBindingIncarnationId: parseA1SafeId("binding-incarnation-1"),
+      attachmentLeaseId: parseA1SafeId("attachment-lease-1"),
+      publicationGeneration: 1,
+      metadataSchemaId: "remote-claw/native-registration-metadata-evidence/v1",
+      metadataRef: metadataHandleId,
+      metadataDigest: digest(22),
+      capabilitiesSchemaId: "remote-claw/native-conversation-capabilities/v1",
+      capabilitiesRef: capabilitiesHandleId,
+      capabilitiesDigest: digest(23),
+      publishedAtMs: 330,
+      state: "current",
+    } as const;
+
+    expect(parseNativeRegistrationPublicationRecord(publication)).toEqual(publication);
+    expect(() =>
+      parseNativeRegistrationPublicationRecord({
+        ...publication,
+        capabilitiesSchemaId: "remote-claw/native-conversation-capabilities/v2",
+      }),
+    ).toThrow(/capabilitiesSchemaId/);
+    expect(() =>
+      parseNativeRegistrationPublicationRecord({
+        ...publication,
+        metadataRef: parseA1SafeId("not-a-protected-handle"),
+      }),
+    ).toThrow(/metadataRef/);
+    expect(() =>
+      parseNativeRegistrationPublicationRecord({ ...publication, publicationGeneration: 0 }),
+    ).toThrow(/greater than zero/);
+    expect(() =>
+      parseNativeRegistrationPublicationRecord({ ...publication, unexpected: true }),
+    ).toThrow(/exactly the selected fields/);
+  });
+
+  it("parses an exact immutable native registration operation ledger", () => {
+    const operation = {
+      operationId: parseA1SafeId("registration-operation-1"),
+      operationSequence: 1,
+      kind: "open",
+      operationSchemaId: "remote-claw/native-registration-open/v1",
+      operationDigest: digest(24),
+      nativeConversationLeaseId,
+      nativeBindingId,
+      runtimeOwnerServiceLeaseId: parseA1SafeId("runtime-owner-lease-1"),
+      runtimeOwnerServiceEpoch: 1,
+      coordinatorLeaseId,
+      coordinatorEpoch: 1,
+      committedAtMs: 300,
+    } as const;
+
+    expect(parseNativeRegistrationOperationRecord(operation)).toEqual(operation);
+    for (const kind of [
+      "open",
+      "bind",
+      "publish",
+      "ready",
+      "recover",
+      "drain",
+      "close",
+      "reattach",
+    ] as const) {
+      expect(parseNativeRegistrationOperationRecord({ ...operation, kind })).toMatchObject({
+        kind,
+      });
+    }
+    expect(() =>
+      parseNativeRegistrationOperationRecord({ ...operation, kind: "dispatch" }),
+    ).toThrow(/kind/);
+    expect(() =>
+      parseNativeRegistrationOperationRecord({ ...operation, operationId: "contains space" }),
+    ).toThrow(/operationId/);
+    expect(() =>
+      parseNativeRegistrationOperationRecord({ ...operation, operationSequence: 0 }),
+    ).toThrow(/greater than zero/);
+    expect(() =>
+      parseNativeRegistrationOperationRecord({ ...operation, runtimeOwnerServiceEpoch: 0 }),
+    ).toThrow(/greater than zero/);
+    expect(() =>
+      parseNativeRegistrationOperationRecord({ ...operation, operationDigest: "not-a-digest" }),
+    ).toThrow(/operationDigest/);
+    expect(() => parseNativeRegistrationOperationRecord(Object.create({ ...operation }))).toThrow(
+      /plain object/,
     );
   });
 

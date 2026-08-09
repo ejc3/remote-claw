@@ -9,8 +9,25 @@ const PACKAGE_JSON = fileURLToPath(new URL("../../../package.json", import.meta.
 const PACKAGE_ROOT = dirname(PACKAGE_JSON);
 const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
   [
+    resolve(SOURCE_ROOT, "host/native/evidence.ts"),
+    new Set([
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "protected"),
+      resolve(STATE_ROOT, "records"),
+      resolve(STATE_ROOT, "validation"),
+    ]),
+  ],
+  [
     resolve(SOURCE_ROOT, "host/runtime-owner/key-custody.ts"),
     new Set([resolve(STATE_ROOT, "ids"), resolve(STATE_ROOT, "protected")]),
+  ],
+  [
+    resolve(SOURCE_ROOT, "host/runtime-owner/port-registry.ts"),
+    new Set([
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "protected"),
+      resolve(STATE_ROOT, "validation"),
+    ]),
   ],
   [
     resolve(SOURCE_ROOT, "host/runtime-owner/production.ts"),
@@ -18,6 +35,25 @@ const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
       resolve(STATE_ROOT, "ids"),
       resolve(STATE_ROOT, "runtime-repository"),
       resolve(STATE_ROOT, "sqlite"),
+    ]),
+  ],
+  [
+    resolve(SOURCE_ROOT, "host/runtime-owner/registration-service.ts"),
+    new Set([
+      resolve(STATE_ROOT, "digests"),
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "protected"),
+      resolve(STATE_ROOT, "records"),
+      resolve(STATE_ROOT, "runtime-repository"),
+      resolve(STATE_ROOT, "sqlite"),
+    ]),
+  ],
+  [
+    resolve(SOURCE_ROOT, "host/runtime-owner/protocol.ts"),
+    new Set([
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "protected"),
+      resolve(STATE_ROOT, "validation"),
     ]),
   ],
 ]);

@@ -5,8 +5,23 @@ import {
   type RuntimeOwnerKeyCustodySigner,
   type RuntimeOwnerKeyCustodySigningCapability,
 } from "./key-custody.js";
-import type { RuntimeOwnerRpcDispatchRequest, RuntimeOwnerRpcJsonValue } from "./protocol.js";
-import { RuntimeOwnerRpcError } from "./protocol.js";
+import type {
+  RuntimeOwnerCallablePortEntry,
+  RuntimeOwnerCallablePortRegistration,
+} from "./port-registry.js";
+import type {
+  RuntimeOwnerRpcCallablePortRef,
+  RuntimeOwnerRpcDispatchRequest,
+  RuntimeOwnerRpcJsonValue,
+  RuntimeOwnerRpcOwnerFence,
+  RuntimeOwnerRpcPortInvocation,
+  RuntimeOwnerRpcPortResult,
+} from "./protocol.js";
+import {
+  parseRuntimeOwnerRpcCallablePortRef,
+  parseRuntimeOwnerRpcOwnerFence,
+  RuntimeOwnerRpcError,
+} from "./protocol.js";
 import {
   type RuntimeOwnerRpcHandler,
   type RuntimeOwnerRpcRequestContext,
@@ -19,6 +34,19 @@ const OPERATION_NAME = /^[a-z][a-z0-9_.:-]{0,127}$/;
 const DEFAULT_LEASE_DURATION_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000;
 const DEFAULT_OPERATION_DRAIN_TIMEOUT_MS = 10_000;
+
+export const RUNTIME_OWNER_NATIVE_REGISTRATION_OPERATION_NAMES = Object.freeze([
+  "native.registration.open",
+  "native.registration.bind",
+  "native.registration.publish",
+  "native.registration.ready",
+  "native.registration.recover",
+  "native.registration.drain",
+  "native.registration.close",
+  "native.registration.reattach",
+] as const);
+
+const NATIVE_REGISTRATION_OPERATION_PREFIX = "native.registration.";
 
 export const RUNTIME_OWNER_LINUX_PROCESS_START_IDENTITY_SCHEMA_ID =
   "remote-claw/linux-process-start-identity/v1" as const;
@@ -109,12 +137,49 @@ export interface RuntimeOwnerLeaseController<Database extends RuntimeOwnerHostSt
 
 export interface RuntimeOwnerOperationContext {
   readonly lease: RuntimeOwnerLease;
+  /** Identity of the mutually authenticated RPC collaborator that owns this request. */
+  readonly connectionId: string;
   readonly requestId: string;
   readonly signal: AbortSignal;
   readonly custodySigner: RuntimeOwnerKeyCustodySigningCapability;
+  readonly callablePort: RuntimeOwnerCallablePortCapability;
   /** Recheck immediately before handing the exact fence to a repository mutation. */
   assertCurrent(): RuntimeOwnerLease;
 }
+
+export type RuntimeOwnerCallablePortRegistrationRequest = Omit<
+  RuntimeOwnerCallablePortRegistration,
+  "connectionId" | "ownerFence" | "collaborationServerId"
+>;
+
+export type RuntimeOwnerCallablePortInvocationRequest = Omit<
+  RuntimeOwnerRpcPortInvocation,
+  "connectionId" | "ownerFence"
+>;
+
+/**
+ * Request-scoped callable-port authority. The service, not an operation payload, supplies the
+ * authenticated connection and current runtime-owner fence.
+ */
+export interface RuntimeOwnerCallablePortCapability {
+  register(request: RuntimeOwnerCallablePortRegistrationRequest): RuntimeOwnerRpcCallablePortRef;
+  unregister(callablePortRef: RuntimeOwnerRpcCallablePortRef): boolean;
+  invoke(request: RuntimeOwnerCallablePortInvocationRequest): Promise<RuntimeOwnerRpcPortResult>;
+}
+
+export interface RuntimeOwnerCollaboratorDetachContext {
+  readonly lease: RuntimeOwnerLease;
+  readonly connectionId: string;
+  /** Ports dropped from this connection before cleanup begins, with their exact durable tuples. */
+  readonly callablePorts: readonly RuntimeOwnerCallablePortEntry[];
+  readonly signal: AbortSignal;
+  /** Valid during an orderly stop, but never after lease loss or expiry. */
+  assertCurrent(): RuntimeOwnerLease;
+}
+
+export type RuntimeOwnerCollaboratorDetachHandler = (
+  context: RuntimeOwnerCollaboratorDetachContext,
+) => MaybePromise<void>;
 
 export interface RuntimeOwnerOperationDefinition {
   readonly name: string;
@@ -130,6 +195,11 @@ interface ActiveRuntimeOwnerOperation {
   readonly complete: () => void;
 }
 
+interface ActiveCollaboratorDetach {
+  readonly abortController: AbortController;
+  readonly completed: Promise<boolean>;
+}
+
 export interface StartRuntimeOwnerServiceOptions<
   Database extends RuntimeOwnerHostStateDatabase = RuntimeOwnerHostStateDatabase,
 > {
@@ -140,6 +210,7 @@ export interface StartRuntimeOwnerServiceOptions<
   readonly keyCustodyValidator: RuntimeOwnerKeyCustodyValidator<Database>;
   readonly ownerIdentity: RuntimeOwnerProcessStartIdentity;
   readonly operations?: readonly RuntimeOwnerOperationDefinition[];
+  readonly onCollaboratorDetach?: RuntimeOwnerCollaboratorDetachHandler;
   readonly leaseDurationMs?: number;
   readonly heartbeatIntervalMs?: number;
   readonly operationDrainTimeoutMs?: number;
@@ -155,6 +226,14 @@ export interface StartRuntimeOwnerServiceOptions<
 
 export interface RuntimeOwnerRpcServerHandle {
   readonly listening: boolean;
+  registerCallablePort(
+    registration: RuntimeOwnerCallablePortRegistration,
+  ): RuntimeOwnerCallablePortEntry;
+  unregisterCallablePort(
+    connectionId: string,
+    callablePortRef: RuntimeOwnerRpcCallablePortRef,
+  ): boolean;
+  invokeCallablePort(invocation: RuntimeOwnerRpcPortInvocation): Promise<RuntimeOwnerRpcPortResult>;
   close(): Promise<void>;
 }
 
@@ -285,6 +364,26 @@ function operationMap(
   return result;
 }
 
+function hasExactNativeRegistrationOperations(
+  operations: ReadonlyMap<string, RuntimeOwnerOperationDefinition["execute"]>,
+): boolean {
+  const installed = [...operations.keys()].filter((name) =>
+    name.startsWith(NATIVE_REGISTRATION_OPERATION_PREFIX),
+  );
+  return (
+    installed.length === RUNTIME_OWNER_NATIVE_REGISTRATION_OPERATION_NAMES.length &&
+    RUNTIME_OWNER_NATIVE_REGISTRATION_OPERATION_NAMES.every((name) => operations.has(name))
+  );
+}
+
+function hasAnyNativeRegistrationOperation(
+  operations: ReadonlyMap<string, RuntimeOwnerOperationDefinition["execute"]>,
+): boolean {
+  return [...operations.keys()].some((name) =>
+    name.startsWith(NATIVE_REGISTRATION_OPERATION_PREFIX),
+  );
+}
+
 function randomSafeId(prefix: string): string {
   return `${prefix}${base64urlEncode(randomBytes(16))}`;
 }
@@ -343,6 +442,7 @@ function signingCapability(
     typeof signer !== "object" ||
     signer === null ||
     signer.closed ||
+    typeof signer.generateIdentityKey !== "function" ||
     typeof signer.sign !== "function" ||
     typeof signer.assertUsable !== "function" ||
     typeof signer.close !== "function"
@@ -350,6 +450,8 @@ function signingCapability(
     throw new RuntimeOwnerServiceLifecycleError("UNAVAILABLE");
   }
   const capability: RuntimeOwnerKeyCustodySigningCapability = {
+    generateIdentityKey: (runtimeId, keyGeneration) =>
+      signer.generateIdentityKey(runtimeId, keyGeneration),
     sign: (envelope, payload) => signer.sign(envelope, payload),
     assertUsable: (envelope) => signer.assertUsable(envelope),
   };
@@ -364,6 +466,8 @@ export class RuntimeOwnerService<
   readonly #database: Database;
   readonly #leaseController: RuntimeOwnerLeaseController<Database>;
   readonly #operations: ReadonlyMap<string, RuntimeOwnerOperationDefinition["execute"]>;
+  readonly #nativeRegistrationEnabled: boolean;
+  readonly #onCollaboratorDetach: RuntimeOwnerCollaboratorDetachHandler | undefined;
   readonly #leaseDurationMs: number;
   readonly #heartbeatIntervalMs: number;
   readonly #operationDrainTimeoutMs: number;
@@ -371,6 +475,11 @@ export class RuntimeOwnerService<
   readonly #custodySigningCapability: RuntimeOwnerKeyCustodySigningCapability;
   readonly #now: () => number;
   readonly #activeOperations = new Set<ActiveRuntimeOwnerOperation>();
+  readonly #activeCollaboratorDetaches = new Set<ActiveCollaboratorDetach>();
+  readonly #callablePortsByConnection = new Map<
+    string,
+    Map<string, RuntimeOwnerCallablePortEntry>
+  >();
   #lease: RuntimeOwnerLease;
   #rpcServer: RuntimeOwnerRpcServerHandle | undefined;
   #heartbeatTimer: NodeJS.Timeout | undefined;
@@ -404,6 +513,10 @@ export class RuntimeOwnerService<
     this.#database = database;
     this.#leaseController = options.leaseController;
     this.#operations = operations;
+    this.#nativeRegistrationEnabled =
+      hasExactNativeRegistrationOperations(operations) &&
+      options.onCollaboratorDetach !== undefined;
+    this.#onCollaboratorDetach = options.onCollaboratorDetach;
     this.#custodySigner = custodySigner;
     this.#custodySigningCapability = custodySigningCapability;
     this.#lease = lease;
@@ -440,6 +553,22 @@ export class RuntimeOwnerService<
       300_000,
     );
     const operations = operationMap(options.operations);
+    if (
+      options.onCollaboratorDetach !== undefined &&
+      typeof options.onCollaboratorDetach !== "function"
+    ) {
+      throw new RuntimeOwnerServiceLifecycleError("INVALID_CONFIGURATION");
+    }
+    if (
+      hasAnyNativeRegistrationOperation(operations) &&
+      (!hasExactNativeRegistrationOperations(operations) ||
+        options.onCollaboratorDetach === undefined)
+    ) {
+      // The reserved namespace is all-or-nothing. A partial or extended lifecycle is still
+      // dispatchable even when health reports false, while a missing detach reconciler would leave
+      // a durable ready lease behind when its authenticated callable-port connection disappears.
+      throw new RuntimeOwnerServiceLifecycleError("INVALID_CONFIGURATION");
+    }
     if (!(options.identitySecret instanceof Uint8Array) || options.identitySecret.length !== 32) {
       throw new RuntimeOwnerServiceLifecycleError("INVALID_CONFIGURATION");
     }
@@ -509,7 +638,13 @@ export class RuntimeOwnerService<
       };
       const startRpcServer = options.startRpcServer ?? startRuntimeOwnerRpcServer;
       service.#rpcServer = await startRpcServer(rpcOptions);
-      if (!service.#rpcServer.listening) {
+      if (
+        !service.#rpcServer.listening ||
+        typeof service.#rpcServer.close !== "function" ||
+        typeof service.#rpcServer.registerCallablePort !== "function" ||
+        typeof service.#rpcServer.unregisterCallablePort !== "function" ||
+        typeof service.#rpcServer.invokeCallablePort !== "function"
+      ) {
         throw new RuntimeOwnerServiceLifecycleError("UNAVAILABLE");
       }
       // Arm lease expiry before making the handler writable. Authenticated clients that race the
@@ -578,9 +713,7 @@ export class RuntimeOwnerService<
     return {
       health: async (context) => this.#health(context),
       dispatch: async (request, context) => this.#dispatch(request, context),
-      detach: () => {
-        // Losing an RPC collaborator never terminates a runtime or releases the service lease.
-      },
+      detach: (context) => this.#detachCollaborator(context.connectionId),
     };
   }
 
@@ -593,7 +726,7 @@ export class RuntimeOwnerService<
       runtimeOwnerServiceEpoch: lease.runtimeOwnerServiceEpoch,
       heartbeatDeadlineMs: lease.heartbeatDeadlineMs,
       ownerOperationsWritable: this.#operations.size > 0,
-      nativeRegistrationEnabled: false,
+      nativeRegistrationEnabled: this.#nativeRegistrationEnabled,
     };
   }
 
@@ -619,12 +752,24 @@ export class RuntimeOwnerService<
     if (rpcContext.signal.aborted) abort();
     else rpcContext.signal.addEventListener("abort", abort, { once: true });
     this.#activeOperations.add(activeOperation);
+    const assertOperationCurrent = (): RuntimeOwnerLease => {
+      if (!this.#activeOperations.has(activeOperation) || abortController.signal.aborted) {
+        throw new RuntimeOwnerServiceLifecycleError("LEASE_LOST");
+      }
+      return this.#assertExactCurrent(lease);
+    };
     const context: RuntimeOwnerOperationContext = Object.freeze({
       lease,
+      connectionId: rpcContext.connectionId,
       requestId: rpcContext.requestId,
       signal: abortController.signal,
       custodySigner: this.#custodySigningCapability,
-      assertCurrent: () => this.#assertExactCurrent(lease),
+      callablePort: this.#callablePortCapability(
+        lease,
+        rpcContext.connectionId,
+        assertOperationCurrent,
+      ),
+      assertCurrent: assertOperationCurrent,
     });
     try {
       return await execute(request.payload, context);
@@ -633,6 +778,128 @@ export class RuntimeOwnerService<
       this.#activeOperations.delete(activeOperation);
       activeOperation.complete();
     }
+  }
+
+  #callablePortCapability(
+    lease: RuntimeOwnerLease,
+    connectionId: string,
+    assertOperationCurrent: () => RuntimeOwnerLease,
+  ): RuntimeOwnerCallablePortCapability {
+    const ownerFence: RuntimeOwnerRpcOwnerFence = parseRuntimeOwnerRpcOwnerFence({
+      runtimeOwnerServiceLeaseId: lease.runtimeOwnerServiceLeaseId,
+      runtimeOwnerServiceEpoch: lease.runtimeOwnerServiceEpoch,
+      ownerInstanceId: lease.ownerInstanceId,
+      ownerProcessStartIdentitySchemaId: lease.ownerStartIdentitySchemaId,
+      ownerProcessStartIdentityRef: lease.ownerStartIdentityRef,
+      ownerProcessStartIdentityDigest: lease.ownerStartIdentityDigest,
+    });
+    const rpcServer = (): RuntimeOwnerRpcServerHandle => {
+      assertOperationCurrent();
+      const server = this.#rpcServer;
+      if (server === undefined || !server.listening) {
+        throw new RuntimeOwnerServiceLifecycleError("LEASE_LOST");
+      }
+      return server;
+    };
+    return Object.freeze({
+      register: (
+        request: RuntimeOwnerCallablePortRegistrationRequest,
+      ): RuntimeOwnerRpcCallablePortRef => {
+        const coordinatorFence = request.coordinatorFence;
+        const entry = rpcServer().registerCallablePort({
+          connectionId,
+          collaborationServerId: coordinatorFence.collaborationServerId,
+          nativeBindingId: request.nativeBindingId,
+          runtimeId: request.runtimeId,
+          nativeIncarnation: request.nativeIncarnation,
+          attachmentLeaseId: request.attachmentLeaseId,
+          ownerFence,
+          coordinatorFence,
+          portGeneration: request.portGeneration,
+        });
+        const connectionPorts = this.#callablePortsByConnection.get(connectionId) ?? new Map();
+        connectionPorts.set(entry.callablePortRef.protectedHandleId, entry);
+        this.#callablePortsByConnection.set(connectionId, connectionPorts);
+        return entry.callablePortRef;
+      },
+      unregister: (callablePortRef: RuntimeOwnerRpcCallablePortRef): boolean => {
+        const parsedRef = parseRuntimeOwnerRpcCallablePortRef(callablePortRef);
+        const removed = rpcServer().unregisterCallablePort(connectionId, parsedRef);
+        if (removed) {
+          const connectionPorts = this.#callablePortsByConnection.get(connectionId);
+          connectionPorts?.delete(parsedRef.protectedHandleId);
+          if (connectionPorts?.size === 0) this.#callablePortsByConnection.delete(connectionId);
+        }
+        return removed;
+      },
+      invoke: (
+        request: RuntimeOwnerCallablePortInvocationRequest,
+      ): Promise<RuntimeOwnerRpcPortResult> =>
+        rpcServer().invokeCallablePort({
+          connectionId,
+          ownerFence,
+          nativeIncarnation: request.nativeIncarnation,
+          attachmentLeaseId: request.attachmentLeaseId,
+          portGeneration: request.portGeneration,
+          request: request.request,
+        }),
+    });
+  }
+
+  #detachCollaborator(connectionId: string): void {
+    const callablePorts = Object.freeze([
+      ...(this.#callablePortsByConnection.get(connectionId)?.values() ?? []),
+    ]);
+    this.#callablePortsByConnection.delete(connectionId);
+    const detach = this.#onCollaboratorDetach;
+    if (detach === undefined) return;
+    let lease: RuntimeOwnerLease;
+    try {
+      lease = this.#assertDetachCurrent();
+    } catch {
+      return;
+    }
+    const abortController = new AbortController();
+    let contextActive = true;
+    const assertCurrent = (): RuntimeOwnerLease => {
+      if (!contextActive || abortController.signal.aborted) {
+        throw new RuntimeOwnerServiceLifecycleError("LEASE_LOST");
+      }
+      return this.#assertExactDetachCurrent(lease);
+    };
+    const invoked = Promise.resolve().then(() =>
+      detach(
+        Object.freeze({
+          lease,
+          connectionId,
+          callablePorts,
+          signal: abortController.signal,
+          assertCurrent,
+        }),
+      ),
+    );
+    const observed = invoked.then(
+      () => true,
+      () => false,
+    );
+    let timeout: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<false>((resolve) => {
+      timeout = setTimeout(() => {
+        abortController.abort(new RuntimeOwnerServiceLifecycleError("SHUTDOWN_FAILED"));
+        resolve(false);
+      }, this.#operationDrainTimeoutMs);
+      timeout.unref();
+    });
+    const completed = Promise.race([observed, timedOut]).finally(() => {
+      contextActive = false;
+      if (timeout !== undefined) clearTimeout(timeout);
+    });
+    const active: ActiveCollaboratorDetach = Object.freeze({ abortController, completed });
+    this.#activeCollaboratorDetaches.add(active);
+    void completed.then((success) => {
+      this.#activeCollaboratorDetaches.delete(active);
+      if (!success) this.#beginPoison();
+    });
   }
 
   #assertCurrent(): RuntimeOwnerLease {
@@ -663,6 +930,35 @@ export class RuntimeOwnerService<
 
   #assertExactCurrent(expected: RuntimeOwnerLease): RuntimeOwnerLease {
     const current = this.#assertCurrent();
+    if (
+      current.runtimeOwnerServiceLeaseId !== expected.runtimeOwnerServiceLeaseId ||
+      current.runtimeOwnerServiceEpoch !== expected.runtimeOwnerServiceEpoch
+    ) {
+      throw new RuntimeOwnerServiceLifecycleError("LEASE_LOST");
+    }
+    return current;
+  }
+
+  #assertDetachCurrent(): RuntimeOwnerLease {
+    if ((this.#state !== "running" && this.#state !== "stopping") || this.#leaseLost) {
+      throw new RuntimeOwnerServiceLifecycleError("LEASE_LOST");
+    }
+    let currentTime: number;
+    try {
+      currentTime = nowMs(this.#now);
+    } catch {
+      this.#beginPoison();
+      throw new RuntimeOwnerServiceLifecycleError("LEASE_LOST");
+    }
+    if (this.#lease.heartbeatDeadlineMs <= currentTime) {
+      this.#beginPoison();
+      throw new RuntimeOwnerServiceLifecycleError("LEASE_LOST");
+    }
+    return this.#lease;
+  }
+
+  #assertExactDetachCurrent(expected: RuntimeOwnerLease): RuntimeOwnerLease {
+    const current = this.#assertDetachCurrent();
     if (
       current.runtimeOwnerServiceLeaseId !== expected.runtimeOwnerServiceLeaseId ||
       current.runtimeOwnerServiceEpoch !== expected.runtimeOwnerServiceEpoch
@@ -756,6 +1052,9 @@ export class RuntimeOwnerService<
     } catch (error) {
       errors.push(error);
     }
+    // Closing the RPC server synchronously detaches its authenticated connections. Snapshot the
+    // resulting cleanup work only after close so it shares this shutdown's bounded drain.
+    const activeDetaches = [...this.#activeCollaboratorDetaches];
     for (const operation of activeOperations) {
       operation.abortController.abort(new RuntimeOwnerServiceLifecycleError("LEASE_LOST"));
     }
@@ -764,17 +1063,21 @@ export class RuntimeOwnerService<
     } catch (error) {
       errors.push(error);
     }
-    if (activeOperations.length > 0) {
+    if (activeOperations.length > 0 || activeDetaches.length > 0) {
       let drainTimer: NodeJS.Timeout | undefined;
-      const drained = Promise.all(activeOperations.map((operation) => operation.completed)).then(
-        () => true,
-      );
+      const drained = Promise.all([
+        ...activeOperations.map((operation) => operation.completed.then(() => true)),
+        ...activeDetaches.map((detach) => detach.completed),
+      ]).then((results) => results.every(Boolean));
       const timedOut = new Promise<false>((resolve) => {
         drainTimer = setTimeout(() => resolve(false), this.#operationDrainTimeoutMs);
       });
       const operationsDrained = await Promise.race([drained, timedOut]);
       if (drainTimer !== undefined) clearTimeout(drainTimer);
       if (!operationsDrained) {
+        for (const detach of activeDetaches) {
+          detach.abortController.abort(new RuntimeOwnerServiceLifecycleError("SHUTDOWN_FAILED"));
+        }
         errors.push(new RuntimeOwnerServiceLifecycleError("SHUTDOWN_FAILED"));
         this.#leaseLost = true;
       }

@@ -1,10 +1,11 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { CanonicalWriter } from "@remote-claw/clawsec";
+import { VERSION_FIVE_SQLITE_SCHEMA_ENTRIES } from "./migration-v5.js";
 
 /** SQLite application_id for the ASCII tag `RCLW`. */
 export const HOST_STATE_APPLICATION_ID = 0x52434c57;
 
-export const HOST_STATE_SCHEMA_VERSION = 4;
+export const HOST_STATE_SCHEMA_VERSION = 5;
 
 /** Domain for the length-framed, history-chained migration digest below. */
 export const HOST_STATE_MIGRATION_DIGEST_DOMAIN = "remote-claw/host-state/migration-chain/v1";
@@ -4692,6 +4693,10 @@ const VERSION_FOUR_STATEMENTS = Object.freeze([
   INSERT_RUNTIME_OWNER_STATE_SQL,
 ]);
 
+const VERSION_FIVE_STATEMENTS = Object.freeze(
+  VERSION_FIVE_SQLITE_SCHEMA_ENTRIES.map((entry) => entry.sql),
+);
+
 export const HOST_STATE_MIGRATIONS: readonly HostStateMigration[] = Object.freeze([
   Object.freeze({
     version: 1,
@@ -4712,6 +4717,11 @@ export const HOST_STATE_MIGRATIONS: readonly HostStateMigration[] = Object.freez
     version: 4,
     id: "004-runtime-owner-durability",
     statements: VERSION_FOUR_STATEMENTS,
+  }),
+  Object.freeze({
+    version: 5,
+    id: "005-durable-native-registration",
+    statements: VERSION_FIVE_STATEMENTS,
   }),
 ]);
 
@@ -5248,12 +5258,18 @@ const VERSION_FOUR_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[]
   ...VERSION_FOUR_SQLITE_SCHEMA_ENTRIES,
 ]);
 
+const VERSION_FIVE_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[] = Object.freeze([
+  ...VERSION_FOUR_SQLITE_SCHEMA_MANIFEST,
+  ...VERSION_FIVE_SQLITE_SCHEMA_ENTRIES,
+]);
+
 export const HOST_STATE_SQLITE_SCHEMA_MANIFESTS: readonly (readonly HostStateSqliteSchemaEntry[])[] =
   Object.freeze([
     VERSION_ONE_SQLITE_SCHEMA_MANIFEST,
     VERSION_TWO_SQLITE_SCHEMA_MANIFEST,
     VERSION_THREE_SQLITE_SCHEMA_MANIFEST,
     VERSION_FOUR_SQLITE_SCHEMA_MANIFEST,
+    VERSION_FIVE_SQLITE_SCHEMA_MANIFEST,
   ]);
 
 export function expectedHostStateSqliteSchemaManifest(
