@@ -567,8 +567,10 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   asynchronous artifact methods reject inside a transaction callback. It behavior-probes disabled
   double-quoted string literals on every connection and validates an existing database through a
   coherent read-only WAL snapshot before a
-  writable SQLite open, uses FULL migration commits followed by a reader-deferable passive checkpoint
-  and guardian fsync, and types migration outcomes separately from non-retry-safe ordinary commit
+  writable SQLite open, uses FULL migration commits followed by a non-blocking passive checkpoint and
+  unconditional guardian fsync, permits a reader or competing checkpoint to leave checkpoint frames
+  for later without deferring fsync, and types migration
+  outcomes separately from non-retry-safe ordinary commit
   ambiguity. Its public opener exposes neither entropy nor clock injection, and artifact persistence
   failure poisons the live handle instead of masquerading as an unverified artifact. Forbidden async
   callback results poison before late continuation can reuse authority. Close retains guardians until

@@ -1,13 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveHostStatePaths } from "./path.js";
 import { HostStateOpenCleanupError, openHostStateDatabase } from "./sqlite.js";
+import {
+  HOST_STATE_TEST_FILESYSTEM_SUPPORTED,
+  HOST_STATE_TEST_TEMPORARY_DIRECTORY,
+} from "./test-environment.js";
 
 const linuxWithUid = process.platform === "linux" && typeof process.getuid === "function";
-const describeLinux = describe.runIf(linuxWithUid);
+const describeLinux = describe.runIf(linuxWithUid && HOST_STATE_TEST_FILESYSTEM_SUPPORTED);
 const temporaryRoots: string[] = [];
 
 afterEach(() => {
@@ -16,7 +19,9 @@ afterEach(() => {
 
 describeLinux("A1.1 failed-open quarantine", () => {
   it("rejects later opens for a path whose live failed-open connection retained guardians", () => {
-    const root = mkdtempSync(join(tmpdir(), "remote-claw-open-cleanup-"));
+    const root = mkdtempSync(
+      join(HOST_STATE_TEST_TEMPORARY_DIRECTORY, "remote-claw-open-cleanup-"),
+    );
     temporaryRoots.push(root);
     const machineIdentityId = "67".repeat(16);
     const pathEnvironment = {

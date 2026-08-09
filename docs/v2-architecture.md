@@ -95,7 +95,8 @@
 > kernel; it creates no production database, acquires no lease, performs no native effect, advertises
 > no A1 capability, and leaves the bytes and behavior of every previously valid canonical A0 frame
 > unchanged. Existing state is validated as one read-only WAL-aware snapshot before writable SQLite
-> open. FULL migration commits use a reader-deferable passive checkpoint plus guarded fsync. Migration
+> open. FULL migration commits use a non-blocking passive checkpoint plus guarded fsync; a reader or
+> competing checkpoint may defer the checkpoint work. Migration
 > committed/unknown outcomes are retry-open-safe, unlike an unknown ordinary command commit. Generic
 > server/project/chat/binding state begins in A1.2. The exact `rcrt_*` runtime-ID derivation formula and
 > locked vector remain deliberately assigned to the A1.3 runtime owner.

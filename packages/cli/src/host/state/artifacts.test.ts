@@ -282,11 +282,30 @@ describe("protected artifact repository", () => {
       randomBytes: exhaustedRandom,
       nowMs: () => 1,
     });
-    await expect(exhausted.putArtifact(putRequest(Uint8Array.of(8)))).rejects.toThrow(
-      new RegExp(`${MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS} attempts`),
-    );
+    await expect(exhausted.putArtifact(putRequest(Uint8Array.of(8)))).rejects.toMatchObject({
+      name: ProtectedArtifactPersistenceError.name,
+      message: expect.stringMatching(`${MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS} attempts`),
+    });
     expect(exhaustedRandom).toHaveBeenCalledTimes(MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS);
     expect(exhaustedDatabase.rows.size).toBe(1);
+  });
+
+  it("accepts schema IDs and payloads at their exact selected limits", async () => {
+    const database = new FakeArtifactDatabase();
+    const repository = new ProtectedArtifactRepository(database, {
+      randomBytes: sequentialRandom(entropy(15), entropy(16)),
+      nowMs: () => 1,
+    });
+    const schemaAtLimit = "a".repeat(MAX_PROTECTED_ARTIFACT_SCHEMA_ID_UTF8_BYTES);
+    const schemaResult = await repository.putArtifact(
+      putRequest(Uint8Array.of(1), { artifactSchemaId: schemaAtLimit }),
+    );
+    expect(schemaResult.artifactSchemaId).toBe(schemaAtLimit);
+
+    const payloadAtLimit = new Uint8Array(MAX_PROTECTED_ARTIFACT_BYTES);
+    const payloadResult = await repository.putArtifact(putRequest(payloadAtLimit));
+    expect(payloadResult.byteLength).toBe(MAX_PROTECTED_ARTIFACT_BYTES);
+    expect(database.rows.size).toBe(2);
   });
 
   it("uses one non-oracular error for missing or mismatched read claims", async () => {

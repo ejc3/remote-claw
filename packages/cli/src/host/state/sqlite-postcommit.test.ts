@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -20,7 +19,7 @@ vi.mock("./secure-filesystem.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.openSecureHostStateFilesystem>
     ) => {
       const guardian = actual.openSecureHostStateFilesystem(...args);
-      return {
+      const wrapped: SecureHostStateFilesystem = {
         databasePath: guardian.databasePath,
         databaseDescriptorPath: guardian.databaseDescriptorPath,
         databaseWasCreated: guardian.databaseWasCreated,
@@ -37,17 +36,26 @@ vi.mock("./secure-filesystem.js", async (importOriginal) => {
         fsync: () => guardian.fsync(),
         close: () => guardian.close(),
       };
+      return wrapped;
     },
   };
 });
 
 import { parseA1Digest } from "./ids.js";
 import { ProtectedByteSnapshot } from "./protected.js";
+import type { SecureHostStateFilesystem } from "./secure-filesystem.js";
 import { HostStateCommittedStateError, openHostStateDatabase } from "./sqlite.js";
+import {
+  HOST_STATE_TEST_FILESYSTEM_SUPPORTED,
+  HOST_STATE_TEST_TEMPORARY_DIRECTORY,
+} from "./test-environment.js";
 
 const linuxWithUid = process.platform === "linux" && typeof process.getuid === "function";
-const describeLinux = describe.runIf(linuxWithUid);
+const describeLinux = describe.runIf(linuxWithUid && HOST_STATE_TEST_FILESYSTEM_SUPPORTED);
 const temporaryRoots: string[] = [];
+const POST_BEGIN_GUARD_CHECK = 2;
+const POST_COMMIT_GUARD_CHECK = 4;
+const CATCH_PATH_GUARD_CHECK = 5;
 
 afterEach(() => {
   guardianControl.armed = false;
@@ -60,7 +68,7 @@ afterEach(() => {
 
 describeLinux("A1.1 post-commit guardian outcome", () => {
   it("reports committed state distinctly when the canonical path changes after COMMIT", async () => {
-    const root = mkdtempSync(join(tmpdir(), "remote-claw-postcommit-"));
+    const root = mkdtempSync(join(HOST_STATE_TEST_TEMPORARY_DIRECTORY, "remote-claw-postcommit-"));
     temporaryRoots.push(root);
     const identity = "55".repeat(16);
     const database = openHostStateDatabase({
@@ -71,7 +79,7 @@ describeLinux("A1.1 post-commit guardian outcome", () => {
       },
     });
     const movedPath = `${database.databasePath}.committed`;
-    guardianControl.mutateAtAssert = 4;
+    guardianControl.mutateAtAssert = POST_COMMIT_GUARD_CHECK;
     guardianControl.mutation = () => {
       guardianControl.committedWalBytes = statSync(`${database.databasePath}-wal`).size;
       renameSync(database.databasePath, movedPath);
@@ -96,13 +104,13 @@ describeLinux("A1.1 post-commit guardian outcome", () => {
     expect((failure as HostStateCommittedStateError).committed).toBe(true);
     expect(guardianControl.committedWalBytes).toBeGreaterThan(0);
     // The catch path performs one final guard check after the post-COMMIT mutation.
-    expect(guardianControl.assertCalls).toBe(5);
+    expect(guardianControl.assertCalls).toBe(CATCH_PATH_GUARD_CHECK);
     expect(() => database.transaction(() => undefined)).toThrow(/poisoned/);
     expect(() => database.close()).toThrow(/path identity changed/);
   });
 
   it("revalidates guardians after acquiring the writer lock and before the callback", () => {
-    const root = mkdtempSync(join(tmpdir(), "remote-claw-postlock-"));
+    const root = mkdtempSync(join(HOST_STATE_TEST_TEMPORARY_DIRECTORY, "remote-claw-postlock-"));
     temporaryRoots.push(root);
     const database = openHostStateDatabase({
       machineIdentityId: "56".repeat(16),
@@ -113,7 +121,7 @@ describeLinux("A1.1 post-commit guardian outcome", () => {
     });
     const movedPath = `${database.databasePath}.before-callback`;
     let callbackEntered = false;
-    guardianControl.mutateAtAssert = 2;
+    guardianControl.mutateAtAssert = POST_BEGIN_GUARD_CHECK;
     guardianControl.mutation = () => {
       renameSync(database.databasePath, movedPath);
       writeFileSync(database.databasePath, "", { mode: 0o600 });

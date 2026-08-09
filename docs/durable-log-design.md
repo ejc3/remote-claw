@@ -336,9 +336,11 @@ and may change during validation; a safe SHM-only remnant beside an existing dat
 reconstructed, while sidecars without a database are refused.
 
 FULL WAL `COMMIT` is migration durability. Post-commit validation uses a coherent snapshot, then a
-non-blocking `wal_checkpoint(PASSIVE)` and guardian fsync; a reader may defer frame copying without
-turning the committed migration into failure. Typed committed and unknown migration outcomes both
-permit retrying open. Ordinary writes perform no mandatory checkpoint or extra fsync: a post-commit
+non-blocking `wal_checkpoint(PASSIVE)` and guardian fsync; a reader may defer frame copying and a
+competing checkpoint may return exactly `busy=1`, `log=-1`, `checkpointed=-1` without turning the
+committed migration into failure. Every other inconsistent result fails closed. Typed committed and
+unknown migration outcomes both permit retrying open. Ordinary writes perform no mandatory checkpoint
+or extra fsync: a post-commit
 guardian failure reports committed state, while an unknown ordinary `COMMIT` is not retry-safe; both
 poison the handle. Migration and ordinary writers revalidate guardians immediately after acquiring
 `BEGIN IMMEDIATE` and before migration SQL or the public callback.

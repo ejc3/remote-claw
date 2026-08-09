@@ -379,9 +379,8 @@ class BoundProtectedArtifactTransaction implements ProtectedArtifactTransactionO
       }
     }
     if (protectedHandleId === undefined) {
-      reject(
-        "putArtifact.artifactRef",
-        `could not allocate a unique ID in ${MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS} attempts`,
+      throw new ProtectedArtifactPersistenceError(
+        `could not allocate a unique artifact ID in ${MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS} attempts`,
       );
     }
 

@@ -102,7 +102,7 @@ about the current A0 implementation:
 | A0.1 | Implemented | Neutral registrar lifecycle, multi-session isolation, ready-before-bridge, and exact-replay/first-bind tests |
 | A0.2 | Implemented (process-local) | OpenCode and tmux driver tests for post-setup capabilities, cancellation and bounded teardown, no pre-ready broker client/announcement/remote mutation, and no ghost registration after setup or spawn failure; tmux additionally proves mandatory native readiness, private socket/runtime and owner-only launch artifacts, prompt/environment/settings absence from tmux argv and public errors, concurrent wrapper isolation, failed permission-decision persistence withholding ACK, and runtime retention when pane termination is uncertain |
 | A1.0 | Implemented (dormant contracts only) | Exact canonical primitive, ID namespace, path-resolution, record-shape, digest, fence, protected-operation, dispatch/reconciliation-separation, and backend-capability unit tests; no persistence, effect, or A1 capability is advertised |
-| A1.1 | Implemented (dormant storage kernel only) | Linux descriptor-anchored secure create/open/reopen, read-only WAL-aware validation before writable SQLite open, exact schema-v2 migration/digest/manifest validation, FULL migration commits with reader-deferable passive checkpoint and guardian fsync, typed commit and guardian-retaining cleanup outcomes, synchronous high-level transactions with generic multiwrite rollback, and immutable protected artifacts with verified scope, schema, reference, digest, and stored length; no production open, lease, generic state row, or A1 capability is advertised |
+| A1.1 | Implemented (dormant storage kernel only) | Linux descriptor-anchored secure create/open/reopen, read-only WAL-aware validation before writable SQLite open, exact schema-v2 migration/digest/manifest validation, FULL migration commits with non-blocking passive checkpoint and guardian fsync, typed commit and guardian-retaining cleanup outcomes, synchronous high-level transactions with generic multiwrite rollback, and immutable protected artifacts with verified scope, schema, reference, digest, and stored length; no production open, lease, generic state row, or A1 capability is advertised |
 | A1.2–A1.11 | Planned | Server/project bootstrap and selector mapping, server/lease races, owner takeover, durable registration, runtime-owner native-root activation, many-session host inventory and per-chat isolation, cross-runtime wire vectors, broker conformance, ingress/dedup, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
 | A2.1–A2.4 | Planned after A1 | Retained real OpenCode TUI/front-door/isolation fixture and the signed `{new_chat}`/`{user_text}` adjudication matrix; unavailable connector kinds use authenticated stand-ins only |
 | N1.1–N1.3 | Planned after A1 | Two live nested servers, rooted edge installation, complete signed downstream receipt, reconnect/reparent recovery, and cycle/reflection/duplicate-execution rejection |
@@ -134,8 +134,9 @@ machine, version, full `sqlite_schema`,
 integrity, locked migration-digest, and disabled-double-quoted-string behavior checks; read-only
 validation of crash-surviving WAL before any writable SQLite open; rejection of a future version in
 WAL without changing the main file or WAL;
-safe SHM-only reconstruction; v1→v2 FULL commit with reader-deferable passive checkpoint and guardian
-fsync; and reopen after a typed committed migration-finalization failure. The kernel also types an
+safe SHM-only reconstruction; v1→v2 FULL commit with non-blocking passive checkpoint, acceptance of
+the exact competing-checkpoint `busy=1`/`log=-1`/`checkpointed=-1` sentinel, and guardian fsync; and
+reopen after a typed committed migration-finalization failure. The kernel also types an
 unproved migration-commit outcome as retry-open-safe, but never makes an unknown ordinary transaction
 retry-safe. Ordinary transaction tests cover pre-commit guardian rollback/poisoning, distinct
 committed-state reporting and poisoning after a post-commit guardian failure, success while an active
@@ -198,7 +199,9 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
 
   Treat FULL WAL `COMMIT` as migration durability, then validate a coherent snapshot, attempt
   `wal_checkpoint(PASSIVE)`, and fsync guarded database/sidecar/directory descriptors. Prove that an
-  active reader may defer copying WAL frames without turning a committed migration into rollback.
+  active reader may leave WAL frames and a competing checkpoint may return exactly
+  `busy=1`/`log=-1`/`checkpointed=-1` without turning a committed migration into rollback; reject every
+  other inconsistent result.
   For both migrations and ordinary transactions, swap a guarded path while `BEGIN IMMEDIATE` waits and
   require guardian revalidation after writer-lock acquisition to fail before migration SQL or a public
   callback runs.

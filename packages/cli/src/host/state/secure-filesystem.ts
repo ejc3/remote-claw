@@ -378,7 +378,11 @@ class SecureHostStateFilesystemGuardian implements SecureHostStateFilesystem {
     files: readonly Guardian[],
   ) {
     this.databasePath = databasePath;
-    this.databaseDescriptorPath = files[0]?.descriptorPath ?? "";
+    const databaseGuardian = files[0];
+    if (databaseGuardian === undefined) {
+      throw new SecureHostStateFilesystemError("database guardian is unavailable");
+    }
+    this.databaseDescriptorPath = databaseGuardian.descriptorPath;
     this.databaseWasCreated = databaseWasCreated;
     this.filesystem = filesystem;
     this.#uid = uid;
@@ -503,6 +507,7 @@ export function openSecureHostStateFilesystem(
   const retainedDirectories: Guardian[] = [];
   const fileGuardians: Guardian[] = [];
   const rootFd = openSync(root, FS.O_RDONLY | FS.O_DIRECTORY | FS.O_NOFOLLOW);
+  let rootCloseAttempted = false;
   let parentFd = rootFd;
   let parentAbsolute = root;
   try {
@@ -691,8 +696,12 @@ export function openSecureHostStateFilesystem(
     for (const file of fileGuardians) fsyncSync(file.fd);
     fsyncSync(identityDirectory.fd);
 
-    for (const guardian of allDirectoryGuardians) {
-      if (!retainedDirectories.includes(guardian)) closeSync(guardian.fd);
+    for (let index = allDirectoryGuardians.length - 1; index >= 0; index--) {
+      const guardian = allDirectoryGuardians[index];
+      if (guardian !== undefined && !retainedDirectories.includes(guardian)) {
+        allDirectoryGuardians.splice(index, 1);
+        closeSync(guardian.fd);
+      }
     }
     const result = new SecureHostStateFilesystemGuardian(
       databasePath,
@@ -703,6 +712,15 @@ export function openSecureHostStateFilesystem(
       fileGuardians,
     );
     result.assertStable();
+    rootCloseAttempted = true;
+    try {
+      closeSync(rootFd);
+    } catch (error) {
+      throw new SecureHostStateFilesystemError(
+        "cannot close the host state traversal-root descriptor",
+        { cause: error },
+      );
+    }
     return result;
   } catch (error) {
     for (const guardian of [...fileGuardians, ...allDirectoryGuardians].reverse()) {
@@ -712,8 +730,14 @@ export function openSecureHostStateFilesystem(
         // Preserve the security failure that triggered cleanup.
       }
     }
+    if (!rootCloseAttempted) {
+      rootCloseAttempted = true;
+      try {
+        closeSync(rootFd);
+      } catch {
+        // Preserve the security failure that triggered cleanup.
+      }
+    }
     throw error;
-  } finally {
-    closeSync(rootFd);
   }
 }

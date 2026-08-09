@@ -163,6 +163,9 @@ function reject(message: string, cause?: unknown): never {
 function databaseRemainsOpenAfterCloseError(database: DatabaseSync): boolean {
   try {
     const state = (database as DatabaseSync & { readonly isOpen?: unknown }).isOpen;
+    // `isOpen` arrived after the oldest supported node:sqlite releases. A
+    // missing property cannot prove closure, so those releases deliberately
+    // retain guardians and fail stop after a thrown close.
     return typeof state === "boolean" ? state : true;
   } catch {
     return true;
@@ -368,9 +371,17 @@ function checkpointAndSync(database: DatabaseSync, filesystem: SecureHostStateFi
   const row = database.prepare("PRAGMA wal_checkpoint(PASSIVE)").get();
   if (!isRecord(row)) reject("WAL checkpoint returned no result");
   const busy = safeInteger(ownData(row, "busy"), "WAL checkpoint busy");
-  const log = safeInteger(ownData(row, "log"), "WAL checkpoint log count");
-  const checkpointed = safeInteger(ownData(row, "checkpointed"), "WAL checkpoint completed count");
-  if (busy > 1 || checkpointed > log) reject("WAL checkpoint returned inconsistent counts");
+  const log = safeInteger(ownData(row, "log"), "WAL checkpoint log count", -1);
+  const checkpointed = safeInteger(
+    ownData(row, "checkpointed"),
+    "WAL checkpoint completed count",
+    -1,
+  );
+  const checkpointLockBusy = busy === 1 && log === -1 && checkpointed === -1;
+  const completedCounts = busy === 0 && log >= 0 && checkpointed >= 0 && checkpointed <= log;
+  if (!checkpointLockBusy && !completedCounts) {
+    reject("WAL checkpoint returned inconsistent counts");
+  }
   // FULL WAL COMMIT is the durability boundary. A passive checkpoint is
   // deliberately non-blocking: an active reader may defer copying frames, but
   // that must not turn an already committed migration into an apparent
@@ -876,11 +887,13 @@ class SqliteHostStateDatabase implements HostStateDatabase {
     Object.freeze(this);
   }
 
+  /** Preconditions for this Promise-returning method throw synchronously. */
   putArtifact(request: PutArtifactRequest): Promise<PutArtifactResult> {
     this.#executor.assertStandaloneUsable();
     return this.#artifacts.putArtifact(request);
   }
 
+  /** Preconditions for this Promise-returning method throw synchronously. */
   readVerifiedArtifact(request: ReadVerifiedArtifactRequest): Promise<ReadVerifiedArtifactResult> {
     this.#executor.assertStandaloneUsable();
     return this.#artifacts.readVerifiedArtifact(request);

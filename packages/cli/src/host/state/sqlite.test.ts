@@ -11,7 +11,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { base64urlDecode, base64urlEncode } from "@remote-claw/clawsec";
@@ -39,14 +38,18 @@ import {
   openHostStateDatabase,
   ProtectedArtifactPersistenceError,
 } from "./sqlite.js";
+import {
+  HOST_STATE_TEST_FILESYSTEM_SUPPORTED,
+  HOST_STATE_TEST_TEMPORARY_DIRECTORY,
+} from "./test-environment.js";
 
 const MACHINE_IDENTITY_ID = "42".repeat(16);
 const linuxWithUid = process.platform === "linux" && typeof process.getuid === "function";
-const describeLinux = describe.runIf(linuxWithUid);
+const describeLinux = describe.runIf(linuxWithUid && HOST_STATE_TEST_FILESYSTEM_SUPPORTED);
 const temporaryDirectories: string[] = [];
 
 function temporaryState() {
-  const root = mkdtempSync(join(tmpdir(), "remote-claw-a11-sqlite-"));
+  const root = mkdtempSync(join(HOST_STATE_TEST_TEMPORARY_DIRECTORY, "remote-claw-a11-sqlite-"));
   temporaryDirectories.push(root);
   const environment = {
     xdgStateHome: join(root, "state"),

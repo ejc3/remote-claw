@@ -11,7 +11,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,16 +21,20 @@ import {
   openSecureHostStateFilesystem,
   type SecureHostStateFilesystem,
 } from "./secure-filesystem.js";
+import {
+  HOST_STATE_TEST_FILESYSTEM_SUPPORTED,
+  HOST_STATE_TEST_TEMPORARY_DIRECTORY,
+} from "./test-environment.js";
 
 const linuxWithUid = process.platform === "linux" && typeof process.getuid === "function";
 const hasSharedMemoryDirectory = existsSync("/dev/shm") && statSync("/dev/shm").isDirectory();
-const describeLinux = describe.runIf(linuxWithUid);
+const describeLinux = describe.runIf(linuxWithUid && HOST_STATE_TEST_FILESYSTEM_SUPPORTED);
 
 const temporaryRoots: string[] = [];
 const openGuardians: SecureHostStateFilesystem[] = [];
 
 function temporaryRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "remote-claw-secure-state-"));
+  const root = mkdtempSync(join(HOST_STATE_TEST_TEMPORARY_DIRECTORY, "remote-claw-secure-state-"));
   temporaryRoots.push(root);
   return root;
 }

@@ -594,8 +594,10 @@ reconstructed with a new WAL; a WAL or SHM without a database is refused.
 
 `synchronous=FULL` WAL `COMMIT` is each migration's durability boundary. After a migration commits,
 the kernel validates a coherent snapshot, attempts a non-blocking `wal_checkpoint(PASSIVE)`, and
-fsyncs the guarded database/WAL/SHM inodes and directories. An active reader may defer copying some
-WAL frames; that is not a rollback or migration failure. A post-commit validation/checkpoint/fsync
+fsyncs the guarded database/WAL/SHM inodes and directories. An active reader may leave frames for a
+later checkpoint, while a competing checkpoint may return SQLite's exact checkpoint-lock sentinel
+`busy=1`, `log=-1`, `checkpointed=-1`; neither is a rollback or migration failure. Every other
+inconsistent result fails closed. A post-commit validation/checkpoint/fsync
 failure raises `HostStateMigrationCommittedError` with `committed=true` and `retryOpenSafe=true`. A
 failed `COMMIT` whose rollback cannot prove the outcome raises
 `HostStateMigrationOutcomeUnknownError` with `outcome="unknown"` and `retryOpenSafe=true`. Retrying the
@@ -10872,7 +10874,7 @@ official-client compatibility; B and C add those records on the generic A1 seams
   transactions; verified protected artifacts; reopen and generic multiwrite rollback; secure
   directory/database/WAL/SHM creation and guardians; local-filesystem policy; read-only WAL-aware
   validation before writable open; coherent validation snapshots; FULL migration commits with
-  reader-deferable passive checkpoint and guardian fsync; typed reopen-safe migration outcomes;
+  non-blocking passive checkpoint and guardian fsync; typed reopen-safe migration outcomes;
   non-retry-safe unknown ordinary commits; distinct persistence failure/poisoning; fail-stop,
   guardian-retaining open/close cleanup; and application, machine, schema-manifest, migration,
   corruption, and future-version refusal. It opens
