@@ -28,10 +28,10 @@ local transcript completeness or replay.
 > chats and native sessions; this document's per-`cse_*` RC state repeats independently for every
 > wrapped Claude session and must not become a host-wide current-session slot. This document's full RC
 > log remains relevant to the current synthetic server, not a universal semantic authority. A1.0 has
-> landed only the canonical writer plus dormant host-state IDs, strict records, digest builders,
-> protected/dispatch interfaces, and a pure database-path resolver. It creates or opens no database,
-> runs no migration or transaction, acquires no owner/coordinator lease, persists no RC state, and is
-> not imported by a current driver.
+> landed the canonical writer and dormant host-state contracts. A1.1 has landed a dormant secure
+> SQLite kernel, migration registry, high-level transactions, and verified protected-artifact store.
+> No current run or driver imports or opens that kernel; it acquires no owner/coordinator lease,
+> persists no RC state, and advertises no writable A1 behavior. Generic host records begin in A1.2.
 
 ## Source Map
 
@@ -53,9 +53,10 @@ local transcript completeness or replay.
   `apps/web/lib/broker/{backend,local,vercel,sqlite-multi,turso-cloud-locator}.ts`.
 - Active shared canonical primitive and locked A0 consumer:
   `packages/clawsec/src/{canonical,aad}.ts`.
-- Dormant A1.0 host-state contract code:
-  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`.
-  These host-state modules do not implement the storage schema proposed below.
+- Dormant A1 host-state code:
+  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,artifacts,sqlite}.ts`.
+  A1.1 implements only schema/migration metadata and immutable protected artifacts; the generic state
+  tables described below remain A1.2 and later work.
 - The A1/A2 branch names and table snapshots later in this document record the
   historical review basis. The durable broker backends have since landed;
   re-check current migrations/code before implementing a dependent host schema.
@@ -200,8 +201,9 @@ native-binding, attachment, delivery-attempt, dispatch, or effect-gate invariant
 owner-only `host-state-v1.db` transaction boundary as the narrow coordinator control journal. A
 separate adapter-local store is permitted only for raw transport material whose loss or update cannot
 cross one of those atomic invariants; it retains immutable refs and digests back to the host-state row.
-That physical database, its secure open/migration path, and all transactions remain A1.1 and later
-work. A1.0 defines row and digest contracts and resolves the intended path without creating a file.
+The physical database, secure open/migration path, and high-level transaction kernel have landed
+dormant in A1.1. The generic control-journal tables and operations remain A1.2 and later work. A1.0
+defines their row/digest contracts and resolves the intended path without creating a file.
 The journal's `command_seq` is the definitive decision order for proposals that remote-claw server
 received from its direct collaborators, including forwarded, queued, and rejected decisions. It is a
 globally unique audit position, not a host-wide execution queue: each logical chat offers only its own
@@ -303,16 +305,65 @@ copied bearer/key material may remain valid, and A1 has neither an in-place key 
 broker-enforced permanent route-revocation protocol. A future bounded-retention version must add and
 prove that protocol before it may collect these records.
 
-The selected A1.1 design supplies the dormant secure transaction/storage kernel for the owner-only
+The implemented, dormant A1.1 kernel supplies the secure transaction/storage boundary for the owner-only
 **LOCAL**
-`$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite/libSQL database,
+`$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite database,
 falling back under `~/.local/state` when `XDG_STATE_HOME` is absent or relative. The fallback home
 must be absolute; a relative or empty value is rejected rather than resolved under the working
-directory. A1.2 adds generic
-host-state tables; B.2 adds private Claude RC event tables/projection state. The database is in
+directory. It is Linux-only, requires an exact stable Node.js `X.Y.Z` version in
+`^22.13.0 || >=23.5.0`, opens `node:sqlite` through a held `/proc/self/fd` descriptor, and creates no
+production database because no run path imports it.
+Local-filesystem policy v1 allows ext, XFS, Btrfs, F2FS, and ZFS only. It requires exact `0700`
+application/identities/identity directories, a non-group/world-writable owner state home, and owned
+regular one-link `0600` database/WAL/SHM files; rollback journals, non-WAL databases, and all other
+filesystem types fail closed.
+
+Current schema v2 uses SQLite `application_id=0x52434c57`, `user_version=2`, exact per-version schema
+manifests, and an append-only `CanonicalWriter` SHA-256 migration chain. The locked v1/v2 digests are
+`Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec` and
+`yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; a valid v1 database is checked before migrating to
+v2. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
+two triggers; v2 adds four triggers for a current total of ten objects and six triggers. Every row,
+including any `sqlite_*` name, must match the corresponding version manifest. Before migration 1, a
+new database must retain `application_id=0` and literally zero `sqlite_schema` rows. Every connection
+reads back `foreign_keys=ON`, `trusted_schema=OFF`, `journal_mode=WAL`,
+`synchronous=FULL`, `busy_timeout=5000`, `temp_store=MEMORY`, and `recursive_triggers=ON`; the initial
+existing-state validator also requires `query_only=ON`. Every connection behavior-probes that
+double-quoted string literals are disabled. It validates the logical WAL state in one read-only
+transaction snapshot before opening a writable SQLite connection. A future version present only in
+crash WAL is rejected without rewriting the main database or WAL. SHM remains guarded but is transient
+and may change during validation; a safe SHM-only remnant beside an existing database can be
+reconstructed, while sidecars without a database are refused.
+
+FULL WAL `COMMIT` is migration durability. Post-commit validation uses a coherent snapshot, then a
+non-blocking `wal_checkpoint(PASSIVE)` and guardian fsync; a reader may defer frame copying and a
+competing checkpoint may return exactly `busy=1`, `log=-1`, `checkpointed=-1` without turning the
+committed migration into failure. Every other inconsistent result fails closed. Typed committed and
+unknown migration outcomes both permit retrying open. Ordinary writes perform no mandatory checkpoint
+or extra fsync: a post-commit
+guardian failure reports committed state, while an unknown ordinary `COMMIT` is not retry-safe; both
+poison the handle. Migration and ordinary writers revalidate guardians immediately after acquiring
+`BEGIN IMMEDIATE` and before migration SQL or the public callback.
+
+The synchronous public transaction surface exposes high-level operations only—never raw SQL—and
+proves generic protected-artifact multiwrite rollback. Database-level asynchronous artifact methods
+reject synchronously inside the callback; atomic work must use its transaction-bound operations.
+Immutable artifacts are
+scope/schema/reference/digest verified with stored-length validation, capped at 16 MiB, and assigned
+a random `rcph_*` with at most eight collision attempts. Persistence failures are distinct from an
+unverified-artifact result and poison the live database handle. The public database opener exposes
+only machine identity plus optional path environment, never entropy or clock injection.
+
+Forbidden async/thenable transaction results roll back and poison before late continuation can reuse
+the handle. Close releases descriptor guardians only after SQLite is closed; an incomplete close
+retains them and is retry-close-safe. If a failed open cannot close every SQLite connection, the
+kernel retains the connections and guardians in fail-stop quarantine, rejects every later open of that
+canonical database path until process restart, leaves other database paths independent, and marks that
+open failure not retry-safe.
+
+A1.2 adds generic host-state tables; B.2 adds private Claude RC event tables/projection state. The database is in
 **cleartext** — nothing on the host needs encryption, and the broker never holds RC plaintext (only
-sealed frames cross to the cloud). A1.0 implements only pure path resolution; no physical store or
-table exists yet. The eventual interface should hide the storage choice from `mitm.ts` and
+sealed frames cross to the cloud). The interface keeps the storage choice hidden from `mitm.ts` and
 `session.ts`. Large raw adapter-only payloads may move to a separate local store only under the
 no-cross-store-invariant rule above. (Decided: do NOT put RC payloads in the broker Turso — there is
 no host-encryption hedge to make, because the RC log simply stays local.)
@@ -1089,11 +1140,11 @@ demonstrates every property below:
 
 ## Assigned Decisions and Proof-Owned Questions
 
-- **A1.1 / B.2 — storage placement: DECIDED.** Use the owner-only local
-  `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite/libSQL
+- **A1.1 / B.2 — storage placement: DECIDED; A1.1 kernel implemented dormant.** Use the owner-only local
+  `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite
   transaction boundary in the CLI, with the absolute-home `~/.local/state` fallback above, for every RC row that
-  participates in a control-state invariant, in cleartext. A1.0 resolves but does not create this
-  path. A separate local adapter store may hold only raw transport payloads with immutable host-state
+  participates in a control-state invariant, in cleartext. A1.0 resolves the path; A1.1 implements
+  secure open/migration and protected artifacts without a production caller. A separate local adapter store may hold only raw transport payloads with immutable host-state
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.

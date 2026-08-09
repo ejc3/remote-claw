@@ -6,3 +6,4 @@ export * from "./path.js";
 export * from "./protected.js";
 export * from "./records.js";
 export * from "./runtime.js";
+export * from "./sqlite.js";

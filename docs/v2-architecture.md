@@ -89,14 +89,17 @@
 > passages later in this historical document describe only the terminal Claude edge; outer layers
 > reconnect server/chat edges and never create another native app.
 >
-> A1.0 has now landed the shared canonical writer and dormant host-state contract layer. Shipped A0
-> AAD already uses the shared writer with its locked bytes unchanged; only the strict host-state
-> parsers, pure digest/ID builders, protected-operation interfaces, and database-path resolver are
-> dormant. No run path imports that host-state layer; it creates or opens no database, acquires no
-> lease, performs no protected operation or native effect, advertises no A1 capability, and leaves
-> the bytes and behavior of every previously valid canonical A0 frame unchanged. Malformed wire and
-> runtime values now fail closed at their trust or canonical boundary instead of being accepted and
-> failing later or being silently coerced.
+> A1.0 has landed the shared canonical writer and dormant host-state contracts. A1.1 has landed the
+> dormant Linux secure-SQLite kernel, schema-v2 migration registry, synchronous high-level
+> transaction boundary, and verified protected-artifact store. No run path imports or opens that
+> kernel; it creates no production database, acquires no lease, performs no native effect, advertises
+> no A1 capability, and leaves the bytes and behavior of every previously valid canonical A0 frame
+> unchanged. Existing state is validated as one read-only WAL-aware snapshot before writable SQLite
+> open. FULL migration commits use a non-blocking passive checkpoint plus guarded fsync; a reader or
+> competing checkpoint may defer the checkpoint work. Migration
+> committed/unknown outcomes are retry-open-safe, unlike an unknown ordinary command commit. Generic
+> server/project/chat/binding state begins in A1.2. The exact `rcrt_*` runtime-ID derivation formula and
+> locked vector remain deliberately assigned to the A1.3 runtime owner.
 
 ## 1. What changes and why
 
@@ -783,7 +786,8 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
     native binding, `rccl_` coordinator lease, `rcra_` registration attempt, `rcncl_` native
     conversation lease, and `rcph_` protected handle;
   - SHA-256-derived 32-byte bodies: `rcrt_` native runtime, `ptm_` project-target-selector mapping,
-    and `nat_` native delivery attempt.
+    and `nat_` native delivery attempt. A1.0 validates the `rcrt_*` shape only; A1.3 must freeze its
+    exact domain-separated derivation and locked vector before allocating runtime IDs.
 
   Every body is canonical unpadded base64url. Other selected A1 safe IDs are 1–128 ASCII bytes, must
   match `[A-Za-z0-9._:-]+`, and are never raw provider/native IDs; adapters map unsafe external
