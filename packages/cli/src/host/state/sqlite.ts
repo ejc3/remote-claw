@@ -41,6 +41,13 @@ import {
   validateHostStateRepositorySnapshot,
 } from "./repository.js";
 import {
+  createRuntimeOwnerRepositoryOperations,
+  createRuntimeOwnerRepositoryTransactionOperations,
+  type RuntimeOwnerRepositoryOperations,
+  RuntimeOwnerRepositoryPersistenceError,
+  validateRuntimeOwnerRepositorySnapshot,
+} from "./runtime-repository.js";
+import {
   openSecureHostStateFilesystem,
   type SecureHostStateFilesystem,
 } from "./secure-filesystem.js";
@@ -84,6 +91,12 @@ export {
   HostStateStaleCoordinatorError,
   parseHostStateActorScope,
 } from "./repository.js";
+export type { RuntimeOwnerRepositoryOperations } from "./runtime-repository.js";
+export {
+  RuntimeOwnerRepositoryConflictError,
+  RuntimeOwnerRepositoryPersistenceError,
+  RuntimeOwnerStaleOwnerError,
+} from "./runtime-repository.js";
 
 export const HOST_STATE_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const INTRINSIC_PROMISE_THEN = Promise.prototype.then;
@@ -173,7 +186,7 @@ export interface OpenHostStateDatabaseOptions {
 }
 
 /**
- * The dormant A1 host-state surface. It exposes only protected artifacts and
+ * The secure A1 host-state surface. It exposes only protected artifacts and
  * high-level record operations; SQLite and arbitrary SQL remain private to the kernel.
  */
 export interface HostStateDatabase extends ProtectedArtifactOperations {
@@ -181,6 +194,7 @@ export interface HostStateDatabase extends ProtectedArtifactOperations {
   readonly databasePath: string;
   readonly schemaVersion: typeof HOST_STATE_SCHEMA_VERSION;
   readonly records: HostStateRepositoryOperations;
+  readonly runtimeOwner: RuntimeOwnerRepositoryOperations;
   transaction<T>(operation: (transaction: HostStateTransaction) => T): T;
   close(): void;
 }
@@ -188,6 +202,7 @@ export interface HostStateDatabase extends ProtectedArtifactOperations {
 /** High-level operations available atomically; no SQL handle crosses this boundary. */
 export interface HostStateTransaction extends ProtectedArtifactTransactionOperations {
   readonly records: HostStateRepositoryOperations;
+  readonly runtimeOwner: RuntimeOwnerRepositoryOperations;
 }
 
 type SqliteRow = Readonly<Record<string, unknown>>;
@@ -703,6 +718,16 @@ function validateDatabaseContentsAtVersion(
       snapshot.invalidate();
     }
   }
+  if (schemaVersion >= 4) {
+    const snapshot = new ActiveArtifactSqlTransaction(database);
+    try {
+      validateRuntimeOwnerRepositorySnapshot(snapshot, machineIdentityId);
+    } catch (error) {
+      reject("runtime-owner records failed semantic validation", error);
+    } finally {
+      snapshot.invalidate();
+    }
+  }
   if (HOST_STATE_SCHEMA_MANIFEST.applicationId !== HOST_STATE_APPLICATION_ID) {
     reject("compiled schema manifest is internally inconsistent");
   }
@@ -902,7 +927,8 @@ class SqliteArtifactTransactionExecutor
     } catch (error) {
       if (
         error instanceof ProtectedArtifactPersistenceError ||
-        error instanceof HostStateRepositoryPersistenceError
+        error instanceof HostStateRepositoryPersistenceError ||
+        error instanceof RuntimeOwnerRepositoryPersistenceError
       ) {
         this.#poisoned = true;
       }
@@ -942,6 +968,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
   readonly databasePath: string;
   readonly schemaVersion = HOST_STATE_SCHEMA_VERSION;
   readonly records: HostStateRepositoryOperations;
+  readonly runtimeOwner: RuntimeOwnerRepositoryOperations;
   readonly #database: DatabaseSync;
   readonly #filesystem: SecureHostStateFilesystem;
   readonly #executor: SqliteArtifactTransactionExecutor;
@@ -962,6 +989,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
     this.#executor = new SqliteArtifactTransactionExecutor(database, filesystem);
     this.#artifacts = new ProtectedArtifactRepository(this.#executor);
     this.records = new HostStateRepository(this.#executor, machineIdentityId);
+    this.runtimeOwner = createRuntimeOwnerRepositoryOperations(this.#executor, machineIdentityId);
     Object.freeze(this);
   }
 
@@ -986,6 +1014,10 @@ class SqliteHostStateDatabase implements HostStateDatabase {
         transaction,
         this.machineIdentityId,
       );
+      const runtimeOwner = createRuntimeOwnerRepositoryTransactionOperations(
+        transaction,
+        this.machineIdentityId,
+      );
       return operation(
         Object.freeze({
           putArtifact: (request: PutArtifactRequest): PutArtifactResult =>
@@ -994,6 +1026,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
             request: ReadVerifiedArtifactRequest,
           ): ReadVerifiedArtifactResult => artifacts.readVerifiedArtifact(request),
           records,
+          runtimeOwner,
         }),
       );
     });
@@ -1034,7 +1067,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
   }
 }
 
-/** Open the dormant A1 host-state kernel. No active CLI path imports this function. */
+/** Open the A1 host-state kernel through the closed runtime-owner production adapter. */
 export function openHostStateDatabase(options: OpenHostStateDatabaseOptions): HostStateDatabase {
   assertHostStateNodeVersion();
   const machineIdentityId = parseMachineIdentityId(options.machineIdentityId);

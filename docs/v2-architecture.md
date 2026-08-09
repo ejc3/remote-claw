@@ -89,7 +89,7 @@
 > passages later in this historical document describe only the terminal Claude edge; outer layers
 > reconnect server/chat edges and never create another native app.
 >
-> A1.0 through A1.2 have landed as dormant libraries. A1.0 supplies the shared canonical writer and
+> A1.0 through A1.3 have landed. A1.0 supplies the shared canonical writer and
 > host-state contracts; A1.1 supplies the Linux secure-SQLite kernel and verified protected artifacts;
 > A1.2 supplies schema v3 and its high-level server/project/chat/binding/edge/coordinator repository.
 > Migration `003-durable-host-records` has 81 ordered statements and digest
@@ -100,10 +100,24 @@
 > a newly migrated graph is validated before the handle returns.
 > Persisted chats name their exact selector mapping and use random `rcie_*` installing native edges.
 > Evidence refs/digests remain opaque until A1.4; actor scopes are addresses only until A1.7; nested
-> mappings and remote-server edges remain rejected until N1. No run path imports or opens the kernel;
-> production creates no database or A1 row, acquires no lease, performs no native effect, advertises
-> no A1 capability, and leaves every previously valid canonical A0 frame unchanged. A1.3 is next; the
-> exact `rcrt_*` runtime-ID derivation formula and locked vector remain assigned to that runtime owner.
+> mappings and remote-server edges remain rejected until N1.
+>
+> A1.3 supplies schema v4 and the runtime-owner repository/semantic validator, an independently
+> supervised Linux daemon, authenticated bounded local RPC with a 64-connection and 1,024-byte
+> pre-authentication inbound ceiling, process-start-bound service leases and
+> takeover, wrapped Ed25519 custody, and durable multi-runtime/multi-conversation ownership records.
+> Migration `004-runtime-owner-durability` has 141 ordered statements and digest
+> `zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0`; the complete v4 manifest has 231 rows: 30 tables,
+> 57 indexes, and 144 triggers. The exact derivation now locks
+> `rcrt_9eXZ6t2i1B6q6KnTszDoABv6BWYw0blCRXoNgPxF1WM` for the selected vector.
+> Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
+> plain and help paths, trace mode, and the local `--rc-identity` action do not. The only successful
+> production owner operation is authenticated health; its dispatch registry is empty, and health
+> reports `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. A0 driver behavior
+> remains unchanged and owner unavailability falls back to the exact A0 path. Wrapper exit closes only
+> the owner's RPC collaborator and leaves the owner service alive; existing A0 native teardown remains
+> separate. No durable owner registration, A1 binding activation, terminal root, owner dispatch, or new
+> A1 remote mutation, inference, or broker capability is enabled; A1.4 is next.
 
 ## 1. What changes and why
 
@@ -790,13 +804,13 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
     inward collaboration edge, `rcnb_` native binding, `rccl_` coordinator lease, `rcra_` registration
     attempt, `rcncl_` native conversation lease, and `rcph_` protected handle;
   - SHA-256-derived 32-byte bodies: `rcrt_` native runtime, `ptm_` project-target-selector mapping,
-    and `nat_` native delivery attempt. A1.0 validates the `rcrt_*` shape only; A1.3 must freeze its
-    exact domain-separated derivation and locked vector before allocating runtime IDs.
+    and `nat_` native delivery attempt. A1.3 now locks the exact domain-separated `rcrt_*` derivation
+    and vector documented in the [host-runtime reference](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
 
   Every body is canonical unpadded base64url. Other selected A1 safe IDs are 1–128 ASCII bytes, must
   match `[A-Za-z0-9._:-]+`, and are never raw provider/native IDs; adapters map unsafe external
   identifiers to durable safe IDs. A1 digests and one-use dispatch authorizations are canonical
-  unpadded base64url of exactly 32 bytes. Generic strings accepted by the dormant A1.0 host-state
+  unpadded base64url of exactly 32 bytes. Generic strings accepted by the A1.0 host-state
   parser are 1–1,024 UTF-16 code units, contain only Unicode scalar values, and exclude `U+0000`.
   `record_kind` is one of
   the versioned protocol values.

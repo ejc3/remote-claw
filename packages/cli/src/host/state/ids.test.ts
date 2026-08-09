@@ -9,7 +9,10 @@ import {
   parseA1Digest,
   parseA1SafeId,
   parseDispatchAuthorization,
+  parseEd25519PublicKey,
+  parseEd25519Signature,
   parseMachineIdentityId,
+  parseWardenLaunchNonce,
 } from "./ids.js";
 
 function encoded(bytes: number, fill = 0): string {
@@ -97,6 +100,18 @@ describe("selected A1 identifier contracts", () => {
     expect(() => parseDispatchAuthorization(`${value}=`)).toThrow(/canonical/);
     expect(() => parseA1Digest("A".repeat(1_000_000))).toThrow(/exactly 32 bytes/);
     expect(() => parseDispatchAuthorization("A".repeat(1_000_000))).toThrow(/exactly 32 bytes/);
+  });
+
+  it("keeps runtime nonce and Ed25519 byte roles nominal and exact", () => {
+    const bytes32 = encoded(32, 8);
+    const bytes64 = encoded(64, 9);
+    expect(parseWardenLaunchNonce(bytes32)).toBe(bytes32);
+    expect(parseEd25519PublicKey(bytes32)).toBe(bytes32);
+    expect(parseEd25519Signature(bytes64)).toBe(bytes64);
+    expect(() => parseWardenLaunchNonce(encoded(31))).toThrow(/exactly 32 bytes/);
+    expect(() => parseEd25519PublicKey(encoded(33))).toThrow(/exactly 32 bytes/);
+    expect(() => parseEd25519Signature(encoded(32))).toThrow(/exactly 64 bytes/);
+    expect(() => parseEd25519Signature(`${bytes64}=`)).toThrow(/canonical|matching/);
   });
 
   it("accepts only the fixed lowercase machine identity encoding", () => {

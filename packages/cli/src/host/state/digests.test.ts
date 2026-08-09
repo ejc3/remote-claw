@@ -1,7 +1,12 @@
-import { base64urlEncode } from "@remote-claw/clawsec";
+import { base64urlDecode, base64urlEncode, CanonicalWriter, sha256 } from "@remote-claw/clawsec";
 import { describe, expect, it } from "vitest";
-import { projectTargetDigest, projectTargetSelectorMappingId } from "./digests.js";
-import { parseA1CanonicalId, parseA1Digest, parseA1SafeId } from "./ids.js";
+import {
+  nativeRuntimeId,
+  projectTargetDigest,
+  projectTargetSelectorMappingId,
+  verifyNativeRuntimeId,
+} from "./digests.js";
+import { parseA1CanonicalId, parseA1Digest, parseA1SafeId, parseWardenLaunchNonce } from "./ids.js";
 
 function encoded(bytes: number, fill: number): string {
   return base64urlEncode(new Uint8Array(bytes).fill(fill));
@@ -20,6 +25,100 @@ function noncanonicalTailAlias(value: string): string {
 }
 
 describe("A1 digest builder input contracts", () => {
+  it("locks the founding native-runtime ID vector and its canonical encoding", async () => {
+    const wardenLaunchNonce = parseWardenLaunchNonce(encoded(32, 11));
+    const startIdentitySchemaId = "remote-claw/codex-start-identity/v1";
+    const startIdentityDigest = parseA1Digest(encoded(32, 12));
+    const input = { wardenLaunchNonce, startIdentitySchemaId, startIdentityDigest };
+
+    await expect(nativeRuntimeId(input)).resolves.toBe(
+      "rcrt_9eXZ6t2i1B6q6KnTszDoABv6BWYw0blCRXoNgPxF1WM",
+    );
+
+    const writer = new CanonicalWriter();
+    writer.str("remote-claw/native-runtime-id/v1");
+    writer.bytes(base64urlDecode(wardenLaunchNonce));
+    writer.str(startIdentitySchemaId);
+    writer.bytes(base64urlDecode(startIdentityDigest));
+    const independentlyEncoded = `rcrt_${base64urlEncode(await sha256(writer.finish()))}`;
+    await expect(nativeRuntimeId(input)).resolves.toBe(independentlyEncoded);
+  });
+
+  it("uses each founding runtime-ID component exactly once and rejects malformed bytes", async () => {
+    const nonce = encoded(32, 11);
+    const digest = encoded(32, 12);
+    let nonceReads = 0;
+    let schemaReads = 0;
+    let digestReads = 0;
+    const input = {
+      get wardenLaunchNonce() {
+        nonceReads++;
+        return parseWardenLaunchNonce(nonce);
+      },
+      get startIdentitySchemaId() {
+        schemaReads++;
+        return "remote-claw/codex-start-identity/v1";
+      },
+      get startIdentityDigest() {
+        digestReads++;
+        return parseA1Digest(digest);
+      },
+    };
+
+    await expect(nativeRuntimeId(input)).resolves.toMatch(/^rcrt_/);
+    expect({ nonceReads, schemaReads, digestReads }).toEqual({
+      nonceReads: 1,
+      schemaReads: 1,
+      digestReads: 1,
+    });
+    await expect(
+      nativeRuntimeId({
+        ...input,
+        wardenLaunchNonce: noncanonicalTailAlias(nonce) as ReturnType<
+          typeof parseWardenLaunchNonce
+        >,
+      }),
+    ).rejects.toThrow(/canonical/);
+    await expect(
+      nativeRuntimeId({
+        ...input,
+        startIdentityDigest: encoded(31, 12) as ReturnType<typeof parseA1Digest>,
+      }),
+    ).rejects.toThrow(/exactly 32 bytes/);
+  });
+
+  it("verifies a runtime root against founding evidence without using successor identity", async () => {
+    const wardenLaunchNonce = parseWardenLaunchNonce(encoded(32, 11));
+    const initialStartIdentityDigest = parseA1Digest(encoded(32, 12));
+    const initialStartIdentitySchemaId = "remote-claw/codex-start-identity/v1";
+    const runtimeId = await nativeRuntimeId({
+      wardenLaunchNonce,
+      startIdentitySchemaId: initialStartIdentitySchemaId,
+      startIdentityDigest: initialStartIdentityDigest,
+    });
+    const record = {
+      runtimeId,
+      descriptor: { product: "codex", access: "app-server" },
+      wardenLaunchNonce,
+      initialStartIdentitySchemaId,
+      initialStartIdentityRef: parseA1SafeId("start-identity-1"),
+      initialStartIdentityDigest,
+      currentNativeIncarnation: 7,
+      currentRuntimeOwnerAssignmentId: parseA1SafeId("runtime-owner-assignment-7"),
+      createdAtMs: 10,
+      closedAtMs: null,
+      state: "current",
+    } as const;
+
+    await expect(verifyNativeRuntimeId(record)).resolves.toBeUndefined();
+    await expect(
+      verifyNativeRuntimeId({
+        ...record,
+        runtimeId: parseA1CanonicalId("nativeRuntime", `rcrt_${encoded(32, 13)}`),
+      }),
+    ).rejects.toThrow(/does not match its founding identity/);
+  });
+
   it("rejects an impossible zero mapping generation before deriving an ID", async () => {
     await expect(
       projectTargetSelectorMappingId({

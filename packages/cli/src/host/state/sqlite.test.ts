@@ -797,8 +797,10 @@ describeLinux("A1.1 secure host-state database", () => {
   it("refuses future, wrong-identity, wrong-digest, and edited-schema state", () => {
     const corruptions: readonly ((database: DatabaseSync) => void)[] = [
       (database) => database.exec(`PRAGMA user_version=${HOST_STATE_SCHEMA_VERSION + 1}`),
-      (database) =>
-        database.exec(`UPDATE host_state_metadata SET machine_identity_id='${"00".repeat(16)}'`),
+      (database) => {
+        database.exec("PRAGMA foreign_keys=OFF");
+        database.exec(`UPDATE host_state_metadata SET machine_identity_id='${"00".repeat(16)}'`);
+      },
       (database) =>
         database.exec(
           "UPDATE host_state_metadata SET migration_digest='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'",

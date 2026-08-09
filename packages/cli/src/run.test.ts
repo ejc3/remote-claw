@@ -34,6 +34,20 @@ describe("runWrapper (functional)", () => {
     expect(calls).toEqual([{ bin: "claude", args: ["chat", "--model", "opus"] }]);
   });
 
+  it("does not activate the runtime owner for an unwrapped invocation", async () => {
+    const { fn } = recordingSpawn(0);
+    let calls = 0;
+    const code = await runWrapper(["chat"], {
+      spawnFn: fn,
+      runtimeOwnerBootstrap: async () => {
+        calls++;
+        return null;
+      },
+    });
+    expect(code).toBe(0);
+    expect(calls).toBe(0);
+  });
+
   it("propagates a non-zero claude exit code", async () => {
     const { fn } = recordingSpawn(7);
     expect(await runWrapper(["x"], { spawnFn: fn })).toBe(7);
@@ -79,16 +93,22 @@ describe("runWrapper (functional)", () => {
     const { fn, calls } = recordingSpawn();
     const out: string[] = [];
     let traceSpawned = false;
+    let ownerCalls = 0;
     const code = await runWrapper(["--rc-trace", "--help"], {
       spawnFn: fn,
       spawnRcEnv: async () => {
         traceSpawned = true;
         return 0;
       },
+      runtimeOwnerBootstrap: async () => {
+        ownerCalls++;
+        return null;
+      },
       stdout: (l) => out.push(l),
     });
     expect(code).toBe(0);
     expect(traceSpawned).toBe(false);
+    expect(ownerCalls).toBe(0);
     expect(calls).toHaveLength(0);
     expect(out.join("")).toContain("--rc-trace");
   });
@@ -96,11 +116,59 @@ describe("runWrapper (functional)", () => {
   it("--help prints the rc help banner and STILL falls through to claude with --help", async () => {
     const { fn, calls } = recordingSpawn(0);
     const out: string[] = [];
-    const code = await runWrapper(["--help"], { spawnFn: fn, stdout: (l) => out.push(l) });
+    let ownerCalls = 0;
+    const code = await runWrapper(["--help"], {
+      spawnFn: fn,
+      stdout: (l) => out.push(l),
+      runtimeOwnerBootstrap: async () => {
+        ownerCalls++;
+        return null;
+      },
+    });
     expect(code).toBe(0);
     expect(out.join("")).toContain("remote-claw"); // our --rc-* banner printed first
     expect(out.join("")).toMatch(/--rc-identity/);
     expect(calls).toEqual([{ bin: "claude", args: ["--help"] }]); // claude still gets --help
+    expect(ownerCalls).toBe(0);
+  });
+
+  it("does not activate the runtime owner for the local identity action", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-identity-"));
+    const secret = join(dir, "secret");
+    let ownerCalls = 0;
+    try {
+      const code = await runWrapper(["--rc-identity", "--rc-json", "--rc-file", secret], {
+        stdout: () => {},
+        stderr: () => {},
+        runtimeOwnerBootstrap: async () => {
+          ownerCalls++;
+          return null;
+        },
+      });
+      expect(code).toBe(0);
+      expect(ownerCalls).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!haveOpenssl())("does not activate the runtime owner for live trace mode", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-trace-"));
+    const secret = join(dir, "secret");
+    let ownerCalls = 0;
+    try {
+      const code = await runWrapper(["--rc-trace", "--rc-file", secret, "chat"], {
+        spawnRcEnv: async () => 0,
+        runtimeOwnerBootstrap: async () => {
+          ownerCalls++;
+          return null;
+        },
+      });
+      expect(code).toBe(0);
+      expect(ownerCalls).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("-h triggers the same help passthrough", async () => {
@@ -164,14 +232,30 @@ describe("runWrapper (functional)", () => {
       const secret = join(dir, "secret");
       let seenEnv: NodeJS.ProcessEnv | null = null;
       let seenArgs: readonly string[] | null = null;
+      const ownerInputs: Array<{ machineIdentityId: string; secretPath: string }> = [];
+      let ownerSecret: Uint8Array | undefined;
+      let ownerClosed = 0;
       try {
         const code = await runWrapper(
           ["chat", "--model", "opus", "--rc-file", secret, "--rc-app", "http://broker.example"],
           {
             spawnRcEnv: async (_bin, args, env) => {
+              expect(ownerSecret?.every((byte) => byte === 0)).toBe(true);
               seenEnv = env;
               seenArgs = args;
               return 0;
+            },
+            runtimeOwnerBootstrap: async (input) => {
+              ownerSecret = input.identitySecret;
+              ownerInputs.push({
+                machineIdentityId: input.machineIdentityId,
+                secretPath: input.secretPath,
+              });
+              return {
+                close: async () => {
+                  ownerClosed++;
+                },
+              };
             },
           },
         );
@@ -181,11 +265,86 @@ describe("runWrapper (functional)", () => {
         const env = seenEnv as unknown as NodeJS.ProcessEnv;
         expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
         expect(env.NODE_EXTRA_CA_CERTS).toBe(join(dir, "mitm-certs", "ca.pem"));
+        expect(ownerInputs).toEqual([
+          { machineIdentityId: expect.stringMatching(/^[0-9a-f]{32}$/), secretPath: secret },
+        ]);
+        expect(ownerClosed).toBe(1);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
     },
   );
+
+  it.each([
+    "opencode",
+    "tmux",
+  ] as const)("activates and detaches the runtime owner around the %s driver", async (driver) => {
+    const dir = mkdtempSync(join(tmpdir(), `rc-run-${driver}-`));
+    const secret = join(dir, "secret");
+    let ownerCalls = 0;
+    let ownerClosed = 0;
+    let driverCalls = 0;
+    let ownerSecret: Uint8Array | undefined;
+    try {
+      const code = await runWrapper(
+        ["chat", "--rc-file", secret, "--rc-app", "http://broker.example", "--rc-driver", driver],
+        {
+          runtimeOwnerBootstrap: async (input) => {
+            ownerCalls++;
+            ownerSecret = input.identitySecret;
+            return {
+              close: () => {
+                ownerClosed++;
+              },
+            };
+          },
+          runOpencodeDriver: async () => {
+            expect(ownerSecret?.every((byte) => byte === 0)).toBe(true);
+            driverCalls++;
+            return 0;
+          },
+          runTmuxDriver: async () => {
+            expect(ownerSecret?.every((byte) => byte === 0)).toBe(true);
+            driverCalls++;
+            return 0;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(ownerCalls).toBe(1);
+      expect(driverCalls).toBe(1);
+      expect(ownerClosed).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues the exact A0 driver path when runtime-owner bootstrap fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-owner-fail-"));
+    const secret = join(dir, "secret");
+    let driverCalls = 0;
+    let ownerSecret: Uint8Array | undefined;
+    try {
+      const code = await runWrapper(
+        ["chat", "--rc-file", secret, "--rc-app", "http://broker.example", "--rc-driver", "tmux"],
+        {
+          runtimeOwnerBootstrap: async (input) => {
+            ownerSecret = input.identitySecret;
+            throw new Error("simulated runtime-owner startup failure");
+          },
+          runTmuxDriver: async () => {
+            expect(ownerSecret?.every((byte) => byte === 0)).toBe(true);
+            driverCalls++;
+            return 0;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(driverCalls).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it("exits 2 on an unknown --rc-driver (with the valid list) without spawning claude", async () => {
     const { fn, calls } = recordingSpawn();

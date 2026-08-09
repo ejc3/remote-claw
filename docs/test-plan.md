@@ -10,7 +10,7 @@ native evidence separately from future release gates.
 | Layer | Where | What it proves | Runtime |
 | --- | --- | --- | --- |
 | **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking, the shared canonical field writer with strict-null optionals and defensive snapshots, and the locked A0 AAD regression vector — pure functions, no network | Node + WebCrypto |
-| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, dormant A1.0 contracts, the dormant A1.1 secure-filesystem/SQLite/protected-artifact kernel, and A1.2 schema-v3 repository/reconciliation/inventory/semantic-snapshot behavior over real in-memory and secure-file SQLite | Node, mock fetch / fixture |
+| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, A1.0 contracts, the A1.1 secure-filesystem/SQLite/protected-artifact kernel, A1.2 server/project repository behavior, and A1.3 schema-v4 runtime-owner repository, key custody, authenticated RPC, service/daemon/bootstrap, production adapter, and activation boundary | Node, mock fetch / fixture |
 | **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
 | **Retained native proof (OpenCode)** | [`spikes/opencode-native/verify-evidence.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, and same-ID `noReply:true` append behavior within one incarnation | Node over checked JSON evidence; no provider/model |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
@@ -101,10 +101,11 @@ about the current A0 implementation:
 | --- | --- | --- |
 | A0.1 | Implemented | Neutral registrar lifecycle, multi-session isolation, ready-before-bridge, and exact-replay/first-bind tests |
 | A0.2 | Implemented (process-local) | OpenCode and tmux driver tests for post-setup capabilities, cancellation and bounded teardown, no pre-ready broker client/announcement/remote mutation, and no ghost registration after setup or spawn failure; tmux additionally proves mandatory native readiness, private socket/runtime and owner-only launch artifacts, prompt/environment/settings absence from tmux argv and public errors, concurrent wrapper isolation, failed permission-decision persistence withholding ACK, and runtime retention when pane termination is uncertain |
-| A1.0 | Implemented (dormant contracts only) | Exact canonical primitive, ID namespace, path-resolution, record-shape, digest, fence, protected-operation, dispatch/reconciliation-separation, and backend-capability unit tests; no persistence, effect, or A1 capability is advertised |
-| A1.1 | Implemented (dormant storage kernel only) | Linux descriptor-anchored secure create/open/reopen, read-only WAL-aware validation before writable SQLite open, exact schema-v2 migration/digest/manifest validation, FULL migration commits with non-blocking passive checkpoint and guardian fsync, typed commit and guardian-retaining cleanup outcomes, synchronous high-level transactions with generic multiwrite rollback, and immutable protected artifacts with verified scope, schema, reference, digest, and stored length; no production open, lease, generic state row, or A1 capability is advertised |
-| A1.2 | Implemented (dormant host repository only) | Exact schema-v3 migration/manifest; default profile/server; atomic first project/mapping/chat/binding/intent/`rcie_*` edge; explicit later projects; terminal mapping-generation replacement; many-chat inventory; coordinator lease CAS, renewal, release, takeover and reconciliation; contiguous immutable journal; full semantic read-only snapshot validation; no production open, live registration, command actor, native effect, or nested target/edge is advertised |
-| A1.3–A1.11 | Planned; A1.3 next | Runtime-owner service, durable evidence-resolving registration, runtime/binding activation, cross-runtime wire vectors, broker conformance, ingress/dedup and actor queues, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
+| A1.0 | Implemented contract foundation | Exact canonical primitive, ID namespace, path-resolution, record-shape, digest, fence, protected-operation, dispatch/reconciliation-separation, and backend-capability unit tests; no direct effect or A1 capability is advertised |
+| A1.1 | Implemented storage kernel | Linux descriptor-anchored secure create/open/reopen, read-only WAL-aware validation before writable SQLite open, exact schema-v2 migration/digest/manifest validation, FULL migration commits with non-blocking passive checkpoint and guardian fsync, typed commit and guardian-retaining cleanup outcomes, synchronous high-level transactions with generic multiwrite rollback, and immutable protected artifacts with verified scope, schema, reference, digest, and stored length; A1.3 now opens it, while no native effect or A1 broker capability is advertised |
+| A1.2 | Implemented host repository; operations inactive | Exact schema-v3 migration/manifest; default profile/server; atomic first project/mapping/chat/binding/intent/`rcie_*` edge; explicit later projects; terminal mapping-generation replacement; many-chat inventory; coordinator lease CAS, renewal, release, takeover and reconciliation; contiguous immutable journal; full semantic read-only snapshot validation; no live registration, command actor, native effect, or nested target/edge is advertised |
+| A1.3 | Implemented; production health only | Exact schema-v4 migration/manifest and full runtime-owner semantic graph; `rcrt_*` vector; service lease fencing/takeover/reconciliation; runtime/incarnation/assignment/containment and local-conversation registry; wrapped Ed25519 custody/signing discipline; binding/attachment/gate foundations; authenticated bounded RPC; daemon/bootstrap and failure cleanup; multi-runtime isolation; wrapped-driver connect/autostart/detach boundary; health reports `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`, with no installed production dispatch operation, durable owner registration, A1 binding activation, remote mutation, or broker capability |
+| A1.4–A1.11 | Planned; A1.4 next | Durable evidence-resolving registration, runtime/binding activation, cross-runtime wire/signing activation, broker conformance, ingress/dedup and actor queues, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
 | A2.1–A2.4 | Planned after A1 | Retained real OpenCode TUI/front-door/isolation fixture and the signed `{new_chat}`/`{user_text}` adjudication matrix; unavailable connector kinds use authenticated stand-ins only |
 | N1.1–N1.3 | Planned after A1 | Two live nested servers, rooted edge installation, complete signed downstream receipt, reconnect/reparent recovery, and cycle/reflection/duplicate-execution rejection |
 | B.1–B.5 | Planned after A1 | Pinned Claude differential fixtures, durable private RC recovery, native correlation/gate races, and live outward Anthropic Remote parity |
@@ -118,15 +119,15 @@ the common ingress until its real connector lands. Such a stand-in proves source
 ordering, signing, and executor isolation only; B, C, the applicable automation connector, or N1 owns
 transport, reconnect, rendering, and fidelity proof.
 
-A1.0's unit tests prove only the dormant in-memory and pure-function contracts. By themselves they do not prove a
+A1.0's unit tests prove only the in-memory and pure-function contracts. By themselves they do not prove a
 lease compare-and-swap or takeover, non-artifact protected-value custody, native dispatch, broker
 conformance, driver integration, or restart recovery.
 They include negative-zero, `U+0000`, lone-surrogate, overlong-string, accessor/TOCTOU snapshot, immutable
 validator-registry, symbol-key, noncanonical base64url alias, pre-decode size rejection, protected
 byte snapshots across `Buffer`, fixed and growable `SharedArrayBuffer`, and returned-copy mutation,
-cross-scope canonical-ID, and dormant-import/non-advertisement vectors.
+cross-scope canonical-ID, exact active runtime-owner import allowlisting, and non-advertisement vectors.
 
-A1.1's dormant Linux/`node:sqlite` kernel accepts only an exact stable Node.js `X.Y.Z` version in
+A1.1's Linux/`node:sqlite` kernel accepts only an exact stable Node.js `X.Y.Z` version in
 `^22.13.0 || >=23.5.0`. Its tests cover version boundaries and prerelease-like suffix refusal;
 `/proc/self/fd`
 descriptor anchoring; owner/mode/link/inode and filesystem-policy-v1 checks; rollback-journal and
@@ -150,8 +151,8 @@ closed canonical database path stays quarantined until process restart while ano
 Artifact vectors cover the 16 MiB limit, random `rcph_*`
 allocation with an eight-collision ceiling, immutability, exact scope/schema/reference/digest and
 stored-length verification, append-only database triggers, distinct persistence failures, and
-live-handle poisoning. The public opener's type test excludes entropy and clock injection. Tests open
-only temporary databases; active CLI imports and production state creation remain forbidden.
+live-handle poisoning. The public opener's type test excludes entropy and clock injection. A1.1's
+tests open only temporary databases; A1.3 is now the narrow production caller of the same kernel.
 
 A1.2's tests apply the exact v3 migration over real SQLite, exercise its foreign keys, uniqueness,
 append-only and monotonic triggers, and migrate the exact v2 manifest forward. Repository tests lock
@@ -169,6 +170,36 @@ topology-generation-one chats with exact mapping IDs, unresolved starting bindin
 and installing native-harness `rcie_*` edges. Nested mappings/remote-server edges, live runtimes,
 binding incarnations, actors/queues, and native effects remain later proof gates. A1.2 stores opaque
 evidence refs/digests; A1.4 owns their verification and the callable-port/native registration workflow.
+
+A1.3's tests lock migration 4 to 141 statements and digest
+`zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0` and the complete v4 manifest to 231 rows: 30 tables,
+57 indexes, and 144 triggers. They cover strict runtime-owner record parsers; the canonical
+`rcrt_9eXZ6t2i1B6q6KnTszDoABv6BWYw0blCRXoNgPxF1WM` vector; service-lease acquisition, renewal,
+release, explicit-release takeover, exact replay/collision, and acquisition-COMMIT
+reopen/reconciliation; runtime creation, same-incarnation reassignment, positive
+replacement/termination containment, project-scoped
+local conversation transitions, binding/attachment/gate detach, key rotation, signature
+reserve/bind/sign/accept/abort, and complete semantic snapshot rejection. Cross-table `rcph_*`
+collisions, stale owner/coordinator fences, predecessor time reversal, duplicate signed digests or
+signer tuples, and termination while the tested binding remains live are rejected; detaching that
+binding leaves its runtime current. Key tests cover AES-256-GCM wrapped
+PKCS#8 custody, binding/AAD tamper, self-test, signing, and zeroing temporary secret material; retained
+ciphertext is logical destruction, not claimed physical erasure.
+
+RPC/service tests cover mutual challenge/response authentication on the Linux abstract socket, the
+64-total-connection and 1,024-byte pre-authentication bounds, rejection of pre-authentication
+pipelining, canonical four-byte-length frames, the 1 MiB/32-in-flight/4,096-request bounds, duplicate
+request IDs, replay, malformed frames, per-request timeout, listener loss, heartbeat loss, service
+poisoning,
+normal and signal shutdown, and disconnect-as-detach. Bootstrap/production tests cover connect-first,
+one detached autostart attempt, machine-ID verification, allowlisted child environment/loader
+arguments, a cwd pinned to the trusted CLI entry directory, absence of secret bytes from
+argv/environment, owner-acquisition unknown-commit reconciliation, and health-only
+activation on exactly wrapped `--rc-app` MITM/OpenCode/tmux paths. Plain and help paths, trace mode,
+and the local `--rc-identity` action do not start the owner; unavailable/auth/start failure preserves
+the exact A0 path; wrapper exit closes only its owner RPC collaborator without replacing A0 native
+teardown. These tests do not claim a durably registered native runtime,
+current binding incarnation, terminal root, inference connector, or remote A1 mutation.
 
 ### One-host/many-session acceptance matrix
 
@@ -249,7 +280,9 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   `yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`, and the 81-statement migration 3 to
   `cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4`; require the exact v1 six-object manifest of three
   tables, one explicit unique index, and two triggers, the v2 ten-object manifest with six triggers,
-  and the v3 91-object manifest of 13 tables, 24 indexes, and 54 triggers. Match every `sqlite_schema` row and reject
+  the v3 91-object manifest of 13 tables, 24 indexes, and 54 triggers, and the 141-statement migration 4
+  to `zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0` with the v4 231-object manifest of 30 tables,
+  57 indexes, and 144 triggers. Match every `sqlite_schema` row and reject
   even a hidden `sqlite_*` extra; reject update, delete, or replacement of migration/artifact rows.
   Expose no raw SQL; reject nested/async/escaped transactions and database-level asynchronous artifact
   calls inside a transaction callback; and roll back multiple protected-artifact writes as one unit.
@@ -264,6 +297,28 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   expired predecessor no earlier than its deadline; advance the server pointer/epoch without rewriting
   the predecessor row; clear the server pointer only after releasing the exact current lease and
   epoch it still names; and accept only current/released lease states in v3 semantic validation;
+- race runtime-owner daemon starts for one machine identity and require exactly one current
+  process-start-bound service lease and monotonic owner epoch. Renew only the exact current deadline;
+  on unknown acquisition or release commit, close the poisoned handle, reopen, and reconcile the
+  immutable operation before retry. Expiry or explicit release permits takeover without rewriting the
+  predecessor. Listener loss, lease loss, clock failure, or unusable key custody must remove writability
+  and stop the daemon; a wrapper RPC disconnect must detach only that collaborator and must not release
+  the service lease or terminate any native runtime;
+- derive the runtime root exactly once from its 32-byte launch nonce, start-identity schema, and
+  32-byte start-identity digest. Register many independent Claude/Codex/OpenCode runtimes and many
+  conversations in one owner inventory; preserve shared-daemon siblings when one binding detaches.
+  Reassignment appends a successor owner assignment; replacement/termination requires positive
+  containment evidence and advances or closes the native incarnation without re-deriving the runtime
+  root. While the coordinator is unavailable, append local conversation transitions only for an
+  already durable project; reject an unknown/closed project, and leave first-project allocation to the
+  coordinator;
+- wrap every runtime-owner Ed25519 private key as an authenticated ciphertext envelope bound to its
+  runtime, key ID, generation, public key, and plaintext digest. Expose only a typed opaque handle and
+  closed signing capability; never return root, wrap-key, or PKCS#8 plaintext over RPC or repository
+  inventory. Require current-key startup self-test, monotonically reserved signer sequences, exact
+  purpose/schema binding, one acceptance per signed digest and signer tuple, and rejection of stale,
+  revoked, transplanted, tampered, cross-handle, or duplicate records. Retain ciphertext for audit and
+  call revocation logical destruction, not physical erasure;
 - allocate each terminal chat's installing native inward edge with its binding and point the recovering
   chat at it; that one edge is the non-writable terminal-root reservation and has no certificate yet.
   Prove activation is impossible before the A1.3 runtime owner has a current protected

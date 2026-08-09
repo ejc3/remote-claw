@@ -19,6 +19,7 @@ import {
 const PINNED_VERSION_ONE_DIGEST = "Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec";
 const PINNED_VERSION_TWO_DIGEST = "yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY";
 const PINNED_VERSION_THREE_DIGEST = "cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4";
+const PINNED_VERSION_FOUR_DIGEST = "zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0";
 
 function encoded(byteLength: number, fill: number): string {
   return base64urlEncode(new Uint8Array(byteLength).fill(fill));
@@ -34,6 +35,13 @@ const BINDING_ID = `rcnb_${encoded(16, 5)}`;
 const EDGE_ID = `rcie_${encoded(16, 6)}`;
 const REGISTRATION_ATTEMPT_ID = `rcra_${encoded(16, 7)}`;
 const COORDINATOR_LEASE_ID = `rccl_${encoded(16, 8)}`;
+const RUNTIME_ID = `rcrt_${encoded(32, 10)}`;
+const WARDEN_LAUNCH_NONCE = encoded(32, 11);
+const PUBLIC_KEY = encoded(32, 12);
+const SIGNATURE = encoded(64, 13);
+const SIGNING_KEY_HANDLE_ID = `rcph_${encoded(16, 14)}`;
+const RUNTIME_OWNER_LEASE_ID = "runtime-owner-lease-1";
+const RUNTIME_OWNER_ASSIGNMENT_ID = "runtime-owner-assignment-1";
 
 function applyMigrations(database: DatabaseSync, through = HOST_STATE_SCHEMA_VERSION): void {
   for (const migration of HOST_STATE_MIGRATIONS.slice(0, through)) {
@@ -41,14 +49,18 @@ function applyMigrations(database: DatabaseSync, through = HOST_STATE_SCHEMA_VER
   }
 }
 
-function insertMetadata(database: DatabaseSync): void {
+function insertMetadata(
+  database: DatabaseSync,
+  schemaVersion = 3,
+  migrationDigest = PINNED_VERSION_THREE_DIGEST,
+): void {
   database
     .prepare(
       `INSERT INTO host_state_metadata
          (singleton, machine_identity_id, schema_version, migration_digest, created_at_ms)
        VALUES (1, ?, ?, ?, 1)`,
     )
-    .run(MACHINE_IDENTITY_ID, HOST_STATE_SCHEMA_VERSION, PINNED_VERSION_THREE_DIGEST);
+    .run(MACHINE_IDENTITY_ID, schemaVersion, migrationDigest);
 }
 
 function insertDefaultServer(database: DatabaseSync): void {
@@ -162,30 +174,132 @@ function openedV3Database(): DatabaseSync {
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys=ON");
   database.exec("PRAGMA recursive_triggers=ON");
-  applyMigrations(database);
+  applyMigrations(database, 3);
   insertMetadata(database);
   insertDefaultServer(database);
   return database;
 }
 
+function openedV4Database(): DatabaseSync {
+  const database = openedV3Database();
+  const migration = HOST_STATE_MIGRATIONS[3];
+  if (migration === undefined) throw new Error("missing v4 migration");
+  for (const statement of migration.statements) database.exec(statement);
+  database
+    .prepare(
+      `UPDATE host_state_metadata
+       SET schema_version = 4, migration_digest = ?
+       WHERE singleton = 1`,
+    )
+    .run(PINNED_VERSION_FOUR_DIGEST);
+  return database;
+}
+
+function acquireRuntimeOwner(database: DatabaseSync): void {
+  database.exec("BEGIN");
+  try {
+    database
+      .prepare(
+        `INSERT INTO runtime_owner_service_leases
+           (runtime_owner_service_lease_id, machine_identity_id, runtime_owner_service_epoch,
+            owner_instance_id, owner_process_start_identity_schema_id,
+            owner_process_start_identity_ref, owner_process_start_identity_digest,
+            acquired_at_ms, initial_heartbeat_deadline_ms, heartbeat_deadline_ms,
+            released_at_ms, state)
+         VALUES (?, ?, 1, 'owner-instance-1', 'process-start/v1', 'process-start-1', ?,
+                 10, 100, 100, NULL, 'current')`,
+      )
+      .run(RUNTIME_OWNER_LEASE_ID, MACHINE_IDENTITY_ID, DIGEST);
+    database
+      .prepare(
+        `UPDATE runtime_owner_state
+         SET current_runtime_owner_service_epoch = 1,
+             current_runtime_owner_service_lease_id = ?
+         WHERE singleton = 1`,
+      )
+      .run(RUNTIME_OWNER_LEASE_ID);
+    database
+      .prepare(
+        `INSERT INTO runtime_owner_journal_entries
+           (journal_offset, entry_kind, subject_kind, subject_id, operation_id,
+            operation_schema_id, operation_digest, runtime_owner_service_lease_id,
+            runtime_owner_service_epoch, committed_at_ms)
+         VALUES (0, 'service_lease_acquired', 'service_lease', ?, 'acquire-owner-1',
+                 'runtime-owner-acquire/v1', ?, ?, 1, 10)`,
+      )
+      .run(RUNTIME_OWNER_LEASE_ID, DIGEST, RUNTIME_OWNER_LEASE_ID);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function insertInitialRuntime(database: DatabaseSync): void {
+  database.exec("BEGIN");
+  try {
+    database
+      .prepare(
+        `INSERT INTO native_runtimes
+           (runtime_id, descriptor_product, descriptor_access, warden_launch_nonce,
+            initial_start_identity_schema_id, initial_start_identity_ref,
+            initial_start_identity_digest, current_native_incarnation,
+            current_runtime_owner_assignment_id, next_local_transition_seq,
+            created_at_ms, closed_at_ms, state)
+         VALUES (?, 'codex', 'app-server', ?, 'codex-start/v1', 'start-identity-1', ?,
+                 1, ?, 1, 12, NULL, 'current')`,
+      )
+      .run(RUNTIME_ID, WARDEN_LAUNCH_NONCE, DIGEST, RUNTIME_OWNER_ASSIGNMENT_ID);
+    database
+      .prepare(
+        `INSERT INTO native_runtime_incarnations
+           (runtime_id, native_incarnation, descriptor_product, descriptor_access,
+            runtime_owner_service_lease_id, runtime_owner_service_epoch,
+            start_identity_schema_id, start_identity_ref, start_identity_digest,
+            started_at_ms, closed_at_ms, state)
+         VALUES (?, 1, 'codex', 'app-server', ?, 1, 'codex-start/v1',
+                 'start-identity-1', ?, 12, NULL, 'current')`,
+      )
+      .run(RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, DIGEST);
+    database
+      .prepare(
+        `INSERT INTO runtime_owner_assignments
+           (runtime_owner_assignment_id, runtime_id, native_incarnation,
+            assignment_generation, runtime_owner_service_lease_id,
+            runtime_owner_service_epoch, assigned_at_ms, assignment_evidence_schema_id,
+            assignment_evidence_ref, assignment_evidence_digest,
+            supersedes_runtime_owner_assignment_id, reason)
+         VALUES (?, ?, 1, 1, ?, 1, 12, 'runtime-owner-assignment/v1',
+                 'assignment-evidence-1', ?, NULL, 'creation')`,
+      )
+      .run(RUNTIME_OWNER_ASSIGNMENT_ID, RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, DIGEST);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 describe("A1 host-state migrations", () => {
   it("pins the application id, schema version, and exact migration digests", () => {
     expect(HOST_STATE_APPLICATION_ID).toBe(0x52434c57);
-    expect(HOST_STATE_SCHEMA_VERSION).toBe(3);
+    expect(HOST_STATE_SCHEMA_VERSION).toBe(4);
     expect(HOST_STATE_MIGRATION_DIGESTS).toEqual([
       PINNED_VERSION_ONE_DIGEST,
       PINNED_VERSION_TWO_DIGEST,
       PINNED_VERSION_THREE_DIGEST,
+      PINNED_VERSION_FOUR_DIGEST,
     ]);
     expect(HOST_STATE_SCHEMA_MANIFEST).toEqual({
       applicationId: 0x52434c57,
-      schemaVersion: 3,
-      migrationDigest: PINNED_VERSION_THREE_DIGEST,
+      schemaVersion: 4,
+      migrationDigest: PINNED_VERSION_FOUR_DIGEST,
       sqliteSchema: HOST_STATE_SQLITE_SCHEMA_MANIFEST,
     });
     expect(expectedHostStateSqliteSchemaManifest(1)).toHaveLength(6);
     expect(expectedHostStateSqliteSchemaManifest(2)).toHaveLength(10);
     expect(expectedHostStateSqliteSchemaManifest(3)).toHaveLength(91);
+    expect(expectedHostStateSqliteSchemaManifest(4)).toHaveLength(231);
   });
 
   it("commits every exact historical SQL byte into the chained digest", () => {
@@ -237,12 +351,13 @@ describe("A1 host-state migrations", () => {
     expect(expectedHostStateMigrationDigest(1)).toBe(PINNED_VERSION_ONE_DIGEST);
     expect(expectedHostStateMigrationDigest(2)).toBe(PINNED_VERSION_TWO_DIGEST);
     expect(expectedHostStateMigrationDigest(3)).toBe(PINNED_VERSION_THREE_DIGEST);
+    expect(expectedHostStateMigrationDigest(4)).toBe(PINNED_VERSION_FOUR_DIGEST);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 1)).toBe(true);
     expect(isExpectedHostStateMigrationDigest(`${PINNED_VERSION_ONE_DIGEST}=`, 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest("A".repeat(43), 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 2)).toBe(false);
     expect(() => expectedHostStateMigrationDigest(0)).toThrow(/not supported/);
-    expect(() => expectedHostStateMigrationDigest(4)).toThrow(/not supported/);
+    expect(() => expectedHostStateMigrationDigest(5)).toThrow(/not supported/);
   });
 
   it("creates exactly the declared application schema", () => {
@@ -288,9 +403,9 @@ describe("A1 host-state migrations", () => {
         "created_at_ms",
       ]);
 
-      expect(rows.filter((row) => row.type === "table")).toHaveLength(13);
-      expect(rows.filter((row) => row.type === "index")).toHaveLength(24);
-      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(54);
+      expect(rows.filter((row) => row.type === "table")).toHaveLength(30);
+      expect(rows.filter((row) => row.type === "index")).toHaveLength(57);
+      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(144);
       expect(rows.some((row) => String(row.name).startsWith("sqlite_autoindex"))).toBe(false);
       expect(
         database
@@ -333,6 +448,43 @@ describe("A1 host-state migrations", () => {
         "heartbeat_deadline_ms",
         "released_at_ms",
         "state",
+      ]);
+      expect(
+        database
+          .prepare("PRAGMA table_info(runtime_owner_private_keys)")
+          .all()
+          .map((row) => row.name),
+      ).toEqual([
+        "protected_handle_id",
+        "runtime_id",
+        "runtime_owner_identity_key_id",
+        "key_generation",
+        "wrapping_schema_id",
+        "wrap_nonce",
+        "wrapped_pkcs8",
+        "auth_tag",
+        "pkcs8_digest",
+        "created_at_ms",
+        "destroyed_at_ms",
+        "state",
+      ]);
+      expect(
+        database
+          .prepare("PRAGMA table_info(native_runtime_containments)")
+          .all()
+          .map((row) => row.name),
+      ).toEqual([
+        "native_runtime_containment_id",
+        "runtime_id",
+        "predecessor_native_incarnation",
+        "successor_native_incarnation",
+        "kind",
+        "evidence_schema_id",
+        "evidence_ref",
+        "evidence_digest",
+        "runtime_owner_service_lease_id",
+        "runtime_owner_service_epoch",
+        "contained_at_ms",
       ]);
       expect(
         rows
@@ -382,6 +534,827 @@ describe("A1 host-state migrations", () => {
           : left.type.localeCompare(right.type),
       );
       expect(actual).toEqual(expected);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("migrates an exact v3 database to the empty v4 runtime-owner graph", () => {
+    const database = new DatabaseSync(":memory:");
+    try {
+      database.exec("PRAGMA foreign_keys=ON");
+      database.exec("PRAGMA recursive_triggers=ON");
+      applyMigrations(database, 3);
+      insertMetadata(database);
+
+      const migration = HOST_STATE_MIGRATIONS[3];
+      if (migration === undefined) throw new Error("missing v4 migration");
+      expect(migration.id).toBe("004-runtime-owner-durability");
+      expect(migration.statements).toHaveLength(141);
+      for (const statement of migration.statements) database.exec(statement);
+
+      const actual = database
+        .prepare(
+          `SELECT type, name, tbl_name AS tableName, sql
+           FROM sqlite_schema
+           ORDER BY type, name`,
+        )
+        .all();
+      const expected = [...expectedHostStateSqliteSchemaManifest(4)].sort((left, right) =>
+        left.type === right.type
+          ? left.name.localeCompare(right.name)
+          : left.type.localeCompare(right.type),
+      );
+      expect(actual).toEqual(expected);
+      expect(database.prepare("SELECT * FROM runtime_owner_state").all()).toEqual([
+        {
+          singleton: 1,
+          machine_identity_id: MACHINE_IDENTITY_ID,
+          current_runtime_owner_service_epoch: 0,
+          current_runtime_owner_service_lease_id: null,
+          next_journal_offset: 0,
+          created_at_ms: 1,
+        },
+      ]);
+      for (const table of [
+        "runtime_owner_service_leases",
+        "runtime_owner_journal_entries",
+        "native_runtimes",
+        "native_runtime_incarnations",
+        "runtime_owner_assignments",
+        "native_runtime_containments",
+        "runtime_owner_identity_keys",
+        "runtime_owner_private_keys",
+        "runtime_owner_signature_reservations",
+        "runtime_owner_signed_record_acceptances",
+        "local_native_conversations",
+        "local_native_conversation_transitions",
+        "native_binding_incarnations",
+        "native_transport_attachments",
+        "native_transport_leases",
+        "binding_lifecycle_gates",
+      ]) {
+        expect(database.prepare(`SELECT * FROM ${table}`).all(), table).toEqual([]);
+      }
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fences runtime-owner acquisition, heartbeat, release, and journal order", () => {
+    const database = openedV4Database();
+    try {
+      acquireRuntimeOwner(database);
+      expect(
+        database
+          .prepare(
+            `SELECT current_runtime_owner_service_epoch, current_runtime_owner_service_lease_id,
+                    next_journal_offset
+             FROM runtime_owner_state WHERE singleton = 1`,
+          )
+          .get(),
+      ).toEqual({
+        current_runtime_owner_service_epoch: 1,
+        current_runtime_owner_service_lease_id: RUNTIME_OWNER_LEASE_ID,
+        next_journal_offset: 1,
+      });
+
+      database
+        .prepare(
+          `UPDATE runtime_owner_service_leases
+           SET heartbeat_deadline_ms = 120
+           WHERE runtime_owner_service_lease_id = ?`,
+        )
+        .run(RUNTIME_OWNER_LEASE_ID);
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE runtime_owner_service_leases
+             SET heartbeat_deadline_ms = 110
+             WHERE runtime_owner_service_lease_id = ?`,
+          )
+          .run(RUNTIME_OWNER_LEASE_ID),
+      ).toThrow(/strictly extend/);
+
+      database.exec("BEGIN");
+      try {
+        database
+          .prepare(
+            `UPDATE runtime_owner_service_leases
+             SET state = 'released', released_at_ms = 50
+             WHERE runtime_owner_service_lease_id = ?`,
+          )
+          .run(RUNTIME_OWNER_LEASE_ID);
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_journal_entries
+               (journal_offset, entry_kind, subject_kind, subject_id, operation_id,
+                operation_schema_id, operation_digest, runtime_owner_service_lease_id,
+                runtime_owner_service_epoch, committed_at_ms)
+             VALUES (1, 'service_lease_released', 'service_lease', ?, 'release-owner-1',
+                     'runtime-owner-release/v1', ?, ?, 1, 50)`,
+          )
+          .run(RUNTIME_OWNER_LEASE_ID, DIGEST, RUNTIME_OWNER_LEASE_ID);
+        database
+          .prepare(
+            `UPDATE runtime_owner_state
+             SET current_runtime_owner_service_lease_id = NULL
+             WHERE singleton = 1`,
+          )
+          .run();
+        database.exec("COMMIT");
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_service_leases
+               (runtime_owner_service_lease_id, machine_identity_id,
+                runtime_owner_service_epoch, owner_instance_id,
+                owner_process_start_identity_schema_id, owner_process_start_identity_ref,
+                owner_process_start_identity_digest, acquired_at_ms,
+                initial_heartbeat_deadline_ms, heartbeat_deadline_ms, released_at_ms, state)
+             VALUES ('runtime-owner-lease-too-early', ?, 2, 'owner-instance-2',
+                     'process-start/v1', 'process-start-2', ?, 49, 149, 149, NULL, 'current')`,
+          )
+          .run(MACHINE_IDENTITY_ID, DIGEST),
+      ).toThrow(/next fenced epoch/);
+
+      database
+        .prepare(
+          `INSERT INTO runtime_owner_service_leases
+             (runtime_owner_service_lease_id, machine_identity_id,
+              runtime_owner_service_epoch, owner_instance_id,
+              owner_process_start_identity_schema_id, owner_process_start_identity_ref,
+              owner_process_start_identity_digest, acquired_at_ms,
+              initial_heartbeat_deadline_ms, heartbeat_deadline_ms, released_at_ms, state)
+           VALUES ('runtime-owner-lease-2', ?, 2, 'owner-instance-2',
+                   'process-start/v1', 'process-start-2', ?, 50, 150, 150, NULL, 'current')`,
+        )
+        .run(MACHINE_IDENTITY_ID, DIGEST);
+      database
+        .prepare(
+          `UPDATE runtime_owner_state
+           SET current_runtime_owner_service_epoch = 2,
+               current_runtime_owner_service_lease_id = 'runtime-owner-lease-2'
+           WHERE singleton = 1`,
+        )
+        .run();
+      expect(
+        database
+          .prepare(
+            `SELECT state, released_at_ms
+             FROM runtime_owner_service_leases
+             WHERE runtime_owner_service_lease_id = ?`,
+          )
+          .get(RUNTIME_OWNER_LEASE_ID),
+      ).toEqual({ state: "released", released_at_ms: 50 });
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps runtime lineage, owner assignments, containment, and local transitions durable", () => {
+    const database = openedV4Database();
+    try {
+      acquireRuntimeOwner(database);
+      insertInitialProject(database);
+      insertInitialRuntime(database);
+
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_assignments
+               (runtime_owner_assignment_id, runtime_id, native_incarnation,
+                assignment_generation, runtime_owner_service_lease_id,
+                runtime_owner_service_epoch, assigned_at_ms, assignment_evidence_schema_id,
+                assignment_evidence_ref, assignment_evidence_digest,
+                supersedes_runtime_owner_assignment_id, reason)
+             VALUES ('assignment-gap', ?, 1, 3, ?, 1, 20, 'assignment/v1',
+                     'assignment-gap-evidence', ?, ?, 'takeover')`,
+          )
+          .run(RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, DIGEST, RUNTIME_OWNER_ASSIGNMENT_ID),
+      ).toThrow(/exact predecessor/);
+
+      database
+        .prepare(
+          `INSERT INTO local_native_conversations
+             (local_native_conversation_id, descriptor_product, descriptor_access,
+              project_id, runtime_id, native_incarnation, semantic_conversation_id,
+              parent_local_native_conversation_id, state)
+           VALUES ('local-conversation-1', 'codex', 'app-server', ?, ?, 1,
+                   'codex-thread-1', NULL, 'open')`,
+        )
+        .run(PROJECT_ID, RUNTIME_ID);
+      database
+        .prepare(
+          `INSERT INTO local_native_conversation_transitions
+             (local_transition_id, runtime_id, native_incarnation, local_transition_seq,
+              kind, source_local_native_conversation_id, target_local_native_conversation_id,
+              observed_semantic_conversation_id, native_evidence_ref,
+              native_evidence_schema_id, native_evidence_digest, observed_at_ms)
+           VALUES ('local-transition-1', ?, 1, 1, 'discover', NULL,
+                   'local-conversation-1', 'codex-thread-1', 'native-evidence-1',
+                   'codex-native-evidence/v1', ?, 20)`,
+        )
+        .run(RUNTIME_ID, DIGEST);
+      expect(
+        database
+          .prepare("SELECT next_local_transition_seq FROM native_runtimes WHERE runtime_id = ?")
+          .get(RUNTIME_ID),
+      ).toEqual({ next_local_transition_seq: 2 });
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO local_native_conversation_transitions
+               (local_transition_id, runtime_id, native_incarnation, local_transition_seq,
+                kind, source_local_native_conversation_id, target_local_native_conversation_id,
+                observed_semantic_conversation_id, native_evidence_ref,
+                native_evidence_schema_id, native_evidence_digest, observed_at_ms)
+             VALUES ('local-transition-gap', ?, 1, 3, 'archive', 'local-conversation-1',
+                     'local-conversation-1', 'codex-thread-1', 'native-evidence-gap',
+                     'codex-native-evidence/v1', ?, 21)`,
+          )
+          .run(RUNTIME_ID, DIGEST),
+      ).toThrow(/next runtime sequence/);
+
+      database.exec("BEGIN");
+      try {
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_service_leases
+               (runtime_owner_service_lease_id, machine_identity_id,
+                runtime_owner_service_epoch, owner_instance_id,
+                owner_process_start_identity_schema_id, owner_process_start_identity_ref,
+                owner_process_start_identity_digest, acquired_at_ms,
+                initial_heartbeat_deadline_ms, heartbeat_deadline_ms, released_at_ms, state)
+             VALUES ('runtime-owner-lease-2', ?, 2, 'owner-instance-2',
+                     'process-start/v1', 'process-start-2', ?, 100, 200, 200, NULL, 'current')`,
+          )
+          .run(MACHINE_IDENTITY_ID, DIGEST);
+        database
+          .prepare(
+            `UPDATE runtime_owner_state
+             SET current_runtime_owner_service_epoch = 2,
+                 current_runtime_owner_service_lease_id = 'runtime-owner-lease-2'
+             WHERE singleton = 1`,
+          )
+          .run();
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_journal_entries
+               (journal_offset, entry_kind, subject_kind, subject_id, operation_id,
+                operation_schema_id, operation_digest, runtime_owner_service_lease_id,
+                runtime_owner_service_epoch, committed_at_ms)
+             VALUES (1, 'service_lease_acquired', 'service_lease',
+                     'runtime-owner-lease-2', 'acquire-owner-2',
+                     'runtime-owner-acquire/v1', ?, 'runtime-owner-lease-2', 2, 100)`,
+          )
+          .run(DIGEST);
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_assignments
+               (runtime_owner_assignment_id, runtime_id, native_incarnation,
+                assignment_generation, runtime_owner_service_lease_id,
+                runtime_owner_service_epoch, assigned_at_ms, assignment_evidence_schema_id,
+                assignment_evidence_ref, assignment_evidence_digest,
+                supersedes_runtime_owner_assignment_id, reason)
+             VALUES ('runtime-owner-assignment-2', ?, 1, 2, 'runtime-owner-lease-2', 2,
+                     100, 'runtime-owner-assignment/v1', 'assignment-evidence-2', ?, ?,
+                     'takeover')`,
+          )
+          .run(RUNTIME_ID, DIGEST, RUNTIME_OWNER_ASSIGNMENT_ID);
+        database
+          .prepare(
+            `UPDATE native_runtimes
+             SET current_runtime_owner_assignment_id = 'runtime-owner-assignment-2'
+             WHERE runtime_id = ?`,
+          )
+          .run(RUNTIME_ID);
+        database.exec("COMMIT");
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+      expect(
+        database
+          .prepare(
+            `SELECT current_native_incarnation, current_runtime_owner_assignment_id
+             FROM native_runtimes WHERE runtime_id = ?`,
+          )
+          .get(RUNTIME_ID),
+      ).toEqual({
+        current_native_incarnation: 1,
+        current_runtime_owner_assignment_id: "runtime-owner-assignment-2",
+      });
+
+      database.exec("BEGIN");
+      try {
+        database
+          .prepare(
+            `INSERT INTO native_runtime_containments
+               (native_runtime_containment_id, runtime_id,
+                predecessor_native_incarnation, successor_native_incarnation, kind,
+                evidence_schema_id, evidence_ref, evidence_digest,
+                runtime_owner_service_lease_id, runtime_owner_service_epoch, contained_at_ms)
+             VALUES ('runtime-containment-1', ?, 1, NULL, 'termination',
+                     'runtime-containment/v1', 'containment-evidence-1', ?,
+                     'runtime-owner-lease-2', 2, 110)`,
+          )
+          .run(RUNTIME_ID, DIGEST);
+        database
+          .prepare(
+            `UPDATE native_runtime_incarnations
+             SET state = 'closed', closed_at_ms = 110
+             WHERE runtime_id = ? AND native_incarnation = 1`,
+          )
+          .run(RUNTIME_ID);
+        database
+          .prepare(
+            `UPDATE native_runtimes
+             SET current_native_incarnation = NULL,
+                 current_runtime_owner_assignment_id = NULL,
+                 closed_at_ms = 110,
+                 state = 'closed'
+             WHERE runtime_id = ?`,
+          )
+          .run(RUNTIME_ID);
+        database.exec("COMMIT");
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+      expect(() =>
+        database
+          .prepare(
+            "DELETE FROM native_runtime_containments WHERE native_runtime_containment_id = 'runtime-containment-1'",
+          )
+          .run(),
+      ).toThrow(/retained/);
+      expect(() =>
+        database
+          .prepare("UPDATE native_runtimes SET closed_at_ms = 111 WHERE runtime_id = ?")
+          .run(RUNTIME_ID),
+      ).toThrow(/state transition/);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("advances a runtime incarnation only after durable replacement containment", () => {
+    const database = openedV4Database();
+    try {
+      acquireRuntimeOwner(database);
+      insertInitialRuntime(database);
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO native_runtime_incarnations
+               (runtime_id, native_incarnation, descriptor_product, descriptor_access,
+                runtime_owner_service_lease_id, runtime_owner_service_epoch,
+                start_identity_schema_id, start_identity_ref, start_identity_digest,
+                started_at_ms, closed_at_ms, state)
+             VALUES (?, 2, 'codex', 'app-server', ?, 1, 'codex-start/v1',
+                     'start-identity-2', ?, 20, NULL, 'starting')`,
+          )
+          .run(RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, DIGEST),
+      ).toThrow(/contained predecessor/);
+
+      database.exec("BEGIN");
+      try {
+        database
+          .prepare(
+            `INSERT INTO native_runtime_containments
+               (native_runtime_containment_id, runtime_id,
+                predecessor_native_incarnation, successor_native_incarnation, kind,
+                evidence_schema_id, evidence_ref, evidence_digest,
+                runtime_owner_service_lease_id, runtime_owner_service_epoch, contained_at_ms)
+             VALUES ('runtime-replacement-1', ?, 1, 2, 'replacement',
+                     'runtime-replacement/v1', 'replacement-evidence-1', ?, ?, 1, 20)`,
+          )
+          .run(RUNTIME_ID, DIGEST, RUNTIME_OWNER_LEASE_ID);
+        database
+          .prepare(
+            `UPDATE native_runtime_incarnations
+             SET state = 'closed', closed_at_ms = 20
+             WHERE runtime_id = ? AND native_incarnation = 1`,
+          )
+          .run(RUNTIME_ID);
+        database
+          .prepare(
+            `INSERT INTO native_runtime_incarnations
+               (runtime_id, native_incarnation, descriptor_product, descriptor_access,
+                runtime_owner_service_lease_id, runtime_owner_service_epoch,
+                start_identity_schema_id, start_identity_ref, start_identity_digest,
+                started_at_ms, closed_at_ms, state)
+             VALUES (?, 2, 'codex', 'app-server', ?, 1, 'codex-start/v1',
+                     'start-identity-2', ?, 20, NULL, 'starting')`,
+          )
+          .run(RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, DIGEST);
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_assignments
+               (runtime_owner_assignment_id, runtime_id, native_incarnation,
+                assignment_generation, runtime_owner_service_lease_id,
+                runtime_owner_service_epoch, assigned_at_ms, assignment_evidence_schema_id,
+                assignment_evidence_ref, assignment_evidence_digest,
+                supersedes_runtime_owner_assignment_id, reason)
+             VALUES ('runtime-owner-assignment-inc2', ?, 2, 1, ?, 1, 20,
+                     'runtime-owner-assignment/v1', 'assignment-evidence-inc2', ?,
+                     NULL, 'creation')`,
+          )
+          .run(RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, DIGEST);
+        database
+          .prepare(
+            `UPDATE native_runtimes
+             SET current_native_incarnation = 2,
+                 current_runtime_owner_assignment_id = 'runtime-owner-assignment-inc2'
+             WHERE runtime_id = ?`,
+          )
+          .run(RUNTIME_ID);
+        database.exec("COMMIT");
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+      expect(
+        database
+          .prepare(
+            `SELECT current_native_incarnation, current_runtime_owner_assignment_id
+             FROM native_runtimes WHERE runtime_id = ?`,
+          )
+          .get(RUNTIME_ID),
+      ).toEqual({
+        current_native_incarnation: 2,
+        current_runtime_owner_assignment_id: "runtime-owner-assignment-inc2",
+      });
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("stores only wrapped signing keys and preserves signer sequence evidence", () => {
+    const database = openedV4Database();
+    try {
+      acquireRuntimeOwner(database);
+      insertInitialRuntime(database);
+
+      const artifactHandle = `rcph_${encoded(16, 15)}`;
+      database
+        .prepare(
+          `INSERT INTO protected_artifacts
+             (protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+              artifact_digest, byte_length, artifact_bytes, created_at_ms)
+           VALUES (?, 'artifact', 'runtime', ?, 'test/v1', ?, 1, ?, 14)`,
+        )
+        .run(artifactHandle, RUNTIME_ID, DIGEST, Uint8Array.of(1));
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_private_keys
+               (protected_handle_id, runtime_id, runtime_owner_identity_key_id,
+                key_generation, wrapping_schema_id, wrap_nonce, wrapped_pkcs8,
+                auth_tag, pkcs8_digest, created_at_ms, destroyed_at_ms, state)
+             VALUES (?, ?, 'uncommitted-key', 1,
+                     'remote-claw/runtime-owner-key-wrap/aes-256-gcm/v1',
+                     ?, ?, ?, ?, 15, NULL, 'current')`,
+          )
+          .run(
+            artifactHandle,
+            RUNTIME_ID,
+            new Uint8Array(12).fill(1),
+            new Uint8Array(64).fill(2),
+            new Uint8Array(16).fill(3),
+            DIGEST,
+          ),
+      ).toThrow(/artifact/);
+
+      database.exec("BEGIN");
+      try {
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_identity_keys
+               (runtime_owner_identity_key_id, runtime_id, key_generation, algorithm,
+                public_key, signing_key_protected_handle_id, next_signer_sequence,
+                local_trust_evidence_ref, local_trust_evidence_digest, state)
+             VALUES ('runtime-key-1', ?, 1, 'Ed25519', ?, ?, 0,
+                     'key-trust-evidence-1', ?, 'current')`,
+          )
+          .run(RUNTIME_ID, PUBLIC_KEY, SIGNING_KEY_HANDLE_ID, DIGEST);
+        database
+          .prepare(
+            `INSERT INTO runtime_owner_private_keys
+               (protected_handle_id, runtime_id, runtime_owner_identity_key_id,
+                key_generation, wrapping_schema_id, wrap_nonce, wrapped_pkcs8,
+                auth_tag, pkcs8_digest, created_at_ms, destroyed_at_ms, state)
+             VALUES (?, ?, 'runtime-key-1', 1,
+                     'remote-claw/runtime-owner-key-wrap/aes-256-gcm/v1',
+                     ?, ?, ?, ?, 15, NULL, 'current')`,
+          )
+          .run(
+            SIGNING_KEY_HANDLE_ID,
+            RUNTIME_ID,
+            new Uint8Array(12).fill(1),
+            new Uint8Array(64).fill(2),
+            new Uint8Array(16).fill(3),
+            DIGEST,
+          );
+        database.exec("COMMIT");
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO protected_artifacts
+               (protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+                artifact_digest, byte_length, artifact_bytes, created_at_ms)
+             VALUES (?, 'artifact', 'runtime', ?, 'test/v1', ?, 1, ?, 16)`,
+          )
+          .run(SIGNING_KEY_HANDLE_ID, RUNTIME_ID, DIGEST, Uint8Array.of(1)),
+      ).toThrow(/signing key/);
+
+      database
+        .prepare(
+          `INSERT INTO runtime_owner_signature_reservations
+             (runtime_id, runtime_owner_identity_key_id, runtime_owner_key_generation,
+              signer_sequence, purpose, canonical_payload_schema_id,
+              canonical_payload_ref, canonical_payload_digest, signed_record_digest,
+              signature, signed_artifact_id, state)
+           VALUES (?, 'runtime-key-1', 1, 0, 'native_root', NULL, NULL, NULL,
+                   NULL, NULL, NULL, 'reserved')`,
+        )
+        .run(RUNTIME_ID);
+      expect(
+        database
+          .prepare(
+            `SELECT next_signer_sequence FROM runtime_owner_identity_keys
+             WHERE runtime_id = ? AND key_generation = 1`,
+          )
+          .get(RUNTIME_ID),
+      ).toEqual({ next_signer_sequence: 1 });
+      database
+        .prepare(
+          `UPDATE runtime_owner_signature_reservations
+           SET canonical_payload_schema_id = 'remote-claw/native-root-certificate/v1',
+               canonical_payload_ref = 'native-root-payload-1',
+               canonical_payload_digest = ?, state = 'bound'
+           WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+             AND runtime_owner_key_generation = 1 AND signer_sequence = 0`,
+        )
+        .run(DIGEST, RUNTIME_ID);
+      database
+        .prepare(
+          `UPDATE runtime_owner_signature_reservations
+           SET signed_record_digest = ?, signature = ?,
+               signed_artifact_id = 'native-root-artifact-1', state = 'signed'
+           WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+             AND runtime_owner_key_generation = 1 AND signer_sequence = 0`,
+        )
+        .run(DIGEST, SIGNATURE, RUNTIME_ID);
+      database
+        .prepare(
+          `INSERT INTO runtime_owner_signed_record_acceptances
+             (runtime_id, runtime_owner_identity_key_id, runtime_owner_key_generation,
+              signer_sequence, signed_record_digest, accepted_at_ms)
+           VALUES (?, 'runtime-key-1', 1, 0, ?, 20)`,
+        )
+        .run(RUNTIME_ID, DIGEST);
+      database
+        .prepare(
+          `INSERT INTO runtime_owner_signature_reservations
+             (runtime_id, runtime_owner_identity_key_id, runtime_owner_key_generation,
+              signer_sequence, purpose, canonical_payload_schema_id,
+              canonical_payload_ref, canonical_payload_digest, signed_record_digest,
+              signature, signed_artifact_id, state)
+           VALUES (?, 'runtime-key-1', 1, 1, 'native_root',
+                   'remote-claw/native-root-certificate/v1', 'native-root-payload-2', ?,
+                   NULL, NULL, NULL, 'bound')`,
+        )
+        .run(RUNTIME_ID, encoded(32, 16));
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE runtime_owner_signature_reservations
+             SET signed_record_digest = ?, signature = ?,
+                 signed_artifact_id = 'native-root-artifact-2', state = 'signed'
+             WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+               AND runtime_owner_key_generation = 1 AND signer_sequence = 1`,
+          )
+          .run(DIGEST, SIGNATURE, RUNTIME_ID),
+      ).toThrow(/UNIQUE/);
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE runtime_owner_signature_reservations
+             SET canonical_payload_digest = ?
+             WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+               AND runtime_owner_key_generation = 1 AND signer_sequence = 1`,
+          )
+          .run(encoded(32, 17), RUNTIME_ID),
+      ).toThrow(/lifecycle is monotonic/);
+      expect(() =>
+        database
+          .prepare("UPDATE runtime_owner_signed_record_acceptances SET accepted_at_ms = 21")
+          .run(),
+      ).toThrow(/append-only/);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("prepares exact binding runtime links without activating the v3 binding", () => {
+    const database = openedV4Database();
+    try {
+      acquireRuntimeOwner(database);
+      insertInitialProject(database);
+      insertTerminalChat(database);
+      insertInitialRuntime(database);
+
+      database
+        .prepare(
+          `INSERT INTO native_binding_incarnations
+             (native_binding_incarnation_id, collaboration_server_id, logical_chat_id,
+              native_binding_id, runtime_id, native_incarnation, semantic_conversation_id,
+              created_at_ms, closed_at_ms, state)
+           VALUES ('binding-incarnation-1', ?, ?, ?, ?, 1, 'codex-thread-1',
+                   20, NULL, 'current')`,
+        )
+        .run(SERVER_ID, CHAT_ID, BINDING_ID, RUNTIME_ID);
+      database
+        .prepare(
+          `INSERT INTO native_transport_attachments
+             (attachment_id, native_binding_id, kind, transport_id, generation,
+              current_attachment_lease_id, resource_ownership,
+              created_at_ms, closed_at_ms, state)
+           VALUES ('attachment-1', ?, 'app-server', 'codex-app-server-1', 1,
+                   NULL, 'shared_runtime', 20, NULL, 'current')`,
+        )
+        .run(BINDING_ID);
+      database
+        .prepare(
+          `INSERT INTO binding_lifecycle_gates
+             (native_binding_id, collaboration_server_id, logical_chat_id, runtime_id,
+              native_incarnation, native_binding_incarnation_id, attachment_id,
+              current_attachment_lease_id, phase, disconnect_policy,
+              gate_generation, updated_at_ms)
+           VALUES (?, ?, ?, ?, 1, 'binding-incarnation-1', 'attachment-1', NULL,
+                   'starting', 'detach', 1, 20)`,
+        )
+        .run(BINDING_ID, SERVER_ID, CHAT_ID, RUNTIME_ID);
+
+      expect(
+        database
+          .prepare(
+            `SELECT semantic_conversation_id, current_binding_incarnation_id, state
+             FROM native_bindings WHERE native_binding_id = ?`,
+          )
+          .get(BINDING_ID),
+      ).toEqual({
+        semantic_conversation_id: null,
+        current_binding_incarnation_id: null,
+        state: "starting",
+      });
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE binding_lifecycle_gates
+             SET phase = 'ready', gate_generation = 2, updated_at_ms = 21
+             WHERE native_binding_id = ?`,
+          )
+          .run(BINDING_ID),
+      ).toThrow();
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE native_bindings
+             SET semantic_conversation_id = 'wrong-thread',
+                 current_binding_incarnation_id = 'binding-incarnation-1',
+                 state = 'current'
+             WHERE native_binding_id = ?`,
+          )
+          .run(BINDING_ID),
+      ).toThrow(/exact current incarnation/);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("orders successor transport leases after the predecessor release", () => {
+    const database = openedV4Database();
+    try {
+      acquireRuntimeOwner(database);
+      insertInitialProject(database);
+      insertTerminalChat(database);
+      insertInitialRuntime(database);
+      database
+        .prepare(
+          `INSERT INTO coordinator_leases
+             (coordinator_lease_id, collaboration_server_id, coordinator_epoch,
+              owner_instance_id, acquired_at_ms, initial_heartbeat_deadline_ms,
+              heartbeat_deadline_ms, released_at_ms, state)
+           VALUES (?, ?, 1, 'coordinator-1', 10, 100, 100, NULL, 'current')`,
+        )
+        .run(COORDINATOR_LEASE_ID, SERVER_ID);
+      database
+        .prepare(
+          `UPDATE collaboration_servers
+           SET current_coordinator_epoch = 1, current_coordinator_lease_id = ?
+           WHERE collaboration_server_id = ?`,
+        )
+        .run(COORDINATOR_LEASE_ID, SERVER_ID);
+      database
+        .prepare(
+          `INSERT INTO native_binding_incarnations
+             (native_binding_incarnation_id, collaboration_server_id, logical_chat_id,
+              native_binding_id, runtime_id, native_incarnation, semantic_conversation_id,
+              created_at_ms, closed_at_ms, state)
+           VALUES ('transport-binding-incarnation', ?, ?, ?, ?, 1, 'codex-thread-1',
+                   20, NULL, 'current')`,
+        )
+        .run(SERVER_ID, CHAT_ID, BINDING_ID, RUNTIME_ID);
+      database
+        .prepare(
+          `INSERT INTO native_transport_attachments
+             (attachment_id, native_binding_id, kind, transport_id, generation,
+              current_attachment_lease_id, resource_ownership,
+              created_at_ms, closed_at_ms, state)
+           VALUES ('transport-attachment', ?, 'app-server', 'codex-app-server-1', 1,
+                   NULL, 'shared_runtime', 20, NULL, 'current')`,
+        )
+        .run(BINDING_ID);
+      database
+        .prepare(
+          `INSERT INTO native_transport_leases
+             (attachment_lease_id, attachment_id, native_binding_incarnation_id,
+              runtime_id, native_incarnation, runtime_owner_service_lease_id,
+              runtime_owner_service_epoch, coordinator_lease_id, coordinator_epoch,
+              transport_epoch, current_capability_snapshot_id,
+              current_native_client_ingress_lease_id, acquired_at_ms, released_at_ms, state)
+           VALUES ('transport-lease-1', 'transport-attachment',
+                   'transport-binding-incarnation', ?, 1, ?, 1, ?, 1, 1,
+                   NULL, NULL, 20, NULL, 'current')`,
+        )
+        .run(RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, COORDINATOR_LEASE_ID);
+      database
+        .prepare(
+          `UPDATE native_transport_attachments
+           SET current_attachment_lease_id = 'transport-lease-1'
+           WHERE attachment_id = 'transport-attachment'`,
+        )
+        .run();
+      database
+        .prepare(
+          `UPDATE native_transport_leases
+           SET released_at_ms = 30, state = 'superseded'
+           WHERE attachment_lease_id = 'transport-lease-1'`,
+        )
+        .run();
+      database
+        .prepare(
+          `UPDATE native_transport_attachments
+           SET current_attachment_lease_id = NULL
+           WHERE attachment_id = 'transport-attachment'`,
+        )
+        .run();
+
+      const successorSql = `INSERT INTO native_transport_leases
+        (attachment_lease_id, attachment_id, native_binding_incarnation_id,
+         runtime_id, native_incarnation, runtime_owner_service_lease_id,
+         runtime_owner_service_epoch, coordinator_lease_id, coordinator_epoch,
+         transport_epoch, current_capability_snapshot_id,
+         current_native_client_ingress_lease_id, acquired_at_ms, released_at_ms, state)
+       VALUES (?, 'transport-attachment', 'transport-binding-incarnation', ?, 1, ?, 1,
+               ?, 1, 2, NULL, NULL, ?, NULL, 'current')`;
+      expect(() =>
+        database
+          .prepare(successorSql)
+          .run(
+            "transport-lease-too-early",
+            RUNTIME_ID,
+            RUNTIME_OWNER_LEASE_ID,
+            COORDINATOR_LEASE_ID,
+            29,
+          ),
+      ).toThrow(/exact owner and coordinator fences/);
+      database
+        .prepare(successorSql)
+        .run("transport-lease-2", RUNTIME_ID, RUNTIME_OWNER_LEASE_ID, COORDINATOR_LEASE_ID, 30);
+      expect(
+        database.prepare("SELECT state FROM native_runtimes WHERE runtime_id = ?").get(RUNTIME_ID),
+      ).toEqual({ state: "current" });
       expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       database.close();

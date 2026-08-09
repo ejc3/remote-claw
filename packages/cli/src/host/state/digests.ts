@@ -8,10 +8,13 @@ import {
 import {
   type A1Digest,
   HostStateContractError,
+  type NativeRuntimeId,
   type ProjectTargetSelectorMappingId,
   parseA1CanonicalId,
   parseA1Digest,
   parseA1SafeId,
+  parseWardenLaunchNonce,
+  type WardenLaunchNonce,
 } from "./ids.js";
 import {
   type NativeRegistrationIntentRecord,
@@ -23,6 +26,7 @@ import {
   parseProjectTarget,
   parseProjectTargetSelectorMappingRecord,
 } from "./records.js";
+import { type NativeRuntimeRecord, parseNativeRuntimeRecord } from "./runtime.js";
 import { parseEnum, parseLiteral, parseNonEmptyString } from "./validation.js";
 
 async function digest(writer: CanonicalWriter): Promise<A1Digest> {
@@ -35,6 +39,57 @@ function digestBytes(value: unknown, field: string): Uint8Array {
 
 function equalDigest(a: A1Digest, b: A1Digest): boolean {
   return timingSafeEqual(digestBytes(a, "computedDigest"), digestBytes(b, "claimedDigest"));
+}
+
+export interface NativeRuntimeIdInput {
+  readonly wardenLaunchNonce: WardenLaunchNonce;
+  readonly startIdentitySchemaId: string;
+  readonly startIdentityDigest: A1Digest;
+}
+
+/**
+ * Stable selected-A1 runtime lineage ID.
+ *
+ * The founding launch nonce and start identity are used once. A successor
+ * process advances the lineage's native incarnation instead of deriving a new
+ * runtime ID from the successor's process identity.
+ */
+export async function nativeRuntimeId(input: NativeRuntimeIdInput): Promise<NativeRuntimeId> {
+  const wardenLaunchNonce = parseWardenLaunchNonce(
+    input.wardenLaunchNonce,
+    "nativeRuntimeId.wardenLaunchNonce",
+  );
+  const startIdentitySchemaId = parseNonEmptyString(
+    input.startIdentitySchemaId,
+    "nativeRuntimeId.startIdentitySchemaId",
+  );
+  const startIdentityDigest = parseA1Digest(
+    input.startIdentityDigest,
+    "nativeRuntimeId.startIdentityDigest",
+  );
+  const writer = new CanonicalWriter();
+  writer.str("remote-claw/native-runtime-id/v1");
+  writer.bytes(base64urlDecode(wardenLaunchNonce));
+  writer.str(startIdentitySchemaId);
+  writer.bytes(digestBytes(startIdentityDigest, "nativeRuntimeId.startIdentityDigest"));
+  return parseA1CanonicalId(
+    "nativeRuntime",
+    `rcrt_${base64urlEncode(await sha256(writer.finish()))}`,
+  );
+}
+
+export async function verifyNativeRuntimeId(record: NativeRuntimeRecord): Promise<void> {
+  const parsed = parseNativeRuntimeRecord(record);
+  const computed = await nativeRuntimeId({
+    wardenLaunchNonce: parsed.wardenLaunchNonce,
+    startIdentitySchemaId: parsed.initialStartIdentitySchemaId,
+    startIdentityDigest: parsed.initialStartIdentityDigest,
+  });
+  if (computed !== parsed.runtimeId) {
+    throw new HostStateContractError(
+      "nativeRuntime.runtimeId does not match its founding identity",
+    );
+  }
 }
 
 /**
