@@ -695,6 +695,71 @@ function sqlGet(
   }
 }
 
+function assertNoRetainedRegistrationForBindingGraph(
+  transaction: HostStateRepositorySqlTransaction,
+  nativeBindingIncarnationId: A1SafeId,
+  attachmentLeaseId: A1SafeId,
+): void {
+  const retained = sqlGet(
+    transaction,
+    `SELECT native_conversation_lease_id
+       FROM native_conversation_leases
+      WHERE native_binding_incarnation_id = ? OR attachment_lease_id = ?
+      LIMIT 1`,
+    [nativeBindingIncarnationId, attachmentLeaseId],
+  );
+  if (retained !== undefined) {
+    throw new RuntimeOwnerRepositoryConflictError(
+      "binding graph is retained by native registration lineage",
+    );
+  }
+}
+
+function assertNoRetainedRegistrationForRuntimeIncarnation(
+  transaction: HostStateRepositorySqlTransaction,
+  runtimeId: NativeRuntimeId,
+  nativeIncarnation: number,
+): void {
+  const retained = sqlGet(
+    transaction,
+    `SELECT native_conversation_lease_id
+       FROM native_conversation_leases
+      WHERE runtime_id = ? AND native_incarnation = ?
+      LIMIT 1`,
+    [runtimeId, nativeIncarnation],
+  );
+  if (retained !== undefined) {
+    throw new RuntimeOwnerRepositoryConflictError(
+      "runtime incarnation is retained by native registration lineage",
+    );
+  }
+}
+
+function assertNoRetainedRegistrationForSemanticConversation(
+  transaction: HostStateRepositorySqlTransaction,
+  runtimeId: NativeRuntimeId,
+  nativeIncarnation: number,
+  semanticConversationId: A1SafeId | null,
+): void {
+  if (semanticConversationId === null) return;
+  const retained = sqlGet(
+    transaction,
+    `SELECT lease.native_conversation_lease_id
+       FROM native_conversation_leases AS lease
+       JOIN native_binding_incarnations AS binding
+         ON binding.native_binding_incarnation_id = lease.native_binding_incarnation_id
+      WHERE binding.runtime_id = ? AND binding.native_incarnation = ?
+        AND binding.semantic_conversation_id = ?
+      LIMIT 1`,
+    [runtimeId, nativeIncarnation, semanticConversationId],
+  );
+  if (retained !== undefined) {
+    throw new RuntimeOwnerRepositoryConflictError(
+      "semantic conversation is retained by native registration lineage",
+    );
+  }
+}
+
 function sqlAll(
   transaction: HostStateRepositorySqlTransaction,
   sql: string,
@@ -2187,12 +2252,14 @@ function claimJournalFact(
 export function validateRuntimeOwnerRepositorySnapshot(
   transaction: HostStateRepositorySqlTransaction,
   machineIdentityId: string,
+  schemaVersion = 4,
 ): RuntimeOwnerInventory {
   const expectedMachineIdentityId = parseMachineIdentityId(
     machineIdentityId,
     "validateRuntimeOwnerRepositorySnapshot.machineIdentityId",
   );
   const inventory = readInventoryTransaction(transaction);
+  const allowNativeRegistration = schemaVersion >= 5;
   snapshotAssert(
     inventory.state.machineIdentityId === expectedMachineIdentityId,
     "machine identity does not match the repository scope",
@@ -3136,18 +3203,26 @@ export function validateRuntimeOwnerRepositorySnapshot(
     const exactAttachment =
       exactLease === undefined ? undefined : attachmentsById.get(exactLease.attachmentId);
     const exactGate = gatesByBindingId.get(bindingIncarnation.nativeBindingId);
+    const bindingRootIsDormant =
+      binding?.state === "starting" &&
+      binding.semanticConversationId === null &&
+      binding.currentBindingIncarnationId === null;
+    const bindingRootIsActivated =
+      allowNativeRegistration &&
+      binding?.state === "current" &&
+      binding.semanticConversationId === bindingIncarnation.semanticConversationId &&
+      binding.currentBindingIncarnationId === bindingIncarnation.nativeBindingIncarnationId;
     snapshotAssert(
       binding !== undefined &&
         binding.collaborationServerId === bindingIncarnation.collaborationServerId &&
         binding.logicalChatId === bindingIncarnation.logicalChatId &&
-        binding.state === "starting" &&
-        binding.semanticConversationId === null &&
-        binding.currentBindingIncarnationId === null,
+        (bindingRootIsDormant || bindingRootIsActivated),
       "A1.3 binding incarnation changes or escapes its dormant A1.2 binding root",
     );
     snapshotAssert(
-      exactLeases.length === 1 &&
+      (allowNativeRegistration ? exactLeases.length >= 1 : exactLeases.length === 1) &&
         exactLease !== undefined &&
+        exactLeases.every(({ attachmentId }) => attachmentId === exactLease.attachmentId) &&
         exactAttachment?.nativeBindingId === bindingIncarnation.nativeBindingId &&
         exactGate?.nativeBindingIncarnationId === bindingIncarnation.nativeBindingIncarnationId &&
         exactGate.attachmentId === exactAttachment.attachmentId,
@@ -3186,6 +3261,38 @@ export function validateRuntimeOwnerRepositorySnapshot(
       exactLease.attachmentLeaseId,
       attachmentEntry.journalOffset,
     );
+    if (allowNativeRegistration) {
+      let previousAcquisitionOffset = attachmentEntry.journalOffset;
+      for (const successorLease of exactLeases.slice(1)) {
+        const successorEntry = claimJournalFact(
+          inventory.journal,
+          claimedJournalOffsets,
+          {
+            entryKind: "attachment_lease_acquired",
+            subjectId: successorLease.attachmentLeaseId,
+            committedAtMs: successorLease.acquiredAtMs,
+            runtimeOwnerServiceLeaseId: successorLease.runtimeOwnerServiceLeaseId,
+            runtimeOwnerServiceEpoch: successorLease.runtimeOwnerServiceEpoch,
+          },
+          `attachment lease ${successorLease.attachmentLeaseId} reacquisition`,
+        );
+        snapshotAssert(
+          successorEntry.journalOffset > previousAcquisitionOffset,
+          "transport lease reacquisition does not follow its predecessor",
+        );
+        assertJournalUsesActiveAssignment(
+          successorLease.runtimeId,
+          successorLease.nativeIncarnation,
+          successorEntry,
+          `attachment lease ${successorLease.attachmentLeaseId} reacquisition`,
+        );
+        attachmentAcquisitionJournalOffsets.set(
+          successorLease.attachmentLeaseId,
+          successorEntry.journalOffset,
+        );
+        previousAcquisitionOffset = successorEntry.journalOffset;
+      }
+    }
     snapshotAssert(
       bindingIncarnation.createdAtMs === exactLease.acquiredAtMs &&
         exactAttachment?.createdAtMs === bindingIncarnation.createdAtMs &&
@@ -3269,10 +3376,13 @@ export function validateRuntimeOwnerRepositorySnapshot(
       inventory.journal,
       "attachment_detached",
       lease.attachmentLeaseId,
-      lease.state === "closed" ? 1 : 0,
+      lease.state === "current" ? 0 : 1,
     );
-    if (lease.state === "closed") {
-      snapshotAssert(lease.releasedAtMs !== null, "closed transport lease has no release time");
+    if (lease.state !== "current") {
+      snapshotAssert(
+        lease.releasedAtMs !== null,
+        "non-current transport lease has no release time",
+      );
       const detachEntry = claimJournalFact(
         inventory.journal,
         claimedJournalOffsets,
@@ -3291,6 +3401,23 @@ export function validateRuntimeOwnerRepositorySnapshot(
           detachEntry.journalOffset > acquisitionJournalOffset,
         "transport lease detach journal does not follow its acquisition",
       );
+      if (lease.state === "superseded") {
+        const successor = inventory.attachmentLeases.find(
+          (candidate) =>
+            candidate.attachmentId === lease.attachmentId &&
+            candidate.transportEpoch === lease.transportEpoch + 1,
+        );
+        const successorAcquisitionOffset =
+          successor === undefined
+            ? undefined
+            : attachmentAcquisitionJournalOffsets.get(successor.attachmentLeaseId);
+        snapshotAssert(
+          successor !== undefined &&
+            successorAcquisitionOffset !== undefined &&
+            successorAcquisitionOffset > detachEntry.journalOffset,
+          "transport lease successor acquisition does not follow predecessor detach",
+        );
+      }
       assertJournalUsesActiveAssignment(
         lease.runtimeId,
         lease.nativeIncarnation,
@@ -3307,7 +3434,7 @@ export function validateRuntimeOwnerRepositorySnapshot(
       ({ nativeBindingIncarnationId }) =>
         nativeBindingIncarnationId === gate.nativeBindingIncarnationId,
     );
-    const gateLease = gateLeases[0];
+    const gateLease = gateLeases.at(-1);
     snapshotAssert(
       binding !== undefined &&
         binding.collaborationServerId === gate.collaborationServerId &&
@@ -3320,7 +3447,10 @@ export function validateRuntimeOwnerRepositorySnapshot(
       "binding lifecycle gate graph is not closed",
     );
     snapshotAssert(
-      gate.phase === "starting" || gate.phase === "recovering" || gate.phase === "closed",
+      allowNativeRegistration ||
+        gate.phase === "starting" ||
+        gate.phase === "recovering" ||
+        gate.phase === "closed",
       "A1.3 snapshot contains an A1.4-ready/draining binding gate",
     );
     if (gate.phase === "closed") {
@@ -3328,8 +3458,9 @@ export function validateRuntimeOwnerRepositorySnapshot(
         gate.currentAttachmentLeaseId === null &&
           bindingIncarnation.state === "closed" &&
           attachment.state === "closed" &&
-          gateLeases.length === 1 &&
+          (allowNativeRegistration ? gateLeases.length >= 1 : gateLeases.length === 1) &&
           gateLease?.state === "closed" &&
+          gateLeases.slice(0, -1).every(({ state }) => state !== "current") &&
           gateLease.releasedAtMs !== null &&
           bindingIncarnation.closedAtMs === gateLease.releasedAtMs &&
           attachment.closedAtMs === gateLease.releasedAtMs &&
@@ -3347,10 +3478,15 @@ export function validateRuntimeOwnerRepositorySnapshot(
           lease.nativeBindingIncarnationId === gate.nativeBindingIncarnationId &&
           bindingIncarnation.state === "current" &&
           attachment.state === "current" &&
-          gateLeases.length === 1 &&
-          gate.updatedAtMs === bindingIncarnation.createdAtMs &&
+          (allowNativeRegistration ? gateLeases.length >= 1 : gateLeases.length === 1) &&
+          (allowNativeRegistration
+            ? gate.updatedAtMs >= bindingIncarnation.createdAtMs &&
+              gate.updatedAtMs >= lease.acquiredAtMs
+            : gate.updatedAtMs === bindingIncarnation.createdAtMs) &&
           attachment.createdAtMs === bindingIncarnation.createdAtMs &&
-          lease.acquiredAtMs === bindingIncarnation.createdAtMs,
+          (allowNativeRegistration
+            ? lease.acquiredAtMs >= bindingIncarnation.createdAtMs
+            : lease.acquiredAtMs === bindingIncarnation.createdAtMs),
         "live binding gate does not point through an exact live transport graph",
       );
     }
@@ -5277,6 +5413,7 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
         "native_binding_id",
         "descriptor_product",
         "descriptor_access",
+        "project_id",
         "semantic_conversation_id",
         "current_binding_incarnation_id",
         "state",
@@ -5303,16 +5440,39 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
           "A1.2 native binding is not dormant and unactivated",
         );
       }
-      const conversation = sqlGet(
+      const conversationValue = sqlGet(
         transaction,
-        `SELECT local_native_conversation_id FROM local_native_conversations
+        `SELECT local_native_conversation_id, descriptor_product, descriptor_access,
+                project_id, state
+         FROM local_native_conversations
          WHERE runtime_id = ? AND native_incarnation = ?
-           AND semantic_conversation_id = ? AND state <> 'closed' LIMIT 1`,
+           AND semantic_conversation_id = ? LIMIT 1`,
         [parsed.runtimeId, parsed.nativeIncarnation, parsed.semanticConversationId],
       );
-      if (conversation === undefined) {
+      if (conversationValue === undefined) {
         throw new RuntimeOwnerRepositoryConflictError(
           "binding semantic conversation is not in the runtime-local registry",
+        );
+      }
+      const conversation = rawRow(
+        conversationValue,
+        [
+          "local_native_conversation_id",
+          "descriptor_product",
+          "descriptor_access",
+          "project_id",
+          "state",
+        ] as const,
+        "preparedLocalNativeConversation",
+      );
+      if (
+        conversation.descriptor_product !== binding.descriptor_product ||
+        conversation.descriptor_access !== binding.descriptor_access ||
+        conversation.project_id !== binding.project_id ||
+        conversation.state !== "open"
+      ) {
+        throw new RuntimeOwnerRepositoryConflictError(
+          "binding semantic conversation does not match the binding project and descriptor",
         );
       }
       const expectedAttachmentKind =
@@ -5655,6 +5815,11 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
       ) {
         throw new RuntimeOwnerRepositoryConflictError("binding detach graph is not current");
       }
+      assertNoRetainedRegistrationForBindingGraph(
+        transaction,
+        bindingIncarnation.nativeBindingIncarnationId,
+        attachmentLease.attachmentLeaseId,
+      );
       runExactlyOne(
         transaction,
         `UPDATE native_transport_leases
@@ -5829,6 +5994,11 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
           "runtime termination predecessor is not current",
         );
       }
+      assertNoRetainedRegistrationForRuntimeIncarnation(
+        transaction,
+        parsed.runtimeId,
+        parsed.predecessorNativeIncarnation,
+      );
       const liveGate = sqlGet(
         transaction,
         `SELECT native_binding_id FROM binding_lifecycle_gates
@@ -6047,6 +6217,21 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
           parsed.kind === "fork"
             ? "fork target parent must equal the exact source conversation"
             : "only a fork target may carry parent lineage",
+        );
+      }
+      if (parsed.kind === "clear") {
+        assertNoRetainedRegistrationForSemanticConversation(
+          transaction,
+          parsed.runtimeId,
+          parsed.nativeIncarnation,
+          source?.semanticConversationId ?? null,
+        );
+      } else if (parsed.kind === "archive") {
+        assertNoRetainedRegistrationForSemanticConversation(
+          transaction,
+          parsed.runtimeId,
+          parsed.nativeIncarnation,
+          existingTarget?.semanticConversationId ?? null,
         );
       }
       let conversation: LocalNativeConversationRecord;
@@ -6803,6 +6988,11 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
           "runtime replacement predecessor is not current",
         );
       }
+      assertNoRetainedRegistrationForRuntimeIncarnation(
+        transaction,
+        parsed.runtimeId,
+        parsed.predecessorNativeIncarnation,
+      );
       const liveGate = sqlGet(
         transaction,
         `SELECT native_binding_id FROM binding_lifecycle_gates

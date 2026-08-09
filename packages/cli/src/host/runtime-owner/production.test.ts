@@ -23,6 +23,7 @@ import {
   HOST_STATE_TEST_TEMPORARY_DIRECTORY,
 } from "../state/test-environment.js";
 import { bootstrapRuntimeOwner } from "./bootstrap.js";
+import { connectRuntimeOwnerRpc } from "./client.js";
 import { generateWrappedRuntimeOwnerIdentityKey } from "./key-custody.js";
 import {
   createRuntimeOwnerDetachedSpawner,
@@ -32,6 +33,7 @@ import {
   startProductionRuntimeOwnerDaemon,
 } from "./production.js";
 import { RuntimeOwnerRpcError } from "./protocol.js";
+import type { NativeRegistrationAdapter } from "./registration-service.js";
 
 const linuxWithUid = process.platform === "linux" && typeof process.getuid === "function";
 const describeLinux = describe.runIf(linuxWithUid && HOST_STATE_TEST_FILESYSTEM_SUPPORTED);
@@ -245,6 +247,120 @@ describe("runtime-owner detached process boundary", () => {
 });
 
 describeLinux("runtime-owner production state adapter", () => {
+  it("enables registration only with a trusted adapter and releases its coordinator before shutdown", async () => {
+    const identitySecret = new Uint8Array(32).fill(0x7a);
+    const machineIdentity = await machineIdentityId(identitySecret);
+    const environment = stateFor(machineIdentity);
+    const unused = (): never => {
+      throw new Error("adapter should not be invoked by health");
+    };
+    const adapter: NativeRegistrationAdapter = {
+      measureOpen: unused,
+      measureBinding: unused,
+      measurePublication: unused,
+      measureReattach: unused,
+    };
+    const daemon = await startProductionRuntimeOwnerDaemon({
+      machineIdentityId: machineIdentity,
+      identitySecret,
+      registrationAdapter: adapter,
+    });
+    const client = await connectRuntimeOwnerRpc({
+      machineIdentityId: machineIdentity,
+      identitySecret,
+    });
+    expect(await client.health()).toMatchObject({
+      ownerOperationsWritable: true,
+      nativeRegistrationEnabled: true,
+    });
+    client.close();
+
+    const during = openHostStateDatabase({
+      machineIdentityId: machineIdentity,
+      pathEnvironment: environment,
+    });
+    const current = during.records.readDefaultCollaborationServer();
+    expect(current?.server.currentCoordinatorLeaseId).not.toBeNull();
+    const coordinatorLeaseId = current?.server.currentCoordinatorLeaseId;
+    const serverId = current?.server.collaborationServerId;
+    during.close();
+    if (coordinatorLeaseId === null || coordinatorLeaseId === undefined || serverId === undefined) {
+      throw new Error("coordinator fixture is absent");
+    }
+
+    await daemon.stop();
+    await daemon.completed;
+    const after = openHostStateDatabase({
+      machineIdentityId: machineIdentity,
+      pathEnvironment: environment,
+    });
+    try {
+      expect(
+        after.records.readDefaultCollaborationServer()?.server.currentCoordinatorLeaseId,
+      ).toBeNull();
+      expect(after.records.readCoordinatorLease(serverId, coordinatorLeaseId)).toMatchObject({
+        state: "released",
+      });
+    } finally {
+      after.close();
+    }
+  });
+
+  it("reopens and reconciles a coordinator acquisition whose COMMIT acknowledgement is lost", async () => {
+    const identitySecret = new Uint8Array(32).fill(0x7b);
+    const machineIdentity = await machineIdentityId(identitySecret);
+    const environment = stateFor(machineIdentity);
+    const unused = (): never => {
+      throw new Error("adapter should not be invoked by coordinator startup");
+    };
+    const adapter: NativeRegistrationAdapter = {
+      measureOpen: unused,
+      measureBinding: unused,
+      measurePublication: unused,
+      measureReattach: unused,
+    };
+    const originalExec = DatabaseSync.prototype.exec;
+    let armed = true;
+    let simulated = false;
+    let applicationCommits = 0;
+    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
+      if (armed && sql === "COMMIT") {
+        applicationCommits += 1;
+        if (applicationCommits === 2 && !simulated) {
+          Reflect.apply(originalExec, this, [sql]);
+          simulated = true;
+          armed = false;
+          throw new Error("simulated lost coordinator COMMIT acknowledgement");
+        }
+      }
+      Reflect.apply(originalExec, this, [sql]);
+    });
+
+    const daemon = await startProductionRuntimeOwnerDaemon({
+      machineIdentityId: machineIdentity,
+      identitySecret,
+      registrationAdapter: adapter,
+    });
+    armed = false;
+    expect(simulated).toBe(true);
+    const database = openHostStateDatabase({
+      machineIdentityId: machineIdentity,
+      pathEnvironment: environment,
+    });
+    try {
+      expect(database.records.readDefaultCollaborationServer()?.server).toMatchObject({
+        currentCoordinatorEpoch: 1,
+      });
+      expect(
+        database.records.readDefaultCollaborationServer()?.server.currentCoordinatorLeaseId,
+      ).not.toBeNull();
+    } finally {
+      database.close();
+    }
+    await daemon.stop();
+    await daemon.completed;
+  });
+
   it("rejects a root secret that does not derive the requested machine namespace", async () => {
     await expect(
       startProductionRuntimeOwnerDaemon({

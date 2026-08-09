@@ -17,7 +17,7 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 > become the neutral schema. In particular, Codex is one
 > persistent multi-project app-server host, not another one-`Session` `DriverName`.
 
-A1.0 through A1.3 have landed. A1.0 supplies the shared canonical writer and
+A1.0 through A1.4 have landed. A1.0 supplies the shared canonical writer and
 host-state contracts; A1.1 supplies the Linux secure-SQLite kernel and verified protected artifacts;
 A1.2 supplies schema v3 plus the high-level default-server, project/selector, recovering-chat,
 starting-binding/intent, installing-`rcie_*`-edge, coordinator-lease, journal, reconciliation, and
@@ -26,15 +26,21 @@ inventory repository. A1.3 adds schema v4, the runtime-owner repository and sema
 process-start-bound service-lease takeover/reconciliation, wrapped Ed25519 key custody, and durable
 multi-runtime/multi-conversation ownership records. Migration 4 has 141 statements and digest
 `zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0`; the complete v4 manifest has 231 rows: 30 tables,
-57 indexes, and 144 triggers. Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
-best-effort autostart that daemon after identity load. Authenticated health is its only successful
-production operation; the dispatch registry is empty, and health reports
-`ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. No current launch path
+57 indexes, and 144 triggers. A1.4 adds schema v5, five canonical evidence schemas, the
+evidence-resolving registration repository, sequenced process leases/publications/operations, bounded
+duplex callable ports, and exact crash reconciliation/reattach. Migration 5 has 38 statements and
+digest `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`; the complete v5 manifest has 269 objects.
+Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
+best-effort autostart that daemon after identity load. For the ordinary CLI, authenticated health is
+the only successful production operation; its operation registry is empty, and health reports
+`ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. The A1.4 operation seam is
+installed only when the daemon receives an explicit trusted `registrationAdapter`; the ordinary CLI
+passes none. No current launch path
 registers a native runtime through the owner, activates an A1 binding/root, dispatches through the
 owner, or advertises an A1 broker capability. Owner failure preserves the exact A0 compatibility path.
 Wrapper exit closes only its owner RPC connection and leaves the owner service alive; existing A0
 native teardown remains unchanged. Plain and help paths, trace mode, and the local `--rc-identity`
-action do not start the owner. A1.4 is next.
+action do not start the owner. A1.5 is next.
 
 **Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
 the A0 registrar's `rcb_*` is only a process-local lease. Neither is the stable logical-chat ID
@@ -43,8 +49,8 @@ repository keys the canonical chat by `(collaborationServerId, logicalChatId)` a
 terminal selector generation, native binding, and `rcie_*` inward edge. Later slices add outward
 bindings. Machine-facing route, row, alias, and cache addresses add
 `identity_id` to that pair. A proven transport replacement may rotate its runtime/channel incarnation
-without changing either canonical chat coordinate. This document does not claim that live native
-reattachment exists today.
+without changing either canonical chat coordinate. A1.4 implements exact durable reattach behind its
+closed trusted-adapter seam; this document does not claim that an ordinary real driver invokes it.
 
 The common relay port is **`Session`** (`packages/cli/src/host/rc/session.ts`). Each current harness
 path produces one or more `Session`s, fills them with Claude-shaped output, and consumes the input the
@@ -571,8 +577,8 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   — A1.0's exact-shape parsers, canonical ID and digest contracts, pure database-path resolver,
   record/runtime shapes, protected-operation interfaces, separated first-dispatch and evidence-only
   reconciliation capabilities, and digest builders.
-- `packages/cli/src/host/state/{secure-filesystem,migrations,artifacts,repository,runtime-repository,sqlite}.ts` and
-  `packages/cli/src/host/runtime-owner/**` — A1.1–A1.3's
+- `packages/cli/src/host/state/{secure-filesystem,migrations,migration-v5,artifacts,repository,runtime-repository,registration-repository,sqlite}.ts`,
+  `packages/cli/src/host/native/evidence.ts`, and `packages/cli/src/host/runtime-owner/**` — A1.1–A1.4's
   Linux-only, descriptor-anchored SQLite kernel and protected-artifact operations. The supported Node
   range is `^22.13.0 || >=23.5.0`, admitted only from an exact stable `X.Y.Z` runtime string; the
   kernel exposes synchronous high-level transactions rather than raw SQL, and database-level
@@ -587,7 +593,9 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   `cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4`, for an exact 91-object manifest of 13 tables,
   24 indexes, and 54 triggers. Schema v4 adds 141 ordered statements with digest
   `zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0`, for an exact 231-object manifest of 30 tables,
-  57 indexes, and 144 triggers. The A1.2 high-level repository atomically bootstraps the first terminal
+  57 indexes, and 144 triggers. Schema v5 adds 38 ordered statements with digest
+  `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`, for an exact 269-object manifest. The A1.2 high-level
+  repository atomically bootstraps the first terminal
   graph, supports later explicit projects/chats and terminal selector replacement, inventories and
   reconciles durable state, and validates the complete narrow v3 graph. Its public opener exposes
   neither entropy nor clock injection, and artifact persistence
@@ -602,15 +610,27 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   entry within the lease lifetime and the runtime assignment/incarnation active at that offset,
   replays acyclic exact local-conversation creation/fork/state lineage, and requires one exact
   attachment/lease/gate graph per prepared binding incarnation. A service takeover cannot mutate an
-  existing runtime until it appends that runtime's successor assignment.
+  existing runtime until it appends that runtime's successor assignment. A1.4 verifies exactly
+  `remote-claw/native-engine-descriptor/v1`, `remote-claw/durable-project-selection/v1`,
+  `remote-claw/native-conversation-ref/v1`, `remote-claw/native-conversation-capabilities/v1`, and
+  `remote-claw/native-registration-metadata-evidence/v1`; persists sequenced native-conversation
+  leases/publications/operations; reconciles uncertain commits; gates reattach on
+  the retained `liveReattach` capability, and rotates a stale crash predecessor only under fresh exact
+  owner/coordinator and binding/attachment fences. Ready deliberately leaves the chat recovering and
+  terminal edge installing.
 - `packages/cli/src/host/runtime-owner/{auth,protocol,server,client,service,daemon,bootstrap,key-custody,production}.ts`
   plus `packages/cli/src/runtime-owner-cli.ts` — the machine-scoped Linux owner. It mutually
   authenticates over an abstract Unix socket, caps the server at 64 live connections and each
   unauthenticated connection at 1,024 inbound bytes and one authentication frame, rejects pre-auth
-  pipelining, and bounds canonical frames and concurrency. Its detached spawn pins cwd to the trusted
+  pipelining, and bounds canonical frames and concurrency. The authenticated channel is duplex: every
+  connection may register 64 callable ports, serve 32 reverse invocations concurrently, and consume
+  4,096 reverse request IDs. The registry binds each port to its exact connection, binding,
+  runtime/incarnation, attachment, owner/coordinator fences, and port generation. Its detached spawn
+  pins cwd to the trusted
   CLI entry directory rather than a project-controlled cwd or `tsconfig`. It holds one process-start-bound durable service lease, self-tests wrapped keys before writability, reconciles
   unknown owner-lease commits after reopen, and fails closed on lease/listener/custody loss. Production
-  installs no dispatch operation; authenticated health returns `ownerOperationsWritable:false` and
+  installs A1.4 registration only for an explicit trusted adapter; the ordinary CLI passes none, so
+  authenticated health returns `ownerOperationsWritable:false` and
   `nativeRegistrationEnabled:false`.
 
 ### Dispatcher
@@ -742,14 +762,18 @@ Claude, Codex, or OpenCode appears once, at the innermost end.
 A1.0 freezes the selected host → project → logical-chat identity and record contracts above this seam.
 A1.1 supplies local persistence/migration machinery and verified artifacts. A1.2 persists the narrow
 server/project/mapping/chat/binding/intent/edge/coordinator graph, including each chat's exact mapping
-generation. A1.3's owner now opens the shared schema and persists its independent service lease, but
-does not invoke A1.2 registration or bind an A0 driver into that graph. A1.2 evidence refs remain opaque until
-A1.4, its actor scopes gain queues/serialization only in A1.7, and nested targets/edges remain rejected
-until N1. A1.3's schema and repository can persist runtime roots/incarnations, append-only owner
+generation. A1.3's owner opens the shared schema and persists its independent service lease. A1.4 can
+now resolve A1.2 evidence, durably register the exact prepared graph, and reattach it through a bounded
+callable port, but the ordinary CLI supplies no trusted adapter and therefore does not bind any A0
+driver into that graph. A1.2 actor scopes gain queues/serialization only in A1.7, and nested
+targets/edges remain rejected until N1. A1.3's schema and repository can persist runtime
+roots/incarnations, append-only owner
 assignments, positive containment, wrapped keys/signature state, already-project-scoped local
-transitions, and binding/attachment/gate foundations, but no active driver creates those records yet.
-Its production dispatch registry is empty, so authenticated health is the only successful RPC
-operation. Owner-RPC disconnect is detach, and one owner can inventory many independent runtimes
+transitions, and binding/attachment/gate foundations. A1.4 adds process leases, publications,
+operation sequences, and exact crash reconciliation, while leaving A1.5 terminal-root activation and
+A1 remote mutation disabled. The ordinary production operation registry is empty, so authenticated
+health is the only successful RPC operation. Owner-RPC disconnect is detach, and one owner can
+inventory many independent runtimes
 and shared-daemon conversations once registration activates. The durable IDs stay separate from `Session.id`, the
 `rcb_*` lease, engine-native IDs, and provider/broker connection IDs; the current `Session` seam does
 not use A1 IDs or protected operations.

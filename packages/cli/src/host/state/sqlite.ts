@@ -30,6 +30,13 @@ import type {
   ReadVerifiedArtifactResult,
 } from "./protected.js";
 import {
+  createNativeRegistrationRepositoryOperations,
+  createNativeRegistrationRepositoryTransactionOperations,
+  type NativeRegistrationRepositoryOperations,
+  NativeRegistrationRepositoryPersistenceError,
+  validateNativeRegistrationRepositorySnapshot,
+} from "./registration-repository.js";
+import {
   createHostStateRepositoryTransactionOperations,
   HostStateRepository,
   type HostStateRepositoryOperations,
@@ -58,6 +65,30 @@ export {
   MAX_PROTECTED_ARTIFACT_SCHEMA_ID_UTF8_BYTES,
   ProtectedArtifactPersistenceError,
 } from "./artifacts.js";
+export type { CoordinatorLeaseFence } from "./records.js";
+export type {
+  BindNativeConversationLeaseRequest,
+  CloseNativeConversationLeaseRequest,
+  NativeConversationLeaseMutationResult,
+  NativeRegistrationInventory,
+  NativeRegistrationOperationInputByKind,
+  NativeRegistrationRepositoryOperations,
+  OpenNativeConversationLeaseRequest,
+  PublishNativeRegistrationRequest,
+  PublishNativeRegistrationResult,
+  ReadyNativeConversationLeaseRequest,
+  ReattachNativeConversationLeaseRequest,
+  ReattachNativeConversationLeaseResult,
+  TransitionNativeConversationLeaseRequest,
+} from "./registration-repository.js";
+export {
+  createNativeRegistrationOperationEvidence,
+  NATIVE_REGISTRATION_OPERATION_SCHEMA_IDS,
+  NativeRegistrationRepositoryConflictError,
+  NativeRegistrationRepositoryPersistenceError,
+  NativeRegistrationStaleCoordinatorError,
+  NativeRegistrationStaleOwnerError,
+} from "./registration-repository.js";
 export type {
   AcquireCoordinatorLeaseRequest,
   AcquireCoordinatorLeaseResult,
@@ -195,6 +226,7 @@ export interface HostStateDatabase extends ProtectedArtifactOperations {
   readonly schemaVersion: typeof HOST_STATE_SCHEMA_VERSION;
   readonly records: HostStateRepositoryOperations;
   readonly runtimeOwner: RuntimeOwnerRepositoryOperations;
+  readonly registration: NativeRegistrationRepositoryOperations;
   transaction<T>(operation: (transaction: HostStateTransaction) => T): T;
   close(): void;
 }
@@ -203,6 +235,7 @@ export interface HostStateDatabase extends ProtectedArtifactOperations {
 export interface HostStateTransaction extends ProtectedArtifactTransactionOperations {
   readonly records: HostStateRepositoryOperations;
   readonly runtimeOwner: RuntimeOwnerRepositoryOperations;
+  readonly registration: NativeRegistrationRepositoryOperations;
 }
 
 type SqliteRow = Readonly<Record<string, unknown>>;
@@ -711,7 +744,7 @@ function validateDatabaseContentsAtVersion(
   if (schemaVersion >= 3) {
     const snapshot = new ActiveArtifactSqlTransaction(database);
     try {
-      validateHostStateRepositorySnapshot(snapshot, machineIdentityId);
+      validateHostStateRepositorySnapshot(snapshot, machineIdentityId, schemaVersion);
     } catch (error) {
       reject("durable host records failed semantic validation", error);
     } finally {
@@ -721,9 +754,19 @@ function validateDatabaseContentsAtVersion(
   if (schemaVersion >= 4) {
     const snapshot = new ActiveArtifactSqlTransaction(database);
     try {
-      validateRuntimeOwnerRepositorySnapshot(snapshot, machineIdentityId);
+      validateRuntimeOwnerRepositorySnapshot(snapshot, machineIdentityId, schemaVersion);
     } catch (error) {
       reject("runtime-owner records failed semantic validation", error);
+    } finally {
+      snapshot.invalidate();
+    }
+  }
+  if (schemaVersion >= 5) {
+    const snapshot = new ActiveArtifactSqlTransaction(database);
+    try {
+      validateNativeRegistrationRepositorySnapshot(snapshot, machineIdentityId);
+    } catch (error) {
+      reject("native registration records failed semantic validation", error);
     } finally {
       snapshot.invalidate();
     }
@@ -928,7 +971,8 @@ class SqliteArtifactTransactionExecutor
       if (
         error instanceof ProtectedArtifactPersistenceError ||
         error instanceof HostStateRepositoryPersistenceError ||
-        error instanceof RuntimeOwnerRepositoryPersistenceError
+        error instanceof RuntimeOwnerRepositoryPersistenceError ||
+        error instanceof NativeRegistrationRepositoryPersistenceError
       ) {
         this.#poisoned = true;
       }
@@ -969,6 +1013,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
   readonly schemaVersion = HOST_STATE_SCHEMA_VERSION;
   readonly records: HostStateRepositoryOperations;
   readonly runtimeOwner: RuntimeOwnerRepositoryOperations;
+  readonly registration: NativeRegistrationRepositoryOperations;
   readonly #database: DatabaseSync;
   readonly #filesystem: SecureHostStateFilesystem;
   readonly #executor: SqliteArtifactTransactionExecutor;
@@ -990,6 +1035,10 @@ class SqliteHostStateDatabase implements HostStateDatabase {
     this.#artifacts = new ProtectedArtifactRepository(this.#executor);
     this.records = new HostStateRepository(this.#executor, machineIdentityId);
     this.runtimeOwner = createRuntimeOwnerRepositoryOperations(this.#executor, machineIdentityId);
+    this.registration = createNativeRegistrationRepositoryOperations(
+      this.#executor,
+      machineIdentityId,
+    );
     Object.freeze(this);
   }
 
@@ -1018,6 +1067,10 @@ class SqliteHostStateDatabase implements HostStateDatabase {
         transaction,
         this.machineIdentityId,
       );
+      const registration = createNativeRegistrationRepositoryTransactionOperations(
+        transaction,
+        this.machineIdentityId,
+      );
       return operation(
         Object.freeze({
           putArtifact: (request: PutArtifactRequest): PutArtifactResult =>
@@ -1027,6 +1080,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
           ): ReadVerifiedArtifactResult => artifacts.readVerifiedArtifact(request),
           records,
           runtimeOwner,
+          registration,
         }),
       );
     });

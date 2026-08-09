@@ -89,7 +89,7 @@
 > passages later in this historical document describe only the terminal Claude edge; outer layers
 > reconnect server/chat edges and never create another native app.
 >
-> A1.0 through A1.3 have landed. A1.0 supplies the shared canonical writer and
+> A1.0 through A1.4 have landed. A1.0 supplies the shared canonical writer and
 > host-state contracts; A1.1 supplies the Linux secure-SQLite kernel and verified protected artifacts;
 > A1.2 supplies schema v3 and its high-level server/project/chat/binding/edge/coordinator repository.
 > Migration `003-durable-host-records` has 81 ordered statements and digest
@@ -99,7 +99,7 @@
 > validate an existing supported v3 graph in one coherent read-only snapshot before writable open;
 > a newly migrated graph is validated before the handle returns.
 > Persisted chats name their exact selector mapping and use random `rcie_*` installing native edges.
-> Evidence refs/digests remain opaque until A1.4; actor scopes are addresses only until A1.7; nested
+> Evidence refs/digests are opaque to A1.2 itself; actor scopes are addresses only until A1.7; nested
 > mappings and remote-server edges remain rejected until N1.
 >
 > A1.3 supplies schema v4 and the runtime-owner repository/semantic validator, an independently
@@ -110,14 +110,30 @@
 > `zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0`; the complete v4 manifest has 231 rows: 30 tables,
 > 57 indexes, and 144 triggers. The exact derivation now locks
 > `rcrt_9eXZ6t2i1B6q6KnTszDoABv6BWYw0blCRXoNgPxF1WM` for the selected vector.
+>
+> A1.4 supplies schema v5 and its exact registration repository/semantic closure. Migration
+> `005-durable-native-registration` has 38 ordered statements and digest
+> `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`; the complete v5 manifest has 269 objects. It verifies
+> `remote-claw/native-engine-descriptor/v1`, `remote-claw/durable-project-selection/v1`,
+> `remote-claw/native-conversation-ref/v1`, `remote-claw/native-conversation-capabilities/v1`, and
+> `remote-claw/native-registration-metadata-evidence/v1`; persists sequenced process leases,
+> publications, and operations; and implements exact request-bound reconciliation and fresh-fenced
+> crash reattach.
+> Authenticated RPC is duplex and bounds each connection to 64 callable ports, 32 reverse invocations
+> in flight, and 4,096 reverse request IDs. A retained publication must advertise
+> `liveReattach:true`; bound pre-publication recovery does not invent that capability. A1.4 ready
+> leaves the logical chat recovering and terminal edge installing; A1.5 owns root signing and
+> chat/edge activation.
+>
 > Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
-> plain and help paths, trace mode, and the local `--rc-identity` action do not. The only successful
-> production owner operation is authenticated health; its dispatch registry is empty, and health
+> plain and help paths, trace mode, and the local `--rc-identity` action do not. A1.4 registration is
+> installed only for an explicit trusted `registrationAdapter`; the ordinary CLI passes none. Its
+> only successful production owner operation is therefore authenticated health, and health
 > reports `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. A0 driver behavior
 > remains unchanged and owner unavailability falls back to the exact A0 path. Wrapper exit closes only
 > the owner's RPC collaborator and leaves the owner service alive; existing A0 native teardown remains
-> separate. No durable owner registration, A1 binding activation, terminal root, owner dispatch, or new
-> A1 remote mutation, inference, or broker capability is enabled; A1.4 is next.
+> separate. No real driver performs durable owner registration or A1 binding activation, and no
+> terminal root, A1 remote mutation, inference, or broker capability is enabled. A1.5 is next.
 
 ## 1. What changes and why
 

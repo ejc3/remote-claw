@@ -8,6 +8,7 @@ import {
   type LogicalChatId,
   type NativeBindingId,
   type NativeConversationLeaseId,
+  type NativeRuntimeId,
   type ProjectId,
   type ProjectTargetSelectorMappingId,
   type ProtectedHandleId,
@@ -105,14 +106,76 @@ export interface NativeRegistrationIntentRecord {
 export interface NativeConversationLeaseRecord {
   readonly nativeConversationLeaseId: NativeConversationLeaseId;
   readonly collaborationServerId: CollaborationServerId;
+  readonly logicalChatId: LogicalChatId;
   readonly nativeBindingId: NativeBindingId;
   readonly registrationAttemptId: RegistrationAttemptId;
+  readonly runtimeId: NativeRuntimeId;
+  readonly nativeIncarnation: number;
+  readonly nativeBindingIncarnationId: A1SafeId | null;
+  readonly attachmentLeaseId: A1SafeId | null;
+  readonly runtimeOwnerServiceLeaseId: A1SafeId;
+  readonly runtimeOwnerServiceEpoch: number;
   readonly coordinatorLeaseId: CoordinatorLeaseId;
   readonly coordinatorEpoch: number;
   readonly protectedPortHandleId: ProtectedHandleId;
+  readonly leaseGeneration: number;
+  readonly supersedesNativeConversationLeaseId: NativeConversationLeaseId | null;
+  readonly currentPublicationId: A1SafeId | null;
+  readonly nextOperationSequence: number;
   readonly acquiredAtMs: number;
+  readonly updatedAtMs: number;
   readonly closedAtMs: number | null;
   readonly state: "starting" | "recovering" | "ready" | "draining" | "closed";
+}
+
+export const NATIVE_REGISTRATION_CAPABILITIES_SCHEMA_ID =
+  "remote-claw/native-conversation-capabilities/v1" as const;
+
+export interface NativeRegistrationPublicationRecord {
+  readonly nativeRegistrationPublicationId: A1SafeId;
+  readonly nativeConversationLeaseId: NativeConversationLeaseId;
+  readonly nativeBindingId: NativeBindingId;
+  readonly runtimeId: NativeRuntimeId;
+  readonly nativeIncarnation: number;
+  readonly nativeBindingIncarnationId: A1SafeId;
+  readonly attachmentLeaseId: A1SafeId;
+  readonly publicationGeneration: number;
+  readonly metadataSchemaId: string;
+  readonly metadataRef: ProtectedHandleId;
+  readonly metadataDigest: A1Digest;
+  readonly capabilitiesSchemaId: typeof NATIVE_REGISTRATION_CAPABILITIES_SCHEMA_ID;
+  readonly capabilitiesRef: ProtectedHandleId;
+  readonly capabilitiesDigest: A1Digest;
+  readonly publishedAtMs: number;
+  readonly state: "current" | "superseded";
+}
+
+export const NATIVE_REGISTRATION_OPERATION_KINDS = Object.freeze([
+  "open",
+  "bind",
+  "publish",
+  "ready",
+  "recover",
+  "drain",
+  "close",
+  "reattach",
+] as const);
+
+export type NativeRegistrationOperationKind = (typeof NATIVE_REGISTRATION_OPERATION_KINDS)[number];
+
+export interface NativeRegistrationOperationRecord {
+  readonly operationId: A1SafeId;
+  readonly operationSequence: number;
+  readonly kind: NativeRegistrationOperationKind;
+  readonly operationSchemaId: string;
+  readonly operationDigest: A1Digest;
+  readonly nativeConversationLeaseId: NativeConversationLeaseId;
+  readonly nativeBindingId: NativeBindingId;
+  readonly runtimeOwnerServiceLeaseId: A1SafeId;
+  readonly runtimeOwnerServiceEpoch: number;
+  readonly coordinatorLeaseId: CoordinatorLeaseId;
+  readonly coordinatorEpoch: number;
+  readonly committedAtMs: number;
 }
 
 export interface LocalArtifactRecord {
@@ -559,12 +622,24 @@ export function parseNativeRegistrationIntentRecord(
 const NATIVE_LEASE_KEYS = [
   "nativeConversationLeaseId",
   "collaborationServerId",
+  "logicalChatId",
   "nativeBindingId",
   "registrationAttemptId",
+  "runtimeId",
+  "nativeIncarnation",
+  "nativeBindingIncarnationId",
+  "attachmentLeaseId",
+  "runtimeOwnerServiceLeaseId",
+  "runtimeOwnerServiceEpoch",
   "coordinatorLeaseId",
   "coordinatorEpoch",
   "protectedPortHandleId",
+  "leaseGeneration",
+  "supersedesNativeConversationLeaseId",
+  "currentPublicationId",
+  "nextOperationSequence",
   "acquiredAtMs",
+  "updatedAtMs",
   "closedAtMs",
   "state",
 ] as const;
@@ -575,18 +650,64 @@ export function parseNativeConversationLeaseRecord(value: unknown): NativeConver
     row.acquiredAtMs,
     "nativeConversationLease.acquiredAtMs",
   );
+  const updatedAtMs = parseNonNegativeSafeInteger(
+    row.updatedAtMs,
+    "nativeConversationLease.updatedAtMs",
+  );
   const closedAtMs = parseNullable(
     row.closedAtMs,
     parseNonNegativeSafeInteger,
     "nativeConversationLease.closedAtMs",
   );
+  const nativeBindingIncarnationId = parseNullable(
+    row.nativeBindingIncarnationId,
+    parseA1SafeId,
+    "nativeConversationLease.nativeBindingIncarnationId",
+  );
+  const attachmentLeaseId = parseNullable(
+    row.attachmentLeaseId,
+    parseA1SafeId,
+    "nativeConversationLease.attachmentLeaseId",
+  );
+  if ((nativeBindingIncarnationId === null) !== (attachmentLeaseId === null)) {
+    reject(
+      "nativeConversationLease.bindingAttachment",
+      "binding-incarnation and attachment-lease IDs must either both be null or both be present",
+    );
+  }
+  const leaseGeneration = parsePositiveSafeInteger(
+    row.leaseGeneration,
+    "nativeConversationLease.leaseGeneration",
+  );
+  const supersedesNativeConversationLeaseId = parseNullable(
+    row.supersedesNativeConversationLeaseId,
+    (value, field) => parseA1CanonicalId("nativeConversationLease", value, field),
+    "nativeConversationLease.supersedesNativeConversationLeaseId",
+  );
+  if ((leaseGeneration === 1) !== (supersedesNativeConversationLeaseId === null)) {
+    reject(
+      "nativeConversationLease.supersedesNativeConversationLeaseId",
+      "must be null exactly at lease generation one",
+    );
+  }
   const state = parseEnum(
     row.state,
     ["starting", "recovering", "ready", "draining", "closed"] as const,
     "nativeConversationLease.state",
   );
-  if (closedAtMs !== null && closedAtMs < acquiredAtMs) {
-    reject("nativeConversationLease.closedAtMs", "must not precede acquisition");
+  const currentPublicationId = parseNullable(
+    row.currentPublicationId,
+    parseA1SafeId,
+    "nativeConversationLease.currentPublicationId",
+  );
+  if (currentPublicationId !== null && nativeBindingIncarnationId === null) {
+    reject(
+      "nativeConversationLease.currentPublicationId",
+      "requires binding-incarnation and attachment-lease IDs",
+    );
+  }
+  if (updatedAtMs < acquiredAtMs) {
+    reject("nativeConversationLease.updatedAtMs", "must not precede acquisition");
   }
   if ((state === "closed") !== (closedAtMs !== null)) {
     reject(
@@ -594,16 +715,42 @@ export function parseNativeConversationLeaseRecord(value: unknown): NativeConver
       "must be present exactly when the lease is closed",
     );
   }
+  if (closedAtMs !== null && closedAtMs !== updatedAtMs) {
+    reject("nativeConversationLease.closedAtMs", "must equal the final update time");
+  }
+  if (
+    state === "ready" &&
+    (nativeBindingIncarnationId === null ||
+      attachmentLeaseId === null ||
+      currentPublicationId === null)
+  ) {
+    reject(
+      "nativeConversationLease.ready",
+      "requires binding-incarnation, attachment-lease, and publication IDs",
+    );
+  }
+  const nativeConversationLeaseId = parseA1CanonicalId(
+    "nativeConversationLease",
+    row.nativeConversationLeaseId,
+    "nativeConversationLease.nativeConversationLeaseId",
+  );
+  if (supersedesNativeConversationLeaseId === nativeConversationLeaseId) {
+    reject(
+      "nativeConversationLease.supersedesNativeConversationLeaseId",
+      "must not reference the lease itself",
+    );
+  }
   return frozen({
-    nativeConversationLeaseId: parseA1CanonicalId(
-      "nativeConversationLease",
-      row.nativeConversationLeaseId,
-      "nativeConversationLease.nativeConversationLeaseId",
-    ),
+    nativeConversationLeaseId,
     collaborationServerId: parseA1CanonicalId(
       "collaborationServer",
       row.collaborationServerId,
       "nativeConversationLease.collaborationServerId",
+    ),
+    logicalChatId: parseA1CanonicalId(
+      "logicalChat",
+      row.logicalChatId,
+      "nativeConversationLease.logicalChatId",
     ),
     nativeBindingId: parseA1CanonicalId(
       "nativeBinding",
@@ -614,6 +761,25 @@ export function parseNativeConversationLeaseRecord(value: unknown): NativeConver
       "registrationAttempt",
       row.registrationAttemptId,
       "nativeConversationLease.registrationAttemptId",
+    ),
+    runtimeId: parseA1CanonicalId(
+      "nativeRuntime",
+      row.runtimeId,
+      "nativeConversationLease.runtimeId",
+    ),
+    nativeIncarnation: parsePositiveSafeInteger(
+      row.nativeIncarnation,
+      "nativeConversationLease.nativeIncarnation",
+    ),
+    nativeBindingIncarnationId,
+    attachmentLeaseId,
+    runtimeOwnerServiceLeaseId: parseA1SafeId(
+      row.runtimeOwnerServiceLeaseId,
+      "nativeConversationLease.runtimeOwnerServiceLeaseId",
+    ),
+    runtimeOwnerServiceEpoch: parsePositiveSafeInteger(
+      row.runtimeOwnerServiceEpoch,
+      "nativeConversationLease.runtimeOwnerServiceEpoch",
     ),
     coordinatorLeaseId: parseA1CanonicalId(
       "coordinatorLease",
@@ -629,9 +795,195 @@ export function parseNativeConversationLeaseRecord(value: unknown): NativeConver
       row.protectedPortHandleId,
       "nativeConversationLease.protectedPortHandleId",
     ),
+    leaseGeneration,
+    supersedesNativeConversationLeaseId,
+    currentPublicationId,
+    nextOperationSequence: parsePositiveSafeInteger(
+      row.nextOperationSequence,
+      "nativeConversationLease.nextOperationSequence",
+    ),
     acquiredAtMs,
+    updatedAtMs,
     closedAtMs,
     state,
+  });
+}
+
+const NATIVE_REGISTRATION_PUBLICATION_KEYS = [
+  "nativeRegistrationPublicationId",
+  "nativeConversationLeaseId",
+  "nativeBindingId",
+  "runtimeId",
+  "nativeIncarnation",
+  "nativeBindingIncarnationId",
+  "attachmentLeaseId",
+  "publicationGeneration",
+  "metadataSchemaId",
+  "metadataRef",
+  "metadataDigest",
+  "capabilitiesSchemaId",
+  "capabilitiesRef",
+  "capabilitiesDigest",
+  "publishedAtMs",
+  "state",
+] as const;
+
+export function parseNativeRegistrationPublicationRecord(
+  value: unknown,
+): NativeRegistrationPublicationRecord {
+  const row = parseExactRecord(
+    value,
+    NATIVE_REGISTRATION_PUBLICATION_KEYS,
+    "nativeRegistrationPublication",
+  );
+  return frozen({
+    nativeRegistrationPublicationId: parseA1SafeId(
+      row.nativeRegistrationPublicationId,
+      "nativeRegistrationPublication.nativeRegistrationPublicationId",
+    ),
+    nativeConversationLeaseId: parseA1CanonicalId(
+      "nativeConversationLease",
+      row.nativeConversationLeaseId,
+      "nativeRegistrationPublication.nativeConversationLeaseId",
+    ),
+    nativeBindingId: parseA1CanonicalId(
+      "nativeBinding",
+      row.nativeBindingId,
+      "nativeRegistrationPublication.nativeBindingId",
+    ),
+    runtimeId: parseA1CanonicalId(
+      "nativeRuntime",
+      row.runtimeId,
+      "nativeRegistrationPublication.runtimeId",
+    ),
+    nativeIncarnation: parsePositiveSafeInteger(
+      row.nativeIncarnation,
+      "nativeRegistrationPublication.nativeIncarnation",
+    ),
+    nativeBindingIncarnationId: parseA1SafeId(
+      row.nativeBindingIncarnationId,
+      "nativeRegistrationPublication.nativeBindingIncarnationId",
+    ),
+    attachmentLeaseId: parseA1SafeId(
+      row.attachmentLeaseId,
+      "nativeRegistrationPublication.attachmentLeaseId",
+    ),
+    publicationGeneration: parsePositiveSafeInteger(
+      row.publicationGeneration,
+      "nativeRegistrationPublication.publicationGeneration",
+    ),
+    metadataSchemaId: parseNonEmptyString(
+      row.metadataSchemaId,
+      "nativeRegistrationPublication.metadataSchemaId",
+    ),
+    metadataRef: parseA1CanonicalId(
+      "protectedHandle",
+      row.metadataRef,
+      "nativeRegistrationPublication.metadataRef",
+    ),
+    metadataDigest: parseA1Digest(
+      row.metadataDigest,
+      "nativeRegistrationPublication.metadataDigest",
+    ),
+    capabilitiesSchemaId: parseLiteral(
+      row.capabilitiesSchemaId,
+      NATIVE_REGISTRATION_CAPABILITIES_SCHEMA_ID,
+      "nativeRegistrationPublication.capabilitiesSchemaId",
+    ),
+    capabilitiesRef: parseA1CanonicalId(
+      "protectedHandle",
+      row.capabilitiesRef,
+      "nativeRegistrationPublication.capabilitiesRef",
+    ),
+    capabilitiesDigest: parseA1Digest(
+      row.capabilitiesDigest,
+      "nativeRegistrationPublication.capabilitiesDigest",
+    ),
+    publishedAtMs: parseNonNegativeSafeInteger(
+      row.publishedAtMs,
+      "nativeRegistrationPublication.publishedAtMs",
+    ),
+    state: parseEnum(
+      row.state,
+      ["current", "superseded"] as const,
+      "nativeRegistrationPublication.state",
+    ),
+  });
+}
+
+const NATIVE_REGISTRATION_OPERATION_KEYS = [
+  "operationId",
+  "operationSequence",
+  "kind",
+  "operationSchemaId",
+  "operationDigest",
+  "nativeConversationLeaseId",
+  "nativeBindingId",
+  "runtimeOwnerServiceLeaseId",
+  "runtimeOwnerServiceEpoch",
+  "coordinatorLeaseId",
+  "coordinatorEpoch",
+  "committedAtMs",
+] as const;
+
+export function parseNativeRegistrationOperationRecord(
+  value: unknown,
+): NativeRegistrationOperationRecord {
+  const row = parseExactRecord(
+    value,
+    NATIVE_REGISTRATION_OPERATION_KEYS,
+    "nativeRegistrationOperation",
+  );
+  return frozen({
+    operationId: parseA1SafeId(row.operationId, "nativeRegistrationOperation.operationId"),
+    operationSequence: parsePositiveSafeInteger(
+      row.operationSequence,
+      "nativeRegistrationOperation.operationSequence",
+    ),
+    kind: parseEnum(
+      row.kind,
+      NATIVE_REGISTRATION_OPERATION_KINDS,
+      "nativeRegistrationOperation.kind",
+    ),
+    operationSchemaId: parseNonEmptyString(
+      row.operationSchemaId,
+      "nativeRegistrationOperation.operationSchemaId",
+    ),
+    operationDigest: parseA1Digest(
+      row.operationDigest,
+      "nativeRegistrationOperation.operationDigest",
+    ),
+    nativeConversationLeaseId: parseA1CanonicalId(
+      "nativeConversationLease",
+      row.nativeConversationLeaseId,
+      "nativeRegistrationOperation.nativeConversationLeaseId",
+    ),
+    nativeBindingId: parseA1CanonicalId(
+      "nativeBinding",
+      row.nativeBindingId,
+      "nativeRegistrationOperation.nativeBindingId",
+    ),
+    runtimeOwnerServiceLeaseId: parseA1SafeId(
+      row.runtimeOwnerServiceLeaseId,
+      "nativeRegistrationOperation.runtimeOwnerServiceLeaseId",
+    ),
+    runtimeOwnerServiceEpoch: parsePositiveSafeInteger(
+      row.runtimeOwnerServiceEpoch,
+      "nativeRegistrationOperation.runtimeOwnerServiceEpoch",
+    ),
+    coordinatorLeaseId: parseA1CanonicalId(
+      "coordinatorLease",
+      row.coordinatorLeaseId,
+      "nativeRegistrationOperation.coordinatorLeaseId",
+    ),
+    coordinatorEpoch: parsePositiveSafeInteger(
+      row.coordinatorEpoch,
+      "nativeRegistrationOperation.coordinatorEpoch",
+    ),
+    committedAtMs: parseNonNegativeSafeInteger(
+      row.committedAtMs,
+      "nativeRegistrationOperation.committedAtMs",
+    ),
   });
 }
 

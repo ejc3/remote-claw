@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { base64urlEncode } from "@remote-claw/clawsec";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { nativeRuntimeId } from "./digests.js";
+import {
+  createDurableProjectSelectionEvidence,
+  createNativeConversationRefEvidence,
+  createNativeEngineDescriptorEvidence,
+  createNativeRegistrationMetadataEvidence,
+} from "../native/evidence.js";
+import { nativeRuntimeId, projectTargetDigest } from "./digests.js";
 import {
   type A1CanonicalId,
   type A1CanonicalIdKind,
@@ -17,6 +23,7 @@ import {
 import { expectedHostStateSqliteSchemaManifest, HOST_STATE_SCHEMA_VERSION } from "./migrations.js";
 import { resolveHostStatePaths } from "./path.js";
 import { ProtectedByteSnapshot } from "./protected.js";
+import { createNativeRegistrationOperationEvidence } from "./registration-repository.js";
 import {
   type AcquireRuntimeOwnerServiceLeaseRequest,
   type RegisterInitialRuntimeRequest,
@@ -184,6 +191,206 @@ function temporaryState() {
   return {
     environment,
     paths: resolveHostStatePaths(MACHINE_IDENTITY_ID, environment),
+  };
+}
+
+async function createRetainedRegistrationFixture() {
+  vi.useFakeTimers();
+  vi.setSystemTime(40_000);
+  const state = temporaryState();
+  const database = openHostStateDatabase({
+    machineIdentityId: MACHINE_IDENTITY_ID,
+    pathEnvironment: state.environment,
+  });
+  const server = database.records.ensureDefaultCollaborationServer();
+  const coordinator = database.records.acquireCoordinatorLease({
+    collaborationServerId: server.server.collaborationServerId,
+    candidateLeaseId: canonicalId("coordinatorLease", 141),
+    ownerInstanceId: parseA1SafeId("lineage-coordinator-owner"),
+    expectedCurrentLeaseId: null,
+    expectedCoordinatorEpoch: 0,
+    leaseDurationMs: 600_000,
+  });
+  const coordinatorFence = {
+    collaborationServerId: server.server.collaborationServerId,
+    coordinatorLeaseId: coordinator.lease.coordinatorLeaseId,
+    coordinatorEpoch: coordinator.lease.coordinatorEpoch,
+  };
+  const ownerRequest = acquireRequest(142);
+  database.runtimeOwner.acquireServiceLease(ownerRequest);
+  const fence = ownerFence(ownerRequest, 1);
+  const registration = await runtimeRegistration(fence, 143);
+  const runtime = database.runtimeOwner.registerInitialRuntime(registration);
+  const workspaceSelectorId = parseA1SafeId("lineage-workspace");
+  const terminalTarget = {
+    kind: "terminal_native" as const,
+    descriptor: registration.descriptor,
+    terminalProjectRef: parseA1SafeId("lineage-terminal-project"),
+    nativeWorkspaceBindingId: null,
+  };
+  const targetDigest = await projectTargetDigest(terminalTarget);
+  const descriptorEvidence = createNativeEngineDescriptorEvidence(registration.descriptor);
+  const projectEvidence = createDurableProjectSelectionEvidence({
+    kind: "first_bootstrap",
+    collaborationServerId: server.server.collaborationServerId,
+    workspaceSelectorId,
+    terminalDescriptor: registration.descriptor,
+    targetDigest,
+  });
+  const metadataEvidence = createNativeRegistrationMetadataEvidence({
+    metadataSchemaId: "remote-claw/test/lineage-metadata/v1",
+    metadataBytes: new TextEncoder().encode("retained registration lineage"),
+  });
+  const semanticConversationId = parseA1SafeId("lineage-semantic-conversation");
+  const nativeRefEvidence = createNativeConversationRefEvidence({
+    descriptor: registration.descriptor,
+    runtimeId: runtime.runtime.runtimeId,
+    conversationId: semanticConversationId,
+    incarnation: 1,
+  });
+  const reserved = database.transaction((transaction) => {
+    const descriptor = transaction.putArtifact({
+      scopeKind: "collaboration_server",
+      scopeId: server.server.collaborationServerId,
+      artifactSchemaId: descriptorEvidence.canonicalSchemaId,
+      artifactDigest: descriptorEvidence.canonicalDigest,
+      artifactBytes: descriptorEvidence.canonicalBytes,
+    });
+    const project = transaction.putArtifact({
+      scopeKind: "collaboration_server",
+      scopeId: server.server.collaborationServerId,
+      artifactSchemaId: projectEvidence.canonicalSchemaId,
+      artifactDigest: projectEvidence.canonicalDigest,
+      artifactBytes: projectEvidence.canonicalBytes,
+    });
+    const metadata = transaction.putArtifact({
+      scopeKind: "collaboration_server",
+      scopeId: server.server.collaborationServerId,
+      artifactSchemaId: metadataEvidence.canonicalSchemaId,
+      artifactDigest: metadataEvidence.canonicalDigest,
+      artifactBytes: metadataEvidence.canonicalBytes,
+    });
+    const nativeRef = transaction.putArtifact({
+      scopeKind: "runtime",
+      scopeId: runtime.runtime.runtimeId,
+      artifactSchemaId: nativeRefEvidence.canonicalSchemaId,
+      artifactDigest: nativeRefEvidence.canonicalDigest,
+      artifactBytes: nativeRefEvidence.canonicalBytes,
+    });
+    const terminal = transaction.records.reserveFirstTerminalChat({
+      fence: coordinatorFence,
+      workspaceSelectorId,
+      terminalTarget,
+      mappingEvidenceRef: parseA1SafeId("lineage-mapping-evidence"),
+      registration: {
+        registrationAttemptId: canonicalId("registrationAttempt", 144),
+        descriptor: registration.descriptor,
+        descriptorRef: descriptor.artifactRef.protectedHandleId,
+        descriptorDigest: descriptorEvidence.canonicalDigest,
+        projectRef: project.artifactRef.protectedHandleId,
+        projectDigest: projectEvidence.canonicalDigest,
+        expectedNativeRefDigest: nativeRefEvidence.canonicalDigest,
+        initialPhase: "starting",
+        metadataSchemaId: metadataEvidence.value.metadataSchemaId,
+        metadataRef: metadata.artifactRef.protectedHandleId,
+        metadataDigest: metadataEvidence.canonicalDigest,
+        capabilitiesRef: null,
+        capabilitiesDigest: null,
+      },
+    });
+    return { terminal, nativeRef };
+  });
+  const openInput = {
+    fence,
+    coordinatorFence,
+    nativeConversationLeaseId: canonicalId("nativeConversationLease", 145),
+    registrationAttemptId: reserved.terminal.registrationIntent.registrationAttemptId,
+    nativeBindingId: reserved.terminal.binding.nativeBindingId,
+    runtimeId: runtime.runtime.runtimeId,
+    nativeIncarnation: 1,
+    protectedPortHandleId: canonicalId("protectedHandle", 146),
+  };
+  const opened = database.registration.open({
+    ...openInput,
+    operation: createNativeRegistrationOperationEvidence(
+      "open",
+      parseA1SafeId("lineage-registration-open"),
+      openInput,
+    ),
+  });
+
+  const bind = () => {
+    const local = database.runtimeOwner.appendLocalConversationTransition({
+      fence,
+      operation: operation("lineage-local-discover", 147),
+      runtimeId: runtime.runtime.runtimeId,
+      nativeIncarnation: 1,
+      localTransitionId: parseA1SafeId("lineage-local-transition"),
+      kind: "discover",
+      sourceLocalNativeConversationId: null,
+      target: {
+        localNativeConversationId: parseA1SafeId("lineage-local-conversation"),
+        descriptor: registration.descriptor,
+        projectId: reserved.terminal.project.projectId,
+        semanticConversationId,
+        parentLocalNativeConversationId: null,
+        state: "open",
+      },
+      observedSemanticConversationId: semanticConversationId,
+      nativeEvidenceSchemaId: nativeRefEvidence.canonicalSchemaId,
+      nativeEvidenceRef: reserved.nativeRef.artifactRef.protectedHandleId,
+      nativeEvidenceDigest: nativeRefEvidence.canonicalDigest,
+    });
+    const prepared = database.runtimeOwner.prepareBindingRuntime({
+      fence,
+      coordinatorFence,
+      bindingOperation: operation("lineage-binding-prepare", 148),
+      attachmentOperation: operation("lineage-attachment-acquire", 149),
+      nativeBindingIncarnationId: parseA1SafeId("lineage-binding-incarnation"),
+      collaborationServerId: server.server.collaborationServerId,
+      logicalChatId: reserved.terminal.chat.logicalChatId,
+      nativeBindingId: reserved.terminal.binding.nativeBindingId,
+      runtimeId: runtime.runtime.runtimeId,
+      nativeIncarnation: 1,
+      semanticConversationId,
+      attachmentId: parseA1SafeId("lineage-attachment"),
+      attachmentKind: "app-server",
+      transportId: parseA1SafeId("lineage-transport"),
+      attachmentGeneration: 1,
+      attachmentLeaseId: parseA1SafeId("lineage-attachment-lease"),
+      transportEpoch: 1,
+      resourceOwnership: "shared_runtime",
+      phase: "starting",
+      disconnectPolicy: "detach",
+    });
+    const bindInput = {
+      fence,
+      coordinatorFence,
+      nativeConversationLeaseId: opened.lease.nativeConversationLeaseId,
+      nativeBindingIncarnationId: prepared.bindingIncarnation.nativeBindingIncarnationId,
+      attachmentLeaseId: prepared.attachmentLease.attachmentLeaseId,
+    };
+    const bound = database.registration.bind({
+      ...bindInput,
+      operation: createNativeRegistrationOperationEvidence(
+        "bind",
+        parseA1SafeId("lineage-registration-bind"),
+        bindInput,
+      ),
+    });
+    return { local, prepared, bound };
+  };
+
+  return {
+    database,
+    state,
+    fence,
+    coordinatorFence,
+    registration,
+    runtime,
+    reserved: reserved.terminal,
+    opened,
+    bind,
   };
 }
 
@@ -442,6 +649,159 @@ afterEach(() => {
 });
 
 describeLinux("A1.3 high-level runtime-owner repository", () => {
+  it("keeps an unbound registration lease intact when legacy runtime retirement is attempted", async () => {
+    const fixture = await createRetainedRegistrationFixture();
+    const { database, fence, runtime } = fixture;
+    const boundLeaseId = fixture.opened.lease.nativeConversationLeaseId;
+    try {
+      expect(() =>
+        database.runtimeOwner.terminateRuntime({
+          fence,
+          operation: operation("lineage-runtime-terminate", 150),
+          runtimeId: runtime.runtime.runtimeId,
+          predecessorNativeIncarnation: 1,
+          expectedRuntimeOwnerAssignmentId: runtime.assignment.runtimeOwnerAssignmentId,
+          containmentId: parseA1SafeId("lineage-runtime-termination"),
+          containmentEvidenceSchemaId: "remote-claw/test/containment/v1",
+          containmentEvidenceRef: parseA1SafeId("lineage-runtime-termination-evidence"),
+          containmentEvidenceDigest: digest(151),
+        }),
+      ).toThrow(RuntimeOwnerRepositoryConflictError);
+      expect(() =>
+        database.runtimeOwner.replaceRuntimeIncarnation({
+          fence,
+          operation: operation("lineage-runtime-replace", 152),
+          runtimeId: runtime.runtime.runtimeId,
+          predecessorNativeIncarnation: 1,
+          expectedRuntimeOwnerAssignmentId: runtime.assignment.runtimeOwnerAssignmentId,
+          containmentId: parseA1SafeId("lineage-runtime-replacement"),
+          containmentEvidenceSchemaId: "remote-claw/test/containment/v1",
+          containmentEvidenceRef: parseA1SafeId("lineage-runtime-replacement-evidence"),
+          containmentEvidenceDigest: digest(153),
+          successorStartIdentitySchemaId: "remote-claw/test/native-process-start/v1",
+          successorStartIdentityRef: parseA1SafeId("lineage-runtime-successor-start"),
+          successorStartIdentityDigest: digest(154),
+          successorRuntimeOwnerAssignmentId: parseA1SafeId("lineage-runtime-successor-assignment"),
+        }),
+      ).toThrow(RuntimeOwnerRepositoryConflictError);
+
+      const bound = fixture.bind();
+      expect(database.registration.readLease(boundLeaseId)).toEqual(bound.bound.lease);
+      expect(database.runtimeOwner.readInventory()).toMatchObject({
+        runtimes: [{ state: "current", currentNativeIncarnation: 1 }],
+        containments: [],
+      });
+    } finally {
+      database.close();
+    }
+
+    const reopened = openHostStateDatabase({
+      machineIdentityId: MACHINE_IDENTITY_ID,
+      pathEnvironment: fixture.state.environment,
+    });
+    try {
+      expect(reopened.registration.readLease(boundLeaseId)).toMatchObject({ state: "starting" });
+      expect(reopened.runtimeOwner.readInventory().runtimes).toMatchObject([
+        { state: "current", currentNativeIncarnation: 1 },
+      ]);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("rejects detach, clear, and archive while their graph is retained by registration", async () => {
+    const fixture = await createRetainedRegistrationFixture();
+    const { database, fence, coordinatorFence, registration, reserved } = fixture;
+    const boundLeaseId = fixture.opened.lease.nativeConversationLeaseId;
+    try {
+      const { local, prepared, bound } = fixture.bind();
+      expect(() =>
+        database.runtimeOwner.detachBindingRuntime({
+          fence,
+          coordinatorFence,
+          operation: operation("lineage-attachment-detach", 155),
+          nativeBindingId: reserved.binding.nativeBindingId,
+          attachmentLeaseId: prepared.attachmentLease.attachmentLeaseId,
+          expectedGateGeneration: prepared.gate.gateGeneration,
+        }),
+      ).toThrow(RuntimeOwnerRepositoryConflictError);
+
+      expect(() =>
+        database.runtimeOwner.appendLocalConversationTransition({
+          fence,
+          operation: operation("lineage-local-clear", 156),
+          runtimeId: local.conversation.runtimeId,
+          nativeIncarnation: local.conversation.nativeIncarnation,
+          localTransitionId: parseA1SafeId("lineage-local-clear-transition"),
+          kind: "clear",
+          sourceLocalNativeConversationId: local.conversation.localNativeConversationId,
+          target: {
+            localNativeConversationId: parseA1SafeId("lineage-cleared-local-conversation"),
+            descriptor: registration.descriptor,
+            projectId: local.conversation.projectId,
+            semanticConversationId: null,
+            parentLocalNativeConversationId: null,
+            state: "unbound",
+          },
+          observedSemanticConversationId: null,
+          nativeEvidenceSchemaId: "remote-claw/test/native-observation/v1",
+          nativeEvidenceRef: parseA1SafeId("lineage-clear-observation"),
+          nativeEvidenceDigest: digest(157),
+        }),
+      ).toThrow(RuntimeOwnerRepositoryConflictError);
+
+      expect(() =>
+        database.runtimeOwner.appendLocalConversationTransition({
+          fence,
+          operation: operation("lineage-local-archive", 158),
+          runtimeId: local.conversation.runtimeId,
+          nativeIncarnation: local.conversation.nativeIncarnation,
+          localTransitionId: parseA1SafeId("lineage-local-archive-transition"),
+          kind: "archive",
+          sourceLocalNativeConversationId: local.conversation.localNativeConversationId,
+          target: {
+            localNativeConversationId: local.conversation.localNativeConversationId,
+            descriptor: registration.descriptor,
+            projectId: local.conversation.projectId,
+            semanticConversationId: local.conversation.semanticConversationId,
+            parentLocalNativeConversationId: null,
+            state: "closed",
+          },
+          observedSemanticConversationId: local.conversation.semanticConversationId,
+          nativeEvidenceSchemaId: "remote-claw/test/native-observation/v1",
+          nativeEvidenceRef: parseA1SafeId("lineage-archive-observation"),
+          nativeEvidenceDigest: digest(159),
+        }),
+      ).toThrow(RuntimeOwnerRepositoryConflictError);
+
+      expect(database.registration.readLease(boundLeaseId)).toEqual(bound.lease);
+      expect(database.runtimeOwner.readInventory()).toMatchObject({
+        conversations: [{ state: "open" }],
+        transitions: [{ kind: "discover" }],
+        bindingIncarnations: [{ state: "current" }],
+        attachments: [{ state: "current" }],
+        attachmentLeases: [{ state: "current" }],
+        gates: [{ phase: "starting", gateGeneration: prepared.gate.gateGeneration }],
+      });
+    } finally {
+      database.close();
+    }
+
+    const reopened = openHostStateDatabase({
+      machineIdentityId: MACHINE_IDENTITY_ID,
+      pathEnvironment: fixture.state.environment,
+    });
+    try {
+      expect(reopened.registration.readLease(boundLeaseId)).toMatchObject({ state: "starting" });
+      expect(reopened.runtimeOwner.readInventory()).toMatchObject({
+        conversations: [{ state: "open" }],
+        gates: [{ phase: "starting" }],
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
   it("fences, renews, releases, reconciles, and takes over the machine-wide owner lease", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -1098,6 +1458,18 @@ describeLinux("A1.3 high-level runtime-owner repository", () => {
         mappingEvidenceRef: parseA1SafeId("mapping-evidence-a13"),
         registration: terminalRegistration(81),
       });
+      const otherProject = database.records.allocateExplicitProject({
+        fence: coordinatorFence,
+        projectAllocationIntentId: parseA1SafeId("other-project-allocation"),
+        workspaceSelectorId: parseA1SafeId("other-project-workspace"),
+        terminalTarget: {
+          kind: "terminal_native",
+          descriptor: { product: "codex", access: "app-server" },
+          terminalProjectRef: parseA1SafeId("other-terminal-project"),
+          nativeWorkspaceBindingId: null,
+        },
+        mappingEvidenceRef: parseA1SafeId("other-project-mapping-evidence"),
+      });
 
       const ownerRequest = acquireRequest(82);
       database.runtimeOwner.acquireServiceLease(ownerRequest);
@@ -1140,6 +1512,22 @@ describeLinux("A1.3 high-level runtime-owner repository", () => {
           },
         }),
       ).toThrow(RuntimeOwnerRepositoryConflictError);
+
+      const crossProjectTransition = database.runtimeOwner.appendLocalConversationTransition({
+        ...transitionRequest,
+        operation: operation("cross-project-local-transition", 137),
+        localTransitionId: parseA1SafeId("cross-project-local-transition"),
+        kind: "new",
+        target: {
+          ...transitionRequest.target,
+          localNativeConversationId: parseA1SafeId("cross-project-local-conversation"),
+          projectId: otherProject.project.projectId,
+          semanticConversationId: parseA1SafeId("cross-project-semantic-conversation"),
+        },
+        observedSemanticConversationId: parseA1SafeId("cross-project-semantic-conversation"),
+        nativeEvidenceRef: parseA1SafeId("cross-project-native-observation"),
+        nativeEvidenceDigest: digest(138),
+      });
       expect(() =>
         database.runtimeOwner.appendLocalConversationTransition({
           ...transitionRequest,
@@ -1184,7 +1572,7 @@ describeLinux("A1.3 high-level runtime-owner repository", () => {
         nativeEvidenceRef: parseA1SafeId("native-observation-2"),
         nativeEvidenceDigest: digest(88),
       });
-      expect(fork.transition.localTransitionSeq).toBe(2);
+      expect(fork.transition.localTransitionSeq).toBe(3);
 
       database.runtimeOwner.releaseServiceLease({
         fence,
@@ -1213,7 +1601,7 @@ describeLinux("A1.3 high-level runtime-owner repository", () => {
           nativeEvidenceDigest: digest(134),
         }),
       ).toThrow(RuntimeOwnerRepositoryConflictError);
-      expect(database.runtimeOwner.readInventory().transitions).toHaveLength(2);
+      expect(database.runtimeOwner.readInventory().transitions).toHaveLength(3);
       const reassigned = database.runtimeOwner.reassignRuntimeOwner({
         fence: successorFence,
         operation: operation("local-runtime-reassign", 135),
@@ -1250,6 +1638,20 @@ describeLinux("A1.3 high-level runtime-owner repository", () => {
         phase: "starting" as const,
         disconnectPolicy: "detach" as const,
       };
+      expect(() =>
+        database.runtimeOwner.prepareBindingRuntime({
+          ...prepareRequest,
+          bindingOperation: operation("cross-project-binding-prepare", 139),
+          attachmentOperation: operation("cross-project-attachment-acquire", 140),
+          nativeBindingIncarnationId: parseA1SafeId("cross-project-binding-incarnation"),
+          semanticConversationId:
+            crossProjectTransition.conversation.semanticConversationId ??
+            parseA1SafeId("unreachable-cross-project-semantic-conversation"),
+          attachmentId: parseA1SafeId("cross-project-transport-attachment"),
+          transportId: parseA1SafeId("cross-project-app-server-transport"),
+          attachmentLeaseId: parseA1SafeId("cross-project-transport-lease"),
+        }),
+      ).toThrow(RuntimeOwnerRepositoryConflictError);
       const prepared = database.runtimeOwner.prepareBindingRuntime(prepareRequest);
       expect(database.runtimeOwner.prepareBindingRuntime(prepareRequest)).toEqual({
         ...prepared,
@@ -1312,7 +1714,11 @@ describeLinux("A1.3 high-level runtime-owner repository", () => {
         runtime: { state: "closed" },
       });
       expect(database.runtimeOwner.readInventory()).toMatchObject({
-        transitions: [{ localTransitionSeq: 1 }, { localTransitionSeq: 2 }],
+        transitions: [
+          { localTransitionSeq: 1 },
+          { localTransitionSeq: 2 },
+          { localTransitionSeq: 3 },
+        ],
         gates: [{ phase: "closed" }],
       });
     } finally {
