@@ -27,11 +27,13 @@ local transcript completeness or replay.
 > not proof of what a particular device rendered. One paired host contains many independent logical
 > chats and native sessions; this document's per-`cse_*` RC state repeats independently for every
 > wrapped Claude session and must not become a host-wide current-session slot. This document's full RC
-> log remains relevant to the current synthetic server, not a universal semantic authority. A1.0 has
-> landed the canonical writer and dormant host-state contracts. A1.1 has landed a dormant secure
-> SQLite kernel, migration registry, high-level transactions, and verified protected-artifact store.
-> No current run or driver imports or opens that kernel; it acquires no owner/coordinator lease,
-> persists no RC state, and advertises no writable A1 behavior. Generic host records begin in A1.2.
+> log remains relevant to the current synthetic server, not a universal semantic authority. A1.0
+> through A1.2 have landed as dormant libraries: canonical contracts, the secure SQLite kernel and
+> protected-artifact store, then schema-v3 server/project/chat/binding/edge/coordinator records with a
+> high-level repository, immutable bootstrap/control journal, inventory/reconciliation, and coherent
+> semantic snapshot validation. No current run or driver imports or opens that kernel; production
+> acquires no owner/coordinator lease, persists no A1 or RC state, and advertises no writable A1
+> behavior. A1.3 is next.
 
 ## Source Map
 
@@ -54,9 +56,9 @@ local transcript completeness or replay.
 - Active shared canonical primitive and locked A0 consumer:
   `packages/clawsec/src/{canonical,aad}.ts`.
 - Dormant A1 host-state code:
-  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,artifacts,sqlite}.ts`.
-  A1.1 implements only schema/migration metadata and immutable protected artifacts; the generic state
-  tables described below remain A1.2 and later work.
+  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,artifacts,repository,sqlite}.ts`.
+  A1.2 implements the generic v3 server/project/chat/binding/edge/coordinator tables and high-level
+  operations described below. It does not yet implement private Claude RC rows or a live runtime owner.
 - The A1/A2 branch names and table snapshots later in this document record the
   historical review basis. The durable broker backends have since landed;
   re-check current migrations/code before implementing a dependent host schema.
@@ -201,9 +203,12 @@ native-binding, attachment, delivery-attempt, dispatch, or effect-gate invariant
 owner-only `host-state-v1.db` transaction boundary as the narrow coordinator control journal. A
 separate adapter-local store is permitted only for raw transport material whose loss or update cannot
 cross one of those atomic invariants; it retains immutable refs and digests back to the host-state row.
-The physical database, secure open/migration path, and high-level transaction kernel have landed
-dormant in A1.1. The generic control-journal tables and operations remain A1.2 and later work. A1.0
-defines their row/digest contracts and resolves the intended path without creating a file.
+The physical database, secure open/migration path, and high-level transaction kernel landed dormant
+in A1.1. A1.2 now adds the generic durable graph and the journal entries for project bootstrap,
+non-first terminal reservation, terminal selector replacement, and coordinator acquisition/release.
+It also provides exact-retry/read-side reconciliation and full restart inventory without opening the
+database from production. Command proposal/decision entries, ingress queues, and actors remain A1.7;
+A1.2's server-control/chat actor scope is durable addressing only.
 The journal's `command_seq` is the definitive decision order for proposals that remote-claw server
 received from its direct collaborators, including forwarded, queued, and rejected decisions. It is a
 globally unique audit position, not a host-wide execution queue: each logical chat offers only its own
@@ -305,7 +310,7 @@ copied bearer/key material may remain valid, and A1 has neither an in-place key 
 broker-enforced permanent route-revocation protocol. A future bounded-retention version must add and
 prove that protocol before it may collect these records.
 
-The implemented, dormant A1.1 kernel supplies the secure transaction/storage boundary for the owner-only
+The implemented, dormant A1.1/A1.2 kernel supplies the secure transaction/storage boundary for the owner-only
 **LOCAL**
 `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite database,
 falling back under `~/.local/state` when `XDG_STATE_HOME` is absent or relative. The fallback home
@@ -318,12 +323,19 @@ application/identities/identity directories, a non-group/world-writable owner st
 regular one-link `0600` database/WAL/SHM files; rollback journals, non-WAL databases, and all other
 filesystem types fail closed.
 
-Current schema v2 uses SQLite `application_id=0x52434c57`, `user_version=2`, exact per-version schema
+Current schema v3 uses SQLite `application_id=0x52434c57`, `user_version=3`, exact per-version schema
 manifests, and an append-only `CanonicalWriter` SHA-256 migration chain. The locked v1/v2 digests are
 `Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec` and
-`yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; a valid v1 database is checked before migrating to
-v2. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
-two triggers; v2 adds four triggers for a current total of ten objects and six triggers. Every row,
+`yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; migration 3 is
+`003-durable-host-records`, contains 81 ordered statements, and is locked to
+`cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4`. A valid v1 or v2 database is
+checked before migrating to v3. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
+two triggers; v2 adds four triggers for a total of ten objects and six triggers. V3 adds ten tables:
+`collaboration_servers`, `host_state_profiles`, `projects`,
+`project_target_selector_mappings`, `logical_chats`, `native_bindings`,
+`native_registration_intents`, `inward_collaboration_edges`, `coordinator_leases`, and
+`control_journal_entries`. The complete v3 manifest is exactly 91 objects: 13 tables, 24 indexes, and
+54 triggers. Every row,
 including any `sqlite_*` name, must match the corresponding version manifest. Before migration 1, a
 new database must retain `application_id=0` and literally zero `sqlite_schema` rows. Every connection
 reads back `foreign_keys=ON`, `trusted_schema=OFF`, `journal_mode=WAL`,
@@ -334,6 +346,31 @@ transaction snapshot before opening a writable SQLite connection. A future versi
 crash WAL is rejected without rewriting the main database or WAL. SHM remains guarded but is transient
 and may change during validation; a safe SHM-only remnant beside an existing database can be
 reconstructed, while sidecars without a database are refused.
+
+V3's semantic validator intentionally accepts only the dormant A1.2 subset. An existing database is
+checked in one coherent read-only snapshot before writable open; a newly migrated database is checked
+before its handle returns. State is empty or has one linked default profile and `installing` server; projects are
+current; each project's one persisted v3 selector chain is contiguous, terminal-native, and ends in exactly one current generation;
+and every logical chat records its exact `project_target_selector_mapping_id`. Chats remain
+recovering at topology generation one and projection sequence zero. Each points to one unresolved
+starting binding, exactly one registration intent, and one random `rcie_*` native-harness edge that is
+still installing with every certificate/live-connection/capability pointer null. Nested mappings and
+remote-server edges are rejected until N1 supplies a migration and proof. Evidence refs/digests are
+opaque in A1.2; A1.4 must resolve and verify them before live setup.
+
+The A1.2 repository atomically bootstraps the first project plus mapping/chat/binding/intent/edge,
+allows explicit later projects only after that bootstrap, reserves later chats against an exact
+mapping fence, and replaces a terminal selector by generation compare-and-swap without retargeting
+old chats. It inventories projects, mapping histories/current mappings, chats, bindings, full terminal
+reservation graphs, and coordinator acquisitions for restart. Coordinator acquisition, release,
+project bootstrap, non-first terminal reservation, and mapping replacement each allocate an exact
+immutable journal entry; renewal changes only the heartbeat deadline. Expiry takeover advances the
+server pointer/epoch without rewriting the predecessor lease. Release may clear that pointer only
+after the exact lease and epoch it still names have been released. Exact retries and read-side
+reconciliation classify persistence outcomes, returning explicit indeterminate state where later lease
+changes prevent exact proof; they are not A1.4's live registration/callable-port
+workflow and do not make an unknown ordinary SQLite commit safe to replay blindly. The landed actor
+scope is only durable addressing; A1.7 owns queues, proposal decisions, and serialization.
 
 FULL WAL `COMMIT` is migration durability. Post-commit validation uses a coherent snapshot, then a
 non-blocking `wal_checkpoint(PASSIVE)` and guardian fsync; a reader may defer frame copying and a
@@ -361,7 +398,8 @@ kernel retains the connections and guardians in fail-stop quarantine, rejects ev
 canonical database path until process restart, leaves other database paths independent, and marks that
 open failure not retry-safe.
 
-A1.2 adds generic host-state tables; B.2 adds private Claude RC event tables/projection state. The database is in
+A1.2 has added the generic host-state tables and repository; B.2 adds private Claude RC event
+tables/projection state. The database is in
 **cleartext** — nothing on the host needs encryption, and the broker never holds RC plaintext (only
 sealed frames cross to the cloud). The interface keeps the storage choice hidden from `mitm.ts` and
 `session.ts`. Large raw adapter-only payloads may move to a separate local store only under the
@@ -1140,11 +1178,12 @@ demonstrates every property below:
 
 ## Assigned Decisions and Proof-Owned Questions
 
-- **A1.1 / B.2 — storage placement: DECIDED; A1.1 kernel implemented dormant.** Use the owner-only local
+- **A1.1–A1.2 / B.2 — storage placement: DECIDED; A1.1 kernel and A1.2 host repository implemented dormant.** Use the owner-only local
   `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite
   transaction boundary in the CLI, with the absolute-home `~/.local/state` fallback above, for every RC row that
   participates in a control-state invariant, in cleartext. A1.0 resolves the path; A1.1 implements
-  secure open/migration and protected artifacts without a production caller. A separate local adapter store may hold only raw transport payloads with immutable host-state
+  secure open/protected artifacts; A1.2 adds schema v3, generic host records, and semantic snapshot
+  validation, still without a production caller. A separate local adapter store may hold only raw transport payloads with immutable host-state
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.

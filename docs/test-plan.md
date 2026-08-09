@@ -10,7 +10,7 @@ native evidence separately from future release gates.
 | Layer | Where | What it proves | Runtime |
 | --- | --- | --- | --- |
 | **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking, the shared canonical field writer with strict-null optionals and defensive snapshots, and the locked A0 AAD regression vector — pure functions, no network | Node + WebCrypto |
-| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, dormant A1.0 contracts, and the dormant A1.1 secure-filesystem/migration/SQLite/protected-artifact kernel | Node, mock fetch / fixture |
+| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, dormant A1.0 contracts, the dormant A1.1 secure-filesystem/SQLite/protected-artifact kernel, and A1.2 schema-v3 repository/reconciliation/inventory/semantic-snapshot behavior over real in-memory and secure-file SQLite | Node, mock fetch / fixture |
 | **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
 | **Retained native proof (OpenCode)** | [`spikes/opencode-native/verify-evidence.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, and same-ID `noReply:true` append behavior within one incarnation | Node over checked JSON evidence; no provider/model |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
@@ -103,7 +103,8 @@ about the current A0 implementation:
 | A0.2 | Implemented (process-local) | OpenCode and tmux driver tests for post-setup capabilities, cancellation and bounded teardown, no pre-ready broker client/announcement/remote mutation, and no ghost registration after setup or spawn failure; tmux additionally proves mandatory native readiness, private socket/runtime and owner-only launch artifacts, prompt/environment/settings absence from tmux argv and public errors, concurrent wrapper isolation, failed permission-decision persistence withholding ACK, and runtime retention when pane termination is uncertain |
 | A1.0 | Implemented (dormant contracts only) | Exact canonical primitive, ID namespace, path-resolution, record-shape, digest, fence, protected-operation, dispatch/reconciliation-separation, and backend-capability unit tests; no persistence, effect, or A1 capability is advertised |
 | A1.1 | Implemented (dormant storage kernel only) | Linux descriptor-anchored secure create/open/reopen, read-only WAL-aware validation before writable SQLite open, exact schema-v2 migration/digest/manifest validation, FULL migration commits with non-blocking passive checkpoint and guardian fsync, typed commit and guardian-retaining cleanup outcomes, synchronous high-level transactions with generic multiwrite rollback, and immutable protected artifacts with verified scope, schema, reference, digest, and stored length; no production open, lease, generic state row, or A1 capability is advertised |
-| A1.2–A1.11 | Planned | Server/project bootstrap and selector mapping, server/lease races, owner takeover, durable registration, runtime-owner native-root activation, many-session host inventory and per-chat isolation, cross-runtime wire vectors, broker conformance, ingress/dedup, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
+| A1.2 | Implemented (dormant host repository only) | Exact schema-v3 migration/manifest; default profile/server; atomic first project/mapping/chat/binding/intent/`rcie_*` edge; explicit later projects; terminal mapping-generation replacement; many-chat inventory; coordinator lease CAS, renewal, release, takeover and reconciliation; contiguous immutable journal; full semantic read-only snapshot validation; no production open, live registration, command actor, native effect, or nested target/edge is advertised |
+| A1.3–A1.11 | Planned; A1.3 next | Runtime-owner service, durable evidence-resolving registration, runtime/binding activation, cross-runtime wire vectors, broker conformance, ingress/dedup and actor queues, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
 | A2.1–A2.4 | Planned after A1 | Retained real OpenCode TUI/front-door/isolation fixture and the signed `{new_chat}`/`{user_text}` adjudication matrix; unavailable connector kinds use authenticated stand-ins only |
 | N1.1–N1.3 | Planned after A1 | Two live nested servers, rooted edge installation, complete signed downstream receipt, reconnect/reparent recovery, and cycle/reflection/duplicate-execution rejection |
 | B.1–B.5 | Planned after A1 | Pinned Claude differential fixtures, durable private RC recovery, native correlation/gate races, and live outward Anthropic Remote parity |
@@ -117,10 +118,10 @@ the common ingress until its real connector lands. Such a stand-in proves source
 ordering, signing, and executor isolation only; B, C, the applicable automation connector, or N1 owns
 transport, reconnect, rendering, and fidelity proof.
 
-A1.0's unit tests prove only the dormant in-memory and pure-function contracts. They do not prove a
+A1.0's unit tests prove only the dormant in-memory and pure-function contracts. By themselves they do not prove a
 lease compare-and-swap or takeover, non-artifact protected-value custody, native dispatch, broker
 conformance, driver integration, or restart recovery.
-They include negative-zero, lone-surrogate, overlong-string, accessor/TOCTOU snapshot, immutable
+They include negative-zero, `U+0000`, lone-surrogate, overlong-string, accessor/TOCTOU snapshot, immutable
 validator-registry, symbol-key, noncanonical base64url alias, pre-decode size rejection, protected
 byte snapshots across `Buffer`, fixed and growable `SharedArrayBuffer`, and returned-copy mutation,
 cross-scope canonical-ID, and dormant-import/non-advertisement vectors.
@@ -152,6 +153,23 @@ stored-length verification, append-only database triggers, distinct persistence 
 live-handle poisoning. The public opener's type test excludes entropy and clock injection. Tests open
 only temporary databases; active CLI imports and production state creation remain forbidden.
 
+A1.2's tests apply the exact v3 migration over real SQLite, exercise its foreign keys, uniqueness,
+append-only and monotonic triggers, and migrate the exact v2 manifest forward. Repository tests lock
+the synchronous and asynchronous digest/derived-ID vectors together; reject malformed actor scopes;
+bootstrap/replay/collide the default server and first complete terminal graph; allocate an explicit
+project only after first bootstrap; replace an exact terminal selector generation by compare-and-swap;
+keep earlier chats pinned to their old mapping; reserve and inventory multiple chats; exhaust ID and
+journal allocation without partial writes; and acquire, renew, release, reconcile, and take over
+coordinator leases without consuming offsets on stale/early requests. Secure-file integration closes
+and reopens the complete graph, combines protected evidence and A1.2 records in one outer transaction,
+and refuses an existing semantically corrupt graph before writable open, while validating a newly
+migrated graph before its handle returns. The accepted v3 graph is intentionally dormant:
+one default profile/server, current projects, contiguous terminal mapping chains, recovering
+topology-generation-one chats with exact mapping IDs, unresolved starting bindings with one intent,
+and installing native-harness `rcie_*` edges. Nested mappings/remote-server edges, live runtimes,
+binding incarnations, actors/queues, and native effects remain later proof gates. A1.2 stores opaque
+evidence refs/digests; A1.4 owns their verification and the callable-port/native registration workflow.
+
 ### One-host/many-session acceptance matrix
 
 This is an integrated release gate across A1, A2, B, and C, not a claim that one early slice proves every native product:
@@ -170,13 +188,19 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
 - bootstrap a server's first random `rcpj_*` and generation-one
   `ProjectTargetSelectorMappingRecord` atomically from one exact allocation intent and terminal target;
   in that same transaction create the recovering logical chat, starting native binding, registration
-  intent, and its installing native-harness inward edge, with the chat pointing to the edge and every
+  intent, and its random `rcie_*` installing native-harness inward edge, with the chat pointing to the
+  edge, the chat storing the exact generation-one mapping ID, and every
   root-certificate/live-lease/capability pointer null. Retry the exact intent and return the same
   project/mapping/chat/binding/edge, collide changed selector/target bytes, and require explicit project
-  creation or exact `(projectId, workspaceSelectorId)` selection after any project exists. Reject
-  `project:null`, a missing/closed project, cwd/title inference, only/most-recent fallback, and a nested
-  selector target whose target server equals its own server before writing any A1 registration intent,
+  creation only after first bootstrap or exact `(projectId, workspaceSelectorId)` selection after any
+  project exists. Reject `project:null`, a missing/closed project, cwd/title inference,
+  only/most-recent fallback, and every nested selector target/remote-server edge in schema v3 before writing any A1 registration intent,
   logical chat, or native binding;
+- replace a terminal selector mapping only when its exact current mapping ID, generation, and target
+  digest match; atomically supersede that row, install generation `n+1`, and journal the new mapping.
+  Require exact retry, collision on changed replacement bytes, read-side lost-response reconciliation,
+  a contiguous mapping inventory with one current tail, and old logical chats remaining pinned to their
+  original superseded generation while later chat reservations may select the new tail;
 - reopen and migrate one owner-only `host-state-v1.db` on Linux with an exact stable Node.js `X.Y.Z`
   version in `^22.13.0 || >=23.5.0`; reject unsupported versions and any prerelease/build-like suffix;
   require owned, non-symlink parents below the selected state home, a state
@@ -221,19 +245,25 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   changed exact per-version schema manifest; a changed, partial, or future migration history; and a
   corrupt database. Before migration 1, require a newly created database to retain
   `application_id=0` and literally zero `sqlite_schema` rows. Lock migration 1 to
-  `Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec` and current migration 2 to
-  `yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; require the exact v1 six-object manifest of three
-  tables, one explicit unique index, and two triggers, plus the current v2 ten-object manifest with six
-  triggers. Match every `sqlite_schema` row and reject
+  `Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec`, migration 2 to
+  `yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`, and the 81-statement migration 3 to
+  `cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4`; require the exact v1 six-object manifest of three
+  tables, one explicit unique index, and two triggers, the v2 ten-object manifest with six triggers,
+  and the v3 91-object manifest of 13 tables, 24 indexes, and 54 triggers. Match every `sqlite_schema` row and reject
   even a hidden `sqlite_*` extra; reject update, delete, or replacement of migration/artifact rows.
   Expose no raw SQL; reject nested/async/escaped transactions and database-level asynchronous artifact
   calls inside a transaction callback; and roll back multiple protected-artifact writes as one unit.
   Exercise the 16 MiB limit, immutable artifact rows, exact
   scope/schema/reference/digest reads with stored-length validation, fresh returned snapshots, and
   failure after eight random handle collisions;
-- race two coordinator acquisitions and require one current lease, one monotonic epoch, and one
+- race two coordinator acquisitions and require one current pointer, contiguous epochs, and one
   allocated journal offset per committed entry; every stale `(leaseId, epoch)` RPC fails before a
-  mutation while the native TUI remains usable;
+  mutation while the native TUI remains usable. Renew only by exact old-deadline compare-and-swap,
+  release only the current fence, and reconcile each lost acquisition/renewal/release response from
+  durable rows. Take over an explicitly released predecessor no earlier than its release time or an
+  expired predecessor no earlier than its deadline; advance the server pointer/epoch without rewriting
+  the predecessor row; clear the server pointer only after releasing the exact current lease and
+  epoch it still names; and accept only current/released lease states in v3 semantic validation;
 - allocate each terminal chat's installing native inward edge with its binding and point the recovering
   chat at it; that one edge is the non-writable terminal-root reservation and has no certificate yet.
   Prove activation is impossible before the A1.3 runtime owner has a current protected

@@ -20,14 +20,19 @@ another row. Codex is not implemented. The selected A1 design below removes that
 the remote-claw logical chat stable across proven native recovery.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
-**A1.0 and A1.1 have landed as dormant libraries:** the shared canonical field writer and the
+**A1.0 through A1.2 have landed as dormant libraries:** the shared canonical field writer and the
 `packages/cli/src/host/state` ID, path, record, runtime, digest, protected-handle, dispatch, and
 backend-capability contracts are implemented and tested. A1.1 adds the secure local SQLite kernel,
 migration registry, synchronous high-level transaction boundary, and immutable protected-artifact
-store described below. The canonical writer is already used by shipped A0 AAD with its locked bytes
-unchanged. No run, RC, registrar, coordinator, or native-driver path imports or opens the A1.1 kernel;
-it acquires no lease, signs or invokes nothing, sends no native request, advertises no A1 broker
-capability, and does not change the bytes or behavior of any previously valid canonical frame.
+store described below. A1.2 adds schema v3 and its high-level repository for the default server/profile,
+projects and selector generations, recovering logical chats, starting bindings and registration
+intents, installing terminal inward edges, coordinator leases, and the bootstrap/control journal. It
+also validates an existing supported v3 graph in a coherent read-only snapshot before writable open,
+and validates a newly migrated graph before returning its handle.
+The canonical writer is already used by shipped A0 AAD with its locked bytes unchanged. No run, RC,
+registrar, coordinator, or native-driver path imports or opens this kernel; production acquires no A1
+lease, signs or invokes nothing, sends no native request, advertises no A1 broker capability, and does
+not change the bytes or behavior of any previously valid canonical frame. A1.3 is the next state slice.
 Malformed wire and runtime values fail closed at their trust or canonical boundary instead of being
 accepted and failing later or being silently coerced.
 
@@ -293,6 +298,10 @@ The complete isolation key for chat work is `(collaborationServerId, logicalChat
 
 The coordinator may allocate globally monotonic journal offsets and command sequence numbers so every durable record has a unique audit position. Those counters are not a host-wide execution lock. Admission, uncertainty quarantine, native-effect gates, causal outboxes, and recovery barriers run in a per-chat actor lane; a stalled or ambiguous attempt blocks only later writes to that same chat. Server-control operations such as `new_chat` use their separately scoped management actor and may take a short project/workspace transition lock where the native server requires it, but they do not serialize turns already running in unrelated chats.
 
+That execution model is the A1.7 target. Landed A1.2 defines and validates only the durable
+`server_control` and chat actor addresses; it has no actor process, ingress queue, or command
+serialization yet.
+
 Shared-daemon resources have their own narrow locks. For example, one Codex bridge may reconcile subscriptions for several threads and one OpenCode server may serialize a workspace identity transition. Such a lock protects only the named daemon resource or workspace transition; it cannot repoint a binding, consume another chat's effect gate, close another chat's TUI path, or turn one session failure into host-wide quarantine.
 
 Host recovery enumerates every current logical chat and native binding, then reattaches or quarantines each lane independently. A recovered lane must prove the exact native conversation and runtime lineage before it becomes writable. Failure to recover chat A leaves chat A visible and non-writable without creating a replacement row; it does not stop healthy local TUIs or runtime-scoped inference for chats B–N. While no coordinator lease is current, remote mutations report unavailable; each healthy remote lane becomes writable independently after its own lease, binding, and attachment proof and does not wait for chat A. Reconnecting or replacing a nested collaborator on one chat follows the same rule and does not alter another chat's edge.
@@ -464,13 +473,15 @@ properties: missing, extra, inherited, symbol, and accessor properties fail clos
 IDs are 1–128 ASCII bytes matching
 `[A-Za-z0-9._:-]+`; digests and one-use dispatch authorizations are canonical unpadded base64url of
 exactly 32 bytes; `machineIdentityId` is exactly 32 lowercase hexadecimal characters. Other generic
-contract strings are 1–1,024 UTF-16 code units and must contain only Unicode scalar values, so a row
+contract strings are 1–1,024 UTF-16 code units, must contain only Unicode scalar values, and must not
+contain `U+0000`, so a row
 accepted here cannot later collide through UTF-8 replacement. Numeric fields reject negative zero as
 well as negative, fractional, unsafe, and nonnumeric values. Runtime validation registries and
-structural parser results are frozen. These validators establish byte and row-shape contracts only:
-foreign-key, uniqueness, compare-and-swap, and current-row enforcement for the generic A1 records
-remain A1.2 and later work. A1.1 enforces only its schema/migration metadata and protected-artifact
-tables through its dormant transaction kernel.
+structural parser results are frozen. A1.0's parsers establish byte and row-shape contracts. A1.2's
+dormant schema and repository now add the selected foreign keys, uniqueness, append-only/monotonic
+triggers, exact-retry and compare-and-swap operations, and full-graph semantic validation for the
+narrow v3 states described below. Later slices may widen those states only with their own retained
+evidence and migrations.
 
 The selected A1 canonical ID namespaces are:
 
@@ -479,6 +490,7 @@ The selected A1 canonical ID namespaces are:
 | Collaboration server | `rcs_` + canonical base64url of 16 bytes | Random |
 | Project | `rcpj_` + canonical base64url of 16 bytes | Random |
 | Logical chat | `rcl_` + canonical base64url of 16 bytes | Random |
+| Inward collaboration edge | `rcie_` + canonical base64url of 16 bytes | Random |
 | Native binding | `rcnb_` + canonical base64url of 16 bytes | Random |
 | Native runtime | `rcrt_` + canonical base64url SHA-256 | Exact derivation formula and locked vector are deferred to A1.3; the inputs will be a warden launch nonce and native start identity |
 | Coordinator lease | `rccl_` + canonical base64url of 16 bytes | Random |
@@ -491,8 +503,8 @@ The selected A1 canonical ID namespaces are:
 The `nat_` identifier is the host-owned native-effect attempt below. It is not the fresh broker
 transport `deliveryAttemptId`, whose retry and rollover domain is separate.
 
-The first start for one local state profile atomically creates one random default `rcs_*`, stores it in
-`HostStateProfileRecord`, and reuses it for later invocations. It is never derived from
+The dormant A1.2 `ensureDefaultCollaborationServer` operation atomically creates one random default
+`rcs_*`, stores it in `HostStateProfileRecord`, and reuses it on exact reopen. It is never derived from
 `machineIdentityId`, a project, or a native session. Additional named server profiles require a later
 explicit selection surface; until that lands, an invocation either reopens the stored default or
 fails. Losing that profile/server record is a new-server and re-pair event, not permission to infer the
@@ -512,11 +524,12 @@ After runtime-owner activation, a native-harness edge may become `current` with 
 while `currentConnectionEpoch` stays zero and both connection pointers stay null. Those three fields
 belong only to an N1 remote-server edge; terminal liveness and capability fencing come from the native
 binding's exact attachment lease and capability snapshot.
-A1.2 lands that dormant compound repository operation; A1.4 is the first registration workflow allowed
-to call it. An exact retry of the same allocation intent returns the same project and mapping; changed
+A1.2 implements that dormant compound repository operation; A1.4 is the first live registration
+workflow allowed to call it. An exact retry of the same allocation intent returns the same graph; changed
 target or selector bytes collide. Once any project exists, an invocation without an explicit current
 `(projectId, workspaceSelectorId)` fails closed. An explicit **New project** management intent uses the
-same atomic allocation rule. It never guesses from cwd or chooses the only or most recent project.
+same atomic allocation rule, but only after first bootstrap has installed the server's first project.
+It never guesses from cwd or chooses the only or most recent project.
 `projectAllocationIntentId` is the caller-supplied `registrationAttemptId` reserved and persisted by
 that same transaction for `first_bootstrap`, and the admitted management `commandId` for
 `explicit_new_project`; neither is minted after an uncertain allocation response.
@@ -622,24 +635,74 @@ keyed by canonical database path: every later open of that path fails until proc
 different database path remains independent. The kernel never drops guardians while SQLite may still
 own the canonical database or sidecars.
 
-Current schema v2 uses SQLite
+Current schema v3 uses SQLite
 `application_id=0x52434c57` (ASCII `RCLW`). Its append-only migration history is a SHA-256
 chain over the previous digest, version, migration ID, statement count, and exact ordered SQL text,
 encoded with the shared `CanonicalWriter` under
 `remote-claw/host-state/migration-chain/v1`. Migration 1 (`001-initial-host-state`) is locked to
 `Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec`; migration 2
 (`002-protected-artifact-immutability`) is locked to
-`yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`. Open verifies the application ID, `user_version`,
+`yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; migration 3 is
+`003-durable-host-records`, contains 81 ordered statements, and is locked to
+`cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4`. Open verifies the application ID, `user_version`,
 stored machine identity, exact schema manifest for that historical version, every migration-history
 row, and migration digest before applying the next compiled migration. Partial, mismatched,
-extra-object, corrupt, or future state is refused; a valid v1 database migrates to v2. Every
+extra-object, corrupt, or future state is refused; a valid v1 or v2 database migrates to v3. Every
 `sqlite_schema` row is matched exactly, including names beginning with `sqlite_`; no hidden extra is
 ignored. A newly created database must have `application_id=0` and literally zero `sqlite_schema`
 rows before migration 1 begins; any preexisting application object fails closed. Schema v1 has three
 tables, the explicit unique migration-ID index, and migration-history
 no-update/no-delete triggers in an exact six-object manifest. Schema v2 adds migration-history
-no-replace and protected-artifact no-update/no-delete/no-replace triggers, producing the current exact
-ten-object manifest of three tables, one index, and six triggers.
+no-replace and protected-artifact no-update/no-delete/no-replace triggers, producing an exact
+ten-object manifest of three tables, one index, and six triggers. Schema v3 adds the ten A1.2 tables
+`collaboration_servers`, `host_state_profiles`, `projects`,
+`project_target_selector_mappings`, `logical_chats`, `native_bindings`,
+`native_registration_intents`, `inward_collaboration_edges`, `coordinator_leases`, and
+`control_journal_entries`. The complete v3 `sqlite_schema` manifest is exactly 91 objects: 13 tables,
+24 indexes, and 54 triggers.
+
+The supported v3 graph is deliberately narrower than the full record unions. A database is either
+unbootstrapped or contains exactly one linked `default` profile and dormant `installing` server.
+Projects are `current`. Each project's one persisted v3 selector has a contiguous terminal-native
+mapping chain starting at generation one, with only its tail `current` and prior rows `superseded`; a replacement is an exact
+generation/ID/target-digest compare-and-swap. Every persisted chat is `recovering`, has topology
+generation one and projection sequence zero, and names the exact mapping generation used to create
+it. It points to one unresolved `starting` binding with exactly one registration intent and one random
+`rcie_*` native-harness edge in `installing`; certificate, remote connection, live-lease, capability,
+semantic-conversation, and binding-incarnation pointers remain null. Explicit projects may exist
+without a chat after the first bootstrap. Nested selector targets and `remote-claw-server` edges are
+valid future record shapes but fail v3 semantic validation; N1 must add its own migration and proof
+before either may persist.
+
+The dormant repository exposes only high-level synchronous operations. It ensures/reads the default
+server; acquires, renews, releases, and reconciles coordinator leases; atomically creates the first
+project/chat/binding/intent/edge graph; allocates a later explicit project only after that first
+bootstrap; replaces a terminal selector mapping by compare-and-swap; reserves additional terminal
+chats against an exact mapping fence; and inventories projects, mapping generations/current mapping,
+logical chats, bindings, full terminal reservations, and lease acquisition state. Exact retries return
+the original rows for the idempotent creation/replacement operations, while a reused intent/candidate
+with changed bytes is a conflict; lease renewal is replayable only under its current fence, and
+release uses read-side reconciliation after response loss. Mapping
+replacement does not retarget old chats: each `LogicalChatRecord.projectTargetSelectorMappingId`
+continues to name the generation it used, while later reservations may select the new current tail.
+
+Every committed project bootstrap, non-first terminal reservation, mapping replacement, coordinator
+acquisition, and coordinator release has exactly one immutable journal entry at the server's next
+contiguous offset; semantic validation rejects missing, extra, reordered, mistimed, or wrongly fenced
+entries. Heartbeat renewal updates only the deadline. An expiry takeover allocates a higher epoch and
+changes the server's current pointer without rewriting the predecessor row; that pointer plus epoch is
+the authority. Explicit release records release time/journal evidence and may clear the server pointer
+only when it still names that exact current lease and epoch. Read-side
+reconciliation reads durable evidence for an acquisition, renewal, release, project allocation,
+mapping replacement, or terminal reservation after a lost response; it reports an explicit
+superseded/indeterminate result when later lease state prevents exact proof. This is A1.2
+persistence reconciliation only: A1.4 still owns the evidence-resolving, callable-port, native setup,
+and attachment workflow, and an unknown ordinary SQLite commit is never declared safe to replay
+blindly.
+
+`HostStateActorScope` supplies durable addresses for the separate `server_control` lane and each
+`(collaborationServerId, logicalChatId)` chat lane. A1.2 persists no command queue and runs no actor;
+durable ingress, admission, queueing, and per-chat serialization remain A1.7.
 
 The public kernel transaction callback is synchronous, forbids nesting and promise returns, and
 exposes only high-level operations. Its transaction object cannot escape the callback; raw SQL and the
@@ -690,7 +753,11 @@ SHA256(
 
 `capabilitiesRef` and `capabilitiesDigest` are either both null or both present. `createdAtMs`, the
 process-local port, and `canonicalIntentDigest` itself are excluded. A1.0 computes and verifies these
-bytes; durable exact-retry lookup and collision enforcement land in A1.4.
+bytes. A1.2's dormant first/additional terminal reservation operations persist the intent with the
+recovering chat, starting binding, and installing `rcie_*` edge, and implement exact-retry lookup and
+collision enforcement. Its refs and digests are opaque durable evidence coordinates: A1.2 neither
+resolves them nor owns a callable port. A1.4 verifies and resolves that evidence, owns the live
+registration workflow and process port, and creates the later attachment/runtime state.
 
 A1.0 also freezes the protected-handle boundary. A protected reference is exactly
 `{protectedHandleId: rcph_…, kind}`. The five kinds are `artifact`, `signing_key`,
@@ -745,7 +812,9 @@ registration intent/conversation lease/local artifact, logical chat/native bindi
 mapping, runtime-owner/runtime/binding-incarnation/transport/edge, backend capability, prepared
 mutation/receipt/reconciliation, and native attempt/dispatch/effect-gate shapes shown here. A caller
 must run the corresponding canonical digest or derived-ID verifier where the row has one. The
-manifest is not a claim that a database row or writable service exists.
+manifest alone is not a claim that every shape has a database row or writable service. A1.2 persists
+only its narrow server/profile/project/mapping/chat/binding/registration-intent/inward-edge/coordinator
+lease/journal subset; the other shapes remain later work.
 
 ```ts
 interface CollaborationServerRecord {
@@ -939,8 +1008,9 @@ interface LogicalChatRecord {
   logicalChatId: string; // stable random rcl_<base64url-128-bit>
   collaborationServerId: string;
   projectId: string;
+  projectTargetSelectorMappingId: string; // exact ptm_* generation selected at reservation
   state: "recovering" | "ready" | "quarantined" | "closed";
-  topologyGeneration: number;
+  topologyGeneration: number; // zero iff currentInwardEdgeId is null; positive iff it is present
   currentInwardEdgeId: string | null;
   currentNativeBindingId: string | null;
   parentChatId: string | null;
@@ -3580,7 +3650,7 @@ interface ChatGptRemoteChatMappingRecord {
 }
 
 interface InwardCollaborationEdgeRecord {
-  inwardEdgeId: string;
+  inwardEdgeId: string; // stable random rcie_<base64url-128-bit>
   representedServerId: string;
   representedLogicalChatId: string;
   targetKind: "native-harness" | "remote-claw-server";
@@ -9386,7 +9456,9 @@ under the project's unique allocation intent; later mappings cannot allocate, in
 project. Exactly one current row may exist for
 `(collaborationServerId, projectId, workspaceSelectorId)`. Initial OpenCode A2 forbids one native
 workspace binding from being current under two public selectors in the same project. Mapping
-replacement is a generation-incrementing compare-and-swap. The target logical chat, creation command/
+replacement is a generation-incrementing compare-and-swap. Each logical chat stores the exact
+`projectTargetSelectorMappingId` it selected, so replacement supersedes the prior mapping for future
+selection without silently retargeting existing chats. The target logical chat, creation command/
 result, and either terminal binding reservation or nested-edge creation all foreign-key the resolved
 mapping generation; a stale selector cannot move creation into a replacement directory or server.
 
@@ -9409,8 +9481,10 @@ nested arm, or a nested-only field in the terminal arm reject. Every decoded dig
 unpadded base64url SHA-256.
 
 A1.0 implements the strict closed-union and immediate-self-cycle parser and recomputes both
-`targetDigest` and the derived `ptm_*` mapping ID. The same-project foreign key, one-current-row uniqueness, generation
-compare-and-swap, and atomic first-project allocation remain A1.2 persistence rules.
+`targetDigest` and the derived `ptm_*` mapping ID. A1.2 implements the same-project foreign key,
+one-current-row uniqueness, contiguous-generation compare-and-swap, atomic first-project allocation,
+replacement journal/reconciliation, and complete mapping inventory. Its v3 repository accepts only
+terminal-native targets; nested-server mappings remain rejected until N1.
 
 Initial A2 allows exactly one current workspace binding per OpenCode server attachment. Multi-workspace
 support moves observer/discovery pointers to `(server attachment, workspace)` and is not implied by
@@ -10857,7 +10931,7 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: A1.0 and A1.1 implemented as dormant libraries; A1.2–A1.11 planned.** A1 is
+**Status: A1.0 through A1.2 implemented as dormant libraries; A1.3–A1.11 planned.** A1 is
 provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
 outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
 Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
@@ -10880,20 +10954,27 @@ official-client compatibility; B and C add those records on the generic A1 seams
   corruption, and future-version refusal. It opens
   no production database outside its tests. The native attempt/dispatch/effect-gate transaction and
   rollback proof remain A1.8.
-- **A1.2 — Server/project/chat/binding/epoch state (dormant repository):** default `rcs_*` bootstrap,
-  idempotent `ProjectRecord` allocation plus initial selector mapping, many concurrent logical chats,
-  starting native bindings, the registration-intent row required by the atomic first-bootstrap
-  transaction, non-writable terminal-root/edge reservation per terminal chat, coordinator lease
-  compare-and-swap, journal offsets, per-chat actor lanes, and unique-current-owner constraints. It
-  creates no current runtime or binding incarnation and exposes no live registration entry point.
+- **A1.2 — Server/project/chat/binding/epoch state (implemented, dormant):** schema v3, default
+  `rcs_*`/profile bootstrap, exact first-project compound bootstrap, explicit later projects,
+  terminal-only selector-generation compare-and-swap, many recovering logical chats pinned to exact
+  mapping generations, starting native bindings, registration intents, random `rcie_*` installing
+  terminal-edge reservations, coordinator lease acquisition/renewal/release, contiguous immutable
+  bootstrap/control journal, exact retry/collision and read-side reconciliation, complete restart
+  inventory, coherent read-only full-graph validation of existing v3 databases before writable open,
+  and validation of a newly migrated graph before the handle returns. The schema accepts only
+  the narrow dormant states above and rejects nested targets/edges until N1. Actor scopes are durable
+  addresses only; A1.7 owns queues and serialization. Evidence refs/digests remain opaque until A1.4.
+  No active path imports the repository; it creates no current runtime or binding incarnation and
+  exposes no live registration entry point.
 - **A1.3 — Runtime owner service:** independently supervised owner RPC, authentication,
   protected `RuntimeOwnerIdentityKeyRecord` custody/signing, multi-runtime/multi-conversation registry,
   service lease and takeover, runtime and binding incarnation creation/recovery, attachment leases,
   per-binding lifecycle gates, takeover fencing, shared-daemon resource isolation, and detach versus
   terminate.
-- **A1.4 — Durable registration orchestration:** invoke A1.2's atomic first-bootstrap transaction,
-  stable intent digest, exact retry/collision behavior, binding reuse, mandatory durable project
-  resolution, fresh epoch-fenced process leases, post-setup capabilities, current
+- **A1.4 — Durable registration orchestration:** resolve and verify A1.2's opaque registration evidence,
+  invoke its atomic reservation operations and persistence reconciliation, own the callable port and
+  live setup, reuse the exact durable binding, require durable project/mapping resolution, create fresh
+  epoch-fenced process leases, publish post-setup capabilities, and enforce current
   binding/attachment prerequisites for a native root, and no ghost readiness.
 - **A1.5 — Canonical A1 wire and signing:** canonical encodings, IDs/KDFs, scope certificates,
   runtime-owner-signed terminal-root certificates and activation, signatures, browser/Node vectors,
@@ -10922,7 +11003,7 @@ A1.5's pure encoding/vector work may start after A1.0, but its runtime-owner sig
 integration waits for A1.3 and A1.4. A1.6 may start after A1.1; A1.7 waits for A1.2, completed A1.5
 signing/verification, and A1.6; A1.8 waits for A1.3, A1.4, and A1.7; A1.9 waits for A1.3 and the
 protected-handle kernel; A1.10 waits for A1.5–A1.8; A1.11 is the integrated gate. A1.0–A1.4 are
-therefore the sequential state foundation; A1.2 is the immediate next state slice, while pure wire
+therefore the sequential state foundation; A1.3 is the immediate next state slice, while pure wire
 vectors and broker conformance can proceed in parallel without prematurely activating a terminal root.
 
 - Add durable `project`, project-allocation/selector mapping, `logical_chat`, `native_binding`,
@@ -11243,11 +11324,13 @@ status.**
 
 ## 14. Proof gates
 
-The following remain unproven until a test says otherwise:
+The following integrated/live behaviors remain unproven. A1.2's dormant repository tests already prove
+the persistence-only default server, project/mapping bootstrap and replacement, many-chat inventory,
+lease/journal reconciliation, and v3 semantic-validation subset described above.
 
-- durable project identity and bootstrap: one random server-scoped `ProjectRecord` plus its initial
-  selector mapping are allocated atomically and replay-idempotently, while `project:null`, cwd/title
-  inference, and only/most-recent fallback cannot create or select an A1 registration, chat, or binding;
+- live A1.4 registration must resolve/verify the stored opaque evidence and call A1.2's exact project,
+  mapping, and terminal-reservation operations without adding `project:null`, cwd/title inference, or
+  only/most-recent fallback, then attach the proved native conversation without minting a second graph;
 - durable separation of server-scoped `logicalChatId`, native binding/conversation/incarnation, inward
   collaboration edge, nested-server chat mapping, private transport, broker channel, and outward
   provider IDs;

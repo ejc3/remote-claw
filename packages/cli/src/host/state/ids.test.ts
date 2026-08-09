@@ -39,6 +39,17 @@ describe("selected A1 identifier contracts", () => {
     ).toThrow(/rcnb_/);
   });
 
+  it("reserves a canonical random namespace for inward collaboration edges", () => {
+    expect(A1_CANONICAL_ID_SPECS.inwardEdge).toEqual({
+      prefix: "rcie_",
+      bodyBytes: 16,
+      allocation: "random",
+    });
+    expect(() => parseA1CanonicalId("inwardEdge", "inward-edge-1", "inwardEdgeId")).toThrow(
+      /rcie_/,
+    );
+  });
+
   it("keeps native runtime scopes in their own derived namespace", () => {
     expect(A1_CANONICAL_ID_SPECS.nativeRuntime).toEqual({
       prefix: "rcrt_",

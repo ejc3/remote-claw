@@ -33,6 +33,7 @@ vi.mock("./secure-filesystem.js", async (importOriginal) => {
   };
 });
 
+import { HOST_STATE_SCHEMA_VERSION } from "./migrations.js";
 import type { SecureHostStateFilesystem } from "./secure-filesystem.js";
 import { HostStateMigrationCommittedError, openHostStateDatabase } from "./sqlite.js";
 import {
@@ -81,7 +82,7 @@ describeLinux("A1.1 migration commit outcomes", () => {
     } finally {
       prepare.mockRestore();
     }
-    expect(checkpointCalls).toBe(2);
+    expect(checkpointCalls).toBe(HOST_STATE_SCHEMA_VERSION);
   });
 
   it("reports a post-commit finalization failure and safely completes on reopen", () => {

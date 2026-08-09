@@ -4,6 +4,7 @@ import {
   type A1SafeId,
   type CollaborationServerId,
   type CoordinatorLeaseId,
+  type InwardEdgeId,
   type LogicalChatId,
   type NativeBindingId,
   type NativeConversationLeaseId,
@@ -156,9 +157,10 @@ export interface LogicalChatRecord {
   readonly logicalChatId: LogicalChatId;
   readonly collaborationServerId: CollaborationServerId;
   readonly projectId: ProjectId;
+  readonly projectTargetSelectorMappingId: ProjectTargetSelectorMappingId;
   readonly state: "recovering" | "ready" | "quarantined" | "closed";
   readonly topologyGeneration: number;
-  readonly currentInwardEdgeId: A1SafeId | null;
+  readonly currentInwardEdgeId: InwardEdgeId | null;
   readonly currentNativeBindingId: NativeBindingId | null;
   readonly parentChatId: LogicalChatId | null;
   readonly nextViewerProjectionSeq: number;
@@ -393,17 +395,20 @@ export function parseCoordinatorLeaseRecord(value: unknown): CoordinatorLeaseRec
     ["current", "expired", "released", "superseded"] as const,
     "coordinatorLease.state",
   );
-  if (heartbeatDeadlineMs < acquiredAtMs) {
-    reject("coordinatorLease.heartbeatDeadlineMs", "must not precede acquisition");
+  if (heartbeatDeadlineMs <= acquiredAtMs) {
+    reject("coordinatorLease.heartbeatDeadlineMs", "must be after acquisition");
   }
   if (releasedAtMs !== null && releasedAtMs < acquiredAtMs) {
     reject("coordinatorLease.releasedAtMs", "must not precede acquisition");
   }
-  if (state === "current" && releasedAtMs !== null) {
-    reject("coordinatorLease.releasedAtMs", "must be null while the lease is current");
+  if (state !== "released" && releasedAtMs !== null) {
+    reject("coordinatorLease.releasedAtMs", `must be null while the lease is ${state}`);
   }
   if (state === "released" && releasedAtMs === null) {
     reject("coordinatorLease.releasedAtMs", "must be present for a released lease");
+  }
+  if (releasedAtMs !== null && releasedAtMs >= heartbeatDeadlineMs) {
+    reject("coordinatorLease.releasedAtMs", "must precede lease expiry");
   }
   return frozen({
     coordinatorLeaseId: parseA1CanonicalId(
@@ -798,6 +803,7 @@ const LOGICAL_CHAT_KEYS = [
   "logicalChatId",
   "collaborationServerId",
   "projectId",
+  "projectTargetSelectorMappingId",
   "state",
   "topologyGeneration",
   "currentInwardEdgeId",
@@ -820,8 +826,12 @@ export function parseLogicalChatRecord(value: unknown): LogicalChatRecord {
   );
   const currentInwardEdgeId = parseNullable(
     row.currentInwardEdgeId,
-    parseA1SafeId,
+    (_value, field) => parseA1CanonicalId("inwardEdge", _value, field),
     "logicalChat.currentInwardEdgeId",
+  );
+  const topologyGeneration = parseNonNegativeSafeInteger(
+    row.topologyGeneration,
+    "logicalChat.topologyGeneration",
   );
   const currentNativeBindingId = parseNullable(
     row.currentNativeBindingId,
@@ -845,6 +855,12 @@ export function parseLogicalChatRecord(value: unknown): LogicalChatRecord {
       "cannot be current without its terminal inward edge",
     );
   }
+  if ((topologyGeneration === 0) !== (currentInwardEdgeId === null)) {
+    reject(
+      "logicalChat.topology",
+      "must have generation zero exactly when no current inward edge is installed",
+    );
+  }
   return frozen({
     logicalChatId,
     collaborationServerId: parseA1CanonicalId(
@@ -853,11 +869,13 @@ export function parseLogicalChatRecord(value: unknown): LogicalChatRecord {
       "logicalChat.collaborationServerId",
     ),
     projectId: parseA1CanonicalId("project", row.projectId, "logicalChat.projectId"),
-    state,
-    topologyGeneration: parseNonNegativeSafeInteger(
-      row.topologyGeneration,
-      "logicalChat.topologyGeneration",
+    projectTargetSelectorMappingId: parseA1CanonicalId(
+      "projectTargetSelectorMapping",
+      row.projectTargetSelectorMappingId,
+      "logicalChat.projectTargetSelectorMappingId",
     ),
+    state,
+    topologyGeneration,
     currentInwardEdgeId,
     currentNativeBindingId,
     parentChatId,

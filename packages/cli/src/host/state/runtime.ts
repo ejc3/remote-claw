@@ -4,6 +4,7 @@ import {
   type A1SafeId,
   type CollaborationServerId,
   type CoordinatorLeaseId,
+  type InwardEdgeId,
   type LogicalChatId,
   type NativeBindingId,
   type NativeRuntimeId,
@@ -110,7 +111,7 @@ export interface NativeTransportLeaseRecord {
 }
 
 export interface InwardCollaborationEdgeRecord {
-  readonly inwardEdgeId: A1SafeId;
+  readonly inwardEdgeId: InwardEdgeId;
   readonly representedServerId: CollaborationServerId;
   readonly representedLogicalChatId: LogicalChatId;
   readonly targetKind: "native-harness" | "remote-claw-server";
@@ -642,7 +643,11 @@ export function parseInwardCollaborationEdgeRecord(value: unknown): InwardCollab
     }
   }
   return frozen({
-    inwardEdgeId: parseA1SafeId(row.inwardEdgeId, "inwardCollaborationEdge.inwardEdgeId"),
+    inwardEdgeId: parseA1CanonicalId(
+      "inwardEdge",
+      row.inwardEdgeId,
+      "inwardCollaborationEdge.inwardEdgeId",
+    ),
     representedServerId,
     representedLogicalChatId: parseA1CanonicalId(
       "logicalChat",

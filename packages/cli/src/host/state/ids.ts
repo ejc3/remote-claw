@@ -38,6 +38,11 @@ export const A1_CANONICAL_ID_SPECS = Object.freeze({
     bodyBytes: 16,
     allocation: "random",
   }),
+  inwardEdge: frozenCanonicalIdSpec({
+    prefix: "rcie_",
+    bodyBytes: 16,
+    allocation: "random",
+  }),
   nativeBinding: frozenCanonicalIdSpec({
     prefix: "rcnb_",
     bodyBytes: 16,
@@ -88,6 +93,7 @@ export type A1CanonicalId<K extends A1CanonicalIdKind> = A1SafeId & {
 export type CollaborationServerId = A1CanonicalId<"collaborationServer">;
 export type ProjectId = A1CanonicalId<"project">;
 export type LogicalChatId = A1CanonicalId<"logicalChat">;
+export type InwardEdgeId = A1CanonicalId<"inwardEdge">;
 export type NativeBindingId = A1CanonicalId<"nativeBinding">;
 export type NativeRuntimeId = A1CanonicalId<"nativeRuntime">;
 export type CoordinatorLeaseId = A1CanonicalId<"coordinatorLease">;
