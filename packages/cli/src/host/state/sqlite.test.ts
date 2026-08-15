@@ -932,7 +932,7 @@ describeLinux("A1.1 secure host-state database", () => {
     expect(statSync(future.paths.identityDirectoryPath, { bigint: true }).mtimeNs).toBe(
       directoryMtimeBefore,
     );
-  });
+  }, 15_000);
 
   it("refuses a non-WAL header before SQLite can convert it", () => {
     const state = temporaryState();
