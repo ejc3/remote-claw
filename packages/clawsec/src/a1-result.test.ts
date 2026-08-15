@@ -11,11 +11,17 @@ import {
   canonicalA1ResultDeliveryIdPreimage,
   canonicalA1StoredSemanticResultPreimage,
   deriveA1ResultDeliveryId,
+  encodeA1AdmittedChatCreationResultPayloadV1,
+  encodeA1AdmittedChatCreationResultPayloadV1Bytes,
+  encodeA1ProjectionAcceptedPayloadV1,
+  encodeA1ProjectionAcceptedPayloadV1Bytes,
   encodeA1RejectedActionResultPayloadV1,
   encodeA1RejectedActionResultPayloadV1Bytes,
   encodeA1RejectedChatCreationResultPayloadV1,
   encodeA1RejectedChatCreationResultPayloadV1Bytes,
+  parseA1AdmittedChatCreationResultPayloadV1,
   parseA1IngressResultIdentity,
+  parseA1ProjectionAcceptedPayloadV1,
   parseA1RejectedActionResultPayloadV1,
   parseA1RejectedChatCreationResultPayloadV1,
   selectA1CompletionObservation,
@@ -29,9 +35,19 @@ function bytes(length: number, start: number): Uint8Array {
 
 const RESULT_ID = `rrs_${base64urlEncode(bytes(32, 0x00))}`;
 const OTHER_RESULT_ID = `rrs_${base64urlEncode(bytes(32, 0x20))}`;
+const CHAT_ID = `rcl_${base64urlEncode(bytes(16, 0x80))}`;
 const TRIGGER_ID = `rio_${base64urlEncode(bytes(32, 0x40))}`;
 const ATTEMPT_ID = `rda_${base64urlEncode(bytes(16, 0x60))}`;
 const OTHER_ATTEMPT_ID = `rda_${base64urlEncode(bytes(16, 0x70))}`;
+
+const PROJECTION_VALUE = Object.freeze({
+  v: 1,
+  resultId: RESULT_ID,
+  clientMsgId: "client.msg-1",
+  seq: 23,
+} as const);
+
+const PROJECTION_JSON = `{"v":1,"result_id":"${RESULT_ID}","client_msg_id":"client.msg-1","seq":23}`;
 
 const ACTION_VALUE = Object.freeze({
   v: 1,
@@ -59,6 +75,19 @@ const CHAT_CREATION_JSON =
   `{"v":1,"result_id":"${RESULT_ID}","source_msg_id":"new-chat.msg-1",` +
   `"decision":"rejected","target_logical_chat_id":null,"command_seq":18}`;
 
+const ADMITTED_CHAT_CREATION_VALUE = Object.freeze({
+  v: 1,
+  resultId: RESULT_ID,
+  sourceMsgId: "new-chat.msg-2",
+  decision: "admitted",
+  targetLogicalChatId: CHAT_ID,
+  commandSeq: 19,
+} as const);
+
+const ADMITTED_CHAT_CREATION_JSON =
+  `{"v":1,"result_id":"${RESULT_ID}","source_msg_id":"new-chat.msg-2",` +
+  `"decision":"admitted","target_logical_chat_id":"${CHAT_ID}","command_seq":19}`;
+
 function cursor(channelGeneration: number, frameIndex: number): BrokerChannelCursorV1 {
   return Object.freeze({ version: 1, channelGeneration, frameIndex });
 }
@@ -72,6 +101,49 @@ describe("selected A1 result schemas", () => {
     );
     expect(A1_STORED_SEMANTIC_RESULT_DOMAIN).toBe("remote-claw/a1/stored-semantic-result/v1");
     expect(A1_RESULT_DELIVERY_ID_DOMAIN).toBe("remote-claw/a1/result-delivery/v1");
+  });
+});
+
+describe("projection-accepted payload", () => {
+  it("emits, parses, and digests one hardcoded exact compact vector", async () => {
+    expect(encodeA1ProjectionAcceptedPayloadV1(PROJECTION_VALUE)).toBe(PROJECTION_JSON);
+    const payload = encodeA1ProjectionAcceptedPayloadV1Bytes(PROJECTION_VALUE);
+    expect(new TextDecoder().decode(payload)).toBe(PROJECTION_JSON);
+    expect(parseA1ProjectionAcceptedPayloadV1(PROJECTION_JSON)).toEqual(PROJECTION_VALUE);
+    expect(parseA1ProjectionAcceptedPayloadV1(payload)).toEqual(PROJECTION_VALUE);
+    expect(
+      await a1StoredSemanticResultDigest({
+        storedSemanticResultSchemaId: A1_PROJECTION_ACCEPTED_PAYLOAD_SCHEMA_ID,
+        exactCompactUtf8Payload: payload,
+      }),
+    ).toBe("h_hlJK86WyA-WbdekqpAGP-R7fVb3121CavaKgQUJIY");
+  });
+
+  it.each([
+    [` ${PROJECTION_JSON}`, /exact compact JSON/],
+    [
+      PROJECTION_JSON.replace(
+        `{"v":1,"result_id":"${RESULT_ID}"`,
+        `{"result_id":"${RESULT_ID}","v":1`,
+      ),
+      /exact compact JSON/,
+    ],
+    [PROJECTION_JSON.replace('"seq":23', '"seq":2.3e1'), /exact compact JSON/],
+    [PROJECTION_JSON.replace("client.msg-1", "client\\u002emsg-1"), /exact compact JSON/],
+    [PROJECTION_JSON.replace('"seq":23', '"seq":23,"extra":true'), /exactly/],
+    [PROJECTION_JSON.replace("client.msg-1", "client/msg-1"), /matching/],
+    [PROJECTION_JSON.replace(RESULT_ID, "rrs_not-canonical"), /canonical unpadded base64url/],
+  ])("rejects hostile or non-canonical bytes %#", (raw, message) => {
+    expect(() => parseA1ProjectionAcceptedPayloadV1(raw)).toThrow(message);
+  });
+
+  it("rejects non-canonical encoder integers and extra fields", () => {
+    expect(() => encodeA1ProjectionAcceptedPayloadV1({ ...PROJECTION_VALUE, seq: -0 })).toThrow(
+      /non-negative safe integer/,
+    );
+    expect(() => encodeA1ProjectionAcceptedPayloadV1({ ...PROJECTION_VALUE, extra: true })).toThrow(
+      /exactly/,
+    );
   });
 });
 
@@ -142,6 +214,79 @@ describe("rejected chat-creation result payload", () => {
     [CHAT_CREATION_JSON.replace(RESULT_ID, OTHER_RESULT_ID).replace('"v":1,', ""), /exactly/],
   ])("rejects non-canonical or changed bytes %#", (raw, message) => {
     expect(() => parseA1RejectedChatCreationResultPayloadV1(raw)).toThrow(message);
+  });
+});
+
+describe("admitted chat-creation result payload", () => {
+  it("emits, parses, and digests one hardcoded exact compact vector", async () => {
+    expect(encodeA1AdmittedChatCreationResultPayloadV1(ADMITTED_CHAT_CREATION_VALUE)).toBe(
+      ADMITTED_CHAT_CREATION_JSON,
+    );
+    const payload = encodeA1AdmittedChatCreationResultPayloadV1Bytes(ADMITTED_CHAT_CREATION_VALUE);
+    expect(new TextDecoder().decode(payload)).toBe(ADMITTED_CHAT_CREATION_JSON);
+    expect(parseA1AdmittedChatCreationResultPayloadV1(ADMITTED_CHAT_CREATION_JSON)).toEqual(
+      ADMITTED_CHAT_CREATION_VALUE,
+    );
+    expect(parseA1AdmittedChatCreationResultPayloadV1(payload)).toEqual(
+      ADMITTED_CHAT_CREATION_VALUE,
+    );
+    expect(
+      await a1StoredSemanticResultDigest({
+        storedSemanticResultSchemaId: A1_CHAT_CREATION_RESULT_PAYLOAD_SCHEMA_ID,
+        exactCompactUtf8Payload: payload,
+      }),
+    ).toBe("evco22scBo0dy3ys0641BIuhoOYQntl66JKsJe9Mt8U");
+  });
+
+  it.each([
+    [`${ADMITTED_CHAT_CREATION_JSON}\n`, /exact compact JSON/],
+    [
+      ADMITTED_CHAT_CREATION_JSON.replace('"decision":"admitted"', '"decision":"rejected"'),
+      /must be admitted/,
+    ],
+    [
+      ADMITTED_CHAT_CREATION_JSON.replace(
+        `"target_logical_chat_id":"${CHAT_ID}"`,
+        '"target_logical_chat_id":null',
+      ),
+      /must be non-null/,
+    ],
+    [ADMITTED_CHAT_CREATION_JSON.replace(CHAT_ID, "rcl_not-canonical"), /canonical unpadded/],
+    [
+      ADMITTED_CHAT_CREATION_JSON.replace('"command_seq":19', '"command_seq":1.9e1'),
+      /exact compact JSON/,
+    ],
+    [ADMITTED_CHAT_CREATION_JSON.replace('"command_seq":19', '"command_seq":19.0'), /exact/],
+    [
+      ADMITTED_CHAT_CREATION_JSON.replace(
+        '"source_msg_id":"new-chat.msg-2"',
+        '"source_msg_id":"new-chat\\u002emsg-2"',
+      ),
+      /exact compact JSON/,
+    ],
+    [
+      ADMITTED_CHAT_CREATION_JSON.replace('"command_seq":19', '"command_seq":19,"extra":null'),
+      /exactly/,
+    ],
+  ])("rejects hostile, cross-branch, or non-canonical bytes %#", (raw, message) => {
+    expect(() => parseA1AdmittedChatCreationResultPayloadV1(raw)).toThrow(message);
+  });
+
+  it("keeps admitted and rejected wrappers branch-exact", () => {
+    expect(() =>
+      encodeA1AdmittedChatCreationResultPayloadV1({
+        ...ADMITTED_CHAT_CREATION_VALUE,
+        decision: "rejected",
+        targetLogicalChatId: null,
+      }),
+    ).toThrow(/must be admitted/);
+    expect(() =>
+      encodeA1RejectedChatCreationResultPayloadV1({
+        ...CHAT_CREATION_VALUE,
+        decision: "admitted",
+        targetLogicalChatId: CHAT_ID,
+      }),
+    ).toThrow(/must be rejected/);
   });
 });
 
