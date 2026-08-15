@@ -93,8 +93,12 @@ local transcript completeness or replay.
 > runtime-owner broker or ingress operation exists, and the dormant actor is absent from production
 > barrels/run paths. No production path invokes the dormant command adjudicator or server signer.
 > A1.8a0 adds no ciphertext, output part/signature, claim/seal/publish, broker call, effect/attempt,
-> projection, native dispatch, or production wiring. Full A1.8a admitted arming and A1.8b
-> sealing/publishing remain deferred; A1.7b1 plus A1.8a0 still advertise nothing.
+> projection, native dispatch, or production wiring. A1.8a1 is now design-frozen but unimplemented:
+> E may retain accepted OpenCode `user_text` binding evidence without changing either native-transport
+> authority pointer; I later installs an accepted capability snapshot and a credentialless
+> authenticated callable-port ingress lease as one matched pair. Neither creates an admitted command,
+> dispatch, effect, native call, production operation, or capability claim. A1.8a2 admitted arming and
+> A1.8b sealing/publishing remain deferred; A1.7b1 plus A1.8a0 still advertise nothing.
 
 ## Source Map
 
@@ -134,6 +138,10 @@ local transcript completeness or replay.
   in that same command-result orchestrator. It still does not implement
   private Claude RC rows, connect an ordinary native driver to durable registration/root activation,
   or install the ingress actor into a live runtime.
+- Frozen design only, with no files or migration yet: A1.8a1-E's immutable signed native-binding
+  evidence and A1.8a1-I's atomic capability-snapshot/credentialless-callable-port pair install. The
+  exact identities, logical tables, artifact bounds, pair-CAS, lifecycle, recovery, and exclusions
+  are owned by the [technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 - A1.6 broker code:
   `apps/web/lib/broker/{a1-contract,a1-http,a1-json,a1-sqlite}.ts` and
   `apps/web/app/api/a1/**/route.ts`. It is deliberately separate from the A0 `BrokerBackend` and its
@@ -590,7 +598,7 @@ effect, attempt, dispatch, viewer, native, or production surface. The v9 accepta
 but A1.7b1 inserts no command-result acceptance row. That schema-v10 boundary requires a later atomic
 final common result, signer acceptance, ingress terminalization, and source result/delivery intent. A1.8a0 now
 implements that boundary only for the already-signed rejected arm; the admitted attempt/front-door
-dispatch/effect arm remains full A1.8a work. A1.7b1 by itself therefore advertises nothing.
+dispatch/effect arm remains A1.8a2 work. A1.7b1 by itself therefore advertises nothing.
 
 V11 adds rejected-only atomic terminal closure, not an executable or publishable outbox. The finalizer
 requires the exact signed `rejected` preparation with no finalization artifact, then atomically inserts
@@ -608,8 +616,24 @@ reattestation. Any later successor signing lease must be durably acquired strict
 predecessor acceptance, including across a same-millisecond wall-clock tie. `pending_seal` stores only
 plaintext semantic refs/digests and target route linkage.
 There is no claim, encryption, output part/signature, sealing, publication, broker call, effect,
-attempt, projection, native dispatch, or production wiring in A1.8a0. Full A1.8a owns admitted
-atomic arming; A1.8b owns sealing/publishing and one-time dispatch.
+attempt, projection, native dispatch, or production wiring in A1.8a0. A1.8a2 owns admitted atomic
+arming after the A1.8a1 authority foundation; A1.8b owns sealing/publishing and one-time dispatch.
+
+The next durable authority design is deliberately split before any admitted arm. A1.8a1-E freezes
+immutable workspace/listener/isolation/operation-family/capability-snapshot evidence and exact
+runtime-owner signature acceptance in dependency-ordered listener → isolation → capability phases,
+with key rotation blocked while a phase is nonterminal, but never changes either existing transport
+pointer. A1.8a1-I later
+adds snapshot status, credentialless native-client ingress, and an install-operation ledger; one
+transaction installs or replaces the exact pair and both pointers, and parent close/detach/reattach,
+takeover, channel loss, or process loss withdraws the pair before a successor is writable. The
+ingress retains only a typed callable-port handle plus authenticated-channel evidence and full
+binding/runtime/workspace/attachment/fence coordinates—never a URL, socket path, bearer, provider
+credential, or readable secret. Secure reopen closes the durable graph but never substitutes for a
+live port-registry proof. Pair withdrawal cannot unregister the A1.4-owned physical port; only exact
+parent-lease closure/replacement may do that after its current authority pair is withdrawn. No
+migration number, statement count, digest, or manifest is claimed until
+the later schema bytes settle.
 
 V4 additionally validates one machine-scoped runtime-owner state row, contiguous retained service
 epochs and owner journal, exact process-start-bound lease acquisition/renewal/release, derived
@@ -696,8 +720,9 @@ retry; this does not make an arbitrary unknown ordinary SQLite commit safe to re
 scope was only durable addressing through A1.6. A1.7a adds dormant ingress queues and route-local
 serialization; A1.7b0 adds their server-signing prerequisite; A1.7b1 adds rejected-only common
 proposal decisions, server-wide order, and signed preparations; and A1.8a0 atomically closes that
-rejected arm into a final result, acceptance, terminal overlay, and inert `pending_seal` intent. Full
-A1.8a still owns admitted attempt/dispatch/effect arming, and A1.8b owns sealing/publishing and
+rejected arm into a final result, acceptance, terminal overlay, and inert `pending_seal` intent.
+A1.8a1-E/I first owns the design-frozen inert evidence and matched native-authority pair; A1.8a2
+still owns admitted attempt/dispatch/effect arming, and A1.8b owns sealing/publishing and
 one-time delivery.
 
 A1.3's daemon listens on one machine-scoped Linux abstract Unix socket. Both peers derive one HKDF key
@@ -1549,6 +1574,13 @@ demonstrates every property below:
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.
+- **A1.8a1 — native-binding authority: DESIGN FROZEN; no schema or operation implemented.** E retains
+  accepted-but-inert exact evidence without changing either transport pointer. I later owns the one-transaction
+  null/null-or-matched-pair CAS, predecessor withdrawal, parent lifecycle integration, exact
+  request-bound unknown-commit reconciliation, hostile-SQL semantic reopen, and separate live-port
+  proof. The selected ingress is credentialless and channel-authenticated. Synthetic proof cannot
+  satisfy the later live OpenCode fixture, and neither subtranche may create an admitted result,
+  attempt, dispatch, effect, native call, or production import.
 - **B.2 — unknown resume policy: DECIDED.** Production rejects unknown `cse_` resumes by default.
   Explicit debug adoption may be retained, but it must mark history incomplete and name
   an existing logical-chat/native-binding target explicitly. An unknown `cse_`
