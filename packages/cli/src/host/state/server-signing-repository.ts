@@ -3454,8 +3454,10 @@ function validateServerSigningInventory(
   transaction: HostStateRepositorySqlTransaction,
   server: CollaborationServerRecord,
   inventory: ServerSigningInventory,
+  schemaVersion: number,
 ): void {
-  if (server.nextCommandSeq !== 0) {
+  const allowCommandResultPreparations = schemaVersion >= 10;
+  if (!allowCommandResultPreparations && server.nextCommandSeq !== 0) {
     throw new ServerSigningRepositoryPersistenceError(
       "signer-only schema contains a command-sequence allocation",
     );
@@ -3466,7 +3468,7 @@ function validateServerSigningInventory(
     inventory.scopeCertificates.length > 1 ||
     inventory.certificateStatuses.length > 1 ||
     inventory.bootstrapLeases.length > 1 ||
-    inventory.reservations.length > 1 ||
+    (!allowCommandResultPreparations && inventory.reservations.length > 1) ||
     inventory.acceptances.length > 1
   ) {
     throw new ServerSigningRepositoryPersistenceError(
@@ -3480,13 +3482,19 @@ function validateServerSigningInventory(
       );
     }
   }
-  for (const reservation of inventory.reservations) {
-    if (
-      reservation.purpose !== "scope_certificate" ||
-      reservation.signingLeaseKind !== "bootstrap"
-    ) {
+  for (const [index, reservation] of inventory.reservations.entries()) {
+    const initialCertificateReservation =
+      index === 0 &&
+      reservation.purpose === "scope_certificate" &&
+      reservation.signingLeaseKind === "bootstrap";
+    const commandResultPreparationReservation =
+      allowCommandResultPreparations &&
+      index > 0 &&
+      reservation.purpose === "collaboration_command_result" &&
+      reservation.signingLeaseKind === "current";
+    if (!initialCertificateReservation && !commandResultPreparationReservation) {
       throw new ServerSigningRepositoryPersistenceError(
-        "signer-only schema contains a future signing purpose",
+        "server signer schema contains an unsupported signing purpose",
       );
     }
   }
@@ -3917,6 +3925,7 @@ function validateServerSigningInventory(
 export function validateServerSigningRepositorySnapshot(
   transaction: HostStateRepositorySqlTransaction,
   machineIdentityId: string,
+  schemaVersion = 9,
 ): void {
   const machineId = parseMachineIdentityId(machineIdentityId);
   const serverRows = sqlAll(
@@ -3933,7 +3942,7 @@ export function validateServerSigningRepositorySnapshot(
     }
     const inventory = readInventoryTransaction(transaction, server.collaborationServerId);
     try {
-      validateServerSigningInventory(transaction, server, inventory);
+      validateServerSigningInventory(transaction, server, inventory, schemaVersion);
     } finally {
       destroyInventoryEnvelopes(inventory);
     }

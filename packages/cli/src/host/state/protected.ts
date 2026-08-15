@@ -90,7 +90,7 @@ export function parseProtectedOperationScope(
           'protectedOperationScope.scopeId must equal "default" for host_profile',
         );
       }
-      return frozen({ scopeKind: kind, scopeId });
+      return frozen({ scopeKind: kind, scopeId: "default" } as const);
     case "collaboration_server":
       return frozen({
         scopeKind: kind,

@@ -75,6 +75,22 @@ const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
       resolve(STATE_ROOT, "sqlite"),
     ]),
   ],
+  [
+    resolve(SOURCE_ROOT, "host/server-signer/command-result-orchestrator.ts"),
+    new Set([
+      resolve(STATE_ROOT, "command-adjudication-repository"),
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "protected"),
+      resolve(STATE_ROOT, "records"),
+      resolve(STATE_ROOT, "server-signing"),
+      resolve(STATE_ROOT, "sqlite"),
+    ]),
+  ],
+]);
+
+const DORMANT_ORCHESTRATION_MODULES = new Set([
+  resolve(SOURCE_ROOT, "host/server-signer/orchestrator"),
+  resolve(SOURCE_ROOT, "host/server-signer/command-result-orchestrator"),
 ]);
 
 async function sourceFiles(directory: string): Promise<string[]> {
@@ -136,6 +152,45 @@ describe("A1 host-state boundary", () => {
         resolvedTarget === STATE_ROOT || resolvedTarget.startsWith(`${STATE_ROOT}/`),
         `package export: ${target}`,
       ).toBe(false);
+    }
+  });
+
+  it("keeps dormant signer orchestration outside every production import graph", async () => {
+    const sourcePaths = (await sourceFiles(SOURCE_ROOT)).filter(
+      (path) => !/\.test\.[cm]?[jt]sx?$/.test(path),
+    );
+    const importSpecifier =
+      /(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"']+)["']/g;
+    const imports = new Map<string, ReadonlySet<string>>();
+    for (const path of sourcePaths) {
+      const source = await readFile(path, "utf8");
+      const dependencies = new Set<string>();
+      for (const match of source.matchAll(importSpecifier)) {
+        const specifier = match[1];
+        if (specifier?.startsWith(".")) {
+          dependencies.add(resolve(dirname(path), specifier.replace(/\.[cm]?[jt]sx?$/, "")));
+        }
+      }
+      imports.set(path.replace(/\.[cm]?[jt]sx?$/, ""), dependencies);
+    }
+    const productionRoots = [
+      resolve(SOURCE_ROOT, "cli"),
+      resolve(SOURCE_ROOT, "run"),
+      resolve(SOURCE_ROOT, "runtime-owner-cli"),
+      resolve(SOURCE_ROOT, "index"),
+      resolve(SOURCE_ROOT, "broker/index"),
+      resolve(SOURCE_ROOT, "host/rc/index"),
+    ];
+    const visited = new Set<string>();
+    const pending = [...productionRoots];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current === undefined || visited.has(current)) continue;
+      visited.add(current);
+      for (const dependency of imports.get(current) ?? []) pending.push(dependency);
+    }
+    for (const dormant of DORMANT_ORCHESTRATION_MODULES) {
+      expect(visited, dormant).not.toContain(dormant);
     }
   });
 });

@@ -18,6 +18,13 @@ import {
   createBrokerRouteRepositoryTransactionOperations,
   validateBrokerRouteRepositorySnapshot,
 } from "./broker-route-repository.js";
+import {
+  type CommandAdjudicationRepositoryOperations,
+  CommandAdjudicationRepositoryPersistenceError,
+  createCommandAdjudicationRepositoryOperations,
+  createCommandAdjudicationRepositoryTransactionOperations,
+} from "./command-adjudication-repository.js";
+import { validateCommandAdjudicationRepositorySnapshot } from "./command-adjudication-validator.js";
 import { HostStateContractError, parseMachineIdentityId } from "./ids.js";
 import {
   createIngressRepositoryOperations,
@@ -103,6 +110,12 @@ export {
   BrokerRouteRepositoryPersistenceError,
   BrokerRouteStaleCoordinatorError,
 } from "./broker-route-repository.js";
+export type { CommandAdjudicationRepositoryOperations } from "./command-adjudication-repository.js";
+export {
+  CommandAdjudicationRepositoryConflictError,
+  CommandAdjudicationRepositoryPersistenceError,
+  CommandAdjudicationStaleCoordinatorError,
+} from "./command-adjudication-repository.js";
 export type { IngressRepositoryOperations } from "./ingress-repository.js";
 export {
   IngressRepositoryConflictError,
@@ -293,6 +306,7 @@ export interface HostStateDatabase extends ProtectedArtifactOperations {
   readonly brokerRoute: BrokerRouteRepositoryOperations;
   readonly ingress: IngressRepositoryOperations;
   readonly serverSigning: ServerSigningRepositoryOperations;
+  readonly commandAdjudication: CommandAdjudicationRepositoryOperations;
   transaction<T>(operation: (transaction: HostStateTransaction) => T): T;
   close(): void;
 }
@@ -306,6 +320,7 @@ export interface HostStateTransaction extends ProtectedArtifactTransactionOperat
   readonly brokerRoute: BrokerRouteRepositoryOperations;
   readonly ingress: IngressRepositoryOperations;
   readonly serverSigning: ServerSigningRepositoryOperations;
+  readonly commandAdjudication: CommandAdjudicationRepositoryOperations;
 }
 
 type SqliteRow = Readonly<Record<string, unknown>>;
@@ -874,9 +889,19 @@ function validateDatabaseContentsAtVersion(
   if (schemaVersion >= 9) {
     const snapshot = new ActiveArtifactSqlTransaction(database);
     try {
-      validateServerSigningRepositorySnapshot(snapshot, machineIdentityId);
+      validateServerSigningRepositorySnapshot(snapshot, machineIdentityId, schemaVersion);
     } catch (error) {
       reject("server signing records failed semantic validation", error);
+    } finally {
+      snapshot.invalidate();
+    }
+  }
+  if (schemaVersion >= 10) {
+    const snapshot = new ActiveArtifactSqlTransaction(database);
+    try {
+      validateCommandAdjudicationRepositorySnapshot(snapshot, machineIdentityId, schemaVersion);
+    } catch (error) {
+      reject("command adjudication records failed semantic validation", error);
     } finally {
       snapshot.invalidate();
     }
@@ -1086,7 +1111,8 @@ class SqliteArtifactTransactionExecutor
         error instanceof TerminalRootRepositoryPersistenceError ||
         error instanceof BrokerRouteRepositoryPersistenceError ||
         error instanceof IngressRepositoryPersistenceError ||
-        error instanceof ServerSigningRepositoryPersistenceError
+        error instanceof ServerSigningRepositoryPersistenceError ||
+        error instanceof CommandAdjudicationRepositoryPersistenceError
       ) {
         this.#poisoned = true;
       }
@@ -1132,6 +1158,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
   readonly brokerRoute: BrokerRouteRepositoryOperations;
   readonly ingress: IngressRepositoryOperations;
   readonly serverSigning: ServerSigningRepositoryOperations;
+  readonly commandAdjudication: CommandAdjudicationRepositoryOperations;
   readonly #database: DatabaseSync;
   readonly #filesystem: SecureHostStateFilesystem;
   readonly #executor: SqliteArtifactTransactionExecutor;
@@ -1161,6 +1188,10 @@ class SqliteHostStateDatabase implements HostStateDatabase {
     this.brokerRoute = createBrokerRouteRepositoryOperations(this.#executor, machineIdentityId);
     this.ingress = createIngressRepositoryOperations(this.#executor, machineIdentityId);
     this.serverSigning = createServerSigningRepositoryOperations(this.#executor, machineIdentityId);
+    this.commandAdjudication = createCommandAdjudicationRepositoryOperations(
+      this.#executor,
+      machineIdentityId,
+    );
     Object.freeze(this);
   }
 
@@ -1209,6 +1240,10 @@ class SqliteHostStateDatabase implements HostStateDatabase {
         transaction,
         this.machineIdentityId,
       );
+      const commandAdjudication = createCommandAdjudicationRepositoryTransactionOperations(
+        transaction,
+        this.machineIdentityId,
+      );
       return operation(
         Object.freeze({
           putArtifact: (request: PutArtifactRequest): PutArtifactResult =>
@@ -1223,6 +1258,7 @@ class SqliteHostStateDatabase implements HostStateDatabase {
           brokerRoute,
           ingress,
           serverSigning,
+          commandAdjudication,
         }),
       );
     });

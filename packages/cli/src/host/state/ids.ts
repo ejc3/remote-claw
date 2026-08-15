@@ -86,6 +86,26 @@ export const A1_CANONICAL_ID_SPECS = Object.freeze({
     bodyBytes: 32,
     allocation: "derived_sha256",
   }),
+  collaborationCommand: frozenCanonicalIdSpec({
+    prefix: "rcm_",
+    bodyBytes: 32,
+    allocation: "derived_sha256",
+  }),
+  collaborationCommandResult: frozenCanonicalIdSpec({
+    prefix: "ccr_",
+    bodyBytes: 32,
+    allocation: "derived_sha256",
+  }),
+  commandSigningGroup: frozenCanonicalIdSpec({
+    prefix: "csg_",
+    bodyBytes: 32,
+    allocation: "derived_sha256",
+  }),
+  commandResultPreparation: frozenCanonicalIdSpec({
+    prefix: "crp_",
+    bodyBytes: 32,
+    allocation: "derived_sha256",
+  }),
 } as const);
 
 export type A1CanonicalIdKind = keyof typeof A1_CANONICAL_ID_SPECS;
@@ -105,6 +125,10 @@ export type NativeConversationLeaseId = A1CanonicalId<"nativeConversationLease">
 export type ProtectedHandleId = A1CanonicalId<"protectedHandle">;
 export type ProjectTargetSelectorMappingId = A1CanonicalId<"projectTargetSelectorMapping">;
 export type NativeDeliveryAttemptId = A1CanonicalId<"nativeDeliveryAttempt">;
+export type CollaborationCommandId = A1CanonicalId<"collaborationCommand">;
+export type CollaborationCommandResultId = A1CanonicalId<"collaborationCommandResult">;
+export type CommandSigningGroupId = A1CanonicalId<"commandSigningGroup">;
+export type CommandResultPreparationId = A1CanonicalId<"commandResultPreparation">;
 
 /** Canonical unpadded-base64url SHA-256. */
 export type A1Digest = string & { readonly [digestBrand]: true };

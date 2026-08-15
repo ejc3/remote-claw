@@ -27,6 +27,7 @@ const PINNED_VERSION_SIX_DIGEST = "li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo";
 const PINNED_VERSION_SEVEN_DIGEST = "uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw";
 const PINNED_VERSION_EIGHT_DIGEST = "6Vf2H56rDvW2PGMrU83upUDz1r9gHP11tdq_w7T1K5E";
 const PINNED_VERSION_NINE_DIGEST = "fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE";
+const PINNED_VERSION_TEN_DIGEST = "rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk";
 const BROKER_CAPABILITY_PIN_ID = `rbcp_${encoded(32, 40)}`;
 const BROKER_CAPABILITY_ARTIFACT_ID = `rcph_${encoded(16, 41)}`;
 const BROKER_ROUTE_ID = `rcr_${encoded(32, 42)}`;
@@ -1336,7 +1337,7 @@ function signAndAcceptPreparedNativeRoot(
 describe("A1 host-state migrations", () => {
   it("pins the application id, schema version, and exact migration digests", () => {
     expect(HOST_STATE_APPLICATION_ID).toBe(0x52434c57);
-    expect(HOST_STATE_SCHEMA_VERSION).toBe(9);
+    expect(HOST_STATE_SCHEMA_VERSION).toBe(10);
     expect(HOST_STATE_MIGRATION_DIGESTS).toEqual([
       PINNED_VERSION_ONE_DIGEST,
       PINNED_VERSION_TWO_DIGEST,
@@ -1347,11 +1348,12 @@ describe("A1 host-state migrations", () => {
       PINNED_VERSION_SEVEN_DIGEST,
       PINNED_VERSION_EIGHT_DIGEST,
       PINNED_VERSION_NINE_DIGEST,
+      PINNED_VERSION_TEN_DIGEST,
     ]);
     expect(HOST_STATE_SCHEMA_MANIFEST).toEqual({
       applicationId: 0x52434c57,
-      schemaVersion: 9,
-      migrationDigest: PINNED_VERSION_NINE_DIGEST,
+      schemaVersion: 10,
+      migrationDigest: PINNED_VERSION_TEN_DIGEST,
       sqliteSchema: HOST_STATE_SQLITE_SCHEMA_MANIFEST,
     });
     expect(expectedHostStateSqliteSchemaManifest(1)).toHaveLength(6);
@@ -1363,7 +1365,21 @@ describe("A1 host-state migrations", () => {
     expect(expectedHostStateSqliteSchemaManifest(7)).toHaveLength(326);
     expect(expectedHostStateSqliteSchemaManifest(8)).toHaveLength(492);
     expect(expectedHostStateSqliteSchemaManifest(9)).toHaveLength(571);
+    expect(expectedHostStateSqliteSchemaManifest(10)).toHaveLength(619);
     expect(HOST_STATE_MIGRATIONS[8]?.statements).toHaveLength(81);
+    expect(HOST_STATE_MIGRATIONS[9]?.statements).toHaveLength(50);
+    expect(
+      HOST_STATE_SQLITE_SCHEMA_MANIFEST.filter((entry) => entry.type === "table"),
+    ).toHaveLength(70);
+    expect(
+      HOST_STATE_SQLITE_SCHEMA_MANIFEST.filter((entry) => entry.type === "index"),
+    ).toHaveLength(137);
+    expect(
+      HOST_STATE_SQLITE_SCHEMA_MANIFEST.filter((entry) => entry.type === "trigger"),
+    ).toHaveLength(412);
+    expect(HOST_STATE_SQLITE_SCHEMA_MANIFEST.filter((entry) => entry.type === "view")).toHaveLength(
+      0,
+    );
   });
 
   it("commits every exact historical SQL byte into the chained digest", () => {
@@ -1421,12 +1437,14 @@ describe("A1 host-state migrations", () => {
     expect(expectedHostStateMigrationDigest(7)).toBe(PINNED_VERSION_SEVEN_DIGEST);
     expect(expectedHostStateMigrationDigest(8)).toBe(PINNED_VERSION_EIGHT_DIGEST);
     expect(expectedHostStateMigrationDigest(9)).toBe(PINNED_VERSION_NINE_DIGEST);
+    expect(expectedHostStateMigrationDigest(10)).toBe(PINNED_VERSION_TEN_DIGEST);
+    expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_TEN_DIGEST, 10)).toBe(true);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 1)).toBe(true);
     expect(isExpectedHostStateMigrationDigest(`${PINNED_VERSION_ONE_DIGEST}=`, 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest("A".repeat(43), 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 2)).toBe(false);
     expect(() => expectedHostStateMigrationDigest(0)).toThrow(/not supported/);
-    expect(() => expectedHostStateMigrationDigest(10)).toThrow(/not supported/);
+    expect(() => expectedHostStateMigrationDigest(11)).toThrow(/not supported/);
   });
 
   it("creates exactly the declared application schema", () => {
@@ -1472,9 +1490,9 @@ describe("A1 host-state migrations", () => {
         "created_at_ms",
       ]);
 
-      expect(rows.filter((row) => row.type === "table")).toHaveLength(65);
-      expect(rows.filter((row) => row.type === "index")).toHaveLength(123);
-      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(383);
+      expect(rows.filter((row) => row.type === "table")).toHaveLength(70);
+      expect(rows.filter((row) => row.type === "index")).toHaveLength(137);
+      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(412);
       expect(rows.some((row) => String(row.name).startsWith("sqlite_autoindex"))).toBe(false);
       expect(
         database
@@ -1912,32 +1930,37 @@ describe("A1 host-state migrations", () => {
     }
   });
 
-  it("installs only the A1.7a ingress ledger and no future effect surface", () => {
+  it("installs exactly the dormant A1.7b1 command foundation and no final/effect surface", () => {
     const database = new DatabaseSync(":memory:");
     try {
       applyMigrations(database);
-      const v8Tables = database
-        .prepare(
-          `SELECT name FROM sqlite_schema
-           WHERE type = 'table' AND name IN (
-             'broker_route_runtime_status', 'broker_channel_generation_observations',
-             'broker_route_fetch_cursors', 'broker_route_semantic_cursors',
-             'broker_route_gaps', 'authenticated_channel_positions',
-             'channel_position_equivocations', 'broker_channel_manifest_equivocations',
-             'broker_transport_key_collisions', 'channel_position_recoveries',
-             'authenticated_ingress_results', 'ingress_transport_attempts',
-             'ingress_delivery_candidates', 'authenticated_ingress_parts',
-             'authenticated_ingress_observations', 'broker_route_actors',
-             'broker_read_page_observations'
-           ) ORDER BY name`,
-        )
-        .all();
-      expect(v8Tables).toHaveLength(17);
+      const priorTableNames = new Set(
+        expectedHostStateSqliteSchemaManifest(9)
+          .filter((entry) => entry.type === "table")
+          .map((entry) => entry.name),
+      );
+      const foundationTables = database
+        .prepare(`SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name`)
+        .all()
+        .filter((row) => !priorTableNames.has(String(row.name)));
+      expect(foundationTables).toEqual([
+        { name: "a1_ingress_adjudications" },
+        { name: "collaboration_command_compound_signing_groups" },
+        { name: "collaboration_command_result_preparations" },
+        { name: "collaboration_commands" },
+        { name: "command_ready_entries" },
+      ]);
       for (const forbidden of [
-        "collaboration_commands",
+        "collaboration_command_results",
+        "collaboration_command_result_deliveries",
         "ingress_result_deliveries",
         "host_output_deliveries",
+        "collaboration_command_result_outbox_entries",
+        "causal_outbox_entries",
+        "command_effect_gates",
+        "native_execution_attempts",
         "native_dispatch_attempts",
+        "command_dispatch_attempts",
         "effect_gates",
       ]) {
         expect(

@@ -28,7 +28,7 @@ local transcript completeness or replay.
 > chats and native sessions; this document's per-`cse_*` RC state repeats independently for every
 > wrapped Claude session and must not become a host-wide current-session slot. This document's full RC
 > log remains relevant to the current synthetic server, not a universal semantic authority. A1.0
-> through dormant A1.7b0 have landed: canonical contracts, the secure SQLite kernel and protected-artifact
+> through dormant A1.7b1 have landed: canonical contracts, the secure SQLite kernel and protected-artifact
 > store, schema-v3 server/project/chat/binding/edge/coordinator records, and now schema-v4 runtime-owner
 > state plus its repository, semantic validator, authenticated daemon/RPC, lease/takeover, and wrapped
 > key custody. Migration 4 has 141 statements and digest
@@ -66,10 +66,20 @@ local transcript completeness or replay.
 > inference, projection, or production wiring. The v8 pins above remain unchanged. Migration 9 has
 > 81 statements, digest `fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`, and a 571-object
 > manifest: 65 tables, 123 indexes, and 383 triggers.
+> A1.7b1 adds schema v10 migration `010-common-command-adjudication` as a dormant rejected-command
+> foundation. Its 50 statements are locked to digest
+> `rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk`; the 619-object manifest contains 70 tables, 137
+> indexes, and 412 triggers. Exactly five new tables retain the shared ready-journal entry, A1 ingress
+> adjudication sidecar, common command, compound signing group, and result preparation. The direct
+> path orders only eligible A1.7a sources, freezes only `rejected`, and binds/signs replaceable result
+> preparations. It stops at signed-but-unaccepted state and adds no final result, signer acceptance,
+> ingress terminalization, source delivery/outbox, native attempt/effect, projection, or production
+> wiring.
 > The ordinary no-adapter CLI remains health-only; no real driver or viewer invokes A1, no
 > runtime-owner broker or ingress operation exists, and the dormant actor is absent from production
-> barrels/run paths. No production path invokes the dormant server signer. Full A1.7b common command
-> ordering/signed results, A1.8 effects, and all live wiring remain deferred.
+> barrels/run paths. No production path invokes the dormant command adjudicator or server signer.
+> A1.8a atomic final-result/acceptance/terminal/outbox/effect completion and all live wiring remain
+> deferred. A1.7b1 and A1.8a are one advertised capability gate.
 
 ## Source Map
 
@@ -89,10 +99,10 @@ local transcript completeness or replay.
   `packages/cli/src/host/rc/anthropic/*.ts`,
   `packages/cli/src/broker/{client,protocol,order}.ts`, and
   `apps/web/lib/broker/{backend,local,vercel,sqlite-multi,turso-cloud-locator}.ts`.
-- Active shared canonical primitive, locked A0 consumer, and dormant pure A1.5–A1.7a contracts:
-  `packages/clawsec/src/{canonical,aad,a1-wire,a1-certificates,a1-onboarding,a1-broker,a1-ingress}.ts`.
+- Active shared canonical primitive, locked A0 consumer, and dormant pure A1.5–A1.7b1 contracts:
+  `packages/clawsec/src/{canonical,aad,a1-wire,a1-certificates,a1-onboarding,a1-broker,a1-ingress,a1-command}.ts`.
 - A1 host-state and runtime-owner code:
-  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,sqlite}.ts`,
+  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
   `packages/cli/src/host/native/evidence.ts`, `packages/cli/src/host/server-signer/**`, and
   `packages/cli/src/host/runtime-owner/**`. A1.2 implements the generic v3
   server/project/chat/binding/edge/coordinator operations described below. A1.3 implements the v4
@@ -103,7 +113,8 @@ local transcript completeness or replay.
   `broker-route`/`broker-route-repository`/`broker-route-orchestrator`, the browser-safe
   `packages/cli/src/broker/a1-client.ts`, and the host-only dormant route installer. A1.7a adds the
   direct-only ingress repository and actor through `awaiting_order`. A1.7b0 adds schema v9 plus the
-  direct-only server signer and its wrapped custody/fenced lease/reservation repository. It still does not implement
+  direct-only server signer and its wrapped custody/fenced lease/reservation repository. A1.7b1 adds
+  schema v10, direct-only command adjudication, and the command-result signing orchestrator. It still does not implement
   private Claude RC rows, connect an ordinary native driver to durable registration/root activation,
   or install the ingress actor into a live runtime.
 - A1.6 broker code:
@@ -145,7 +156,7 @@ re-verification.
 remote-control turns reportedly wrote only incomplete title/stub rows locally,
 while normal non-RC Claude wrote full local JSONL in real time. The tracked RC
 wire evidence independently establishes that the worker does not backfill
-history ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), so local JSONL must not
+history ([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)), so local JSONL must not
 be assumed to be the remote-claw server log; its exact compact role still needs the Phase B4 gate.
 
 **Historical investigation claim — resume/re-bridge.** When
@@ -155,7 +166,7 @@ The bridge body is `{}`, there is no `POST /v1/code/sessions`, and no historical
 payload is sent to the worker server. The wrapper must already have the
 history if gated re-verification confirms this behavior. The narrower tracked
 fact is that worker bridge/SSE does not provide history
-([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)).
+([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)).
 
 **Unverified client reconnect claim.** Historical traces suggested
 `lastSequenceNum`, `from_sequence_num`, or `Last-Event-ID` on client-side
@@ -367,7 +378,7 @@ prove that protocol before it may collect these records. The existing explicitly
 locator `dropScope()` remains destructive whole-scope test cleanup; it is not production retention,
 checkpointing, revocation, or recovery.
 
-The implemented A1.1–A1.7b0 kernel supplies the secure transaction/storage boundary for the owner-only
+The implemented A1.1–A1.7b1 kernel supplies the secure transaction/storage boundary for the owner-only
 **LOCAL**
 `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite database,
 falling back under `~/.local/state` when `XDG_STATE_HOME` is absent or relative. The fallback home
@@ -381,7 +392,7 @@ application/identities/identity directories, a non-group/world-writable owner st
 regular one-link `0600` database/WAL/SHM files; rollback journals, non-WAL databases, and all other
 filesystem types fail closed.
 
-Current schema v9 uses SQLite `application_id=0x52434c57`, `user_version=9`, exact per-version schema
+Current schema v10 uses SQLite `application_id=0x52434c57`, `user_version=10`, exact per-version schema
 manifests, and an append-only `CanonicalWriter` SHA-256 migration chain. The locked v1/v2 digests are
 `Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec` and
 `yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; migration 3 is
@@ -398,7 +409,9 @@ manifests, and an append-only `CanonicalWriter` SHA-256 migration chain. The loc
 `008-a1-durable-ingress`, contains 171 ordered statements, and is locked to
 `6Vf2H56rDvW2PGMrU83upUDz1r9gHP11tdq_w7T1K5E`. Migration 9 is
 `009-server-scope-signer`, contains 81 ordered statements, and is locked to
-`fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`. Every predecessor is checked before migrating. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
+`fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`. Migration 10 is
+`010-common-command-adjudication`, contains 50 ordered statements, and is locked to
+`rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk`. Every predecessor is checked before migrating. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
 two triggers; v2 adds four triggers for a total of ten objects and six triggers. V3 adds ten tables:
 `collaboration_servers`, `host_state_profiles`, `projects`,
 `project_target_selector_mappings`, `logical_chats`, `native_bindings`,
@@ -420,7 +433,11 @@ objects: 57 tables, 99 indexes, and 336 triggers. V9 adds
 `server_identity_keys`, `server_identity_private_key_envelopes`, `server_scope_certificates`,
 `server_scope_certificate_statuses`, `server_bootstrap_signing_leases`, `server_signing_leases`,
 `server_signature_reservations`, and `server_signed_record_acceptances`. The complete v9 manifest is
-exactly 571 objects: 65 tables, 123 indexes, and 383 triggers. Every row,
+exactly 571 objects: 65 tables, 123 indexes, and 383 triggers. V10 adds exactly
+`command_ready_entries`, `a1_ingress_adjudications`, `collaboration_commands`,
+`collaboration_command_compound_signing_groups`, and
+`collaboration_command_result_preparations`. Its complete manifest is exactly 619 objects: 70 tables,
+137 indexes, and 412 triggers. Every row,
 including any `sqlite_*` name, must match the corresponding version manifest. Before migration 1, a
 new database must retain `application_id=0` and literally zero `sqlite_schema` rows. Every connection
 reads back `foreign_keys=ON`, `trusted_schema=OFF`, `journal_mode=WAL`,
@@ -433,10 +450,10 @@ and may change during validation; a safe SHM-only remnant beside an existing dat
 reconstructed, while sidecars without a database are refused.
 
 The semantic validator accepts the dormant A1.2 subset plus the A1.3 runtime-owner, A1.4
-registration, A1.5 terminal-root, A1.6 broker-route, A1.7a ingress, and A1.7b0 server-signer graphs. An existing database is
+registration, A1.5 terminal-root, A1.6 broker-route, A1.7a ingress, A1.7b0 server-signer, and A1.7b1 command-preparation graphs. An existing database is
 checked in one coherent read-only snapshot before writable open; a newly migrated database is checked
 before its handle returns. State is empty or has one linked default profile whose server is
-`installing` in schemas v3–v8 and may be `installing` or signer-activated `current` in schema v9; projects are
+`installing` in schemas v3–v8 and may be `installing` or signer-activated `current` in schemas v9–v10; projects are
 current; each project's one persisted v3 selector chain is contiguous, terminal-native, and ends in exactly one current generation;
 and every logical chat records its exact `project_target_selector_mapping_id`. A new A1.2 reservation
 starts recovering at topology generation one and projection sequence zero. It points to one unresolved
@@ -499,6 +516,59 @@ it for another reservation. A later explicit-repair milestone must resolve it. A
 takeover instead supersedes the normal current signing lease; once no `reserved`, `bound`, or
 signed-but-unaccepted predecessor reservation remains, the successor may acquire a fresh current lease
 at the exact next fencing token.
+
+V10 is the dormant command-adjudication boundary, not the final result/effect ledger. A ready
+transaction accepts only the route's earliest unadjudicated complete A1-ingress result while its
+runtime head is current and gap-free. It atomically creates the common command, A1 sidecar, and ready
+entry at the exact next server journal offset. The semantic validator merges
+`command_ready_entries` with schema-v3 `control_journal_entries` and requires their offsets to be
+unique within that server, contiguous from zero, and equal to `nextJournalOffset`. It separately requires dense
+server command sequences and permits at most 256 unresolved commands.
+
+The pure command contract allows exact scalar `user_text` through 48 MiB. V10's current persistence
+path is rejected-only and deliberately stores a bounded `unsupported_recognized` envelope containing
+the normalized family plus A1.7a's exact source schema, canonical message digest, and source-event
+fingerprint, rather than copying the retained large plaintext. The global sequencer chooses only the
+minimum `(readyAtJournalSeq, commandId)` and can freeze only `rejected`; it rechecks that the source
+route has not gained a gap. Creation and decision coordinator lease/epoch fields are separate, so
+takeover can decide a ready command without rewriting its creation fence or time.
+
+The deterministic IDs are:
+
+```text
+commandId = "rcm_" || base64url(SHA256(
+  str("remote-claw/collaboration-command/v1") || str(collaborationServerId) ||
+  str("a1_ingress") || bytes(base64urlDecode(sourceCommandIdentityDigest))))
+commandResultId = "ccr_" || base64url(SHA256(
+  str("remote-claw/collaboration-command-result-id/v1") || str(collaborationServerId) ||
+  str(commandId) || uint(1)))
+compoundSigningGroupId = "csg_" || base64url(SHA256(
+  str("remote-claw/collaboration-command-signing-group/v1") || str(collaborationServerId) ||
+  str(commandId) || str(commandResultId) || uint(preparationGeneration)))
+commandResultPreparationId = "crp_" || base64url(SHA256(
+  str("remote-claw/collaboration-command-result-preparation/v1") ||
+  str(collaborationServerId) || str(commandId) || str(commandResultId) || uint(1) ||
+  uint(preparationGeneration)))
+```
+
+Here each displayed prefix wraps the canonical unpadded-base64url SHA-256 body, and every textual
+field is written with the shared `CanonicalWriter`; the full byte-exact formulas are frozen in
+`packages/clawsec/src/a1-command.ts`. Generation one is reserved with the rejected decision under the
+current server signing lease. Bind and signed-store retain and verify the exact canonical result
+payload before returning. Reserved or bound generations may abort as a three-row
+reservation/preparation/group unit; a replacement burns the next signer sequence, advances the
+generation and `supersedesPreparationRef`, and retains the original command/order/disposition/result
+and decision time. Unknown commit handling closes/reopens and reconciles exact retained state; a
+proved-absent signed store reuses the same signature instead of signing again.
+
+V10 can reach only command `decision_reserved`, A1 sidecar `deciding`, preparation `signed`, group
+`result_signed`, and signature reservation `signed`. It rejects final command/terminal sidecar/
+finalized-group states and has no final-result, signer-acceptance, source result/delivery, outbox,
+effect, attempt, dispatch, viewer, native, or production surface. The v9 acceptance table remains,
+but A1.7b1 inserts no command-result acceptance row. A1.8a must add final common result,
+signer acceptance, ingress terminalization, and source result/delivery outbox atomically; an admitted
+arm must add its pinned native attempt/front-door dispatch/effect gate in the same transaction.
+A1.7b1 and A1.8a therefore form one advertised capability gate.
 
 V4 additionally validates one machine-scoped runtime-owner state row, contiguous retained service
 epochs and owner journal, exact process-start-bound lease acquisition/renewal/release, derived
@@ -583,8 +653,9 @@ reconciliation. A1.3's production lease controller handles an unknown owner-leas
 poisoned handle, reopening the same identity database, and reconciling the exact operation before any
 retry; this does not make an arbitrary unknown ordinary SQLite commit safe to replay blindly. The A1.2 actor
 scope was only durable addressing through A1.6. A1.7a adds dormant ingress queues and route-local
-serialization; A1.7b0 adds only their unused server-signing prerequisite, while full A1.7b owns
-common proposal decisions and server-wide command order.
+serialization; A1.7b0 adds their server-signing prerequisite; and A1.7b1 adds rejected-only common
+proposal decisions, server-wide order, and signed-but-unaccepted preparations. A1.8a owns the atomic
+final-result/acceptance/terminal/outbox/effect boundary.
 
 A1.3's daemon listens on one machine-scoped Linux abstract Unix socket. Both peers derive one HKDF key
 from the machine secret and prove possession over a fresh 32-byte challenge, with separate server and
@@ -1416,7 +1487,7 @@ demonstrates every property below:
 
 ## Assigned Decisions and Proof-Owned Questions
 
-- **A1.1–A1.7b0 / B.2 — storage placement: DECIDED; kernel, host/runtime-owner/registration/root/broker-route/ingress/signer repositories, and daemon seam implemented.** Use the owner-only local
+- **A1.1–A1.7b1 / B.2 — storage placement: DECIDED; kernel, host/runtime-owner/registration/root/broker-route/ingress/signer/command repositories, and daemon seam implemented.** Use the owner-only local
   `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite
   transaction boundary in the CLI, with the absolute-home `~/.local/state` fallback above, for every RC row that
   participates in a control-state invariant, in cleartext. A1.0 resolves the path; A1.1 implements
@@ -1426,7 +1497,9 @@ demonstrates every property below:
   activation/renewal/demotion ledger; A1.6 adds schema v7 and its dormant capability-pin/route/open-
   genesis ledger; A1.7a adds schema v8 and its evidence-preserving ingress ledger through
   `awaiting_order`; A1.7b0 adds schema v9 and its dormant initial self-anchor, wrapped server-key,
-  fenced signing-lease, reservation, and acceptance ledger. The ordinary CLI installs no adapter and invokes no A1 broker, ingress, or signer operation, so the
+  fenced signing-lease, reservation, and acceptance ledger; A1.7b1 adds schema v10 and its dormant
+  shared ready journal, rejected command decision, compound result preparation, and result signing
+  ledger. The ordinary CLI installs no adapter and invokes no A1 broker, ingress, command, or signer operation, so the
   production daemon remains health-only. A separate local adapter store may hold only raw transport payloads with immutable host-state
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
@@ -1439,7 +1512,7 @@ demonstrates every property below:
   RC `sequence_num`; the projector retains their explicit mapping and never substitutes one for the
   other.
 - **B.5 — compact source: PROOF-OWNED.** Tracked relay protocol describes an assistant compact-summary turn plus `result`
-  ([Protocol & Runtime §12](protocol.md#12-convergence--failure-modes)), while the unavailable
+  ([Protocol & Runtime §12](protocol.md#12-convergence-failure-modes)), while the unavailable
   historical native-RC investigation reportedly saw only an empty result on the
   wire and summary text in local JSONL. Treat this as version/mode dependent
   until B.5 retains the selected fixture; do not require local transcript watching or
