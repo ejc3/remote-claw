@@ -113,7 +113,9 @@ about the current A0 implementation:
 | A1.7b0 | Implemented dormant prerequisite; no production wiring | Schema-v9 migration `009-server-scope-signer`; initial self-anchor, AES-GCM-wrapped server Ed25519 custody without raw-key export, coordinator-fenced bootstrap/current leases, immutable signer sequences and payload bindings, dense per-server `acceptedAtJournalSeq` signed-record acceptance, non-closed-bootstrap `stale_bootstrap_fence` fail-stop versus installed-lease supersession/next-token takeover, exact replay/collision/reconciliation, semantic reopen, and compatibility admission of dormant route installation for an exact signer-activated current server; no command/result, generic host output, broker publish, outbox/effect, native dispatch, or projection claim |
 | A1.7b1 | Implemented dormant foundation; no production wiring or independent capability claim | Schema-v10 `010-common-command-adjudication`, exact five-table/619-object boundary, shared ready/control journal closure, A1-ingress-only route-head admission, deterministic source/command/result/group/preparation identities, small `unsupported_recognized` persistence, global order, rejected-only decision, distinct creation/decision fences, signer binding/store, abort/reprepare generations, crash reconciliation, semantic reopen, and a hard signed-but-unaccepted terminal boundary |
 | A1.8a0 | Implemented dormant rejected-only closure; no production wiring or capability claim | Schema-v11 `011-a1-rejected-result-finalization`, exact three-table/647-object boundary, one-transaction common result + dense signer acceptance + `decided`/`terminal` overlay + exact semantic artifact + inert `pending_seal` intent, immutable base ingress evidence, no cursor movement or post-sign route-health dependency, narrow safe predecessor-signature takeover with strictly later successor-lease acquisition, crash reconciliation, and semantic reopen |
-| A1.8a | Planned next | Add an admitted command's pinned native attempt/front-door dispatch/protected effect arm atomically without widening the rejected-only finalizer or exposing a partial path |
+| A1.8a1-E | Design frozen; implementation next | Exact ID/digest vectors, bounded protected evidence, dependency-ordered listener/isolation/capability signature acceptance, nonterminal key-rotation barrier, semantic reopen, and proof that accepted evidence never changes either transport authority pointer or imports a production path |
+| A1.8a1-I | Planned after E | One-transaction null/null-or-matched snapshot/credentialless-ingress pair install and replacement; live callable-port proof; pair-only withdrawal with A1.4-owned physical-port teardown; parent close/detach/reattach/takeover closure; exact unknown-commit reconciliation and absent-generation reuse; hostile-SQL closure; no admitted command, dispatch, effect, native call, or advertised capability |
+| A1.8a2 | Planned after I | Add an admitted command's pinned native attempt/front-door dispatch/protected effect arm atomically without widening the rejected-only finalizer or exposing a partial path |
 | A1.8b | Planned after full A1.8a | Seal/publish causal result delivery, then one-time dispatch, protected authorization consumption, uncertainty quarantine, native read-back, and evidence-only recovery without replaying a possibly started effect |
 | A1.9 | Planned after the protected-handle and dispatch foundations | Runtime-scoped inference identity, encrypted exact request/response retention, connector leases, and ambiguous-upstream no-silent-retry proof |
 | A1.10 | Planned after A1.5–A1.8b | Viewer trust-store onboarding, certificate status policy, scoped discovery, result redelivery, broker catch-up, projection rebuild, and no duplicate optimistic row |
@@ -379,8 +381,29 @@ tests retain the immutable v8 evidence row in `awaiting_order` or later
 orphan artifacts, and inconsistent completion anchors. Negative gates prove that `pending_seal` is
 unclaimable plaintext semantic intent: no ciphertext, output part/signature, claim/seal/publish,
 effect/attempt, projection, native/broker operation, cursor movement, or production import exists.
-Full A1.8a still needs the admitted attempt/front-door-dispatch/effect atomic arm, and A1.8b still
-needs sealing/publishing and one-time delivery before any capability can be advertised.
+A1.8a1-E/I must first establish the dormant native-binding authority foundation; A1.8a2 still needs
+the admitted attempt/front-door-dispatch/effect atomic arm, and A1.8b still needs sealing/publishing
+and one-time delivery before any capability can be advertised.
+
+A1.8a1 is design-frozen but has no implementation gate to report as passed. Its later focused evidence
+gate must lock every `nwb_*`/`nlra_*`/`nria_*`/`nbcs_*`/`ncsa_*`/`ncil_*`/`nbao_*`/`nbai_*`/`nbaw_*` identity and
+canonical digest vector; enforce bounded, exhaustive listener/classification/family artifacts; verify
+the three exact runtime-owner signatures and acceptances in listener → isolation → capability order;
+race two attachments at the same runtime/incarnation/key generation and prove only one singleton
+listener/isolation reservation is allocated while the other joins its exact accepted tuple; reject
+phase skips, orphan prefixes, signed-but-unaccepted abandonment, key rotation while a phase is
+nonterminal, and every cross-server/chat/workspace/runtime/incarnation/attachment transplant; and
+prove that accepted evidence leaves both transport pointers byte-identical. Its later install gate
+must reject owner/coordinator/channel fence transplants, prove the pointer XOR state impossible,
+exact pair CAS/replacement/withdrawal, stale or missing live-port refusal, process-loss
+non-writability, and parent close/detach/reattach/takeover closure. Race a late predecessor withdrawal
+against successor install and prove it neither clears the successor pair nor unregisters the shared
+A1.4 port. Prove exact landed/absent/changed-byte unknown-commit outcomes, including that a landed
+aborted preparation burns its generations while a proved-absent preparation consumes none and may
+reuse the still-next derived ingress ID. Require semantic-reopen no-extra-row closure and absence of
+admitted/result/attempt/dispatch/effect/native-call or production-operation surfaces. A synthetic callable-port fixture cannot satisfy the retained live
+OpenCode proof; it only closes the dormant authority metadata. The canonical matrix is
+[in the technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 
 ### One-host/many-session acceptance matrix
 

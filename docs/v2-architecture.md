@@ -256,8 +256,20 @@
 > same-millisecond wall-clock tie. `pending_seal` retains only
 > semantic payload refs/digests and immutable broker-route linkage. A1.8a0 implements no ciphertext,
 > output parts/signatures, claim/seal/publish, broker call, cursor movement, native attempt/effect,
-> viewer projection, driver operation, production wiring, or capability advertisement. Full A1.8a
-> still owns the admitted atomic arm and A1.8b owns sealing/publishing.
+> viewer projection, driver operation, production wiring, or capability advertisement.
+>
+> A1.8a1 is now design-frozen but unimplemented. A1.8a1-E may retain exact signed OpenCode
+> `user_text` binding evidence through dependency-ordered listener/isolation/capability phases,
+> with key rotation blocked while a phase is nonterminal, without changing either transport
+> authority pointer. A1.8a1-I
+> later installs one accepted capability snapshot and one credentialless authenticated callable-port
+> ingress lease as a matched pair in one transaction; a snapshot-only pointer is forbidden. The
+> volatile port remains useful only on its exact authenticated runtime-owner channel and must be
+> withdrawn and replaced after process loss. Pair withdrawal never unregisters the A1.4-owned shared
+> physical port; only exact parent-lease closure/replacement may do that. Neither slice creates an admitted command, native
+> attempt, dispatch, effect, native call, production operation, or advertised capability. The
+> exhaustive contract is in the [host-runtime reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
+> A1.8a2 still owns the admitted atomic arm and A1.8b owns sealing/publishing.
 >
 > Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
 > plain and help paths, trace mode, and the local `--rc-identity` action do not. A1.4 registration is
@@ -270,8 +282,9 @@
 > adapter; it signs the protected payload, obtains a fresh nonce-bound callable-port proof, and then
 > synchronously enters the closed transaction-local finalizer. No real driver performs durable owner registration, A1 binding activation, or root
 > activation, and no A1 remote mutation, inference, or live broker capability is enabled. The
-> The A1.7b0 signer, A1.7b1 command adjudicator, and A1.8a0 rejected finalizer remain direct-only
-> dormant host state. Full A1.8a admitted atomic arming is next; A1.8b owns sealing/publishing,
+> A1.7b0 signer, A1.7b1 command adjudicator, and A1.8a0 rejected finalizer remain direct-only
+> dormant host state. A1.8a1-E/I is design-frozen but unimplemented; A1.8a2 admitted atomic arming
+> follows it. A1.8b owns sealing/publishing,
 > one-time dispatch, and evidence-only recovery.
 
 ## 1. What changes and why
@@ -963,10 +976,13 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
 
   - random 16-byte bodies: `rcs_` collaboration server, `rcpj_` project, `rcl_` logical chat, `rcie_`
     inward collaboration edge, `rcnb_` native binding, `rccl_` coordinator lease, `rcra_` registration
-    attempt, `rcncl_` native conversation lease, `rcph_` protected handle, and `rbsi_` broker route
-    store instance;
+    attempt, `rcncl_` native conversation lease, `rcph_` protected handle, `rbsi_` broker route store
+    instance, `nwb_` native workspace binding, `nbao_` native-binding evidence operation, `nbai_`
+    native-binding install operation, and `nbaw_` native-binding withdrawal operation;
   - SHA-256-derived 32-byte bodies: `rcrt_` native runtime, `ptm_` project-target-selector mapping,
-    `nat_` native delivery attempt, `rcr_` broker route, and `rbcp_` backend capability pin. A1.3 now locks the exact domain-separated `rcrt_*` derivation
+    `nat_` native delivery attempt, `rcr_` broker route, `rbcp_` backend capability pin, `nlra_`
+    listener-registration attestation, `nria_` runtime-isolation attestation, `nbcs_` binding capability
+    snapshot, `ncsa_` capability-snapshot attestation, and `ncil_` native-client ingress lease. A1.3 now locks the exact domain-separated `rcrt_*` derivation
     and vector documented in the [host-runtime reference](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
 
   Every body is canonical unpadded base64url. Other selected A1 safe IDs are 1–128 ASCII bytes, must
@@ -1539,8 +1555,9 @@ call). See §14.)
   signed-but-unaccepted result preparation. A1.8a0 now atomically closes that rejected-only arm into
   an immutable common result, dense signer acceptance, logical ingress terminal overlay, exact
   semantic artifact, and inert `pending_seal` delivery intent without advancing the ingress cursor or
-  requiring later route health. It neither seals nor publishes that intent. Full A1.8a must add any
-  admitted attempt/front-door-dispatch/effect arm atomically, and A1.8b must seal/publish before any
+  requiring later route health. It neither seals nor publishes that intent. A1.8a1-E/I first retains
+  and later installs the dormant matched capability-snapshot/credentialless-ingress authority pair;
+  A1.8a2 must add any admitted attempt/front-door-dispatch/effect arm atomically, and A1.8b must seal/publish before any
   forward or result delivery; viewer-projection `seq` remains explicitly separate.
   A1.6 retains ciphertext frame bodies on every route from
   genesis. A1.7a also retains decrypted plaintext part evidence for chat and
