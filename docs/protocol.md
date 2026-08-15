@@ -731,7 +731,10 @@ be durably acquired strictly after the predecessor acceptance, even across a sam
 wall-clock tie. This does not authorize generic
 superseded-lease acceptance, key rotation, retired certificates, or historical reattestation.
 
-The pure result contracts live in `packages/clawsec/src/a1-result.ts`; schema/repository/reopen
+The pure result contracts live in `packages/clawsec/src/a1-result.ts`. In addition to the
+schema-v11 rejected payloads, that browser-safe module freezes the exact `accepted` projection and
+admitted `chat_creation_result` bytes for later A1.8a use. Those codecs create no durable result,
+projection, capability, attempt, effect gate, or dispatch authority. Schema/repository/reopen
 closure live in `packages/cli/src/host/state/{migration-v11,command-result-finalization,command-adjudication-repository,command-adjudication-validator}.ts`;
 and the crash-reconciling composition is the dormant
 `packages/cli/src/host/server-signer/command-result-orchestrator.ts`. None is invoked by an ordinary

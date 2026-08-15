@@ -1,8 +1,8 @@
 // Browser-safe selected-A1 semantic-result byte contracts.
 //
 // This module deliberately owns no persistence, signing, cursor advancement, outbox execution, or
-// broker behavior. It freezes only the exact rejected-result payloads and identities consumed by
-// the dormant A1 result finalizer.
+// broker behavior. It freezes only the selected exact semantic-result payloads and identities
+// consumed by dormant A1 result finalizers.
 
 import { type BrokerChannelCursorV1, parseBrokerChannelCursorV1 } from "./a1-broker.js";
 import { base64urlDecode, base64urlEncode } from "./base64url.js";
@@ -20,6 +20,7 @@ export const A1_RESULT_DELIVERY_ID_DOMAIN = "remote-claw/a1/result-delivery/v1" 
 const SAFE_ID = /^[A-Za-z0-9._:-]+$/;
 const MAX_SAFE_ID_BYTES = 128;
 const DIGEST_BYTES = 32;
+const LOGICAL_CHAT_ID_BYTES = 16;
 const DELIVERY_ATTEMPT_BYTES = 16;
 
 export type A1StoredSemanticResultSchemaId =
@@ -141,10 +142,24 @@ function deliveryAttemptId(value: unknown, field: string): string {
 }
 
 function safeUint(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    Object.is(value, -0)
+  ) {
     return reject("invalid-field", `${field} must be a non-negative safe integer`);
   }
   return value;
+}
+
+function logicalChatId(value: unknown, field: string): string {
+  const parsed = safeId(value, field);
+  if (!parsed.startsWith("rcl_")) {
+    return reject("invalid-field", `${field} must use the rcl_ namespace`);
+  }
+  canonicalBase64url(parsed.slice(4), LOGICAL_CHAT_ID_BYTES, field);
+  return parsed;
 }
 
 function storedSchemaId(value: unknown, field: string): A1StoredSemanticResultSchemaId {
@@ -192,6 +207,76 @@ function jsonValue(raw: string, field: string): unknown {
   }
 }
 
+export interface A1ProjectionAcceptedPayloadV1 {
+  readonly v: 1;
+  readonly resultId: string;
+  readonly clientMsgId: string;
+  readonly seq: number;
+}
+
+function parseProjectionAcceptedCanonicalValue(value: unknown): A1ProjectionAcceptedPayloadV1 {
+  const row = exactRecord(
+    value,
+    ["v", "resultId", "clientMsgId", "seq"] as const,
+    "projectionAcceptedPayload",
+  );
+  if (row.v !== 1) {
+    return reject("invalid-field", "projectionAcceptedPayload.v must be exactly 1");
+  }
+  return Object.freeze({
+    v: 1,
+    resultId: canonicalId(row.resultId, "rrs_", "projectionAcceptedPayload.resultId"),
+    clientMsgId: safeId(row.clientMsgId, "projectionAcceptedPayload.clientMsgId"),
+    seq: safeUint(row.seq, "projectionAcceptedPayload.seq"),
+  });
+}
+
+function parseProjectionAcceptedWireValue(value: unknown): A1ProjectionAcceptedPayloadV1 {
+  const row = exactRecord(
+    value,
+    ["v", "result_id", "client_msg_id", "seq"] as const,
+    "projectionAcceptedPayload",
+  );
+  return parseProjectionAcceptedCanonicalValue({
+    v: row.v,
+    resultId: row.result_id,
+    clientMsgId: row.client_msg_id,
+    seq: row.seq,
+  });
+}
+
+function encodeProjectionAcceptedValue(value: A1ProjectionAcceptedPayloadV1): string {
+  return `{"v":1,"result_id":"${value.resultId}","client_msg_id":"${value.clientMsgId}","seq":${value.seq}}`;
+}
+
+export function encodeA1ProjectionAcceptedPayloadV1(value: unknown): string {
+  return encodeProjectionAcceptedValue(parseProjectionAcceptedCanonicalValue(value));
+}
+
+export function encodeA1ProjectionAcceptedPayloadV1Bytes(value: unknown): Uint8Array {
+  return new TextEncoder().encode(encodeA1ProjectionAcceptedPayloadV1(value));
+}
+
+export function parseA1ProjectionAcceptedPayloadV1(
+  raw: string | Uint8Array,
+): A1ProjectionAcceptedPayloadV1 {
+  const source = boundedUtf8(raw, "projectionAcceptedPayload");
+  try {
+    const parsed = parseProjectionAcceptedWireValue(
+      jsonValue(source.text, "projectionAcceptedPayload"),
+    );
+    if (encodeProjectionAcceptedValue(parsed) !== source.text) {
+      return reject(
+        "non-canonical",
+        "projectionAcceptedPayload must use exact compact JSON with keys v,result_id,client_msg_id,seq in that order",
+      );
+    }
+    return parsed;
+  } finally {
+    source.bytes.fill(0);
+  }
+}
+
 export interface A1RejectedActionResultPayloadV1 {
   readonly v: 1;
   readonly resultId: string;
@@ -207,6 +292,15 @@ export interface A1RejectedChatCreationResultPayloadV1 {
   readonly sourceMsgId: string;
   readonly decision: "rejected";
   readonly targetLogicalChatId: null;
+  readonly commandSeq: number;
+}
+
+export interface A1AdmittedChatCreationResultPayloadV1 {
+  readonly v: 1;
+  readonly resultId: string;
+  readonly sourceMsgId: string;
+  readonly decision: "admitted";
+  readonly targetLogicalChatId: string;
   readonly commandSeq: number;
 }
 
@@ -349,6 +443,94 @@ export function parseA1RejectedChatCreationResultPayloadV1(
   try {
     const parsed = parseChatCreationWireValue(jsonValue(source.text, "chatCreationResultPayload"));
     if (encodeChatCreationValue(parsed) !== source.text) {
+      return reject(
+        "non-canonical",
+        "chatCreationResultPayload must use exact compact JSON with keys v,result_id,source_msg_id,decision,target_logical_chat_id,command_seq in that order",
+      );
+    }
+    return parsed;
+  } finally {
+    source.bytes.fill(0);
+  }
+}
+
+function parseAdmittedChatCreationCanonicalValue(
+  value: unknown,
+): A1AdmittedChatCreationResultPayloadV1 {
+  const row = exactRecord(
+    value,
+    ["v", "resultId", "sourceMsgId", "decision", "targetLogicalChatId", "commandSeq"] as const,
+    "chatCreationResultPayload",
+  );
+  if (row.v !== 1) {
+    return reject("invalid-field", "chatCreationResultPayload.v must be exactly 1");
+  }
+  if (row.decision !== "admitted") {
+    return reject("invalid-field", "chatCreationResultPayload.decision must be admitted");
+  }
+  if (row.targetLogicalChatId === null) {
+    return reject(
+      "invalid-field",
+      "chatCreationResultPayload.targetLogicalChatId must be non-null for admission",
+    );
+  }
+  return Object.freeze({
+    v: 1,
+    resultId: canonicalId(row.resultId, "rrs_", "chatCreationResultPayload.resultId"),
+    sourceMsgId: safeId(row.sourceMsgId, "chatCreationResultPayload.sourceMsgId"),
+    decision: "admitted",
+    targetLogicalChatId: logicalChatId(
+      row.targetLogicalChatId,
+      "chatCreationResultPayload.targetLogicalChatId",
+    ),
+    commandSeq: safeUint(row.commandSeq, "chatCreationResultPayload.commandSeq"),
+  });
+}
+
+function parseAdmittedChatCreationWireValue(value: unknown): A1AdmittedChatCreationResultPayloadV1 {
+  const row = exactRecord(
+    value,
+    [
+      "v",
+      "result_id",
+      "source_msg_id",
+      "decision",
+      "target_logical_chat_id",
+      "command_seq",
+    ] as const,
+    "chatCreationResultPayload",
+  );
+  return parseAdmittedChatCreationCanonicalValue({
+    v: row.v,
+    resultId: row.result_id,
+    sourceMsgId: row.source_msg_id,
+    decision: row.decision,
+    targetLogicalChatId: row.target_logical_chat_id,
+    commandSeq: row.command_seq,
+  });
+}
+
+function encodeAdmittedChatCreationValue(value: A1AdmittedChatCreationResultPayloadV1): string {
+  return `{"v":1,"result_id":"${value.resultId}","source_msg_id":"${value.sourceMsgId}","decision":"admitted","target_logical_chat_id":"${value.targetLogicalChatId}","command_seq":${value.commandSeq}}`;
+}
+
+export function encodeA1AdmittedChatCreationResultPayloadV1(value: unknown): string {
+  return encodeAdmittedChatCreationValue(parseAdmittedChatCreationCanonicalValue(value));
+}
+
+export function encodeA1AdmittedChatCreationResultPayloadV1Bytes(value: unknown): Uint8Array {
+  return new TextEncoder().encode(encodeA1AdmittedChatCreationResultPayloadV1(value));
+}
+
+export function parseA1AdmittedChatCreationResultPayloadV1(
+  raw: string | Uint8Array,
+): A1AdmittedChatCreationResultPayloadV1 {
+  const source = boundedUtf8(raw, "chatCreationResultPayload");
+  try {
+    const parsed = parseAdmittedChatCreationWireValue(
+      jsonValue(source.text, "chatCreationResultPayload"),
+    );
+    if (encodeAdmittedChatCreationValue(parsed) !== source.text) {
       return reject(
         "non-canonical",
         "chatCreationResultPayload must use exact compact JSON with keys v,result_id,source_msg_id,decision,target_logical_chat_id,command_seq in that order",

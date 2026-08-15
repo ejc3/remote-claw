@@ -672,7 +672,10 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   and open no broker route themselves. The A1.6 broker module additionally freezes the selected
   capability, route/store, cursor/generation/manifest, retry/collision, and read-page contracts. The
   A1.8a0 result module freezes exact rejected action/chat payload bytes, stored semantic-result and
-  delivery digests, stable result identity, and completion-observation selection.
+  delivery digests, stable result identity, and completion-observation selection. The same
+  authority-free module now also freezes the exact `accepted` projection/admitted chat-creation
+  payload bytes reserved for later A1.8a. Those codecs do not persist or authorize a result,
+  projection, attempt, effect, or dispatch.
 - `packages/cli/src/broker/a1-client.ts` and `apps/web/{lib/broker/a1-*,app/api/a1/**/route.ts}` — the
   dormant negotiation-first client and the separate selected SQLite/libSQL A1 provider. They are not
   invoked by any current driver, `HostRcRelay`, runtime-owner operation, or viewer path.
