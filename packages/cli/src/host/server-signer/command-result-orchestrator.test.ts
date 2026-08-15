@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCommandAdjudicationRepositoryOperations,
   createCommandAdjudicationRepositoryTransactionOperations,
+  type FinalizeSignedRejectedCommandResultRequest,
   type ReserveRejectedCommandDecisionRequest,
 } from "../state/command-adjudication-repository.js";
 import { parseA1CanonicalId, parseA1SafeId } from "../state/ids.js";
@@ -24,6 +25,11 @@ import {
   VERSION_TEN_PRE_SCHEMA_STATEMENTS,
   VERSION_TEN_SQLITE_SCHEMA_ENTRIES,
 } from "../state/migration-v10.js";
+import {
+  VERSION_ELEVEN_DATA_STATEMENTS,
+  VERSION_ELEVEN_PRE_SCHEMA_STATEMENTS,
+  VERSION_ELEVEN_SQLITE_SCHEMA_ENTRIES,
+} from "../state/migration-v11.js";
 import { expectedHostStateMigrationDigest, HOST_STATE_MIGRATIONS } from "../state/migrations.js";
 import { ProtectedByteSnapshot } from "../state/protected.js";
 import type { HostStateRepositorySqlTransaction } from "../state/repository.js";
@@ -37,8 +43,11 @@ import {
   HOST_STATE_TEST_TEMPORARY_DIRECTORY,
 } from "../state/test-environment.js";
 import {
+  type DormantCommandResultFinalizationDatabase,
+  type DormantCommandResultFinalizationError,
   type DormantCommandResultSigningDatabase,
   type DormantCommandResultSigningError,
+  finalizeSignedRejectedCommandResult,
   signRejectedCommandResultPreparation,
 } from "./command-result-orchestrator.js";
 import type { ServerKeyCustodySigningCapability, WrappedServerPrivateKey } from "./service.js";
@@ -53,6 +62,11 @@ const ROUTE_ID = `rcr_${encoded(32, 6)}`;
 const SOURCE_NAMESPACE_ID = `wns_${encoded(32, 7)}`;
 const MESSAGE_DIGEST = encoded(32, 8);
 const EVENT_FINGERPRINT = encoded(32, 9);
+const ACCEPTED_DELIVERY_ATTEMPT_ID = `rda_${encoded(16, 10)}`;
+const COMPLETION_OBSERVATION_ID = `rio_${encoded(32, 17)}`;
+const COMPLETION_POSITION_ID = `rcp_${encoded(32, 18)}`;
+const BROKER_CAPABILITY_REF = `rbcp_${encoded(32, 21)}`;
+const BROKER_CAPABILITY_ARTIFACT_REF = `rcph_${encoded(16, 22)}`;
 const SERVER_IDENTITY_KEY_ID = "server-key-1";
 const SCOPE_CERTIFICATE_ID = "server-cert-1";
 const SIGNING_LEASE_ID = parseA1SafeId("server-signing-lease-1");
@@ -159,17 +173,9 @@ function installFixture(database: DatabaseSync, publicKey: string): void {
       SOURCE_NAMESPACE_ID,
       MESSAGE_DIGEST,
       EVENT_FINGERPRINT,
-      `rda_${encoded(16, 10)}`,
+      ACCEPTED_DELIVERY_ATTEMPT_ID,
     );
-  database
-    .prepare(
-      `INSERT INTO broker_route_runtime_status
-         (broker_route_id, collaboration_server_id, route_kind, logical_chat_id,
-          machine_identity_id, state, current_channel_generation, active_gap_count,
-          updated_at_ms)
-       VALUES (?, ?, 'server_control', NULL, ?, 'current', 0, 0, 5)`,
-    )
-    .run(ROUTE_ID, SERVER_ID, MACHINE_IDENTITY_ID);
+  addAcceptedCompletionEvidence(database);
   database.exec("PRAGMA foreign_keys = ON");
   applyEntries(database, VERSION_EIGHT_SQLITE_SCHEMA_ENTRIES, "trigger");
 
@@ -272,6 +278,7 @@ function installFixture(database: DatabaseSync, publicKey: string): void {
        VALUES (?, ?, 'current', NULL, 6, ?, ?)`,
     )
     .run(SERVER_ID, SCOPE_CERTIFICATE_ID, TRUST_REF, MESSAGE_DIGEST);
+  addBrokerRouteFixture(database);
   database.exec("COMMIT");
   database
     .prepare(
@@ -301,6 +308,115 @@ function installFixture(database: DatabaseSync, publicKey: string): void {
   for (const statement of VERSION_TEN_PRE_SCHEMA_STATEMENTS) database.exec(statement);
   applyEntries(database, VERSION_TEN_SQLITE_SCHEMA_ENTRIES);
   for (const statement of VERSION_TEN_DATA_STATEMENTS) database.exec(statement);
+  for (const statement of VERSION_ELEVEN_PRE_SCHEMA_STATEMENTS) database.exec(statement);
+  applyEntries(database, VERSION_ELEVEN_SQLITE_SCHEMA_ENTRIES);
+  for (const statement of VERSION_ELEVEN_DATA_STATEMENTS) database.exec(statement);
+}
+
+function addBrokerRouteFixture(database: DatabaseSync): void {
+  database
+    .prepare(
+      `INSERT INTO protected_artifacts (
+        protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+        artifact_digest, byte_length, artifact_bytes, created_at_ms
+      ) VALUES (?, 'artifact', 'host_profile', 'default',
+                'remote-claw/broker-backend-capabilities/v1', ?, 1, ?, 3)`,
+    )
+    .run(BROKER_CAPABILITY_ARTIFACT_REF, MESSAGE_DIGEST, Buffer.of(2));
+  database
+    .prepare(
+      `INSERT INTO broker_backend_capability_pins (
+        broker_backend_capability_pin_id, machine_identity_id, broker_origin,
+        broker_backend_selector, canonical_payload_schema_id,
+        canonical_payload_ref, canonical_payload_digest, observed_at_ms
+      ) VALUES (?, ?, 'https://broker.example', 'sqlite',
+                'remote-claw/broker-backend-capabilities/v1', ?, ?, 3)`,
+    )
+    .run(
+      BROKER_CAPABILITY_REF,
+      MACHINE_IDENTITY_ID,
+      BROKER_CAPABILITY_ARTIFACT_REF,
+      MESSAGE_DIGEST,
+    );
+  database
+    .prepare(
+      `INSERT INTO broker_routes (
+        broker_route_id, machine_identity_id, collaboration_server_id,
+        route_kind, logical_chat_id, route_token, broker_origin,
+        broker_backend_selector, broker_route_store_instance_id,
+        genesis_generation, broker_backend_capabilities_ref,
+        broker_backend_capabilities_digest, coordinator_lease_id,
+        coordinator_epoch, created_at_ms, state
+      ) VALUES (?, ?, ?, 'server_control', NULL, ?, 'https://broker.example', 'sqlite',
+                ?, 0, ?, ?, ?, 1, 4, 'current')`,
+    )
+    .run(
+      ROUTE_ID,
+      MACHINE_IDENTITY_ID,
+      SERVER_ID,
+      `ctl:a1:${encoded(32, 19)}`,
+      `rbsi_${encoded(16, 20)}`,
+      BROKER_CAPABILITY_REF,
+      MESSAGE_DIGEST,
+      COORDINATOR_LEASE_ID,
+    );
+}
+
+function addAcceptedCompletionEvidence(database: DatabaseSync): void {
+  database
+    .prepare(
+      `INSERT INTO ingress_delivery_candidates (
+        stable_semantic_result_id, delivery_attempt_id, broker_route_id,
+        collaboration_server_id, route_kind, logical_chat_id, expected_parts,
+        received_parts, plaintext_byte_count, first_ingress_generation,
+        first_ingress_frame_index, last_observed_ingress_generation,
+        last_observed_ingress_frame_index, state
+      ) VALUES (?, ?, ?, ?, 'server_control', NULL, 1, 1, 1, 0, 0, 0, 0, 'complete')`,
+    )
+    .run(RESULT_ID, ACCEPTED_DELIVERY_ATTEMPT_ID, ROUTE_ID, SERVER_ID);
+  database
+    .prepare(
+      `INSERT INTO authenticated_ingress_parts (
+        stable_semantic_result_id, delivery_attempt_id, part, broker_route_id,
+        collaboration_server_id, route_kind, logical_chat_id, parts,
+        authenticated_part_digest, plaintext_part_ref, plaintext_part_digest,
+        plaintext_part_byte_length, first_ingress_generation,
+        first_ingress_frame_index
+      ) VALUES (?, ?, 0, ?, ?, 'server_control', NULL, 1, ?, ?, ?, 1, 0, 0)`,
+    )
+    .run(
+      RESULT_ID,
+      ACCEPTED_DELIVERY_ATTEMPT_ID,
+      ROUTE_ID,
+      SERVER_ID,
+      MESSAGE_DIGEST,
+      TRUST_REF,
+      MESSAGE_DIGEST,
+    );
+  database
+    .prepare(
+      `INSERT INTO authenticated_ingress_observations (
+        ingress_observation_id, channel_position_observation_id,
+        stable_semantic_result_id, delivery_attempt_id, broker_route_id,
+        collaboration_server_id, route_kind, logical_chat_id,
+        channel_generation, frame_index, part, parts, authenticated_part_digest,
+        plaintext_evidence_ref, plaintext_evidence_digest,
+        plaintext_evidence_byte_length, disposition, cursor_disposition,
+        gap_id, recovery_id
+      ) VALUES (?, ?, ?, ?, ?, ?, 'server_control', NULL, 0, 0, 0, 1, ?, ?, ?, 1,
+                'new_part', 'advanceable', NULL, NULL)`,
+    )
+    .run(
+      COMPLETION_OBSERVATION_ID,
+      COMPLETION_POSITION_ID,
+      RESULT_ID,
+      ACCEPTED_DELIVERY_ATTEMPT_ID,
+      ROUTE_ID,
+      SERVER_ID,
+      MESSAGE_DIGEST,
+      TRUST_REF,
+      MESSAGE_DIGEST,
+    );
 }
 
 interface OpenFixture {
@@ -486,6 +602,40 @@ function observedCustody(fixture: OpenFixture, duringSign?: () => void): Observe
   };
 }
 
+interface SignedFinalizationFixture {
+  readonly database: DormantCommandResultSigningDatabase;
+  readonly request: FinalizeSignedRejectedCommandResultRequest;
+  readonly custody: ObservedCustody;
+}
+
+function prepareSignedFinalization(fixture: OpenFixture): SignedFinalizationFixture {
+  const custody = observedCustody(fixture);
+  const signed = signRejectedCommandResultPreparation({
+    database: fixture.facade,
+    reopenDatabase: () => reopen(fixture.databasePath),
+    custody: custody.custody,
+    machineIdentityId: MACHINE_IDENTITY_ID,
+    decision: fixture.decision,
+  });
+  const state = signed.database.commandAdjudication.readState(RESULT_ID);
+  const signedRecordDigest = state?.signatureReservation?.signedRecordDigest;
+  if (signedRecordDigest === null || signedRecordDigest === undefined) {
+    throw new Error("signed finalization fixture has no signed-record digest");
+  }
+  return {
+    database: signed.database,
+    request: {
+      fence: fixture.decision.fence,
+      expectedCommandId: fixture.decision.expectedCommandId,
+      expectedCommandResultId: signed.commandResultId,
+      expectedCommandResultPreparationId: signed.commandResultPreparationId,
+      expectedSignedRecordDigest: signedRecordDigest,
+      expectedAcceptedAtJournalSeq: 0,
+    },
+    custody,
+  };
+}
+
 function expectDestroyed(snapshot: ProtectedByteSnapshot): void {
   expect(() => snapshot.copyBytes()).toThrow(/destroyed/);
 }
@@ -648,5 +798,217 @@ describeLinux("dormant command-result preparation signer", () => {
     expect(replay.commandResultPreparationId).toBe(initial.commandResultPreparationId);
     expect(replayCustody.sign).not.toHaveBeenCalled();
     replay.database.close();
+  });
+});
+
+describeLinux("dormant rejected command-result finalizer", () => {
+  it.each([
+    "landed",
+    "absent",
+  ] as const)("reopens and request-bound reconciles a finalization COMMIT proved %s", (outcome) => {
+    const fixture = openPreparedFixture();
+    const signed = prepareSignedFinalization(fixture);
+    signed.custody.sign.mockClear();
+    const result = finalizeSignedRejectedCommandResult({
+      database: unknownCommitDatabase(signed.database, 1, outcome),
+      reopenDatabase: () => reopen(fixture.databasePath),
+      machineIdentityId: MACHINE_IDENTITY_ID,
+      finalization: signed.request,
+    });
+    expect(result).toMatchObject({
+      commandId: signed.request.expectedCommandId,
+      commandResultId: signed.request.expectedCommandResultId,
+      commandResultPreparationId: signed.request.expectedCommandResultPreparationId,
+      stableSemanticResultId: RESULT_ID,
+      acceptedIngressDeliveryAttemptId: ACCEPTED_DELIVERY_ATTEMPT_ID,
+      triggerIngressObservationId: COMPLETION_OBSERVATION_ID,
+      replayed: outcome === "landed",
+      reconciledUnknownCommitCount: 1,
+    });
+    expect(result.resultDeliveryId).toMatch(/^rrd_/);
+    expect(result.deliveryAttemptId).toMatch(/^rda_/);
+    expect(signed.custody.sign).not.toHaveBeenCalled();
+    expect(Object.keys(result)).not.toEqual(
+      expect.arrayContaining([
+        "canonicalPayload",
+        "signature",
+        "signedRecordDigest",
+        "identityKeyId",
+        "publicKey",
+      ]),
+    );
+    const verification = new DatabaseSync(fixture.databasePath, { readOnly: true });
+    openDatabases.push(verification);
+    const row = verification
+      .prepare(
+        `SELECT delivery_attempt_id, state
+             FROM a1_ingress_result_deliveries
+            WHERE result_delivery_id = ?`,
+      )
+      .get(result.resultDeliveryId);
+    expect(row).toEqual({ delivery_attempt_id: result.deliveryAttemptId, state: "pending_seal" });
+    result.database.close();
+  });
+
+  it("replays the exact retained IDs and delivery attempt without reallocating", () => {
+    const fixture = openPreparedFixture();
+    const signed = prepareSignedFinalization(fixture);
+    const first = finalizeSignedRejectedCommandResult({
+      database: signed.database,
+      reopenDatabase: () => reopen(fixture.databasePath),
+      machineIdentityId: MACHINE_IDENTITY_ID,
+      finalization: signed.request,
+    });
+    const replay = finalizeSignedRejectedCommandResult({
+      database: first.database,
+      reopenDatabase: () => reopen(fixture.databasePath),
+      machineIdentityId: MACHINE_IDENTITY_ID,
+      finalization: signed.request,
+    });
+    expect(replay.replayed).toBe(true);
+    expect(replay.reconciledUnknownCommitCount).toBe(0);
+    expect(replay.resultDeliveryId).toBe(first.resultDeliveryId);
+    expect(replay.deliveryAttemptId).toBe(first.deliveryAttemptId);
+    expect(replay.triggerIngressObservationId).toBe(first.triggerIngressObservationId);
+    replay.database.close();
+  });
+
+  it("fails closed after two finalization COMMITs are each proved absent", () => {
+    const fixture = openPreparedFixture();
+    const signed = prepareSignedFinalization(fixture);
+    expect(() =>
+      finalizeSignedRejectedCommandResult({
+        database: unknownCommitDatabase(signed.database, 1, "absent"),
+        reopenDatabase: () => unknownCommitDatabase(reopen(fixture.databasePath), 1, "absent"),
+        machineIdentityId: MACHINE_IDENTITY_ID,
+        finalization: signed.request,
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<DormantCommandResultFinalizationError>>({
+        code: "UNKNOWN_COMMIT_NOT_SETTLED",
+      }),
+    );
+    const verification = new DatabaseSync(fixture.databasePath, { readOnly: true });
+    openDatabases.push(verification);
+    expect(
+      verification.prepare("SELECT count(*) AS count FROM collaboration_command_results").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("terminalizes after source collision and route close without route or custody capability use", () => {
+    const fixture = openPreparedFixture();
+    const signed = prepareSignedFinalization(fixture);
+    fixture.database.exec(`
+      DROP TRIGGER authenticated_ingress_results_require_accepted_candidate;
+      DROP TRIGGER authenticated_ingress_results_require_current_actor_update;
+      DROP TRIGGER broker_route_runtime_status_require_exact_route_scope_update;
+      DROP TRIGGER broker_route_runtime_status_require_current_actor_update;
+      DROP TRIGGER broker_route_runtime_status_require_legal_update;
+    `);
+    fixture.database
+      .prepare(
+        `UPDATE authenticated_ingress_results
+            SET state = 'quarantined_collision', collision_at_ms = 101, terminal_at_ms = 101
+          WHERE stable_semantic_result_id = ?`,
+      )
+      .run(RESULT_ID);
+    fixture.database
+      .prepare(
+        `UPDATE broker_route_runtime_status
+            SET state = 'closed', active_gap_count = 1, updated_at_ms = 101
+          WHERE broker_route_id = ?`,
+      )
+      .run(ROUTE_ID);
+    signed.custody.sign.mockClear();
+    const forbiddenCapabilityAccess = vi.fn();
+    const database: DormantCommandResultFinalizationDatabase = {
+      machineIdentityId: signed.database.machineIdentityId,
+      commandAdjudication: signed.database.commandAdjudication,
+      transaction<T>(operation: (transaction: HostStateTransaction) => T): T {
+        return signed.database.transaction((transaction) =>
+          operation(
+            new Proxy(transaction, {
+              get(target, property, receiver) {
+                if (property === "brokerRoute" || property === "serverSigning") {
+                  forbiddenCapabilityAccess(property);
+                  throw new Error(`finalizer reached forbidden ${String(property)} capability`);
+                }
+                return Reflect.get(target, property, receiver);
+              },
+            }),
+          ),
+        );
+      },
+      close: () => signed.database.close(),
+    };
+    const result = finalizeSignedRejectedCommandResult({
+      database,
+      reopenDatabase: () => reopen(fixture.databasePath),
+      machineIdentityId: MACHINE_IDENTITY_ID,
+      finalization: signed.request,
+    });
+    expect(result.stableSemanticResultId).toBe(RESULT_ID);
+    expect(forbiddenCapabilityAccess).not.toHaveBeenCalled();
+    expect(signed.custody.sign).not.toHaveBeenCalled();
+    expect(
+      fixture.database
+        .prepare(
+          "SELECT state, collision_at_ms, terminal_at_ms FROM authenticated_ingress_results WHERE stable_semantic_result_id = ?",
+        )
+        .get(RESULT_ID),
+    ).toEqual({ state: "quarantined_collision", collision_at_ms: 101, terminal_at_ms: 101 });
+    result.database.close();
+  });
+
+  it("rejects a colliding result identity without landing any terminal row", () => {
+    const fixture = openPreparedFixture();
+    const signed = prepareSignedFinalization(fixture);
+    const collision = {
+      ...signed.request,
+      expectedCommandResultId: parseA1SafeId(`ccr_${encoded(32, 99)}`),
+    };
+    expect(() =>
+      finalizeSignedRejectedCommandResult({
+        database: signed.database,
+        reopenDatabase: () => reopen(fixture.databasePath),
+        machineIdentityId: MACHINE_IDENTITY_ID,
+        finalization: collision,
+      }),
+    ).toThrow(/result identity does not recompute/);
+    for (const table of [
+      "collaboration_command_results",
+      "a1_ingress_terminal_results",
+      "a1_ingress_result_deliveries",
+      "server_signed_record_acceptances",
+    ]) {
+      expect(fixture.database.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
+        count: 0,
+      });
+    }
+    signed.database.close();
+  });
+
+  it("classifies a partial retained graph as corruption instead of retrying", () => {
+    const fixture = openPreparedFixture();
+    const signed = prepareSignedFinalization(fixture);
+    const landed = finalizeSignedRejectedCommandResult({
+      database: signed.database,
+      reopenDatabase: () => reopen(fixture.databasePath),
+      machineIdentityId: MACHINE_IDENTITY_ID,
+      finalization: signed.request,
+    });
+    fixture.database.exec("DROP TRIGGER a1_ingress_result_deliveries_no_delete");
+    fixture.database.exec("PRAGMA foreign_keys = OFF");
+    fixture.database.prepare("DELETE FROM a1_ingress_result_deliveries").run();
+    fixture.database.exec("PRAGMA foreign_keys = ON");
+    expect(() =>
+      finalizeSignedRejectedCommandResult({
+        database: landed.database,
+        reopenDatabase: () => reopen(fixture.databasePath),
+        machineIdentityId: MACHINE_IDENTITY_ID,
+        finalization: signed.request,
+      }),
+    ).toThrow(/delivery is absent/);
+    landed.database.close();
   });
 });

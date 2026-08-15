@@ -884,7 +884,7 @@ describeLinux("A1.7a real SQLite durable-ingress integration", () => {
       machineIdentityId: MACHINE_IDENTITY_ID,
       pathEnvironment: state.environment,
     });
-    expect(reopened.schemaVersion).toBe(10);
+    expect(reopened.schemaVersion).toBe(11);
     expect(reopened.ingress.readRouteState(harness.routeId)?.results).toMatchObject([
       { stableSemanticResultId: completed.resultId, state: "awaiting_order" },
     ]);
@@ -892,8 +892,17 @@ describeLinux("A1.7a real SQLite durable-ingress integration", () => {
 
     const inspection = new DatabaseSync(state.paths.databasePath, { readOnly: true });
     try {
-      for (const forbidden of [
+      for (const dormant of [
         "collaboration_command_results",
+        "a1_ingress_terminal_results",
+        "a1_ingress_result_deliveries",
+      ]) {
+        expect(
+          inspection.prepare(`SELECT count(*) AS count FROM ${dormant}`).get(),
+          dormant,
+        ).toEqual({ count: 0 });
+      }
+      for (const forbidden of [
         "ingress_result_deliveries",
         "host_output_deliveries",
         "native_dispatch_attempts",

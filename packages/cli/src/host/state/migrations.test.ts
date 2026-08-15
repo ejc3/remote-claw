@@ -28,6 +28,7 @@ const PINNED_VERSION_SEVEN_DIGEST = "uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw
 const PINNED_VERSION_EIGHT_DIGEST = "6Vf2H56rDvW2PGMrU83upUDz1r9gHP11tdq_w7T1K5E";
 const PINNED_VERSION_NINE_DIGEST = "fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE";
 const PINNED_VERSION_TEN_DIGEST = "rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk";
+const PINNED_VERSION_ELEVEN_DIGEST = "SkkuAFJed-7GT9XyXXPCub7VFauqNY6eu0u4IQJEInc";
 const BROKER_CAPABILITY_PIN_ID = `rbcp_${encoded(32, 40)}`;
 const BROKER_CAPABILITY_ARTIFACT_ID = `rcph_${encoded(16, 41)}`;
 const BROKER_ROUTE_ID = `rcr_${encoded(32, 42)}`;
@@ -1337,7 +1338,7 @@ function signAndAcceptPreparedNativeRoot(
 describe("A1 host-state migrations", () => {
   it("pins the application id, schema version, and exact migration digests", () => {
     expect(HOST_STATE_APPLICATION_ID).toBe(0x52434c57);
-    expect(HOST_STATE_SCHEMA_VERSION).toBe(10);
+    expect(HOST_STATE_SCHEMA_VERSION).toBe(11);
     expect(HOST_STATE_MIGRATION_DIGESTS).toEqual([
       PINNED_VERSION_ONE_DIGEST,
       PINNED_VERSION_TWO_DIGEST,
@@ -1349,11 +1350,12 @@ describe("A1 host-state migrations", () => {
       PINNED_VERSION_EIGHT_DIGEST,
       PINNED_VERSION_NINE_DIGEST,
       PINNED_VERSION_TEN_DIGEST,
+      PINNED_VERSION_ELEVEN_DIGEST,
     ]);
     expect(HOST_STATE_SCHEMA_MANIFEST).toEqual({
       applicationId: 0x52434c57,
-      schemaVersion: 10,
-      migrationDigest: PINNED_VERSION_TEN_DIGEST,
+      schemaVersion: 11,
+      migrationDigest: PINNED_VERSION_ELEVEN_DIGEST,
       sqliteSchema: HOST_STATE_SQLITE_SCHEMA_MANIFEST,
     });
     expect(expectedHostStateSqliteSchemaManifest(1)).toHaveLength(6);
@@ -1366,17 +1368,19 @@ describe("A1 host-state migrations", () => {
     expect(expectedHostStateSqliteSchemaManifest(8)).toHaveLength(492);
     expect(expectedHostStateSqliteSchemaManifest(9)).toHaveLength(571);
     expect(expectedHostStateSqliteSchemaManifest(10)).toHaveLength(619);
+    expect(expectedHostStateSqliteSchemaManifest(11)).toHaveLength(647);
     expect(HOST_STATE_MIGRATIONS[8]?.statements).toHaveLength(81);
     expect(HOST_STATE_MIGRATIONS[9]?.statements).toHaveLength(50);
+    expect(HOST_STATE_MIGRATIONS[10]?.statements).toHaveLength(38);
     expect(
       HOST_STATE_SQLITE_SCHEMA_MANIFEST.filter((entry) => entry.type === "table"),
-    ).toHaveLength(70);
+    ).toHaveLength(73);
     expect(
       HOST_STATE_SQLITE_SCHEMA_MANIFEST.filter((entry) => entry.type === "index"),
-    ).toHaveLength(137);
+    ).toHaveLength(147);
     expect(
       HOST_STATE_SQLITE_SCHEMA_MANIFEST.filter((entry) => entry.type === "trigger"),
-    ).toHaveLength(412);
+    ).toHaveLength(427);
     expect(HOST_STATE_SQLITE_SCHEMA_MANIFEST.filter((entry) => entry.type === "view")).toHaveLength(
       0,
     );
@@ -1438,13 +1442,14 @@ describe("A1 host-state migrations", () => {
     expect(expectedHostStateMigrationDigest(8)).toBe(PINNED_VERSION_EIGHT_DIGEST);
     expect(expectedHostStateMigrationDigest(9)).toBe(PINNED_VERSION_NINE_DIGEST);
     expect(expectedHostStateMigrationDigest(10)).toBe(PINNED_VERSION_TEN_DIGEST);
-    expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_TEN_DIGEST, 10)).toBe(true);
+    expect(expectedHostStateMigrationDigest(11)).toBe(PINNED_VERSION_ELEVEN_DIGEST);
+    expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ELEVEN_DIGEST, 11)).toBe(true);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 1)).toBe(true);
     expect(isExpectedHostStateMigrationDigest(`${PINNED_VERSION_ONE_DIGEST}=`, 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest("A".repeat(43), 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 2)).toBe(false);
     expect(() => expectedHostStateMigrationDigest(0)).toThrow(/not supported/);
-    expect(() => expectedHostStateMigrationDigest(11)).toThrow(/not supported/);
+    expect(() => expectedHostStateMigrationDigest(12)).toThrow(/not supported/);
   });
 
   it("creates exactly the declared application schema", () => {
@@ -1490,9 +1495,9 @@ describe("A1 host-state migrations", () => {
         "created_at_ms",
       ]);
 
-      expect(rows.filter((row) => row.type === "table")).toHaveLength(70);
-      expect(rows.filter((row) => row.type === "index")).toHaveLength(137);
-      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(412);
+      expect(rows.filter((row) => row.type === "table")).toHaveLength(73);
+      expect(rows.filter((row) => row.type === "index")).toHaveLength(147);
+      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(427);
       expect(rows.some((row) => String(row.name).startsWith("sqlite_autoindex"))).toBe(false);
       expect(
         database
@@ -1933,7 +1938,7 @@ describe("A1 host-state migrations", () => {
   it("installs exactly the dormant A1.7b1 command foundation and no final/effect surface", () => {
     const database = new DatabaseSync(":memory:");
     try {
-      applyMigrations(database);
+      applyMigrations(database, 10);
       const priorTableNames = new Set(
         expectedHostStateSqliteSchemaManifest(9)
           .filter((entry) => entry.type === "table")
@@ -1970,6 +1975,53 @@ describe("A1 host-state migrations", () => {
           forbidden,
         ).toBeUndefined();
       }
+    } finally {
+      database.close();
+    }
+  });
+
+  it("adds only the dormant rejected-result closure and no A1.8b or effect surface", () => {
+    const database = new DatabaseSync(":memory:");
+    try {
+      applyMigrations(database);
+      const priorTableNames = new Set(
+        expectedHostStateSqliteSchemaManifest(10)
+          .filter((entry) => entry.type === "table")
+          .map((entry) => entry.name),
+      );
+      const finalizationTables = database
+        .prepare(`SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name`)
+        .all()
+        .filter((row) => !priorTableNames.has(String(row.name)));
+      expect(finalizationTables).toEqual([
+        { name: "a1_ingress_result_deliveries" },
+        { name: "a1_ingress_terminal_results" },
+        { name: "collaboration_command_results" },
+      ]);
+      for (const forbidden of [
+        "collaboration_command_result_deliveries",
+        "host_output_deliveries",
+        "host_output_parts",
+        "causal_outbox_entries",
+        "command_effect_gates",
+        "native_execution_attempts",
+        "native_dispatch_attempts",
+        "command_dispatch_attempts",
+        "effect_gates",
+      ]) {
+        expect(
+          database
+            .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get(forbidden),
+          forbidden,
+        ).toBeUndefined();
+      }
+      expect(
+        database
+          .prepare("PRAGMA table_info(a1_ingress_result_deliveries)")
+          .all()
+          .map((row) => row.name),
+      ).not.toEqual(expect.arrayContaining(["encrypted_result_payload_ref", "published_at_ms"]));
     } finally {
       database.close();
     }

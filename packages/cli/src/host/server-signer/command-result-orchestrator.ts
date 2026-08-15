@@ -3,6 +3,8 @@
 
 import { base64urlEncode } from "@remote-claw/clawsec";
 import type {
+  FinalizedRejectedCommandResult,
+  FinalizeSignedRejectedCommandResultRequest,
   RejectedCommandDecisionResult,
   RejectedCommandPreparationMutationResult,
   ReserveRejectedCommandDecisionRequest,
@@ -35,12 +37,24 @@ export type DormantCommandResultSigningDatabase = Pick<
   "machineIdentityId" | "commandAdjudication" | "serverSigning" | "transaction" | "close"
 >;
 
+export type DormantCommandResultFinalizationDatabase = Pick<
+  HostStateDatabase,
+  "machineIdentityId" | "commandAdjudication" | "transaction" | "close"
+>;
+
 export interface SignRejectedCommandResultPreparationRequest {
   readonly database: DormantCommandResultSigningDatabase;
   readonly reopenDatabase: () => DormantCommandResultSigningDatabase;
   readonly custody: ServerKeyCustodySigningCapability;
   readonly machineIdentityId: string;
   readonly decision: ReserveRejectedCommandDecisionRequest;
+}
+
+export interface FinalizeSignedRejectedCommandResultOrchestrationRequest {
+  readonly database: DormantCommandResultFinalizationDatabase;
+  readonly reopenDatabase: () => DormantCommandResultFinalizationDatabase;
+  readonly machineIdentityId: string;
+  readonly finalization: FinalizeSignedRejectedCommandResultRequest;
 }
 
 /**
@@ -54,6 +68,25 @@ export interface SignRejectedCommandResultPreparationResult {
   readonly signerSequence: number;
   readonly signingLeaseId: A1SafeId;
   readonly preparationGeneration: number;
+  readonly replayed: boolean;
+  readonly reconciledUnknownCommitCount: number;
+}
+
+/**
+ * Deliberately projects the durable graph down to opaque identifiers. No
+ * canonical payload, server signature, signer key, or key-custody capability
+ * crosses this dormant composition boundary.
+ */
+export interface FinalizeSignedRejectedCommandResultOrchestrationResult {
+  readonly database: DormantCommandResultFinalizationDatabase;
+  readonly commandId: A1SafeId;
+  readonly commandResultId: A1SafeId;
+  readonly commandResultPreparationId: A1SafeId;
+  readonly stableSemanticResultId: A1SafeId;
+  readonly acceptedIngressDeliveryAttemptId: A1SafeId;
+  readonly triggerIngressObservationId: A1SafeId;
+  readonly resultDeliveryId: A1SafeId;
+  readonly deliveryAttemptId: A1SafeId;
   readonly replayed: boolean;
   readonly reconciledUnknownCommitCount: number;
 }
@@ -82,6 +115,28 @@ export class DormantCommandResultSigningError extends Error {
   }
 }
 
+export class DormantCommandResultFinalizationError extends Error {
+  readonly code:
+    | "DATABASE_CLOSE_FAILED"
+    | "DATABASE_REOPEN_FAILED"
+    | "UNKNOWN_COMMIT_NOT_SETTLED"
+    | "DURABLE_GRAPH_MISMATCH";
+
+  constructor(
+    code:
+      | "DATABASE_CLOSE_FAILED"
+      | "DATABASE_REOPEN_FAILED"
+      | "UNKNOWN_COMMIT_NOT_SETTLED"
+      | "DURABLE_GRAPH_MISMATCH",
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(`dormant rejected command-result finalization failed: ${message}`, options);
+    this.name = "DormantCommandResultFinalizationError";
+    this.code = code;
+  }
+}
+
 interface ParsedSigningRequest {
   readonly machineIdentityId: string;
   readonly decision: ReserveRejectedCommandDecisionRequest;
@@ -89,6 +144,11 @@ interface ParsedSigningRequest {
 
 interface MutableDatabaseState {
   database: DormantCommandResultSigningDatabase;
+  reconciledUnknownCommitCount: number;
+}
+
+interface MutableFinalizationDatabaseState {
+  database: DormantCommandResultFinalizationDatabase;
   reconciledUnknownCommitCount: number;
 }
 
@@ -629,4 +689,154 @@ export function signRejectedCommandResultPreparation(
   };
   const bound = ensureBound(state, value.reopenDatabase, value.custody, request);
   return signBound(state, value.reopenDatabase, value.custody, request, bound);
+}
+
+function closeAndReopenFinalizationDatabase(
+  state: MutableFinalizationDatabaseState,
+  reopenDatabase: () => DormantCommandResultFinalizationDatabase,
+  machineIdentityId: string,
+): void {
+  try {
+    state.database.close();
+  } catch (error) {
+    throw new DormantCommandResultFinalizationError(
+      "DATABASE_CLOSE_FAILED",
+      "the poisoned database could not be closed",
+      { cause: error },
+    );
+  }
+  try {
+    const reopened = reopenDatabase();
+    if (reopened.machineIdentityId !== machineIdentityId) {
+      try {
+        reopened.close();
+      } catch {
+        // The identity mismatch remains the primary fail-stop condition.
+      }
+      throw new TypeError("reopened result-finalization database belongs to another machine");
+    }
+    state.database = reopened;
+  } catch (error) {
+    throw new DormantCommandResultFinalizationError(
+      "DATABASE_REOPEN_FAILED",
+      "the database could not be securely reopened",
+      { cause: error },
+    );
+  }
+  state.reconciledUnknownCommitCount += 1;
+}
+
+function projectedFinalization(
+  state: MutableFinalizationDatabaseState,
+  request: FinalizeSignedRejectedCommandResultRequest,
+  finalized: FinalizedRejectedCommandResult,
+): FinalizeSignedRejectedCommandResultOrchestrationResult {
+  if (
+    finalized.command.commandId !== request.expectedCommandId ||
+    finalized.command.currentCommandResultId !== request.expectedCommandResultId ||
+    finalized.adjudication.commandId !== request.expectedCommandId ||
+    finalized.adjudication.commandResultId !== request.expectedCommandResultId ||
+    finalized.adjudication.commandResultPreparationId !==
+      request.expectedCommandResultPreparationId ||
+    finalized.commonResult.commandId !== request.expectedCommandId ||
+    finalized.commonResult.commandResultId !== request.expectedCommandResultId ||
+    finalized.commonResult.commandResultPreparationId !==
+      request.expectedCommandResultPreparationId ||
+    finalized.commonResult.signedRecordDigest !== request.expectedSignedRecordDigest ||
+    finalized.commonResult.acceptedAtJournalSeq !== request.expectedAcceptedAtJournalSeq ||
+    finalized.signerAcceptance.signedRecordDigest !== request.expectedSignedRecordDigest ||
+    finalized.signerAcceptance.acceptedAtJournalSeq !== request.expectedAcceptedAtJournalSeq ||
+    finalized.terminalResult.commandId !== request.expectedCommandId ||
+    finalized.terminalResult.commandResultId !== request.expectedCommandResultId ||
+    finalized.terminalResult.stableSemanticResultId !==
+      finalized.adjudication.stableSemanticResultId ||
+    finalized.resultDelivery.resultDeliveryId !==
+      finalized.terminalResult.initialResultDeliveryId ||
+    finalized.resultDelivery.stableSemanticResultId !==
+      finalized.terminalResult.stableSemanticResultId ||
+    finalized.resultDelivery.commandResultId !== request.expectedCommandResultId ||
+    finalized.resultDelivery.triggerIngressObservationId !==
+      finalized.terminalResult.triggerIngressObservationId ||
+    finalized.resultDelivery.state !== "pending_seal"
+  ) {
+    throw new DormantCommandResultFinalizationError(
+      "DURABLE_GRAPH_MISMATCH",
+      "the repository returned a partial or request-mismatched terminal graph",
+    );
+  }
+  return Object.freeze({
+    database: state.database,
+    commandId: finalized.command.commandId,
+    commandResultId: finalized.commonResult.commandResultId,
+    commandResultPreparationId: finalized.commonResult.commandResultPreparationId,
+    stableSemanticResultId: finalized.terminalResult.stableSemanticResultId,
+    acceptedIngressDeliveryAttemptId: finalized.terminalResult.acceptedIngressDeliveryAttemptId,
+    triggerIngressObservationId: finalized.terminalResult.triggerIngressObservationId,
+    resultDeliveryId: finalized.resultDelivery.resultDeliveryId,
+    deliveryAttemptId: finalized.resultDelivery.deliveryAttemptId,
+    replayed: finalized.replayed,
+    reconciledUnknownCommitCount: state.reconciledUnknownCommitCount,
+  });
+}
+
+function reconcileFinalization(
+  state: MutableFinalizationDatabaseState,
+  request: FinalizeSignedRejectedCommandResultRequest,
+): FinalizeSignedRejectedCommandResultOrchestrationResult | null {
+  const finalized =
+    state.database.commandAdjudication.reconcileFinalizedRejectedCommandResult(request);
+  return finalized === null ? null : projectedFinalization(state, request, finalized);
+}
+
+/**
+ * Atomically terminalize one exact signed rejected command result. This dormant
+ * helper has no route, sealing, publication, or custody capability. An unknown
+ * COMMIT poisons the handle: it is closed, securely reopened, and reconciled
+ * against the complete request-bound graph before a proved-absent retry.
+ */
+export function finalizeSignedRejectedCommandResult(
+  value: FinalizeSignedRejectedCommandResultOrchestrationRequest,
+): FinalizeSignedRejectedCommandResultOrchestrationResult {
+  const machineIdentityId = parseMachineIdentityId(
+    value.machineIdentityId,
+    "commandResultFinalization.machineIdentityId",
+  );
+  if (value.database.machineIdentityId !== machineIdentityId) {
+    throw new TypeError("result-finalization database belongs to another machine identity");
+  }
+  const finalization: FinalizeSignedRejectedCommandResultRequest = Object.freeze({
+    ...value.finalization,
+    fence: parseCoordinatorLeaseFence(value.finalization.fence),
+  });
+  const state: MutableFinalizationDatabaseState = {
+    database: value.database,
+    reconciledUnknownCommitCount: 0,
+  };
+  const replay = reconcileFinalization(state, finalization);
+  if (replay !== null) return replay;
+
+  for (let attempt = 1; attempt <= DORMANT_COMMAND_RESULT_SIGNING_PHASE_ATTEMPTS; attempt++) {
+    try {
+      const finalized = state.database.transaction((transaction) =>
+        transaction.commandAdjudication.finalizeSignedRejectedCommandResult(finalization),
+      );
+      return projectedFinalization(state, finalization, finalized);
+    } catch (error) {
+      if (!(error instanceof HostStateCommitOutcomeUnknownError)) throw error;
+      closeAndReopenFinalizationDatabase(state, value.reopenDatabase, machineIdentityId);
+      const reconciled = reconcileFinalization(state, finalization);
+      if (reconciled !== null) return reconciled;
+      if (attempt === DORMANT_COMMAND_RESULT_SIGNING_PHASE_ATTEMPTS) {
+        throw new DormantCommandResultFinalizationError(
+          "UNKNOWN_COMMIT_NOT_SETTLED",
+          "the exact rejected command-result finalization was repeatedly proved absent",
+          { cause: error },
+        );
+      }
+    }
+  }
+  throw new DormantCommandResultFinalizationError(
+    "UNKNOWN_COMMIT_NOT_SETTLED",
+    "the rejected command-result finalization did not settle",
+  );
 }
