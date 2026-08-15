@@ -46,7 +46,12 @@ export const RUNTIME_OWNER_NATIVE_REGISTRATION_OPERATION_NAMES = Object.freeze([
   "native.registration.reattach",
 ] as const);
 
+export const RUNTIME_OWNER_NATIVE_ROOT_OPERATION_NAMES = Object.freeze([
+  "native.root.activate",
+] as const);
+
 const NATIVE_REGISTRATION_OPERATION_PREFIX = "native.registration.";
+const NATIVE_ROOT_OPERATION_PREFIX = "native.root.";
 
 export const RUNTIME_OWNER_LINUX_PROCESS_START_IDENTITY_SCHEMA_ID =
   "remote-claw/linux-process-start-identity/v1" as const;
@@ -384,6 +389,24 @@ function hasAnyNativeRegistrationOperation(
   );
 }
 
+function hasExactNativeRootOperations(
+  operations: ReadonlyMap<string, RuntimeOwnerOperationDefinition["execute"]>,
+): boolean {
+  const installed = [...operations.keys()].filter((name) =>
+    name.startsWith(NATIVE_ROOT_OPERATION_PREFIX),
+  );
+  return (
+    installed.length === RUNTIME_OWNER_NATIVE_ROOT_OPERATION_NAMES.length &&
+    RUNTIME_OWNER_NATIVE_ROOT_OPERATION_NAMES.every((name) => operations.has(name))
+  );
+}
+
+function hasAnyNativeRootOperation(
+  operations: ReadonlyMap<string, RuntimeOwnerOperationDefinition["execute"]>,
+): boolean {
+  return [...operations.keys()].some((name) => name.startsWith(NATIVE_ROOT_OPERATION_PREFIX));
+}
+
 function randomSafeId(prefix: string): string {
   return `${prefix}${base64urlEncode(randomBytes(16))}`;
 }
@@ -567,6 +590,16 @@ export class RuntimeOwnerService<
       // The reserved namespace is all-or-nothing. A partial or extended lifecycle is still
       // dispatchable even when health reports false, while a missing detach reconciler would leave
       // a durable ready lease behind when its authenticated callable-port connection disappears.
+      throw new RuntimeOwnerServiceLifecycleError("INVALID_CONFIGURATION");
+    }
+    if (
+      hasAnyNativeRootOperation(operations) &&
+      (!hasExactNativeRootOperations(operations) ||
+        !hasExactNativeRegistrationOperations(operations) ||
+        options.onCollaboratorDetach === undefined)
+    ) {
+      // Root activation is a closed extension of the trusted registration profile. It must never
+      // become independently dispatchable without the exact lifecycle and its detach reconciler.
       throw new RuntimeOwnerServiceLifecycleError("INVALID_CONFIGURATION");
     }
     if (!(options.identitySecret instanceof Uint8Array) || options.identitySecret.length !== 32) {

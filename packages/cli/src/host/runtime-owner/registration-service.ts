@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { base64urlDecode, base64urlEncode, CanonicalWriter } from "@remote-claw/clawsec";
 import type {
   NativeConversationCapabilities,
@@ -22,6 +22,7 @@ import {
   type A1Digest,
   type A1SafeId,
   type CollaborationServerId,
+  type Ed25519Signature,
   type NativeBindingId,
   type NativeConversationLeaseId,
   type NativeRuntimeId,
@@ -30,6 +31,7 @@ import {
   parseA1Digest,
   parseA1SafeId,
   parseEd25519PublicKey,
+  parseEd25519Signature,
   parseWardenLaunchNonce,
   type RegistrationAttemptId,
 } from "../state/ids.js";
@@ -49,9 +51,14 @@ import {
   createNativeRegistrationOperationEvidence,
   HostStateCommitOutcomeUnknownError,
   type HostStateDatabase,
+  NATIVE_ROOT_MAX_TTL_MS,
   type NativeRegistrationOperationInputByKind,
   NativeRegistrationRepositoryConflictError,
 } from "../state/sqlite.js";
+import {
+  RUNTIME_OWNER_KEY_WRAP_SCHEMA_ID,
+  type WrappedRuntimeOwnerPrivateKey,
+} from "./key-custody.js";
 import {
   encodeRuntimeOwnerRpcCanonicalJson,
   type RuntimeOwnerRpcCallablePortRef,
@@ -71,6 +78,8 @@ const REGISTRATION_PROBE_OPERATION_SCHEMA_ID =
 const REGISTRATION_PROBE_RESULT_SCHEMA_ID =
   "remote-claw/native-registration-port-probe-result/v1" as const;
 const INTERNAL_OPERATION_SCHEMA_PREFIX = "remote-claw/native-registration-orchestration";
+const NATIVE_ROOT_PROBE_EVIDENCE_SCHEMA_ID =
+  "remote-claw/native-root-port-probe-evidence/v1" as const;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -364,6 +373,31 @@ function internalOperation(
   });
 }
 
+function nativeRootProofOperation(
+  outerOperationId: A1SafeId,
+  serviceNonce: string,
+  selector: RuntimeOwnerRpcJsonValue,
+): RuntimeOwnerOperationEvidence {
+  const idWriter = new CanonicalWriter();
+  idWriter.str(NATIVE_ROOT_PROBE_EVIDENCE_SCHEMA_ID);
+  idWriter.str(outerOperationId);
+  idWriter.str(serviceNonce);
+  const operationId = parseA1SafeId(
+    `a15proof_${base64urlEncode(createHash("sha256").update(idWriter.finish()).digest())}`,
+  );
+  const digestWriter = new CanonicalWriter();
+  digestWriter.str(NATIVE_ROOT_PROBE_EVIDENCE_SCHEMA_ID);
+  digestWriter.str(operationId);
+  digestWriter.bytes(encodeRuntimeOwnerRpcCanonicalJson(selector));
+  return Object.freeze({
+    operationId,
+    operationSchemaId: NATIVE_ROOT_PROBE_EVIDENCE_SCHEMA_ID,
+    operationDigest: parseA1Digest(
+      base64urlEncode(createHash("sha256").update(digestWriter.finish()).digest()),
+    ),
+  });
+}
+
 function registrationOperation<K extends keyof NativeRegistrationOperationInputByKind>(
   kind: K,
   outerOperationId: A1SafeId,
@@ -378,6 +412,90 @@ function registrationOperation<K extends keyof NativeRegistrationOperationInputB
 
 function response(value: Record<string, RuntimeOwnerRpcJsonValue>): RuntimeOwnerRpcJsonValue {
   return Object.freeze(value);
+}
+
+type NativeRootPreparation = ReturnType<HostStateDatabase["terminalRoot"]["prepare"]>;
+
+function nativeRootCustodyEnvelope(
+  preparation: NativeRootPreparation,
+): WrappedRuntimeOwnerPrivateKey {
+  const { identityKey, privateKey } = preparation;
+  if (
+    identityKey.algorithm !== "Ed25519" ||
+    identityKey.signingKeyRef === null ||
+    identityKey.signingKeyRef.protectedHandleId !== privateKey.signingKeyRef.protectedHandleId ||
+    identityKey.runtimeId !== privateKey.runtimeId ||
+    identityKey.runtimeOwnerIdentityKeyId !== privateKey.runtimeOwnerIdentityKeyId ||
+    identityKey.keyGeneration !== privateKey.keyGeneration ||
+    privateKey.wrappingSchemaId !== RUNTIME_OWNER_KEY_WRAP_SCHEMA_ID ||
+    privateKey.state !== "current" ||
+    privateKey.destroyedAtMs !== null
+  ) {
+    throw new NativeRegistrationOrchestrationError("RESULT_MISMATCH");
+  }
+  return Object.freeze({
+    wrappingSchemaId: RUNTIME_OWNER_KEY_WRAP_SCHEMA_ID,
+    binding: Object.freeze({
+      runtimeId: identityKey.runtimeId,
+      runtimeOwnerIdentityKeyId: identityKey.runtimeOwnerIdentityKeyId,
+      keyGeneration: identityKey.keyGeneration,
+      publicKey: identityKey.publicKey,
+    }),
+    wrapNonce: privateKey.wrapNonce,
+    wrappedPkcs8: privateKey.wrappedPkcs8,
+    authTag: privateKey.authTag,
+    pkcs8Digest: privateKey.pkcs8Digest,
+  });
+}
+
+function signNativeRootPreparation(
+  preparation: NativeRootPreparation,
+  context: RuntimeOwnerOperationContext,
+): Ed25519Signature {
+  const signature = context.custodySigner.sign(
+    nativeRootCustodyEnvelope(preparation),
+    preparation.canonicalPayload,
+  );
+  const bytes = signature.copyBytes();
+  try {
+    return parseEd25519Signature(base64urlEncode(bytes));
+  } finally {
+    bytes.fill(0);
+  }
+}
+
+function nativeRootResponse(
+  result: ReturnType<HostStateDatabase["terminalRoot"]["finalize"]>,
+  livenessVerified: boolean,
+): RuntimeOwnerRpcJsonValue {
+  return response({
+    nativeConversationLeaseId: result.operation.nativeConversationLeaseId,
+    rootPathCertificateId: result.operation.rootPathCertificateId,
+    state: result.operation.state,
+    committedAtMs: result.storedCertificate.committedAtMs,
+    expiresAtMs: result.storedCertificate.certificate.expiresAtMs,
+    replayed: result.replayed,
+    livenessVerified,
+  });
+}
+
+function reconciledNativeRootResponse(
+  result: NonNullable<ReturnType<HostStateDatabase["terminalRoot"]["reconcileOperation"]>>,
+): RuntimeOwnerRpcJsonValue {
+  const storedCertificate = result.storedCertificate;
+  if (result.operation.state !== "committed" || storedCertificate === null) {
+    throw new NativeRegistrationOrchestrationError("COMMIT_NOT_RECONCILED");
+  }
+  return response({
+    nativeConversationLeaseId: result.operation.nativeConversationLeaseId,
+    rootPathCertificateId: result.operation.rootPathCertificateId,
+    state: result.operation.state,
+    committedAtMs: storedCertificate.committedAtMs,
+    expiresAtMs: storedCertificate.certificate.expiresAtMs,
+    replayed: true,
+    // A durable historical replay proves the activation fact, not present callable-port liveness.
+    livenessVerified: false,
+  });
 }
 
 interface LivePort {
@@ -648,6 +766,41 @@ interface ParsedLeaseOperation {
   readonly nativeConversationLeaseId: NativeConversationLeaseId;
 }
 
+interface ParsedNativeRootActivation {
+  readonly operationId: A1SafeId;
+  readonly kind: "activate" | "renew";
+  readonly nativeConversationLeaseId: NativeConversationLeaseId;
+  readonly expectedPriorRootPathCertificateId: A1SafeId | null;
+  readonly ttlMs: number;
+}
+
+function parseNativeRootActivation(value: RuntimeOwnerRpcJsonValue): ParsedNativeRootActivation {
+  const row = exactRecord(value, [
+    "expectedPriorRootPathCertificateId",
+    "kind",
+    "nativeConversationLeaseId",
+    "operationId",
+    "ttlMs",
+  ]);
+  if (row.kind !== "activate" && row.kind !== "renew") invalidRequest();
+  const expectedPriorRootPathCertificateId = nullableSafeId(row.expectedPriorRootPathCertificateId);
+  if ((row.kind === "activate") !== (expectedPriorRootPathCertificateId === null)) {
+    invalidRequest();
+  }
+  const ttlMs = positiveInteger(row.ttlMs);
+  if (ttlMs > NATIVE_ROOT_MAX_TTL_MS) invalidRequest();
+  return Object.freeze({
+    operationId: safeId(row.operationId),
+    kind: row.kind,
+    nativeConversationLeaseId: canonicalId(
+      "nativeConversationLease",
+      row.nativeConversationLeaseId,
+    ),
+    expectedPriorRootPathCertificateId,
+    ttlMs,
+  });
+}
+
 function parseLeaseOperation(
   value: RuntimeOwnerRpcJsonValue,
   extraKeys: readonly string[] = [],
@@ -801,6 +954,9 @@ class BoundNativeRegistrationOrchestrator implements NativeRegistrationOrchestra
       ),
       this.#definition("native.registration.reattach", (payload, context) =>
         this.#reattach(payload, context),
+      ),
+      this.#definition("native.root.activate", (payload, context) =>
+        this.#activateNativeRoot(payload, context),
       ),
     ]);
     this.onCollaboratorDetach = this.onCollaboratorDetach.bind(this);
@@ -1016,8 +1172,9 @@ class BoundNativeRegistrationOrchestrator implements NativeRegistrationOrchestra
     operationId: A1SafeId,
     selector: RuntimeOwnerRpcJsonValue,
     context: RuntimeOwnerOperationContext,
+    exactEvidence?: RuntimeOwnerOperationEvidence,
   ) {
-    const evidence = internalOperation(operationId, "port-proof", selector);
+    const evidence = exactEvidence ?? internalOperation(operationId, "port-proof", selector);
     const result = await context.callablePort.invoke({
       nativeIncarnation: candidate.nativeIncarnation,
       attachmentLeaseId: candidate.attachmentLeaseId,
@@ -1039,6 +1196,172 @@ class BoundNativeRegistrationOrchestrator implements NativeRegistrationOrchestra
       throw new NativeRegistrationOrchestrationError("LIVE_PORT_UNAVAILABLE");
     }
     return result;
+  }
+
+  async #activateNativeRoot(
+    value: RuntimeOwnerRpcJsonValue,
+    context: RuntimeOwnerOperationContext,
+  ): Promise<RuntimeOwnerRpcJsonValue> {
+    const parsed = parseNativeRootActivation(value);
+    const coordinatorFence = currentCoordinator(this.#coordinator);
+    const fence = ownerFence(context);
+    const request = Object.freeze({
+      fence,
+      coordinatorFence,
+      operationId: parsed.operationId,
+      kind: parsed.kind,
+      nativeConversationLeaseId: parsed.nativeConversationLeaseId,
+      expectedPriorRootPathCertificateId: parsed.expectedPriorRootPathCertificateId,
+      ttlMs: parsed.ttlMs,
+    });
+
+    // A completed request is a durable fact. Return it before asking for a fresh port proof, and
+    // explicitly avoid presenting that historical replay as evidence of current native liveness.
+    const historical = this.#database.use((current) =>
+      current.terminalRoot.reconcileOperation(request),
+    );
+    if (historical !== null && historical.storedCertificate !== null) {
+      return reconciledNativeRootResponse(historical);
+    }
+
+    const candidate = assertLivePort(
+      this.#candidates.get(parsed.nativeConversationLeaseId),
+      context,
+      coordinatorFence,
+    );
+    let preparation: NativeRootPreparation;
+    try {
+      preparation = this.#database.use((current) => current.terminalRoot.prepare(request));
+    } catch (error) {
+      if (!(error instanceof HostStateCommitOutcomeUnknownError)) throw error;
+      this.#database.reopenAfterUnknownCommit();
+      const reconciled = this.#database.use((current) =>
+        current.terminalRoot.reconcileOperation(request),
+      );
+      if (reconciled === null) {
+        throw new NativeRegistrationOrchestrationError("COMMIT_NOT_RECONCILED", {
+          cause: error,
+        });
+      }
+      if (reconciled.storedCertificate !== null) {
+        return reconciledNativeRootResponse(reconciled);
+      }
+      // Reconciliation proved the exact preparation committed. This replay only materializes its
+      // already-bound protected payload and custody envelope; it cannot reserve or write anew.
+      try {
+        preparation = this.#database.use((current) => current.terminalRoot.prepare(request));
+      } catch (replayError) {
+        if (!(replayError instanceof HostStateCommitOutcomeUnknownError)) throw replayError;
+        this.#database.reopenAfterUnknownCommit();
+        const replayReconciliation = this.#database.use((current) =>
+          current.terminalRoot.reconcileOperation(request),
+        );
+        if (replayReconciliation !== null && replayReconciliation.storedCertificate !== null) {
+          return reconciledNativeRootResponse(replayReconciliation);
+        }
+        throw new NativeRegistrationOrchestrationError("COMMIT_NOT_RECONCILED", {
+          cause: replayError,
+        });
+      }
+    }
+    if (
+      preparation.operation.state !== "prepared" ||
+      preparation.operation.nativeConversationLeaseId !== parsed.nativeConversationLeaseId ||
+      preparation.operation.nativeBindingId !== candidate.nativeBindingId ||
+      preparation.operation.runtimeId !== candidate.runtimeId ||
+      preparation.operation.nativeIncarnation !== candidate.nativeIncarnation ||
+      preparation.operation.attachmentLeaseId !== candidate.attachmentLeaseId ||
+      preparation.operation.nativeConversationLeaseGeneration !== candidate.portGeneration ||
+      preparation.operation.runtimeOwnerServiceLeaseId !== fence.runtimeOwnerServiceLeaseId ||
+      preparation.operation.runtimeOwnerServiceEpoch !== fence.runtimeOwnerServiceEpoch ||
+      preparation.operation.coordinatorLeaseId !== coordinatorFence.coordinatorLeaseId ||
+      preparation.operation.coordinatorEpoch !== coordinatorFence.coordinatorEpoch
+    ) {
+      throw new NativeRegistrationOrchestrationError("RESULT_MISMATCH");
+    }
+    if (context.signal.aborted) {
+      throw new NativeRegistrationOrchestrationError("LIVE_PORT_UNAVAILABLE");
+    }
+    const signature = signNativeRootPreparation(preparation, context);
+    const nonceBytes = randomBytes(32);
+    const serviceNonce = base64urlEncode(nonceBytes);
+    nonceBytes.fill(0);
+    const proofSelector = Object.freeze({
+      phase: "native-root-finalize",
+      connectionId: context.connectionId,
+      nativeConversationLeaseId: parsed.nativeConversationLeaseId,
+      nativeBindingId: candidate.nativeBindingId,
+      runtimeId: candidate.runtimeId,
+      nativeIncarnation: candidate.nativeIncarnation,
+      attachmentLeaseId: candidate.attachmentLeaseId,
+      portGeneration: candidate.portGeneration,
+      activationOperationId: preparation.operation.operationId,
+      activationOperationDigest: preparation.operation.operationDigest,
+      rootPathCertificateId: preparation.operation.rootPathCertificateId,
+      serviceNonce,
+    });
+    await this.#invokeProof(
+      candidate,
+      parsed.operationId,
+      proofSelector,
+      context,
+      nativeRootProofOperation(parsed.operationId, serviceNonce, proofSelector),
+    );
+    if (context.signal.aborted) {
+      throw new NativeRegistrationOrchestrationError("LIVE_PORT_UNAVAILABLE");
+    }
+
+    // No await is permitted between this last reverse proof/fence check and SQLite finalization.
+    const finalCoordinatorFence = currentCoordinator(this.#coordinator);
+    const finalCandidate = assertLivePort(
+      this.#candidates.get(parsed.nativeConversationLeaseId),
+      context,
+      finalCoordinatorFence,
+    );
+    const finalFence = ownerFence(context);
+    if (
+      finalFence.runtimeOwnerServiceLeaseId !== fence.runtimeOwnerServiceLeaseId ||
+      finalFence.runtimeOwnerServiceEpoch !== fence.runtimeOwnerServiceEpoch ||
+      finalCoordinatorFence.collaborationServerId !== coordinatorFence.collaborationServerId ||
+      finalCoordinatorFence.coordinatorLeaseId !== coordinatorFence.coordinatorLeaseId ||
+      finalCoordinatorFence.coordinatorEpoch !== coordinatorFence.coordinatorEpoch ||
+      finalCandidate.nativeBindingId !== candidate.nativeBindingId ||
+      finalCandidate.runtimeId !== candidate.runtimeId ||
+      finalCandidate.nativeIncarnation !== candidate.nativeIncarnation ||
+      finalCandidate.attachmentLeaseId !== candidate.attachmentLeaseId ||
+      finalCandidate.portGeneration !== candidate.portGeneration ||
+      finalCandidate.callablePortRef.protectedHandleId !==
+        candidate.callablePortRef.protectedHandleId
+    ) {
+      throw new NativeRegistrationOrchestrationError("STALE_AUTHORITY");
+    }
+    try {
+      const activated = this.#database.use((current) =>
+        current.terminalRoot.finalize({
+          fence: finalFence,
+          coordinatorFence: finalCoordinatorFence,
+          operationId: parsed.operationId,
+          signature,
+        }),
+      );
+      return nativeRootResponse(activated, true);
+    } catch (error) {
+      if (!(error instanceof HostStateCommitOutcomeUnknownError)) throw error;
+      this.#database.reopenAfterUnknownCommit();
+      const reconciled = this.#database.use((current) =>
+        current.terminalRoot.reconcileOperation(request),
+      );
+      if (
+        reconciled === null ||
+        reconciled.storedCertificate === null ||
+        reconciled.storedCertificate.certificate.signature !== signature
+      ) {
+        throw new NativeRegistrationOrchestrationError("COMMIT_NOT_RECONCILED", {
+          cause: error,
+        });
+      }
+      return reconciledNativeRootResponse(reconciled);
+    }
   }
 
   async #bind(

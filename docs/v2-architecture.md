@@ -89,7 +89,7 @@
 > passages later in this historical document describe only the terminal Claude edge; outer layers
 > reconnect server/chat edges and never create another native app.
 >
-> A1.0 through A1.4 have landed. A1.0 supplies the shared canonical writer and
+> A1.0 through dormant A1.7b0 have landed. A1.0 supplies the shared canonical writer and
 > host-state contracts; A1.1 supplies the Linux secure-SQLite kernel and verified protected artifacts;
 > A1.2 supplies schema v3 and its high-level server/project/chat/binding/edge/coordinator repository.
 > Migration `003-durable-host-records` has 81 ordered statements and digest
@@ -99,7 +99,8 @@
 > validate an existing supported v3 graph in one coherent read-only snapshot before writable open;
 > a newly migrated graph is validated before the handle returns.
 > Persisted chats name their exact selector mapping and use random `rcie_*` installing native edges.
-> Evidence refs/digests are opaque to A1.2 itself; actor scopes are addresses only until A1.7; nested
+> Evidence refs/digests are opaque to A1.2 itself; actor scopes are durable addresses that A1.7a now
+> uses only in its dormant ingress module; nested
 > mappings and remote-server edges remain rejected until N1.
 >
 > A1.3 supplies schema v4 and the runtime-owner repository/semantic validator, an independently
@@ -122,8 +123,93 @@
 > Authenticated RPC is duplex and bounds each connection to 64 callable ports, 32 reverse invocations
 > in flight, and 4,096 reverse request IDs. A retained publication must advertise
 > `liveReattach:true`; bound pre-publication recovery does not invent that capability. A1.4 ready
-> leaves the logical chat recovering and terminal edge installing; A1.5 owns root signing and
-> chat/edge activation.
+> leaves the logical chat recovering and terminal edge installing.
+>
+> A1.5 adds pure browser-safe A1 v2 scope/server-control/chat address and token derivation,
+> broker-route IDs, chat and directional server-control KDFs, strict kind/header/route rules, per-part
+> AEAD, exact JSON frames, host-signature preimages, a transport-frame digest, stable
+> attempt/part/message digests, strict
+> native-root and server-scope certificates, signed onboarding-key commitments, and canonical
+> `ViewerOnboardingBundleV2`/`rcp2` transfer verification. These modules use Web Platform APIs and are
+> dormant: they retain no trust state and open no broker route.
+>
+> A1.5 also supplies schema v6 and terminal-root activation. Migration `006-terminal-native-root`
+> has 36 ordered statements and digest `li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo`; the complete v6
+> manifest has 304 objects: 36 tables, 78 indexes, and 190 triggers. Its immutable signer-activation
+> fences, two-stage operations, retained certificates, and semantic validator bind one protected
+> runtime-owner signature to the exact current A1.4 ready graph. The service signs before its ephemeral
+> callable-port proof; immediately afterward, only the transaction-local terminal-root finalizer may
+> store and accept the operation-attached v6 signature and sample the acceptance/commit timestamp.
+> Public runtime-owner store, accept, and abort operations reject that reservation, while legacy
+> unattached v5 signature history stays inert and compatible. Certificate insertion atomically commits
+> the operation and makes the logical chat and terminal edge current; renewals extend only the latest
+> certificate. Recover, drain, close, and reattach demote a rooted graph while retaining its history,
+> so registration must become ready again before fresh-fenced renewal. Semantic reopen does not persist
+> or replay the proof. Certificate expiry alone does not auto-demote the stored chat/edge,
+> so later effective route/dispatch admission must recheck expiry and the current live lease.
+>
+> A1.6 adds the pure exact selected-backend capability, route/store, generation/manifest,
+> publish/collision, and one-generation/64-frame read-page contracts; a separate bearer-authenticated SQLite/libSQL
+> `/api/a1/*` provider; and a negotiation-first browser-safe client. The provider derives identity
+> from the bearer, recomputes route authority, pins the exact capability digest, provisions an A1-only
+> random `rbsi_*` physical store, retains all route ciphertext, route-wide attempt/part originals and
+> first collisions, and sealed manifests indefinitely, rolls over atomically at 4,096 unique frames,
+> and enforces 8,000,000 bytes on the transmitted snake-case HTTP page. Exact retry returns the original
+> cursor across rollover; changed normalized bytes allocate no cursor. A known missing store latches
+> lost and is never silently recreated. A0 Workflow/local/SQLite backends and A0 retention cannot
+> advertise or enumerate this A1 state.
+>
+> Schema v7 migration `007-a1-broker-routes` has 22 ordered statements, digest
+> `uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw`, and a complete 326-object manifest: 39 tables, 85
+> indexes, and 202 triggers. It adds immutable protected capability pins, broker routes, and broker channel generations.
+> Its current-coordinator-fenced repository installs only a confirmed pristine open generation-zero
+> receipt for an installing server and reconciles exact historical unknown commits. A host-only
+> split-commit installer performs remote open before local install and recovers only exact prior work.
+> These routes are dormant: ordinary CLI launches, all real drivers, runtime-owner RPC, and the viewer
+> make zero `/api/a1/*` calls.
+>
+> A1.7a adds host schema v8 migration `008-a1-durable-ingress`, exact ingress parsers, a
+> coordinator- and revision-fenced repository, and a dormant per-route actor. It backfills or
+> auto-seeds each v7 route with runtime/generation heads, distinct physical-fetch and contiguous-
+> semantic cursors, and an actor claim. It retains exact read-page/per-frame evidence and raw bytes
+> before parse/open, then retains authenticated positions, opened plaintext, bounded multipart
+> attempts/candidates/parts/observations, exact retries, collision/incomplete tombstones, and explicit
+> gaps/recoveries. Fetch may run within bounded lookahead while an earlier position blocks semantic
+> progress. Complete chat `user` and server-control `new_chat` input stops at durable
+> `awaiting_order`. The actor is absent from package barrels and production run paths, and schema v8
+> adds no common command, signed result, server-scope signer, checkpoint, native effect/outbox,
+> dispatch, inference, viewer, or native table. Migration 8 has 171 statements, digest
+> `6Vf2H56rDvW2PGMrU83upUDz1r9gHP11tdq_w7T1K5E`, and a 492-object manifest: 57 tables, 99 indexes,
+> and 336 triggers.
+>
+> A1.7b0 advances the host through migration `009-server-scope-signer` to schema v9 with a dormant server-signer prerequisite. It retains the
+> initial self-anchored server identity key and scope certificate, an AES-256-GCM-wrapped Ed25519
+> private-key envelope with no raw-key API, coordinator-fenced bootstrap and current signing leases,
+> server-wide monotone signer-sequence reservations, exact purpose/schema/payload bindings, signed-record
+> acceptances at a dense per-server `acceptedAtJournalSeq`, and exact unknown-commit reconciliation.
+> That acceptance coordinate is its own signer journal, not an expansion of schema-v3
+> `control_journal_entries`. Bootstrap authority is one-shot and
+> `scope_certificate`-only; normal signing requires the exact current key, certificate,
+> coordinator-lease ID/epoch, and fencing token. The custody binding covers the machine, server,
+> protected handle, key ID/generation, algorithm/backend, public key, and PKCS#8 digest so a wrapped
+> key cannot be transplanted into another server-signing coordinate. This slice does not consume
+> `awaiting_order` or add a common command, command decision/result, generic host output, broker
+> publish, result delivery, checkpoint, outbox/effect, native dispatch, inference, projection, or
+> production wiring. Its callable repository path exercises reserve/bind/sign/accept/reconcile only
+> for `initial_pair` scope-certificate bootstrap and acquisition of the installed current lease;
+> coordinator takeover during a non-closed bootstrap is an immutable fail-stop reported as
+> `writable:false`/`stale_bootstrap_fence`, with no v9 re-fence, replacement, or second reservation.
+> Explicit repair remains later. After installation, takeover instead supersedes the normal lease and
+> permits a fresh exact-next-token lease once no `reserved`, `bound`, or signed-but-unaccepted
+> predecessor reservation remains.
+> Migration 9 also replaces the existing broker-route admission trigger so the dormant installer
+> accepts either an `installing` server or an exact signer-activated `current` server under the same
+> current-coordinator and capability-pin proof; this adds no route table or production call path.
+> Generic current-lease
+> signing and rotation/repair services remain later. The v8 migration and
+> manifest pins above remain unchanged. Migration 9 has 81 statements, digest
+> `fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`, and a 571-object manifest: 65 tables, 123 indexes,
+> and 383 triggers.
 >
 > Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
 > plain and help paths, trace mode, and the local `--rc-identity` action do not. A1.4 registration is
@@ -132,8 +218,12 @@
 > reports `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. A0 driver behavior
 > remains unchanged and owner unavailability falls back to the exact A0 path. Wrapper exit closes only
 > the owner's RPC collaborator and leaves the owner service alive; existing A0 native teardown remains
-> separate. No real driver performs durable owner registration or A1 binding activation, and no
-> terminal root, A1 remote mutation, inference, or broker capability is enabled. A1.5 is next.
+> separate. The narrow `native.root.activate` operation is installed only with that same explicit
+> adapter; it signs the protected payload, obtains a fresh nonce-bound callable-port proof, and then
+> synchronously enters the closed transaction-local finalizer. No real driver performs durable owner registration, A1 binding activation, or root
+> activation, and no A1 remote mutation, inference, or live broker capability is enabled. The
+> A1.7b0 signer remains direct-only dormant host state. Full A1.7b common command ordering and signed
+> results are next; A1.8 owns dispatch/outbox effects.
 
 ## 1. What changes and why
 
@@ -728,14 +818,18 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   pinned current subject key over the same out-of-band path as the viewer credential. The first
   certificate is the operator-approved self-signed anchor; each next certificate is signed by its
   immediate predecessor and increments the generation exactly once. An already paired viewer may
-  receive a suffix beginning with its exact locally current certificate. The verifier requires exact
-  `supersedes` links, immutable key-ID-to-public-key bindings, and an atomic compare-and-swap from its
-  locally current `(certificate ID, key generation, identity key ID)` to the chain tip; the stored
-  current key generation always equals the current certificate's `keyGeneration`. Stale, rollback,
-  skipped-generation, concurrent-fork, revoked-signer, or caller-supplied mutable-state claims fail
-  closed. The same transaction retires the prior certificate, installs intermediate chain items as
-  retired, and makes the tip the server's sole current certificate without ever overwriting a revoked
-  status. A cold client can therefore
+  receive a suffix beginning with its exact locally current certificate. The pure A1.5 verifier
+  requires exact `supersedes` links, the first suffix item to equal the caller-supplied trusted
+  certificate byte-for-byte, immutable key-ID-to-public-key bindings within the supplied chain, and
+  every successor subject public key to differ from every earlier supplied subject key rather than
+  permitting reuse under a renamed ID. It retains no trust history, so older omitted key-ID and
+  public-key bindings remain the caller trust store's policy. A1.10's installation transaction will
+  compare-and-swap from the locally current `(certificate ID, key generation, identity key ID)` to the
+  chain tip; the stored current key generation always equals the current certificate's
+  `keyGeneration`. Stale, rollback, skipped-generation, concurrent-fork, revoked-signer, or
+  caller-supplied mutable-state claims fail closed. That transaction retires the prior certificate,
+  installs intermediate chain items as retired, and makes the tip the server's sole current
+  certificate without ever overwriting a revoked status. A cold client can therefore
   verify the complete server scope before subscribing. Nested-server handshakes carry the same
   certified scope.
   `collaborationServerId` is routing identity, not a second bearer; broker admission still requires the
@@ -745,12 +839,13 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   digest/signature. It also verifies the current server key's versioned
   `ViewerOnboardingKeyAttestationV1`, which binds domain-separated commitments to the decoded
   `authToken`, `contentRoot`, `controlKey`, and `metaKey`; substituting any operational key fails before
-  a route or KDF is used. Exact current-tip replay is an idempotent no-op, while only a non-empty
-  successor suffix retires the prior certificate. A mismatch is a local splice error, not a broker-auth
-  fallback.
+  a route or KDF is used. The pure verifier returns an immutable verified bundle and performs no state
+  transition. Under A1.10's future trust-store policy, an exact locally current tip and attestation
+  replay is an idempotent no-op, while only a non-empty successor suffix retires the prior certificate.
+  A mismatch is a local splice error, not a broker-auth fallback.
 
   Server signing-key rotation is distinct from A1's deliberately fixed symmetric machine credential
-  and `key_epoch=0`. Every server signature receives one durable, globally monotonic signer sequence.
+  and `key_epoch=0`. Every server signature receives one durable, server-wide monotonic signer sequence.
   The old lease drains, then uses its final sequence to sign a successor certificate containing the
   predecessor cutoff; only after that certificate and its public broker update are durable does one
   transaction swap the key/certificate/lease and retire the old private key. Existing viewers fetch a
@@ -788,8 +883,9 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   server certificate or plaintext payload.
 - **Selected A1 has one byte-level wire contract.** The public
   `@remote-claw/clawsec` `CanonicalWriter` now implements the selected primitive field encoding, and
-  shipped A0 `canonicalAad` uses that same writer with its locked byte vector unchanged. This does not
-  mean the A1 frame parser, encryption route, or signing path has landed. The primitive encodings are:
+  shipped A0 `canonicalAad` uses that same writer with its locked byte vector unchanged. A1.5 now
+  implements the pure frame/encryption/signing contracts and A1.6 implements their durable broker
+  transport, but no ordinary driver, runtime-owner operation, or viewer invokes that path. The primitive encodings are:
 
   ```text
   bytes(x)         = u32be(byteLength(x)) || x
@@ -818,9 +914,10 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
 
   - random 16-byte bodies: `rcs_` collaboration server, `rcpj_` project, `rcl_` logical chat, `rcie_`
     inward collaboration edge, `rcnb_` native binding, `rccl_` coordinator lease, `rcra_` registration
-    attempt, `rcncl_` native conversation lease, and `rcph_` protected handle;
+    attempt, `rcncl_` native conversation lease, `rcph_` protected handle, and `rbsi_` broker route
+    store instance;
   - SHA-256-derived 32-byte bodies: `rcrt_` native runtime, `ptm_` project-target-selector mapping,
-    and `nat_` native delivery attempt. A1.3 now locks the exact domain-separated `rcrt_*` derivation
+    `nat_` native delivery attempt, `rcr_` broker route, and `rbcp_` backend capability pin. A1.3 now locks the exact domain-separated `rcrt_*` derivation
     and vector documented in the [host-runtime reference](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
 
   Every body is canonical unpadded base64url. Other selected A1 safe IDs are 1–128 ASCII bytes, must
@@ -965,11 +1062,12 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   it never means “start at the broker's latest generation.” Mutating chat recovery requires the retained
   contiguous cursor or the complete immutable manifest chain from genesis. The mutating
   server-control route has the same requirement. Missing genesis or a broker
-  that starts at `N > 0` is non-writable. The scope bus alone may use a fresh, separately
+  that starts at `N > 0` is non-writable. A future A1.10 viewer may let the scope bus alone use a fresh, separately
   host-signed checkpoint for discovery-only cold start: the broker first seals an exact generation and
   opens its successor, then the host signs separate metadata over that sealed tip. It is not a frame,
   cannot seed a chat cursor, and cannot acknowledge a mutation. Open/empty/rollover, freshness, and
-  checkpoint-equivocation rules are exact in the runtime reference.
+  checkpoint-equivocation target rules are exact in the runtime reference. A1.6 implements neither
+  checkpoint signing/acceptance nor compaction and retains scope-bus ciphertext from genesis.
 
   For a new position, route matching precedes KDF selection/open. The frame identity/server must equal
   the selected route; a chat route also requires its exact non-null chat and rejects
@@ -1382,13 +1480,18 @@ call). See §14.)
   a semantic idempotency record: it cannot prove the outcome of a command whose acknowledgement was
   lost, and the same source ID re-appended above the floor meets an empty set. The shipped behavior is
   documented exactly in [Protocol & Runtime](protocol.md) §§5–6 and must not be called exactly-once.
-- **Selected A1 replay is durable, authenticated, and result-bearing.** Before forwarding a proposal,
-  the coordinator authenticates and fully reassembles it. The unique durable result key is
-  `(brokerRouteId, sourceEventNamespaceId, msg_id)` and stores the canonical
-  whole-message digest, decision, command order, explicitly separate viewer-projection `seq`, action
-  result, stable semantic result ID, exact result payload, and ingress cursor. Part rows inherit that
-  full scope through the result foreign key. Chat and server-control ciphertext/plaintext part bodies
-  are retained from genesis; only checkpointed discovery-only scope-bus bodies may be compacted. The
+- **Selected A1 replay is durable and authenticated before it may become result-bearing.** Before
+  forwarding a proposal, the coordinator authenticates and fully reassembles it. The durable semantic
+  key is `(brokerRouteId, sourceEventNamespaceId, msg_id)`. A1.7a stores its canonical whole-message
+  digest, stable semantic result ID, accepted transport candidate, and first/last ingress positions,
+  stopping at `awaiting_order`. A1.7b0 supplies the dormant server-signer prerequisite and
+  current-server route-install compatibility; full
+  A1.7b must add the decision, common command order, signed semantic result, and explicitly separate
+  viewer-projection `seq` before any forward or result delivery.
+  A1.6 retains ciphertext frame bodies on every route from
+  genesis. A1.7a also retains decrypted plaintext part evidence for chat and
+  server-control routes; future checkpointed discovery-only scope-bus ciphertext may be compacted only
+  after A1.10 supplies that signed checkpoint and recovery proof. The
   expected part count and complete part-digest vector remain with every result indefinitely. A single
   old part never returns success: after completion, every
   expected part of a replay candidate must match before the stored result is eligible. Changed

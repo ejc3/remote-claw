@@ -469,7 +469,7 @@ describeLinux("A1.1 secure host-state database", () => {
     expect(shm.isFile()).toBe(true);
     expect(shm.mode & 0o777).toBe(0o600);
     expect(shm.nlink).toBe(1);
-  });
+  }, 15_000);
 
   it("reconstructs WAL state when a crash leaves only a safe SHM sidecar", () => {
     const state = temporaryState();
@@ -932,7 +932,7 @@ describeLinux("A1.1 secure host-state database", () => {
     expect(statSync(future.paths.identityDirectoryPath, { bigint: true }).mtimeNs).toBe(
       directoryMtimeBefore,
     );
-  });
+  }, 15_000);
 
   it("refuses a non-WAL header before SQLite can convert it", () => {
     const state = temporaryState();

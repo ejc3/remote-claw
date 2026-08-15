@@ -19,6 +19,7 @@ const TURSO_API_BASE = "https://api.turso.tech";
 //
 //   rc-<scope>-<kind>-<16 hex>     e.g. rc-prod-s-3f9a1c2e8b7d6045   (prod, session channel)
 //                                       rc-prod-b-3f9a1c2e8b7d6045   (prod, bus channel)
+//                                       rc-prod-c-3f9a1c2e8b7d6045   (prod, A1 control channel)
 //                                       rc-pr-a1b2c3d-s-<16hex>      (preview of commit a1b2c3d)
 //   rc-<scope>-index               the per-scope cold-index catalog db (rc-prod-index / rc-pr-a1b2c3d-index)
 //
@@ -28,7 +29,7 @@ const TURSO_API_BASE = "https://api.turso.tech";
 //                 into and sweeps ONLY its own `rc-<scope>-index`, so a preview deployment can never
 //                 enumerate — let alone drop — a production channel db, and two concurrent preview
 //                 deployments (different commits ⇒ different scopes) can't reclaim each other's dbs.
-//   • `<kind>`  — `s` (session channel) or `b` (bus channel), so the two kinds are distinguishable.
+//   • `<kind>`  — `s` (session), `b` (bus), `c` (selected-A1 control), or `x` (other).
 //   • `<hash>`  — sha256(channel token) truncated; the uniqueness/addressing component.
 //
 // Budget: `rc-`(3) + scope(≤14) + `-`+kind(1)+`-`(2) + 16 hex = ≤36. The scope is bounded to 14 chars.
@@ -172,10 +173,12 @@ export class TursoCloudDbLocator implements DbLocator {
     this.#known.set(name, Date.now() + this.#knownTtlMs);
   }
 
-  /** The channel KIND, for a meaningful + distinguishable name: `s` (session), `b` (bus), `x` (other). */
+  /** The channel KIND, for a meaningful + distinguishable name: `s` (session), `b` (bus), selected-A1
+   *  `c` (server control), or `x` (other). */
   #kind(token: string): string {
     if (token.startsWith("sess:")) return "s";
     if (token.startsWith("bus:")) return "b";
+    if (token.startsWith("ctl:a1:")) return "c";
     return "x";
   }
 

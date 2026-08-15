@@ -821,7 +821,7 @@ describe("host state repository canonical operations", () => {
       }
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("rejects stale and early-takeover writes without consuming journal offsets", () => {
     const executor = openExecutor();

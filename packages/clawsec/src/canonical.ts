@@ -96,8 +96,12 @@ function assertUnicodeScalars(value: string): void {
 export class CanonicalWriter {
   private readonly chunks: Uint8Array[] = [];
   private finishedBytes: Uint8Array | null = null;
+  private destroyed = false;
 
   private assertOpen(): void {
+    if (this.destroyed) {
+      throw new Error("canonical writer was destroyed");
+    }
     if (this.finishedBytes !== null) {
       throw new Error("canonical writer is already finished");
     }
@@ -168,10 +172,24 @@ export class CanonicalWriter {
    * Every call returns a fresh defensive copy. Field methods reject writes after the first call.
    */
   finish(): Uint8Array {
+    if (this.destroyed) {
+      throw new Error("canonical writer was destroyed");
+    }
     if (this.finishedBytes === null) {
       this.finishedBytes = concatBytes(...this.chunks);
+      for (const chunk of this.chunks) chunk.fill(0);
       this.chunks.length = 0;
     }
     return this.finishedBytes.slice();
+  }
+
+  /** Erase retained field/preimage copies. The writer cannot be reused after destruction. */
+  destroy(): void {
+    if (this.destroyed) return;
+    for (const chunk of this.chunks) chunk.fill(0);
+    this.chunks.length = 0;
+    this.finishedBytes?.fill(0);
+    this.finishedBytes = null;
+    this.destroyed = true;
   }
 }

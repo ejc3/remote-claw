@@ -12,7 +12,7 @@ import {
   parseWardenLaunchNonce,
 } from "../state/ids.js";
 import type { RuntimeOwnerOperationEvidence } from "../state/runtime-repository.js";
-import { openHostStateDatabase } from "../state/sqlite.js";
+import { HostStateCommitOutcomeUnknownError, openHostStateDatabase } from "../state/sqlite.js";
 import {
   HOST_STATE_TEST_FILESYSTEM_SUPPORTED,
   HOST_STATE_TEST_TEMPORARY_DIRECTORY,
@@ -198,7 +198,7 @@ async function createRegistrationHarness(fill: number) {
     }),
     measurePublication: () => ({
       metadataSchemaId: "remote-claw/test/provider-metadata/v1",
-      metadataBytes: Uint8Array.of(fill, 2),
+      metadataBytes: Uint8Array.of(fill, 1),
       capabilities: {
         version: 1,
         mutationAdmission: "structured",
@@ -209,10 +209,58 @@ async function createRegistrationHarness(fill: number) {
     }),
     measureReattach: () => state.reattach,
   };
+  const faults = {
+    unknownPrepareAfterCommit: false,
+    unknownPrepareBeforeCommit: false,
+    unknownFinalizeAfterCommit: false,
+    reopenCount: 0,
+  };
   const access: NativeRegistrationDatabaseAccess = {
-    use: (callback) => callback(database),
+    use: (callback) => {
+      if (
+        !faults.unknownPrepareAfterCommit &&
+        !faults.unknownPrepareBeforeCommit &&
+        !faults.unknownFinalizeAfterCommit
+      ) {
+        return callback(database);
+      }
+      const terminalRoot: typeof database.terminalRoot = {
+        prepare: (request) => {
+          if (faults.unknownPrepareBeforeCommit) {
+            faults.unknownPrepareBeforeCommit = false;
+            throw new HostStateCommitOutcomeUnknownError(
+              "injected absent terminal-root preparation",
+            );
+          }
+          const result = database.terminalRoot.prepare(request);
+          if (faults.unknownPrepareAfterCommit) {
+            faults.unknownPrepareAfterCommit = false;
+            throw new HostStateCommitOutcomeUnknownError(
+              "injected terminal-root preparation response loss",
+              { cause: result },
+            );
+          }
+          return result;
+        },
+        finalize: (request) => {
+          const result = database.terminalRoot.finalize(request);
+          faults.unknownFinalizeAfterCommit = false;
+          throw new HostStateCommitOutcomeUnknownError(
+            "injected terminal-root finalization response loss",
+            { cause: result },
+          );
+        },
+        reconcileOperation: (request) => database.terminalRoot.reconcileOperation(request),
+        readOperation: (operationId) => database.terminalRoot.readOperation(operationId),
+        readCertificate: (certificateId) => database.terminalRoot.readCertificate(certificateId),
+        readCurrentCertificate: (serverId, leaseId) =>
+          database.terminalRoot.readCurrentCertificate(serverId, leaseId),
+        readInventory: () => database.terminalRoot.readInventory(),
+      };
+      return callback({ terminalRoot } as typeof database);
+    },
     reopenAfterUnknownCommit: () => {
-      throw new Error("unexpected unknown commit");
+      faults.reopenCount += 1;
     },
   };
   const coordinatorFence = {
@@ -235,12 +283,14 @@ async function createRegistrationHarness(fill: number) {
   const createContext = (
     lease = rpcLease(owner),
     register?: RuntimeOwnerOperationContext["callablePort"]["register"],
+    invoke?: RuntimeOwnerOperationContext["callablePort"]["invoke"],
+    signal: AbortSignal = new AbortController().signal,
   ): RuntimeOwnerOperationContext => {
     const context: RuntimeOwnerOperationContext = {
       lease,
       connectionId: base64urlEncode(new Uint8Array(16).fill(fill + 12)),
       requestId: `harness-request-${fill}`,
-      signal: new AbortController().signal,
+      signal,
       custodySigner: signer,
       callablePort: {
         register:
@@ -250,12 +300,14 @@ async function createRegistrationHarness(fill: number) {
             kind: "callable_port",
           })),
         unregister: () => true,
-        invoke: async (request) => ({
-          ...request.request,
-          resultSchemaId: "remote-claw/native-registration-port-probe-result/v1",
-          resultRef: parseA1SafeId(`harness-proof-${fill}`),
-          resultDigest: digest(fill + 13),
-        }),
+        invoke:
+          invoke ??
+          (async (request) => ({
+            ...request.request,
+            resultSchemaId: "remote-claw/native-registration-port-probe-result/v1",
+            resultRef: parseA1SafeId(`harness-proof-${fill}`),
+            resultDigest: digest(fill + 13),
+          })),
       },
       assertCurrent: () => context.lease,
     };
@@ -286,6 +338,7 @@ async function createRegistrationHarness(fill: number) {
     database,
     descriptor,
     execute,
+    faults,
     owner,
     rpcLease,
     runtimeId,
@@ -294,6 +347,436 @@ async function createRegistrationHarness(fill: number) {
     state,
   };
 }
+
+type RegistrationHarness = Awaited<ReturnType<typeof createRegistrationHarness>>;
+
+async function bringRegistrationReady(
+  harness: RegistrationHarness,
+  context: RuntimeOwnerOperationContext,
+  orchestrator = harness.createOrchestrator(),
+) {
+  const leaseId = parseA1CanonicalId(
+    "nativeConversationLease",
+    harness.state.open.nativeConversationLeaseId,
+  );
+  await harness.execute(
+    orchestrator,
+    "native.registration.open",
+    { operationId: "root-open", adapterRequest: { selector: "root" } },
+    context,
+  );
+  const bound = (await harness.execute(
+    orchestrator,
+    "native.registration.bind",
+    {
+      operationId: "root-bind",
+      nativeConversationLeaseId: leaseId,
+      adapterRequest: { selector: "root" },
+    },
+    context,
+  )) as Record<string, unknown>;
+  await harness.execute(
+    orchestrator,
+    "native.registration.publish",
+    {
+      operationId: "root-publish",
+      nativeConversationLeaseId: leaseId,
+      nativeRegistrationPublicationId: "root-publication",
+      publicationGeneration: 1,
+      adapterRequest: { selector: "root" },
+    },
+    context,
+  );
+  const ready = (await harness.execute(
+    orchestrator,
+    "native.registration.ready",
+    {
+      operationId: "root-ready",
+      nativeConversationLeaseId: leaseId,
+      expectedGateGeneration: bound.gateGeneration as number,
+      expectedPublicationId: "root-publication",
+    },
+    context,
+  )) as Record<string, unknown>;
+  return Object.freeze({ leaseId, orchestrator, ready });
+}
+
+describeLinux("trusted terminal-root activation orchestration", () => {
+  it("activates, demotes, renews, and returns exact replays as historical facts", async () => {
+    const harness = await createRegistrationHarness(90);
+    const invocations: Parameters<RuntimeOwnerOperationContext["callablePort"]["invoke"]>[0][] = [];
+    const context = harness.createContext(undefined, undefined, async (request) => {
+      invocations.push(request);
+      return {
+        ...request.request,
+        resultSchemaId: "remote-claw/native-registration-port-probe-result/v1",
+        resultRef: parseA1SafeId(`root-proof-${invocations.length}`),
+        resultDigest: digest(100 + invocations.length),
+      };
+    });
+    try {
+      const { leaseId, orchestrator, ready } = await bringRegistrationReady(harness, context);
+      expect(
+        orchestrator.operations.filter((operation) =>
+          operation.name.startsWith("native.registration."),
+        ),
+      ).toHaveLength(8);
+      expect(orchestrator.operations.map((operation) => operation.name)).toContain(
+        "native.root.activate",
+      );
+      expect(orchestrator.operations).toHaveLength(9);
+      expect(
+        orchestrator.operations.filter((operation) => operation.name.startsWith("native.root.")),
+      ).toHaveLength(1);
+      const activationPayload = {
+        operationId: "native-root-activate",
+        kind: "activate",
+        nativeConversationLeaseId: leaseId,
+        expectedPriorRootPathCertificateId: null,
+        ttlMs: 30_000,
+      } as const;
+      const proofsBeforeActivation = invocations.length;
+      const activated = (await harness.execute(
+        orchestrator,
+        "native.root.activate",
+        activationPayload,
+        context,
+      )) as Record<string, unknown>;
+      expect(activated).toMatchObject({
+        nativeConversationLeaseId: leaseId,
+        state: "committed",
+        replayed: false,
+        livenessVerified: true,
+      });
+      expect(invocations).toHaveLength(proofsBeforeActivation + 1);
+      expect(invocations.at(-1)).toMatchObject({
+        nativeIncarnation: 1,
+        attachmentLeaseId: parseA1SafeId(
+          (harness.state.open.binding as { readonly attachmentLeaseId: string }).attachmentLeaseId,
+        ),
+        portGeneration: 1,
+        request: {
+          scopeKind: "native_binding",
+          runtimeId: harness.runtimeId,
+          operationSchemaId: "remote-claw/native-registration-port-probe/v1",
+        },
+      });
+      expect(harness.database.terminalRoot.readInventory()).toMatchObject({
+        operations: [{ state: "committed" }],
+        certificates: [{ certificate: { rootPathCertificateId: activated.rootPathCertificateId } }],
+      });
+
+      const replayProofCount = invocations.length;
+      await expect(
+        harness.execute(orchestrator, "native.root.activate", activationPayload, context),
+      ).resolves.toMatchObject({
+        rootPathCertificateId: activated.rootPathCertificateId,
+        replayed: true,
+        livenessVerified: false,
+      });
+      expect(invocations).toHaveLength(replayProofCount);
+      await expect(
+        harness.execute(
+          orchestrator,
+          "native.root.activate",
+          { ...activationPayload, ttlMs: 29_999 },
+          context,
+        ),
+      ).rejects.toThrow(/request collided/);
+      await expect(
+        harness.execute(
+          orchestrator,
+          "native.root.activate",
+          { ...activationPayload, unexpected: true } as never,
+          context,
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+
+      const recovered = (await harness.execute(
+        orchestrator,
+        "native.registration.recover",
+        {
+          operationId: "native-root-recover",
+          nativeConversationLeaseId: leaseId,
+          expectedGateGeneration: ready.gateGeneration as number,
+        },
+        context,
+      )) as Record<string, unknown>;
+      const demoted = harness.database.records.readTerminalReservation(
+        harness.server.collaborationServerId,
+        parseA1CanonicalId("registrationAttempt", harness.state.open.registrationAttemptId),
+      );
+      expect(demoted).toMatchObject({
+        chat: { state: "recovering" },
+        edge: { state: "installing", rootPathCertificateId: null },
+      });
+      const rereadied = (await harness.execute(
+        orchestrator,
+        "native.registration.ready",
+        {
+          operationId: "native-root-reready",
+          nativeConversationLeaseId: leaseId,
+          expectedGateGeneration: recovered.gateGeneration as number,
+          expectedPublicationId: "root-publication",
+        },
+        context,
+      )) as Record<string, unknown>;
+      expect(rereadied).toMatchObject({ state: "ready" });
+      const renewed = (await harness.execute(
+        orchestrator,
+        "native.root.activate",
+        {
+          operationId: "native-root-renew",
+          kind: "renew",
+          nativeConversationLeaseId: leaseId,
+          expectedPriorRootPathCertificateId: activated.rootPathCertificateId as string,
+          ttlMs: 30_000,
+        },
+        context,
+      )) as Record<string, unknown>;
+      expect(renewed).toMatchObject({ state: "committed", livenessVerified: true });
+      expect(renewed.rootPathCertificateId).not.toBe(activated.rootPathCertificateId);
+      expect(harness.database.terminalRoot.readInventory()).toMatchObject({
+        operations: [{ state: "committed" }, { state: "committed" }],
+      });
+      expect(harness.database.terminalRoot.readInventory().certificates).toHaveLength(2);
+    } finally {
+      harness.signer.close();
+      harness.database.close();
+    }
+  });
+
+  it("keeps a preparation uncommitted on reverse-proof loss, disconnect, and stale authority", async () => {
+    const harness = await createRegistrationHarness(120);
+    let rejectProof = false;
+    const controller = new AbortController();
+    let abortProof = false;
+    const rootProofs: Parameters<RuntimeOwnerOperationContext["callablePort"]["invoke"]>[0][] = [];
+    const context = harness.createContext(
+      undefined,
+      undefined,
+      async (request) => {
+        if (rejectProof || abortProof) rootProofs.push(request);
+        if (rejectProof) throw new Error("injected root proof loss");
+        if (abortProof) controller.abort();
+        return {
+          ...request.request,
+          resultSchemaId: "remote-claw/native-registration-port-probe-result/v1",
+          resultRef: parseA1SafeId("root-proof-control"),
+          resultDigest: digest(121),
+        };
+      },
+      controller.signal,
+    );
+    try {
+      const { leaseId, orchestrator } = await bringRegistrationReady(harness, context);
+      const payload = {
+        operationId: "native-root-proof-loss",
+        kind: "activate",
+        nativeConversationLeaseId: leaseId,
+        expectedPriorRootPathCertificateId: null,
+        ttlMs: 30_000,
+      } as const;
+      rejectProof = true;
+      await expect(
+        harness.execute(orchestrator, "native.root.activate", payload, context),
+      ).rejects.toThrow(/injected root proof loss/);
+      expect(harness.database.terminalRoot.readInventory()).toMatchObject({
+        operations: [{ state: "prepared" }],
+        certificates: [],
+      });
+      await expect(
+        harness.execute(
+          orchestrator,
+          "native.root.activate",
+          { ...payload, ttlMs: 29_999 },
+          context,
+        ),
+      ).rejects.toThrow(/request collided/);
+
+      rejectProof = false;
+      abortProof = true;
+      await expect(
+        harness.execute(orchestrator, "native.root.activate", payload, context),
+      ).rejects.toMatchObject({ code: "LIVE_PORT_UNAVAILABLE" });
+      expect(rootProofs).toHaveLength(2);
+      expect(rootProofs[0]?.request.operationRef).not.toBe(rootProofs[1]?.request.operationRef);
+      expect(rootProofs[0]?.request.operationDigest).not.toBe(
+        rootProofs[1]?.request.operationDigest,
+      );
+      expect(harness.database.terminalRoot.readInventory().certificates).toEqual([]);
+      const staleContext: RuntimeOwnerOperationContext = {
+        ...context,
+        signal: new AbortController().signal,
+        assertCurrent: () => {
+          throw new Error("injected stale owner fence");
+        },
+      };
+      await expect(
+        harness.execute(
+          orchestrator,
+          "native.root.activate",
+          { ...payload, operationId: "native-root-stale-owner" },
+          staleContext,
+        ),
+      ).rejects.toThrow(/injected stale owner fence/);
+      expect(harness.database.terminalRoot.readInventory().operations).toHaveLength(1);
+    } finally {
+      harness.signer.close();
+      harness.database.close();
+    }
+  });
+
+  it("reopens and reconciles a finalized certificate after its response is lost", async () => {
+    const harness = await createRegistrationHarness(140);
+    const context = harness.createContext();
+    try {
+      const { leaseId, orchestrator } = await bringRegistrationReady(harness, context);
+      harness.faults.unknownFinalizeAfterCommit = true;
+      const result = (await harness.execute(
+        orchestrator,
+        "native.root.activate",
+        {
+          operationId: "native-root-unknown-finalize",
+          kind: "activate",
+          nativeConversationLeaseId: leaseId,
+          expectedPriorRootPathCertificateId: null,
+          ttlMs: 30_000,
+        },
+        context,
+      )) as Record<string, unknown>;
+      expect(result).toMatchObject({
+        state: "committed",
+        replayed: true,
+        livenessVerified: false,
+      });
+      expect(harness.faults.reopenCount).toBe(1);
+      expect(harness.database.terminalRoot.readInventory()).toMatchObject({
+        operations: [{ state: "committed" }],
+        certificates: [{}],
+      });
+    } finally {
+      harness.signer.close();
+      harness.database.close();
+    }
+  });
+
+  it("reconciles a landed preparation once and fails closed when no preparation exists", async () => {
+    const landed = await createRegistrationHarness(160);
+    const landedContext = landed.createContext();
+    try {
+      const { leaseId, orchestrator } = await bringRegistrationReady(landed, landedContext);
+      landed.faults.unknownPrepareAfterCommit = true;
+      await expect(
+        landed.execute(
+          orchestrator,
+          "native.root.activate",
+          {
+            operationId: "native-root-unknown-prepare-landed",
+            kind: "activate",
+            nativeConversationLeaseId: leaseId,
+            expectedPriorRootPathCertificateId: null,
+            ttlMs: 30_000,
+          },
+          landedContext,
+        ),
+      ).resolves.toMatchObject({ state: "committed", livenessVerified: true });
+      expect(landed.faults.reopenCount).toBe(1);
+      const runtimeInventory = landed.database.runtimeOwner.readInventory();
+      expect(runtimeInventory.signatureReservations).toMatchObject([
+        { purpose: "native_root", signerSequence: 0, state: "signed" },
+      ]);
+      expect(runtimeInventory.identityKeys).toMatchObject([{ nextSignerSequence: 1 }]);
+      expect(landed.database.terminalRoot.readInventory().operations).toHaveLength(1);
+    } finally {
+      landed.signer.close();
+      landed.database.close();
+    }
+
+    const absent = await createRegistrationHarness(180);
+    const absentContext = absent.createContext();
+    try {
+      const { leaseId, orchestrator } = await bringRegistrationReady(absent, absentContext);
+      absent.faults.unknownPrepareBeforeCommit = true;
+      await expect(
+        absent.execute(
+          orchestrator,
+          "native.root.activate",
+          {
+            operationId: "native-root-unknown-prepare-absent",
+            kind: "activate",
+            nativeConversationLeaseId: leaseId,
+            expectedPriorRootPathCertificateId: null,
+            ttlMs: 30_000,
+          },
+          absentContext,
+        ),
+      ).rejects.toMatchObject({ code: "COMMIT_NOT_RECONCILED" });
+      expect(absent.faults.reopenCount).toBe(1);
+      expect(absent.database.terminalRoot.readInventory()).toEqual({
+        operations: [],
+        certificates: [],
+      });
+      expect(absent.database.runtimeOwner.readInventory().signatureReservations).toEqual([]);
+    } finally {
+      absent.signer.close();
+      absent.database.close();
+    }
+  });
+
+  it("refuses finalization when the proven callable port is removed before the final fence check", async () => {
+    const harness = await createRegistrationHarness(200);
+    let afterProof: (() => Promise<void>) | null = null;
+    const context = harness.createContext(undefined, undefined, async (request) => {
+      const action = afterProof;
+      afterProof = null;
+      if (action !== null) await action();
+      return {
+        ...request.request,
+        resultSchemaId: "remote-claw/native-registration-port-probe-result/v1",
+        resultRef: parseA1SafeId("root-proof-before-port-removal"),
+        resultDigest: digest(201),
+      };
+    });
+    try {
+      const { leaseId, orchestrator, ready } = await bringRegistrationReady(harness, context);
+      afterProof = async () => {
+        await harness.execute(
+          orchestrator,
+          "native.registration.close",
+          {
+            operationId: "native-root-proof-race-close",
+            nativeConversationLeaseId: leaseId,
+            expectedGateGeneration: ready.gateGeneration as number,
+          },
+          context,
+        );
+      };
+      await expect(
+        harness.execute(
+          orchestrator,
+          "native.root.activate",
+          {
+            operationId: "native-root-proof-race",
+            kind: "activate",
+            nativeConversationLeaseId: leaseId,
+            expectedPriorRootPathCertificateId: null,
+            ttlMs: 30_000,
+          },
+          context,
+        ),
+      ).rejects.toMatchObject({ code: "LIVE_PORT_UNAVAILABLE" });
+      expect(harness.database.terminalRoot.readInventory()).toMatchObject({
+        operations: [{ state: "prepared" }],
+        certificates: [],
+      });
+      expect(harness.database.registration.readLease(leaseId)).toMatchObject({ state: "closed" });
+    } finally {
+      harness.signer.close();
+      harness.database.close();
+    }
+  });
+});
 
 describeLinux("trusted native registration orchestration", () => {
   it("reattaches an unbound crash survivor with trusted successor setup and then binds it", async () => {

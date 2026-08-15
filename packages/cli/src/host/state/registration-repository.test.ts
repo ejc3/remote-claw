@@ -29,13 +29,20 @@ import {
   type NativeRegistrationOperationKind,
   NativeRegistrationRepositoryConflictError,
   NativeRegistrationStaleOwnerError,
+  validateNativeRegistrationRepositorySnapshot,
 } from "./registration-repository.js";
-import type {
-  AcquireRuntimeOwnerServiceLeaseRequest,
-  RegisterInitialRuntimeRequest,
-  RuntimeOwnerKeyMaterialInput,
-  RuntimeOwnerOperationEvidence,
-  RuntimeOwnerServiceFence,
+import {
+  type HostStateRepositorySqlTransaction,
+  type HostStateRepositorySqlValue,
+  validateHostStateRepositorySnapshot,
+} from "./repository.js";
+import {
+  type AcquireRuntimeOwnerServiceLeaseRequest,
+  type RegisterInitialRuntimeRequest,
+  type RuntimeOwnerKeyMaterialInput,
+  type RuntimeOwnerOperationEvidence,
+  type RuntimeOwnerServiceFence,
+  validateRuntimeOwnerRepositorySnapshot,
 } from "./runtime-repository.js";
 import { openHostStateDatabase } from "./sqlite.js";
 import {
@@ -190,6 +197,28 @@ function mutateWithoutTriggers(
     throw error;
   } finally {
     editor.close();
+  }
+}
+
+function inspectRawState<T>(
+  databasePath: string,
+  operation: (transaction: HostStateRepositorySqlTransaction) => T,
+): T {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return operation({
+      get(sql: string, parameters: readonly HostStateRepositorySqlValue[]): unknown {
+        return database.prepare(sql).get(...parameters);
+      },
+      all(sql: string, parameters: readonly HostStateRepositorySqlValue[]): readonly unknown[] {
+        return database.prepare(sql).all(...parameters);
+      },
+      run() {
+        throw new Error("read-only snapshot test transaction cannot mutate");
+      },
+    });
+  } finally {
+    database.close();
   }
 }
 
@@ -397,6 +426,42 @@ async function createFixture(liveReattach = true) {
 
 type RegistrationFixture = Awaited<ReturnType<typeof createFixture>>;
 
+function installSyntheticTerminalRoot(
+  fixture: RegistrationFixture,
+  rootPathCertificateId: string,
+): void {
+  mutateWithoutTriggers(
+    fixture.state.paths.databasePath,
+    [
+      "inward_collaboration_edges_require_native_root_activation",
+      "logical_chats_require_native_root_for_ready",
+    ],
+    (editor) => {
+      const edge = editor
+        .prepare(
+          `UPDATE inward_collaboration_edges
+              SET state = 'current', root_path_certificate_id = ?
+            WHERE represented_server_id = ? AND inward_edge_id = ?
+              AND state = 'installing' AND root_path_certificate_id IS NULL`,
+        )
+        .run(
+          rootPathCertificateId,
+          fixture.reserved.edge.representedServerId,
+          fixture.reserved.edge.inwardEdgeId,
+        );
+      if (edge.changes !== 1) throw new Error("synthetic terminal edge did not root");
+      const chat = editor
+        .prepare(
+          `UPDATE logical_chats SET state = 'ready'
+            WHERE collaboration_server_id = ? AND logical_chat_id = ?
+              AND state = 'recovering'`,
+        )
+        .run(fixture.reserved.chat.collaborationServerId, fixture.reserved.chat.logicalChatId);
+      if (chat.changes !== 1) throw new Error("synthetic terminal chat did not become ready");
+    },
+  );
+}
+
 function activateRegistration(fixture: RegistrationFixture, fill: number) {
   const { database, fence, coordinatorFence, reserved, runtime, prepared } = fixture;
   const openInput = {
@@ -574,6 +639,126 @@ describeLinux("A1.4 durable registration repository", () => {
         leases: [{ state: "ready", nextOperationSequence: 5 }],
         publications: [{ state: "current" }],
         operations: [{ kind: "open" }, { kind: "bind" }, { kind: "publish" }, { kind: "ready" }],
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("accepts the exact rooted terminal graph only under schema v6 and exposes it publicly", async () => {
+    const fixture = await createFixture();
+    const { database, reserved } = fixture;
+    try {
+      activateRegistration(fixture, 22);
+      const rootPathCertificateId = "synthetic-native-root-schema-v6";
+      installSyntheticTerminalRoot(fixture, rootPathCertificateId);
+
+      expect(
+        database.records.readTerminalReservation(
+          reserved.project.collaborationServerId,
+          reserved.registrationIntent.registrationAttemptId,
+        ),
+      ).toMatchObject({
+        chat: { state: "ready" },
+        edge: { state: "current", rootPathCertificateId },
+      });
+
+      inspectRawState(fixture.state.paths.databasePath, (transaction) => {
+        expect(() =>
+          validateHostStateRepositorySnapshot(transaction, MACHINE_IDENTITY_ID, 6),
+        ).not.toThrow();
+        expect(() =>
+          validateNativeRegistrationRepositorySnapshot(transaction, MACHINE_IDENTITY_ID, 6),
+        ).not.toThrow();
+        expect(() =>
+          validateRuntimeOwnerRepositorySnapshot(transaction, MACHINE_IDENTITY_ID, 6),
+        ).not.toThrow();
+        expect(() =>
+          validateHostStateRepositorySnapshot(transaction, MACHINE_IDENTITY_ID, 5),
+        ).toThrow(/terminal/);
+        expect(() =>
+          validateNativeRegistrationRepositorySnapshot(transaction, MACHINE_IDENTITY_ID, 5),
+        ).toThrow(/terminal/);
+        expect(() =>
+          validateRuntimeOwnerRepositorySnapshot(transaction, MACHINE_IDENTITY_ID, 5),
+        ).toThrow(/terminal/);
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    "recover",
+    "drain",
+    "close",
+    "reattach",
+  ] as const)("atomically demotes the rooted terminal graph on %s", async (kind) => {
+    const fixture = await createFixture();
+    const { database, fence, coordinatorFence, prepared, reserved } = fixture;
+    try {
+      const activated = activateRegistration(fixture, 24);
+      installSyntheticTerminalRoot(fixture, `synthetic-native-root-${kind}`);
+      const expectedGateGeneration = prepared.gate.gateGeneration + 1;
+      const transitionInput = {
+        fence,
+        coordinatorFence,
+        nativeConversationLeaseId: activated.ready.lease.nativeConversationLeaseId,
+        expectedGateGeneration,
+      };
+      if (kind === "recover") {
+        database.registration.recover({
+          ...transitionInput,
+          operation: registrationOperation(
+            "recover",
+            "registration-rooted-recover",
+            transitionInput,
+          ),
+        });
+      } else if (kind === "drain") {
+        database.registration.drain({
+          ...transitionInput,
+          operation: registrationOperation("drain", "registration-rooted-drain", transitionInput),
+        });
+      } else if (kind === "close") {
+        database.registration.close({
+          ...transitionInput,
+          operation: registrationOperation("close", "registration-rooted-close", transitionInput),
+        });
+      } else {
+        const predecessorCloseOperation = registrationOperation(
+          "close",
+          "registration-rooted-reattach-close",
+          transitionInput,
+        );
+        const reattachInput = {
+          fence,
+          coordinatorFence,
+          predecessorCloseOperation,
+          predecessorNativeConversationLeaseId: activated.ready.lease.nativeConversationLeaseId,
+          nativeConversationLeaseId: canonicalId("nativeConversationLease", 26),
+          protectedPortHandleId: canonicalId("protectedHandle", 27),
+          successorAttachmentLeaseId: null,
+          expectedGateGeneration,
+        };
+        database.registration.reattach({
+          ...reattachInput,
+          operation: registrationOperation(
+            "reattach",
+            "registration-rooted-reattach",
+            reattachInput,
+          ),
+        });
+      }
+
+      expect(
+        database.records.readTerminalReservation(
+          reserved.project.collaborationServerId,
+          reserved.registrationIntent.registrationAttemptId,
+        ),
+      ).toMatchObject({
+        chat: { state: "recovering" },
+        edge: { state: "installing", rootPathCertificateId: null },
       });
     } finally {
       database.close();

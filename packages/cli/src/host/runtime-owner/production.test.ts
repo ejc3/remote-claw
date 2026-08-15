@@ -247,6 +247,33 @@ describe("runtime-owner detached process boundary", () => {
 });
 
 describeLinux("runtime-owner production state adapter", () => {
+  it("keeps terminal-root activation dormant without a trusted registration adapter", async () => {
+    const identitySecret = new Uint8Array(32).fill(0x79);
+    const machineIdentity = await machineIdentityId(identitySecret);
+    stateFor(machineIdentity);
+    const daemon = await startProductionRuntimeOwnerDaemon({
+      machineIdentityId: machineIdentity,
+      identitySecret,
+    });
+    const client = await connectRuntimeOwnerRpc({
+      machineIdentityId: machineIdentity,
+      identitySecret,
+    });
+    try {
+      expect(await client.health()).toMatchObject({
+        ownerOperationsWritable: false,
+        nativeRegistrationEnabled: false,
+      });
+      await expect(
+        client.dispatch({ operation: "native.root.activate", payload: null }),
+      ).rejects.toMatchObject({ code: "HANDLER_ERROR" });
+    } finally {
+      client.close();
+      await daemon.stop();
+      await daemon.completed;
+    }
+  });
+
   it("enables registration only with a trusted adapter and releases its coordinator before shutdown", async () => {
     const identitySecret = new Uint8Array(32).fill(0x7a);
     const machineIdentity = await machineIdentityId(identitySecret);

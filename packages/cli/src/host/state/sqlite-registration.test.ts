@@ -542,13 +542,25 @@ describeLinux("A1.4 secure durable-registration SQLite integration", () => {
       | "records"
       | "runtimeOwner"
       | "registration"
+      | "terminalRoot"
+      | "brokerRoute"
+      | "ingress"
+      | "serverSigning"
       | "putArtifact"
       | "readVerifiedArtifact"
       | "transaction"
       | "close"
     >();
     expectTypeOf<keyof HostStateTransaction>().toEqualTypeOf<
-      "records" | "runtimeOwner" | "registration" | "putArtifact" | "readVerifiedArtifact"
+      | "records"
+      | "runtimeOwner"
+      | "registration"
+      | "terminalRoot"
+      | "brokerRoute"
+      | "ingress"
+      | "serverSigning"
+      | "putArtifact"
+      | "readVerifiedArtifact"
     >();
   });
 
@@ -763,7 +775,7 @@ describeLinux("A1.4 secure durable-registration SQLite integration", () => {
       machineIdentityId: MACHINE_IDENTITY_ID,
       pathEnvironment: dormant.environment,
     });
-    expect(migrated.schemaVersion).toBe(5);
+    expect(migrated.schemaVersion).toBe(HOST_STATE_SCHEMA_VERSION);
     expect(migrated.registration.readInventory()).toEqual({
       leases: [],
       publications: [],

@@ -28,7 +28,7 @@ local transcript completeness or replay.
 > chats and native sessions; this document's per-`cse_*` RC state repeats independently for every
 > wrapped Claude session and must not become a host-wide current-session slot. This document's full RC
 > log remains relevant to the current synthetic server, not a universal semantic authority. A1.0
-> through A1.4 have landed: canonical contracts, the secure SQLite kernel and protected-artifact
+> through dormant A1.7b0 have landed: canonical contracts, the secure SQLite kernel and protected-artifact
 > store, schema-v3 server/project/chat/binding/edge/coordinator records, and now schema-v4 runtime-owner
 > state plus its repository, semantic validator, authenticated daemon/RPC, lease/takeover, and wrapped
 > key custody. Migration 4 has 141 statements and digest
@@ -42,7 +42,34 @@ local transcript completeness or replay.
 > `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`; its dispatch registry is
 > empty. It persists the owner service lease and can host durable runtime-owner records, while A0
 > drivers remain unchanged: no durable owner registration, A1 binding activation, private Claude RC
-> row, or new A1 mutation or broker capability is advertised. A1.5 is next.
+> row, or new A1 mutation or broker capability is advertised. A1.5 adds pure browser-safe A1 v2
+> wire/KDF/frame, certificate, and onboarding codecs plus schema-v6 terminal-root activation behind
+> the same opt-in trusted-adapter seam. Migration `006-terminal-native-root` has 36 statements, digest
+> `li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo`, and a 304-object manifest: 36 tables, 78 indexes,
+> and 190 triggers. A1.6 adds a separate bearer-bound SQLite/libSQL `/api/a1/*` broker, exact
+> capability negotiation, immutable route-store identity, retained route-wide retry/collision and
+> manifest state, automatic bounded rollover/read pages, a browser-safe negotiation-first client, and
+> schema-v7 host capability-pin/route/open-genesis persistence plus a host-only split-commit installer.
+> Migration `007-a1-broker-routes` has 22 statements, digest
+> `uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw`, and a 326-object manifest: 39 tables, 85 indexes,
+> and 202 triggers.
+> A1.7a adds schema v8 migration `008-a1-durable-ingress`: exact page/frame/raw/plaintext evidence,
+> separate physical-fetch and contiguous-semantic cursors, authenticated positions, bounded
+> multipart attempts/candidates/parts/observations, exact retry, collision/incomplete tombstones,
+> gaps/recovery, revisioned route actors, and durable results through `awaiting_order`. Migration 8
+> has 171 statements, digest `6Vf2H56rDvW2PGMrU83upUDz1r9gHP11tdq_w7T1K5E`, and a 492-object
+> manifest: 57 tables, 99 indexes, and 336 triggers.
+> A1.7b0 adds schema v9 migration `009-server-scope-signer` as a dormant server-signer prerequisite: initial self-anchor, wrapped Ed25519
+> custody with no raw-private-key API, coordinator-fenced bootstrap/current signing leases, and
+> durable reserve/bind/sign/accept/reconcile state. It does not consume `awaiting_order` or add common
+> command ordering/results, generic host output, broker publishing, outbox/effect, native dispatch,
+> inference, projection, or production wiring. The v8 pins above remain unchanged. Migration 9 has
+> 81 statements, digest `fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`, and a 571-object
+> manifest: 65 tables, 123 indexes, and 383 triggers.
+> The ordinary no-adapter CLI remains health-only; no real driver or viewer invokes A1, no
+> runtime-owner broker or ingress operation exists, and the dormant actor is absent from production
+> barrels/run paths. No production path invokes the dormant server signer. Full A1.7b common command
+> ordering/signed results, A1.8 effects, and all live wiring remain deferred.
 
 ## Source Map
 
@@ -62,15 +89,27 @@ local transcript completeness or replay.
   `packages/cli/src/host/rc/anthropic/*.ts`,
   `packages/cli/src/broker/{client,protocol,order}.ts`, and
   `apps/web/lib/broker/{backend,local,vercel,sqlite-multi,turso-cloud-locator}.ts`.
-- Active shared canonical primitive and locked A0 consumer:
-  `packages/clawsec/src/{canonical,aad}.ts`.
+- Active shared canonical primitive, locked A0 consumer, and dormant pure A1.5–A1.7a contracts:
+  `packages/clawsec/src/{canonical,aad,a1-wire,a1-certificates,a1-onboarding,a1-broker,a1-ingress}.ts`.
 - A1 host-state and runtime-owner code:
-  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,artifacts,repository,runtime-repository,registration-repository,sqlite}.ts`,
-  `packages/cli/src/host/native/evidence.ts`, and `packages/cli/src/host/runtime-owner/**`. A1.2 implements the generic v3
+  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,sqlite}.ts`,
+  `packages/cli/src/host/native/evidence.ts`, `packages/cli/src/host/server-signer/**`, and
+  `packages/cli/src/host/runtime-owner/**`. A1.2 implements the generic v3
   server/project/chat/binding/edge/coordinator operations described below. A1.3 implements the v4
   runtime-owner tables/repository and live owner daemon. A1.4 implements the v5 registration graph,
-  canonical evidence, reverse port transport, and closed trusted-adapter service. It still does not
-  implement private Claude RC rows or connect an ordinary native driver to durable registration.
+  canonical evidence, reverse port transport, and closed trusted-adapter service. A1.5 implements the
+  pure A1 v2 wire/certificate/onboarding modules plus schema-v6 terminal-root repository and the
+  narrow opt-in `native.root.activate` owner operation. A1.6 adds schema-v7
+  `broker-route`/`broker-route-repository`/`broker-route-orchestrator`, the browser-safe
+  `packages/cli/src/broker/a1-client.ts`, and the host-only dormant route installer. A1.7a adds the
+  direct-only ingress repository and actor through `awaiting_order`. A1.7b0 adds schema v9 plus the
+  direct-only server signer and its wrapped custody/fenced lease/reservation repository. It still does not implement
+  private Claude RC rows, connect an ordinary native driver to durable registration/root activation,
+  or install the ingress actor into a live runtime.
+- A1.6 broker code:
+  `apps/web/lib/broker/{a1-contract,a1-http,a1-json,a1-sqlite}.ts` and
+  `apps/web/app/api/a1/**/route.ts`. It is deliberately separate from the A0 `BrokerBackend` and its
+  retention index; Workflow, local, and A0 SQLite cannot advertise the selected A1 capability vector.
 - The A1/A2 branch names and table snapshots later in this document record the
   historical review basis. The durable broker backends have since landed;
   re-check current migrations/code before implementing a dependent host schema.
@@ -219,8 +258,9 @@ The physical database, secure open/migration path, and high-level transaction ke
 A1.3 now opens it from the runtime-owner daemon. A1.2 adds the generic durable graph and the journal entries for project bootstrap,
 non-first terminal reservation, terminal selector replacement, and coordinator acquisition/release.
 It also provides exact-retry/read-side reconciliation and full restart inventory, but production does
-not yet invoke those A1.2 operations. Command proposal/decision entries, ingress queues, and actors remain A1.7;
-A1.2's server-control/chat actor scope is durable addressing only.
+not yet invoke those A1.2 operations. A1.7a now uses A1.2's server-control/chat addresses for dormant
+evidence-preserving ingress queues and route actors through `awaiting_order`; common command
+proposal/decision entries and server-wide ordering remain A1.7b.
 
 The journal's `command_seq` is the definitive decision order for proposals that remote-claw server
 received from its direct collaborators, including forwarded, queued, and rejected decisions. It is a
@@ -294,36 +334,40 @@ CREATE INDEX IF NOT EXISTS frames_token_gen_id ON frames (token, gen, id);
 ```
 
 That table is retained evidence for the shipped A0-compatible durable backend. Its
-`UNIQUE(token, gen, msg_id, part)` rule is not the selected client-driven A1 replay contract. A1
-requires a broker migration whose transport row is unique route-wide on
+`UNIQUE(token, gen, msg_id, part)` rule is not the selected client-driven A1 replay contract. A1.6
+implements a separate A1-only catalog and physical-route schema whose transport row is unique route-wide on
 `(token, delivery_attempt_id, part)`, stores its assigned `(generation, frame_index)`, and stores the
 normalized transport-frame digest. An exact retry before or after rollover returns that original
 cursor only when the complete normalized frame digest matches; unequal bytes fail closed as a
 transport collision. Separate sealed-generation manifest rows define frame counts, next-generation
 links, and empty generations. Stable semantic results remain host-owned and key on the full
 server/chat/source namespace plus `msg_id`; they are not collapsed into the broker transport key. The
-no-rollover Workflow backend remains A0-only and cannot claim this A1 contract.
+no-rollover Workflow, local, and A0 SQLite backends remain A0-only and cannot claim this A1 contract.
 
 The physical cursor/manifest key is one immutable authenticated broker route, not a parsed chat:
 `scope_bus` has one null-chat discovery route, `server_control` has a distinct null-chat management
 ingress/result route, and each `chat` route has its exact chat. A position is unique on
 `(broker_route_id, generation, frame_index)`.
-Same-position/same raw digest is idempotent; different bytes retain equivocation evidence and quarantine
-the route before parse/open. The first sealed manifest tuple is immutable; changed count/state/successor
+Same-position replay is idempotent only when the stored byte length and broker delivery-attempt, part,
+and transport-digest claims also match. Different bytes retain equivocation evidence; changed outer
+claims retain an `outer_page_invalid` gap, and either case quarantines the route before parse/open. The first sealed manifest tuple is immutable; changed count/state/successor
 or an index outside its sealed count records manifest equivocation. Chat, server, machine, and
 bus↔control↔chat route transplants are invalid on the externally selected route and never dispatch by the
 embedded header.
 
-Chat and server-control ciphertext bodies are retained from genesis. Only discovery-only scope-bus
-bodies in a sealed generation covered by a fresh host-signed successor checkpoint may be compacted
-after all supported recovery leases pass. Selected A1 retains every route-wide
+Chat, server-control, and scope-bus ciphertext bodies are retained from genesis in A1.6. A1.7a also
+retains every staged page/frame observation, raw first-seen frame, and authenticated plaintext
+evidence needed to rebuild its position and multipart ledgers. Checkpoints and compaction are not
+implemented. Selected A1 retains every route-wide
 attempt/part→original-cursor/digest tombstone and generation manifest indefinitely. Ordinary retention
 expiry, local chat closure, and machine reset are insufficient:
 copied bearer/key material may remain valid, and A1 has neither an in-place key epoch nor a
 broker-enforced permanent route-revocation protocol. A future bounded-retention version must add and
-prove that protocol before it may collect these records.
+prove that protocol before it may collect these records. The existing explicitly dev/CI-gated
+locator `dropScope()` remains destructive whole-scope test cleanup; it is not production retention,
+checkpointing, revocation, or recovery.
 
-The implemented A1.1–A1.4 kernel supplies the secure transaction/storage boundary for the owner-only
+The implemented A1.1–A1.7b0 kernel supplies the secure transaction/storage boundary for the owner-only
 **LOCAL**
 `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite database,
 falling back under `~/.local/state` when `XDG_STATE_HOME` is absent or relative. The fallback home
@@ -337,7 +381,7 @@ application/identities/identity directories, a non-group/world-writable owner st
 regular one-link `0600` database/WAL/SHM files; rollback journals, non-WAL databases, and all other
 filesystem types fail closed.
 
-Current schema v5 uses SQLite `application_id=0x52434c57`, `user_version=5`, exact per-version schema
+Current schema v9 uses SQLite `application_id=0x52434c57`, `user_version=9`, exact per-version schema
 manifests, and an append-only `CanonicalWriter` SHA-256 migration chain. The locked v1/v2 digests are
 `Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec` and
 `yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; migration 3 is
@@ -346,7 +390,15 @@ manifests, and an append-only `CanonicalWriter` SHA-256 migration chain. The loc
 `004-runtime-owner-durability`, contains 141 ordered statements, and is locked to
 `zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0`. Migration 5 is
 `005-durable-native-registration`, contains 38 ordered statements, and is locked to
-`l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`. Every predecessor is checked before migrating. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
+`l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`. Migration 6 is
+`006-terminal-native-root`, contains 36 ordered statements, and is locked to
+`li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo`. Migration 7 is
+`007-a1-broker-routes`, contains 22 ordered statements, and is locked to
+`uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw`. Migration 8 is
+`008-a1-durable-ingress`, contains 171 ordered statements, and is locked to
+`6Vf2H56rDvW2PGMrU83upUDz1r9gHP11tdq_w7T1K5E`. Migration 9 is
+`009-server-scope-signer`, contains 81 ordered statements, and is locked to
+`fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`. Every predecessor is checked before migrating. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
 two triggers; v2 adds four triggers for a total of ten objects and six triggers. V3 adds ten tables:
 `collaboration_servers`, `host_state_profiles`, `projects`,
 `project_target_selector_mappings`, `logical_chats`, `native_bindings`,
@@ -358,7 +410,17 @@ reservations/acceptances, project-scoped local conversations/transitions, bindin
 transport attachments/leases, and lifecycle gates. The complete v4 manifest is exactly 231 objects:
 30 tables, 57 indexes, and 144 triggers. V5 adds `native_conversation_leases`,
 `native_registration_publications`, and `native_registration_operations`; its exact manifest is 269
-objects: 33 tables, 67 indexes, and 169 triggers. Every row,
+objects: 33 tables, 67 indexes, and 169 triggers. V6 adds
+`native_root_signature_activation_fences`, `native_root_activation_operations`, and
+`native_root_certificates`; its exact manifest is 304 objects: 36 tables, 78 indexes, and 190
+triggers. V7 adds `broker_backend_capability_pins`, `broker_routes`, and
+`broker_channel_generations`; its exact manifest is 326 objects: 39 tables, 85 indexes, and 202
+triggers. V8 adds the evidence-preserving ingress ledger described below; its exact manifest is 492
+objects: 57 tables, 99 indexes, and 336 triggers. V9 adds
+`server_identity_keys`, `server_identity_private_key_envelopes`, `server_scope_certificates`,
+`server_scope_certificate_statuses`, `server_bootstrap_signing_leases`, `server_signing_leases`,
+`server_signature_reservations`, and `server_signed_record_acceptances`. The complete v9 manifest is
+exactly 571 objects: 65 tables, 123 indexes, and 383 triggers. Every row,
 including any `sqlite_*` name, must match the corresponding version manifest. Before migration 1, a
 new database must retain `application_id=0` and literally zero `sqlite_schema` rows. Every connection
 reads back `foreign_keys=ON`, `trusted_schema=OFF`, `journal_mode=WAL`,
@@ -370,18 +432,73 @@ crash WAL is rejected without rewriting the main database or WAL. SHM remains gu
 and may change during validation; a safe SHM-only remnant beside an existing database can be
 reconstructed, while sidecars without a database are refused.
 
-The semantic validator accepts the dormant A1.2 subset plus the A1.3 runtime-owner and A1.4
-registration graphs. An existing database is
+The semantic validator accepts the dormant A1.2 subset plus the A1.3 runtime-owner, A1.4
+registration, A1.5 terminal-root, A1.6 broker-route, A1.7a ingress, and A1.7b0 server-signer graphs. An existing database is
 checked in one coherent read-only snapshot before writable open; a newly migrated database is checked
-before its handle returns. State is empty or has one linked default profile and `installing` server; projects are
+before its handle returns. State is empty or has one linked default profile whose server is
+`installing` in schemas v3–v8 and may be `installing` or signer-activated `current` in schema v9; projects are
 current; each project's one persisted v3 selector chain is contiguous, terminal-native, and ends in exactly one current generation;
-and every logical chat records its exact `project_target_selector_mapping_id`. Chats remain
-recovering at topology generation one and projection sequence zero. Each points to one unresolved
+and every logical chat records its exact `project_target_selector_mapping_id`. A new A1.2 reservation
+starts recovering at topology generation one and projection sequence zero. It points to one unresolved
 starting binding, exactly one registration intent, and one random `rcie_*` native-harness edge that is
-still installing with every certificate/live-connection/capability pointer null. Nested mappings and
+installing with every certificate/live-connection/capability pointer null; A1.4 and A1.5 may widen only
+that exact graph through the registration and terminal-root transitions described below. Nested mappings and
 remote-server edges are rejected until N1 supplies a migration and proof. Evidence refs/digests are
 opaque to A1.2 itself; A1.4 resolves them before registration through the five canonical descriptor,
 project-selection, native-conversation-ref, capability, and registration-metadata evidence schemas.
+
+V7 adds immutable broker-backend capability pins, broker routes, and channel generations. Every pin
+names this machine, a canonical HTTP(S) origin, literal `sqlite` selector, the exact selected
+capability digest, and a verified immutable artifact in `host_profile/default`. Every route repeats
+the complete machine/server/route/chat coordinate, derived token and `rcr_*` ID, origin/selector,
+random immutable `rbsi_*` store instance, pin, and historical coordinator fence. The A1.6 repository
+admits only an exact broker receipt whose genesis and current generation are both open generation zero
+with sampled next index zero, while the collaboration server is still `installing` and the coordinator
+lease is current. It inserts the pin, route, and pristine local generation atomically; exact replay is
+idempotent, changed replay collides, and reconciliation verifies an already-committed historical tuple
+without pretending stale authority is current. No local cursor, later generation, manifest
+equivocation, checkpoint, command, or dispatch row is created in A1.6.
+
+V8 preserves those v7 route/generation rows as immutable installation receipts and seeds a separate
+mutable runtime head, observed-generation state, fetch cursor, semantic cursor, and revisioned actor
+for each route. A read that advances fetch or changes generation evidence retains its exact page and
+frame evidence before the fetch cursor moves; an unchanged empty open live-tail poll is a no-op.
+First-seen positions retain raw bytes before parse/open. Classification retains parsed evidence,
+opened plaintext, multipart candidates and attempts, exact retries, terminal tombstones, and explicit
+gap/recovery decisions. Fetch may proceed inside the frozen lookahead while semantic progress remains
+at the first blocked position. A complete input freezes only the accepted semantic tuple in
+`awaiting_order`; migration 8 and A1.7a add no command, command result/signature, outbox, effect, dispatch,
+checkpoint, viewer, or native row.
+
+V9's only new durable capability is the dormant server signer. It also replaces the existing
+broker-route admission trigger so the dormant installer can attach a route to either an `installing`
+server or an exact signer-activated `current` server under the same current-coordinator and
+capability-pin proof; this adds no route table or production call path. The initial self-anchor is authorized by a one-shot
+`scope_certificate`-only bootstrap lease that pins the proposed key/certificate and the exact current
+coordinator lease ID, epoch, and fencing token. Installation verifies that self-signature, retains the
+immutable key/certificate/status tuple, and opens the normal current signing lease. The Ed25519
+private key remains in an AES-256-GCM envelope whose AAD binds the machine, collaboration server,
+protected handle, identity key/generation, algorithm/backend, public key, and PKCS#8 digest; no API
+returns raw private-key bytes. Normal reservations burn one server-wide signer sequence, bind one closed
+purpose and its exact schema/reference/digest, retain the signature and signed-record digest, and then
+admit one immutable acceptance at the next dense per-server `acceptedAtJournalSeq`. That is the
+signer-acceptance journal coordinate, not an expansion of schema-v3 `control_journal_entries`. Exact
+replay returns retained state, changed replay collides, stale authority cannot mutate, and an unknown
+commit is resolved by request-bound reconciliation. V9 adds no
+common command/result, generic host output, broker publish, result delivery, checkpoint,
+outbox/effect, native attempt/dispatch, inference, projection, production operation, or native table.
+The A1.7b0 callable path uses this state machine only for `initial_pair` scope-certificate bootstrap
+and acquisition of the installed current lease. Generic current-lease signing, explicit repair,
+rotation/revocation, and historical reattestation remain later transition services.
+
+Coordinator takeover has deliberately asymmetric recovery. If it happens while the initial bootstrap
+is not closed, that bootstrap, its key envelope, and its sole reservation become an immutable
+fail-stop: reconciliation reports `writable:false` and
+`nonWritableReason:"stale_bootstrap_fence"`, and v9 can neither re-fence/replace the bootstrap nor use
+it for another reservation. A later explicit-repair milestone must resolve it. After installation,
+takeover instead supersedes the normal current signing lease; once no `reserved`, `bound`, or
+signed-but-unaccepted predecessor reservation remains, the successor may acquire a fresh current lease
+at the exact next fencing token.
 
 V4 additionally validates one machine-scoped runtime-owner state row, contiguous retained service
 epochs and owner journal, exact process-start-bound lease acquisition/renewal/release, derived
@@ -424,7 +541,23 @@ predecessor, and transport-journal fact and rejects missing or unreachable extra
 detach/replace/termination and local clear/archive conflict before writing when retained registration
 lineage would make that historical graph unreopenable. A1.4 ready can make the runtime incarnation,
 binding, lifecycle gate, and process lease current, but it leaves the logical chat recovering and its
-terminal edge installing; A1.5 owns root signing and chat/edge activation.
+terminal edge installing. A1.5 may then prepare one exact runtime-owner signing reservation under
+current owner/coordinator and ready-registration authority. The service signs its protected payload,
+then performs the fresh reverse proof. Public runtime-owner store, accept, and abort operations cannot
+mutate that operation-attached v6 reservation; only the transaction-local terminal-root finalizer may
+store and accept it after the proof, sampling the acceptance/commit timestamp then. Its signed
+certificate insert commits the operation, changes the chat to ready, and makes the terminal edge
+current with that root ID. Legacy unattached v5 signature history stays inert and compatible. Renewal
+names the latest retained certificate; exactly one committed successor may extend it. The schema-v6
+validator recomputes payloads and digests, verifies every Ed25519 signature/reservation/acceptance and
+authority lifetime, walks every activation chain, and requires the latest root to be either current or
+in the exact retained-history demoted form. A1.4
+recover, drain, close, and reattach demote a rooted graph without deleting its certificates;
+registration must become ready again before a fresh-fenced renewal. The reverse callable-port proof
+used by the trusted service is ephemeral and immediately precedes synchronous finalization; it is not
+a durable row and semantic reopen does not replay it. Certificate expiry alone does not rewrite the
+persisted chat/edge state, so future effective route/dispatch admission must recheck the certificate
+time and current live attachment/process lease.
 
 A stale open process lease may survive owner/coordinator loss as historical crash evidence, but it is
 neither writable nor proof that its process-local port still exists. Mutators, including exact replay,
@@ -448,8 +581,10 @@ reconciliation classify persistence outcomes, returning explicit indeterminate s
 changes prevent exact proof; they are separate from A1.4's implemented request-bound registration
 reconciliation. A1.3's production lease controller handles an unknown owner-lease commit by closing the
 poisoned handle, reopening the same identity database, and reconciling the exact operation before any
-retry; this does not make an arbitrary unknown ordinary SQLite commit safe to replay blindly. The landed actor
-scope is only durable addressing; A1.7 owns queues, proposal decisions, and serialization.
+retry; this does not make an arbitrary unknown ordinary SQLite commit safe to replay blindly. The A1.2 actor
+scope was only durable addressing through A1.6. A1.7a adds dormant ingress queues and route-local
+serialization; A1.7b0 adds only their unused server-signing prerequisite, while full A1.7b owns
+common proposal decisions and server-wide command order.
 
 A1.3's daemon listens on one machine-scoped Linux abstract Unix socket. Both peers derive one HKDF key
 from the machine secret and prove possession over a fresh 32-byte challenge, with separate server and
@@ -469,8 +604,8 @@ path and machine ID and starts with an allowlisted environment and Node loader a
 pinned to the trusted CLI entry directory so project-controlled cwd/`tsconfig` state cannot influence
 the retained tsx loader. Its current
 production wire surface includes a closed operation registry. An explicit trusted
-`registrationAdapter` installs A1.4 registration; the ordinary CLI passes none, so authenticated health
-is its only successful operation and returns `ownerOperationsWritable:false` and
+`registrationAdapter` installs A1.4 registration and A1.5 `native.root.activate`; the ordinary CLI
+passes none, so authenticated health is its only successful operation and returns `ownerOperationsWritable:false` and
 `nativeRegistrationEnabled:false`. Losing only the owner's wrapper RPC connection detaches that
 collaborator and does not release the daemon's service lease. Existing A0 driver teardown remains
 separate and unchanged.
@@ -1281,13 +1416,17 @@ demonstrates every property below:
 
 ## Assigned Decisions and Proof-Owned Questions
 
-- **A1.1–A1.4 / B.2 — storage placement: DECIDED; kernel, host/runtime-owner/registration repositories, and daemon seam implemented.** Use the owner-only local
+- **A1.1–A1.7b0 / B.2 — storage placement: DECIDED; kernel, host/runtime-owner/registration/root/broker-route/ingress/signer repositories, and daemon seam implemented.** Use the owner-only local
   `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite
   transaction boundary in the CLI, with the absolute-home `~/.local/state` fallback above, for every RC row that
   participates in a control-state invariant, in cleartext. A1.0 resolves the path; A1.1 implements
   secure open/protected artifacts; A1.2 adds schema v3, generic host records, and semantic snapshot
   validation; A1.3 adds schema v4 and opens it from the runtime-owner daemon; A1.4 adds schema v5 and
-  the closed trusted-adapter registration/reattach seam. The ordinary CLI installs no adapter, so the
+  the closed trusted-adapter registration/reattach seam; A1.5 adds schema v6 and its terminal-root
+  activation/renewal/demotion ledger; A1.6 adds schema v7 and its dormant capability-pin/route/open-
+  genesis ledger; A1.7a adds schema v8 and its evidence-preserving ingress ledger through
+  `awaiting_order`; A1.7b0 adds schema v9 and its dormant initial self-anchor, wrapped server-key,
+  fenced signing-lease, reservation, and acceptance ledger. The ordinary CLI installs no adapter and invokes no A1 broker, ingress, or signer operation, so the
   production daemon remains health-only. A separate local adapter store may hold only raw transport payloads with immutable host-state
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
@@ -1305,7 +1444,7 @@ demonstrates every property below:
   wire and summary text in local JSONL. Treat this as version/mode dependent
   until B.5 retains the selected fixture; do not require local transcript watching or
   expose compact as result-only based on either observation alone.
-- **A1.6 / A1.8 / B.2 — retention: ASSIGNED.** A1.6 owns sealed broker-frame retention, A1.8 owns generic outbox retention,
+- **A1.6 / A1.7a / A1.8 / B.2 — retention: A1.6 and A1.7a DECIDED; later layers ASSIGNED.** A1.6 retains every A1 ciphertext body, route-wide attempt/part original and first-collision tombstone, and generation manifest indefinitely. A1.7a retains its page/frame/raw/plaintext evidence, semantic part vectors, tombstones, gaps, and recoveries; neither slice implements checkpointing or compaction. A1.8 owns generic outbox retention,
   B.2 owns private raw RC events, delivery rows, and compacted visible-history retention. Raw RC logs
   remain longer than viewer frames because idempotency and audit depend on them. Each slice must
   choose and test its concrete policy before enabling destructive collection.

@@ -44,7 +44,12 @@ export async function identityFromRequest(req: Request): Promise<Uint8Array> {
     throw new AuthError("bearer token is not valid hex");
   }
   if (authToken.length !== AUTH_TOKEN_LEN) {
+    authToken.fill(0);
     throw new AuthError(`bearer token must decode to ${AUTH_TOKEN_LEN} bytes`);
   }
-  return (await sha256(authToken)).slice(0, IDENTITY_ID_LEN);
+  try {
+    return (await sha256(authToken)).slice(0, IDENTITY_ID_LEN);
+  } finally {
+    authToken.fill(0);
+  }
 }

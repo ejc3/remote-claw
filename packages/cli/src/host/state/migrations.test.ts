@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { base64urlEncode } from "@remote-claw/clawsec";
 import { describe, expect, it } from "vitest";
+import { parseA1CanonicalId, parseA1SafeId } from "./ids.js";
 import {
   assertHostStateMigrationRegistry,
   computeHostStateMigrationDigests,
@@ -15,12 +16,35 @@ import {
   type HostStateMigration,
   isExpectedHostStateMigrationDigest,
 } from "./migrations.js";
+import { nativeRootCertificateId } from "./native-root.js";
 
 const PINNED_VERSION_ONE_DIGEST = "Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec";
 const PINNED_VERSION_TWO_DIGEST = "yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY";
 const PINNED_VERSION_THREE_DIGEST = "cMLS59JfiV7fRoK68n1kZz3DN9Vo4yu7VZAX_HxHpq4";
 const PINNED_VERSION_FOUR_DIGEST = "zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0";
 const PINNED_VERSION_FIVE_DIGEST = "l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE";
+const PINNED_VERSION_SIX_DIGEST = "li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo";
+const PINNED_VERSION_SEVEN_DIGEST = "uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw";
+const PINNED_VERSION_EIGHT_DIGEST = "6Vf2H56rDvW2PGMrU83upUDz1r9gHP11tdq_w7T1K5E";
+const PINNED_VERSION_NINE_DIGEST = "fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE";
+const BROKER_CAPABILITY_PIN_ID = `rbcp_${encoded(32, 40)}`;
+const BROKER_CAPABILITY_ARTIFACT_ID = `rcph_${encoded(16, 41)}`;
+const BROKER_ROUTE_ID = `rcr_${encoded(32, 42)}`;
+const SECOND_BROKER_ROUTE_ID = `rcr_${encoded(32, 43)}`;
+const BROKER_STORE_ID = `rbsi_${encoded(16, 44)}`;
+const SECOND_BROKER_STORE_ID = `rbsi_${encoded(16, 45)}`;
+const BROKER_ROUTE_TOKEN = `ctl:a1:${encoded(32, 46)}`;
+const SECOND_BROKER_ROUTE_TOKEN = `bus:a1:${encoded(32, 47)}`;
+const CHANNEL_POSITION_ID = `rcp_${encoded(32, 48)}`;
+const DELIVERY_ATTEMPT_ID = `rda_${encoded(16, 49)}`;
+const RAW_FRAME_ARTIFACT_ID = `rcph_${encoded(16, 50)}`;
+const GAP_EVIDENCE_ARTIFACT_ID = `rcph_${encoded(16, 51)}`;
+const GAP_ID = "gap-invalid-frame-1";
+const RECOVERY_ID = "recover-invalid-frame-1";
+const SOURCE_NAMESPACE_ID = `wns_${encoded(32, 56)}`;
+const SEMANTIC_RESULT_ID = `rrs_${encoded(32, 57)}`;
+const INGRESS_OBSERVATION_ID = `rio_${encoded(32, 58)}`;
+const PLAINTEXT_ARTIFACT_ID = `rcph_${encoded(16, 59)}`;
 
 function encoded(byteLength: number, fill: number): string {
   return base64urlEncode(new Uint8Array(byteLength).fill(fill));
@@ -51,6 +75,38 @@ const METADATA_HANDLE_ID = `rcph_${encoded(16, 20)}`;
 const CAPABILITIES_HANDLE_ID = `rcph_${encoded(16, 21)}`;
 const METADATA_DIGEST = encoded(32, 20);
 const CAPABILITIES_DIGEST = encoded(32, 21);
+const ROOT_PAYLOAD_HANDLE_ID = `rcph_${encoded(16, 24)}`;
+const ROOT_PAYLOAD_DIGEST = encoded(32, 25);
+const ROOT_SIGNED_RECORD_DIGEST = encoded(32, 26);
+const ROOT_OPERATION_DIGEST = encoded(32, 27);
+const ROOT_OPERATION_ID = "activate-native-root-1";
+const ROOT_ID_SCOPE = {
+  machineIdentityId: MACHINE_IDENTITY_ID,
+  collaborationServerId: parseA1CanonicalId("collaborationServer", SERVER_ID),
+  logicalChatId: parseA1CanonicalId("logicalChat", CHAT_ID),
+} as const;
+const ROOT_CERTIFICATE_ID = nativeRootCertificateId({
+  ...ROOT_ID_SCOPE,
+  operationId: parseA1SafeId(ROOT_OPERATION_ID),
+});
+const RENEW_PAYLOAD_HANDLE_ID = `rcph_${encoded(16, 28)}`;
+const RENEW_PAYLOAD_DIGEST = encoded(32, 29);
+const RENEW_SIGNED_RECORD_DIGEST = encoded(32, 30);
+const RENEW_OPERATION_DIGEST = encoded(32, 31);
+const RENEW_OPERATION_ID = "renew-native-root-2";
+const RENEW_CERTIFICATE_ID = nativeRootCertificateId({
+  ...ROOT_ID_SCOPE,
+  operationId: parseA1SafeId(RENEW_OPERATION_ID),
+});
+const TAKEOVER_RENEW_PAYLOAD_HANDLE_ID = `rcph_${encoded(16, 32)}`;
+const TAKEOVER_RENEW_PAYLOAD_DIGEST = encoded(32, 33);
+const TAKEOVER_RENEW_SIGNED_RECORD_DIGEST = encoded(32, 34);
+const TAKEOVER_RENEW_OPERATION_DIGEST = encoded(32, 35);
+const TAKEOVER_RENEW_OPERATION_ID = "renew-native-root-after-takeover";
+const TAKEOVER_RENEW_CERTIFICATE_ID = nativeRootCertificateId({
+  ...ROOT_ID_SCOPE,
+  operationId: parseA1SafeId(TAKEOVER_RENEW_OPERATION_ID),
+});
 
 function applyMigrations(database: DatabaseSync, through = HOST_STATE_SCHEMA_VERSION): void {
   for (const migration of HOST_STATE_MIGRATIONS.slice(0, through)) {
@@ -217,6 +273,240 @@ function openedV5Database(): DatabaseSync {
     )
     .run(PINNED_VERSION_FIVE_DIGEST);
   return database;
+}
+
+function openedV6Database(): DatabaseSync {
+  const database = openedV5Database();
+  const migration = HOST_STATE_MIGRATIONS[5];
+  if (migration === undefined) throw new Error("missing v6 migration");
+  for (const statement of migration.statements) database.exec(statement);
+  database
+    .prepare(
+      `UPDATE host_state_metadata
+       SET schema_version = 6, migration_digest = ?
+       WHERE singleton = 1`,
+    )
+    .run(PINNED_VERSION_SIX_DIGEST);
+  return database;
+}
+
+function openedV7Database(): DatabaseSync {
+  const database = openedV6Database();
+  const migration = HOST_STATE_MIGRATIONS[6];
+  if (migration === undefined) throw new Error("missing v7 migration");
+  for (const statement of migration.statements) database.exec(statement);
+  database
+    .prepare(
+      `UPDATE host_state_metadata
+       SET schema_version = 7, migration_digest = ?
+       WHERE singleton = 1`,
+    )
+    .run(PINNED_VERSION_SEVEN_DIGEST);
+  return database;
+}
+
+function prepareV7BrokerRoute(database: DatabaseSync): void {
+  database
+    .prepare(
+      `INSERT INTO coordinator_leases (
+         coordinator_lease_id, collaboration_server_id, coordinator_epoch,
+         owner_instance_id, acquired_at_ms, initial_heartbeat_deadline_ms,
+         heartbeat_deadline_ms, released_at_ms, state
+       ) VALUES (?, ?, 1, 'migration-coordinator', 10, 1000, 1000, NULL, 'current')`,
+    )
+    .run(COORDINATOR_LEASE_ID, SERVER_ID);
+  database
+    .prepare(
+      `UPDATE collaboration_servers
+       SET current_coordinator_epoch = 1, current_coordinator_lease_id = ?
+       WHERE collaboration_server_id = ?`,
+    )
+    .run(COORDINATOR_LEASE_ID, SERVER_ID);
+  database
+    .prepare(
+      `INSERT INTO protected_artifacts (
+         protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+         artifact_digest, byte_length, artifact_bytes, created_at_ms
+       ) VALUES (?, 'artifact', 'host_profile', 'default',
+                 'remote-claw/broker-backend-capabilities/v1', ?, 1, ?, 20)`,
+    )
+    .run(BROKER_CAPABILITY_ARTIFACT_ID, DIGEST, Uint8Array.of(1));
+  database
+    .prepare(
+      `INSERT INTO broker_backend_capability_pins (
+         broker_backend_capability_pin_id, machine_identity_id, broker_origin,
+         broker_backend_selector, canonical_payload_schema_id, canonical_payload_ref,
+         canonical_payload_digest, observed_at_ms
+       ) VALUES (?, ?, 'https://broker.example', 'sqlite',
+                 'remote-claw/broker-backend-capabilities/v1', ?, ?, 20)`,
+    )
+    .run(BROKER_CAPABILITY_PIN_ID, MACHINE_IDENTITY_ID, BROKER_CAPABILITY_ARTIFACT_ID, DIGEST);
+  database
+    .prepare(
+      `INSERT INTO broker_routes (
+         broker_route_id, machine_identity_id, collaboration_server_id, route_kind,
+         logical_chat_id, route_token, broker_origin, broker_backend_selector,
+         broker_route_store_instance_id, genesis_generation,
+         broker_backend_capabilities_ref, broker_backend_capabilities_digest,
+         coordinator_lease_id, coordinator_epoch, created_at_ms, state
+       ) VALUES (?, ?, ?, 'server_control', NULL, ?, 'https://broker.example', 'sqlite',
+                 ?, 0, ?, ?, ?, 1, 30, 'current')`,
+    )
+    .run(
+      BROKER_ROUTE_ID,
+      MACHINE_IDENTITY_ID,
+      SERVER_ID,
+      BROKER_ROUTE_TOKEN,
+      BROKER_STORE_ID,
+      BROKER_CAPABILITY_PIN_ID,
+      DIGEST,
+      COORDINATOR_LEASE_ID,
+    );
+  database
+    .prepare(
+      `INSERT INTO broker_channel_generations (
+         broker_route_id, channel_generation, frame_count, next_generation,
+         state, manifest_digest
+       ) VALUES (?, 0, NULL, NULL, 'open', NULL)`,
+    )
+    .run(BROKER_ROUTE_ID);
+}
+
+function openedV8BrokerRouteDatabase(): DatabaseSync {
+  const database = openedV7Database();
+  prepareV7BrokerRoute(database);
+  const migration = HOST_STATE_MIGRATIONS[7];
+  if (migration === undefined) throw new Error("missing v8 migration");
+  for (const statement of migration.statements) database.exec(statement);
+  return database;
+}
+
+function claimBrokerRouteActor(database: DatabaseSync, observedAtMs = 40): void {
+  database
+    .prepare(
+      `UPDATE broker_route_actors
+       SET revision = revision + 1, claim_token = 'claim-one',
+           coordinator_lease_id = ?, coordinator_epoch = 1, claimed_at_ms = ?,
+           last_operation_id = 'claim-operation-one', last_operation_kind = 'claim',
+           last_operation_digest = ?, updated_at_ms = ?
+       WHERE broker_route_id = ?`,
+    )
+    .run(COORDINATOR_LEASE_ID, observedAtMs, DIGEST, observedAtMs, BROKER_ROUTE_ID);
+}
+
+function insertIngressArtifact(
+  database: DatabaseSync,
+  handleId: string,
+  schemaId: string,
+  digest = DIGEST,
+): void {
+  database
+    .prepare(
+      `INSERT INTO protected_artifacts (
+         protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+         artifact_digest, byte_length, artifact_bytes, created_at_ms
+       ) VALUES (?, 'artifact', 'collaboration_server', ?, ?, ?, 1, ?, 40)`,
+    )
+    .run(handleId, SERVER_ID, schemaId, digest, Uint8Array.of(1));
+}
+
+function insertPendingPosition(database: DatabaseSync): void {
+  database
+    .prepare(
+      `INSERT INTO authenticated_channel_positions (
+         channel_position_observation_id, broker_route_id, collaboration_server_id,
+         route_kind, logical_chat_id, channel_generation, frame_index,
+         claimed_delivery_attempt_id, claimed_part, claimed_transport_frame_digest,
+         received_frame_ref, received_frame_digest, received_frame_byte_length,
+         normalized_transport_frame_digest, frame_identity_id,
+         frame_collaboration_server_id, frame_logical_chat_id, direction, record_kind,
+         sequence, message_id, delivery_attempt_id, client_message_id, key_epoch,
+         part, parts, server_key_generation, host_signer_identity_key_id,
+         host_scope_certificate_id, host_signature_sequence, stable_logical_header_digest,
+         classification, validation_failure_code, ingress_observation_id,
+         cursor_disposition, recovery_id, gap_id, observed_at_ms, classified_at_ms
+       ) VALUES (?, ?, ?, 'server_control', NULL, 0, 0, ?, 0, ?, ?, ?, 1,
+                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pending_validation',
+                 NULL, NULL, 'blocked', NULL, NULL, 40, NULL)`,
+    )
+    .run(
+      CHANNEL_POSITION_ID,
+      BROKER_ROUTE_ID,
+      SERVER_ID,
+      DELIVERY_ATTEMPT_ID,
+      DIGEST,
+      RAW_FRAME_ARTIFACT_ID,
+      DIGEST,
+    );
+}
+
+function insertPendingPositionAt(
+  database: DatabaseSync,
+  positionId: string,
+  frameIndex: number,
+  deliveryAttemptId: string,
+): void {
+  database
+    .prepare(
+      `INSERT INTO authenticated_channel_positions (
+         channel_position_observation_id, broker_route_id, collaboration_server_id,
+         route_kind, logical_chat_id, channel_generation, frame_index,
+         claimed_delivery_attempt_id, claimed_part, claimed_transport_frame_digest,
+         received_frame_ref, received_frame_digest, received_frame_byte_length,
+         classification, cursor_disposition, observed_at_ms
+       ) VALUES (?, ?, ?, 'server_control', NULL, 0, ?, ?, 0, ?, ?, ?, 1,
+                 'pending_validation', 'blocked', 40)`,
+    )
+    .run(
+      positionId,
+      BROKER_ROUTE_ID,
+      SERVER_ID,
+      frameIndex,
+      deliveryAttemptId,
+      DIGEST,
+      RAW_FRAME_ARTIFACT_ID,
+      DIGEST,
+    );
+}
+
+function classifyInboundPosition(
+  database: DatabaseSync,
+  positionId: string,
+  observationId: string,
+  deliveryAttemptId: string,
+  cursorDisposition: "blocked" | "advanceable",
+  gapId: string | null,
+  recoveryId: string | null = null,
+  parts = 1,
+): void {
+  database
+    .prepare(
+      `UPDATE authenticated_channel_positions SET
+         normalized_transport_frame_digest = ?, frame_identity_id = ?,
+         frame_collaboration_server_id = ?, frame_logical_chat_id = NULL,
+         direction = 'in', record_kind = 'new_chat', sequence = 0,
+         message_id = 'message-one', delivery_attempt_id = ?, client_message_id = 'client-one',
+         key_epoch = 0, part = 0, parts = ?, server_key_generation = 1,
+         host_signer_identity_key_id = NULL, host_scope_certificate_id = NULL,
+         host_signature_sequence = NULL, stable_logical_header_digest = ?,
+         classification = 'inbound_ingress', ingress_observation_id = ?,
+         cursor_disposition = ?, gap_id = ?, recovery_id = ?, classified_at_ms = 50
+       WHERE channel_position_observation_id = ?`,
+    )
+    .run(
+      DIGEST,
+      MACHINE_IDENTITY_ID,
+      SERVER_ID,
+      deliveryAttemptId,
+      parts,
+      DIGEST,
+      observationId,
+      cursorDisposition,
+      gapId,
+      recoveryId,
+      positionId,
+    );
 }
 
 function acquireRuntimeOwner(database: DatabaseSync): void {
@@ -501,21 +791,567 @@ function insertRegistrationOperation(
     );
 }
 
+function prepareReadyNativeRootGraph(database: DatabaseSync): void {
+  prepareDurableRegistrationGraph(database);
+  insertRegistrationArtifacts(database);
+  insertStartingConversationLease(database);
+  insertRegistrationOperation(database, "operation-open", 1, "open", 25);
+  insertRegistrationOperation(database, "operation-bind", 2, "bind", 30);
+  database
+    .prepare(
+      `UPDATE native_conversation_leases
+       SET native_binding_incarnation_id = 'registration-binding-incarnation',
+           attachment_lease_id = 'registration-attachment-lease', updated_at_ms = 30
+       WHERE native_conversation_lease_id = ?`,
+    )
+    .run(NATIVE_CONVERSATION_LEASE_ID);
+  database
+    .prepare(
+      `INSERT INTO native_registration_publications
+         (native_registration_publication_id, native_conversation_lease_id,
+          native_binding_id, runtime_id, native_incarnation,
+          native_binding_incarnation_id, attachment_lease_id,
+          publication_generation, metadata_schema_id, metadata_ref,
+          metadata_digest, capabilities_schema_id, capabilities_ref,
+          capabilities_digest, published_at_ms, state)
+       VALUES ('registration-publication-1', ?, ?, ?, 1,
+               'registration-binding-incarnation', 'registration-attachment-lease',
+               1, 'provider-metadata/v1', ?, ?,
+               'remote-claw/native-conversation-capabilities/v1', ?, ?, 30, 'current')`,
+    )
+    .run(
+      NATIVE_CONVERSATION_LEASE_ID,
+      BINDING_ID,
+      RUNTIME_ID,
+      METADATA_HANDLE_ID,
+      METADATA_DIGEST,
+      CAPABILITIES_HANDLE_ID,
+      CAPABILITIES_DIGEST,
+    );
+  insertRegistrationOperation(database, "operation-publish", 3, "publish", 30);
+  database
+    .prepare(
+      `UPDATE native_conversation_leases
+       SET current_publication_id = 'registration-publication-1', updated_at_ms = 30
+       WHERE native_conversation_lease_id = ?`,
+    )
+    .run(NATIVE_CONVERSATION_LEASE_ID);
+  insertRegistrationOperation(database, "operation-ready", 4, "ready", 30);
+  database
+    .prepare(
+      `UPDATE native_conversation_leases
+       SET state = 'ready', updated_at_ms = 30
+       WHERE native_conversation_lease_id = ?`,
+    )
+    .run(NATIVE_CONVERSATION_LEASE_ID);
+  database
+    .prepare(
+      `UPDATE native_bindings
+       SET semantic_conversation_id = 'codex-thread-1',
+           current_binding_incarnation_id = 'registration-binding-incarnation',
+           state = 'current'
+       WHERE native_binding_id = ?`,
+    )
+    .run(BINDING_ID);
+  database
+    .prepare(
+      `INSERT INTO binding_lifecycle_gates
+         (native_binding_id, collaboration_server_id, logical_chat_id, runtime_id,
+          native_incarnation, native_binding_incarnation_id, attachment_id,
+          current_attachment_lease_id, phase, disconnect_policy,
+          gate_generation, updated_at_ms)
+       VALUES (?, ?, ?, ?, 1, 'registration-binding-incarnation',
+               'registration-attachment', 'registration-attachment-lease',
+               'ready', 'detach', 1, 30)`,
+    )
+    .run(BINDING_ID, SERVER_ID, CHAT_ID, RUNTIME_ID);
+  database.exec("BEGIN");
+  try {
+    database
+      .prepare(
+        `INSERT INTO runtime_owner_identity_keys
+           (runtime_owner_identity_key_id, runtime_id, key_generation, algorithm,
+            public_key, signing_key_protected_handle_id, next_signer_sequence,
+            local_trust_evidence_ref, local_trust_evidence_digest, state)
+         VALUES ('runtime-key-1', ?, 1, 'Ed25519', ?, ?, 0,
+                 'key-trust-evidence-1', ?, 'current')`,
+      )
+      .run(RUNTIME_ID, PUBLIC_KEY, SIGNING_KEY_HANDLE_ID, DIGEST);
+    database
+      .prepare(
+        `INSERT INTO runtime_owner_private_keys
+           (protected_handle_id, runtime_id, runtime_owner_identity_key_id,
+            key_generation, wrapping_schema_id, wrap_nonce, wrapped_pkcs8,
+            auth_tag, pkcs8_digest, created_at_ms, destroyed_at_ms, state)
+         VALUES (?, ?, 'runtime-key-1', 1,
+                 'remote-claw/runtime-owner-key-wrap/aes-256-gcm/v1',
+                 ?, ?, ?, ?, 31, NULL, 'current')`,
+      )
+      .run(
+        SIGNING_KEY_HANDLE_ID,
+        RUNTIME_ID,
+        new Uint8Array(12).fill(1),
+        new Uint8Array(64).fill(2),
+        new Uint8Array(16).fill(3),
+        DIGEST,
+      );
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+  database
+    .prepare(
+      `INSERT INTO runtime_owner_signature_reservations
+         (runtime_id, runtime_owner_identity_key_id, runtime_owner_key_generation,
+          signer_sequence, purpose, canonical_payload_schema_id,
+          canonical_payload_ref, canonical_payload_digest, signed_record_digest,
+          signature, signed_artifact_id, state)
+       VALUES (?, 'runtime-key-1', 1, 0, 'native_root', NULL, NULL, NULL,
+               NULL, NULL, NULL, 'reserved')`,
+    )
+    .run(RUNTIME_ID);
+  database
+    .prepare(
+      `INSERT INTO protected_artifacts
+         (protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+          artifact_digest, byte_length, artifact_bytes, created_at_ms)
+       VALUES (?, 'artifact', 'native_binding', ?,
+               'remote-claw/native-root-certificate/v1', ?, 1, ?, 40)`,
+    )
+    .run(ROOT_PAYLOAD_HANDLE_ID, BINDING_ID, ROOT_PAYLOAD_DIGEST, Uint8Array.of(24));
+  database
+    .prepare(
+      `UPDATE runtime_owner_signature_reservations
+       SET canonical_payload_schema_id = 'remote-claw/native-root-certificate/v1',
+           canonical_payload_ref = ?, canonical_payload_digest = ?, state = 'bound'
+       WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+         AND runtime_owner_key_generation = 1 AND signer_sequence = 0`,
+    )
+    .run(ROOT_PAYLOAD_HANDLE_ID, ROOT_PAYLOAD_DIGEST, RUNTIME_ID);
+}
+
+function reserveBoundNativeRootSigner(
+  database: DatabaseSync,
+  options: {
+    readonly signerSequence: number;
+    readonly canonicalPayloadRef: string;
+    readonly canonicalPayloadDigest: string;
+    readonly createdAtMs: number;
+  },
+): void {
+  database
+    .prepare(
+      `INSERT INTO runtime_owner_signature_reservations
+         (runtime_id, runtime_owner_identity_key_id, runtime_owner_key_generation,
+          signer_sequence, purpose, canonical_payload_schema_id,
+          canonical_payload_ref, canonical_payload_digest, signed_record_digest,
+          signature, signed_artifact_id, state)
+       VALUES (?, 'runtime-key-1', 1, ?, 'native_root', NULL, NULL, NULL,
+               NULL, NULL, NULL, 'reserved')`,
+    )
+    .run(RUNTIME_ID, options.signerSequence);
+  database
+    .prepare(
+      `INSERT INTO protected_artifacts
+         (protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+          artifact_digest, byte_length, artifact_bytes, created_at_ms)
+       VALUES (?, 'artifact', 'native_binding', ?,
+               'remote-claw/native-root-certificate/v1', ?, 1, ?, ?)`,
+    )
+    .run(
+      options.canonicalPayloadRef,
+      BINDING_ID,
+      options.canonicalPayloadDigest,
+      Uint8Array.of(options.signerSequence),
+      options.createdAtMs,
+    );
+  database
+    .prepare(
+      `UPDATE runtime_owner_signature_reservations
+       SET canonical_payload_schema_id = 'remote-claw/native-root-certificate/v1',
+           canonical_payload_ref = ?, canonical_payload_digest = ?, state = 'bound'
+       WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+         AND runtime_owner_key_generation = 1 AND signer_sequence = ?`,
+    )
+    .run(
+      options.canonicalPayloadRef,
+      options.canonicalPayloadDigest,
+      RUNTIME_ID,
+      options.signerSequence,
+    );
+}
+
+function takeOverReadyNativeRootGraph(database: DatabaseSync): void {
+  takeOverRuntimeOwner(database);
+  database.exec("BEGIN");
+  try {
+    database
+      .prepare(
+        `INSERT INTO runtime_owner_assignments
+           (runtime_owner_assignment_id, runtime_id, native_incarnation,
+            assignment_generation, runtime_owner_service_lease_id,
+            runtime_owner_service_epoch, assigned_at_ms,
+            assignment_evidence_schema_id, assignment_evidence_ref,
+            assignment_evidence_digest, supersedes_runtime_owner_assignment_id, reason)
+         VALUES ('runtime-owner-assignment-2', ?, 1, 2, 'runtime-owner-lease-2', 2,
+                 105, 'runtime-owner-assignment/v1', 'assignment-evidence-2', ?,
+                 ?, 'takeover')`,
+      )
+      .run(RUNTIME_ID, DIGEST, RUNTIME_OWNER_ASSIGNMENT_ID);
+    database
+      .prepare(
+        `UPDATE native_runtimes
+         SET current_runtime_owner_assignment_id = 'runtime-owner-assignment-2'
+         WHERE runtime_id = ?`,
+      )
+      .run(RUNTIME_ID);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+
+  insertRegistrationOperation(database, "operation-takeover-close", 5, "close", 110, {
+    ownerLeaseId: "runtime-owner-lease-2",
+    ownerEpoch: 2,
+  });
+  database
+    .prepare(
+      `UPDATE native_conversation_leases
+       SET updated_at_ms = 110, closed_at_ms = 110, state = 'closed'
+       WHERE native_conversation_lease_id = ?`,
+    )
+    .run(NATIVE_CONVERSATION_LEASE_ID);
+  database
+    .prepare(`UPDATE logical_chats SET state = 'recovering' WHERE logical_chat_id = ?`)
+    .run(CHAT_ID);
+  database
+    .prepare(
+      `UPDATE inward_collaboration_edges
+       SET root_path_certificate_id = NULL, state = 'installing'
+       WHERE inward_edge_id = ?`,
+    )
+    .run(EDGE_ID);
+  database
+    .prepare(
+      `UPDATE binding_lifecycle_gates
+       SET current_attachment_lease_id = NULL, phase = 'recovering',
+           gate_generation = 2, updated_at_ms = 110
+       WHERE native_binding_id = ?`,
+    )
+    .run(BINDING_ID);
+  database
+    .prepare(
+      `UPDATE native_transport_leases
+       SET released_at_ms = 110, state = 'superseded'
+       WHERE attachment_lease_id = 'registration-attachment-lease'`,
+    )
+    .run();
+  database
+    .prepare(
+      `UPDATE native_transport_attachments SET current_attachment_lease_id = NULL
+       WHERE attachment_id = 'registration-attachment'`,
+    )
+    .run();
+  database
+    .prepare(
+      `INSERT INTO native_transport_leases
+         (attachment_lease_id, attachment_id, native_binding_incarnation_id,
+          runtime_id, native_incarnation, runtime_owner_service_lease_id,
+          runtime_owner_service_epoch, coordinator_lease_id, coordinator_epoch,
+          transport_epoch, current_capability_snapshot_id,
+          current_native_client_ingress_lease_id, acquired_at_ms, released_at_ms, state)
+       VALUES ('registration-attachment-lease-2', 'registration-attachment',
+               'registration-binding-incarnation', ?, 1, 'runtime-owner-lease-2', 2,
+               ?, 1, 2, NULL, NULL, 110, NULL, 'current')`,
+    )
+    .run(RUNTIME_ID, COORDINATOR_LEASE_ID);
+  database
+    .prepare(
+      `UPDATE native_transport_attachments
+       SET current_attachment_lease_id = 'registration-attachment-lease-2'
+       WHERE attachment_id = 'registration-attachment'`,
+    )
+    .run();
+
+  insertStartingConversationLease(database, {
+    leaseId: SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+    portHandleId: SUCCESSOR_PROTECTED_PORT_HANDLE_ID,
+    ownerLeaseId: "runtime-owner-lease-2",
+    ownerEpoch: 2,
+    acquiredAtMs: 110,
+    leaseGeneration: 2,
+    supersedesLeaseId: NATIVE_CONVERSATION_LEASE_ID,
+    state: "recovering",
+  });
+  insertRegistrationOperation(database, "operation-takeover-reattach", 1, "reattach", 110, {
+    leaseId: SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+    ownerLeaseId: "runtime-owner-lease-2",
+    ownerEpoch: 2,
+  });
+  database
+    .prepare(
+      `UPDATE native_conversation_leases
+       SET native_binding_incarnation_id = 'registration-binding-incarnation',
+           attachment_lease_id = 'registration-attachment-lease-2', updated_at_ms = 110
+       WHERE native_conversation_lease_id = ?`,
+    )
+    .run(SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID);
+  database
+    .prepare(
+      `INSERT INTO native_registration_publications
+         (native_registration_publication_id, native_conversation_lease_id,
+          native_binding_id, runtime_id, native_incarnation,
+          native_binding_incarnation_id, attachment_lease_id,
+          publication_generation, metadata_schema_id, metadata_ref,
+          metadata_digest, capabilities_schema_id, capabilities_ref,
+          capabilities_digest, published_at_ms, state)
+       VALUES ('registration-publication-2', ?, ?, ?, 1,
+               'registration-binding-incarnation', 'registration-attachment-lease-2',
+               1, 'provider-metadata/v1', ?, ?,
+               'remote-claw/native-conversation-capabilities/v1', ?, ?, 112, 'current')`,
+    )
+    .run(
+      SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+      BINDING_ID,
+      RUNTIME_ID,
+      METADATA_HANDLE_ID,
+      METADATA_DIGEST,
+      CAPABILITIES_HANDLE_ID,
+      CAPABILITIES_DIGEST,
+    );
+  insertRegistrationOperation(database, "operation-takeover-publish", 2, "publish", 112, {
+    leaseId: SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+    ownerLeaseId: "runtime-owner-lease-2",
+    ownerEpoch: 2,
+  });
+  database
+    .prepare(
+      `UPDATE native_conversation_leases
+       SET current_publication_id = 'registration-publication-2', updated_at_ms = 112
+       WHERE native_conversation_lease_id = ?`,
+    )
+    .run(SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID);
+  insertRegistrationOperation(database, "operation-takeover-ready", 3, "ready", 113, {
+    leaseId: SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+    ownerLeaseId: "runtime-owner-lease-2",
+    ownerEpoch: 2,
+  });
+  database
+    .prepare(
+      `UPDATE native_conversation_leases
+       SET state = 'ready', updated_at_ms = 113
+       WHERE native_conversation_lease_id = ?`,
+    )
+    .run(SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID);
+  database
+    .prepare(
+      `UPDATE binding_lifecycle_gates
+       SET current_attachment_lease_id = 'registration-attachment-lease-2',
+           phase = 'ready', gate_generation = 3, updated_at_ms = 113
+       WHERE native_binding_id = ?`,
+    )
+    .run(BINDING_ID);
+}
+
+interface NativeRootFixtureOptions {
+  readonly operationId?: string;
+  readonly operationDigest?: string;
+  readonly kind?: "activate" | "renew";
+  readonly rootPathCertificateId?: string;
+  readonly expectedPriorRootPathCertificateId?: string | null;
+  readonly signerSequence?: number;
+  readonly canonicalPayloadRef?: string;
+  readonly canonicalPayloadDigest?: string;
+  readonly signedRecordDigest?: string;
+  readonly attachmentLeaseId?: string;
+  readonly transportEpoch?: number;
+  readonly nativeConversationLeaseId?: string;
+  readonly nativeConversationLeaseGeneration?: number;
+  readonly nativeRegistrationPublicationId?: string;
+  readonly publicationGeneration?: number;
+  readonly bindingGateGeneration?: number;
+  readonly runtimeOwnerServiceLeaseId?: string;
+  readonly runtimeOwnerServiceEpoch?: number;
+  readonly preparedAtMs?: number;
+  readonly issuedAtMs?: number;
+  readonly expiresAtMs?: number;
+  readonly acceptedAtMs?: number;
+  readonly committedAtMs?: number;
+}
+
+function insertPreparedNativeRootOperation(
+  database: DatabaseSync,
+  options: NativeRootFixtureOptions = {},
+): void {
+  database
+    .prepare(
+      `INSERT INTO native_root_activation_operations
+         (operation_id, operation_schema_id, operation_digest, kind,
+          root_path_certificate_id, expected_prior_root_path_certificate_id,
+          collaboration_server_id, logical_chat_id, inward_edge_id,
+          terminal_topology_generation, native_binding_id, runtime_id,
+          native_incarnation, native_binding_incarnation_id, attachment_id,
+          attachment_lease_id, transport_epoch, native_conversation_lease_id,
+          native_conversation_lease_generation, native_registration_publication_id,
+          publication_generation, binding_gate_generation,
+          runtime_owner_service_lease_id, runtime_owner_service_epoch,
+          coordinator_lease_id, coordinator_epoch, runtime_owner_identity_key_id,
+          runtime_owner_key_generation, signer_sequence, native_binding_evidence_digest,
+          canonical_payload_ref, canonical_payload_digest, signed_record_digest,
+          prepared_at_ms, issued_at_ms, expires_at_ms, committed_at_ms, state)
+       VALUES (?, 'remote-claw/native-root-activation/v1', ?, ?, ?, ?,
+               ?, ?, ?, 1, ?, ?, 1, 'registration-binding-incarnation',
+               'registration-attachment', ?, ?, ?, ?,
+               ?, ?, ?, ?, ?, ?, 1,
+               'runtime-key-1', 1, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, 'prepared')`,
+    )
+    .run(
+      options.operationId ?? ROOT_OPERATION_ID,
+      options.operationDigest ?? ROOT_OPERATION_DIGEST,
+      options.kind ?? "activate",
+      options.rootPathCertificateId ?? ROOT_CERTIFICATE_ID,
+      options.expectedPriorRootPathCertificateId ?? null,
+      SERVER_ID,
+      CHAT_ID,
+      EDGE_ID,
+      BINDING_ID,
+      RUNTIME_ID,
+      options.attachmentLeaseId ?? "registration-attachment-lease",
+      options.transportEpoch ?? 1,
+      options.nativeConversationLeaseId ?? NATIVE_CONVERSATION_LEASE_ID,
+      options.nativeConversationLeaseGeneration ?? 1,
+      options.nativeRegistrationPublicationId ?? "registration-publication-1",
+      options.publicationGeneration ?? 1,
+      options.bindingGateGeneration ?? 1,
+      options.runtimeOwnerServiceLeaseId ?? RUNTIME_OWNER_LEASE_ID,
+      options.runtimeOwnerServiceEpoch ?? 1,
+      COORDINATOR_LEASE_ID,
+      options.signerSequence ?? 0,
+      DIGEST,
+      options.canonicalPayloadRef ?? ROOT_PAYLOAD_HANDLE_ID,
+      options.canonicalPayloadDigest ?? ROOT_PAYLOAD_DIGEST,
+      options.preparedAtMs ?? 40,
+      options.issuedAtMs ?? 50,
+      options.expiresAtMs ?? 90,
+    );
+}
+
+function insertNativeRootCertificate(
+  database: DatabaseSync,
+  options: NativeRootFixtureOptions = {},
+): void {
+  database
+    .prepare(
+      `INSERT INTO native_root_certificates
+         (root_path_certificate_id, activation_operation_id,
+          activation_operation_digest, expected_prior_root_path_certificate_id,
+          schema_version, canonical_payload_schema_id, kind,
+          terminal_native_binding_id, terminal_server_id, terminal_logical_chat_id,
+          terminal_topology_generation, native_binding_evidence_digest,
+          runtime_id, native_incarnation, native_binding_incarnation_id,
+          attachment_id, attachment_lease_id, transport_epoch,
+          native_conversation_lease_id, native_conversation_lease_generation,
+          native_registration_publication_id, publication_generation,
+          binding_gate_generation, runtime_owner_service_lease_id,
+          runtime_owner_service_epoch, coordinator_lease_id, coordinator_epoch,
+          runtime_owner_identity_key_id, runtime_owner_key_generation, signer_sequence,
+          issued_at_ms, expires_at_ms, signature_algorithm,
+          canonical_payload_digest_algorithm, canonical_payload_ref,
+          canonical_payload_digest, signed_record_digest, signature,
+          committed_at_ms, state)
+       VALUES (?, ?, ?, ?, 1, 'remote-claw/native-root-certificate/v1',
+               'native-root', ?, ?, ?, 1, ?, ?, 1,
+               'registration-binding-incarnation', 'registration-attachment',
+               ?, ?, ?, ?,
+               ?, ?, ?, ?, ?, ?, 1,
+               'runtime-key-1', 1, ?, ?, ?, 'Ed25519', 'SHA-256',
+               ?, ?, ?, ?, ?, 'activated')`,
+    )
+    .run(
+      options.rootPathCertificateId ?? ROOT_CERTIFICATE_ID,
+      options.operationId ?? ROOT_OPERATION_ID,
+      options.operationDigest ?? ROOT_OPERATION_DIGEST,
+      options.expectedPriorRootPathCertificateId ?? null,
+      BINDING_ID,
+      SERVER_ID,
+      CHAT_ID,
+      DIGEST,
+      RUNTIME_ID,
+      options.attachmentLeaseId ?? "registration-attachment-lease",
+      options.transportEpoch ?? 1,
+      options.nativeConversationLeaseId ?? NATIVE_CONVERSATION_LEASE_ID,
+      options.nativeConversationLeaseGeneration ?? 1,
+      options.nativeRegistrationPublicationId ?? "registration-publication-1",
+      options.publicationGeneration ?? 1,
+      options.bindingGateGeneration ?? 1,
+      options.runtimeOwnerServiceLeaseId ?? RUNTIME_OWNER_LEASE_ID,
+      options.runtimeOwnerServiceEpoch ?? 1,
+      COORDINATOR_LEASE_ID,
+      options.signerSequence ?? 0,
+      options.issuedAtMs ?? 50,
+      options.expiresAtMs ?? 90,
+      options.canonicalPayloadRef ?? ROOT_PAYLOAD_HANDLE_ID,
+      options.canonicalPayloadDigest ?? ROOT_PAYLOAD_DIGEST,
+      options.signedRecordDigest ?? ROOT_SIGNED_RECORD_DIGEST,
+      SIGNATURE,
+      options.committedAtMs ?? 60,
+    );
+}
+
+function signAndAcceptPreparedNativeRoot(
+  database: DatabaseSync,
+  options: NativeRootFixtureOptions = {},
+): void {
+  database
+    .prepare(
+      `UPDATE runtime_owner_signature_reservations
+       SET signed_record_digest = ?, signature = ?, signed_artifact_id = ?, state = 'signed'
+       WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+         AND runtime_owner_key_generation = 1 AND signer_sequence = ?`,
+    )
+    .run(
+      options.signedRecordDigest ?? ROOT_SIGNED_RECORD_DIGEST,
+      SIGNATURE,
+      options.rootPathCertificateId ?? ROOT_CERTIFICATE_ID,
+      RUNTIME_ID,
+      options.signerSequence ?? 0,
+    );
+  database
+    .prepare(
+      `INSERT INTO runtime_owner_signed_record_acceptances
+         (runtime_id, runtime_owner_identity_key_id, runtime_owner_key_generation,
+          signer_sequence, signed_record_digest, accepted_at_ms)
+       VALUES (?, 'runtime-key-1', 1, ?, ?, ?)`,
+    )
+    .run(
+      RUNTIME_ID,
+      options.signerSequence ?? 0,
+      options.signedRecordDigest ?? ROOT_SIGNED_RECORD_DIGEST,
+      options.acceptedAtMs ?? 55,
+    );
+}
+
 describe("A1 host-state migrations", () => {
   it("pins the application id, schema version, and exact migration digests", () => {
     expect(HOST_STATE_APPLICATION_ID).toBe(0x52434c57);
-    expect(HOST_STATE_SCHEMA_VERSION).toBe(5);
+    expect(HOST_STATE_SCHEMA_VERSION).toBe(9);
     expect(HOST_STATE_MIGRATION_DIGESTS).toEqual([
       PINNED_VERSION_ONE_DIGEST,
       PINNED_VERSION_TWO_DIGEST,
       PINNED_VERSION_THREE_DIGEST,
       PINNED_VERSION_FOUR_DIGEST,
       PINNED_VERSION_FIVE_DIGEST,
+      PINNED_VERSION_SIX_DIGEST,
+      PINNED_VERSION_SEVEN_DIGEST,
+      PINNED_VERSION_EIGHT_DIGEST,
+      PINNED_VERSION_NINE_DIGEST,
     ]);
     expect(HOST_STATE_SCHEMA_MANIFEST).toEqual({
       applicationId: 0x52434c57,
-      schemaVersion: 5,
-      migrationDigest: PINNED_VERSION_FIVE_DIGEST,
+      schemaVersion: 9,
+      migrationDigest: PINNED_VERSION_NINE_DIGEST,
       sqliteSchema: HOST_STATE_SQLITE_SCHEMA_MANIFEST,
     });
     expect(expectedHostStateSqliteSchemaManifest(1)).toHaveLength(6);
@@ -523,6 +1359,11 @@ describe("A1 host-state migrations", () => {
     expect(expectedHostStateSqliteSchemaManifest(3)).toHaveLength(91);
     expect(expectedHostStateSqliteSchemaManifest(4)).toHaveLength(231);
     expect(expectedHostStateSqliteSchemaManifest(5)).toHaveLength(269);
+    expect(expectedHostStateSqliteSchemaManifest(6)).toHaveLength(304);
+    expect(expectedHostStateSqliteSchemaManifest(7)).toHaveLength(326);
+    expect(expectedHostStateSqliteSchemaManifest(8)).toHaveLength(492);
+    expect(expectedHostStateSqliteSchemaManifest(9)).toHaveLength(571);
+    expect(HOST_STATE_MIGRATIONS[8]?.statements).toHaveLength(81);
   });
 
   it("commits every exact historical SQL byte into the chained digest", () => {
@@ -576,12 +1417,16 @@ describe("A1 host-state migrations", () => {
     expect(expectedHostStateMigrationDigest(3)).toBe(PINNED_VERSION_THREE_DIGEST);
     expect(expectedHostStateMigrationDigest(4)).toBe(PINNED_VERSION_FOUR_DIGEST);
     expect(expectedHostStateMigrationDigest(5)).toBe(PINNED_VERSION_FIVE_DIGEST);
+    expect(expectedHostStateMigrationDigest(6)).toBe(PINNED_VERSION_SIX_DIGEST);
+    expect(expectedHostStateMigrationDigest(7)).toBe(PINNED_VERSION_SEVEN_DIGEST);
+    expect(expectedHostStateMigrationDigest(8)).toBe(PINNED_VERSION_EIGHT_DIGEST);
+    expect(expectedHostStateMigrationDigest(9)).toBe(PINNED_VERSION_NINE_DIGEST);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 1)).toBe(true);
     expect(isExpectedHostStateMigrationDigest(`${PINNED_VERSION_ONE_DIGEST}=`, 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest("A".repeat(43), 1)).toBe(false);
     expect(isExpectedHostStateMigrationDigest(PINNED_VERSION_ONE_DIGEST, 2)).toBe(false);
     expect(() => expectedHostStateMigrationDigest(0)).toThrow(/not supported/);
-    expect(() => expectedHostStateMigrationDigest(6)).toThrow(/not supported/);
+    expect(() => expectedHostStateMigrationDigest(10)).toThrow(/not supported/);
   });
 
   it("creates exactly the declared application schema", () => {
@@ -627,9 +1472,9 @@ describe("A1 host-state migrations", () => {
         "created_at_ms",
       ]);
 
-      expect(rows.filter((row) => row.type === "table")).toHaveLength(33);
-      expect(rows.filter((row) => row.type === "index")).toHaveLength(67);
-      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(169);
+      expect(rows.filter((row) => row.type === "table")).toHaveLength(65);
+      expect(rows.filter((row) => row.type === "index")).toHaveLength(123);
+      expect(rows.filter((row) => row.type === "trigger")).toHaveLength(383);
       expect(rows.some((row) => String(row.name).startsWith("sqlite_autoindex"))).toBe(false);
       expect(
         database
@@ -856,6 +1701,1407 @@ describe("A1 host-state migrations", () => {
       ]) {
         expect(database.prepare(`SELECT * FROM ${table}`).all()).toEqual([]);
       }
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("migrates the exact v5 manifest to the empty v6 terminal-root ledger", () => {
+    const database = openedV5Database();
+    try {
+      const migration = HOST_STATE_MIGRATIONS[5];
+      if (migration === undefined) throw new Error("missing v6 migration");
+      expect(migration.id).toBe("006-terminal-native-root");
+      expect(migration.statements).toHaveLength(36);
+      for (const statement of migration.statements) database.exec(statement);
+
+      const actual = database
+        .prepare(
+          `SELECT type, name, tbl_name AS tableName, sql
+           FROM sqlite_schema
+           ORDER BY type, name`,
+        )
+        .all();
+      const expected = [...expectedHostStateSqliteSchemaManifest(6)].sort((left, right) =>
+        left.type === right.type
+          ? left.name.localeCompare(right.name)
+          : left.type.localeCompare(right.type),
+      );
+      expect(actual).toEqual(expected);
+      for (const table of [
+        "native_root_signature_activation_fences",
+        "native_root_activation_operations",
+        "native_root_certificates",
+      ]) {
+        expect(database.prepare(`SELECT * FROM ${table}`).all(), table).toEqual([]);
+      }
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("migrates the exact v6 manifest to the empty v7 dormant broker-route graph", () => {
+    const database = openedV6Database();
+    try {
+      const migration = HOST_STATE_MIGRATIONS[6];
+      if (migration === undefined) throw new Error("missing v7 migration");
+      expect(migration.id).toBe("007-a1-broker-routes");
+      expect(migration.statements).toHaveLength(22);
+      for (const statement of migration.statements) database.exec(statement);
+
+      const actual = database
+        .prepare(
+          `SELECT type, name, tbl_name AS tableName, sql
+           FROM sqlite_schema
+           ORDER BY type, name`,
+        )
+        .all();
+      const expected = [...expectedHostStateSqliteSchemaManifest(7)].sort((left, right) =>
+        left.type === right.type
+          ? left.name.localeCompare(right.name)
+          : left.type.localeCompare(right.type),
+      );
+      expect(actual).toEqual(expected);
+      for (const table of [
+        "broker_backend_capability_pins",
+        "broker_routes",
+        "broker_channel_generations",
+      ]) {
+        expect(database.prepare(`SELECT * FROM ${table}`).all(), table).toEqual([]);
+      }
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("backfills every v7 broker route into the dormant v8 ingress heads", () => {
+    const database = openedV7Database();
+    try {
+      prepareV7BrokerRoute(database);
+      const migration = HOST_STATE_MIGRATIONS[7];
+      if (migration === undefined) throw new Error("missing v8 migration");
+      expect(migration.id).toBe("008-a1-durable-ingress");
+      for (const statement of migration.statements) database.exec(statement);
+
+      expect(
+        database
+          .prepare(
+            `SELECT state, current_channel_generation, active_gap_count
+             FROM broker_route_runtime_status WHERE broker_route_id = ?`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({ state: "current", current_channel_generation: 0, active_gap_count: 0 });
+      expect(
+        database
+          .prepare(
+            `SELECT state, observed_next_frame_index, frame_count, next_generation,
+                    manifest_digest
+             FROM broker_channel_generation_observations
+             WHERE broker_route_id = ? AND channel_generation = 0`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({
+        state: "open",
+        observed_next_frame_index: 0,
+        frame_count: null,
+        next_generation: null,
+        manifest_digest: null,
+      });
+      expect(
+        database
+          .prepare(
+            `SELECT next_generation, next_frame_index, revision
+             FROM broker_route_fetch_cursors WHERE broker_route_id = ?`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({ next_generation: 0, next_frame_index: 0, revision: 0 });
+      expect(
+        database
+          .prepare(
+            `SELECT next_generation, next_frame_index, contiguous_through_generation,
+                    contiguous_through_frame_index, revision
+             FROM broker_route_semantic_cursors WHERE broker_route_id = ?`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({
+        next_generation: 0,
+        next_frame_index: 0,
+        contiguous_through_generation: null,
+        contiguous_through_frame_index: null,
+        revision: 0,
+      });
+      expect(
+        database
+          .prepare(
+            `SELECT revision, claim_token, coordinator_lease_id, coordinator_epoch,
+                    last_operation_id
+             FROM broker_route_actors WHERE broker_route_id = ?`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({
+        revision: 0,
+        claim_token: null,
+        coordinator_lease_id: null,
+        coordinator_epoch: null,
+        last_operation_id: null,
+      });
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("auto-seeds the same v8 heads for a route installed after migration", () => {
+    const database = openedV7Database();
+    try {
+      prepareV7BrokerRoute(database);
+      const migration = HOST_STATE_MIGRATIONS[7];
+      if (migration === undefined) throw new Error("missing v8 migration");
+      for (const statement of migration.statements) database.exec(statement);
+
+      database
+        .prepare(
+          `INSERT INTO broker_routes (
+             broker_route_id, machine_identity_id, collaboration_server_id, route_kind,
+             logical_chat_id, route_token, broker_origin, broker_backend_selector,
+             broker_route_store_instance_id, genesis_generation,
+             broker_backend_capabilities_ref, broker_backend_capabilities_digest,
+             coordinator_lease_id, coordinator_epoch, created_at_ms, state
+           ) VALUES (?, ?, ?, 'scope_bus', NULL, ?, 'https://broker.example', 'sqlite',
+                     ?, 0, ?, ?, ?, 1, 40, 'current')`,
+        )
+        .run(
+          SECOND_BROKER_ROUTE_ID,
+          MACHINE_IDENTITY_ID,
+          SERVER_ID,
+          SECOND_BROKER_ROUTE_TOKEN,
+          SECOND_BROKER_STORE_ID,
+          BROKER_CAPABILITY_PIN_ID,
+          DIGEST,
+          COORDINATOR_LEASE_ID,
+        );
+      database
+        .prepare(
+          `INSERT INTO broker_channel_generations (
+             broker_route_id, channel_generation, frame_count, next_generation,
+             state, manifest_digest
+           ) VALUES (?, 0, NULL, NULL, 'open', NULL)`,
+        )
+        .run(SECOND_BROKER_ROUTE_ID);
+
+      for (const table of [
+        "broker_route_runtime_status",
+        "broker_channel_generation_observations",
+        "broker_route_fetch_cursors",
+        "broker_route_semantic_cursors",
+        "broker_route_actors",
+      ]) {
+        expect(
+          database
+            .prepare(`SELECT count(*) AS count FROM ${table} WHERE broker_route_id = ?`)
+            .get(SECOND_BROKER_ROUTE_ID),
+          table,
+        ).toEqual({ count: 1 });
+      }
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("installs only the A1.7a ingress ledger and no future effect surface", () => {
+    const database = new DatabaseSync(":memory:");
+    try {
+      applyMigrations(database);
+      const v8Tables = database
+        .prepare(
+          `SELECT name FROM sqlite_schema
+           WHERE type = 'table' AND name IN (
+             'broker_route_runtime_status', 'broker_channel_generation_observations',
+             'broker_route_fetch_cursors', 'broker_route_semantic_cursors',
+             'broker_route_gaps', 'authenticated_channel_positions',
+             'channel_position_equivocations', 'broker_channel_manifest_equivocations',
+             'broker_transport_key_collisions', 'channel_position_recoveries',
+             'authenticated_ingress_results', 'ingress_transport_attempts',
+             'ingress_delivery_candidates', 'authenticated_ingress_parts',
+             'authenticated_ingress_observations', 'broker_route_actors',
+             'broker_read_page_observations'
+           ) ORDER BY name`,
+        )
+        .all();
+      expect(v8Tables).toHaveLength(17);
+      for (const forbidden of [
+        "collaboration_commands",
+        "ingress_result_deliveries",
+        "host_output_deliveries",
+        "native_dispatch_attempts",
+        "effect_gates",
+      ]) {
+        expect(
+          database
+            .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+            .get(forbidden),
+          forbidden,
+        ).toBeUndefined();
+      }
+    } finally {
+      database.close();
+    }
+  });
+
+  it("lets only exact scoped artifacts enter the staged-position ledger", () => {
+    const database = openedV8BrokerRouteDatabase();
+    try {
+      claimBrokerRouteActor(database);
+      insertIngressArtifact(database, RAW_FRAME_ARTIFACT_ID, "wrong-schema/v1");
+      expect(() => insertPendingPosition(database)).toThrow(/exact received-frame artifact/);
+
+      const validRef = `rcph_${encoded(16, 52)}`;
+      database
+        .prepare(
+          `INSERT INTO protected_artifacts (
+             protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+             artifact_digest, byte_length, artifact_bytes, created_at_ms
+           ) VALUES (?, 'artifact', 'collaboration_server', ?,
+                     'remote-claw/a1/received-frame/v1', ?, 1, ?, 40)`,
+        )
+        .run(validRef, SERVER_ID, DIGEST, Uint8Array.of(1));
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO authenticated_channel_positions (
+               channel_position_observation_id, broker_route_id, collaboration_server_id,
+               route_kind, logical_chat_id, channel_generation, frame_index,
+               claimed_delivery_attempt_id, claimed_part, claimed_transport_frame_digest,
+               received_frame_ref, received_frame_digest, received_frame_byte_length,
+               classification, cursor_disposition, observed_at_ms
+             ) VALUES (?, ?, ?, 'chat', NULL, 0, 0, ?, 0, ?, ?, ?, 1,
+                       'pending_validation', 'blocked', 40)`,
+          )
+          .run(
+            CHANNEL_POSITION_ID,
+            BROKER_ROUTE_ID,
+            SERVER_ID,
+            DELIVERY_ATTEMPT_ID,
+            DIGEST,
+            validRef,
+            DIGEST,
+          ),
+      ).toThrow(/route scope|CHECK constraint/);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("makes gap count and quarantine state database-owned through exact recovery", () => {
+    const database = openedV8BrokerRouteDatabase();
+    try {
+      claimBrokerRouteActor(database);
+      insertIngressArtifact(database, RAW_FRAME_ARTIFACT_ID, "remote-claw/a1/received-frame/v1");
+      insertIngressArtifact(
+        database,
+        GAP_EVIDENCE_ARTIFACT_ID,
+        "remote-claw/a1/ingress-gap-evidence/v1",
+      );
+      insertPendingPosition(database);
+      database
+        .prepare(
+          `INSERT INTO broker_route_gaps (
+             gap_id, broker_route_id, collaboration_server_id, route_kind, logical_chat_id,
+             reason, stable_semantic_result_id, channel_position_observation_id,
+             channel_generation, manifest_equivocation_id, transport_key_collision_id,
+             evidence_ref, evidence_digest, state, opened_at_ms, resolved_at_ms, recovery_id
+           ) VALUES (?, ?, ?, 'server_control', NULL, 'invalid_frame', NULL, ?,
+                     NULL, NULL, NULL, ?, ?, 'open', 45, NULL, NULL)`,
+        )
+        .run(
+          GAP_ID,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          CHANNEL_POSITION_ID,
+          GAP_EVIDENCE_ARTIFACT_ID,
+          DIGEST,
+        );
+      expect(
+        database
+          .prepare(
+            `SELECT state, active_gap_count FROM broker_route_runtime_status
+             WHERE broker_route_id = ?`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({ state: "quarantined", active_gap_count: 1 });
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE broker_route_runtime_status SET active_gap_count = 0, state = 'current'
+             WHERE broker_route_id = ?`,
+          )
+          .run(BROKER_ROUTE_ID),
+      ).toThrow(/runtime transition/);
+
+      database
+        .prepare(
+          `INSERT INTO channel_position_recoveries (
+             recovery_id, gap_id, broker_route_id, collaboration_server_id, route_kind,
+             logical_chat_id, reason, decision, evidence_ref, evidence_digest,
+             coordinator_lease_id, coordinator_epoch, decided_at_ms
+           ) VALUES (?, ?, ?, ?, 'server_control', NULL, 'invalid_frame',
+                     'proved_safe_discard', ?, ?, ?, 1, 50)`,
+        )
+        .run(
+          RECOVERY_ID,
+          GAP_ID,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          GAP_EVIDENCE_ARTIFACT_ID,
+          DIGEST,
+          COORDINATOR_LEASE_ID,
+        );
+      database
+        .prepare(
+          `UPDATE broker_route_gaps SET state = 'resolved', resolved_at_ms = 50,
+                  recovery_id = ? WHERE gap_id = ?`,
+        )
+        .run(RECOVERY_ID, GAP_ID);
+      expect(
+        database
+          .prepare(
+            `SELECT state, active_gap_count FROM broker_route_runtime_status
+             WHERE broker_route_id = ?`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({ state: "current", active_gap_count: 0 });
+      expect(() =>
+        database.prepare("DELETE FROM broker_route_gaps WHERE gap_id = ?").run(GAP_ID),
+      ).toThrow(/retained/);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("retains fresh retry evidence while extending semantic cursor bounds by min and max", () => {
+    const database = openedV8BrokerRouteDatabase();
+    try {
+      claimBrokerRouteActor(database);
+      insertIngressArtifact(database, RAW_FRAME_ARTIFACT_ID, "remote-claw/a1/received-frame/v1");
+      insertIngressArtifact(
+        database,
+        PLAINTEXT_ARTIFACT_ID,
+        "remote-claw/a1/opened-plaintext-part/v1",
+      );
+      insertPendingPosition(database);
+      database.exec("BEGIN");
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_results (
+             stable_semantic_result_id, broker_route_id, collaboration_server_id, route_kind,
+             logical_chat_id, source_event_namespace_id, message_id, record_kind,
+             client_message_id, expected_parts, source_payload_schema_id,
+             canonical_message_digest, source_event_fingerprint_schema_id,
+             source_event_fingerprint, first_ingress_generation, first_ingress_frame_index,
+             last_observed_ingress_generation, last_observed_ingress_frame_index,
+             assembly_deadline_ms, state, collision_at_ms, terminal_at_ms
+           ) VALUES (?, ?, ?, 'server_control', NULL, ?, 'message-one', 'new_chat',
+                     'client-one', 1, NULL, NULL, NULL, NULL, 0, 10, 0, 10,
+                     300040, 'assembling', NULL, NULL)`,
+        )
+        .run(SEMANTIC_RESULT_ID, BROKER_ROUTE_ID, SERVER_ID, SOURCE_NAMESPACE_ID);
+      database
+        .prepare(
+          `INSERT INTO ingress_transport_attempts (
+             broker_route_id, collaboration_server_id, route_kind, logical_chat_id,
+             delivery_attempt_id, source_event_namespace_id, stable_semantic_result_id,
+             message_id, record_kind, client_message_id, stable_logical_header_digest,
+             expected_parts, binding_disposition, collision_gap_id
+           ) VALUES (?, ?, 'server_control', NULL, ?, ?, ?, 'message-one', 'new_chat',
+                     'client-one', ?, 1, 'exact', NULL)`,
+        )
+        .run(
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          DELIVERY_ATTEMPT_ID,
+          SOURCE_NAMESPACE_ID,
+          SEMANTIC_RESULT_ID,
+          DIGEST,
+        );
+      database
+        .prepare(
+          `INSERT INTO ingress_delivery_candidates (
+             stable_semantic_result_id, delivery_attempt_id, broker_route_id,
+             collaboration_server_id, route_kind, logical_chat_id, expected_parts,
+             received_parts, plaintext_byte_count, first_ingress_generation,
+             first_ingress_frame_index, last_observed_ingress_generation,
+             last_observed_ingress_frame_index, state
+           ) VALUES (?, ?, ?, ?, 'server_control', NULL, 1, 0, 0, 0, 10, 0, 10, 'assembling')`,
+        )
+        .run(SEMANTIC_RESULT_ID, DELIVERY_ATTEMPT_ID, BROKER_ROUTE_ID, SERVER_ID);
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_parts (
+             stable_semantic_result_id, delivery_attempt_id, part, broker_route_id,
+             collaboration_server_id, route_kind, logical_chat_id, parts,
+             authenticated_part_digest, plaintext_part_ref, plaintext_part_digest,
+             plaintext_part_byte_length, first_ingress_generation, first_ingress_frame_index
+           ) VALUES (?, ?, 0, ?, ?, 'server_control', NULL, 1, ?, ?, ?, 1, 0, 10)`,
+        )
+        .run(
+          SEMANTIC_RESULT_ID,
+          DELIVERY_ATTEMPT_ID,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          DIGEST,
+          PLAINTEXT_ARTIFACT_ID,
+          DIGEST,
+        );
+      database
+        .prepare(
+          `UPDATE ingress_delivery_candidates
+           SET received_parts = 1, plaintext_byte_count = 1, state = 'complete'
+           WHERE broker_route_id = ? AND stable_semantic_result_id = ?
+             AND delivery_attempt_id = ?`,
+        )
+        .run(BROKER_ROUTE_ID, SEMANTIC_RESULT_ID, DELIVERY_ATTEMPT_ID);
+      database
+        .prepare(
+          `UPDATE authenticated_ingress_results
+           SET state = 'awaiting_order', source_payload_schema_id =
+                 'remote-claw/a1-ingress-new-chat/v1', canonical_message_digest = ?,
+               source_event_fingerprint_schema_id =
+                 'remote-claw/a1/source-event-fingerprint/v1',
+               source_event_fingerprint = ?, accepted_delivery_attempt_id = ?
+           WHERE broker_route_id = ? AND stable_semantic_result_id = ?`,
+        )
+        .run(DIGEST, DIGEST, DELIVERY_ATTEMPT_ID, BROKER_ROUTE_ID, SEMANTIC_RESULT_ID);
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_observations (
+             ingress_observation_id, channel_position_observation_id,
+             stable_semantic_result_id, delivery_attempt_id, broker_route_id,
+             collaboration_server_id, route_kind, logical_chat_id, channel_generation,
+             frame_index, part, parts, authenticated_part_digest, plaintext_evidence_ref,
+             plaintext_evidence_digest, plaintext_evidence_byte_length, disposition,
+             cursor_disposition, gap_id, recovery_id
+           ) VALUES (?, ?, ?, ?, ?, ?, 'server_control', NULL, 0, 0, 0, 1, ?, ?, ?, 1,
+                     'exact_transport_retry', 'advanceable', NULL, NULL)`,
+        )
+        .run(
+          INGRESS_OBSERVATION_ID,
+          CHANNEL_POSITION_ID,
+          SEMANTIC_RESULT_ID,
+          DELIVERY_ATTEMPT_ID,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          DIGEST,
+          PLAINTEXT_ARTIFACT_ID,
+          DIGEST,
+        );
+      database.exec("COMMIT");
+
+      for (const table of ["authenticated_ingress_results", "ingress_delivery_candidates"]) {
+        expect(
+          database
+            .prepare(
+              `SELECT first_ingress_generation, first_ingress_frame_index,
+                      last_observed_ingress_generation, last_observed_ingress_frame_index
+               FROM ${table} WHERE stable_semantic_result_id = ?`,
+            )
+            .get(SEMANTIC_RESULT_ID),
+          table,
+        ).toEqual({
+          first_ingress_generation: 0,
+          first_ingress_frame_index: 0,
+          last_observed_ingress_generation: 0,
+          last_observed_ingress_frame_index: 10,
+        });
+      }
+      expect(
+        database
+          .prepare(
+            `SELECT plaintext_evidence_ref FROM authenticated_ingress_observations
+             WHERE ingress_observation_id = ?`,
+          )
+          .get(INGRESS_OBSERVATION_ID),
+      ).toEqual({ plaintext_evidence_ref: PLAINTEXT_ARTIFACT_ID });
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE authenticated_ingress_results
+             SET accepted_delivery_attempt_id = ?
+             WHERE stable_semantic_result_id = ?`,
+          )
+          .run(`rda_${encoded(16, 60)}`, SEMANTIC_RESULT_ID),
+      ).toThrow(/transition is not allowed|FOREIGN KEY|exact complete accepted candidate/);
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE ingress_delivery_candidates SET state = 'collision'
+             WHERE stable_semantic_result_id = ? AND delivery_attempt_id = ?`,
+          )
+          .run(SEMANTIC_RESULT_ID, DELIVERY_ATTEMPT_ID),
+      ).toThrow(/accepted delivery candidate must remain complete/);
+
+      const collisionPositionId = `rcp_${encoded(32, 61)}`;
+      const collisionObservationId = `rio_${encoded(32, 62)}`;
+      const collisionAttemptId = `rda_${encoded(16, 63)}`;
+      const collisionGapId = "gap-semantic-collision-one";
+      const collisionRecoveryId = "recover-semantic-collision-one";
+      insertPendingPositionAt(database, collisionPositionId, 1, collisionAttemptId);
+      database
+        .prepare(
+          `INSERT INTO broker_route_gaps (
+             gap_id, broker_route_id, collaboration_server_id, route_kind, logical_chat_id,
+             reason, stable_semantic_result_id, channel_position_observation_id,
+             channel_generation, manifest_equivocation_id, transport_key_collision_id,
+             evidence_ref, evidence_digest, state, opened_at_ms, resolved_at_ms, recovery_id
+           ) VALUES (?, ?, ?, 'server_control', NULL, 'semantic_collision', ?, NULL,
+                     NULL, NULL, NULL, ?, ?, 'open', 51, NULL, NULL)`,
+        )
+        .run(
+          collisionGapId,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          SEMANTIC_RESULT_ID,
+          RAW_FRAME_ARTIFACT_ID,
+          DIGEST,
+        );
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_observations (
+             ingress_observation_id, channel_position_observation_id,
+             stable_semantic_result_id, delivery_attempt_id, broker_route_id,
+             collaboration_server_id, route_kind, logical_chat_id, channel_generation,
+             frame_index, part, parts, authenticated_part_digest, plaintext_evidence_ref,
+             plaintext_evidence_digest, plaintext_evidence_byte_length, disposition,
+             cursor_disposition, gap_id, recovery_id
+           ) VALUES (?, ?, ?, ?, ?, ?, 'server_control', NULL, 0, 1, 0, 1, ?, ?, ?, 1,
+                     'collision', 'blocked', ?, NULL)`,
+        )
+        .run(
+          collisionObservationId,
+          collisionPositionId,
+          SEMANTIC_RESULT_ID,
+          collisionAttemptId,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          DIGEST,
+          PLAINTEXT_ARTIFACT_ID,
+          DIGEST,
+          collisionGapId,
+        );
+      classifyInboundPosition(
+        database,
+        collisionPositionId,
+        collisionObservationId,
+        collisionAttemptId,
+        "blocked",
+        collisionGapId,
+      );
+      insertIngressArtifact(
+        database,
+        GAP_EVIDENCE_ARTIFACT_ID,
+        "remote-claw/a1/ingress-gap-evidence/v1",
+      );
+      database
+        .prepare(
+          `INSERT INTO channel_position_recoveries (
+             recovery_id, gap_id, broker_route_id, collaboration_server_id, route_kind,
+             logical_chat_id, reason, decision, evidence_ref, evidence_digest,
+             coordinator_lease_id, coordinator_epoch, decided_at_ms
+           ) VALUES (?, ?, ?, ?, 'server_control', NULL, 'semantic_collision',
+                     'proved_safe_discard', ?, ?, ?, 1, 55)`,
+        )
+        .run(
+          collisionRecoveryId,
+          collisionGapId,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          GAP_EVIDENCE_ARTIFACT_ID,
+          DIGEST,
+          COORDINATOR_LEASE_ID,
+        );
+      database
+        .prepare(
+          `UPDATE broker_route_gaps SET state = 'resolved', resolved_at_ms = 55, recovery_id = ?
+           WHERE gap_id = ?`,
+        )
+        .run(collisionRecoveryId, collisionGapId);
+      database
+        .prepare(
+          `UPDATE authenticated_ingress_observations
+           SET cursor_disposition = 'advanceable', recovery_id = ?
+           WHERE ingress_observation_id = ?`,
+        )
+        .run(collisionRecoveryId, collisionObservationId);
+      database
+        .prepare(
+          `UPDATE authenticated_channel_positions
+           SET cursor_disposition = 'advanceable', recovery_id = ?
+           WHERE channel_position_observation_id = ?`,
+        )
+        .run(collisionRecoveryId, collisionPositionId);
+      expect(
+        database
+          .prepare(
+            `SELECT state, accepted_delivery_attempt_id FROM authenticated_ingress_results
+             WHERE stable_semantic_result_id = ?`,
+          )
+          .get(SEMANTIC_RESULT_ID),
+      ).toEqual({ state: "awaiting_order", accepted_delivery_attempt_id: DELIVERY_ATTEMPT_ID });
+
+      const lateResultId = `rrs_${encoded(32, 64)}`;
+      const latePositionId = `rcp_${encoded(32, 65)}`;
+      const lateObservationId = `rio_${encoded(32, 66)}`;
+      const lateAttemptId = `rda_${encoded(16, 67)}`;
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_results (
+             stable_semantic_result_id, broker_route_id, collaboration_server_id, route_kind,
+             logical_chat_id, source_event_namespace_id, message_id, record_kind,
+             client_message_id, expected_parts, source_payload_schema_id,
+             canonical_message_digest, source_event_fingerprint_schema_id,
+             source_event_fingerprint, accepted_delivery_attempt_id,
+             first_ingress_generation, first_ingress_frame_index,
+             last_observed_ingress_generation, last_observed_ingress_frame_index,
+             assembly_deadline_ms, state, collision_at_ms, terminal_at_ms
+           ) VALUES (?, ?, ?, 'server_control', NULL, ?, 'message-late', 'new_chat',
+                     'client-late', 1, NULL, NULL, NULL, NULL, NULL, 0, 2, 0, 2,
+                     50, 'assembling', NULL, NULL)`,
+        )
+        .run(lateResultId, BROKER_ROUTE_ID, SERVER_ID, SOURCE_NAMESPACE_ID);
+      database
+        .prepare(
+          `UPDATE authenticated_ingress_results
+              SET state='quarantined_incomplete', terminal_at_ms=60
+            WHERE stable_semantic_result_id=?`,
+        )
+        .run(lateResultId);
+      insertPendingPositionAt(database, latePositionId, 2, lateAttemptId);
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_observations (
+             ingress_observation_id, channel_position_observation_id,
+             stable_semantic_result_id, delivery_attempt_id, broker_route_id,
+             collaboration_server_id, route_kind, logical_chat_id, channel_generation,
+             frame_index, part, parts, authenticated_part_digest, plaintext_evidence_ref,
+             plaintext_evidence_digest, plaintext_evidence_byte_length, disposition,
+             cursor_disposition, gap_id, recovery_id
+           ) VALUES (?, ?, ?, ?, ?, ?, 'server_control', NULL, 0, 2, 0, 1, ?, ?, ?, 1,
+                     'late_after_tombstone', 'advanceable', NULL, NULL)`,
+        )
+        .run(
+          lateObservationId,
+          latePositionId,
+          lateResultId,
+          lateAttemptId,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          DIGEST,
+          PLAINTEXT_ARTIFACT_ID,
+          DIGEST,
+        );
+      classifyInboundPosition(
+        database,
+        latePositionId,
+        lateObservationId,
+        lateAttemptId,
+        "advanceable",
+        null,
+      );
+
+      const invalidResultId = `rrs_${encoded(32, 68)}`;
+      const invalidAttemptId = `rda_${encoded(16, 69)}`;
+      const invalidPositionId = `rcp_${encoded(32, 70)}`;
+      const invalidObservationId = `rio_${encoded(32, 71)}`;
+      const invalidGapId = "gap-invalid-payload-one";
+      database.exec("BEGIN");
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_results (
+             stable_semantic_result_id, broker_route_id, collaboration_server_id, route_kind,
+             logical_chat_id, source_event_namespace_id, message_id, record_kind,
+             client_message_id, expected_parts, source_payload_schema_id,
+             canonical_message_digest, source_event_fingerprint_schema_id,
+             source_event_fingerprint, accepted_delivery_attempt_id,
+             first_ingress_generation, first_ingress_frame_index,
+             last_observed_ingress_generation, last_observed_ingress_frame_index,
+             assembly_deadline_ms, state, collision_at_ms, terminal_at_ms
+           ) VALUES (?, ?, ?, 'server_control', NULL, ?, 'message-invalid', 'new_chat',
+                     'client-invalid', 2, NULL, NULL, NULL, NULL, NULL, 0, 3, 0, 3,
+                     300070, 'assembling', NULL, NULL)`,
+        )
+        .run(invalidResultId, BROKER_ROUTE_ID, SERVER_ID, SOURCE_NAMESPACE_ID);
+      database
+        .prepare(
+          `INSERT INTO ingress_transport_attempts (
+             broker_route_id, collaboration_server_id, route_kind, logical_chat_id,
+             delivery_attempt_id, source_event_namespace_id, stable_semantic_result_id,
+             message_id, record_kind, client_message_id, stable_logical_header_digest,
+             expected_parts, binding_disposition, collision_gap_id
+           ) VALUES (?, ?, 'server_control', NULL, ?, ?, ?, 'message-invalid', 'new_chat',
+                     'client-invalid', ?, 2, 'exact', NULL)`,
+        )
+        .run(
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          invalidAttemptId,
+          SOURCE_NAMESPACE_ID,
+          invalidResultId,
+          DIGEST,
+        );
+      database
+        .prepare(
+          `INSERT INTO ingress_delivery_candidates (
+             stable_semantic_result_id, delivery_attempt_id, broker_route_id,
+             collaboration_server_id, route_kind, logical_chat_id, expected_parts,
+             received_parts, plaintext_byte_count, first_ingress_generation,
+             first_ingress_frame_index, last_observed_ingress_generation,
+             last_observed_ingress_frame_index, state
+           ) VALUES (?, ?, ?, ?, 'server_control', NULL, 2, 0, 0, 0, 3, 0, 3, 'assembling')`,
+        )
+        .run(invalidResultId, invalidAttemptId, BROKER_ROUTE_ID, SERVER_ID);
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_parts (
+             stable_semantic_result_id, delivery_attempt_id, part, broker_route_id,
+             collaboration_server_id, route_kind, logical_chat_id, parts,
+             authenticated_part_digest, plaintext_part_ref, plaintext_part_digest,
+             plaintext_part_byte_length, first_ingress_generation, first_ingress_frame_index
+           ) VALUES (?, ?, 0, ?, ?, 'server_control', NULL, 2, ?, ?, ?, 1, 0, 3)`,
+        )
+        .run(
+          invalidResultId,
+          invalidAttemptId,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          DIGEST,
+          PLAINTEXT_ARTIFACT_ID,
+          DIGEST,
+        );
+      database
+        .prepare(
+          `UPDATE ingress_delivery_candidates
+           SET received_parts = 1, plaintext_byte_count = 1, state = 'expired'
+           WHERE stable_semantic_result_id = ? AND delivery_attempt_id = ?`,
+        )
+        .run(invalidResultId, invalidAttemptId);
+      database
+        .prepare(
+          `UPDATE authenticated_ingress_results
+           SET state = 'quarantined_incomplete', terminal_at_ms = 70
+           WHERE stable_semantic_result_id = ?`,
+        )
+        .run(invalidResultId);
+      insertPendingPositionAt(database, invalidPositionId, 3, invalidAttemptId);
+      database
+        .prepare(
+          `INSERT INTO broker_route_gaps (
+             gap_id, broker_route_id, collaboration_server_id, route_kind, logical_chat_id,
+             reason, stable_semantic_result_id, channel_position_observation_id,
+             channel_generation, manifest_equivocation_id, transport_key_collision_id,
+             evidence_ref, evidence_digest, state, opened_at_ms, resolved_at_ms, recovery_id
+           ) VALUES (?, ?, ?, 'server_control', NULL, 'invalid_frame', NULL, ?,
+                     NULL, NULL, NULL, ?, ?, 'open', 70, NULL, NULL)`,
+        )
+        .run(
+          invalidGapId,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          invalidPositionId,
+          GAP_EVIDENCE_ARTIFACT_ID,
+          DIGEST,
+        );
+      database
+        .prepare(
+          `INSERT INTO authenticated_ingress_observations (
+             ingress_observation_id, channel_position_observation_id,
+             stable_semantic_result_id, delivery_attempt_id, broker_route_id,
+             collaboration_server_id, route_kind, logical_chat_id, channel_generation,
+             frame_index, part, parts, authenticated_part_digest, plaintext_evidence_ref,
+             plaintext_evidence_digest, plaintext_evidence_byte_length, disposition,
+             cursor_disposition, gap_id, recovery_id
+           ) VALUES (?, ?, ?, ?, ?, ?, 'server_control', NULL, 0, 3, 0, 2, ?, ?, ?, 1,
+                     'invalid_payload', 'advanceable', ?, NULL)`,
+        )
+        .run(
+          invalidObservationId,
+          invalidPositionId,
+          invalidResultId,
+          invalidAttemptId,
+          BROKER_ROUTE_ID,
+          SERVER_ID,
+          DIGEST,
+          PLAINTEXT_ARTIFACT_ID,
+          DIGEST,
+          invalidGapId,
+        );
+      classifyInboundPosition(
+        database,
+        invalidPositionId,
+        invalidObservationId,
+        invalidAttemptId,
+        "advanceable",
+        invalidGapId,
+        null,
+        2,
+      );
+      database.exec("COMMIT");
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } catch (error) {
+      if (database.isTransaction) database.exec("ROLLBACK");
+      throw error;
+    } finally {
+      database.close();
+    }
+  });
+
+  it("seals open and empty generations once and seeds each exact successor", () => {
+    const database = openedV8BrokerRouteDatabase();
+    try {
+      claimBrokerRouteActor(database);
+      const manifestOne = encoded(32, 53);
+      database
+        .prepare(
+          `UPDATE broker_channel_generation_observations
+           SET observed_next_frame_index = 1, last_observed_at_ms = 45
+           WHERE broker_route_id = ? AND channel_generation = 0`,
+        )
+        .run(BROKER_ROUTE_ID);
+      database
+        .prepare(
+          `UPDATE broker_channel_generation_observations
+           SET state = 'sealed', frame_count = 1, next_generation = 1,
+               manifest_digest = ?, last_observed_at_ms = 50
+           WHERE broker_route_id = ? AND channel_generation = 0`,
+        )
+        .run(manifestOne, BROKER_ROUTE_ID);
+      expect(
+        database
+          .prepare(
+            `SELECT state, observed_next_frame_index FROM broker_channel_generation_observations
+             WHERE broker_route_id = ? AND channel_generation = 1`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({ state: "open", observed_next_frame_index: 0 });
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE broker_channel_generation_observations SET manifest_digest = ?
+             WHERE broker_route_id = ? AND channel_generation = 0`,
+          )
+          .run(encoded(32, 54), BROKER_ROUTE_ID),
+      ).toThrow(/transition is not allowed/);
+
+      database
+        .prepare(
+          `UPDATE broker_channel_generation_observations
+           SET state = 'sealed', frame_count = 0, next_generation = 2,
+               manifest_digest = ?, last_observed_at_ms = 55
+           WHERE broker_route_id = ? AND channel_generation = 1`,
+        )
+        .run(encoded(32, 55), BROKER_ROUTE_ID);
+      expect(
+        database
+          .prepare(
+            `SELECT state, observed_next_frame_index FROM broker_channel_generation_observations
+             WHERE broker_route_id = ? AND channel_generation = 2`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({ state: "open", observed_next_frame_index: 0 });
+      expect(
+        database
+          .prepare(
+            `SELECT current_channel_generation FROM broker_route_runtime_status
+             WHERE broker_route_id = ?`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({ current_channel_generation: 2 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("lets a successor coordinator replace a crash-retained actor claim but rejects stale reuse", () => {
+    const database = openedV8BrokerRouteDatabase();
+    try {
+      claimBrokerRouteActor(database);
+      database
+        .prepare(
+          `INSERT INTO coordinator_leases (
+             coordinator_lease_id, collaboration_server_id, coordinator_epoch,
+             owner_instance_id, acquired_at_ms, initial_heartbeat_deadline_ms,
+             heartbeat_deadline_ms, released_at_ms, state
+           ) VALUES ('rccl_AQEBAQEBAQEBAQEBAQEBAQ', ?, 2, 'successor',
+                     1000, 2000, 2000, NULL, 'current')`,
+        )
+        .run(SERVER_ID);
+      database
+        .prepare(
+          `UPDATE collaboration_servers
+           SET current_coordinator_epoch = 2,
+               current_coordinator_lease_id = 'rccl_AQEBAQEBAQEBAQEBAQEBAQ'
+           WHERE collaboration_server_id = ?`,
+        )
+        .run(SERVER_ID);
+      database
+        .prepare(
+          `UPDATE broker_route_actors
+           SET revision = 2, claim_token = 'successor-claim',
+               coordinator_lease_id = 'rccl_AQEBAQEBAQEBAQEBAQEBAQ', coordinator_epoch = 2,
+               claimed_at_ms = 1000, last_operation_id = 'claim-operation-two',
+               last_operation_kind = 'claim', last_operation_digest = ?, updated_at_ms = 1000
+           WHERE broker_route_id = ? AND revision = 1`,
+        )
+        .run(DIGEST, BROKER_ROUTE_ID);
+      expect(
+        database
+          .prepare(
+            `SELECT revision, coordinator_epoch, claim_token FROM broker_route_actors
+             WHERE broker_route_id = ?`,
+          )
+          .get(BROKER_ROUTE_ID),
+      ).toEqual({ revision: 2, coordinator_epoch: 2, claim_token: "successor-claim" });
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE broker_route_actors
+             SET revision = 3, claim_token = 'stale-reclaim', coordinator_lease_id = ?,
+                 coordinator_epoch = 1, claimed_at_ms = 1001,
+                 last_operation_id = 'stale-operation', last_operation_kind = 'claim',
+                 last_operation_digest = ?, updated_at_ms = 1001
+             WHERE broker_route_id = ?`,
+          )
+          .run(COORDINATOR_LEASE_ID, DIGEST, BROKER_ROUTE_ID),
+      ).toThrow(/current unexpired coordinator/);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("finalizes one prepared native root atomically through its accepted signer fact", () => {
+    const database = openedV6Database();
+    try {
+      prepareReadyNativeRootGraph(database);
+      expect(
+        database
+          .prepare(
+            `SELECT first_eligible_signer_sequence
+             FROM native_root_signature_activation_fences
+             WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+               AND runtime_owner_key_generation = 1`,
+          )
+          .get(RUNTIME_ID),
+      ).toEqual({ first_eligible_signer_sequence: 0 });
+      insertPreparedNativeRootOperation(database);
+      expect(
+        database
+          .prepare(
+            `SELECT state, signed_record_digest, committed_at_ms
+             FROM native_root_activation_operations WHERE operation_id = ?`,
+          )
+          .get(ROOT_OPERATION_ID),
+      ).toEqual({ state: "prepared", signed_record_digest: null, committed_at_ms: null });
+      expect(
+        database
+          .prepare(
+            `SELECT state, root_path_certificate_id FROM inward_collaboration_edges
+             WHERE inward_edge_id = ?`,
+          )
+          .get(EDGE_ID),
+      ).toEqual({ state: "installing", root_path_certificate_id: null });
+      expect(() =>
+        database
+          .prepare(`UPDATE logical_chats SET state = 'ready' WHERE logical_chat_id = ?`)
+          .run(CHAT_ID),
+      ).toThrow(/committed native root/);
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE native_root_activation_operations
+             SET signed_record_digest = ?, committed_at_ms = 60, state = 'committed'
+             WHERE operation_id = ?`,
+          )
+          .run(ROOT_SIGNED_RECORD_DIGEST, ROOT_OPERATION_ID),
+      ).toThrow(/certificate finalization/);
+
+      signAndAcceptPreparedNativeRoot(database);
+      insertNativeRootCertificate(database);
+
+      expect(
+        database
+          .prepare(
+            `SELECT state, signed_record_digest, committed_at_ms
+             FROM native_root_activation_operations WHERE operation_id = ?`,
+          )
+          .get(ROOT_OPERATION_ID),
+      ).toEqual({
+        state: "committed",
+        signed_record_digest: ROOT_SIGNED_RECORD_DIGEST,
+        committed_at_ms: 60,
+      });
+      expect(
+        database
+          .prepare(
+            `SELECT state, root_path_certificate_id FROM inward_collaboration_edges
+             WHERE inward_edge_id = ?`,
+          )
+          .get(EDGE_ID),
+      ).toEqual({ state: "current", root_path_certificate_id: ROOT_CERTIFICATE_ID });
+      expect(
+        database.prepare("SELECT state FROM logical_chats WHERE logical_chat_id = ?").get(CHAT_ID),
+      ).toEqual({ state: "ready" });
+      expect(() => database.prepare("DELETE FROM native_root_certificates").run()).toThrow(
+        /retained/,
+      );
+      expect(() =>
+        database.prepare("UPDATE native_root_certificates SET committed_at_ms = 61").run(),
+      ).toThrow(/immutable/);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("backfills an immutable floor that keeps v5 native-root signatures inert", () => {
+    const database = openedV5Database();
+    try {
+      prepareReadyNativeRootGraph(database);
+      database
+        .prepare(
+          `UPDATE runtime_owner_signature_reservations
+           SET signed_record_digest = ?, signature = ?,
+               signed_artifact_id = 'historical-native-root', state = 'signed'
+           WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+             AND runtime_owner_key_generation = 1 AND signer_sequence = 0`,
+        )
+        .run(ROOT_SIGNED_RECORD_DIGEST, SIGNATURE, RUNTIME_ID);
+      database
+        .prepare(
+          `INSERT INTO runtime_owner_signed_record_acceptances
+             (runtime_id, runtime_owner_identity_key_id, runtime_owner_key_generation,
+              signer_sequence, signed_record_digest, accepted_at_ms)
+           VALUES (?, 'runtime-key-1', 1, 0, ?, 55)`,
+        )
+        .run(RUNTIME_ID, ROOT_SIGNED_RECORD_DIGEST);
+      reserveBoundNativeRootSigner(database, {
+        signerSequence: 1,
+        canonicalPayloadRef: RENEW_PAYLOAD_HANDLE_ID,
+        canonicalPayloadDigest: RENEW_PAYLOAD_DIGEST,
+        createdAtMs: 60,
+      });
+
+      const migration = HOST_STATE_MIGRATIONS[5];
+      if (migration === undefined) throw new Error("missing v6 migration");
+      for (const statement of migration.statements) database.exec(statement);
+
+      expect(
+        database
+          .prepare(
+            `SELECT first_eligible_signer_sequence
+             FROM native_root_signature_activation_fences
+             WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+               AND runtime_owner_key_generation = 1`,
+          )
+          .get(RUNTIME_ID),
+      ).toEqual({ first_eligible_signer_sequence: 2 });
+      expect(
+        database
+          .prepare(
+            `SELECT state, signed_artifact_id
+             FROM runtime_owner_signature_reservations
+             WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+               AND runtime_owner_key_generation = 1 AND signer_sequence = 0`,
+          )
+          .get(RUNTIME_ID),
+      ).toEqual({ state: "signed", signed_artifact_id: "historical-native-root" });
+      expect(database.prepare("SELECT * FROM native_root_certificates").all()).toEqual([]);
+      expect(database.prepare("SELECT * FROM native_root_activation_operations").all()).toEqual([]);
+      expect(() => insertPreparedNativeRootOperation(database)).toThrow(/exact signer reservation/);
+      expect(() =>
+        insertPreparedNativeRootOperation(database, {
+          signerSequence: 1,
+          canonicalPayloadRef: RENEW_PAYLOAD_HANDLE_ID,
+          canonicalPayloadDigest: RENEW_PAYLOAD_DIGEST,
+        }),
+      ).toThrow(/exact signer reservation/);
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE inward_collaboration_edges
+             SET root_path_certificate_id = 'historical-native-root', state = 'current'
+             WHERE inward_edge_id = ?`,
+          )
+          .run(EDGE_ID),
+      ).toThrow(/committed activation fact/);
+      expect(() =>
+        database
+          .prepare(
+            `UPDATE native_root_signature_activation_fences
+             SET first_eligible_signer_sequence = 0`,
+          )
+          .run(),
+      ).toThrow(/immutable/);
+      expect(() =>
+        database.prepare("DELETE FROM native_root_signature_activation_fences").run(),
+      ).toThrow(/retained/);
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO native_root_signature_activation_fences
+               (runtime_id, runtime_owner_identity_key_id,
+                runtime_owner_key_generation, first_eligible_signer_sequence)
+             VALUES (?, 'runtime-key-1', 1, 0)`,
+          )
+          .run(RUNTIME_ID),
+      ).toThrow(/cannot be replaced/);
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rechecks the actual owner and coordinator lock-time fences before finalization", () => {
+    const database = openedV6Database();
+    try {
+      prepareReadyNativeRootGraph(database);
+      insertPreparedNativeRootOperation(database);
+      signAndAcceptPreparedNativeRoot(database);
+      takeOverRuntimeOwner(database);
+
+      expect(() => insertNativeRootCertificate(database)).toThrow(/current graph|unexpired fences/);
+      expect(database.prepare("SELECT * FROM native_root_certificates").all()).toEqual([]);
+      expect(
+        database
+          .prepare(
+            `SELECT state, signed_record_digest, committed_at_ms
+             FROM native_root_activation_operations WHERE operation_id = ?`,
+          )
+          .get(ROOT_OPERATION_ID),
+      ).toEqual({ state: "prepared", signed_record_digest: null, committed_at_ms: null });
+      expect(
+        database
+          .prepare(
+            `SELECT state, root_path_certificate_id FROM inward_collaboration_edges
+             WHERE inward_edge_id = ?`,
+          )
+          .get(EDGE_ID),
+      ).toEqual({ state: "installing", root_path_certificate_id: null });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("renews from the latest retained root after recovery demotes the live edge", () => {
+    const database = openedV6Database();
+    try {
+      prepareReadyNativeRootGraph(database);
+      insertPreparedNativeRootOperation(database);
+      signAndAcceptPreparedNativeRoot(database);
+      insertNativeRootCertificate(database);
+      database
+        .prepare("UPDATE logical_chats SET state = 'recovering' WHERE logical_chat_id = ?")
+        .run(CHAT_ID);
+      database
+        .prepare(
+          `UPDATE inward_collaboration_edges
+           SET root_path_certificate_id = NULL, state = 'installing'
+           WHERE inward_edge_id = ?`,
+        )
+        .run(EDGE_ID);
+
+      database
+        .prepare(
+          `INSERT INTO runtime_owner_signature_reservations
+             (runtime_id, runtime_owner_identity_key_id, runtime_owner_key_generation,
+              signer_sequence, purpose, canonical_payload_schema_id,
+              canonical_payload_ref, canonical_payload_digest, signed_record_digest,
+              signature, signed_artifact_id, state)
+           VALUES (?, 'runtime-key-1', 1, 1, 'native_root', NULL, NULL, NULL,
+                   NULL, NULL, NULL, 'reserved')`,
+        )
+        .run(RUNTIME_ID);
+      database
+        .prepare(
+          `INSERT INTO protected_artifacts
+             (protected_handle_id, kind, scope_kind, scope_id, artifact_schema_id,
+              artifact_digest, byte_length, artifact_bytes, created_at_ms)
+           VALUES (?, 'artifact', 'native_binding', ?,
+                   'remote-claw/native-root-certificate/v1', ?, 1, ?, 65)`,
+        )
+        .run(RENEW_PAYLOAD_HANDLE_ID, BINDING_ID, RENEW_PAYLOAD_DIGEST, Uint8Array.of(28));
+      database
+        .prepare(
+          `UPDATE runtime_owner_signature_reservations
+           SET canonical_payload_schema_id = 'remote-claw/native-root-certificate/v1',
+               canonical_payload_ref = ?, canonical_payload_digest = ?, state = 'bound'
+           WHERE runtime_id = ? AND runtime_owner_identity_key_id = 'runtime-key-1'
+             AND runtime_owner_key_generation = 1 AND signer_sequence = 1`,
+        )
+        .run(RENEW_PAYLOAD_HANDLE_ID, RENEW_PAYLOAD_DIGEST, RUNTIME_ID);
+
+      const renewal: NativeRootFixtureOptions = {
+        operationId: RENEW_OPERATION_ID,
+        operationDigest: RENEW_OPERATION_DIGEST,
+        kind: "renew",
+        rootPathCertificateId: RENEW_CERTIFICATE_ID,
+        expectedPriorRootPathCertificateId: ROOT_CERTIFICATE_ID,
+        signerSequence: 1,
+        canonicalPayloadRef: RENEW_PAYLOAD_HANDLE_ID,
+        canonicalPayloadDigest: RENEW_PAYLOAD_DIGEST,
+        signedRecordDigest: RENEW_SIGNED_RECORD_DIGEST,
+        preparedAtMs: 65,
+        issuedAtMs: 70,
+        expiresAtMs: 99,
+        acceptedAtMs: 75,
+        committedAtMs: 80,
+      };
+      expect(() =>
+        insertPreparedNativeRootOperation(database, {
+          ...renewal,
+          kind: "activate",
+          expectedPriorRootPathCertificateId: null,
+        }),
+      ).toThrow(/root lineage/);
+      insertPreparedNativeRootOperation(database, renewal);
+      signAndAcceptPreparedNativeRoot(database, renewal);
+      insertNativeRootCertificate(database, renewal);
+
+      expect(
+        database
+          .prepare(
+            `SELECT state, root_path_certificate_id FROM inward_collaboration_edges
+             WHERE inward_edge_id = ?`,
+          )
+          .get(EDGE_ID),
+      ).toEqual({ state: "current", root_path_certificate_id: RENEW_CERTIFICATE_ID });
+      expect(
+        database.prepare("SELECT state FROM logical_chats WHERE logical_chat_id = ?").get(CHAT_ID),
+      ).toEqual({ state: "ready" });
+      expect(
+        database
+          .prepare(
+            `SELECT expected_prior_root_path_certificate_id, state
+             FROM native_root_activation_operations WHERE operation_id = ?`,
+          )
+          .get(RENEW_OPERATION_ID),
+      ).toEqual({
+        expected_prior_root_path_certificate_id: ROOT_CERTIFICATE_ID,
+        state: "committed",
+      });
+      expect(
+        database.prepare("SELECT count(*) AS count FROM native_root_certificates").get(),
+      ).toEqual({ count: 2 });
+      expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("lets a new authority win renewal while retaining an abandoned prepared fork", () => {
+    const database = openedV6Database();
+    try {
+      prepareReadyNativeRootGraph(database);
+      insertPreparedNativeRootOperation(database);
+      signAndAcceptPreparedNativeRoot(database);
+      insertNativeRootCertificate(database);
+
+      reserveBoundNativeRootSigner(database, {
+        signerSequence: 1,
+        canonicalPayloadRef: RENEW_PAYLOAD_HANDLE_ID,
+        canonicalPayloadDigest: RENEW_PAYLOAD_DIGEST,
+        createdAtMs: 65,
+      });
+      const abandoned: NativeRootFixtureOptions = {
+        operationId: RENEW_OPERATION_ID,
+        operationDigest: RENEW_OPERATION_DIGEST,
+        kind: "renew",
+        rootPathCertificateId: RENEW_CERTIFICATE_ID,
+        expectedPriorRootPathCertificateId: ROOT_CERTIFICATE_ID,
+        signerSequence: 1,
+        canonicalPayloadRef: RENEW_PAYLOAD_HANDLE_ID,
+        canonicalPayloadDigest: RENEW_PAYLOAD_DIGEST,
+        signedRecordDigest: RENEW_SIGNED_RECORD_DIGEST,
+        preparedAtMs: 65,
+        issuedAtMs: 70,
+        expiresAtMs: 180,
+        acceptedAtMs: 75,
+        committedAtMs: 80,
+      };
+      insertPreparedNativeRootOperation(database, abandoned);
+
+      takeOverReadyNativeRootGraph(database);
+      reserveBoundNativeRootSigner(database, {
+        signerSequence: 2,
+        canonicalPayloadRef: TAKEOVER_RENEW_PAYLOAD_HANDLE_ID,
+        canonicalPayloadDigest: TAKEOVER_RENEW_PAYLOAD_DIGEST,
+        createdAtMs: 114,
+      });
+      const winner: NativeRootFixtureOptions = {
+        operationId: TAKEOVER_RENEW_OPERATION_ID,
+        operationDigest: TAKEOVER_RENEW_OPERATION_DIGEST,
+        kind: "renew",
+        rootPathCertificateId: TAKEOVER_RENEW_CERTIFICATE_ID,
+        expectedPriorRootPathCertificateId: ROOT_CERTIFICATE_ID,
+        signerSequence: 2,
+        canonicalPayloadRef: TAKEOVER_RENEW_PAYLOAD_HANDLE_ID,
+        canonicalPayloadDigest: TAKEOVER_RENEW_PAYLOAD_DIGEST,
+        signedRecordDigest: TAKEOVER_RENEW_SIGNED_RECORD_DIGEST,
+        attachmentLeaseId: "registration-attachment-lease-2",
+        transportEpoch: 2,
+        nativeConversationLeaseId: SUCCESSOR_NATIVE_CONVERSATION_LEASE_ID,
+        nativeConversationLeaseGeneration: 2,
+        nativeRegistrationPublicationId: "registration-publication-2",
+        publicationGeneration: 1,
+        bindingGateGeneration: 3,
+        runtimeOwnerServiceLeaseId: "runtime-owner-lease-2",
+        runtimeOwnerServiceEpoch: 2,
+        preparedAtMs: 120,
+        issuedAtMs: 125,
+        expiresAtMs: 180,
+        acceptedAtMs: 128,
+        committedAtMs: 130,
+      };
+      insertPreparedNativeRootOperation(database, winner);
+      signAndAcceptPreparedNativeRoot(database, winner);
+      insertNativeRootCertificate(database, winner);
+
+      expect(
+        database
+          .prepare(
+            `SELECT operation_id, state, committed_at_ms
+             FROM native_root_activation_operations
+             WHERE expected_prior_root_path_certificate_id = ?
+             ORDER BY operation_id`,
+          )
+          .all(ROOT_CERTIFICATE_ID),
+      ).toEqual([
+        { operation_id: RENEW_OPERATION_ID, state: "prepared", committed_at_ms: null },
+        {
+          operation_id: TAKEOVER_RENEW_OPERATION_ID,
+          state: "committed",
+          committed_at_ms: 130,
+        },
+      ]);
+      expect(
+        database
+          .prepare(
+            `SELECT root_path_certificate_id
+             FROM native_root_certificates
+             WHERE expected_prior_root_path_certificate_id = ?`,
+          )
+          .all(ROOT_CERTIFICATE_ID),
+      ).toEqual([{ root_path_certificate_id: TAKEOVER_RENEW_CERTIFICATE_ID }]);
+      expect(
+        database
+          .prepare(
+            `SELECT state, root_path_certificate_id FROM inward_collaboration_edges
+             WHERE inward_edge_id = ?`,
+          )
+          .get(EDGE_ID),
+      ).toEqual({ state: "current", root_path_certificate_id: TAKEOVER_RENEW_CERTIFICATE_ID });
       expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       database.close();

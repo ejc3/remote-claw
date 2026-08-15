@@ -140,6 +140,7 @@ export interface ProtectedCoordinatorFence {
  */
 export class ProtectedByteSnapshot {
   readonly #snapshot: Uint8Array<ArrayBuffer>;
+  #destroyed = false;
 
   private constructor(value: Uint8Array) {
     this.#snapshot = canonicalByteSnapshot(value);
@@ -151,11 +152,20 @@ export class ProtectedByteSnapshot {
   }
 
   get byteLength(): number {
+    if (this.#destroyed) throw new TypeError("protected byte snapshot was destroyed");
     return this.#snapshot.byteLength;
   }
 
   copyBytes(): Uint8Array<ArrayBuffer> {
+    if (this.#destroyed) throw new TypeError("protected byte snapshot was destroyed");
     return canonicalByteSnapshot(this.#snapshot);
+  }
+
+  /** Erase this private snapshot without mutating the caller-owned source used at construction. */
+  destroy(): void {
+    if (this.#destroyed) return;
+    this.#snapshot.fill(0);
+    this.#destroyed = true;
   }
 }
 
