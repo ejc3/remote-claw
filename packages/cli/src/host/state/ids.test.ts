@@ -64,6 +64,25 @@ describe("selected A1 identifier contracts", () => {
     );
   });
 
+  it("reserves distinct derived namespaces for command adjudication", () => {
+    expect(A1_CANONICAL_ID_SPECS.collaborationCommand).toEqual({
+      prefix: "rcm_",
+      bodyBytes: 32,
+      allocation: "derived_sha256",
+    });
+    expect(A1_CANONICAL_ID_SPECS.collaborationCommandResult.prefix).toBe("ccr_");
+    expect(A1_CANONICAL_ID_SPECS.commandSigningGroup.prefix).toBe("csg_");
+    expect(A1_CANONICAL_ID_SPECS.commandResultPreparation.prefix).toBe("crp_");
+    expect(
+      new Set([
+        A1_CANONICAL_ID_SPECS.collaborationCommand.prefix,
+        A1_CANONICAL_ID_SPECS.collaborationCommandResult.prefix,
+        A1_CANONICAL_ID_SPECS.commandSigningGroup.prefix,
+        A1_CANONICAL_ID_SPECS.commandResultPreparation.prefix,
+      ]).size,
+    ).toBe(4);
+  });
+
   it("rejects wrong prefixes, byte lengths, padding, and noncanonical trailing bits", () => {
     expect(() => parseA1CanonicalId("collaborationServer", `rcl_${encoded(16)}`)).toThrow(
       HostStateContractError,

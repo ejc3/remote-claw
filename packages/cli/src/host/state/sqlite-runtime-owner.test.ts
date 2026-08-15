@@ -79,6 +79,7 @@ describeLinux("A1.3 secure runtime-owner SQLite integration", () => {
       | "brokerRoute"
       | "ingress"
       | "serverSigning"
+      | "commandAdjudication"
       | "putArtifact"
       | "readVerifiedArtifact"
       | "transaction"
@@ -92,6 +93,7 @@ describeLinux("A1.3 secure runtime-owner SQLite integration", () => {
       | "brokerRoute"
       | "ingress"
       | "serverSigning"
+      | "commandAdjudication"
       | "putArtifact"
       | "readVerifiedArtifact"
     >();

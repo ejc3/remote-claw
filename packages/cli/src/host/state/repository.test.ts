@@ -1119,6 +1119,7 @@ describe("host state repository canonical operations", () => {
       expectedCoordinatorEpoch: 0,
       leaseDurationMs: 100,
     });
+    executor.database.exec("DROP TRIGGER collaboration_servers_command_journal_sequence_monotonic");
     executor.database
       .prepare(
         "UPDATE collaboration_servers SET next_journal_offset = ? WHERE collaboration_server_id = ?",

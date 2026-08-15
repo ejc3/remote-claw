@@ -77,11 +77,19 @@ function canonicalId<K extends A1CanonicalIdKind>(kind: K, fill: number): A1Cano
     protectedHandle: "rcph_",
     projectTargetSelectorMapping: "ptm_",
     nativeDeliveryAttempt: "nat_",
+    collaborationCommand: "rcm_",
+    collaborationCommandResult: "ccr_",
+    commandSigningGroup: "csg_",
+    commandResultPreparation: "crp_",
   } as const;
   const byteLength =
     kind === "nativeRuntime" ||
     kind === "projectTargetSelectorMapping" ||
-    kind === "nativeDeliveryAttempt"
+    kind === "nativeDeliveryAttempt" ||
+    kind === "collaborationCommand" ||
+    kind === "collaborationCommandResult" ||
+    kind === "commandSigningGroup" ||
+    kind === "commandResultPreparation"
       ? 32
       : 16;
   return parseA1CanonicalId(
@@ -568,6 +576,7 @@ describeLinux("A1.5 secure terminal-root SQLite integration", () => {
       | "brokerRoute"
       | "ingress"
       | "serverSigning"
+      | "commandAdjudication"
       | "putArtifact"
       | "readVerifiedArtifact"
       | "transaction"
@@ -581,6 +590,7 @@ describeLinux("A1.5 secure terminal-root SQLite integration", () => {
       | "brokerRoute"
       | "ingress"
       | "serverSigning"
+      | "commandAdjudication"
       | "putArtifact"
       | "readVerifiedArtifact"
     >();
@@ -756,7 +766,7 @@ describeLinux("A1.5 secure terminal-root SQLite integration", () => {
       pathEnvironment: fixture.state.environment,
     });
     try {
-      expect(migrated.schemaVersion).toBe(9);
+      expect(migrated.schemaVersion).toBe(10);
       expect(migrated.terminalRoot.readInventory()).toEqual({
         operations: [],
         certificates: [],

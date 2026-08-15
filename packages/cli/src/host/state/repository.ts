@@ -4118,6 +4118,39 @@ export function validateHostStateRepositorySnapshot(
     `SELECT ${selectColumns(JOURNAL_ROW_KEYS)} FROM control_journal_entries
      ORDER BY collaboration_server_id, journal_offset`,
   ).map(journalFromRow);
+  const commandReadyJournal =
+    schemaVersion >= 10
+      ? sqlAll(
+          transaction,
+          `SELECT collaboration_server_id, ready_at_journal_seq
+           FROM command_ready_entries
+           ORDER BY collaboration_server_id, ready_at_journal_seq`,
+        ).map((value) => {
+          const row = rawRow(
+            value,
+            ["collaboration_server_id", "ready_at_journal_seq"],
+            "commandReadyJournalEntry",
+          );
+          try {
+            return frozen({
+              collaborationServerId: parseA1CanonicalId(
+                "collaborationServer",
+                row.collaboration_server_id,
+                "commandReadyJournalEntry.collaborationServerId",
+              ),
+              journalOffset: parseNonNegativeSafeInteger(
+                row.ready_at_journal_seq,
+                "commandReadyJournalEntry.readyAtJournalSeq",
+              ),
+            });
+          } catch (error) {
+            throw new HostStateRepositoryPersistenceError(
+              "command-ready journal coordinate is invalid",
+              { cause: error },
+            );
+          }
+        })
+      : [];
 
   const key = (serverId: string, id: string): string => `${serverId}\0${id}`;
   const serverById = new Map(servers.map((server) => [server.collaborationServerId, server]));
@@ -4168,7 +4201,7 @@ export function validateHostStateRepositorySnapshot(
       server.machineIdentityId !== machineId ||
       !serverStateIsAllowed ||
       (schemaVersion < 9 && server.nextServerSignatureSeq !== 0) ||
-      server.nextCommandSeq !== 0
+      (schemaVersion < 10 && server.nextCommandSeq !== 0)
     ) {
       throw new HostStateRepositoryPersistenceError(
         "collaboration server is not the dormant server for this database",
@@ -4787,14 +4820,35 @@ export function validateHostStateRepositorySnapshot(
       "control journal does not exactly cover the durable host graph",
     );
   }
+  const readyJournalByServer = new Map<CollaborationServerId, number[]>();
+  for (const entry of commandReadyJournal) {
+    if (!serverById.has(entry.collaborationServerId)) {
+      throw new HostStateRepositoryPersistenceError(
+        "command-ready journal entry names an unknown collaboration server",
+      );
+    }
+    const entries = readyJournalByServer.get(entry.collaborationServerId) ?? [];
+    entries.push(entry.journalOffset);
+    readyJournalByServer.set(entry.collaborationServerId, entries);
+  }
   for (const server of servers) {
     const entries = journalByServer.get(server.collaborationServerId) ?? [];
-    if (entries.length !== server.nextJournalOffset) {
-      throw new HostStateRepositoryPersistenceError("control journal offset range is incomplete");
+    const readyOffsets = readyJournalByServer.get(server.collaborationServerId) ?? [];
+    const offsets = new Set(entries.map((entry) => entry.journalOffset));
+    for (const offset of readyOffsets) {
+      if (offsets.has(offset)) {
+        throw new HostStateRepositoryPersistenceError(
+          "host journal offset is claimed by both control and command-ready evidence",
+        );
+      }
+      offsets.add(offset);
     }
-    for (let offset = 0; offset < entries.length; offset++) {
-      if (entries[offset]?.journalOffset !== offset) {
-        throw new HostStateRepositoryPersistenceError("control journal offsets are not contiguous");
+    if (offsets.size !== server.nextJournalOffset) {
+      throw new HostStateRepositoryPersistenceError("host journal offset range is incomplete");
+    }
+    for (let offset = 0; offset < server.nextJournalOffset; offset++) {
+      if (!offsets.has(offset)) {
+        throw new HostStateRepositoryPersistenceError("host journal offsets are not contiguous");
       }
     }
   }

@@ -70,11 +70,19 @@ function canonicalId<K extends A1CanonicalIdKind>(kind: K, fill: number): A1Cano
     protectedHandle: "rcph_",
     projectTargetSelectorMapping: "ptm_",
     nativeDeliveryAttempt: "nat_",
+    collaborationCommand: "rcm_",
+    collaborationCommandResult: "ccr_",
+    commandSigningGroup: "csg_",
+    commandResultPreparation: "crp_",
   } as const;
   const bytes =
     kind === "nativeRuntime" ||
     kind === "projectTargetSelectorMapping" ||
-    kind === "nativeDeliveryAttempt"
+    kind === "nativeDeliveryAttempt" ||
+    kind === "collaborationCommand" ||
+    kind === "collaborationCommandResult" ||
+    kind === "commandSigningGroup" ||
+    kind === "commandResultPreparation"
       ? 32
       : 16;
   return parseA1CanonicalId(
@@ -883,7 +891,7 @@ describeLinux("A1.6 secure dormant broker-route SQLite integration", () => {
       machineIdentityId: MACHINE_IDENTITY_ID,
       pathEnvironment: state.environment,
     });
-    expect(reopened.schemaVersion).toBe(9);
+    expect(reopened.schemaVersion).toBe(10);
     expect(reopened.brokerRoute.readInstallation(installed.route.brokerRouteId)).toEqual({
       ...installed,
       replayed: true,
@@ -914,7 +922,7 @@ describeLinux("A1.6 secure dormant broker-route SQLite integration", () => {
         { name: "broker_transport_key_collisions" },
       ]);
       for (const forbidden of [
-        "collaboration_commands",
+        "collaboration_command_results",
         "ingress_result_deliveries",
         "host_output_deliveries",
         "native_dispatch_attempts",

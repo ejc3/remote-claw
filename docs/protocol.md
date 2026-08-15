@@ -5,7 +5,7 @@ runtime discipline that lets a person use a host-side native TUI while one or mo
 watch and drive the same native session through a zero-knowledge broker. Every claim cites the source
 that implements it (path + symbol), so it stays honest as the code changes. Where a behaviour is a
 deliberate boundary rather than a guarantee, it is called out in
-[§12 Convergence & failure modes](#12-convergence--failure-modes).
+[§12 Convergence & failure modes](#12-convergence-failure-modes).
 
 Companion docs: [v2 Architecture](v2-architecture.md) for the design rationale (§-numbers below refer to
 its sections), [Phase 0 Findings](phase0-findings.md) for the reverse-engineered RC worker protocol, and
@@ -29,8 +29,8 @@ behavior, and any A1 viewer row, alias, or cache, are not implemented here.
 **Host multiplicity.** Current A0 already gives each in-process `Session` its own registrar lease,
 relay instance, inbound dedup set, projection log, broker chat channel, permission map, and teardown
 controller; one MITM registrar can serve several intercepted sessions. That is process-local
-isolation, not the selected live durable host inventory. A1.2, A1.6, and A1.7a can now persist dormant
-host/chat, broker-route, and evidence-preserving ingress inventory, but later slices must make one paired host discover and recover
+isolation, not the selected live durable host inventory. A1.2, A1.6, A1.7a, and A1.7b1 can now persist dormant
+host/chat, broker-route, evidence-preserving ingress, and rejected command/preparation inventory, but later slices must make one paired host discover and recover
 many independently wrapped Claude, Codex, and OpenCode conversations across equal or different
 directories. Each keeps its own native identity/history, local TUI, collaborators, actor lane,
 delivery gates, and recovery outcome. Global journal counters remain audit positions; native
@@ -79,6 +79,14 @@ an initial self-anchor, wrapped Ed25519 custody, fenced bootstrap/current leases
 reserve/bind/sign/accept/reconcile state. [§3c](#3c-dormant-a17b0-server-signer-prerequisite) records
 that direct-only contract. It does not consume `awaiting_order`, publish a host frame, or add a common
 command/result, broker write, outbox/effect, native dispatch, viewer projection, or production path.
+
+**Dormant A1.7b1 command adjudication.** Host schema v10 now consumes an eligible A1.7a
+`awaiting_order` source into the shared ready journal, deterministically creates and orders a common
+command, freezes the current rejected-only decision, and binds/signs a replaceable version-one result
+preparation under the A1.7b0 current server lease. [§3d](#3d-dormant-a17b1-command-adjudication)
+records that direct-only contract. Its terminal boundary is a signed-but-unaccepted preparation. It
+does not create the final result, signer acceptance, terminal ingress result, source delivery/outbox,
+native attempt/effect, viewer projection, broker write, driver operation, or production path.
 
 **Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the
 only driver. Every current harness produces a `Session`. Claude MITM, OpenCode, and tmux register that
@@ -449,8 +457,9 @@ When one candidate supplies every exact part, the repository freezes its accepte
 canonical message digest, source payload schema, and source-event fingerprint and changes the result
 from `assembling` to `awaiting_order`. That is the terminal success state for A1.7a. Migration 8 and A1.7a add no
 common-command, command-result/signature, server-scope signer, result-delivery, checkpoint, outbox,
-effect, dispatch, viewer, or native table. A1.7b0 now supplies only the server-signer prerequisite;
-full A1.7b must order and sign an `awaiting_order` result before A1.8 may authorize any native effect.
+effect, dispatch, viewer, or native table. A1.7b0 supplies the server-signer prerequisite and A1.7b1
+now orders an eligible source and signs a rejected result preparation, but A1.8a must atomically
+finalize the common/source result and any admitted effect arm before any live capability exists.
 Ordinary CLI launches, every current driver, runtime-owner RPC,
 `HostRcRelay`, and the viewer make zero calls into this actor, so the as-built live protocol remains
 the A0 relay in the following sections.
@@ -528,7 +537,112 @@ an A1.7a `awaiting_order` row or creates a common command, admitted/queued/rejec
 result, generic host output, broker publish, result-delivery row, checkpoint, outbox/effect, native
 attempt/dispatch, inference record, viewer projection, or native table. The signer is absent from
 ordinary CLI launch paths, all real drivers, runtime-owner RPC, `HostRcRelay`, and the viewer. Full
-A1.7b owns command ordering and signed results; A1.8 owns one-time effects and native dispatch.
+A1.7b1 now uses the installed current lease only through the dormant command-result path below.
+
+---
+
+## 3d. Dormant A1.7b1 command adjudication
+
+A1.7b1 advances the host through migration `010-common-command-adjudication` to schema v10 without
+changing the A0 wire or production runtime. Migration 10 contains 50 ordered statements, is locked to
+digest `rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk`, and produces an exact 619-object manifest: 70
+tables, 137 indexes, and 412 triggers. It adds only these five tables:
+
+- `command_ready_entries`
+- `a1_ingress_adjudications`
+- `collaboration_commands`
+- `collaboration_command_compound_signing_groups`
+- `collaboration_command_result_preparations`
+
+It adds no `collaboration_command_results`, command-result signer-acceptance row, generic host-output, result-delivery,
+outbox, effect, native-attempt, dispatch, projection, or native table. The only new v9 signer purpose
+reachable in schema v10 is `collaboration_command_result` under an exact current signing lease; the
+bootstrap scope-certificate path and all earlier migration pins remain unchanged.
+
+Ready materialization is A1-ingress-only. The repository requires a current coordinator and a
+signer-activated current server, a current route with zero active gaps, and that route's earliest unadjudicated complete
+`awaiting_order` result. It atomically stores the command, ready row, and ingress sidecar and consumes
+the server's exact next `nextJournalOffset`. Secure reopen validates the union of
+`control_journal_entries` and `command_ready_entries` as one unique, contiguous sequence from zero to
+that offset; the ready journal is not a second independent counter. A server may retain at most 256
+unresolved commands.
+
+For an A1 source, the stable source identity and command are:
+
+```text
+sourceCommandIdentityDigest =
+  SHA256(str("remote-claw/command-source/a1/v1") || bytes(identity_id) ||
+         str(collaborationServerId) || str(scopeKind) || optionalStr(logicalChatId) ||
+         str(sourceEventNamespaceId) || str(sourceEventId))
+
+commandId =
+  "rcm_" || base64url(SHA256(str("remote-claw/collaboration-command/v1") ||
+         str(collaborationServerId) || str("a1_ingress") ||
+         bytes(base64urlDecode(sourceCommandIdentityDigest))))
+```
+
+The pure `@remote-claw/clawsec` contract has exact canonical payload codecs, including scalar
+`user_text` up to 48 MiB. A1.7b1 persistence intentionally does not copy that potentially large
+plaintext out of A1.7a's retained segmented evidence. For both currently recognized A1 ingress
+families (`user_text` and `new_chat`), it stores a small
+`remote-claw/command-payload/unsupported-recognized/v1` envelope containing the normalized family,
+source payload schema, canonical message digest, and source-event fingerprint. That envelope is not
+truncation: those fields commit the complete A1.7a source evidence. Because this tranche has no target
+capability or effect arm, its only callable policy outcome is `rejected`.
+
+Decisions are server-global: the repository may decide only the minimum
+`(readyAtJournalSeq, commandId)` among ready commands and compare-and-swaps the exact next dense
+`nextCommandSeq`. It rechecks that the retained source route is still current and gap-free. The
+command keeps its creation coordinator lease/epoch and `createdAtMs`; a successor current coordinator
+may supply the separately retained decision lease/epoch and monotone `decidedAtMs`. A decision never
+rewrites creation provenance.
+
+The rejected decision freezes the canonical decision evidence and command-record digest, allocates
+one version-one result, and reserves a compound group and result preparation. Their identifiers are:
+
+```text
+commandResultId =
+  "ccr_" || base64url(SHA256(str("remote-claw/collaboration-command-result-id/v1") ||
+         str(collaborationServerId) || str(commandId) || uint(1)))
+
+compoundSigningGroupId =
+  "csg_" || base64url(SHA256(str("remote-claw/collaboration-command-signing-group/v1") ||
+         str(collaborationServerId) || str(commandId) || str(commandResultId) ||
+         uint(preparationGeneration)))
+
+commandResultPreparationId =
+  "crp_" || base64url(SHA256(str("remote-claw/collaboration-command-result-preparation/v1") ||
+         str(collaborationServerId) || str(commandId) || str(commandResultId) || uint(1) ||
+         uint(preparationGeneration)))
+```
+
+The decision transaction advances both the command sequence and signer sequence, stores the exact
+result payload artifact, and reserves generation one. The dormant signing orchestrator binds the v9
+reservation to artifact type `collaboration_command_result_preparation` and the exact `crp_*`, signs
+through wrapped custody, and stores/verifies the signature before returning. Exact replay is
+byte-identical. An unknown commit closes the poisoned database, securely reopens it, and reconciles
+the exact durable phase before continuing; a proved-absent signing store reuses the already produced
+signature and does not sign again.
+
+Only `reserved` or `bound` preparations can abort. Abort burns their signer sequence and atomically
+marks the reservation, preparation, and group aborted. Reprepare allocates the next signer sequence,
+increments `preparationGeneration`, points `supersedesPreparationRef` at the exact aborted predecessor,
+and derives new `csg_*`/`crp_*` IDs. It retains the same frozen command ID, `commandSeq`, rejected
+disposition, command-record digest, `ccr_*`, and original decision time; the replacement preparation
+uses a later monotone preparation time and may repeat for later generations.
+
+The maximum reachable successful state in A1.7b1 is command `decision_reserved`, ingress sidecar
+`deciding`, preparation `signed`, compound group `result_signed`, and signer reservation `signed`.
+Schema triggers and semantic reopen reject command `decided`, ingress `terminal`, group `finalized`,
+and any acceptance or final-result graph. A1.8a must add one atomic transaction that creates the final
+common result, accepts the signer reservation, terminalizes the ingress sidecar/source result, and
+creates the source result/delivery outbox; for an admitted decision, that same transaction must also
+create its pinned native attempt, front-door dispatch, and one-use effect gate. A1.7b1 and A1.8a are
+one advertised capability gate, so a signed preparation alone never authorizes delivery or mutation.
+
+The command repository is attached to the secure host-state database, but no ordinary CLI, driver,
+runtime-owner RPC, relay, or viewer operation invokes it. The signing orchestrator remains outside the
+production import graph. All live traffic therefore continues to use the A0 relay below.
 
 ---
 
@@ -550,7 +664,7 @@ execute while its user text is absent from the viewer projection.
 
 A `seq` is allocated **before** the POST so the frame's `msgId` is deterministic (`${kind}-${seq}`) and a
 retry re-posts the *same* frame, which the viewer dedups (`relay.ts` `#post` / `POST_RETRIES`). The cost
-of allocating before the durable write is analysed in [§12](#12-convergence--failure-modes).
+of allocating before the durable write is analysed in [§12](#12-convergence-failure-modes).
 
 ---
 
@@ -675,7 +789,7 @@ incarnation's inbound floor, and re-reads only from that floor so an empty post-
 re-execute earlier inbound actions. The viewer maintains its own stream/orderer recovery logic
 (`viewer.ts`; `relay.ts`). The sampled durable floor prevents duplicate old execution, but it is not a
 command inbox: a command published before the sample and not executed before a crash can be skipped.
-See [§12](#12-convergence--failure-modes).
+See [§12](#12-convergence-failure-modes).
 
 Two authenticated cursor routes expose these facts without a transcript body. `GET /api/seq` reports
 the effective backend's `durable` flag and highest transcript `seq`: the host uses the high-water to
@@ -979,13 +1093,13 @@ guarantees.
    kill or proved absence. An unknown tmux outcome retains the runtime and emits the exact
    `tmux -S <socket> attach -t <session>` command; a new wrapper still cannot adopt that pane because
    the A0.2 registrar/binding is process-local and `liveReattach:false`.
-9. **A1.6 transport, A1.7a ingress, and the A1.7b0 signer are still not a live collaboration path.**
+9. **A1.6 transport through A1.7b1 command signing is still not a live collaboration path.**
    The selected provider/client, schema-v7 route installer, schema-v8 evidence-preserving ingress
-   repository/actor, and schema-v9 server signer are implemented and tested, but ordinary CLI
+   repository/actor, schema-v9 server signer, and schema-v10 command adjudicator are implemented and tested, but ordinary CLI
    launches, drivers, runtime-owner RPC, `HostRcRelay`, and the viewer do not invoke them. A dormant
-   `awaiting_order` row plus an unused signing lease is not a common command, signed decision, native
-   authorization, effect, or viewer projection. Full A1.7b and later milestones must add and prove
-   those layers before A1 can replace the A0 relay described above.
+   `awaiting_order` row or signed-but-unaccepted preparation is not a final result, delivery,
+   authorization, effect, or viewer projection. The atomic A1.8a finalization/effect tranche and later
+   milestones must land before A1 can replace the A0 relay described above.
 
 ### Capture-grounded protocol surfaces (observed via `--rc-trace`)
 

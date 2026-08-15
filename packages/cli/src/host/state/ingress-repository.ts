@@ -2804,7 +2804,16 @@ function updateResultAsPrecompletionCollision(
     transaction,
     `UPDATE authenticated_ingress_results
         SET state='quarantined_collision', collision_at_ms=?, terminal_at_ms=?
-      WHERE stable_semantic_result_id=? AND state IN ('assembling', 'awaiting_order')`,
+      WHERE stable_semantic_result_id=?
+        AND state IN ('assembling', 'awaiting_order')
+        AND NOT (
+          state='awaiting_order'
+          AND EXISTS (
+            SELECT 1 FROM a1_ingress_adjudications adjudication
+             WHERE adjudication.stable_semantic_result_id=
+               authenticated_ingress_results.stable_semantic_result_id
+          )
+        )`,
     [observedAtMs, observedAtMs, resultId],
   );
 }

@@ -5,13 +5,15 @@
 > page unless you need record shapes, adapter contracts, recovery algorithms, or crash-boundary proof
 > requirements.
 
-**Status:** selected architecture; A1.0 through the dormant A1.7b0 server-signer prerequisite are
+**Status:** selected architecture; A1.0 through the dormant A1.7b1 command-adjudication foundation are
 implemented. The ordinary production CLI supplies no registration adapter and invokes no A1 broker,
-ingress-actor, or server-signer operation, so every real driver and the viewer remain on their A0
-paths. A1.7a stops at durable `awaiting_order`; schema v9's only new durable capability is
-server-scoped key custody and signing authority, plus a compatibility replacement that lets the
-existing dormant route installer admit an exact signer-activated `current` server. Common command ordering, signed command decisions/results, dispatch/outbox effects,
-and production wiring are not implemented by this slice.
+ingress-actor, command-adjudication, or server-signer operation, so every real driver and the viewer
+remain on their A0 paths. A1.7a stops at durable `awaiting_order`; schema v9 supplies server-scoped
+key custody/signing authority; and schema v10 now provides A1-ingress-only ready materialization,
+global common-command order, a rejected decision, and replaceable signed result preparations.
+A1.7b1 stops at signed-but-unaccepted state: final results, signer acceptance, ingress terminalization,
+source delivery/outbox, admitted effects, and production wiring remain unimplemented. A1.7b1 and
+A1.8a form one advertised capability gate.
 
 **Current external behavior remains compatible:** today `--rc-app` hosts an in-memory `RelayCore`
 that lazily creates one Claude-shaped `Session` per intercepted Claude RC session. A host-scoped
@@ -26,7 +28,7 @@ another row. Codex is not implemented. The selected A1 design below removes that
 the remote-claw logical chat stable across proven native recovery.
 [Protocol & Runtime](protocol.md) remains the as-built reference.
 
-**A1.0 through dormant A1.7b0 have landed:** the shared canonical field writer and the
+**A1.0 through dormant A1.7b1 have landed:** the shared canonical field writer and the
 `packages/cli/src/host/state` ID, path, record, runtime, digest, protected-handle, dispatch, and
 backend-capability contracts are implemented and tested. A1.1 adds the secure local SQLite kernel,
 migration registry, synchronous high-level transaction boundary, and immutable protected-artifact
@@ -143,6 +145,30 @@ The v8 digest/count/manifest pins remain unchanged. Migration 9 has 81 statement
 `fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`, and a 571-object manifest: 65 tables, 123 indexes,
 and 383 triggers.
 
+A1.7b1 adds schema v10 migration `010-common-command-adjudication` and direct-only pure-contract,
+repository, semantic-validation, and signing-orchestration modules. Migration 10 has 48 ordered
+statements, digest `rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk`, and an exact 619-object
+manifest: 70 tables, 137 indexes, and 412 triggers. It adds only `command_ready_entries`,
+`a1_ingress_adjudications`, `collaboration_commands`,
+`collaboration_command_compound_signing_groups`, and
+`collaboration_command_result_preparations`. The current source is only eligible A1 ingress; the
+current policy is rejected-only. Ready entries and schema-v3 control entries consume one gap-free
+`nextJournalOffset`; decisions globally choose `(readyAtJournalSeq, commandId)` and consume the dense
+`nextCommandSeq`. Creation and decision keep distinct coordinator fences. The pure payload contract
+allows scalar `user_text` through 48 MiB, while this rejected-only persistence path stores a small
+`unsupported_recognized` envelope over the retained A1 source schema/digest/fingerprint instead of
+copying plaintext. It derives one version-one result plus generation-specific signing group and
+preparation, binds/signs through the current server lease, and can abort/reprepare reserved or bound
+generations without changing the frozen command, order, decision, or result ID.
+
+A1.7b1 deliberately ends with the current result preparation signed but unaccepted. The command
+remains `decision_reserved`, the A1 sidecar remains `deciding`, and the group remains
+`result_signed`. There is no final common result, signer acceptance, ingress terminal state, source
+result/delivery outbox, attempt/effect, projection, or production operation. A1.8a must add those
+final-result/acceptance/terminal/outbox writes atomically and, for an admitted arm, create its pinned
+native attempt/front-door dispatch/effect gate in the same transaction. Neither tranche may advertise
+a partial capability.
+
 The canonical writer is already used by shipped A0 AAD with its locked bytes unchanged. Production
 now connects to or best-effort starts the owner only for wrapped `--rc-app` MITM, OpenCode, and tmux
 driver paths after identity load. `startProductionRuntimeOwnerDaemon` installs A1.4 registration and
@@ -157,9 +183,10 @@ daemon and its service lease survive. This owner-lifetime rule does not replace 
 existing native teardown behavior. The schema-v6 root operation remains available only through the
 same explicit trusted-adapter seam. A1.6 broker calls are confined to the host-only installation
 service and tests: ordinary launches, drivers, and the viewer make zero `/api/a1/*` calls, and there is
-no runtime-owner broker or ingress operation and no real-driver integration. Schema-v8 ingress and
-schema-v9 server signing are reachable only through direct host-state/custody/repository modules and
-tests. Full A1.7b common ordering and signed results are the next state slice.
+no runtime-owner broker or ingress operation and no real-driver integration. Schema-v8 ingress,
+schema-v9 server signing, and schema-v10 command adjudication are reachable only through direct
+host-state/custody/repository modules and tests. A1.8a atomic completion is the next state slice,
+jointly gated with A1.7b1.
 Malformed wire and runtime values fail closed at their trust or canonical boundary instead of being
 accepted and failing later or being silently coerced.
 
@@ -425,10 +452,10 @@ The complete isolation key for chat work is `(collaborationServerId, logicalChat
 
 The coordinator may allocate globally monotonic journal offsets and command sequence numbers so every durable record has a unique audit position. Those counters are not a host-wide execution lock. Admission, uncertainty quarantine, native-effect gates, causal outboxes, and recovery barriers run in a per-chat actor lane; a stalled or ambiguous attempt blocks only later writes to that same chat. Server-control operations such as `new_chat` use their separately scoped management actor and may take a short project/workspace transition lock where the native server requires it, but they do not serialize turns already running in unrelated chats.
 
-That execution model remains the full A1.7 target. A1.7a now implements dormant route-local actor
-claims and evidence-preserving ingress queues for `server_control` and chat routes. It does not yet
-materialize or sequence common commands, so the server-wide ordering and native-facing serialization
-described above remain A1.7b work.
+That execution model remains the integrated target. A1.7a implements dormant route-local actor claims
+and evidence-preserving ingress queues for `server_control` and chat routes. A1.7b1 now materializes
+and globally sequences rejected common commands through signed preparation; admitted decisions,
+atomic finalization, and native-facing per-lane serialization/effects remain A1.8a/A1.8b work.
 
 Shared-daemon resources have their own narrow locks. For example, one Codex bridge may reconcile subscriptions for several threads and one OpenCode server may serialize a workspace identity transition. Such a lock protects only the named daemon resource or workspace transition; it cannot repoint a binding, consume another chat's effect gate, close another chat's TUI path, or turn one session failure into host-wide quarantine.
 
@@ -786,8 +813,8 @@ keyed by canonical database path: every later open of that path fails until proc
 different database path remains independent. The kernel never drops guardians while SQLite may still
 own the canonical database or sidecars.
 
-Current schema v9 uses SQLite
-`application_id=0x52434c57` (ASCII `RCLW`). Its append-only migration history is a SHA-256
+Current schema v10 uses SQLite
+`application_id=0x52434c57` (ASCII `RCLW`) and `user_version=10`. Its append-only migration history is a SHA-256
 chain over the previous digest, version, migration ID, statement count, and exact ordered SQL text,
 encoded with the shared `CanonicalWriter` under
 `remote-claw/host-state/migration-chain/v1`. Migration 1 (`001-initial-host-state`) is locked to
@@ -811,7 +838,10 @@ server-signer schema with 81 statements, digest
 indexes, and 383 triggers. Open verifies the application ID, `user_version`,
 stored machine identity, exact schema manifest for that historical version, every migration-history
 row, and migration digest before applying the next compiled migration. Partial, mismatched,
-extra-object, corrupt, or future state is refused; a valid v1 through v8 database migrates to v9. Every
+extra-object, corrupt, or future state is refused; migration 10
+(`010-common-command-adjudication`) has 50 ordered statements, digest
+`rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk`, and a 619-object manifest containing 70 tables,
+137 indexes, and 412 triggers. A valid v1 through v9 database migrates to v10. Every
 `sqlite_schema` row is matched exactly, including names beginning with `sqlite_`; no hidden extra is
 ignored. A newly created database must have `application_id=0` and literally zero `sqlite_schema`
 rows before migration 1 begins; any preexisting application object fails closed. Schema v1 has three
@@ -856,10 +886,16 @@ Migration 9 also replaces the existing broker-route admission trigger so a route
 either an `installing` server or an exact signer-activated `current` server under the same
 current-coordinator and capability-pin proof; this is compatibility for the existing dormant route
 repository, not a new route or live wire capability.
+Schema v10 adds exactly `command_ready_entries`, `a1_ingress_adjudications`,
+`collaboration_commands`, `collaboration_command_compound_signing_groups`, and
+`collaboration_command_result_preparations`. It permits only the dormant A1-ingress ready,
+rejected-decision, and signed-preparation graph described below. It has no final common-result,
+command-result acceptance row, source-result/delivery, outbox, effect, attempt, dispatch, inference,
+viewer, production-operation, or native table.
 
 The supported graph is deliberately narrower than the full record unions. A database is either
 unbootstrapped or contains exactly one linked `default` profile whose server is `installing` in
-schemas v3–v8 and may be `installing` or signer-activated `current` in schema v9.
+schemas v3–v8 and may be `installing` or signer-activated `current` in schemas v9–v10.
 Projects are `current`. Each project's one persisted v3 selector has a contiguous terminal-native
 mapping chain starting at generation one, with only its tail `current` and prior rows `superseded`; a replacement is an exact
 generation/ID/target-digest compare-and-swap. Every persisted chat is `recovering`, has topology
@@ -869,7 +905,7 @@ it. It points to one unresolved `starting` binding with exactly one registration
 semantic-conversation, and binding-incarnation pointers remain null. Explicit projects may exist
 without a chat after the first bootstrap. Nested selector targets and `remote-claw-server` edges are
 valid future record shapes but fail v3 semantic validation; N1 must add its own migration and proof
-before either may persist. The current v9 semantic validator preserves all of those A1.2 restrictions and
+before either may persist. The current v10 semantic validator preserves all of those A1.2 restrictions and
 additionally validates the runtime-owner state, service-lease/journal history, derived runtime roots,
 incarnation/assignment/containment lineage, wrapped-key and signing state, project-scoped local
 conversation transitions, and binding-incarnation/attachment/lease/gate joins described below. It
@@ -881,7 +917,11 @@ observation, immutable artifact, position, multipart/result vector, gap/recovery
 claim to its exact installed route and coordinator authority. It also closes every schema-v9 server
 key/envelope, certificate/status, bootstrap/current lease, reservation, and acceptance to the exact
 machine/server/key generation, signer sequence, payload, and coordinator fence; corruption fails
-before writable reopen.
+before writable reopen. For schema v10 it additionally recomputes every A1 source/payload/command/
+decision/result/group/preparation identity and digest, merges control and ready rows into the exact
+gap-free `nextJournalOffset`, validates dense server command and signer sequences, verifies retained
+result signatures, follows the single current generation plus its exact aborted predecessors, and
+rejects terminal/final/effect or orphan state before writable reopen.
 
 For schema v6, an unrooted A1.4 ready graph may prepare competing initial root operations under its
 current owner/coordinator fences and exact current runtime, binding incarnation, attachment lease,
@@ -1095,11 +1135,14 @@ its narrow server/profile/project/mapping/chat/binding/registration-intent/inwar
 lease/journal subset; A1.3–A1.6 add the runtime-owner, registration, terminal-root, and broker-route
 rows called out in their milestone sections; A1.7a adds only the schema-v8 ingress subset through
 `awaiting_order`; A1.7b0 adds only the schema-v9 server key/envelope, certificate/status,
-bootstrap/current signing-lease, reservation, and acceptance subset. The combined interfaces below continue through later target states: fields such as
-`deciding`, `terminal`, common command/result IDs, signed payload refs, result delivery, checkpoint,
-outbox, effect, dispatch, projection, and native execution are neither schema-v8 nor schema-v9 claims.
+bootstrap/current signing-lease, reservation, and acceptance subset; and A1.7b1 adds the schema-v10
+ready/A1-sidecar/common-command/compound-group/result-preparation subset. The combined interfaces below continue through later target states. Schema v10 permits
+`deciding`, a common command/result ID, and signed preparation refs only in its rejected
+signed-but-unaccepted graph; `terminal`, a final common result, signer acceptance, result delivery,
+checkpoint, outbox, effect, dispatch, projection, and native execution remain later claims.
 The exact landed A1.7a record union and bounds live in `packages/cli/src/host/state/ingress.ts`; the
-schema-v9 signer records live in `packages/cli/src/host/state/server-signing.ts`.
+schema-v9 signer records live in `packages/cli/src/host/state/server-signing.ts`; and the schema-v10
+records live in `packages/cli/src/host/state/command-adjudication.ts`.
 
 ```ts
 interface CollaborationServerRecord {
@@ -4939,10 +4982,12 @@ the A1.7a route-runtime/generation observations, manifest and position equivocat
 and semantic cursors, retained page/frame/position evidence, multipart ingress, tombstones, gaps, and
 recoveries described here. Schema v9 implements only A1.7b0's server key/envelope,
 certificate/status, bootstrap/current signing lease, signature reservation, and signed-record
-acceptance subset needed for the dormant initial self-anchor and signer. The wider interfaces in this
-section remain target-state contracts: v9 does not consume an ingress result, allocate a common
-command, produce a command decision/result or generic host output, publish to the broker, or create a
-result-delivery/outbox/effect/native/projection record. Those remain full A1.7b/A1.8/A1.10 work.
+acceptance subset needed for the dormant initial self-anchor and signer. Schema v10 implements only
+A1.7b1's ready entry, A1 ingress sidecar, common command, compound group, and replaceable signed
+result-preparation subset. It consumes an eligible ingress source and allocates a rejected decision,
+but cannot create the final common result, signer acceptance, terminal sidecar/source result,
+result-delivery/outbox/effect/native/projection record, or broker publish. Those remain atomic A1.8a
+and later A1.8/A1.10 work.
 
 `ServerScopeCertificateStatusRecord.scopeCertificateId` is a foreign key to the immutable certificate,
 and its `collaborationServerId` must equal that certificate's server ID. A status row cannot move a
@@ -5216,6 +5261,16 @@ command, effect gate, native attempt, and foreign keys retain the same server/ch
 server-control command additionally and immutably names its once-allocated `targetLogicalChatId`; only
 its creation reservation/effect crosses into that target. Equal source IDs on another route or server
 cannot alias either gate.
+
+**A1.7b1 implementation boundary.** The formulas above are live pure contracts, but schema v10 calls
+them only for `sourceKind:"a1_ingress"` and only after A1.7a has retained a complete eligible route
+head. It atomically writes the command, its A1 sidecar, and a ready entry at the exact shared server
+journal offset. Control-journal and ready-journal entries together must be unique and contiguous to
+`nextJournalOffset`. It refuses a 257th unresolved command. The current global sequencer selects only
+the minimum `(readyAtJournalSeq, commandId)`, allocates the next dense `commandSeq`, and freezes only
+`rejected`; all admitted/queued, outside-source, target-capability, and effect arms described later in
+this section remain target contracts. Creation lease/epoch/time remain immutable when a successor
+current coordinator supplies the separate decision lease/epoch/time.
 For the shared-key A1 web channel, `sourceEventNamespaceId` is immutable for the route's entire
 lifetime and equals
 `wns_${base64url(SHA256(str("remote-claw/a1/web-source-namespace/v1") || bytes(identity_id) ||
@@ -5270,6 +5325,14 @@ is exactly `first_bootstrap` or `new_chat`; project/workspace selectors use the 
 Text is valid UTF-8 encoded from Unicode scalar values exactly as supplied, with no normalization,
 newline rewrite, slash parsing, or source-specific wrapper. Web, official, automation, and nested
 adapters must produce byte-identical common payloads for the same typed input.
+
+The pure version-one `user_text` codec accepts at most 48 MiB of UTF-8 bytes. A1.7b1's rejected-only
+repository does not duplicate that retained plaintext. For both currently recognized A1.7a source
+kinds it persists the small `unsupported_recognized` form containing the normalized family, exact
+source payload schema, canonical message digest, and source-event fingerprint. Those values bind the
+complete segmented A1.7a evidence; this is not a truncated text payload. A future admitted path must
+materialize the exact canonical `user_text` or `new_chat` payload before it may claim the associated
+capability.
 
 The attachment arm is exact rather than an adapter-shaped JSON pass-through. Its item ref retains
 `CanonicalAttachmentItemRecord` values in contiguous `itemIndex` order starting at zero. Each
@@ -5603,6 +5666,42 @@ and `supersedesCommandResultId` is null. Every admitted, queued, or rejected dec
 that proposal across A1, official, automation, and nested sources. A queued proposal is never mutated
 into admitted behind an acknowledged signature; forwarding later requires a fresh authenticated source
 event and common command.
+
+A1.7b1 also freezes the exact generation-specific IDs:
+
+```text
+compoundSigningGroupId =
+  "csg_" || base64url(SHA256(
+    str("remote-claw/collaboration-command-signing-group/v1") ||
+    str(collaborationServerId) || str(commandId) || str(commandResultId) ||
+    uint(preparationGeneration)))
+
+commandResultPreparationId =
+  "crp_" || base64url(SHA256(
+    str("remote-claw/collaboration-command-result-preparation/v1") ||
+    str(collaborationServerId) || str(commandId) || str(commandResultId) || uint(1) ||
+    uint(preparationGeneration)))
+```
+
+Its rejected-only group always has `requiredFinalizationArtifactKind:"none"` and no secondary
+preparation. Generation one shares the decision time. Only a `reserved` or `bound` generation may
+abort; its reservation/preparation/group abort atomically and burns the signer sequence. Reprepare
+uses a new signer sequence, increments `preparationGeneration`, names the exact predecessor through
+`supersedesPreparationRef`, and retains the frozen command ID, command sequence, disposition,
+canonical command-record digest, result ID, and original decision time. Replacement reservation,
+group, and preparation use their later shared preparation time. Repeated recovery can advance through
+arbitrary safe-integer generations; schema/repository tests explicitly cover generations one through
+three.
+
+A1.7b1 binds the result reservation to artifact type
+`collaboration_command_result_preparation` and the exact current `crp_*`, signs and verifies the
+canonical payload, and stops at preparation `signed`, group `result_signed`, reservation `signed`,
+command `decision_reserved`, and A1 sidecar `deciding`. The broader finalization paragraphs in this
+section are target behavior. Schema v10 rejects group `finalized`, command `decided`, sidecar
+`terminal`, signer acceptance, and any final result/outbox/effect graph. A1.8a must atomically add the
+final result, signer acceptance, ingress terminal/source result, result/delivery outbox, and every
+admitted attempt/front-door-dispatch/effect arm. That all-or-nothing proof and A1.7b1 are one
+advertised capability gate.
 
 The canonical result payload is exactly:
 
@@ -6274,7 +6373,7 @@ another namespace, `msgId`, header, or part count is therefore a host-side colli
 original result and a blocked observation, not a new result.
 `stableLogicalHeaderDigest` is unpadded-base64url SHA-256 of
 `str("remote-claw/a1/attempt-header/v1") || bytes(stableLogicalHeader)` using the exact
-[v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow)
+[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow)
 writer.
 
 Before opening an A1 route, the versioned broker client requires this complete backend contract:
@@ -6343,8 +6442,10 @@ implemented dormant ingress slice. It retains each state-changing page and its e
 vector, then moves the physical fetch cursor only after the page and every supplied raw frame are
 durable; an unchanged empty open live-tail poll is an evidence-preserving no-op. A separate semantic cursor moves only one proven advanceable position or sealed-generation
 boundary at a time, so fetch may use the bounded lookahead while an earlier multipart candidate or
-gap holds semantic progress. Steps 4 onward are the A1.7b command-order/signing target. A durable
-`awaiting_order` row is not yet a command, decision, signed result, outbox item, or effect authority.
+gap holds semantic progress. A1.7b1 now implements the direct-only route-head → shared-ready-journal
+→ rejected-command/order → signed-result-preparation subset of steps 4 onward. A durable
+`awaiting_order` row is still not itself a command, decision, final result, outbox item, or effect
+authority, and production invokes neither the ingress actor nor the command repository.
 
 The canonical message digest is computed only after every authenticated part in one candidate is
 present, over the versioned canonical logical-frame header—excluding `deliveryAttemptId`, salt, nonce,
@@ -6357,7 +6458,7 @@ candidate may produce a success result while that collision latch remains unreso
 
 `authenticatedPartDigest` and `canonicalMessageDigest` use the exact
 `remote-claw/a1/stable-part/v1` and `remote-claw/a1/logical-message/v1` encodings in
-[v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow).
+[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow).
 The part digest is computed only after AEAD open and excludes `deliveryAttemptId`, salt, and nonce, so
 an exact semantic retry under fresh transport encryption compares equal.
 
@@ -6376,8 +6477,9 @@ retains plaintext part bodies on chat and server-control routes. The full-scope 
 `expectedParts`, every `(part, authenticatedPartDigest)` coordinate, source payload schema, canonical
 message digest, source-event fingerprint tuple, disposition, stable semantic result ID, accepted
 transport candidate, transport-attempt binding, and the collision/incomplete tombstone needed to
-reject replay remain indefinitely for that route. A1.7b must separately retain any future
-accepted/action-result/chat-creation-result payload bytes. Neither local chat/channel closure nor machine reset authorizes collection because copied
+reject replay remain indefinitely for that route. A1.7b1 retains its command/decision/preparation
+artifacts and signatures; A1.8a must separately retain final
+accepted/action-result/chat-creation-result payload bytes and their delivery/outbox state. Neither local chat/channel closure nor machine reset authorizes collection because copied
 bearer/key material may remain valid. A late missing part links the tombstone as
 `late_after_tombstone` and cannot resurrect or execute the message.
 Candidate/count/byte overflow follows the same terminal quarantine path immediately.
@@ -6497,7 +6599,7 @@ allocates each part's salt/nonce once, seals that part once, and persists the co
 only through the current fenced signing lease and stores the exact key generation, signer ID, signature,
 scope certificate, signature sequence, host-signed-record digest, header, transport digest, and bytes.
 `hostSignedRecordDigest` is SHA-256 of the exact versioned host-signature payload from
-[v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow).
+[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow).
 `HostOutputPartRecord` is unique on both
 `(brokerRouteId, deliveryAttemptId, part)` and `(hostOutputDeliveryId, part)`; every header field,
 `parts`, digest, sealed bytes, signer coordinate, and signature is immutable. A conflicting local
@@ -6544,8 +6646,9 @@ links the recovery to the invalid position, resolves its gap, and clears channel
 no unresolved gap/collision remains. Buffered valid proposals then re-enter the ordinary
 first-ingress order; they never overtake the invalid position before that transition.
 
-The following result-delivery, `deciding`, and terminal-outbox states begin at A1.7b/A1.8 and are not
-schema-v8 records. `IngressResultDeliveryRecord` is unique on
+Schema v10 now implements only the A1-ingress `deciding` sidecar for its frozen rejected decision and
+current result-preparation pointer. The following result-delivery and terminal-outbox states remain
+A1.8a target records. `IngressResultDeliveryRecord` is unique on
 `(ingressResultId, triggerIngressObservationId)`;
 `resultDeliveryId` is
 `rrd_${base64url(SHA256(str("remote-claw/a1/result-delivery/v1") || str(ingressResultId) ||
@@ -8121,7 +8224,7 @@ generation names the exact prior record. The broker lookup key is
 and signed-object digest rather than trusting publisher-supplied values.
 
 Here `str`, `uint`, `bytes`, `optionalStr`, and `optionalUint` are exactly the A1 primitives in
-[v2 Architecture §4.3](v2-architecture.md#43-session--message-key-flow-answers-do-we-need-a-sessionkey-flow);
+[v2 Architecture §4.3](v2-architecture.md#43-session-message-key-flow-answers-do-we-need-a-sessionkey-flow);
 the stored lowercase-hex machine identity and base64url public key are decoded before their byte
 fields are serialized.
 
@@ -11629,7 +11732,7 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: A1.0 through dormant A1.7b0 implemented; full A1.7b–A1.11 planned.** A1 is
+**Status: A1.0 through dormant A1.7b1 implemented; A1.8a–A1.11 planned.** A1 is
 provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
 outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
 Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
@@ -11661,8 +11764,8 @@ official-client compatibility; B and C add those records on the generic A1 seams
   inventory, coherent read-only full-graph validation of existing v3 databases before writable open,
   and validation of a newly migrated graph before the handle returns. The schema accepts only
   the narrow dormant states above and rejects nested targets/edges until N1. Actor scopes are durable
-  addresses only; A1.7a now uses them for dormant ingress queues, A1.7b0 supplies only the server
-  signer, and full A1.7b owns common command serialization. A1.4 verifies the evidence refs/digests when its
+  addresses only; A1.7a now uses them for dormant ingress queues, A1.7b0 supplies the server signer,
+  and A1.7b1 supplies rejected-only common command serialization through signed preparation. A1.4 verifies the evidence refs/digests when its
   trusted registration operation is invoked. The ordinary CLI still does not invoke these
   server/project/chat operations; A1.2 itself
   creates no current runtime or binding incarnation and exposes no live registration entry point.
@@ -11737,12 +11840,23 @@ official-client compatibility; B and C add those records on the generic A1 seams
   modules/tests invoke this surface; it creates no command/result, generic host output, broker publish,
   result delivery, checkpoint, outbox/effect, native dispatch, inference, projection, production
   operation, or native table.
-- **A1.7b — Common command order and signed results:** consume eligible `awaiting_order` rows,
-  allocate the server-wide common command order, and retain immutable signed
-  admitted/queued/rejected results under a server-scope signer.
-- **A1.8 — Outbox and one-time native dispatch:** atomic result/attempt/dispatch/effect-gate creation,
-  causal outboxes, protected one-use authorization, epoch/fence checks, uncertainty quarantine, and
-  evidence-only reconciliation.
+- **A1.7b1 — Rejected command adjudication and signed preparation (implemented dormant
+  foundation):** schema v10 exact five-table ledger; shared ready/control-journal closure; eligible
+  A1-ingress route-head materialization; deterministic source/command/result/group/preparation IDs;
+  bounded `unsupported_recognized` persistence; global ready order and dense `commandSeq`;
+  rejected-only decision; distinct creation/decision fences; current-lease reserve/bind/sign;
+  abort/reprepare generations; unknown-commit reconciliation; and semantic reopen. It stops at a
+  signed-but-unaccepted result preparation and exposes no final result, signer acceptance, terminal
+  ingress/source result, delivery/outbox, effect/attempt/dispatch, projection, or production path.
+- **A1.8a — Atomic result/effect capability gate (planned next):** in one transaction, create the
+  immutable final common result, accept its signer reservation, terminalize the ingress sidecar and
+  source result, and create the source result/delivery outbox. An admitted arm must create its exact
+  pinned native attempt, front-door dispatch, and protected one-use effect gate in that same
+  transaction. Any partial state rolls back. A1.7b1 and A1.8a are separate reviewed tranches but one
+  advertised capability gate; neither may enable live A1 mutation alone.
+- **A1.8b — One-time dispatch and recovery (planned):** causal outbox execution, protected one-use
+  authorization consumption, epoch/fence checks, uncertainty quarantine, native read-back, and
+  evidence-only reconciliation without replaying a possibly started effect.
 - **A1.9 — Runtime-scoped inference recovery:** provider-request identity, encrypted exact request
   bytes and response chunks, connector leases, and no silent retry after ambiguous upstream receipt.
 - **A1.10 — Viewer onboarding and projection:** trust-store installation and certificate
@@ -11752,11 +11866,11 @@ official-client compatibility; B and C add those records on the generic A1 seams
   takeover, broker rollover, projection rebuild, and proof that the local TUI remains usable while
   remote collaboration is unavailable.
 
-The stateful prerequisite path through dormant server signing—`A1.0 → A1.1 → A1.2 → A1.3 → A1.4 → A1.5 → A1.6 → A1.7a → A1.7b0`—is implemented behind closed trusted-adapter and host-only seams.
-Full A1.7b waits for A1.7a plus A1.7b0's server signer; A1.8 waits for A1.3, A1.4, and the
-completed A1.7 command/result boundary; A1.9 waits for A1.3 and the protected-handle kernel; A1.10
-waits for A1.5–A1.8; A1.11 is the integrated gate. A1.7a must not treat an `awaiting_order` result as
-an admitted command, signed result, or dispatch authority.
+The stateful path through dormant command signing—`A1.0 → A1.1 → A1.2 → A1.3 → A1.4 → A1.5 → A1.6 → A1.7a → A1.7b0 → A1.7b1`—is implemented behind closed trusted-adapter and host-only seams.
+A1.8a waits for that complete path plus the A1.3/A1.4 executor foundations and must land atomically;
+A1.8b waits for A1.8a; A1.9 waits for A1.3 and the protected-handle kernel; A1.10 waits for
+A1.5–A1.8b; A1.11 is the integrated gate. An A1.7a `awaiting_order` result and an A1.7b1
+signed-but-unaccepted preparation are neither a final result nor dispatch authority.
 
 - Add durable `project`, project-allocation/selector mapping, `logical_chat`, `native_binding`,
   native-incarnation, runtime-local
@@ -12149,6 +12263,23 @@ attempt/dispatch, inference, viewer projection, native table, or production impo
 unchanged. Migration 9 is pinned at 81 statements, digest
 `fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`, and a 571-object manifest: 65 tables, 123 indexes,
 and 383 triggers.
+
+A1.7b1 pure-contract, migration, repository, signing-orchestrator, and real-SQLite tests pin migration
+10 to 50 statements, digest `rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk`, and the exact
+619-object manifest: 70 tables, 137 indexes, and 412 triggers. They require exactly the five new
+ready/sidecar/command/group/preparation tables; defensive pure parsing and canonical bytes; scalar
+text through 48 MiB; small `unsupported_recognized` persistence; deterministic
+`rcm_*`/`ccr_*`/`csg_*`/`crp_*`; the merged gap-free control/ready journal; current gap-free route
+head selection; the 256-unresolved ceiling; global `(readyAtJournalSeq, commandId)` order; dense
+command/signer sequences; rejected-only decisions; distinct creator/decider fences; exact
+reserve/bind/sign; takeover and unknown-commit reconciliation; repeated abort/reprepare through a
+third generation; signature verification; and semantic reopen/corruption refusal. Negative gates
+prohibit command `decided`, ingress `terminal`, group `finalized`, final common result, signer
+acceptance, source result/delivery, outbox/effect, attempt/dispatch, inference, viewer/native state,
+and every production operation or runtime invocation of command adjudication/result signing. A1.8a
+still needs the all-or-nothing crash matrix that makes final result + acceptance + ingress/source
+terminal + delivery/outbox and every admitted effect arm one transaction before the joint capability
+can be advertised.
 
 - one real trusted adapter must invoke the implemented A1.4 seam against A1.2's exact project,
   mapping, and terminal reservation without adding `project:null`, cwd/title inference, or
