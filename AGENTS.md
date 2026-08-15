@@ -184,6 +184,31 @@ any viewer change** — in BOTH modes: `cd tests/web && pnpm exec playwright tes
 writes 11 surfaces × `{phone,desktop}`×`{light,dark}` to `tests/web/shots/<project>/`. Take a set before
 and after and actually open them.
 
+## Tranche scope and gate discipline
+
+Safety invariants and atomic boundaries remain non-negotiable. Save time by controlling scope and
+sequencing the proof work, never by weakening the proof:
+
+- **Freeze the tranche before implementation.** Write down its durable endpoint, forbidden surfaces,
+  file/owner map, release-blocking invariants, and executable gate. If an ID formula, schema shape,
+  atomic boundary, or takeover rule is still open, resolve it in a design-only pass before coding.
+- **Use one integration owner.** One agent owns cross-cutting schema/API integration. Parallel work must
+  be read-only or use non-overlapping files against a frozen interface; consumers do not guess an
+  unfinished producer's types or table layout.
+- **Keep the release cutoff concrete.** A new finding blocks the tranche only when it demonstrates a
+  reachable P0/P1 safety failure or durable liveness loss with a causal path or executable regression.
+  Record lower-severity hardening separately instead of silently expanding the tranche. Recheck every
+  claimed blocker against the latest tree before routing work.
+- **Do not repeatedly full-gate a moving tree.** During implementation, run the smallest relevant tests.
+  After the code and schema freeze, update migration pins and docs once, run one combined focused gate,
+  then one full local gate, independent review, and CI. Repeat the full gate only when a later code or
+  schema change invalidates it.
+- **Pin and document only settled bytes.** Migration counts/digests and the mandatory cross-doc sync come
+  after schema freeze. Do not make documentation agents chase provisional pins or changing semantics.
+- **Bound reviews and report scope growth.** Timebox independent review loops, preserve every concrete
+  finding they surface, and stop unproductive rereading. If the tranche grows materially beyond the
+  forecast, report it immediately and split only at a genuinely closed, crash-safe boundary.
+
 ## CLI / clawsec workflow
 
 - Each change lands as its own reviewed PR (stacked when dependent). Per-PR gate: `pnpm exec biome
