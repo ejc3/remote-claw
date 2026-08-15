@@ -1138,6 +1138,10 @@ interface ReservationGraph {
   readonly bindingState: string;
   readonly bindingSemanticConversationId: A1SafeId | null;
   readonly bindingIncarnationId: A1SafeId | null;
+  readonly inwardEdgeId: A1SafeId;
+  readonly chatState: "recovering" | "ready";
+  readonly edgeState: "installing" | "current";
+  readonly rootPathCertificateId: A1SafeId | null;
 }
 
 const RESERVATION_KEYS = [
@@ -1171,6 +1175,7 @@ const RESERVATION_KEYS = [
   "binding_state",
   "semantic_conversation_id",
   "current_binding_incarnation_id",
+  "inward_edge_id",
   "chat_state",
   "edge_state",
   "root_path_certificate_id",
@@ -1181,6 +1186,7 @@ function loadReservation(
   serverId: CollaborationServerId,
   registrationAttemptId: RegistrationAttemptId,
   bindingId: NativeBindingId,
+  allowRootedTerminal = true,
 ): ReservationGraph {
   const value = sqlGet(
     transaction,
@@ -1195,7 +1201,7 @@ function loadReservation(
             i.metadata_ref, i.metadata_digest, i.capabilities_ref, i.capabilities_digest,
             b.state AS binding_state, b.semantic_conversation_id,
             b.current_binding_incarnation_id, c.state AS chat_state, e.state AS edge_state,
-            e.root_path_certificate_id
+            e.inward_edge_id, e.root_path_certificate_id
        FROM native_registration_intents AS i
        JOIN native_bindings AS b
          ON b.collaboration_server_id = i.collaboration_server_id
@@ -1225,14 +1231,29 @@ function loadReservation(
   }
   const row = rawRow(value, RESERVATION_KEYS, "nativeRegistrationReservation");
   return persisted("nativeRegistrationReservation", () => {
+    const rootPathCertificateId = parseNullable(
+      row.root_path_certificate_id,
+      parseA1SafeId,
+      "nativeRegistrationReservation.rootPathCertificateId",
+    );
+    const terminalIsInstalling =
+      row.chat_state === "recovering" &&
+      row.edge_state === "installing" &&
+      rootPathCertificateId === null;
+    const terminalIsRooted =
+      allowRootedTerminal &&
+      row.binding_state === "current" &&
+      row.semantic_conversation_id !== null &&
+      row.current_binding_incarnation_id !== null &&
+      row.chat_state === "ready" &&
+      row.edge_state === "current" &&
+      rootPathCertificateId !== null;
     if (
-      row.chat_state !== "recovering" ||
-      row.edge_state !== "installing" ||
-      row.root_path_certificate_id !== null ||
+      (!terminalIsInstalling && !terminalIsRooted) ||
       (row.mapping_state !== "current" && row.mapping_state !== "superseded")
     ) {
       throw new NativeRegistrationRepositoryPersistenceError(
-        "A1.2 reservation crossed the pre-A1.5 safety boundary",
+        "terminal reservation graph is neither installing nor exactly rooted",
       );
     }
     const capabilitiesRef = parseNullable(
@@ -1337,8 +1358,54 @@ function loadReservation(
         parseA1SafeId,
         "reservation.currentBindingIncarnationId",
       ),
+      inwardEdgeId: parseA1CanonicalId(
+        "inwardEdge",
+        row.inward_edge_id,
+        "reservation.inwardEdgeId",
+      ),
+      chatState: terminalIsRooted ? "ready" : "recovering",
+      edgeState: terminalIsRooted ? "current" : "installing",
+      rootPathCertificateId,
     });
   });
+}
+
+function demoteRootedTerminalReservation(
+  transaction: HostStateRepositorySqlTransaction,
+  graph: ReservationGraph,
+): void {
+  if (graph.rootPathCertificateId === null) return;
+  if (graph.chatState !== "ready" || graph.edgeState !== "current") {
+    throw new NativeRegistrationRepositoryPersistenceError(
+      "rooted terminal reservation has an invalid lifecycle state",
+    );
+  }
+  runExactlyOne(
+    transaction,
+    `UPDATE inward_collaboration_edges
+        SET state = 'installing', root_path_certificate_id = NULL
+      WHERE inward_edge_id = ? AND represented_server_id = ?
+        AND represented_logical_chat_id = ? AND target_kind = 'native-harness'
+        AND target_native_binding_id = ? AND state = 'current'
+        AND root_path_certificate_id = ?`,
+    [
+      graph.inwardEdgeId,
+      graph.collaborationServerId,
+      graph.logicalChatId,
+      graph.nativeBindingId,
+      graph.rootPathCertificateId,
+    ],
+    "native root edge demotion",
+  );
+  runExactlyOne(
+    transaction,
+    `UPDATE logical_chats SET state = 'recovering'
+      WHERE collaboration_server_id = ? AND logical_chat_id = ?
+        AND current_inward_edge_id = ? AND current_native_binding_id = ?
+        AND state = 'ready'`,
+    [graph.collaborationServerId, graph.logicalChatId, graph.inwardEdgeId, graph.nativeBindingId],
+    "native root chat demotion",
+  );
 }
 
 function readArtifact(
@@ -2754,6 +2821,9 @@ class BoundNativeRegistrationRepository implements NativeRegistrationRepositoryO
         [targetState, current.nowMs, current.lease.nativeConversationLeaseId, current.lease.state],
         "native conversation lifecycle transition",
       );
+      if (kind !== "ready") {
+        demoteRootedTerminalReservation(transaction, current.graph);
+      }
       return frozen({
         lease: updatedLease(current.lease, { state: targetState, updatedAtMs: current.nowMs }),
         operation,
@@ -2870,6 +2940,7 @@ class BoundNativeRegistrationRepository implements NativeRegistrationRepositoryO
           "closed lease recovery gate",
         );
       }
+      demoteRootedTerminalReservation(transaction, current.graph);
       return frozen({
         lease: updatedLease(current.lease, {
           state: "closed",
@@ -3304,6 +3375,7 @@ class BoundNativeRegistrationRepository implements NativeRegistrationRepositoryO
         parsed.fence,
         parsed.coordinatorFence,
       );
+      demoteRootedTerminalReservation(transaction, graph);
       return frozen({
         predecessor: parseNativeConversationLeaseRecord({
           ...predecessor,
@@ -3339,7 +3411,7 @@ class BoundNativeRegistrationRepository implements NativeRegistrationRepositoryO
       },
     );
     return this.#executor.transaction((transaction) => {
-      validateNativeRegistrationRepositorySnapshot(transaction, this.#machineIdentityId);
+      validateNativeRegistrationRepositorySnapshot(transaction, this.#machineIdentityId, 6);
       const operation = findOperation(transaction, parsed.operation.operationId);
       if (operation === null) return null;
       const lease = findLease(transaction, operation.nativeConversationLeaseId);
@@ -4023,11 +4095,13 @@ function validateExactNativeRegistrationOperationClosure(
 export function validateNativeRegistrationRepositorySnapshot(
   transaction: HostStateRepositorySqlTransaction,
   machineIdentityId: string,
+  schemaVersion = 5,
 ): void {
   const machine = parseMachineIdentityId(
     machineIdentityId,
     "validateNativeRegistrationRepositorySnapshot.machineIdentityId",
   );
+  const allowRootedTerminal = schemaVersion >= 6;
   const inventory = readInventoryTransaction(transaction);
   const leasesById = new Map(
     inventory.leases.map((lease) => [lease.nativeConversationLeaseId, lease] as const),
@@ -4059,6 +4133,7 @@ export function validateNativeRegistrationRepositorySnapshot(
       lease.collaborationServerId,
       lease.registrationAttemptId,
       lease.nativeBindingId,
+      allowRootedTerminal,
     );
     verifyReservationEvidence(transaction, graph);
     snapshotAssert(

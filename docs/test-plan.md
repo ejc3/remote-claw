@@ -9,8 +9,9 @@ native evidence separately from future release gates.
 
 | Layer | Where | What it proves | Runtime |
 | --- | --- | --- | --- |
-| **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking, the shared canonical field writer with strict-null optionals and defensive snapshots, and the locked A0 AAD regression vector — pure functions, no network | Node + WebCrypto |
-| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), BrokerClient (HTTP/SSE) against an in-memory broker, viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, A1.0 contracts, the A1.1 secure-filesystem/SQLite/protected-artifact kernel, A1.2 server/project repository, A1.3 runtime-owner/key-custody/daemon/RPC, and A1.4 schema-v5 evidence/registration/reconciliation/duplex-port/trusted-adapter boundaries | Node, mock fetch / fixture |
+| **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking, the shared canonical field writer with strict-null optionals and defensive snapshots, the locked A0 AAD regression vector, A1.5's pure v2 wire/KDF/frame/digest/certificate/onboarding contracts, A1.6's exact selected capability/route/store/generation/manifest/retry/collision/read-page contracts, and A1.7a's bounded ingress identifiers/digests/cursors plus strict `user`/`new_chat` payload codecs — pure functions, no network | Node + WebCrypto |
+| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), A0 BrokerClient (HTTP/SSE), viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, A1.0 contracts, the A1.1 secure-filesystem/SQLite/protected-artifact kernel, A1.2 server/project repository, A1.3 runtime-owner/key-custody/daemon/RPC, A1.4 schema-v5 evidence/registration/reconciliation/duplex-port/trusted-adapter boundaries, A1.5 schema-v6 terminal-root repository/service boundaries, A1.6's negotiation-first client plus schema-v7 capability-pin/route/genesis repository and host-only installer, A1.7a's schema-v8 evidence-preserving ingress repository/dormant actor through `awaiting_order`, and A1.7b0's schema-v9 wrapped server-key custody, self-anchor, fenced leases, and reserve/bind/sign/accept/reconcile boundary | Node, mock fetch / fixture + real temporary SQLite |
+| **Unit/integration (A1 broker)** | `apps/web/test/{api/a1-routes,broker/a1-sqlite}.test.ts` | Strict bearer/selector/capability admission, route recomputation, A1-only catalog/store provisioning and loss, bounded canonical relay/read, route-wide exact retry and first collision, rollover/manifests, quota/counter exhaustion, pagination, and isolation from A0 retention | Node + mock/local SQLite/libSQL |
 | **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
 | **Retained native proof (OpenCode)** | [`spikes/opencode-native/verify-evidence.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, and same-ID `noReply:true` append behavior within one incarnation | Node over checked JSON evidence; no provider/model |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
@@ -106,7 +107,11 @@ about the current A0 implementation:
 | A1.2 | Implemented host repository; operations inactive | Exact schema-v3 migration/manifest; default profile/server; atomic first project/mapping/chat/binding/intent/`rcie_*` edge; explicit later projects; terminal mapping-generation replacement; many-chat inventory; coordinator lease CAS, renewal, release, takeover and reconciliation; contiguous immutable journal; full semantic read-only snapshot validation; no live registration, command actor, native effect, or nested target/edge is advertised |
 | A1.3 | Implemented; production health only | Exact schema-v4 migration/manifest and full runtime-owner semantic graph; `rcrt_*` vector; service lease fencing/takeover/reconciliation; runtime/incarnation/assignment/containment and local-conversation registry; wrapped Ed25519 custody/signing discipline; binding/attachment/gate foundations; authenticated bounded RPC; daemon/bootstrap and failure cleanup; multi-runtime isolation; wrapped-driver connect/autostart/detach boundary; health reports `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`, with no installed production dispatch operation, durable owner registration, A1 binding activation, remote mutation, or broker capability |
 | A1.4 | Implemented closed trusted-adapter seam; ordinary CLI has it disabled | Exact schema-v5 migration and 269-object manifest; five canonical evidence schemas; sequenced process leases/publications/operations; replay/collision and request-bound reconciliation; lifecycle/publication closure plus validator-enforced no-extra-row closure; duplex bounded callable ports; `liveReattach` admission; stale-open crash takeover and fresh-fenced same-binding process/port reattach with authority-change transport rotation; explicit-adapter production activation while ordinary health remains `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false` |
-| A1.5–A1.11 | Planned; A1.5 next | Cross-runtime canonical wire/signing and terminal-root activation, broker conformance, ingress/dedup and actor queues, signed decision, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
+| A1.5 | Implemented dormant foundation; ordinary CLI has it disabled | Pure browser-safe A1 v2 route/token/KDF/frame/digest, certificate, and onboarding codecs; exact schema-v6 304-object terminal-root ledger; activation/renewal replay, collision, fencing, expired-preparation refusal, rollback, lost-commit reconciliation, semantic reopen, lifecycle demotion, and re-ready renewal; closed v6 signature reservation, protected signing, fresh callable-port proof, and transaction-local store/accept/finalization through the opt-in trusted-adapter operation; no real driver or broker integration |
+| A1.6 | Implemented dormant foundation; ordinary CLI/drivers/viewer make zero A1 calls | Exact capability negotiation; selected SQLite/libSQL route provisioning; auth/route/store binding; raw and decoded bounds; retained route-wide exact retry/collision/manifests; automatic rollover and bounded one-generation pagination; outcome-unknown client behavior; exact 22-statement schema-v7/326-object capability-pin/route/pristine-genesis install and split-commit recovery; no ingress cursor, actor, native effect, checkpoint/signing, inference, or projection claim |
+| A1.7a | Implemented dormant foundation; absent from production barrels/run paths | Schema-v8 route backfill/auto-seeding, exact retained page/frame/raw/plaintext evidence, independent fetch/semantic cursors, current-fenced actor takeover, multipart/exact-retry/collision/tombstone/recovery, quotas/lookahead, secure reopen, and durable `awaiting_order`; no command/order, signed result, server-scope signer, outbox/effect, native dispatch, or live A1 claim |
+| A1.7b0 | Implemented dormant prerequisite; no production wiring | Schema-v9 migration `009-server-scope-signer`; initial self-anchor, AES-GCM-wrapped server Ed25519 custody without raw-key export, coordinator-fenced bootstrap/current leases, immutable signer sequences and payload bindings, dense per-server `acceptedAtJournalSeq` signed-record acceptance, non-closed-bootstrap `stale_bootstrap_fence` fail-stop versus installed-lease supersession/next-token takeover, exact replay/collision/reconciliation, semantic reopen, and compatibility admission of dormant route installation for an exact signer-activated current server; no command/result, generic host output, broker publish, outbox/effect, native dispatch, or projection claim |
+| A1.7b–A1.11 | Planned; full A1.7b next | Common command ordering and signed decisions, one-time effect/outbox, inference, viewer projection, and integrated crash matrices |
 | A2.1–A2.4 | Planned after A1 | Retained real OpenCode TUI/front-door/isolation fixture and the signed `{new_chat}`/`{user_text}` adjudication matrix; unavailable connector kinds use authenticated stand-ins only |
 | N1.1–N1.3 | Planned after A1 | Two live nested servers, rooted edge installation, complete signed downstream receipt, reconnect/reparent recovery, and cycle/reflection/duplicate-execution rejection |
 | B.1–B.5 | Planned after A1 | Pinned Claude differential fixtures, durable private RC recovery, native correlation/gate races, and live outward Anthropic Remote parity |
@@ -237,7 +242,98 @@ registration, ready-time before/after port authorization, teardown, and crash re
 installed only when an explicit `registrationAdapter` is supplied. The ordinary CLI supplies none, so
 its operation registry is empty, its authenticated RPC surface is health-only, and health reports
 `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`; these tests do not claim a
-real-driver A1 registration, terminal root, inference connector, or remote A1 mutation. A1.5 is next.
+real-driver A1 registration, terminal root, inference connector, or remote A1 mutation.
+
+A1.5 pure tests cover exact route addresses/tokens and `rcr_*` IDs; three chat and two directional
+server-control KDFs; closed kind-to-plane, direction, sequence, client-ID, authentication-field, and
+part-shape rules; AEAD seal/open and route binding; canonical JSON frame encoder order, reordered-member
+parse/normalized re-encoding, and duplicate/extra/noncanonical-value rejection; signature preimages;
+a transport-frame digest; and stable attempt-header,
+authenticated-part, and whole-message digests. Certificate tests cover strict native-root, server-scope rotation, four onboarding-key
+commitments/attestation, signer-generation derivation, Ed25519 verification, TTL, and signature
+transplant rejection. `ViewerOnboardingBundleV2` tests cover canonical `rcp2` transfer/checksum,
+cold self-signed anchor and trusted-suffix modes, current-key binding, optional key pinning, and tamper,
+chain, identity, noncanonical, and size failures, including rejection of any supplied-chain successor
+that reuses an earlier Ed25519 public key under a renamed ID. A suffix begins at the exact
+caller-supplied trusted certificate; older omitted key-ID and public-key history is deliberately left
+to the caller trust store. These are pure Web-Platform contracts; they do not
+claim viewer installation or a broker route.
+
+Schema-v6 tests lock migration `006-terminal-native-root` to 36 statements, digest
+`li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo`, and the complete manifest to 304 objects: 36 tables,
+78 indexes, and 190 triggers. Repository/SQLite coverage includes initial activation and renewal,
+exact replay/collision, stale owner/coordinator fences, expired-preparation refusal, rollback, lost-COMMIT reopen and exact
+reconciliation, cryptographic/full-chain semantic reopen, machine/server/chat/operation-scoped `nrpc_*`
+derivation and snapshot re-verification, a prepared renewal fork with exactly one
+committed successor, backward-clock finalization rollback, and a committed certificate chain that
+survives recover followed by re-ready/renew. Registration lifecycle tests separately prove that
+recover, drain, close, and reattach atomically demote the rooted chat to recovering and edge to
+installing; the append-only certificate ledger itself is not deleted by those transitions. Tests prove
+that public runtime-owner store/accept/abort cannot mutate a prepared operation-attached v6
+`native_root` reservation. The same test reopens the database and stores and accepts it through the
+transaction-local terminal-root finalizer, which samples the acceptance/commit timestamp; legacy
+unattached v5 signature history remains inert. Trusted-adapter service tests cover the closed
+`native.root.activate` payload, protected runtime-owner signing before a fresh nonce-bound reverse
+proof of the exact connection/binding/runtime/incarnation/attachment/port generation, immediate
+synchronous finalization after that proof, and historical replay that does not claim present liveness.
+The ordinary CLI installs no adapter. The reverse proof is ephemeral—not a row checked
+on reopen—and A1.5 expiry does not auto-demote a persisted chat/edge. The later effective-route/
+dispatch gate must separately prove certificate-time and current live-lease rechecks.
+
+A1.6 pure tests lock the selected capability vector/digest, canonical route/store and cursor records,
+generation-manifest digest, strict publish/exact-retry/first-collision receipts, and one-generation
+read-page ordering and frame/count bounds. Web backend and route tests cover bearer-derived identity, literal
+SQLite selection, capability pinning, strict duplicate-safe control/frame JSON, route/token/ID
+recomputation, content-type and streaming body bounds, decoded ciphertext and part bounds, A1-only
+catalog quota and concurrent provisioning, immutable `rbsi_*` identity, exact retry across automatic
+4,096-frame rollover, changed-byte collision without allocation, immutable first-conflict evidence,
+empty-generation seal/read advance, at most 64 frames and an 8,000,000-byte cap on each transmitted
+snake-case HTTP response page, safe-
+integer exhaustion, missing-store loss latching, and A0 retention isolation. Client tests cover
+required negotiation, fixed bearer/selector/capability headers, redirect refusal, strict bounded
+responses, canonical frame and digest validation, typed collision, original-cursor replay, store and
+capability mismatches, secret scrubbing, and outcome-unknown network failure without automatic retry.
+Schema-v7 tests lock migration `007-a1-broker-routes` to 22 statements, digest
+`uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw`, and the complete manifest to 326 objects: 39 tables,
+85 indexes, and 202 triggers. Migration/repository/SQLite tests cover exact protected capability artifacts in
+`host_profile/default`, deterministic `rbcp_*` pins, canonical `rcr_*` route/token/store tuples,
+current-coordinator and installing-server fencing, exact pristine open-generation-zero installation,
+replay/collision, rollback, historical unknown-commit reconciliation, and full semantic reopen. The
+host-only installer tests the remote-open/local-install split and exact recovery after either side is
+already durable. None of these tests proves an ordinary CLI/driver/viewer A1 request or
+runtime-owner broker operation.
+
+A1.7a migration, parser, repository, actor, and real-SQLite tests cover v7-route backfill and post-v8
+auto-seeding; exact route/artifact/page/frame closure; current-fenced revision CAS, stale refusal, and
+crash-retained actor takeover; bounded page staging and independent fetch/semantic cursor movement;
+one-part and multipart `awaiting_order`; exact retry; transport/semantic collisions; invalid payload;
+incomplete expiry and late tombstones; quota and 1,024-position lookahead; explicit gap recovery;
+unknown-commit reconciliation; and secure-reopen corruption refusal. Negative migration assertions
+also prohibit A1.8 command, signature, result-delivery, outbox, effect, dispatch, viewer, and native
+tables. The dormant actor has unit composition coverage but no ordinary CLI, driver, runtime-owner,
+or viewer wiring, so the tests do not establish a live A1 collaboration path.
+
+A1.7b0 parser, custody, migration, repository, service, and real-SQLite tests cover strict record
+shapes and lifecycle tuples; deterministic server identity, bootstrap-intent/signed-certificate
+digests, and AAD vectors; sign/verify without any
+raw PKCS#8 API; rejection after transplanting the machine, server, protected handle, key ID,
+generation, algorithm/backend, public key, PKCS#8 digest, ciphertext/tag, or root secret; initial
+`scope_certificate`-only bootstrap; current coordinator lease/epoch/fencing checks; monotone burned
+signer sequences; exact initial-certificate reserve/bind/sign/accept replay and collision; acquisition
+of the installed current lease without a generic current-lease signing API; stale-authority refusal;
+immutable `writable:false`/`stale_bootstrap_fence` reconciliation when coordinator takeover strands a
+non-closed initial bootstrap, including refusal to re-fence, replace, or reserve again; installed
+current-lease supersession and custody-qualified fresh exact-next-token acquisition after no
+`reserved`, `bound`, or signed-but-unaccepted predecessor reservation remains;
+the dense per-server `acceptedAtJournalSeq` signer-acceptance coordinate without any schema-v3
+control-journal expansion; atomic artifact-plus-phase persistence; landed/absent unknown-commit cuts
+for prepare, bind, signed store, finalization, and takeover acquisition; process-crash resume from
+every durable phase without replacement-key generation; and semantic reopen. Negative tests require the schema-v9
+slice to remain dormant and prohibit a common command/result, generic host-output record, broker
+publish, result delivery, outbox/effect, native attempt/dispatch, viewer projection, native table, or
+production import. Migration 9 is pinned at 81 statements, digest
+`fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`, and a 571-object manifest: 65 tables, 123 indexes,
+and 383 triggers.
 
 ### One-host/many-session acceptance matrix
 
@@ -321,7 +417,9 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   the v3 91-object manifest of 13 tables, 24 indexes, and 54 triggers, and the 141-statement migration 4
   to `zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0` with the v4 231-object manifest of 30 tables,
   57 indexes, and 144 triggers. Lock the 38-statement migration 5 to
-  `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE` and the v5 manifest to 269 objects. Match every `sqlite_schema` row and reject
+  `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE` and the v5 manifest to 269 objects. Lock the
+  36-statement migration 6 to `li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo` and the v6 manifest
+  to 304 objects: 36 tables, 78 indexes, and 190 triggers. Match every `sqlite_schema` row and reject
   even a hidden `sqlite_*` extra; reject update, delete, or replacement of migration/artifact rows.
   Expose no raw SQL; reject nested/async/escaped transactions and database-level asynchronous artifact
   calls inside a transaction callback; and roll back multiple protected-artifact writes as one unit.
@@ -428,7 +526,7 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   include the four onboarding key-commitment formulas and exact attestation payload, per-key
   substitution, canonical bundle wire/checksum, host-output signature preimage/digest/verification,
   signer key/certificate/generation/sequence AAD fields, unsigned output, route/signature transplant,
-  stale/burned signing reservations, duplicate/equivocating global signer sequences, signed rotation
+  stale/burned signing reservations, duplicate/equivocating server-wide signer sequences, signed rotation
   cutoffs, certificate-update order/fork, historical reattestation publication/retrieval/equivocation,
   and current versus retired/revoked-key behavior;
 - restart Claude, explicitly resume the same native UUID, accept a re-bridge of the persisted private
@@ -476,7 +574,7 @@ This is an integrated release gate across A1, A2, B, and C, not a claim that one
   semantic collision blocked until audited recovery; crash after a generation seals but before its
   final frame is consumed, then resume the durable cursor,
   drain through the stored frame count, and only then consume its successor;
-  compact only a checkpointed discovery scope-bus frame body after recovery leases pass, then retry
+  in the later A1.10 retention gate, compact only a checkpointed discovery scope-bus frame body after recovery leases pass, then retry
   the old attempt/part unchanged and changed; require the retained route-wide tombstone to return the
   original cursor or a collision, never a new position. Attempt chat- or server-control-body
   compaction and require rejection because cold semantic/result recovery retains those routes from

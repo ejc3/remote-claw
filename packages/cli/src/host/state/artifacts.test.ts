@@ -228,6 +228,26 @@ describe("protected artifact repository", () => {
     expect(database.transactions).toBe(0);
   });
 
+  it("copies caller snapshots for puts and returns caller-destroyable read snapshots", () => {
+    const database = new FakeArtifactDatabase();
+    const operations = createProtectedArtifactTransactionOperations(database, {
+      randomBytes: () => entropy(12),
+      nowMs: () => 22,
+    });
+    const source = Uint8Array.of(4, 5, 6);
+    const request = putRequest(source);
+    const put = operations.putArtifact(request);
+
+    source.fill(0);
+    expect(request.artifactBytes.copyBytes()).toEqual(Uint8Array.of(4, 5, 6));
+    const read = operations.readVerifiedArtifact(readRequest(put));
+    read.artifactBytes.destroy();
+    expect(() => read.artifactBytes.copyBytes()).toThrow(/destroyed/);
+    expect(operations.readVerifiedArtifact(readRequest(put)).artifactBytes.copyBytes()).toEqual(
+      Uint8Array.of(4, 5, 6),
+    );
+  });
+
   it("rejects malformed puts, digest mismatches, and bounded fields before insertion", async () => {
     const database = new FakeArtifactDatabase();
     const repository = new ProtectedArtifactRepository(database, {

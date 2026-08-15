@@ -56,6 +56,25 @@ const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
       resolve(STATE_ROOT, "validation"),
     ]),
   ],
+  [
+    resolve(SOURCE_ROOT, "host/server-signer/service.ts"),
+    new Set([
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "protected"),
+      resolve(STATE_ROOT, "server-signing"),
+      resolve(STATE_ROOT, "server-signing-repository"),
+    ]),
+  ],
+  [
+    resolve(SOURCE_ROOT, "host/server-signer/orchestrator.ts"),
+    new Set([
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "protected"),
+      resolve(STATE_ROOT, "server-signing"),
+      resolve(STATE_ROOT, "server-signing-repository"),
+      resolve(STATE_ROOT, "sqlite"),
+    ]),
+  ],
 ]);
 
 async function sourceFiles(directory: string): Promise<string[]> {

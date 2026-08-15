@@ -19,17 +19,18 @@ its native setup.
 **Identity scope.** In this as-built protocol, `Session.id` is a synthetic `cse_*` identifier used as
 the broker channel address and session-list key. It is not a Claude transcript ID, Codex thread ID,
 OpenCode `ses_*`, tmux pane identity, or durable remote-claw logical-chat ID. The A0 `rcb_*`
-registration lease is also process-local. A1 targets a separately persisted
+registration lease is also process-local. A1.2 now persists a separate
 `(collaborationServerId, logicalChatId)` scope; that pair is the canonical chat within one machine.
-The machine-facing viewer row, route, alias, wire channel, and cache keys use the full
+The A1.6 dormant broker route and A1.7a host ingress ledger use the full
 `(identity_id, collaborationServerId, logicalChatId)` triple. A private synthetic `cse_*` may then
 rotate beneath it during a proven native transport/runtime replacement. That mapping and recovery
-behavior are not implemented here.
+behavior, and any A1 viewer row, alias, or cache, are not implemented here.
 
 **Host multiplicity.** Current A0 already gives each in-process `Session` its own registrar lease,
 relay instance, inbound dedup set, projection log, broker chat channel, permission map, and teardown
 controller; one MITM registrar can serve several intercepted sessions. That is process-local
-isolation, not the selected durable host inventory. A1 must make one paired host discover and recover
+isolation, not the selected live durable host inventory. A1.2, A1.6, and A1.7a can now persist dormant
+host/chat, broker-route, and evidence-preserving ingress inventory, but later slices must make one paired host discover and recover
 many independently wrapped Claude, Codex, and OpenCode conversations across equal or different
 directories. Each keeps its own native identity/history, local TUI, collaborators, actor lane,
 delivery gates, and recovery outcome. Global journal counters remain audit positions; native
@@ -58,6 +59,26 @@ Three parties, one of which (the broker) is untrusted and sees only ciphertext.
 - **Viewer** — the browser client (`apps/web/app/lib/viewer.ts` + `page.tsx`). It reuses the host's
   `BrokerClient` and `SecurityProvider`, plus the shared `FrameOrderer`, so the wire and security
   primitives do not have separate implementations that can drift (`viewer.ts` header comment).
+
+**Dormant A1.6 transport.** A separate selected SQLite/libSQL provider now exists behind
+`/api/a1/*` (`apps/web/app/api/a1/**/route.ts`, `lib/broker/a1-sqlite.ts`) with the browser-safe
+contracts in `packages/clawsec/src/a1-broker.ts` and client in
+`packages/cli/src/broker/a1-client.ts`. It does not implement the A0 `BrokerBackend` interface and is
+not used by `HostRcRelay`, any driver, runtime-owner RPC, or the viewer. Ordinary production therefore
+makes zero A1 requests; the current topology and UI still use only the A0 endpoints above. The exact
+A1.6 HTTP/storage contract is recorded in [§3a](#3a-dormant-a16-broker-transport).
+
+**Dormant A1.7a ingress.** Host schema v8 and its repository/route actor now retain authenticated
+ingress evidence through complete multipart results in `awaiting_order`; [§3b](#3b-dormant-a17a-evidence-preserving-ingress)
+records that direct-only contract. The actor is absent from package barrels and every production run
+path. A1.7a itself neither changes the A0 topology above nor adds command ordering, signed results,
+server-scope signing, native effects/outboxes, dispatch, or viewer projection.
+
+**Dormant A1.7b0 server signer.** Host schema v9 now adds only the server-scoped signing prerequisite:
+an initial self-anchor, wrapped Ed25519 custody, fenced bootstrap/current leases, and durable
+reserve/bind/sign/accept/reconcile state. [§3c](#3c-dormant-a17b0-server-signer-prerequisite) records
+that direct-only contract. It does not consume `awaiting_order`, publish a host frame, or add a common
+command/result, broker write, outbox/effect, native dispatch, viewer projection, or production path.
 
 **Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the
 only driver. Every current harness produces a `Session`. Claude MITM, OpenCode, and tmux register that
@@ -274,6 +295,240 @@ not the index, for correctness (`viewer.ts transcript()` comment). An `event: er
 
 The broker is **at-least-once and not FIFO** (`order.ts` header). Everything below is built to make that
 substrate deliver a consistent transcript anyway.
+
+---
+
+## 3a. Dormant A1.6 broker transport
+
+A1.6 implements a second, closed transport contract; it does not strengthen or silently select the
+A0 endpoints in §3. Every request is bearer-authenticated and must carry the literal
+`x-broker-backend: sqlite`. Omission is `backend_selector_required`; another selector is
+`a1_backend_unsupported`. The broker derives the 16-byte machine identity from the bearer, requires
+the request's `identity_id` to be its 32-character lowercase hexadecimal form, recomputes the canonical
+scope-bus/server-control/chat token and `rcr_*` ID, and rejects a route/auth transplant before storage
+lookup (`apps/web/lib/broker/a1-http.ts`). Query-string selection and default fallback do not exist.
+
+`GET /api/a1/capabilities` returns exactly this strict vector
+(`packages/clawsec/src/a1-broker.ts`):
+
+```json
+{
+  "schemaVersion": 1,
+  "protocol": "remote-claw-broker-a1",
+  "durableCiphertext": true,
+  "routeWideDeliveryAttemptUniqueness": true,
+  "brokerRecomputesTransportDigest": true,
+  "exactRetryReturnsOriginalCursor": true,
+  "generationManifests": true,
+  "immutableCollisionTombstones": true
+}
+```
+
+Its canonical digest is `pxq9w0eeR1rKMUyVw5p5Sgl6VU1jdEHAPYlrS93Cbdo`. Open, relay, and subscribe
+also require that value in `x-remote-claw-a1-capabilities-digest`. Every A1 JSON response—including an
+error—sets `Cache-Control: no-store` and echoes that digest header. The selected Vercel deployment
+requires a complete Turso fleet configuration; local/self-hosted conformance may use the file locator
+only when no partial Turso configuration is present. Workflow, local, and A0 SQLite providers cannot
+advertise this vector.
+
+The operations are:
+
+| Operation | Exact role |
+| --- | --- |
+| `GET /api/a1/capabilities` | Authenticate, require the explicit SQLite selector, and return the exact vector above. This is the only operation that does not require the digest to have already been pinned. |
+| `POST /api/a1/route/open` | Accept strict JSON `{v, identity_id, collaboration_server_id, route_kind, logical_chat_id, route_token, expected_route_store_instance_id}`. The expected store is nullable for an unpinned open; a pinned/recovery open supplies its exact `rbsi_*`. Return `created`/`existing`, the derived route ID, immutable random store ID, capability digest, genesis descriptor, current open-generation descriptor, and sampled `observed_next_frame_index`. |
+| `POST /api/a1/relay` | Accept one canonical A1-v2 frame as the raw JSON body plus `x-remote-claw-a1-route-kind`, `x-remote-claw-a1-route-token`, and `x-remote-claw-a1-route-store-instance-id`. Recompute the route and normalized transport-frame digest. Return `inserted`/`exact_retry`, immutable cursor and digest, or a typed 409 collision containing the original cursor/digest, latched first-conflicting digest, and current conflicting digest. |
+| `POST /api/a1/subscribe` | Accept the same strict route tuple, non-null expected store, `{version:1, channel_generation, next_frame_index}` position, and `max_frames`. Return one generation descriptor and sampled tail, contiguous canonical frames with cursor/attempt/part/digest, next position, and `at_live_tail`. A page never crosses a generation. |
+
+The provider reserves the store ID in an A1-only catalog before provisioning the route database. The
+catalog state is `provisioning`, `current`, or `lost`; a known current store that disappears is latched
+`lost` and returns `route_not_found` rather than creating a replacement under the same route. Catalog
+recovery may reinstall only an intact physical route with the same store ID. The catalog permits at
+most 4,096 retained routes per bearer identity, and the A0 retention index cannot enumerate A1 routes
+(`apps/web/lib/broker/a1-sqlite.ts`).
+
+Transport uniqueness is route-wide on `(deliveryAttemptId, part)`, not `msgId` and not generation. A
+first insert atomically receives `(channelGeneration, frameIndex)`. The same normalized frame returns
+that original cursor even after rollover; different normalized bytes persist the first collision and
+return 409 without consuming a cursor. At 4,096 unique frames the publish transaction seals the open
+generation with its count, successor, and canonical manifest digest, creates the unique successor, and
+inserts the frame at index zero. An internal `seal` hook exists only for backend conformance and empty-
+generation tests; there is no public seal endpoint. A drained sealed page, including an empty one,
+advances to `(g+1, 0)`; a drained open page stays at its sampled live tail. A1.6 retains every route's
+ciphertext bodies, attempt/part originals, collision tombstones, and manifests indefinitely under
+ordinary operation. The existing explicitly dev/CI-gated locator `dropScope()` remains destructive
+whole-scope cleanup; it is not an A1 retention, checkpoint, revocation, or production recovery rule.
+A1.6 has no checkpoint, compaction, or broker-side route-revocation collection rule.
+
+The enforced bounds are 4,450,000 UTF-8 bytes per raw relay body; decoded ciphertext strictly less
+than 3,300,000 bytes; at most 32 parts; 8,192 bytes per open/subscribe control body; 4,096 unique frames
+per generation; and at most 64 frames and 8,000,000 bytes in the transmitted snake-case HTTP subscribe
+response. The CLI independently caps its raw response read at that same byte count; the pure
+camelCase semantic DTO is frame/count bounded and does not claim a second wire-size calculation. Bodies are consumed
+incrementally rather than through an unbounded `Request.text()`. Safe-integer counter exhaustion fails
+with 507. Ordinary errors have exact `{v:1,error:<literal>}` bodies; the closed status set covers
+invalid request/selector (400), unauthorized (401), route auth (403), missing route (404), coordinate,
+store, capability, generation, and transport collisions (409), oversized frame (413), unsupported
+media type (415), invalid read position (416), unsupported backend (501), counter exhaustion (507),
+and redacted broker failure (500).
+
+`A1BrokerClient.negotiate()` is the only way to obtain a route-opening client. It uses
+`redirect:"error"`, sends the bearer/selector/digest without putting secrets on argv or in returned
+records, validates every response header and exact record, re-parses canonical frames, and checks
+route/store/cursor/generation/digest continuity. It never automatically retries an ambiguous fetch;
+that becomes `A1BrokerOutcomeUnknownError` for caller-owned exact reconciliation
+(`packages/cli/src/broker/a1-client.ts`).
+
+Host schema v7 migration `007-a1-broker-routes` has 22 ordered statements, digest
+`uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw`, and an exact 326-object manifest: 39 tables, 85
+indexes, and 202 triggers. It stores only the protected exact-capability pin, immutable route receipt, and open
+generation-zero record. Installation requires a current coordinator lease and an `installing` server,
+and accepts only a confirmed receipt whose genesis and current generation are both pristine open zero
+with sampled next index zero. The host-only installer accepts an already negotiated client, opens
+remotely, and then atomically installs those local rows. It retries the identical remote open once
+only after an outcome-unknown response. An unknown local commit is resolved by close/reopen plus exact
+repository reconciliation; a proved-absent local commit is reported as non-retry-safe because the
+remote route may already exist. A1.6 itself attaches no durable ingress cursor/actor,
+checkpoint/signature, native effect/outbox, inference, or projection to the route. A1.7a adds the
+dormant host-side ingress ledger below; no ordinary CLI command, runtime-owner operation, driver, or
+viewer invokes it.
+
+---
+
+## 3b. Dormant A1.7a evidence-preserving ingress
+
+A1.7a advances the host database to schema v8 with migration `008-a1-durable-ingress`. Its 171
+statements are locked to digest `6Vf2H56rDvW2PGMrU83upUDz1r9gHP11tdq_w7T1K5E`; the complete
+492-object manifest contains 57 tables, 99 indexes, and 336 triggers. Migration preserves every schema-v7 broker route and generation as an
+immutable installation receipt. It backfills each route—and auto-seeds each route installed later—with
+a route runtime head, an observed generation-zero row, independent fetch and semantic cursors, and an
+unclaimed revisioned actor.
+
+The two cursors have different meanings:
+
+- The **fetch cursor** is the next broker position to request. It advances only in the same transaction
+  that retains the exact read-page observation, its per-frame claims, and every newly supplied raw
+  frame artifact.
+- The **semantic cursor** is the next position whose semantic outcome is unresolved. It advances only
+  one proven advanceable position or exact sealed-generation boundary at a time and never jumps a
+  missing or blocked position. Fetch may run ahead only within the selected 1,024-frame / 64 MiB
+  unresolved lookahead.
+
+For every first-seen physical position, the repository retains the received-frame bytes, digest,
+length, broker claims, route coordinate, and parsed-header evidence before the position can be
+classified. Same-position replay is exact only when the stored length and broker delivery-attempt,
+part, and transport-digest claims also match; changed bytes retain position-equivocation evidence,
+while changed outer claims retain an `outer_page_invalid` gap. Generation observations admit monotone open tails and one exact
+open-to-sealed transition with its immutable manifest; a changed manifest is retained separately.
+Page and frame evidence remain bound to the exact route and immutable `rbsi_*` store instance.
+
+The dormant actor claims one route under the current coordinator lease/epoch and advances its stored
+revision for each mutation. A successor coordinator may replace a crash-retained claim; a stale,
+released, superseded, or expired fence cannot mutate or recover the route. The actor reads at most one
+bounded route head, one due assembling result, or one exact reconciliation result on its hot path; the
+full route-history read remains diagnostic only.
+
+After route/header validation, chat routes accept only inbound `user` and server-control routes only
+inbound `new_chat`. Unsupported or malformed frames become retained invalid positions; an otherwise
+valid outbound frame without a known A1.8 host-output ledger becomes `unknown_outbound` and opens a
+gap rather than being trusted. AEAD-open plaintext is retained as a protected evidence artifact.
+Multipart assembly is bounded to 32 parts, four delivery candidates per semantic result, 48 MiB of
+reassembled plaintext, and a fixed five-minute deadline. It retains transport attempts, candidate
+counters, immutable part vectors, and every authenticated observation.
+
+The semantic identity is route-scoped `(brokerRouteId, sourceEventNamespaceId, msgId)`, independent
+of transport `deliveryAttemptId`. Exact duplicate parts and complete exact replays do not create a
+second semantic result. Changed transport bytes, changed stable headers, or changed semantic content
+retain collision evidence and tombstones. An incomplete candidate expires durably as
+`quarantined_incomplete`; later parts remain `late_after_tombstone` and cannot resurrect it. Invalid
+complete payloads, storage quota, page/position/manifest equivocation, transport collision, semantic
+collision, and unknown outbound evidence each have explicit gap semantics. A current coordinator may
+append one exact recovery decision and resolve the gap without rewriting the original evidence.
+
+When one candidate supplies every exact part, the repository freezes its accepted delivery attempt,
+canonical message digest, source payload schema, and source-event fingerprint and changes the result
+from `assembling` to `awaiting_order`. That is the terminal success state for A1.7a. Migration 8 and A1.7a add no
+common-command, command-result/signature, server-scope signer, result-delivery, checkpoint, outbox,
+effect, dispatch, viewer, or native table. A1.7b0 now supplies only the server-signer prerequisite;
+full A1.7b must order and sign an `awaiting_order` result before A1.8 may authorize any native effect.
+Ordinary CLI launches, every current driver, runtime-owner RPC,
+`HostRcRelay`, and the viewer make zero calls into this actor, so the as-built live protocol remains
+the A0 relay in the following sections.
+
+---
+
+## 3c. Dormant A1.7b0 server-signer prerequisite
+
+A1.7b0 advances the host database through migration `009-server-scope-signer` to schema v9 without changing any live wire path. Its only new
+durable capability is the server-signer ledger: `server_identity_keys`, `server_identity_private_key_envelopes`,
+`server_scope_certificates`, `server_scope_certificate_statuses`,
+`server_bootstrap_signing_leases`, `server_signing_leases`, `server_signature_reservations`, and
+`server_signed_record_acceptances`. Migration 9 also replaces the existing broker-route admission
+trigger so the dormant route installer can attach a route to either an `installing` server or an
+exact signer-activated `current` server; the same current-coordinator and capability-pin proof remains
+mandatory, and this compatibility change adds no route table or production call path. The v8 statement-count, migration-digest, and 492-object manifest
+pins in §3b remain unchanged. Migration 9 has 81 statements, digest
+`fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`, and a 571-object manifest: 65 tables, 123 indexes,
+and 383 triggers.
+
+The first server identity is installed only through a one-shot, current-coordinator-fenced bootstrap
+lease. That lease pins the machine/server, proposed identity key and generation, proposed scope
+certificate, protected signing handle, coordinator lease ID and epoch, and fencing token; its only
+signing purpose is `scope_certificate`. It creates and verifies the initial self-signature, installs
+the immutable certificate/key/status tuple, and opens the normal current signing lease. A bootstrap
+or current signing lease under stale, released, superseded, or mismatched coordinator authority cannot
+sign or accept a record. Initial
+self-anchor is not continuity rotation, and a different key/certificate intent requires new explicit
+operator intent rather than silently reusing the old identity.
+
+Coordinator takeover while that bootstrap is not closed is an explicit immutable fail-stop.
+Reconciliation returns `writable:false` with `nonWritableReason:"stale_bootstrap_fence"`; v9 cannot
+re-fence or replace the bootstrap, and its signing lease cannot be used for another reservation. A
+later explicit-repair milestone is required. Once installation has closed the bootstrap, coordinator
+takeover instead supersedes the normal current signing lease. After no `reserved`, `bound`, or
+signed-but-unaccepted predecessor reservation remains, the successor may acquire a fresh current lease
+at exactly the next fencing token.
+
+A1.7b0's callable repository path exercises reserve/bind/sign/accept/reconcile only for that
+`initial_pair` scope certificate and can acquire the installed current lease under a successor
+coordinator fence. Generic current-lease signing, explicit repair, rotation, revocation, and historical
+reattestation remain frozen record/schema states for later tranches.
+
+The owned-file custody backend exposes signing, self-test, and close capabilities, never raw PKCS#8.
+It wraps the Ed25519 private key with AES-256-GCM under a distinct server-key HKDF domain. Its canonical
+AAD binds the machine identity, collaboration server, protected handle, identity key ID, generation,
+algorithm, literal `owned-file` backend, public key, and PKCS#8 digest. Changing any coordinate, the
+ciphertext/tag, or the root secret makes unwrap fail; the plaintext and derived wrap key are wiped from
+temporary buffers after use.
+
+The frozen normal-signing state machine requires the exact current signing lease and a durable server-wide
+signer sequence. A
+reservation first burns that sequence, then binds the closed purpose, its exact canonical payload
+schema/reference/digest, and target artifact. Only those bound bytes may be signed. The signed
+transition retains the Ed25519 signature and signed-record digest before returning the result; an
+acceptance row is immutable and tied back to that exact reservation. Acceptance allocates the next
+dense per-server `acceptedAtJournalSeq`; this is the signer-acceptance journal coordinate, not an
+expansion of schema-v3 `control_journal_entries`. Exact replay returns the retained state, changed
+replay collides, stale authority fails, an unbound reservation may be aborted without reusing its
+sequence in the frozen state contract, and request-bound reconciliation distinguishes a committed
+operation from a proved-absent one after an unknown local outcome. A1.7b0 exposes no generic abort
+operation.
+
+The dormant orchestrator stores the bootstrap-intent artifact with `prepare` and the canonical
+certificate artifact with `bind` in the same synchronous SQLite transactions. If any prepare, bind,
+signed-store, finalization, or successor-lease `COMMIT` becomes unknown, it closes the poisoned
+handle, securely reopens, and reconciles the exact retained phase before continuing or retrying a
+proved-absent phase. A normal process restart reconstructs reserved, bound, signed, or closed state
+from the durable graph and custody-self-tests the retained envelope before doing more work; it never
+generates a replacement key once bootstrap evidence exists. Successor signing-lease acquisition is
+likewise admitted only after the retained envelope verifies under the current custody root.
+
+This is custody and authority infrastructure, not command adjudication. No A1.7b0 operation consumes
+an A1.7a `awaiting_order` row or creates a common command, admitted/queued/rejected decision, command
+result, generic host output, broker publish, result-delivery row, checkpoint, outbox/effect, native
+attempt/dispatch, inference record, viewer projection, or native table. The signer is absent from
+ordinary CLI launch paths, all real drivers, runtime-owner RPC, `HostRcRelay`, and the viewer. Full
+A1.7b owns command ordering and signed results; A1.8 owns one-time effects and native dispatch.
 
 ---
 
@@ -724,6 +979,13 @@ guarantees.
    kill or proved absence. An unknown tmux outcome retains the runtime and emits the exact
    `tmux -S <socket> attach -t <session>` command; a new wrapper still cannot adopt that pane because
    the A0.2 registrar/binding is process-local and `liveReattach:false`.
+9. **A1.6 transport, A1.7a ingress, and the A1.7b0 signer are still not a live collaboration path.**
+   The selected provider/client, schema-v7 route installer, schema-v8 evidence-preserving ingress
+   repository/actor, and schema-v9 server signer are implemented and tested, but ordinary CLI
+   launches, drivers, runtime-owner RPC, `HostRcRelay`, and the viewer do not invoke them. A dormant
+   `awaiting_order` row plus an unused signing lease is not a common command, signed decision, native
+   authorization, effect, or viewer projection. Full A1.7b and later milestones must add and prove
+   those layers before A1 can replace the A0 relay described above.
 
 ### Capture-grounded protocol surfaces (observed via `--rc-trace`)
 

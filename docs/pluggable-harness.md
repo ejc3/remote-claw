@@ -17,7 +17,7 @@ legacy **per-conversation compatibility port** shared by the current harness pat
 > become the neutral schema. In particular, Codex is one
 > persistent multi-project app-server host, not another one-`Session` `DriverName`.
 
-A1.0 through A1.4 have landed. A1.0 supplies the shared canonical writer and
+A1.0 through dormant A1.7b0 have landed. A1.0 supplies the shared canonical writer and
 host-state contracts; A1.1 supplies the Linux secure-SQLite kernel and verified protected artifacts;
 A1.2 supplies schema v3 plus the high-level default-server, project/selector, recovering-chat,
 starting-binding/intent, installing-`rcie_*`-edge, coordinator-lease, journal, reconciliation, and
@@ -30,6 +30,59 @@ multi-runtime/multi-conversation ownership records. Migration 4 has 141 statemen
 evidence-resolving registration repository, sequenced process leases/publications/operations, bounded
 duplex callable ports, and exact crash reconciliation/reattach. Migration 5 has 38 statements and
 digest `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`; the complete v5 manifest has 269 objects.
+A1.5 adds pure browser-safe A1 v2 address/token/route, KDF, frame, digest, certificate, and
+`ViewerOnboardingBundleV2` codecs. Schema v6 migration `006-terminal-native-root` has 36 statements,
+digest `li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo`, and a complete 304-object manifest: 36 tables,
+78 indexes, and 190 triggers. Its two-stage repository and narrow `native.root.activate` operation
+reserve and bind under the current protected runtime-owner key, sign, then demand fresh owner/coordinator
+and callable-port liveness proof immediately before synchronous finalization. Only the transaction-local
+terminal-root finalizer stores and accepts the operation-attached v6 signature, samples the
+acceptance/commit timestamp, and atomically activates the exact ready chat/edge; public runtime-owner
+store, accept, and abort operations cannot mutate that reservation, while legacy unattached v5 history
+stays inert. It reconciles an unknown commit and renews only from the latest retained certificate.
+Registration recover, drain, close, and reattach demote a root without deleting history and require
+re-ready plus renewal. The callable-port proof is ephemeral; snapshot validation does not store or
+replay it. Expiry alone does not auto-demote the persisted chat/edge, so future effective
+route/dispatch admission must recheck certificate time and the live lease.
+A1.6 adds pure selected-backend capability, route/store, generation/manifest, publish/collision, and
+one-generation/64-frame read-page contracts; a separate bearer-authenticated SQLite/libSQL `/api/a1/*` broker with
+immutable `rbsi_*` store identity, route-wide retry/collision tombstones, retained ciphertext and
+manifests, automatic 4,096-frame rollover, and an 8,000,000-byte transmitted HTTP page cap; and a
+negotiation-first browser-safe client that reports ambiguous writes as outcome-unknown. Schema v7
+migration `007-a1-broker-routes` has 22 ordered statements, digest
+`uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw`, and a complete 326-object manifest: 39 tables, 85
+indexes, and 202 triggers. It adds protected capability pins, broker routes, and pristine open
+generation-zero receipts. A
+current-coordinator-fenced repository and host-only split-commit installer install and reconcile only
+that exact empty dormant route.
+A1.7a adds schema v8 migration `008-a1-durable-ingress` and direct-only host-state modules for
+evidence-preserving page staging, independent fetch and semantic cursors, authenticated physical
+positions, bounded multipart assembly, exact replay, collision/incomplete tombstones, gaps/recovery,
+and revisioned route actors. Complete chat `user` and server-control `new_chat` inputs stop at durable
+`awaiting_order`. The actor is intentionally absent from every package barrel and production run
+path; it creates no common command/order, signed result, server-scope signer, native effect, outbox,
+dispatch, inference, or viewer projection.
+A1.7b0 adds schema v9 migration `009-server-scope-signer` as a direct-only server-signer prerequisite: an initial self-anchored
+server-scope certificate, AES-256-GCM-wrapped Ed25519 custody with no raw-private-key API,
+coordinator-fenced bootstrap/current signing leases, and durable
+reserve/bind/sign/accept/reconcile state, with acceptance ordered by its own dense per-server
+`acceptedAtJournalSeq` rather than the schema-v3 control journal. The bootstrap lease is one-shot and
+`scope_certificate`-only; the normal lease is bound to the exact server key/certificate and current
+coordinator lease/epoch/fencing token. The callable path uses the signing state machine only for the
+initial scope certificate and installs that current lease; generic current-lease signing is later.
+Coordinator takeover during a non-closed bootstrap retains an immutable fail-stop reported as
+`writable:false`/`stale_bootstrap_fence`: v9 cannot re-fence or replace it or allocate another
+reservation, and explicit repair remains later. Takeover after installation instead supersedes the
+normal lease and can acquire a fresh next-token lease once no `reserved`, `bound`, or
+signed-but-unaccepted predecessor reservation remains. Migration 9 also replaces the existing
+broker-route admission trigger so the dormant installer accepts either an `installing` server or an
+exact signer-activated `current` server under the same current-coordinator and capability-pin proof;
+this adds no route table or production call path.
+This slice does not consume `awaiting_order` or create common
+commands/results, generic host output, broker publishes, outboxes/effects, native dispatch,
+inference, or viewer projection. The v8 digest/count/manifest pins remain unchanged. Migration 9 has
+81 statements, digest `fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`, and a 571-object manifest:
+65 tables, 123 indexes, and 383 triggers.
 Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
 best-effort autostart that daemon after identity load. For the ordinary CLI, authenticated health is
 the only successful production operation; its operation registry is empty, and health reports
@@ -40,7 +93,13 @@ registers a native runtime through the owner, activates an A1 binding/root, disp
 owner, or advertises an A1 broker capability. Owner failure preserves the exact A0 compatibility path.
 Wrapper exit closes only its owner RPC connection and leaves the owner service alive; existing A0
 native teardown remains unchanged. Plain and help paths, trace mode, and the local `--rc-identity`
-action do not start the owner. A1.5 is next.
+action do not start the owner. The A1.5 operation is installed only with that same explicit adapter;
+no real driver supplies one. A1.6 calls, A1.7a ingress execution, and A1.7b0 signing are confined to
+host-only direct modules and tests: ordinary
+launches, all three drivers, runtime-owner RPC, and the viewer make zero `/api/a1/*` requests. There is
+no production A1 ingress actor or server signer, native effect, checkpoint, inference, or projection.
+Full A1.7b common command ordering and signed results are next; A1.8 still owns outbox/effect and
+one-time native dispatch.
 
 **Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
 the A0 registrar's `rcb_*` is only a process-local lease. Neither is the stable logical-chat ID
@@ -573,12 +632,20 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   A0 `canonicalAad` user of it. The extraction preserves the locked A0 byte vector. Canonical optional
   fields require explicit `null`; the older A0 DTO's omitted or `undefined` `clientMsgId` alone is
   adapted at the AAD boundary, while explicit `null` and other runtime values are rejected.
+- `packages/clawsec/src/{a1-wire,a1-certificates,a1-onboarding,a1-broker,a1-ingress}.ts` — A1.5–A1.7a's pure browser-safe v2
+  address/token/route, KDF, frame, AEAD, digest, native-root/server-scope certificate, onboarding-key
+  attestation, and `ViewerOnboardingBundleV2` transfer/verifier contracts. They retain no trust state
+  and open no broker route themselves. The A1.6 broker module additionally freezes the selected
+  capability, route/store, cursor/generation/manifest, retry/collision, and read-page contracts.
+- `packages/cli/src/broker/a1-client.ts` and `apps/web/{lib/broker/a1-*,app/api/a1/**/route.ts}` — the
+  dormant negotiation-first client and the separate selected SQLite/libSQL A1 provider. They are not
+  invoked by any current driver, `HostRcRelay`, runtime-owner operation, or viewer path.
 - `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
   — A1.0's exact-shape parsers, canonical ID and digest contracts, pure database-path resolver,
   record/runtime shapes, protected-operation interfaces, separated first-dispatch and evidence-only
   reconciliation capabilities, and digest builders.
-- `packages/cli/src/host/state/{secure-filesystem,migrations,migration-v5,artifacts,repository,runtime-repository,registration-repository,sqlite}.ts`,
-  `packages/cli/src/host/native/evidence.ts`, and `packages/cli/src/host/runtime-owner/**` — A1.1–A1.4's
+- `packages/cli/src/host/state/{secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,sqlite}.ts`,
+  `packages/cli/src/host/native/evidence.ts`, and `packages/cli/src/host/runtime-owner/**` — A1.1–A1.7a's
   Linux-only, descriptor-anchored SQLite kernel and protected-artifact operations. The supported Node
   range is `^22.13.0 || >=23.5.0`, admitted only from an exact stable `X.Y.Z` runtime string; the
   kernel exposes synchronous high-level transactions rather than raw SQL, and database-level
@@ -594,7 +661,12 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   24 indexes, and 54 triggers. Schema v4 adds 141 ordered statements with digest
   `zx52EtAFNY9hEZneG3RW14zRCYR18gg7ysnltHbOkT0`, for an exact 231-object manifest of 30 tables,
   57 indexes, and 144 triggers. Schema v5 adds 38 ordered statements with digest
-  `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`, for an exact 269-object manifest. The A1.2 high-level
+  `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`, for an exact 269-object manifest.
+  Schema v6 adds 36 ordered statements with digest
+  `li87zqB0yxSfRtN-p_xT5Yk2xAvX8Iy5a1xDXNTYYZo`, for an exact 304-object manifest of 36 tables,
+  78 indexes, and 190 triggers. Schema v7 adds 22 ordered statements with digest
+  `uShlOvT_fWScwCLQD1g6-GAd1YyKR2QIlGjC0SPQWbw`, for an exact 326-object manifest of 39 tables,
+  85 indexes, and 202 triggers. The A1.2 high-level
   repository atomically bootstraps the first terminal
   graph, supports later explicit projects/chats and terminal selector replacement, inventories and
   reconciles durable state, and validates the complete narrow v3 graph. Its public opener exposes
@@ -617,7 +689,14 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   leases/publications/operations; reconciles uncertain commits; gates reattach on
   the retained `liveReattach` capability, and rotates a stale crash predecessor only under fresh exact
   owner/coordinator and binding/attachment fences. Ready deliberately leaves the chat recovering and
-  terminal edge installing.
+  terminal edge installing. A1.5 adds immutable root signer-activation floors, operations and
+  certificates; two-stage activation/renewal; signature and full-chain semantic validation; lifecycle
+  demotion with retained history; and exact replay and unknown-commit reconciliation.
+- `packages/cli/src/host/state/{migration-v9,server-signing,server-signing-repository}.ts` and
+  `packages/cli/src/host/server-signer/{service,orchestrator}.ts` — A1.7b0's direct-only schema-v9 signer ledger,
+  strict record/digest contract, wrapped owned-file custody, initial self-anchor repository, bootstrap
+  fail-stop reconciliation, and installed current-lease takeover. They are not exported from a
+  production package barrel or invoked by a driver, runtime-owner operation, relay, or viewer.
 - `packages/cli/src/host/runtime-owner/{auth,protocol,server,client,service,daemon,bootstrap,key-custody,production}.ts`
   plus `packages/cli/src/runtime-owner-cli.ts` — the machine-scoped Linux owner. It mutually
   authenticates over an abstract Unix socket, caps the server at 64 live connections and each
@@ -629,7 +708,7 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   pins cwd to the trusted
   CLI entry directory rather than a project-controlled cwd or `tsconfig`. It holds one process-start-bound durable service lease, self-tests wrapped keys before writability, reconciles
   unknown owner-lease commits after reopen, and fails closed on lease/listener/custody loss. Production
-  installs A1.4 registration only for an explicit trusted adapter; the ordinary CLI passes none, so
+  installs A1.4 registration and A1.5 `native.root.activate` only for an explicit trusted adapter; the ordinary CLI passes none, so
   authenticated health returns `ownerOperationsWritable:false` and
   `nativeRegistrationEnabled:false`.
 
@@ -765,13 +844,18 @@ server/project/mapping/chat/binding/intent/edge/coordinator graph, including eac
 generation. A1.3's owner opens the shared schema and persists its independent service lease. A1.4 can
 now resolve A1.2 evidence, durably register the exact prepared graph, and reattach it through a bounded
 callable port, but the ordinary CLI supplies no trusted adapter and therefore does not bind any A0
-driver into that graph. A1.2 actor scopes gain queues/serialization only in A1.7, and nested
-targets/edges remain rejected until N1. A1.3's schema and repository can persist runtime
+driver into that graph. A1.7a now uses A1.2 actor scopes for dormant route-local ingress through
+`awaiting_order`; A1.7b0 supplies the dormant server signer and current-server route-install
+compatibility, while full A1.7b owns common command
+ordering and signed results. Nested targets/edges remain
+rejected until N1. A1.3's schema and repository can persist runtime
 roots/incarnations, append-only owner
 assignments, positive containment, wrapped keys/signature state, already-project-scoped local
 transitions, and binding/attachment/gate foundations. A1.4 adds process leases, publications,
-operation sequences, and exact crash reconciliation, while leaving A1.5 terminal-root activation and
-A1 remote mutation disabled. The ordinary production operation registry is empty, so authenticated
+operation sequences, and exact crash reconciliation. A1.5 adds the protected terminal-root
+prepare/bind/sign/fresh-proof/transaction-local-finalize operation plus renewal and lifecycle demotion;
+the finalizer exclusively stores and accepts its v6 signature. It leaves all A1 remote mutation and
+broker integration disabled. The ordinary production operation registry is empty, so authenticated
 health is the only successful RPC operation. Owner-RPC disconnect is detach, and one owner can
 inventory many independent runtimes
 and shared-daemon conversations once registration activates. The durable IDs stay separate from `Session.id`, the

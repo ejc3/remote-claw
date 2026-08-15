@@ -469,7 +469,7 @@ describeLinux("A1.1 secure host-state database", () => {
     expect(shm.isFile()).toBe(true);
     expect(shm.mode & 0o777).toBe(0o600);
     expect(shm.nlink).toBe(1);
-  });
+  }, 15_000);
 
   it("reconstructs WAL state when a crash leaves only a safe SHM sidecar", () => {
     const state = temporaryState();

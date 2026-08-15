@@ -470,6 +470,15 @@ export interface RuntimeOwnerSignedRecordAcceptanceResult {
   readonly replayed: boolean;
 }
 
+/**
+ * Internal result for the terminal-root repository's transaction-local finalizer.
+ * This surface is deliberately not part of RuntimeOwnerRepositoryOperations.
+ */
+export interface RuntimeOwnerNativeRootSignatureFinalizationResult {
+  readonly reservation: RuntimeOwnerSignatureReservationRecord;
+  readonly acceptance: RuntimeOwnerSignedRecordAcceptanceRecord;
+}
+
 export interface RuntimeOwnerInventory {
   readonly state: RuntimeOwnerStateRecord;
   readonly serviceLeases: readonly RuntimeOwnerServiceLeaseRecord[];
@@ -1723,6 +1732,126 @@ function findAcceptance(
   return row === undefined ? null : acceptanceFromRow(row);
 }
 
+const TERMINAL_ROOT_SIGNATURE_FINALIZATION_CAPABILITY = Symbol(
+  "terminal-root-signature-finalization",
+);
+
+interface TerminalRootSignatureFinalizationScope {
+  readonly capability: typeof TERMINAL_ROOT_SIGNATURE_FINALIZATION_CAPABILITY;
+  readonly activationOperationId: A1SafeId;
+}
+
+interface AttachedNativeRootActivationOperation {
+  readonly operationId: A1SafeId;
+  readonly rootPathCertificateId: A1SafeId;
+  readonly runtimeOwnerServiceLeaseId: A1SafeId;
+  readonly runtimeOwnerServiceEpoch: number;
+  readonly state: "prepared" | "committed";
+}
+
+function hostStateSchemaVersion(transaction: HostStateRepositorySqlTransaction): number {
+  const row = sqlGet(
+    transaction,
+    "SELECT schema_version FROM host_state_metadata WHERE singleton = 1",
+  );
+  if (row === undefined) {
+    throw new RuntimeOwnerRepositoryPersistenceError("host-state metadata is missing");
+  }
+  const parsed = rawRow(row, ["schema_version"], "hostStateMetadata");
+  return persisted("hostStateMetadata", () =>
+    parsePositiveSafeInteger(parsed.schema_version, "hostStateMetadata.schemaVersion"),
+  );
+}
+
+function findAttachedNativeRootActivationOperation(
+  transaction: HostStateRepositorySqlTransaction,
+  reservation: RuntimeOwnerSignatureReservationRecord,
+): AttachedNativeRootActivationOperation | null {
+  if (reservation.purpose !== "native_root" || hostStateSchemaVersion(transaction) < 6) {
+    return null;
+  }
+  const value = sqlGet(
+    transaction,
+    `SELECT operation_id, root_path_certificate_id,
+            runtime_owner_service_lease_id, runtime_owner_service_epoch, state
+       FROM native_root_activation_operations
+      WHERE runtime_id = ? AND runtime_owner_identity_key_id = ?
+        AND runtime_owner_key_generation = ? AND signer_sequence = ?
+      LIMIT 1`,
+    [
+      reservation.runtimeId,
+      reservation.runtimeOwnerIdentityKeyId,
+      reservation.runtimeOwnerKeyGeneration,
+      reservation.signerSequence,
+    ],
+  );
+  if (value === undefined) return null;
+  const row = rawRow(
+    value,
+    [
+      "operation_id",
+      "root_path_certificate_id",
+      "runtime_owner_service_lease_id",
+      "runtime_owner_service_epoch",
+      "state",
+    ],
+    "nativeRootActivationOperation",
+  );
+  return persisted("nativeRootActivationOperation", () =>
+    frozen({
+      operationId: parseA1SafeId(row.operation_id, "nativeRootActivationOperation.operationId"),
+      rootPathCertificateId: parseA1SafeId(
+        row.root_path_certificate_id,
+        "nativeRootActivationOperation.rootPathCertificateId",
+      ),
+      runtimeOwnerServiceLeaseId: parseA1SafeId(
+        row.runtime_owner_service_lease_id,
+        "nativeRootActivationOperation.runtimeOwnerServiceLeaseId",
+      ),
+      runtimeOwnerServiceEpoch: parsePositiveSafeInteger(
+        row.runtime_owner_service_epoch,
+        "nativeRootActivationOperation.runtimeOwnerServiceEpoch",
+      ),
+      state: parseEnum(
+        row.state,
+        ["prepared", "committed"] as const,
+        "nativeRootActivationOperation.state",
+      ),
+    }),
+  );
+}
+
+function assertSignedRecordMutationBoundary(
+  transaction: HostStateRepositorySqlTransaction,
+  reservation: RuntimeOwnerSignatureReservationRecord,
+  finalizationScope: TerminalRootSignatureFinalizationScope | null,
+  fence: RuntimeOwnerServiceFence,
+  signedArtifactId?: A1SafeId,
+): void {
+  const attached = findAttachedNativeRootActivationOperation(transaction, reservation);
+  if (finalizationScope === null) {
+    if (attached !== null) {
+      throw new RuntimeOwnerRepositoryConflictError(
+        "terminal-root signature evidence is owned by its closed finalizer",
+      );
+    }
+    return;
+  }
+  if (
+    finalizationScope.capability !== TERMINAL_ROOT_SIGNATURE_FINALIZATION_CAPABILITY ||
+    attached === null ||
+    attached.operationId !== finalizationScope.activationOperationId ||
+    attached.state !== "prepared" ||
+    attached.runtimeOwnerServiceLeaseId !== fence.runtimeOwnerServiceLeaseId ||
+    attached.runtimeOwnerServiceEpoch !== fence.runtimeOwnerServiceEpoch ||
+    (signedArtifactId !== undefined && attached.rootPathCertificateId !== signedArtifactId)
+  ) {
+    throw new RuntimeOwnerRepositoryConflictError(
+      "terminal-root signature finalization scope does not match its prepared operation",
+    );
+  }
+}
+
 function findConversation(
   transaction: HostStateRepositorySqlTransaction,
   conversationId: A1SafeId,
@@ -2079,6 +2208,15 @@ interface SnapshotNativeBinding {
   readonly state: "starting" | "current" | "superseded" | "closed";
 }
 
+interface SnapshotTerminalRootState {
+  readonly nativeBindingId: NativeBindingId;
+  readonly collaborationServerId: CollaborationServerId;
+  readonly logicalChatId: LogicalChatId;
+  readonly chatState: "recovering" | "ready";
+  readonly edgeState: "installing" | "current";
+  readonly rootPathCertificateId: A1SafeId | null;
+}
+
 const SNAPSHOT_NATIVE_BINDING_ROW_KEYS = [
   "native_binding_id",
   "collaboration_server_id",
@@ -2089,6 +2227,15 @@ const SNAPSHOT_NATIVE_BINDING_ROW_KEYS = [
   "semantic_conversation_id",
   "current_binding_incarnation_id",
   "state",
+] as const;
+
+const SNAPSHOT_TERMINAL_ROOT_ROW_KEYS = [
+  "native_binding_id",
+  "collaboration_server_id",
+  "logical_chat_id",
+  "chat_state",
+  "edge_state",
+  "root_path_certificate_id",
 ] as const;
 
 const SNAPSHOT_COORDINATOR_LEASE_ROW_KEYS = [
@@ -2164,6 +2311,44 @@ function snapshotNativeBindingFromRow(value: unknown): SnapshotNativeBinding {
         row.state,
         ["starting", "current", "superseded", "closed"] as const,
         "snapshotNativeBinding.state",
+      ),
+    }),
+  );
+}
+
+function snapshotTerminalRootStateFromRow(value: unknown): SnapshotTerminalRootState {
+  const row = rawRow(value, SNAPSHOT_TERMINAL_ROOT_ROW_KEYS, "snapshotTerminalRoot");
+  return persisted("snapshotTerminalRoot", () =>
+    frozen({
+      nativeBindingId: parseA1CanonicalId(
+        "nativeBinding",
+        row.native_binding_id,
+        "snapshotTerminalRoot.nativeBindingId",
+      ),
+      collaborationServerId: parseA1CanonicalId(
+        "collaborationServer",
+        row.collaboration_server_id,
+        "snapshotTerminalRoot.collaborationServerId",
+      ),
+      logicalChatId: parseA1CanonicalId(
+        "logicalChat",
+        row.logical_chat_id,
+        "snapshotTerminalRoot.logicalChatId",
+      ),
+      chatState: parseEnum(
+        row.chat_state,
+        ["recovering", "ready"] as const,
+        "snapshotTerminalRoot.chatState",
+      ),
+      edgeState: parseEnum(
+        row.edge_state,
+        ["installing", "current"] as const,
+        "snapshotTerminalRoot.edgeState",
+      ),
+      rootPathCertificateId: parseNullable(
+        row.root_path_certificate_id,
+        parseA1SafeId,
+        "snapshotTerminalRoot.rootPathCertificateId",
       ),
     }),
   );
@@ -2260,6 +2445,7 @@ export function validateRuntimeOwnerRepositorySnapshot(
   );
   const inventory = readInventoryTransaction(transaction);
   const allowNativeRegistration = schemaVersion >= 5;
+  const allowTerminalRoot = schemaVersion >= 6;
   snapshotAssert(
     inventory.state.machineIdentityId === expectedMachineIdentityId,
     "machine identity does not match the repository scope",
@@ -2279,6 +2465,54 @@ export function validateRuntimeOwnerRepositorySnapshot(
     `SELECT ${selectColumns(SNAPSHOT_NATIVE_BINDING_ROW_KEYS)} FROM native_bindings
      ORDER BY native_binding_id`,
   ).map(snapshotNativeBindingFromRow);
+  const terminalRootStates = sqlAll(
+    transaction,
+    `SELECT b.native_binding_id, b.collaboration_server_id, b.logical_chat_id,
+            chat.state AS chat_state, edge.state AS edge_state,
+            edge.root_path_certificate_id
+       FROM native_bindings AS b
+       JOIN logical_chats AS chat
+         ON chat.collaboration_server_id = b.collaboration_server_id
+        AND chat.logical_chat_id = b.logical_chat_id
+        AND chat.current_native_binding_id = b.native_binding_id
+       JOIN inward_collaboration_edges AS edge
+         ON edge.inward_edge_id = chat.current_inward_edge_id
+        AND edge.represented_server_id = chat.collaboration_server_id
+        AND edge.represented_logical_chat_id = chat.logical_chat_id
+        AND edge.target_kind = 'native-harness'
+        AND edge.target_native_binding_id = b.native_binding_id
+      ORDER BY b.native_binding_id`,
+  ).map(snapshotTerminalRootStateFromRow);
+  snapshotAssert(
+    terminalRootStates.length === nativeBindings.length,
+    "native bindings do not each have one exact terminal edge",
+  );
+  const terminalRootByBindingId = new Map(
+    terminalRootStates.map((state) => [state.nativeBindingId, state] as const),
+  );
+  for (const binding of nativeBindings) {
+    const terminal = terminalRootByBindingId.get(binding.nativeBindingId);
+    const terminalIsInstalling =
+      terminal?.collaborationServerId === binding.collaborationServerId &&
+      terminal.logicalChatId === binding.logicalChatId &&
+      terminal.chatState === "recovering" &&
+      terminal.edgeState === "installing" &&
+      terminal.rootPathCertificateId === null;
+    const terminalIsRooted =
+      allowTerminalRoot &&
+      binding.state === "current" &&
+      binding.semanticConversationId !== null &&
+      binding.currentBindingIncarnationId !== null &&
+      terminal?.collaborationServerId === binding.collaborationServerId &&
+      terminal.logicalChatId === binding.logicalChatId &&
+      terminal.chatState === "ready" &&
+      terminal.edgeState === "current" &&
+      terminal.rootPathCertificateId !== null;
+    snapshotAssert(
+      terminalIsInstalling || terminalIsRooted,
+      "terminal binding graph is neither installing nor exactly rooted for this schema",
+    );
+  }
   const coordinatorLeases = sqlAll(
     transaction,
     `SELECT ${selectColumns(SNAPSHOT_COORDINATOR_LEASE_ROW_KEYS)} FROM coordinator_leases
@@ -4569,11 +4803,13 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
   readonly #executor: HostStateRepositoryTransactionExecutor;
   readonly #machineIdentityId: string;
   readonly #nowMs: () => number;
+  readonly #terminalRootFinalizationScope: TerminalRootSignatureFinalizationScope | null;
 
   constructor(
     executor: HostStateRepositoryTransactionExecutor,
     machineIdentityId: string,
     nowMs: () => number = Date.now,
+    terminalRootFinalizationScope: TerminalRootSignatureFinalizationScope | null = null,
   ) {
     if (
       typeof executor !== "object" ||
@@ -4587,6 +4823,7 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
     this.#executor = executor;
     this.#machineIdentityId = parseMachineIdentityId(machineIdentityId);
     this.#nowMs = nowMs;
+    this.#terminalRootFinalizationScope = terminalRootFinalizationScope;
   }
 
   acquireServiceLease(
@@ -5078,6 +5315,13 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
       if (existing === null) {
         throw new RuntimeOwnerRepositoryConflictError("signature reservation is unknown");
       }
+      assertSignedRecordMutationBoundary(
+        transaction,
+        existing,
+        this.#terminalRootFinalizationScope,
+        parsed.fence,
+        parsed.signedArtifactId,
+      );
       if (existing.state === "signed") {
         if (
           existing.signedRecordDigest === null ||
@@ -5155,6 +5399,22 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
           "signature runtime is not assigned to the current owner",
         );
       }
+      const reservation = findSignature(
+        transaction,
+        parsed.runtimeId,
+        parsed.runtimeOwnerIdentityKeyId,
+        parsed.runtimeOwnerKeyGeneration,
+        parsed.signerSequence,
+      );
+      if (reservation === null) {
+        throw new RuntimeOwnerRepositoryConflictError("signature reservation is unknown");
+      }
+      assertSignedRecordMutationBoundary(
+        transaction,
+        reservation,
+        this.#terminalRootFinalizationScope,
+        parsed.fence,
+      );
       const existing = findAcceptance(
         transaction,
         parsed.runtimeId,
@@ -5179,15 +5439,7 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
           "signed record digest is already accepted under another signer tuple",
         );
       }
-      const reservation = findSignature(
-        transaction,
-        parsed.runtimeId,
-        parsed.runtimeOwnerIdentityKeyId,
-        parsed.runtimeOwnerKeyGeneration,
-        parsed.signerSequence,
-      );
       if (
-        reservation === null ||
         reservation.state !== "signed" ||
         reservation.signedRecordDigest === null ||
         !sameDigest(reservation.signedRecordDigest, parsed.signedRecordDigest)
@@ -5249,6 +5501,12 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
       if (existing === null) {
         throw new RuntimeOwnerRepositoryConflictError("signature reservation is unknown");
       }
+      assertSignedRecordMutationBoundary(
+        transaction,
+        existing,
+        this.#terminalRootFinalizationScope,
+        parsed.fence,
+      );
       if (existing.state === "aborted") {
         return frozen({ reservation: existing, replayed: true });
       }
@@ -7179,6 +7437,7 @@ class RuntimeOwnerRepository implements RuntimeOwnerRepositoryOperations {
 export function createRuntimeOwnerRepositoryTransactionOperations(
   transaction: HostStateRepositorySqlTransaction,
   machineIdentityId: string,
+  nowMs: () => number = Date.now,
 ): RuntimeOwnerRepositoryOperations {
   return new RuntimeOwnerRepository(
     {
@@ -7186,7 +7445,47 @@ export function createRuntimeOwnerRepositoryTransactionOperations(
         operation(transaction),
     },
     machineIdentityId,
+    nowMs,
   );
+}
+
+/**
+ * @internal Closed transaction-local bridge used only after terminal-root proof and
+ * signature verification. Public runtime-owner operations never receive the capability.
+ */
+export function finalizeRuntimeOwnerNativeRootSignatureInTransaction(
+  transaction: HostStateRepositorySqlTransaction,
+  machineIdentityId: string,
+  activationOperationId: A1SafeId,
+  request: StoreRuntimeOwnerSignatureRequest,
+  nowMs: () => number = Date.now,
+): RuntimeOwnerNativeRootSignatureFinalizationResult {
+  const operationId = parseA1SafeId(
+    activationOperationId,
+    "runtimeOwnerNativeRootFinalization.activationOperationId",
+  );
+  const repository = new RuntimeOwnerRepository(
+    {
+      transaction: <T>(operation: (active: HostStateRepositorySqlTransaction) => T): T =>
+        operation(transaction),
+    },
+    machineIdentityId,
+    nowMs,
+    frozen({
+      capability: TERMINAL_ROOT_SIGNATURE_FINALIZATION_CAPABILITY,
+      activationOperationId: operationId,
+    }),
+  );
+  const reservation = repository.storeSignedRecord(request).reservation;
+  const acceptance = repository.acceptSignedRecord({
+    fence: request.fence,
+    runtimeId: request.runtimeId,
+    runtimeOwnerIdentityKeyId: request.runtimeOwnerIdentityKeyId,
+    runtimeOwnerKeyGeneration: request.runtimeOwnerKeyGeneration,
+    signerSequence: request.signerSequence,
+    signedRecordDigest: request.signedRecordDigest,
+  }).acceptance;
+  return frozen({ reservation, acceptance });
 }
 
 /** Internal dormant-library constructor; no SQL or repository options escape this surface. */

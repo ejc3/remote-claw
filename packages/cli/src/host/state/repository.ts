@@ -1494,6 +1494,7 @@ function loadTerminalReservation(
   serverId: CollaborationServerId,
   registrationAttemptId: RegistrationAttemptId,
   allowActivatedBinding = true,
+  allowRootedTerminal = true,
 ): ParsedReservationGraph | null {
   const intentRow = sqlGet(transaction, SELECT_INTENT, [serverId, registrationAttemptId]);
   if (intentRow === undefined) return null;
@@ -1530,13 +1531,23 @@ function loadTerminalReservation(
     binding.state === "current" &&
     binding.semanticConversationId !== null &&
     binding.currentBindingIncarnationId !== null;
+  const terminalIsInstalling =
+    chat.state === "recovering" &&
+    edge.state === "installing" &&
+    edge.rootPathCertificateId === null;
+  const terminalIsRooted =
+    allowRootedTerminal &&
+    bindingIsActivated &&
+    chat.state === "ready" &&
+    edge.state === "current" &&
+    edge.rootPathCertificateId !== null;
   if (
     binding.collaborationServerId !== serverId ||
     binding.logicalChatId !== chat.logicalChatId ||
     binding.projectId !== project.projectId ||
     (!bindingIsDormant && !bindingIsActivated) ||
     chat.currentNativeBindingId !== binding.nativeBindingId ||
-    chat.state !== "recovering" ||
+    (!terminalIsInstalling && !terminalIsRooted) ||
     chat.nextViewerProjectionSeq !== 0 ||
     mapping.collaborationServerId !== serverId ||
     mapping.projectId !== project.projectId ||
@@ -1548,11 +1559,9 @@ function loadTerminalReservation(
     edge.targetNativeBindingId !== binding.nativeBindingId ||
     edge.targetServerId !== null ||
     edge.targetLogicalChatId !== null ||
-    edge.rootPathCertificateId !== null ||
     edge.currentConnectionEpoch !== 0 ||
     edge.currentLiveLeaseId !== null ||
     edge.currentCapabilitySnapshotId !== null ||
-    edge.state !== "installing" ||
     chat.topologyGeneration !== 1 ||
     mapping.target.kind !== "terminal_native" ||
     !sameDescriptor(binding.descriptor, mapping.target.descriptor)
@@ -2646,9 +2655,9 @@ export class HostStateRepository implements HostStateRepositoryOperations {
             "default profile server machine identity does not match",
           );
         }
-        if (server.state !== "installing") {
+        if (server.state !== "installing" && server.state !== "current") {
           throw new HostStateRepositoryPersistenceError(
-            "schema-v3 default collaboration server is not dormant",
+            "default collaboration server is not available",
           );
         }
         validateServerLeasePointer(transaction, server);
@@ -3707,7 +3716,7 @@ export class HostStateRepository implements HostStateRepositoryOperations {
       if (
         profile.machineIdentityId !== this.#machineIdentityId ||
         server.machineIdentityId !== this.#machineIdentityId ||
-        server.state !== "installing"
+        (server.state !== "installing" && server.state !== "current")
       ) {
         throw new HostStateRepositoryPersistenceError("default profile linkage is invalid");
       }
@@ -3970,6 +3979,7 @@ function validateChatLinkage(
   transaction: HostStateRepositorySqlTransaction,
   chat: LogicalChatRecord,
   allowActivatedBinding = true,
+  allowRootedTerminal = true,
 ): void {
   const project = findProject(transaction, chat.collaborationServerId, chat.projectId);
   const mapping = findMapping(
@@ -3997,7 +4007,6 @@ function validateChatLinkage(
   if (
     chat.currentNativeBindingId === null ||
     chat.currentInwardEdgeId === null ||
-    chat.state !== "recovering" ||
     chat.topologyGeneration !== 1 ||
     chat.nextViewerProjectionSeq !== 0
   ) {
@@ -4014,23 +4023,32 @@ function validateChatLinkage(
     binding?.state === "current" &&
     binding.semanticConversationId !== null &&
     binding.currentBindingIncarnationId !== null;
+  const terminalIsInstalling =
+    chat.state === "recovering" &&
+    edge?.state === "installing" &&
+    edge.rootPathCertificateId === null;
+  const terminalIsRooted =
+    allowRootedTerminal &&
+    bindingIsActivated &&
+    chat.state === "ready" &&
+    edge?.state === "current" &&
+    edge.rootPathCertificateId !== null;
   if (
     binding === null ||
     edge === null ||
     binding.logicalChatId !== chat.logicalChatId ||
     binding.projectId !== chat.projectId ||
     (!bindingIsDormant && !bindingIsActivated) ||
+    (!terminalIsInstalling && !terminalIsRooted) ||
     !sameDescriptor(binding.descriptor, mapping.target.descriptor) ||
     edge.representedLogicalChatId !== chat.logicalChatId ||
     edge.targetKind !== "native-harness" ||
     edge.targetNativeBindingId !== binding.nativeBindingId ||
     edge.targetServerId !== null ||
     edge.targetLogicalChatId !== null ||
-    edge.rootPathCertificateId !== null ||
     edge.currentConnectionEpoch !== 0 ||
     edge.currentLiveLeaseId !== null ||
-    edge.currentCapabilitySnapshotId !== null ||
-    edge.state !== "installing"
+    edge.currentCapabilitySnapshotId !== null
   ) {
     throw new HostStateRepositoryPersistenceError("logical chat terminal linkage is invalid");
   }
@@ -4048,6 +4066,7 @@ export function validateHostStateRepositorySnapshot(
 ): void {
   const machineId = parseMachineIdentityId(machineIdentityId);
   const allowActivatedBinding = schemaVersion >= 5;
+  const allowRootedTerminal = schemaVersion >= 6;
   const servers = sqlAll(
     transaction,
     `SELECT ${selectColumns(SERVER_ROW_KEYS)} FROM collaboration_servers
@@ -4143,10 +4162,12 @@ export function validateHostStateRepositorySnapshot(
   }
 
   for (const server of servers) {
+    const serverStateIsAllowed =
+      server.state === "installing" || (schemaVersion >= 9 && server.state === "current");
     if (
       server.machineIdentityId !== machineId ||
-      server.state !== "installing" ||
-      server.nextServerSignatureSeq !== 0 ||
+      !serverStateIsAllowed ||
+      (schemaVersion < 9 && server.nextServerSignatureSeq !== 0) ||
       server.nextCommandSeq !== 0
     ) {
       throw new HostStateRepositoryPersistenceError(
@@ -4226,6 +4247,7 @@ export function validateHostStateRepositorySnapshot(
         project.collaborationServerId,
         attemptId,
         allowActivatedBinding,
+        allowRootedTerminal,
       );
       if (
         graph === null ||
@@ -4353,7 +4375,9 @@ export function validateHostStateRepositorySnapshot(
       }
     }
   }
-  for (const chat of chats) validateChatLinkage(transaction, chat, allowActivatedBinding);
+  for (const chat of chats) {
+    validateChatLinkage(transaction, chat, allowActivatedBinding, allowRootedTerminal);
+  }
 
   // Parent lineage is acyclic within one project/server scope.
   for (const chat of chats) {
@@ -4406,6 +4430,7 @@ export function validateHostStateRepositorySnapshot(
       intent.collaborationServerId,
       intent.registrationAttemptId,
       allowActivatedBinding,
+      allowRootedTerminal,
     );
     if (graph === null) {
       throw new HostStateRepositoryPersistenceError(
@@ -4533,6 +4558,16 @@ export function validateHostStateRepositorySnapshot(
       edge.targetNativeBindingId === null
         ? undefined
         : bindingById.get(key(edge.representedServerId, edge.targetNativeBindingId));
+    const terminalIsInstalling =
+      chat.state === "recovering" &&
+      edge.state === "installing" &&
+      edge.rootPathCertificateId === null;
+    const terminalIsRooted =
+      allowRootedTerminal &&
+      binding?.state === "current" &&
+      chat.state === "ready" &&
+      edge.state === "current" &&
+      edge.rootPathCertificateId !== null;
     if (
       edge.targetKind !== "native-harness" ||
       binding === undefined ||
@@ -4540,11 +4575,10 @@ export function validateHostStateRepositorySnapshot(
       chat.currentInwardEdgeId !== edge.inwardEdgeId ||
       edge.targetServerId !== null ||
       edge.targetLogicalChatId !== null ||
-      edge.rootPathCertificateId !== null ||
+      (!terminalIsInstalling && !terminalIsRooted) ||
       edge.currentConnectionEpoch !== 0 ||
       edge.currentLiveLeaseId !== null ||
-      edge.currentCapabilitySnapshotId !== null ||
-      edge.state !== "installing"
+      edge.currentCapabilitySnapshotId !== null
     ) {
       throw new HostStateRepositoryPersistenceError("terminal inward edge target is invalid");
     }

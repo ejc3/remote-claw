@@ -285,7 +285,14 @@ function parseStoredArtifact(value: unknown): StoredArtifactSnapshot {
   if (byteLength > MAX_PROTECTED_ARTIFACT_BYTES || row.artifact_bytes.byteLength !== byteLength) {
     reject("protectedArtifactRow.byteLength", "must match an artifact within the selected limit");
   }
-  const artifactBytes = ProtectedByteSnapshot.from(row.artifact_bytes).copyBytes();
+  const snapshot = ProtectedByteSnapshot.from(row.artifact_bytes);
+  let artifactBytes: Uint8Array<ArrayBuffer>;
+  try {
+    artifactBytes = snapshot.copyBytes();
+  } finally {
+    snapshot.destroy();
+    row.artifact_bytes.fill(0);
+  }
   return {
     scope,
     artifactRef,
@@ -357,61 +364,65 @@ class BoundProtectedArtifactTransaction implements ProtectedArtifactTransactionO
 
   putArtifact(request: PutArtifactRequest): PutArtifactResult {
     const parsed = parsePutArtifactRequest(request);
-    const computedDigest = digestArtifact(parsed.artifactBytes);
-    if (!equalDigest(computedDigest, parsed.artifactDigest)) {
-      reject("putArtifact.artifactDigest", "must match artifactBytes");
-    }
-    const createdAtMs = parseNonNegativeSafeInteger(this.#nowMs(), "putArtifact.createdAtMs");
-    let protectedHandleId: ReturnType<typeof parseA1CanonicalId<"protectedHandle">> | undefined;
-    for (let attempt = 0; attempt < MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS; attempt++) {
-      const entropy = this.#randomBytes(16);
-      if (!(entropy instanceof Uint8Array) || entropy.byteLength !== 16) {
-        reject("putArtifact.randomBytes", "must return exactly 16 bytes");
+    try {
+      const computedDigest = digestArtifact(parsed.artifactBytes);
+      if (!equalDigest(computedDigest, parsed.artifactDigest)) {
+        reject("putArtifact.artifactDigest", "must match artifactBytes");
       }
-      const candidate = parseA1CanonicalId(
-        "protectedHandle",
-        `rcph_${base64urlEncode(entropy)}`,
-        "putArtifact.artifactRef.protectedHandleId",
-      );
-      if (persistenceGet(this.#transaction, FIND_ARTIFACT_SQL, [candidate]) === undefined) {
-        protectedHandleId = candidate;
-        break;
+      const createdAtMs = parseNonNegativeSafeInteger(this.#nowMs(), "putArtifact.createdAtMs");
+      let protectedHandleId: ReturnType<typeof parseA1CanonicalId<"protectedHandle">> | undefined;
+      for (let attempt = 0; attempt < MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS; attempt++) {
+        const entropy = this.#randomBytes(16);
+        if (!(entropy instanceof Uint8Array) || entropy.byteLength !== 16) {
+          reject("putArtifact.randomBytes", "must return exactly 16 bytes");
+        }
+        const candidate = parseA1CanonicalId(
+          "protectedHandle",
+          `rcph_${base64urlEncode(entropy)}`,
+          "putArtifact.artifactRef.protectedHandleId",
+        );
+        if (persistenceGet(this.#transaction, FIND_ARTIFACT_SQL, [candidate]) === undefined) {
+          protectedHandleId = candidate;
+          break;
+        }
       }
-    }
-    if (protectedHandleId === undefined) {
-      throw new ProtectedArtifactPersistenceError(
-        `could not allocate a unique artifact ID in ${MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS} attempts`,
-      );
-    }
+      if (protectedHandleId === undefined) {
+        throw new ProtectedArtifactPersistenceError(
+          `could not allocate a unique artifact ID in ${MAX_PROTECTED_ARTIFACT_ID_ATTEMPTS} attempts`,
+        );
+      }
 
-    const result = persistenceRun(this.#transaction, INSERT_ARTIFACT_SQL, [
-      protectedHandleId,
-      "artifact",
-      parsed.scope.scopeKind,
-      parsed.scope.scopeId,
-      parsed.artifactSchemaId,
-      parsed.artifactDigest,
-      parsed.artifactBytes.byteLength,
-      parsed.artifactBytes,
-      createdAtMs,
-    ]);
-    if (result.changes !== 1) {
-      throw new ProtectedArtifactPersistenceError(
-        "write operation did not insert exactly one artifact",
+      const result = persistenceRun(this.#transaction, INSERT_ARTIFACT_SQL, [
+        protectedHandleId,
+        "artifact",
+        parsed.scope.scopeKind,
+        parsed.scope.scopeId,
+        parsed.artifactSchemaId,
+        parsed.artifactDigest,
+        parsed.artifactBytes.byteLength,
+        parsed.artifactBytes,
+        createdAtMs,
+      ]);
+      if (result.changes !== 1) {
+        throw new ProtectedArtifactPersistenceError(
+          "write operation did not insert exactly one artifact",
+        );
+      }
+      const artifactRef = parseArtifactRef(
+        { protectedHandleId, kind: "artifact" },
+        "putArtifact.artifactRef",
       );
-    }
-    const artifactRef = parseArtifactRef(
-      { protectedHandleId, kind: "artifact" },
-      "putArtifact.artifactRef",
-    );
 
-    return Object.freeze({
-      ...parsed.scope,
-      artifactRef,
-      artifactSchemaId: parsed.artifactSchemaId,
-      artifactDigest: parsed.artifactDigest,
-      byteLength: parsed.artifactBytes.byteLength,
-    }) as PutArtifactResult;
+      return Object.freeze({
+        ...parsed.scope,
+        artifactRef,
+        artifactSchemaId: parsed.artifactSchemaId,
+        artifactDigest: parsed.artifactDigest,
+        byteLength: parsed.artifactBytes.byteLength,
+      }) as PutArtifactResult;
+    } finally {
+      parsed.artifactBytes.fill(0);
+    }
   }
 
   readVerifiedArtifact(request: ReadVerifiedArtifactRequest): ReadVerifiedArtifactResult {
@@ -424,8 +435,9 @@ class BoundProtectedArtifactTransaction implements ProtectedArtifactTransactionO
     const row = persistenceGet(this.#transaction, READ_ARTIFACT_SQL, [
       parsed.artifactRef.protectedHandleId,
     ]);
+    let stored: StoredArtifactSnapshot | undefined;
     try {
-      const stored = parseStoredArtifact(row);
+      stored = parseStoredArtifact(row);
       if (
         stored.artifactRef.protectedHandleId !== parsed.artifactRef.protectedHandleId ||
         !sameScope(stored.scope, parsed.scope) ||
@@ -448,7 +460,10 @@ class BoundProtectedArtifactTransaction implements ProtectedArtifactTransactionO
       }) as ReadVerifiedArtifactResult;
     } catch {
       rejectRead();
+    } finally {
+      stored?.artifactBytes.fill(0);
     }
+    return rejectRead();
   }
 }
 

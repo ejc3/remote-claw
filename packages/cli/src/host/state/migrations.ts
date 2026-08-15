@@ -1,11 +1,22 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { CanonicalWriter } from "@remote-claw/clawsec";
 import { VERSION_FIVE_SQLITE_SCHEMA_ENTRIES } from "./migration-v5.js";
+import { VERSION_SIX_DATA_STATEMENTS, VERSION_SIX_SQLITE_SCHEMA_ENTRIES } from "./migration-v6.js";
+import { VERSION_SEVEN_SQLITE_SCHEMA_ENTRIES } from "./migration-v7.js";
+import {
+  VERSION_EIGHT_DATA_STATEMENTS,
+  VERSION_EIGHT_SQLITE_SCHEMA_ENTRIES,
+} from "./migration-v8.js";
+import {
+  VERSION_NINE_DATA_STATEMENTS,
+  VERSION_NINE_PRE_SCHEMA_STATEMENTS,
+  VERSION_NINE_SQLITE_SCHEMA_ENTRIES,
+} from "./migration-v9.js";
 
 /** SQLite application_id for the ASCII tag `RCLW`. */
 export const HOST_STATE_APPLICATION_ID = 0x52434c57;
 
-export const HOST_STATE_SCHEMA_VERSION = 5;
+export const HOST_STATE_SCHEMA_VERSION = 9;
 
 /** Domain for the length-framed, history-chained migration digest below. */
 export const HOST_STATE_MIGRATION_DIGEST_DOMAIN = "remote-claw/host-state/migration-chain/v1";
@@ -4697,6 +4708,26 @@ const VERSION_FIVE_STATEMENTS = Object.freeze(
   VERSION_FIVE_SQLITE_SCHEMA_ENTRIES.map((entry) => entry.sql),
 );
 
+const VERSION_SIX_STATEMENTS = Object.freeze([
+  ...VERSION_SIX_SQLITE_SCHEMA_ENTRIES.map((entry) => entry.sql),
+  ...VERSION_SIX_DATA_STATEMENTS,
+]);
+
+const VERSION_SEVEN_STATEMENTS = Object.freeze(
+  VERSION_SEVEN_SQLITE_SCHEMA_ENTRIES.map((entry) => entry.sql),
+);
+
+const VERSION_EIGHT_STATEMENTS = Object.freeze([
+  ...VERSION_EIGHT_SQLITE_SCHEMA_ENTRIES.map((entry) => entry.sql),
+  ...VERSION_EIGHT_DATA_STATEMENTS,
+]);
+
+const VERSION_NINE_STATEMENTS = Object.freeze([
+  ...VERSION_NINE_PRE_SCHEMA_STATEMENTS,
+  ...VERSION_NINE_SQLITE_SCHEMA_ENTRIES.map((entry) => entry.sql),
+  ...VERSION_NINE_DATA_STATEMENTS,
+]);
+
 export const HOST_STATE_MIGRATIONS: readonly HostStateMigration[] = Object.freeze([
   Object.freeze({
     version: 1,
@@ -4722,6 +4753,26 @@ export const HOST_STATE_MIGRATIONS: readonly HostStateMigration[] = Object.freez
     version: 5,
     id: "005-durable-native-registration",
     statements: VERSION_FIVE_STATEMENTS,
+  }),
+  Object.freeze({
+    version: 6,
+    id: "006-terminal-native-root",
+    statements: VERSION_SIX_STATEMENTS,
+  }),
+  Object.freeze({
+    version: 7,
+    id: "007-a1-broker-routes",
+    statements: VERSION_SEVEN_STATEMENTS,
+  }),
+  Object.freeze({
+    version: 8,
+    id: "008-a1-durable-ingress",
+    statements: VERSION_EIGHT_STATEMENTS,
+  }),
+  Object.freeze({
+    version: 9,
+    id: "009-server-scope-signer",
+    statements: VERSION_NINE_STATEMENTS,
   }),
 ]);
 
@@ -5263,6 +5314,28 @@ const VERSION_FIVE_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[]
   ...VERSION_FIVE_SQLITE_SCHEMA_ENTRIES,
 ]);
 
+const VERSION_SIX_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[] = Object.freeze([
+  ...VERSION_FIVE_SQLITE_SCHEMA_MANIFEST,
+  ...VERSION_SIX_SQLITE_SCHEMA_ENTRIES,
+]);
+
+const VERSION_SEVEN_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[] = Object.freeze([
+  ...VERSION_SIX_SQLITE_SCHEMA_MANIFEST,
+  ...VERSION_SEVEN_SQLITE_SCHEMA_ENTRIES,
+]);
+
+const VERSION_EIGHT_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[] = Object.freeze([
+  ...VERSION_SEVEN_SQLITE_SCHEMA_MANIFEST,
+  ...VERSION_EIGHT_SQLITE_SCHEMA_ENTRIES,
+]);
+
+const VERSION_NINE_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[] = Object.freeze([
+  ...VERSION_EIGHT_SQLITE_SCHEMA_MANIFEST.filter(
+    (entry) => entry.name !== "broker_routes_require_current_authority",
+  ),
+  ...VERSION_NINE_SQLITE_SCHEMA_ENTRIES,
+]);
+
 export const HOST_STATE_SQLITE_SCHEMA_MANIFESTS: readonly (readonly HostStateSqliteSchemaEntry[])[] =
   Object.freeze([
     VERSION_ONE_SQLITE_SCHEMA_MANIFEST,
@@ -5270,6 +5343,10 @@ export const HOST_STATE_SQLITE_SCHEMA_MANIFESTS: readonly (readonly HostStateSql
     VERSION_THREE_SQLITE_SCHEMA_MANIFEST,
     VERSION_FOUR_SQLITE_SCHEMA_MANIFEST,
     VERSION_FIVE_SQLITE_SCHEMA_MANIFEST,
+    VERSION_SIX_SQLITE_SCHEMA_MANIFEST,
+    VERSION_SEVEN_SQLITE_SCHEMA_MANIFEST,
+    VERSION_EIGHT_SQLITE_SCHEMA_MANIFEST,
+    VERSION_NINE_SQLITE_SCHEMA_MANIFEST,
   ]);
 
 export function expectedHostStateSqliteSchemaManifest(

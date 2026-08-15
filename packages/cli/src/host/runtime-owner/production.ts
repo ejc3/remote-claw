@@ -925,7 +925,7 @@ function createProductionRuntimeOwnerKeyCustodyValidator(): RuntimeOwnerKeyCusto
 export interface StartProductionRuntimeOwnerDaemonOptions {
   readonly machineIdentityId: string;
   readonly identitySecret: Uint8Array;
-  /** Trusted development/profile seam. Omit to keep the production registration surface dormant. */
+  /** Trusted development/profile seam. Omit to keep registration and root activation dormant. */
   readonly registrationAdapter?: NativeRegistrationAdapter;
 }
 

@@ -151,6 +151,18 @@ describe("CanonicalWriter (§4.3)", () => {
     expect(() => writer.str("late")).toThrowError("canonical writer is already finished");
   });
 
+  it("destroys retained field and finished-byte snapshots idempotently", () => {
+    const writer = new CanonicalWriter();
+    writer.bytes(Uint8Array.of(0xaa));
+    const output = writer.finish();
+    writer.destroy();
+    writer.destroy();
+
+    expect(toHex(output)).toBe("00000001aa");
+    expect(() => writer.finish()).toThrowError("canonical writer was destroyed");
+    expect(() => writer.bytes(Uint8Array.of(0xbb))).toThrowError("canonical writer was destroyed");
+  });
+
   it("prefixes the copied snapshot when a length-tracking SharedArrayBuffer view grows", () => {
     const backing = Reflect.construct(SharedArrayBuffer, [
       1,

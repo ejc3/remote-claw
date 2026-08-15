@@ -182,6 +182,18 @@ describe("protected operation surface", () => {
     expect(snapshot.copyBytes()).toEqual(Uint8Array.of(0xaa));
   });
 
+  it("idempotently destroys only its private copy and rejects later reads", () => {
+    const source = Uint8Array.of(7, 8, 9);
+    const snapshot = ProtectedByteSnapshot.from(source);
+
+    snapshot.destroy();
+    snapshot.destroy();
+
+    expect(source).toEqual(Uint8Array.of(7, 8, 9));
+    expect(() => snapshot.copyBytes()).toThrow(/destroyed/);
+    expect(() => snapshot.byteLength).toThrow(/destroyed/);
+  });
+
   it("rejects byte-view impostors and makes protected byte fields nominal", () => {
     for (const value of [
       new Uint16Array([1]),

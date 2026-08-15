@@ -13,6 +13,7 @@ import {
 import {
   type HostStateDatabaseFactory,
   RUNTIME_OWNER_NATIVE_REGISTRATION_OPERATION_NAMES,
+  RUNTIME_OWNER_NATIVE_ROOT_OPERATION_NAMES,
   type RuntimeOwnerCollaboratorDetachContext,
   type RuntimeOwnerHostStateDatabase,
   type RuntimeOwnerKeyCustodyValidator,
@@ -402,7 +403,7 @@ describe.skipIf(process.platform !== "linux")("runtime-owner service lifecycle",
     }
   });
 
-  it("reports registration enabled for the exact closed lifecycle set plus unrelated operations", async () => {
+  it("allows the exact registration and terminal-root sets plus unrelated operations", async () => {
     const events: string[] = [];
     const machineIdentityId = machineIdentity();
     const rootSecret = secret();
@@ -415,9 +416,11 @@ describe.skipIf(process.platform !== "linux")("runtime-owner service lifecycle",
       keyCustodyValidator: custody(events),
       leaseDurationMs: 10_000,
       heartbeatIntervalMs: 3_000,
-      operations: [...RUNTIME_OWNER_NATIVE_REGISTRATION_OPERATION_NAMES, "inventory.read"].map(
-        (name) => ({ name, execute: async () => null }),
-      ),
+      operations: [
+        ...RUNTIME_OWNER_NATIVE_REGISTRATION_OPERATION_NAMES,
+        ...RUNTIME_OWNER_NATIVE_ROOT_OPERATION_NAMES,
+        "inventory.read",
+      ].map((name) => ({ name, execute: async () => null })),
       onCollaboratorDetach: async () => {},
     });
     const client = await connectRuntimeOwnerRpc({ machineIdentityId, identitySecret: rootSecret });
@@ -470,6 +473,33 @@ describe.skipIf(process.platform !== "linux")("runtime-owner service lifecycle",
           name,
           execute: async () => null,
         })),
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_CONFIGURATION" });
+    expect(events).toEqual([]);
+  });
+
+  it.each([
+    { names: RUNTIME_OWNER_NATIVE_ROOT_OPERATION_NAMES },
+    {
+      names: [
+        ...RUNTIME_OWNER_NATIVE_REGISTRATION_OPERATION_NAMES,
+        ...RUNTIME_OWNER_NATIVE_ROOT_OPERATION_NAMES,
+        "native.root.debug",
+      ],
+    },
+  ])("rejects a standalone or extended reserved terminal-root namespace", async ({ names }) => {
+    const events: string[] = [];
+    const machineIdentityId = machineIdentity();
+    await expect(
+      startRuntimeOwnerService({
+        machineIdentityId,
+        identitySecret: secret(),
+        ownerIdentity: ownerIdentity(machineIdentityId),
+        databaseFactory: databaseFactory(events),
+        leaseController: new FakeLeaseController({ events }),
+        keyCustodyValidator: custody(events),
+        operations: names.map((name) => ({ name, execute: async () => null })),
+        onCollaboratorDetach: async () => {},
       }),
     ).rejects.toMatchObject({ code: "INVALID_CONFIGURATION" });
     expect(events).toEqual([]);

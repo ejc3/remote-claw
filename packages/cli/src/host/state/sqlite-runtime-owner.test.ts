@@ -75,13 +75,25 @@ describeLinux("A1.3 secure runtime-owner SQLite integration", () => {
       | "records"
       | "runtimeOwner"
       | "registration"
+      | "terminalRoot"
+      | "brokerRoute"
+      | "ingress"
+      | "serverSigning"
       | "putArtifact"
       | "readVerifiedArtifact"
       | "transaction"
       | "close"
     >();
     expectTypeOf<keyof HostStateTransaction>().toEqualTypeOf<
-      "records" | "runtimeOwner" | "registration" | "putArtifact" | "readVerifiedArtifact"
+      | "records"
+      | "runtimeOwner"
+      | "registration"
+      | "terminalRoot"
+      | "brokerRoute"
+      | "ingress"
+      | "serverSigning"
+      | "putArtifact"
+      | "readVerifiedArtifact"
     >();
   });
 
