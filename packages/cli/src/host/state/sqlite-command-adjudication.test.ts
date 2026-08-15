@@ -34,6 +34,7 @@ import {
   syncBrokerBackendCapabilitiesDigestV1,
 } from "./broker-route.js";
 import type {
+  FinalizeSignedRejectedCommandResultRequest,
   MaterializeReadyA1IngressCommandRequest,
   ReserveRejectedCommandDecisionRequest,
 } from "./command-adjudication-repository.js";
@@ -868,6 +869,31 @@ interface SignedCommandFixture extends CommandFixture {
   successorFence: ReserveRejectedCommandDecisionRequest["fence"] | null;
 }
 
+function finalizationRequest(
+  fixture: SignedCommandFixture,
+  fence: ReserveRejectedCommandDecisionRequest["fence"] = fixture.decision.fence,
+): FinalizeSignedRejectedCommandResultRequest {
+  const retained = fixture.database.commandAdjudication.readState(fixture.sourceId);
+  const commandResultId = retained?.preparation?.commandResultId;
+  const signedRecordDigest = retained?.signatureReservation?.signedRecordDigest;
+  if (
+    commandResultId === undefined ||
+    commandResultId === null ||
+    signedRecordDigest === null ||
+    signedRecordDigest === undefined
+  ) {
+    throw new Error("signed command fixture has no exact durable result identity and digest");
+  }
+  return {
+    fence,
+    expectedCommandId: fixture.commandId,
+    expectedCommandResultId: commandResultId,
+    expectedCommandResultPreparationId: fixture.commandResultPreparationId,
+    expectedSignedRecordDigest: signedRecordDigest,
+    expectedAcceptedAtJournalSeq: 1,
+  };
+}
+
 async function createSignedCommandFixture(
   options: { readonly secondSource?: boolean; readonly takeoverBeforeDecision?: boolean } = {},
 ): Promise<SignedCommandFixture> {
@@ -1081,7 +1107,7 @@ describeLinux("A1.7b1 real SQLite command-adjudication integration", () => {
 
       const reopened = reopenFixture(fixture);
       try {
-        expect(reopened.schemaVersion).toBe(10);
+        expect(reopened.schemaVersion).toBe(11);
         expect(reopened.commandAdjudication.readState(sourceId)).toMatchObject({
           readyEntry: { commandId: ready.command.commandId },
           command: { state: "decision_reserved", disposition: "rejected", commandSeq: 0 },
@@ -1110,8 +1136,17 @@ describeLinux("A1.7b1 real SQLite command-adjudication integration", () => {
       });
       const inspection = new DatabaseSync(fixture.state.paths.databasePath, { readOnly: true });
       try {
-        for (const forbidden of [
+        for (const dormant of [
           "collaboration_command_results",
+          "a1_ingress_terminal_results",
+          "a1_ingress_result_deliveries",
+        ]) {
+          expect(
+            inspection.prepare(`SELECT count(*) AS count FROM ${dormant}`).get(),
+            dormant,
+          ).toEqual({ count: 0 });
+        }
+        for (const forbidden of [
           "collaboration_command_result_deliveries",
           "collaboration_command_result_outbox",
           "ingress_result_deliveries",
@@ -1146,6 +1181,172 @@ describeLinux("A1.7b1 real SQLite command-adjudication integration", () => {
     } finally {
       fixture.custody.close();
       fixture.rootSecret.fill(0);
+    }
+  });
+
+  it("atomically finalizes one rejected result and securely reopens its inert pending-seal graph", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW_MS);
+    const fixture = await createSignedCommandFixture();
+    const request = finalizationRequest(fixture);
+    try {
+      const finalized =
+        fixture.database.commandAdjudication.finalizeSignedRejectedCommandResult(request);
+      expect(finalized).toMatchObject({
+        command: { state: "decided", currentCommandResultId: request.expectedCommandResultId },
+        adjudication: { state: "terminal", disposition: "rejected" },
+        commonResult: {
+          commandResultId: request.expectedCommandResultId,
+          disposition: "rejected",
+          acceptedAtJournalSeq: 1,
+        },
+        signerAcceptance: { acceptedAtJournalSeq: 1, historicalReattestationId: null },
+        terminalResult: {
+          stableSemanticResultId: fixture.sourceId,
+          semanticResultRecordKind: "action_result",
+          adjudicationState: "terminal",
+        },
+        resultDelivery: {
+          stableSemanticResultId: fixture.sourceId,
+          targetKind: "a1_broker",
+          targetRef: fixture.harness.routeId,
+          state: "pending_seal",
+        },
+        replayed: false,
+      });
+      expect(
+        fixture.database.ingress.readRouteState(fixture.harness.routeId)?.results,
+      ).toMatchObject([{ stableSemanticResultId: fixture.sourceId, state: "awaiting_order" }]);
+
+      const terminalPayloadRef = finalized.terminalResult.semanticResultPayloadRef;
+      fixture.database.close();
+      const inspection = new DatabaseSync(fixture.state.paths.databasePath, { readOnly: true });
+      try {
+        const source = inspection
+          .prepare(
+            `SELECT message_id, record_kind, state FROM authenticated_ingress_results
+              WHERE stable_semantic_result_id = ?`,
+          )
+          .get(fixture.sourceId) as {
+          message_id: string;
+          record_kind: string;
+          state: string;
+        };
+        const artifact = inspection
+          .prepare(
+            `SELECT artifact_schema_id, artifact_bytes FROM protected_artifacts
+              WHERE protected_handle_id = ?`,
+          )
+          .get(terminalPayloadRef) as { artifact_schema_id: string; artifact_bytes: Uint8Array };
+        expect(source).toMatchObject({ record_kind: "user", state: "awaiting_order" });
+        expect(artifact.artifact_schema_id).toBe("remote-claw/a1-action-result/v1");
+        expect(Buffer.from(artifact.artifact_bytes).toString("utf8")).toBe(
+          `{"v":1,"result_id":"${fixture.sourceId}","source_msg_id":"${source.message_id}","source_record_kind":"user","decision":"rejected","command_seq":0}`,
+        );
+        expect(
+          inspection
+            .prepare(
+              `SELECT count(*) AS count FROM server_signed_record_acceptances AS acceptance
+                JOIN server_signature_reservations AS reservation
+                  ON reservation.collaboration_server_id = acceptance.collaboration_server_id
+                 AND reservation.signer_sequence = acceptance.signer_sequence
+               WHERE reservation.purpose = 'collaboration_command_result'`,
+            )
+            .get(),
+        ).toEqual({ count: 1 });
+        for (const table of [
+          "collaboration_command_results",
+          "a1_ingress_terminal_results",
+          "a1_ingress_result_deliveries",
+        ]) {
+          expect(inspection.prepare(`SELECT count(*) AS count FROM ${table}`).get(), table).toEqual(
+            {
+              count: 1,
+            },
+          );
+        }
+      } finally {
+        inspection.close();
+      }
+
+      fixture.database = reopenFixture(fixture);
+      expect(
+        fixture.database.commandAdjudication.reconcileFinalizedRejectedCommandResult(request),
+      ).toMatchObject({
+        commonResult: { commandResultId: request.expectedCommandResultId },
+        resultDelivery: { state: "pending_seal" },
+        replayed: true,
+      });
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it("accepts an exact predecessor signature after takeover and then unblocks the successor signer", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW_MS);
+    const fixture = await createSignedCommandFixture();
+    try {
+      fixture.database.records.releaseCoordinatorLease({ fence: fixture.decision.fence });
+      vi.setSystemTime(NOW_MS + 1);
+      const successor = fixture.database.records.acquireCoordinatorLease({
+        collaborationServerId: fixture.harness.serverId,
+        candidateLeaseId: canonicalId("coordinatorLease", 223),
+        ownerInstanceId: parseA1SafeId("a18a0-finalization-owner-2"),
+        expectedCurrentLeaseId: null,
+        expectedCoordinatorEpoch: fixture.decision.fence.coordinatorEpoch,
+        leaseDurationMs: LEASE_DURATION_MS,
+      });
+      const successorFence = {
+        collaborationServerId: fixture.harness.serverId,
+        coordinatorLeaseId: successor.lease.coordinatorLeaseId,
+        coordinatorEpoch: successor.lease.coordinatorEpoch,
+      };
+      const request = finalizationRequest(fixture, successorFence);
+      expect(
+        fixture.database.commandAdjudication.finalizeSignedRejectedCommandResult(request),
+      ).toMatchObject({
+        commonResult: { signedRecordDigest: request.expectedSignedRecordDigest },
+        terminalResult: {
+          finalizationCoordinatorLeaseId: successorFence.coordinatorLeaseId,
+          finalizationCoordinatorEpoch: successorFence.coordinatorEpoch,
+        },
+        signerAcceptance: { historicalReattestationId: null },
+        resultDelivery: { state: "pending_seal" },
+      });
+
+      const successorSigningLeaseId = parseA1SafeId("a18a0-current-signing-lease-2");
+      expect(
+        acquireUsableServerSigningLease({
+          database: fixture.database,
+          reopenDatabase: () => reopenFixture(fixture),
+          custody: fixture.custody,
+          machineIdentityId: MACHINE_IDENTITY_ID,
+          acquisition: {
+            fence: successorFence,
+            signingLeaseId: successorSigningLeaseId,
+            expectedCurrentSigningLeaseId: fixture.signingLeaseId,
+            expectedFencingToken: fixture.signingLeaseFencingToken,
+          },
+        }),
+      ).toMatchObject({
+        acquisition: {
+          predecessor: { signingLeaseId: fixture.signingLeaseId, state: "superseded" },
+          signingLease: {
+            signingLeaseId: successorSigningLeaseId,
+            state: "current",
+            acquiredAtMs: NOW_MS + 2,
+          },
+        },
+      });
+
+      fixture.database.close();
+      fixture.database = reopenFixture(fixture);
+      expect(
+        fixture.database.commandAdjudication.reconcileFinalizedRejectedCommandResult(request),
+      ).toMatchObject({ replayed: true, resultDelivery: { state: "pending_seal" } });
+    } finally {
+      closeFixture(fixture);
     }
   });
 
@@ -1821,7 +2022,7 @@ describeLinux("A1.7b1 real SQLite command-adjudication integration", () => {
       secondSource: false,
       takeover: false,
       triggers: ["protected_artifacts_no_replace"],
-      expected: /known schema-v10 protected artifact is orphaned/,
+      expected: /known command protected artifact is orphaned/,
       mutate(editor: DatabaseSync, fixture: SignedCommandFixture) {
         const orphanRef = canonicalId("protectedHandle", 250);
         const result = editor

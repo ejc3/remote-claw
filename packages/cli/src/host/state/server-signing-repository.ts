@@ -2519,9 +2519,47 @@ function maxFencingToken(
       );
 }
 
+function maxAcceptanceAtMsForSigningLease(
+  transaction: HostStateRepositorySqlTransaction,
+  collaborationServerId: CollaborationServerId,
+  signingLeaseId: A1SafeId,
+): number | null {
+  const row = record(
+    sqlGet(
+      transaction,
+      `SELECT MAX(acceptance.accepted_at_ms) AS max_accepted_at_ms
+         FROM server_signed_record_acceptances AS acceptance
+         JOIN server_signature_reservations AS reservation
+           ON reservation.collaboration_server_id = acceptance.collaboration_server_id
+          AND reservation.signer_sequence = acceptance.signer_sequence
+          AND reservation.signed_record_digest = acceptance.signed_record_digest
+        WHERE reservation.collaboration_server_id = ?
+          AND reservation.signing_lease_id = ?`,
+      [collaborationServerId, signingLeaseId],
+    ),
+    ["max_accepted_at_ms"],
+    "serverSigningLeaseAcceptanceMaximum",
+  );
+  return row.max_accepted_at_ms === null
+    ? null
+    : parseNonNegativeSafeInteger(
+        row.max_accepted_at_ms,
+        "serverSigningLeaseAcceptanceMaximum.maxAcceptedAtMs",
+      );
+}
+
 function nextFencingToken(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0 || value >= Number.MAX_SAFE_INTEGER) {
     throw new ServerSigningRepositoryConflictError("server signing fencing token is exhausted");
+  }
+  return value + 1;
+}
+
+function nextSafeTimestamp(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value >= Number.MAX_SAFE_INTEGER) {
+    throw new ServerSigningRepositoryConflictError(
+      "server signing acceptance timestamp is exhausted",
+    );
   }
   return value + 1;
 }
@@ -3395,6 +3433,20 @@ class ServerSigningRepository implements ServerSigningRepositoryOperations {
           "predecessor signing lease has unfinished reservations",
         );
       }
+      const predecessorAcceptanceAtMs = maxAcceptanceAtMsForSigningLease(
+        transaction,
+        parsed.fence.collaborationServerId,
+        predecessor.signingLeaseId,
+      );
+      const acquiredAtMs =
+        predecessorAcceptanceAtMs === null
+          ? current.nowMs
+          : Math.max(current.nowMs, nextSafeTimestamp(predecessorAcceptanceAtMs));
+      if (acquiredAtMs >= current.lease.heartbeatDeadlineMs) {
+        throw new ServerSigningRepositoryConflictError(
+          "current coordinator has no post-acceptance signing-lease window",
+        );
+      }
       const signingLease = parseServerSigningLeaseRecord({
         signingLeaseId: parsed.signingLeaseId,
         collaborationServerId: parsed.fence.collaborationServerId,
@@ -3404,7 +3456,7 @@ class ServerSigningRepository implements ServerSigningRepositoryOperations {
         coordinatorLeaseId: parsed.fence.coordinatorLeaseId,
         coordinatorEpoch: parsed.fence.coordinatorEpoch,
         fencingToken: nextFencingToken(parsed.expectedFencingToken),
-        acquiredAtMs: current.nowMs,
+        acquiredAtMs,
         drainingAtMs: null,
         supersededAtMs: null,
         closedAtMs: null,
@@ -3457,6 +3509,7 @@ function validateServerSigningInventory(
   schemaVersion: number,
 ): void {
   const allowCommandResultPreparations = schemaVersion >= 10;
+  const allowCommandResultAcceptances = schemaVersion >= 11;
   if (!allowCommandResultPreparations && server.nextCommandSeq !== 0) {
     throw new ServerSigningRepositoryPersistenceError(
       "signer-only schema contains a command-sequence allocation",
@@ -3469,7 +3522,7 @@ function validateServerSigningInventory(
     inventory.certificateStatuses.length > 1 ||
     inventory.bootstrapLeases.length > 1 ||
     (!allowCommandResultPreparations && inventory.reservations.length > 1) ||
-    inventory.acceptances.length > 1
+    (!allowCommandResultAcceptances && inventory.acceptances.length > 1)
   ) {
     throw new ServerSigningRepositoryPersistenceError(
       "signer-only schema contains unsupported rotation or repair history",

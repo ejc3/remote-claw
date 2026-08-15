@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import {
+  A1_CHAT_CREATION_RESULT_PAYLOAD_SCHEMA_ID,
   A1_COMMAND_DECISION_EVIDENCE_SCHEMA_ID,
   A1_COMMAND_DECISION_POLICY_ID,
   A1_COMMAND_RESULT_SCHEMA_ID,
@@ -11,7 +12,10 @@ import {
   canonicalA1CommandRecord,
   canonicalA1CommandResultPayload,
   canonicalA1CommandSourceIdentity,
+  canonicalA1ResultDeliveryIdPreimage,
   canonicalA1SignedCommandResult,
+  canonicalA1StoredSemanticResultPreimage,
+  encodeA1RejectedChatCreationResultPayloadV1Bytes,
 } from "@remote-claw/clawsec";
 import { describe, expect, it } from "vitest";
 import {
@@ -342,6 +346,7 @@ function signedFixture(): Fixture {
         source_event_namespace_id: namespaceId,
         message_id: "message-1",
         record_kind: "new_chat",
+        expected_parts: 1,
         accepted_delivery_attempt_id: `rda_${encoded(16, 11)}`,
         source_payload_schema_id: "remote-claw/a1-ingress-new-chat/v1",
         canonical_message_digest: messageDigest,
@@ -359,6 +364,7 @@ function signedFixture(): Fixture {
         scope_certificate_id: certificateId,
         coordinator_lease_id: coordinatorLeaseId,
         coordinator_epoch: 1,
+        fencing_token: 1,
         acquired_at_ms: 5,
         draining_at_ms: null,
         superseded_at_ms: null,
@@ -459,6 +465,186 @@ function signedFixture(): Fixture {
   };
 }
 
+function finalizedFixture(): Fixture {
+  const fixture = signedFixture();
+  const command = fixture.tables.commands?.[0];
+  const adjudication = fixture.tables.adjudications?.[0];
+  const ingress = fixture.tables.ingress?.[0];
+  const preparation = fixture.tables.preparations?.[0];
+  const group = fixture.tables.groups?.[0];
+  const signingLease = fixture.tables.signingLeases?.[0];
+  const reservationRow = fixture.tables.reservations?.[1];
+  if (
+    command === undefined ||
+    adjudication === undefined ||
+    ingress === undefined ||
+    preparation === undefined ||
+    group === undefined ||
+    signingLease === undefined ||
+    reservationRow === undefined
+  ) {
+    throw new Error("signed fixture is incomplete");
+  }
+
+  const terminalAtMs = 30;
+  const triggerObservationId = `rio_${encoded(32, 12)}`;
+  const semanticPayloadRef = `rcph_${encoded(16, 13)}`;
+  const semanticPayloadBytes = encodeA1RejectedChatCreationResultPayloadV1Bytes({
+    v: 1,
+    resultId: String(ingress.stable_semantic_result_id),
+    sourceMsgId: String(ingress.message_id),
+    decision: "rejected",
+    targetLogicalChatId: null,
+    commandSeq: Number(command.command_seq),
+  });
+  const semanticArtifactDigest = digest(semanticPayloadBytes);
+  const storedSemanticResultDigest = canonicalDigest(() =>
+    canonicalA1StoredSemanticResultPreimage({
+      storedSemanticResultSchemaId: A1_CHAT_CREATION_RESULT_PAYLOAD_SCHEMA_ID,
+      exactCompactUtf8Payload: semanticPayloadBytes,
+    }),
+  );
+  const resultDeliveryId = `rrd_${canonicalDigest(() =>
+    canonicalA1ResultDeliveryIdPreimage({
+      ingressResultId: String(ingress.stable_semantic_result_id),
+      triggerIngressObservationId: triggerObservationId,
+    }),
+  )}`;
+
+  command.current_command_result_id = fixture.ids.resultId;
+  command.state = "decided";
+  adjudication.terminal_at_ms = terminalAtMs;
+  adjudication.state = "terminal";
+  fixture.tables.commonResults = [
+    {
+      command_result_id: fixture.ids.resultId,
+      collaboration_server_id: fixture.ids.serverId,
+      command_id: fixture.ids.commandId,
+      canonical_command_record_digest: command.canonical_command_record_digest,
+      result_version: 1,
+      supersedes_command_result_id: null,
+      source_kind: "a1_ingress",
+      source_ref: command.source_ref,
+      scope_kind: "server_control",
+      logical_chat_id: null,
+      target_logical_chat_id: null,
+      command_seq: command.command_seq,
+      disposition: "rejected",
+      canonical_payload_schema_id: A1_COMMAND_RESULT_SCHEMA_ID,
+      canonical_payload_ref: preparation.canonical_payload_ref,
+      canonical_payload_digest: preparation.canonical_payload_digest,
+      command_result_preparation_id: fixture.ids.preparationId,
+      compound_signing_group_id: group.compound_signing_group_id,
+      signer_sequence: preparation.signer_sequence,
+      server_key_generation: signingLease.key_generation,
+      signer_identity_key_id: signingLease.identity_key_id,
+      signer_scope_certificate_id: signingLease.scope_certificate_id,
+      signature_algorithm: "Ed25519",
+      signature: reservationRow.signature,
+      signed_record_digest: reservationRow.signed_record_digest,
+      accepted_at_journal_seq: 1,
+      created_at_ms: preparation.prepared_at_ms,
+      finalized_at_ms: terminalAtMs,
+    },
+  ];
+  fixture.tables.terminalResults = [
+    {
+      stable_semantic_result_id: ingress.stable_semantic_result_id,
+      collaboration_server_id: fixture.ids.serverId,
+      broker_route_id: ingress.broker_route_id,
+      command_id: fixture.ids.commandId,
+      command_result_id: fixture.ids.resultId,
+      accepted_ingress_delivery_attempt_id: ingress.accepted_delivery_attempt_id,
+      trigger_ingress_observation_id: triggerObservationId,
+      initial_result_delivery_id: resultDeliveryId,
+      semantic_result_record_kind: "chat_creation_result",
+      semantic_result_payload_schema_id: A1_CHAT_CREATION_RESULT_PAYLOAD_SCHEMA_ID,
+      semantic_result_payload_ref: semanticPayloadRef,
+      semantic_result_payload_artifact_digest: semanticArtifactDigest,
+      stored_semantic_result_digest: storedSemanticResultDigest,
+      finalization_coordinator_lease_id: signingLease.coordinator_lease_id,
+      finalization_coordinator_epoch: signingLease.coordinator_epoch,
+      adjudication_state: "terminal",
+      terminal_at_ms: terminalAtMs,
+    },
+  ];
+  fixture.tables.resultDeliveries = [
+    {
+      result_delivery_id: resultDeliveryId,
+      stable_semantic_result_id: ingress.stable_semantic_result_id,
+      source_kind: "a1_ingress",
+      source_ref: ingress.stable_semantic_result_id,
+      command_result_id: fixture.ids.resultId,
+      trigger_ingress_observation_id: triggerObservationId,
+      broker_route_id: ingress.broker_route_id,
+      target_kind: "a1_broker",
+      target_ref: ingress.broker_route_id,
+      delivery_attempt_id: `rda_${encoded(16, 14)}`,
+      semantic_result_record_kind: "chat_creation_result",
+      semantic_result_payload_schema_id: A1_CHAT_CREATION_RESULT_PAYLOAD_SCHEMA_ID,
+      semantic_result_payload_ref: semanticPayloadRef,
+      semantic_result_payload_artifact_digest: semanticArtifactDigest,
+      stored_semantic_result_digest: storedSemanticResultDigest,
+      state: "pending_seal",
+      created_at_ms: terminalAtMs,
+    },
+  ];
+  fixture.tables.acceptances = [
+    {
+      collaboration_server_id: fixture.ids.serverId,
+      accepted_at_journal_seq: 1,
+      signed_record_digest: reservationRow.signed_record_digest,
+      signer_identity_key_id: signingLease.identity_key_id,
+      signer_key_generation: signingLease.key_generation,
+      signer_scope_certificate_id: signingLease.scope_certificate_id,
+      signer_sequence: preparation.signer_sequence,
+      accepted_at_ms: terminalAtMs,
+      historical_reattestation_id: null,
+    },
+  ];
+  fixture.tables.currentAuthorities = [
+    {
+      collaboration_server_id: fixture.ids.serverId,
+      current_coordinator_lease_id: signingLease.coordinator_lease_id,
+      current_coordinator_epoch: signingLease.coordinator_epoch,
+      current_identity_key_id: signingLease.identity_key_id,
+      current_key_generation: signingLease.key_generation,
+      current_scope_certificate_id: signingLease.scope_certificate_id,
+      server_state: "current",
+      identity_key_state: "current",
+      private_key_custody_state: "current",
+      certificate_status: "current",
+    },
+  ];
+  fixture.tables.observations = [
+    {
+      ingress_observation_id: triggerObservationId,
+      stable_semantic_result_id: ingress.stable_semantic_result_id,
+      delivery_attempt_id: ingress.accepted_delivery_attempt_id,
+      broker_route_id: ingress.broker_route_id,
+      collaboration_server_id: fixture.ids.serverId,
+      route_kind: ingress.route_kind,
+      logical_chat_id: ingress.logical_chat_id,
+      channel_generation: 0,
+      frame_index: 0,
+      part: 0,
+      parts: 1,
+      disposition: "new_part",
+    },
+  ];
+  fixture.tables.artifacts?.push(
+    artifact(
+      semanticPayloadRef,
+      fixture.ids.serverId,
+      A1_CHAT_CREATION_RESULT_PAYLOAD_SCHEMA_ID,
+      semanticPayloadBytes,
+      terminalAtMs,
+    ),
+  );
+  semanticPayloadBytes.fill(0);
+  return fixture;
+}
+
 function artifact(
   ref: string,
   serverId: string,
@@ -514,6 +700,13 @@ function selectRows(
   sql: string,
 ): readonly unknown[] {
   if (sql.includes("FROM command_ready_entries")) return tables.ready ?? [];
+  if (sql.includes("FROM authenticated_ingress_observations AS observation"))
+    return tables.observations ?? [];
+  if (sql.includes("identity_key.state AS identity_key_state"))
+    return tables.currentAuthorities ?? [];
+  if (sql.includes("FROM collaboration_command_results\n")) return tables.commonResults ?? [];
+  if (sql.includes("FROM a1_ingress_terminal_results\n")) return tables.terminalResults ?? [];
+  if (sql.includes("FROM a1_ingress_result_deliveries\n")) return tables.resultDeliveries ?? [];
   if (sql.includes("first_ingress_generation")) return tables.routeHistory ?? [];
   if (sql.includes("FROM broker_route_runtime_status")) return tables.routeScopes ?? [];
   if (sql.includes("FROM broker_route_gaps")) return tables.gaps ?? [];
@@ -538,6 +731,10 @@ function selectRows(
 
 function validate(fixture: Fixture): void {
   validateCommandAdjudicationRepositorySnapshot(fixture.transaction, MACHINE_ID, 10);
+}
+
+function validateV11(fixture: Fixture): void {
+  validateCommandAdjudicationRepositorySnapshot(fixture.transaction, MACHINE_ID, 11);
 }
 
 function addReservedReplacement(fixture: Fixture): string {
@@ -867,5 +1064,190 @@ describe("command adjudication snapshot validator", () => {
     expect([...(second as Uint8Array)]).toEqual(
       new Array((second as Uint8Array).byteLength).fill(0),
     );
+  });
+
+  it("accepts one exact rejected-only schema-v11 final result graph", () => {
+    validateV11(finalizedFixture());
+  });
+
+  it("selects the lexicographically greatest completion cursor, not the greatest part", () => {
+    const fixture = finalizedFixture();
+    const ingress = fixture.tables.ingress?.[0];
+    const first = fixture.tables.observations?.[0];
+    if (ingress === undefined || first === undefined) {
+      throw new Error("finalized fixture is incomplete");
+    }
+    ingress.expected_parts = 2;
+    first.channel_generation = 1;
+    first.frame_index = 0;
+    first.part = 0;
+    first.parts = 2;
+    fixture.tables.observations?.push({
+      ...first,
+      ingress_observation_id: `rio_${encoded(32, 39)}`,
+      channel_generation: 0,
+      frame_index: 10,
+      part: 1,
+    });
+    validateV11(fixture);
+  });
+
+  it("retains semantic finalization after a later source collision and route closure", () => {
+    const fixture = finalizedFixture();
+    const ingress = fixture.tables.ingress?.[0];
+    const route = fixture.tables.routeScopes?.[0];
+    if (ingress !== undefined) ingress.state = "quarantined_collision";
+    if (route !== undefined) {
+      route.state = "closed";
+      route.active_gap_count = 1;
+      route.updated_at_ms = 25;
+    }
+    fixture.tables.gaps?.push({
+      broker_route_id: route?.broker_route_id,
+      opened_at_ms: 25,
+      resolved_at_ms: null,
+    });
+    validateV11(fixture);
+  });
+
+  it("accepts only the max-fence signed predecessor under a live successor takeover", () => {
+    const fixture = finalizedFixture();
+    const predecessor = fixture.tables.signingLeases?.[0];
+    const terminal = fixture.tables.terminalResults?.[0];
+    const authority = fixture.tables.currentAuthorities?.[0];
+    if (predecessor === undefined || terminal === undefined || authority === undefined) {
+      throw new Error("finalized fixture is incomplete");
+    }
+    predecessor.superseded_at_ms = 25;
+    predecessor.state = "superseded";
+    const predecessorCoordinator = fixture.tables.coordinators?.[0];
+    if (predecessorCoordinator !== undefined) predecessorCoordinator.released_at_ms = 25;
+    fixture.tables.coordinators?.push({
+      collaboration_server_id: fixture.ids.serverId,
+      coordinator_lease_id: `rccl_${encoded(16, 40)}`,
+      coordinator_epoch: 2,
+      acquired_at_ms: 25,
+      heartbeat_deadline_ms: 1000,
+      released_at_ms: null,
+    });
+    const successor = fixture.tables.coordinators?.[1];
+    terminal.finalization_coordinator_lease_id = successor?.coordinator_lease_id;
+    terminal.finalization_coordinator_epoch = successor?.coordinator_epoch;
+    authority.current_coordinator_lease_id = successor?.coordinator_lease_id;
+    authority.current_coordinator_epoch = successor?.coordinator_epoch;
+    validateV11(fixture);
+  });
+
+  it("rejects an equal-time higher signing fence as hostile ambiguity", () => {
+    const fixture = finalizedFixture();
+    const predecessor = fixture.tables.signingLeases?.[0];
+    const terminal = fixture.tables.terminalResults?.[0];
+    const authority = fixture.tables.currentAuthorities?.[0];
+    if (predecessor === undefined || terminal === undefined || authority === undefined) {
+      throw new Error("finalized fixture is incomplete");
+    }
+    predecessor.superseded_at_ms = 25;
+    predecessor.state = "superseded";
+    const predecessorCoordinator = fixture.tables.coordinators?.[0];
+    if (predecessorCoordinator !== undefined) predecessorCoordinator.released_at_ms = 25;
+    const successorCoordinatorId = `rccl_${encoded(16, 42)}`;
+    fixture.tables.coordinators?.push({
+      collaboration_server_id: fixture.ids.serverId,
+      coordinator_lease_id: successorCoordinatorId,
+      coordinator_epoch: 2,
+      acquired_at_ms: 25,
+      heartbeat_deadline_ms: 1000,
+      released_at_ms: null,
+    });
+    terminal.finalization_coordinator_lease_id = successorCoordinatorId;
+    terminal.finalization_coordinator_epoch = 2;
+    authority.current_coordinator_lease_id = successorCoordinatorId;
+    authority.current_coordinator_epoch = 2;
+    fixture.tables.signingLeases?.push({
+      ...predecessor,
+      signing_lease_id: "post-acceptance-signing-lease",
+      coordinator_lease_id: successorCoordinatorId,
+      coordinator_epoch: 2,
+      fencing_token: 2,
+      acquired_at_ms: terminal.terminal_at_ms,
+      draining_at_ms: null,
+      superseded_at_ms: null,
+      closed_at_ms: null,
+      state: "current",
+    });
+    expect(() => validateV11(fixture)).toThrow(/narrow superseded-lease takeover repair/);
+  });
+
+  it("rejects takeover acceptance after a strictly earlier intervening higher signing fence", () => {
+    const fixture = finalizedFixture();
+    const predecessor = fixture.tables.signingLeases?.[0];
+    const terminal = fixture.tables.terminalResults?.[0];
+    if (predecessor === undefined || terminal === undefined) {
+      throw new Error("finalized fixture is incomplete");
+    }
+    predecessor.superseded_at_ms = 25;
+    predecessor.state = "superseded";
+    const predecessorCoordinator = fixture.tables.coordinators?.[0];
+    if (predecessorCoordinator !== undefined) predecessorCoordinator.released_at_ms = 25;
+    const successorCoordinatorId = `rccl_${encoded(16, 41)}`;
+    fixture.tables.coordinators?.push({
+      collaboration_server_id: fixture.ids.serverId,
+      coordinator_lease_id: successorCoordinatorId,
+      coordinator_epoch: 2,
+      acquired_at_ms: 25,
+      heartbeat_deadline_ms: 1000,
+      released_at_ms: null,
+    });
+    terminal.finalization_coordinator_lease_id = successorCoordinatorId;
+    terminal.finalization_coordinator_epoch = 2;
+    fixture.tables.signingLeases?.push({
+      ...predecessor,
+      signing_lease_id: "intervening-signing-lease",
+      coordinator_lease_id: successorCoordinatorId,
+      coordinator_epoch: 2,
+      fencing_token: 2,
+      acquired_at_ms: 26,
+      draining_at_ms: null,
+      superseded_at_ms: null,
+      closed_at_ms: null,
+      state: "current",
+    });
+    expect(() => validateV11(fixture)).toThrow(/narrow superseded-lease takeover repair/);
+  });
+
+  it.each([
+    [
+      "stored digest",
+      (fixture: Fixture) => {
+        const terminal = fixture.tables.terminalResults?.[0];
+        if (terminal !== undefined) terminal.stored_semantic_result_digest = encoded(32, 90);
+      },
+    ],
+    [
+      "acceptance signer",
+      (fixture: Fixture) => {
+        const acceptance = fixture.tables.acceptances?.[0];
+        if (acceptance !== undefined) acceptance.signer_identity_key_id = "foreign-key";
+      },
+    ],
+    [
+      "completion trigger",
+      (fixture: Fixture) => {
+        const terminal = fixture.tables.terminalResults?.[0];
+        if (terminal !== undefined)
+          terminal.trigger_ingress_observation_id = `rio_${encoded(32, 91)}`;
+      },
+    ],
+    [
+      "noncanonical random attempt",
+      (fixture: Fixture) => {
+        const delivery = fixture.tables.resultDeliveries?.[0];
+        if (delivery !== undefined) delivery.delivery_attempt_id = `rda_${"A".repeat(21)}B`;
+      },
+    ],
+  ] as const)("rejects a corrupt schema-v11 %s", (_label, corrupt) => {
+    const fixture = finalizedFixture();
+    corrupt(fixture);
+    expect(() => validateV11(fixture)).toThrow();
   });
 });

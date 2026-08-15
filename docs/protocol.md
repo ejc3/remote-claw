@@ -29,8 +29,8 @@ behavior, and any A1 viewer row, alias, or cache, are not implemented here.
 **Host multiplicity.** Current A0 already gives each in-process `Session` its own registrar lease,
 relay instance, inbound dedup set, projection log, broker chat channel, permission map, and teardown
 controller; one MITM registrar can serve several intercepted sessions. That is process-local
-isolation, not the selected live durable host inventory. A1.2, A1.6, A1.7a, and A1.7b1 can now persist dormant
-host/chat, broker-route, evidence-preserving ingress, and rejected command/preparation inventory, but later slices must make one paired host discover and recover
+isolation, not the selected live durable host inventory. A1.2, A1.6, A1.7a, A1.7b1, and A1.8a0 can now persist dormant
+host/chat, broker-route, evidence-preserving ingress, rejected command/preparation, and rejected terminal-result inventory, but later slices must make one paired host discover and recover
 many independently wrapped Claude, Codex, and OpenCode conversations across equal or different
 directories. Each keeps its own native identity/history, local TUI, collaborators, actor lane,
 delivery gates, and recovery outcome. Global journal counters remain audit positions; native
@@ -87,6 +87,15 @@ preparation under the A1.7b0 current server lease. [§3d](#3d-dormant-a17b1-comm
 records that direct-only contract. Its terminal boundary is a signed-but-unaccepted preparation. It
 does not create the final result, signer acceptance, terminal ingress result, source delivery/outbox,
 native attempt/effect, viewer projection, broker write, driver operation, or production path.
+
+**Dormant A1.8a0 rejected-result finalization.** Host schema v11 now consumes only that exact signed
+rejected preparation and atomically retains the immutable common result, dense signer acceptance,
+terminal adjudication overlay, exact semantic-result artifact, and one causal plaintext
+`pending_seal` delivery intent. [§3e](#3e-dormant-a18a0-rejected-result-finalization) records that
+direct-only contract. The base schema-v8 ingress row remains immutable evidence, and finalization
+does not depend on later route health. The intent cannot be claimed, sealed, encrypted, signed,
+published, or sent in A1.8a0; there is no cursor movement, admitted/effect arm, broker call, viewer
+projection, driver operation, production path, or capability advertisement.
 
 **Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the
 only driver. Every current harness produces a `Session`. Claude MITM, OpenCode, and tmux register that
@@ -458,8 +467,9 @@ canonical message digest, source payload schema, and source-event fingerprint an
 from `assembling` to `awaiting_order`. That is the terminal success state for A1.7a. Migration 8 and A1.7a add no
 common-command, command-result/signature, server-scope signer, result-delivery, checkpoint, outbox,
 effect, dispatch, viewer, or native table. A1.7b0 supplies the server-signer prerequisite and A1.7b1
-now orders an eligible source and signs a rejected result preparation, but A1.8a must atomically
-finalize the common/source result and any admitted effect arm before any live capability exists.
+now orders an eligible source and signs a rejected result preparation. A1.8a0 atomically finalizes
+only that rejected common/source result into an inert delivery intent; full A1.8a/A1.8b still own any
+admitted effect and sealed publication before a live capability exists.
 Ordinary CLI launches, every current driver, runtime-owner RPC,
 `HostRcRelay`, and the viewer make zero calls into this actor, so the as-built live protocol remains
 the A0 relay in the following sections.
@@ -634,15 +644,100 @@ uses a later monotone preparation time and may repeat for later generations.
 The maximum reachable successful state in A1.7b1 is command `decision_reserved`, ingress sidecar
 `deciding`, preparation `signed`, compound group `result_signed`, and signer reservation `signed`.
 Schema triggers and semantic reopen reject command `decided`, ingress `terminal`, group `finalized`,
-and any acceptance or final-result graph. A1.8a must add one atomic transaction that creates the final
-common result, accepts the signer reservation, terminalizes the ingress sidecar/source result, and
-creates the source result/delivery outbox; for an admitted decision, that same transaction must also
-create its pinned native attempt, front-door dispatch, and one-use effect gate. A1.7b1 and A1.8a are
-one advertised capability gate, so a signed preparation alone never authorizes delivery or mutation.
+and any acceptance or final-result graph in schema v10. A1.8a0 now supplies one atomic rejected-only
+transaction for the final common result, signer acceptance, logical ingress terminalization, and
+inert delivery intent. Full A1.8a must still create an admitted decision's pinned native attempt,
+front-door dispatch, and one-use effect gate, while A1.8b must seal/publish. A signed preparation or
+plaintext `pending_seal` intent alone never authorizes delivery or mutation.
 
 The command repository is attached to the secure host-state database, but no ordinary CLI, driver,
 runtime-owner RPC, relay, or viewer operation invokes it. The signing orchestrator remains outside the
 production import graph. All live traffic therefore continues to use the A0 relay below.
+
+---
+
+## 3e. Dormant A1.8a0 rejected-result finalization
+
+A1.8a0 advances the host through migration `011-a1-rejected-result-finalization` to schema v11
+without changing any live wire or production runtime. Its 38 ordered statements are locked to digest
+`SkkuAFJed-7GT9XyXXPCub7VFauqNY6eu0u4IQJEInc`; the exact 647-object manifest contains 73 tables,
+147 indexes, and 427 triggers. It adds exactly these three tables:
+
+- `collaboration_command_results`
+- `a1_ingress_terminal_results`
+- `a1_ingress_result_deliveries`
+
+The dormant repository accepts only a signed schema-v10 `rejected` result preparation with
+`requiredFinalizationArtifactKind:"none"`. One SQLite transaction inserts the immutable common
+command result, the next dense `server_signed_record_acceptances` row, a logical terminal result, and
+one causal result-delivery row; moves the command from `decision_reserved` to `decided`; moves its
+A1 adjudication sidecar from `deciding` to `terminal`; and stores the exact compact semantic payload
+as a protected artifact. The existing preparation, group, and reservation deliberately remain
+`signed`/`result_signed`/`signed`; their exact accepted result and terminal graph are the durable
+consumption witness. Partial graphs are invalid, and unknown `COMMIT` closes the poisoned handle,
+securely reopens it, reconciles the complete request-bound graph, and retries only after proving the
+transaction absent.
+
+For a chat `user`, the protected semantic payload uses schema
+`remote-claw/a1-action-result/v1` and exact compact JSON key order:
+
+```text
+{"v":1,"result_id":"rrs_*","source_msg_id":"...","source_record_kind":"user","decision":"rejected","command_seq":N}
+```
+
+For server-control `new_chat`, it uses schema
+`remote-claw/a1-chat-creation-result/v1`:
+
+```text
+{"v":1,"result_id":"rrs_*","source_msg_id":"...","decision":"rejected","target_logical_chat_id":null,"command_seq":N}
+```
+
+In both cases `ingressResultId` equals the existing `stableSemanticResultId`. The artifact digest is
+SHA-256 of the exact payload bytes. The separately stored semantic digest is:
+
+```text
+SHA256(str("remote-claw/a1/stored-semantic-result/v1") ||
+       str(semanticResultPayloadSchemaId) || bytes(exactCompactUtf8Payload))
+```
+
+The terminal trigger is the unique `rio_*` observation for the accepted delivery attempt with
+`disposition:"new_part"` at the lexicographically greatest `(channelGeneration, frameIndex)` among
+exactly one observation for every part `0..N-1`. No channel cursor advances. The initial delivery ID
+is deterministic:
+
+```text
+"rrd_" || base64url(SHA256(str("remote-claw/a1/result-delivery/v1") ||
+                           str(stableSemanticResultId) ||
+                           str(triggerIngressObservationId)))
+```
+
+Its `rda_*` delivery-attempt ID is a once-allocated random 128-bit value. The row fixes
+`targetKind:"a1_broker"`, `targetRef:brokerRouteId`, semantic payload refs/digests, and
+`state:"pending_seal"`. That state is an inert plaintext semantic intent, not an encrypted broker
+frame or a dispatchable outbox: schema v11 defines no claim, ciphertext/output part, output
+signature, seal, publication, retry, or broker operation.
+
+Finalization does not require the source route to remain current or gap-free after the rejection was
+signed. The immutable schema-v8 `authenticated_ingress_results` evidence remains `awaiting_order` or
+may later become `quarantined_collision`; neither a post-sign collision nor exact
+`discard_and_close_source` recovery erases or deadlocks the signed rejection. A narrow takeover rule
+lets the exact current live successor coordinator accept a command-result signature made under the
+now-superseded predecessor lease only when it was stored no later than supersession, that predecessor
+was valid at signing time, no intervening signing lease exists, and the same current identity key,
+generation, scope certificate, and custody record remain intact. The predecessor's lease stays the
+signature's maximum fence, `historicalReattestationId` stays null, and the common result, terminal
+row, acceptance, and `pending_seal` row must land together. Any later successor signing lease must
+be durably acquired strictly after the predecessor acceptance, even across a same-millisecond
+wall-clock tie. This does not authorize generic
+superseded-lease acceptance, key rotation, retired certificates, or historical reattestation.
+
+The pure result contracts live in `packages/clawsec/src/a1-result.ts`; schema/repository/reopen
+closure live in `packages/cli/src/host/state/{migration-v11,command-result-finalization,command-adjudication-repository,command-adjudication-validator}.ts`;
+and the crash-reconciling composition is the dormant
+`packages/cli/src/host/server-signer/command-result-orchestrator.ts`. None is invoked by an ordinary
+CLI, driver, runtime-owner RPC, relay, viewer, or broker route. Full A1.8a still owns the admitted
+attempt/front-door-dispatch/effect arm, and A1.8b owns sealing and publication. A1.7b1 plus A1.8a0
+therefore still advertise no capability.
 
 ---
 
@@ -1093,13 +1188,14 @@ guarantees.
    kill or proved absence. An unknown tmux outcome retains the runtime and emits the exact
    `tmux -S <socket> attach -t <session>` command; a new wrapper still cannot adopt that pane because
    the A0.2 registrar/binding is process-local and `liveReattach:false`.
-9. **A1.6 transport through A1.7b1 command signing is still not a live collaboration path.**
+9. **A1.6 transport through A1.8a0 rejected-result finalization is still not a live collaboration path.**
    The selected provider/client, schema-v7 route installer, schema-v8 evidence-preserving ingress
-   repository/actor, schema-v9 server signer, and schema-v10 command adjudicator are implemented and tested, but ordinary CLI
+   repository/actor, schema-v9 server signer, schema-v10 command adjudicator, and schema-v11 rejected
+   finalizer are implemented and tested, but ordinary CLI
    launches, drivers, runtime-owner RPC, `HostRcRelay`, and the viewer do not invoke them. A dormant
-   `awaiting_order` row or signed-but-unaccepted preparation is not a final result, delivery,
-   authorization, effect, or viewer projection. The atomic A1.8a finalization/effect tranche and later
-   milestones must land before A1 can replace the A0 relay described above.
+   `pending_seal` intent is neither a sealed/published result nor delivery, authorization, effect, or
+   viewer projection. Full A1.8a admitted arming, A1.8b sealing/publishing, and later milestones must
+   land before A1 can replace the A0 relay described above.
 
 ### Capture-grounded protocol surfaces (observed via `--rc-trace`)
 

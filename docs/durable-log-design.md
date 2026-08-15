@@ -28,7 +28,7 @@ local transcript completeness or replay.
 > chats and native sessions; this document's per-`cse_*` RC state repeats independently for every
 > wrapped Claude session and must not become a host-wide current-session slot. This document's full RC
 > log remains relevant to the current synthetic server, not a universal semantic authority. A1.0
-> through dormant A1.7b1 have landed: canonical contracts, the secure SQLite kernel and protected-artifact
+> through dormant A1.8a0 have landed: canonical contracts, the secure SQLite kernel and protected-artifact
 > store, schema-v3 server/project/chat/binding/edge/coordinator records, and now schema-v4 runtime-owner
 > state plus its repository, semantic validator, authenticated daemon/RPC, lease/takeover, and wrapped
 > key custody. Migration 4 has 141 statements and digest
@@ -75,11 +75,26 @@ local transcript completeness or replay.
 > preparations. It stops at signed-but-unaccepted state and adds no final result, signer acceptance,
 > ingress terminalization, source delivery/outbox, native attempt/effect, projection, or production
 > wiring.
+> A1.8a0 adds schema v11 migration `011-a1-rejected-result-finalization` as a dormant rejected-only
+> atomic closure. Its 38 statements are locked to digest
+> `SkkuAFJed-7GT9XyXXPCub7VFauqNY6eu0u4IQJEInc`; the 647-object manifest contains 73 tables, 147
+> indexes, and 427 triggers. Exactly three new tables retain the immutable common result, logical A1
+> terminal overlay, and one causal plaintext result-delivery intent. One transaction adds the dense
+> signer acceptance, changes command/sidecar to `decided`/`terminal`, stores the exact rejected
+> action/chat semantic artifact, and leaves the delivery in unclaimable `pending_seal`. The base v8
+> ingress row remains immutable evidence in `awaiting_order` or later `quarantined_collision`; no
+> cursor advances, and the v10 preparation/group/reservation remain
+> `signed`/`result_signed`/`signed`. Finalization does not require post-sign route health, and a
+> narrow exact-successor rule accepts a valid pre-supersession predecessor-lease signature without
+> authorizing generic superseded leases or rotated/retired keys. Any later successor signing lease
+> must be durably acquired strictly after that predecessor acceptance, including across a
+> same-millisecond wall-clock tie.
 > The ordinary no-adapter CLI remains health-only; no real driver or viewer invokes A1, no
 > runtime-owner broker or ingress operation exists, and the dormant actor is absent from production
 > barrels/run paths. No production path invokes the dormant command adjudicator or server signer.
-> A1.8a atomic final-result/acceptance/terminal/outbox/effect completion and all live wiring remain
-> deferred. A1.7b1 and A1.8a are one advertised capability gate.
+> A1.8a0 adds no ciphertext, output part/signature, claim/seal/publish, broker call, effect/attempt,
+> projection, native dispatch, or production wiring. Full A1.8a admitted arming and A1.8b
+> sealing/publishing remain deferred; A1.7b1 plus A1.8a0 still advertise nothing.
 
 ## Source Map
 
@@ -99,10 +114,10 @@ local transcript completeness or replay.
   `packages/cli/src/host/rc/anthropic/*.ts`,
   `packages/cli/src/broker/{client,protocol,order}.ts`, and
   `apps/web/lib/broker/{backend,local,vercel,sqlite-multi,turso-cloud-locator}.ts`.
-- Active shared canonical primitive, locked A0 consumer, and dormant pure A1.5–A1.7b1 contracts:
-  `packages/clawsec/src/{canonical,aad,a1-wire,a1-certificates,a1-onboarding,a1-broker,a1-ingress,a1-command}.ts`.
+- Active shared canonical primitive, locked A0 consumer, and dormant pure A1.5–A1.8a0 contracts:
+  `packages/clawsec/src/{canonical,aad,a1-wire,a1-certificates,a1-onboarding,a1-broker,a1-ingress,a1-command,a1-result}.ts`.
 - A1 host-state and runtime-owner code:
-  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
+  `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,migration-v11,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-result-finalization,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
   `packages/cli/src/host/native/evidence.ts`, `packages/cli/src/host/server-signer/**`, and
   `packages/cli/src/host/runtime-owner/**`. A1.2 implements the generic v3
   server/project/chat/binding/edge/coordinator operations described below. A1.3 implements the v4
@@ -114,7 +129,9 @@ local transcript completeness or replay.
   `packages/cli/src/broker/a1-client.ts`, and the host-only dormant route installer. A1.7a adds the
   direct-only ingress repository and actor through `awaiting_order`. A1.7b0 adds schema v9 plus the
   direct-only server signer and its wrapped custody/fenced lease/reservation repository. A1.7b1 adds
-  schema v10, direct-only command adjudication, and the command-result signing orchestrator. It still does not implement
+  schema v10, direct-only command adjudication, and command-result signing. A1.8a0 adds schema v11,
+  pure result bytes/digests, direct-only rejected-result finalization, and unknown-commit reconciliation
+  in that same command-result orchestrator. It still does not implement
   private Claude RC rows, connect an ordinary native driver to durable registration/root activation,
   or install the ingress actor into a live runtime.
 - A1.6 broker code:
@@ -378,7 +395,7 @@ prove that protocol before it may collect these records. The existing explicitly
 locator `dropScope()` remains destructive whole-scope test cleanup; it is not production retention,
 checkpointing, revocation, or recovery.
 
-The implemented A1.1–A1.7b1 kernel supplies the secure transaction/storage boundary for the owner-only
+The implemented A1.1–A1.8a0 kernel supplies the secure transaction/storage boundary for the owner-only
 **LOCAL**
 `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite database,
 falling back under `~/.local/state` when `XDG_STATE_HOME` is absent or relative. The fallback home
@@ -392,7 +409,7 @@ application/identities/identity directories, a non-group/world-writable owner st
 regular one-link `0600` database/WAL/SHM files; rollback journals, non-WAL databases, and all other
 filesystem types fail closed.
 
-Current schema v10 uses SQLite `application_id=0x52434c57`, `user_version=10`, exact per-version schema
+Current schema v11 uses SQLite `application_id=0x52434c57`, `user_version=11`, exact per-version schema
 manifests, and an append-only `CanonicalWriter` SHA-256 migration chain. The locked v1/v2 digests are
 `Pk8Yrc3jVK9xoHKDcBdeyejFYUSbyjnp-SH0VMA_Hec` and
 `yx23Bca9rSZttCEInDAEOrzLVhq-KWcZLE1i27tqNiY`; migration 3 is
@@ -411,7 +428,9 @@ manifests, and an append-only `CanonicalWriter` SHA-256 migration chain. The loc
 `009-server-scope-signer`, contains 81 ordered statements, and is locked to
 `fYrN5atmwIj-tlT_tTXmrg9kNF52ah-zWmgf7vVFQWE`. Migration 10 is
 `010-common-command-adjudication`, contains 50 ordered statements, and is locked to
-`rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk`. Every predecessor is checked before migrating. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
+`rdJC_2C5IyjfsTuXhxjFSzT0bvDYtlpT8o0xDvu4IEk`. Migration 11 is
+`011-a1-rejected-result-finalization`, contains 38 ordered statements, and is locked to
+`SkkuAFJed-7GT9XyXXPCub7VFauqNY6eu0u4IQJEInc`. Every predecessor is checked before migrating. The v1 exact six-object `sqlite_schema` manifest has three tables, one explicit unique index, and
 two triggers; v2 adds four triggers for a total of ten objects and six triggers. V3 adds ten tables:
 `collaboration_servers`, `host_state_profiles`, `projects`,
 `project_target_selector_mappings`, `logical_chats`, `native_bindings`,
@@ -437,7 +456,9 @@ exactly 571 objects: 65 tables, 123 indexes, and 383 triggers. V10 adds exactly
 `command_ready_entries`, `a1_ingress_adjudications`, `collaboration_commands`,
 `collaboration_command_compound_signing_groups`, and
 `collaboration_command_result_preparations`. Its complete manifest is exactly 619 objects: 70 tables,
-137 indexes, and 412 triggers. Every row,
+137 indexes, and 412 triggers. V11 adds exactly `collaboration_command_results`,
+`a1_ingress_terminal_results`, and `a1_ingress_result_deliveries`. Its complete manifest is exactly
+647 objects: 73 tables, 147 indexes, and 427 triggers. Every row,
 including any `sqlite_*` name, must match the corresponding version manifest. Before migration 1, a
 new database must retain `application_id=0` and literally zero `sqlite_schema` rows. Every connection
 reads back `foreign_keys=ON`, `trusted_schema=OFF`, `journal_mode=WAL`,
@@ -450,10 +471,11 @@ and may change during validation; a safe SHM-only remnant beside an existing dat
 reconstructed, while sidecars without a database are refused.
 
 The semantic validator accepts the dormant A1.2 subset plus the A1.3 runtime-owner, A1.4
-registration, A1.5 terminal-root, A1.6 broker-route, A1.7a ingress, A1.7b0 server-signer, and A1.7b1 command-preparation graphs. An existing database is
+registration, A1.5 terminal-root, A1.6 broker-route, A1.7a ingress, A1.7b0 server-signer, A1.7b1
+command-preparation, and A1.8a0 rejected terminal-result graphs. An existing database is
 checked in one coherent read-only snapshot before writable open; a newly migrated database is checked
 before its handle returns. State is empty or has one linked default profile whose server is
-`installing` in schemas v3–v8 and may be `installing` or signer-activated `current` in schemas v9–v10; projects are
+`installing` in schemas v3–v8 and may be `installing` or signer-activated `current` in schemas v9–v11; projects are
 current; each project's one persisted v3 selector chain is contiguous, terminal-native, and ends in exactly one current generation;
 and every logical chat records its exact `project_target_selector_mapping_id`. A new A1.2 reservation
 starts recovering at topology generation one and projection sequence zero. It points to one unresolved
@@ -565,10 +587,29 @@ V10 can reach only command `decision_reserved`, A1 sidecar `deciding`, preparati
 `result_signed`, and signature reservation `signed`. It rejects final command/terminal sidecar/
 finalized-group states and has no final-result, signer-acceptance, source result/delivery, outbox,
 effect, attempt, dispatch, viewer, native, or production surface. The v9 acceptance table remains,
-but A1.7b1 inserts no command-result acceptance row. A1.8a must add final common result,
-signer acceptance, ingress terminalization, and source result/delivery outbox atomically; an admitted
-arm must add its pinned native attempt/front-door dispatch/effect gate in the same transaction.
-A1.7b1 and A1.8a therefore form one advertised capability gate.
+but A1.7b1 inserts no command-result acceptance row. That schema-v10 boundary requires a later atomic
+final common result, signer acceptance, ingress terminalization, and source result/delivery intent. A1.8a0 now
+implements that boundary only for the already-signed rejected arm; the admitted attempt/front-door
+dispatch/effect arm remains full A1.8a work. A1.7b1 by itself therefore advertises nothing.
+
+V11 adds rejected-only atomic terminal closure, not an executable or publishable outbox. The finalizer
+requires the exact signed `rejected` preparation with no finalization artifact, then atomically inserts
+its immutable common result and dense signer acceptance, changes the command and A1 sidecar to
+`decided`/`terminal`, stores the exact compact `action_result` or `chat_creation_result` artifact, and
+inserts one causal `pending_seal` delivery intent. The immutable v8 source evidence remains
+`awaiting_order` or may later become `quarantined_collision`; the finalizer neither mutates it nor
+advances the channel cursor, and it does not require the route to remain current or gap-free after
+signing. The v10 preparation/group/reservation stay `signed`/`result_signed`/`signed` and are closed by
+the one-to-one accepted result graph. A narrow current-successor exception accepts the exact valid
+pre-supersession predecessor-lease command-result signature only while the same identity
+key/generation/certificate/custody chain remains current and no intervening signing lease exists; it
+does not admit generic superseded authority, rotation, retired certificates, or historical
+reattestation. Any later successor signing lease must be durably acquired strictly after that
+predecessor acceptance, including across a same-millisecond wall-clock tie. `pending_seal` stores only
+plaintext semantic refs/digests and target route linkage.
+There is no claim, encryption, output part/signature, sealing, publication, broker call, effect,
+attempt, projection, native dispatch, or production wiring in A1.8a0. Full A1.8a owns admitted
+atomic arming; A1.8b owns sealing/publishing and one-time dispatch.
 
 V4 additionally validates one machine-scoped runtime-owner state row, contiguous retained service
 epochs and owner journal, exact process-start-bound lease acquisition/renewal/release, derived
@@ -653,9 +694,11 @@ reconciliation. A1.3's production lease controller handles an unknown owner-leas
 poisoned handle, reopening the same identity database, and reconciling the exact operation before any
 retry; this does not make an arbitrary unknown ordinary SQLite commit safe to replay blindly. The A1.2 actor
 scope was only durable addressing through A1.6. A1.7a adds dormant ingress queues and route-local
-serialization; A1.7b0 adds their server-signing prerequisite; and A1.7b1 adds rejected-only common
-proposal decisions, server-wide order, and signed-but-unaccepted preparations. A1.8a owns the atomic
-final-result/acceptance/terminal/outbox/effect boundary.
+serialization; A1.7b0 adds their server-signing prerequisite; A1.7b1 adds rejected-only common
+proposal decisions, server-wide order, and signed preparations; and A1.8a0 atomically closes that
+rejected arm into a final result, acceptance, terminal overlay, and inert `pending_seal` intent. Full
+A1.8a still owns admitted attempt/dispatch/effect arming, and A1.8b owns sealing/publishing and
+one-time delivery.
 
 A1.3's daemon listens on one machine-scoped Linux abstract Unix socket. Both peers derive one HKDF key
 from the machine secret and prove possession over a fresh 32-byte challenge, with separate server and
@@ -1487,7 +1530,7 @@ demonstrates every property below:
 
 ## Assigned Decisions and Proof-Owned Questions
 
-- **A1.1–A1.7b1 / B.2 — storage placement: DECIDED; kernel, host/runtime-owner/registration/root/broker-route/ingress/signer/command repositories, and daemon seam implemented.** Use the owner-only local
+- **A1.1–A1.8a0 / B.2 — storage placement: DECIDED; kernel, host/runtime-owner/registration/root/broker-route/ingress/signer/command/finalization repositories, and daemon seam implemented.** Use the owner-only local
   `$XDG_STATE_HOME/remote-claw/identities/<machineIdentityId>/host-state-v1.db` SQLite
   transaction boundary in the CLI, with the absolute-home `~/.local/state` fallback above, for every RC row that
   participates in a control-state invariant, in cleartext. A1.0 resolves the path; A1.1 implements
@@ -1499,7 +1542,9 @@ demonstrates every property below:
   `awaiting_order`; A1.7b0 adds schema v9 and its dormant initial self-anchor, wrapped server-key,
   fenced signing-lease, reservation, and acceptance ledger; A1.7b1 adds schema v10 and its dormant
   shared ready journal, rejected command decision, compound result preparation, and result signing
-  ledger. The ordinary CLI installs no adapter and invokes no A1 broker, ingress, command, or signer operation, so the
+  ledger; A1.8a0 adds schema v11 and its rejected-only common-result, terminal overlay, and inert
+  `pending_seal` ledger. The ordinary CLI installs no adapter and invokes no A1 broker, ingress,
+  command, signer, or finalization operation, so the
   production daemon remains health-only. A separate local adapter store may hold only raw transport payloads with immutable host-state
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds

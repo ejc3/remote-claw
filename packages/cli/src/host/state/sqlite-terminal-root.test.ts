@@ -766,7 +766,7 @@ describeLinux("A1.5 secure terminal-root SQLite integration", () => {
       pathEnvironment: fixture.state.environment,
     });
     try {
-      expect(migrated.schemaVersion).toBe(10);
+      expect(migrated.schemaVersion).toBe(11);
       expect(migrated.terminalRoot.readInventory()).toEqual({
         operations: [],
         certificates: [],

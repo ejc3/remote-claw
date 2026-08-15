@@ -17,11 +17,16 @@ import {
   VERSION_TEN_PRE_SCHEMA_STATEMENTS,
   VERSION_TEN_SQLITE_SCHEMA_ENTRIES,
 } from "./migration-v10.js";
+import {
+  VERSION_ELEVEN_DATA_STATEMENTS,
+  VERSION_ELEVEN_PRE_SCHEMA_STATEMENTS,
+  VERSION_ELEVEN_SQLITE_SCHEMA_ENTRIES,
+} from "./migration-v11.js";
 
 /** SQLite application_id for the ASCII tag `RCLW`. */
 export const HOST_STATE_APPLICATION_ID = 0x52434c57;
 
-export const HOST_STATE_SCHEMA_VERSION = 10;
+export const HOST_STATE_SCHEMA_VERSION = 11;
 
 /** Domain for the length-framed, history-chained migration digest below. */
 export const HOST_STATE_MIGRATION_DIGEST_DOMAIN = "remote-claw/host-state/migration-chain/v1";
@@ -4739,6 +4744,12 @@ const VERSION_TEN_STATEMENTS = Object.freeze([
   ...VERSION_TEN_DATA_STATEMENTS,
 ]);
 
+const VERSION_ELEVEN_STATEMENTS = Object.freeze([
+  ...VERSION_ELEVEN_PRE_SCHEMA_STATEMENTS,
+  ...VERSION_ELEVEN_SQLITE_SCHEMA_ENTRIES.map((entry) => entry.sql),
+  ...VERSION_ELEVEN_DATA_STATEMENTS,
+]);
+
 export const HOST_STATE_MIGRATIONS: readonly HostStateMigration[] = Object.freeze([
   Object.freeze({
     version: 1,
@@ -4789,6 +4800,11 @@ export const HOST_STATE_MIGRATIONS: readonly HostStateMigration[] = Object.freez
     version: 10,
     id: "010-common-command-adjudication",
     statements: VERSION_TEN_STATEMENTS,
+  }),
+  Object.freeze({
+    version: 11,
+    id: "011-a1-rejected-result-finalization",
+    statements: VERSION_ELEVEN_STATEMENTS,
   }),
 ]);
 
@@ -5359,6 +5375,21 @@ const VERSION_TEN_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[] 
   ...VERSION_TEN_SQLITE_SCHEMA_ENTRIES,
 ]);
 
+const VERSION_ELEVEN_REPLACED_SCHEMA_NAMES = new Set([
+  "collaboration_commands_require_rejected_decision",
+  "a1_ingress_adjudications_require_deciding_transition",
+  "authenticated_ingress_results_freeze_adjudicated_source",
+  "server_signed_record_acceptances_require_exact_signed_record",
+  "server_signed_record_acceptances_forbid_command_results_v10",
+]);
+
+const VERSION_ELEVEN_SQLITE_SCHEMA_MANIFEST: readonly HostStateSqliteSchemaEntry[] = Object.freeze([
+  ...VERSION_TEN_SQLITE_SCHEMA_MANIFEST.filter(
+    (entry) => !VERSION_ELEVEN_REPLACED_SCHEMA_NAMES.has(entry.name),
+  ),
+  ...VERSION_ELEVEN_SQLITE_SCHEMA_ENTRIES,
+]);
+
 export const HOST_STATE_SQLITE_SCHEMA_MANIFESTS: readonly (readonly HostStateSqliteSchemaEntry[])[] =
   Object.freeze([
     VERSION_ONE_SQLITE_SCHEMA_MANIFEST,
@@ -5371,6 +5402,7 @@ export const HOST_STATE_SQLITE_SCHEMA_MANIFESTS: readonly (readonly HostStateSql
     VERSION_EIGHT_SQLITE_SCHEMA_MANIFEST,
     VERSION_NINE_SQLITE_SCHEMA_MANIFEST,
     VERSION_TEN_SQLITE_SCHEMA_MANIFEST,
+    VERSION_ELEVEN_SQLITE_SCHEMA_MANIFEST,
   ]);
 
 export function expectedHostStateSqliteSchemaManifest(

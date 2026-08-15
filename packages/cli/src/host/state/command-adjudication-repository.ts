@@ -1,5 +1,7 @@
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, randomBytes as secureRandomBytes, verify } from "node:crypto";
 import {
+  A1_ACTION_RESULT_PAYLOAD_SCHEMA_ID,
+  A1_CHAT_CREATION_RESULT_PAYLOAD_SCHEMA_ID,
   A1_COMMAND_DECISION_EVIDENCE_SCHEMA_ID,
   A1_COMMAND_DECISION_POLICY_ID,
   A1_COMMAND_RESULT_SCHEMA_ID,
@@ -10,13 +12,19 @@ import {
   type A1IngressCommandSource,
   type A1UnsupportedRecognizedCommandPayload,
   base64urlDecode,
+  base64urlEncode,
   canonicalA1CollaborationCommandIdPreimage,
   canonicalA1CommandDecisionEvidence,
   canonicalA1CommandPayload,
   canonicalA1CommandRecord,
   canonicalA1CommandResultPayload,
   canonicalA1CommandSourceIdentity,
+  canonicalA1ResultDeliveryIdPreimage,
   canonicalA1SignedCommandResult,
+  canonicalA1StoredSemanticResultPreimage,
+  encodeA1RejectedActionResultPayloadV1Bytes,
+  encodeA1RejectedChatCreationResultPayloadV1Bytes,
+  selectA1CompletionObservation,
 } from "@remote-claw/clawsec";
 import { createProtectedArtifactTransactionOperations } from "./artifacts.js";
 import {
@@ -35,6 +43,16 @@ import {
   parseCollaborationCommandResultPreparationRecord,
   parseCommandReadyEntryRecord,
 } from "./command-adjudication.js";
+import {
+  type A1IngressResultDeliveryRecord,
+  type A1IngressTerminalResultRecord,
+  type A1SemanticResultPayloadSchemaId,
+  type A1SemanticResultRecordKind,
+  type CollaborationCommandResultRecord,
+  parseA1IngressResultDeliveryRecord,
+  parseA1IngressTerminalResultRecord,
+  parseCollaborationCommandResultRecord,
+} from "./command-result-finalization.js";
 import {
   type A1Digest,
   type A1SafeId,
@@ -59,7 +77,9 @@ import type {
 } from "./repository.js";
 import {
   parseServerSignatureReservationRecord,
+  parseServerSignedRecordAcceptanceRecord,
   type ServerSignatureReservationRecord,
+  type ServerSignedRecordAcceptanceRecord,
 } from "./server-signing.js";
 import {
   frozen,
@@ -101,6 +121,15 @@ export interface StoreSignedRejectedCommandResultPreparationRequest {
   readonly signature: Ed25519Signature;
 }
 
+export interface FinalizeSignedRejectedCommandResultRequest {
+  readonly fence: CoordinatorLeaseFence;
+  readonly expectedCommandId: A1SafeId;
+  readonly expectedCommandResultId: A1SafeId;
+  readonly expectedCommandResultPreparationId: A1SafeId;
+  readonly expectedSignedRecordDigest: A1Digest;
+  readonly expectedAcceptedAtJournalSeq: number;
+}
+
 export interface AbortRejectedCommandResultPreparationRequest {
   readonly fence: CoordinatorLeaseFence;
   readonly commandResultPreparationId: A1SafeId;
@@ -134,6 +163,16 @@ export interface RejectedCommandPreparationMutationResult {
   readonly preparation: CollaborationCommandResultPreparationRecord;
   readonly signingGroup: CollaborationCommandCompoundSigningGroupRecord;
   readonly signatureReservation: ServerSignatureReservationRecord;
+  readonly replayed: boolean;
+}
+
+export interface FinalizedRejectedCommandResult {
+  readonly command: CollaborationCommandRecord;
+  readonly adjudication: A1IngressAdjudicationRecord;
+  readonly commonResult: CollaborationCommandResultRecord;
+  readonly signerAcceptance: ServerSignedRecordAcceptanceRecord;
+  readonly terminalResult: A1IngressTerminalResultRecord;
+  readonly resultDelivery: A1IngressResultDeliveryRecord;
   readonly replayed: boolean;
 }
 
@@ -171,6 +210,12 @@ export interface CommandAdjudicationRepositoryOperations {
   reconcileSignedRejectedResultPreparation(
     request: StoreSignedRejectedCommandResultPreparationRequest,
   ): RejectedCommandPreparationMutationResult | null;
+  finalizeSignedRejectedCommandResult(
+    request: FinalizeSignedRejectedCommandResultRequest,
+  ): FinalizedRejectedCommandResult;
+  reconcileFinalizedRejectedCommandResult(
+    request: FinalizeSignedRejectedCommandResultRequest,
+  ): FinalizedRejectedCommandResult | null;
   abortRejectedResultPreparation(
     request: AbortRejectedCommandResultPreparationRequest,
   ): RejectedCommandPreparationMutationResult;
@@ -233,6 +278,14 @@ function preparationId(value: unknown, field: string): A1SafeId {
   const parsed = parseA1SafeId(value, field);
   if (!parsed.startsWith("crp_") || parsed.length !== 47) {
     throw new HostStateContractError(`${field} must use the crp_ SHA-256 namespace`);
+  }
+  return parsed;
+}
+
+function prefixedRepositoryId(value: unknown, prefix: string, field: string): A1SafeId {
+  const parsed = parseA1SafeId(value, field);
+  if (!parsed.startsWith(prefix) || parsed.length !== prefix.length + 43) {
+    throw new HostStateContractError(`${field} must use the ${prefix} SHA-256 namespace`);
   }
   return parsed;
 }
@@ -322,6 +375,45 @@ function parseStoreSignedRequest(
   });
 }
 
+function parseFinalizeRequest(value: unknown): FinalizeSignedRejectedCommandResultRequest {
+  const row = parseExactRecord(
+    value,
+    [
+      "fence",
+      "expectedCommandId",
+      "expectedCommandResultId",
+      "expectedCommandResultPreparationId",
+      "expectedSignedRecordDigest",
+      "expectedAcceptedAtJournalSeq",
+    ] as const,
+    "finalizeSignedRejectedCommandResult",
+  );
+  return frozen({
+    fence: parseCoordinatorLeaseFence(row.fence),
+    expectedCommandId: commandId(
+      row.expectedCommandId,
+      "finalizeSignedRejectedCommandResult.expectedCommandId",
+    ),
+    expectedCommandResultId: prefixedRepositoryId(
+      row.expectedCommandResultId,
+      "ccr_",
+      "finalizeSignedRejectedCommandResult.expectedCommandResultId",
+    ),
+    expectedCommandResultPreparationId: preparationId(
+      row.expectedCommandResultPreparationId,
+      "finalizeSignedRejectedCommandResult.expectedCommandResultPreparationId",
+    ),
+    expectedSignedRecordDigest: parseA1Digest(
+      row.expectedSignedRecordDigest,
+      "finalizeSignedRejectedCommandResult.expectedSignedRecordDigest",
+    ),
+    expectedAcceptedAtJournalSeq: parseNonNegativeSafeInteger(
+      row.expectedAcceptedAtJournalSeq,
+      "finalizeSignedRejectedCommandResult.expectedAcceptedAtJournalSeq",
+    ),
+  });
+}
+
 function parseAbortRequest(value: unknown): AbortRejectedCommandResultPreparationRequest {
   const row = parseExactRecord(
     value,
@@ -374,6 +466,33 @@ function sqlGet(
 ): unknown {
   try {
     return transaction.get(sql, parameters);
+  } catch (error) {
+    if (
+      error instanceof CommandAdjudicationRepositoryConflictError ||
+      error instanceof CommandAdjudicationStaleCoordinatorError ||
+      error instanceof CommandAdjudicationRepositoryPersistenceError ||
+      error instanceof HostStateContractError
+    ) {
+      throw error;
+    }
+    throw new CommandAdjudicationRepositoryPersistenceError("SQL read did not complete", {
+      cause: error,
+    });
+  }
+}
+
+function sqlAll(
+  transaction: HostStateRepositorySqlTransaction,
+  sql: string,
+  parameters: readonly HostStateRepositorySqlValue[] = [],
+): unknown[] {
+  try {
+    if (transaction.all === undefined) {
+      throw new CommandAdjudicationRepositoryPersistenceError(
+        "SQL transaction does not support inventory reads",
+      );
+    }
+    return Array.from(transaction.all(sql, parameters));
   } catch (error) {
     if (
       error instanceof CommandAdjudicationRepositoryConflictError ||
@@ -443,6 +562,29 @@ function rawRow(value: unknown, keys: readonly string[], field: string): Unknown
 
 function digestBytes(bytes: Uint8Array): A1Digest {
   return parseA1Digest(createHash("sha256").update(bytes).digest("base64url"));
+}
+
+function allocateA1DeliveryAttemptId(
+  randomBytes: ((byteLength: number) => Uint8Array) | undefined,
+): A1SafeId {
+  let bytes: Uint8Array;
+  try {
+    bytes = Uint8Array.from((randomBytes ?? secureRandomBytes)(16));
+  } catch {
+    throw new HostStateContractError(
+      "command adjudication randomBytes failed to allocate a delivery attempt",
+    );
+  }
+  try {
+    if (bytes.byteLength !== 16) {
+      throw new HostStateContractError(
+        "command adjudication randomBytes must return exactly the requested byte length",
+      );
+    }
+    return parseA1SafeId(`rda_${base64urlEncode(bytes)}`, "resultDelivery.deliveryAttemptId");
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 function artifactTransaction(transaction: HostStateRepositorySqlTransaction) {
@@ -725,6 +867,184 @@ function reservationFromRow(value: unknown): ServerSignatureReservationRecord {
   });
 }
 
+const ACCEPTANCE_ROW_KEYS = [
+  "collaboration_server_id",
+  "accepted_at_journal_seq",
+  "signed_record_digest",
+  "signer_identity_key_id",
+  "signer_key_generation",
+  "signer_scope_certificate_id",
+  "signer_sequence",
+  "accepted_at_ms",
+  "historical_reattestation_id",
+] as const;
+
+function acceptanceFromRow(value: unknown): ServerSignedRecordAcceptanceRecord {
+  const row = rawRow(value, ACCEPTANCE_ROW_KEYS, "serverSignedRecordAcceptance");
+  return parseServerSignedRecordAcceptanceRecord({
+    collaborationServerId: row.collaboration_server_id,
+    acceptedAtJournalSeq: row.accepted_at_journal_seq,
+    signedRecordDigest: row.signed_record_digest,
+    signerIdentityKeyId: row.signer_identity_key_id,
+    signerKeyGeneration: row.signer_key_generation,
+    signerScopeCertificateId: row.signer_scope_certificate_id,
+    signerSequence: row.signer_sequence,
+    acceptedAtMs: row.accepted_at_ms,
+    historicalReattestationId: row.historical_reattestation_id,
+  });
+}
+
+const COMMON_RESULT_ROW_KEYS = [
+  "command_result_id",
+  "collaboration_server_id",
+  "command_id",
+  "canonical_command_record_digest",
+  "result_version",
+  "supersedes_command_result_id",
+  "source_kind",
+  "source_ref",
+  "scope_kind",
+  "logical_chat_id",
+  "target_logical_chat_id",
+  "command_seq",
+  "disposition",
+  "canonical_payload_schema_id",
+  "canonical_payload_ref",
+  "canonical_payload_digest",
+  "command_result_preparation_id",
+  "compound_signing_group_id",
+  "signer_sequence",
+  "server_key_generation",
+  "signer_identity_key_id",
+  "signer_scope_certificate_id",
+  "signature_algorithm",
+  "signature",
+  "signed_record_digest",
+  "accepted_at_journal_seq",
+  "created_at_ms",
+  "finalized_at_ms",
+] as const;
+
+function commonResultFromRow(value: unknown): CollaborationCommandResultRecord {
+  const row = rawRow(value, COMMON_RESULT_ROW_KEYS, "collaborationCommandResult");
+  return parseCollaborationCommandResultRecord({
+    commandResultId: row.command_result_id,
+    collaborationServerId: row.collaboration_server_id,
+    commandId: row.command_id,
+    canonicalCommandRecordDigest: row.canonical_command_record_digest,
+    resultVersion: row.result_version,
+    supersedesCommandResultId: row.supersedes_command_result_id,
+    sourceKind: row.source_kind,
+    sourceRef: row.source_ref,
+    scopeKind: row.scope_kind,
+    logicalChatId: row.logical_chat_id,
+    targetLogicalChatId: row.target_logical_chat_id,
+    commandSeq: row.command_seq,
+    disposition: row.disposition,
+    canonicalPayloadSchemaId: row.canonical_payload_schema_id,
+    canonicalPayloadRef: row.canonical_payload_ref,
+    canonicalPayloadDigest: row.canonical_payload_digest,
+    commandResultPreparationId: row.command_result_preparation_id,
+    compoundSigningGroupId: row.compound_signing_group_id,
+    signerSequence: row.signer_sequence,
+    serverKeyGeneration: row.server_key_generation,
+    signerIdentityKeyId: row.signer_identity_key_id,
+    signerScopeCertificateId: row.signer_scope_certificate_id,
+    signatureAlgorithm: row.signature_algorithm,
+    signature: row.signature,
+    signedRecordDigest: row.signed_record_digest,
+    acceptedAtJournalSeq: row.accepted_at_journal_seq,
+    createdAtMs: row.created_at_ms,
+    finalizedAtMs: row.finalized_at_ms,
+  });
+}
+
+const TERMINAL_RESULT_ROW_KEYS = [
+  "stable_semantic_result_id",
+  "collaboration_server_id",
+  "broker_route_id",
+  "command_id",
+  "command_result_id",
+  "accepted_ingress_delivery_attempt_id",
+  "trigger_ingress_observation_id",
+  "initial_result_delivery_id",
+  "semantic_result_record_kind",
+  "semantic_result_payload_schema_id",
+  "semantic_result_payload_ref",
+  "semantic_result_payload_artifact_digest",
+  "stored_semantic_result_digest",
+  "adjudication_state",
+  "finalization_coordinator_lease_id",
+  "finalization_coordinator_epoch",
+  "terminal_at_ms",
+] as const;
+
+function terminalResultFromRow(value: unknown): A1IngressTerminalResultRecord {
+  const row = rawRow(value, TERMINAL_RESULT_ROW_KEYS, "a1IngressTerminalResult");
+  return parseA1IngressTerminalResultRecord({
+    stableSemanticResultId: row.stable_semantic_result_id,
+    collaborationServerId: row.collaboration_server_id,
+    brokerRouteId: row.broker_route_id,
+    commandId: row.command_id,
+    commandResultId: row.command_result_id,
+    acceptedIngressDeliveryAttemptId: row.accepted_ingress_delivery_attempt_id,
+    triggerIngressObservationId: row.trigger_ingress_observation_id,
+    initialResultDeliveryId: row.initial_result_delivery_id,
+    semanticResultRecordKind: row.semantic_result_record_kind,
+    semanticResultPayloadSchemaId: row.semantic_result_payload_schema_id,
+    semanticResultPayloadRef: row.semantic_result_payload_ref,
+    semanticResultPayloadArtifactDigest: row.semantic_result_payload_artifact_digest,
+    storedSemanticResultDigest: row.stored_semantic_result_digest,
+    adjudicationState: row.adjudication_state,
+    finalizationCoordinatorLeaseId: row.finalization_coordinator_lease_id,
+    finalizationCoordinatorEpoch: row.finalization_coordinator_epoch,
+    terminalAtMs: row.terminal_at_ms,
+  });
+}
+
+const RESULT_DELIVERY_ROW_KEYS = [
+  "result_delivery_id",
+  "stable_semantic_result_id",
+  "source_kind",
+  "source_ref",
+  "command_result_id",
+  "trigger_ingress_observation_id",
+  "broker_route_id",
+  "target_kind",
+  "target_ref",
+  "delivery_attempt_id",
+  "semantic_result_record_kind",
+  "semantic_result_payload_schema_id",
+  "semantic_result_payload_ref",
+  "semantic_result_payload_artifact_digest",
+  "stored_semantic_result_digest",
+  "state",
+  "created_at_ms",
+] as const;
+
+function resultDeliveryFromRow(value: unknown): A1IngressResultDeliveryRecord {
+  const row = rawRow(value, RESULT_DELIVERY_ROW_KEYS, "a1IngressResultDelivery");
+  return parseA1IngressResultDeliveryRecord({
+    resultDeliveryId: row.result_delivery_id,
+    stableSemanticResultId: row.stable_semantic_result_id,
+    sourceKind: row.source_kind,
+    sourceRef: row.source_ref,
+    commandResultId: row.command_result_id,
+    triggerIngressObservationId: row.trigger_ingress_observation_id,
+    brokerRouteId: row.broker_route_id,
+    targetKind: row.target_kind,
+    targetRef: row.target_ref,
+    deliveryAttemptId: row.delivery_attempt_id,
+    semanticResultRecordKind: row.semantic_result_record_kind,
+    semanticResultPayloadSchemaId: row.semantic_result_payload_schema_id,
+    semanticResultPayloadRef: row.semantic_result_payload_ref,
+    semanticResultPayloadArtifactDigest: row.semantic_result_payload_artifact_digest,
+    storedSemanticResultDigest: row.stored_semantic_result_digest,
+    state: row.state,
+    createdAtMs: row.created_at_ms,
+  });
+}
+
 interface CurrentAuthority {
   readonly collaborationServerId: CollaborationServerId;
   readonly machineIdentityId: string;
@@ -942,6 +1262,260 @@ function findAwaitingIngress(
     [stableSemanticResultId],
   );
   return row === undefined ? null : awaitingIngressFromRow(row);
+}
+
+interface FinalizationIngress {
+  readonly stableSemanticResultId: A1SafeId;
+  readonly brokerRouteId: A1SafeId;
+  readonly collaborationServerId: CollaborationServerId;
+  readonly scopeKind: "server_control" | "chat";
+  readonly logicalChatId: LogicalChatId | null;
+  readonly sourceEventNamespaceId: A1SafeId;
+  readonly messageId: A1SafeId;
+  readonly recordKind: "user" | "new_chat";
+  readonly acceptedDeliveryAttemptId: A1SafeId;
+  readonly expectedParts: number;
+  readonly sourcePayloadSchemaId: string;
+  readonly canonicalMessageDigest: A1Digest;
+  readonly sourceEventFingerprint: A1Digest;
+  readonly firstIngressGeneration: number;
+  readonly firstIngressFrameIndex: number;
+  readonly state: "awaiting_order" | "quarantined_collision";
+}
+
+function finalizationIngressFromRow(value: unknown): FinalizationIngress {
+  const row = rawRow(
+    value,
+    [
+      "stable_semantic_result_id",
+      "broker_route_id",
+      "collaboration_server_id",
+      "route_kind",
+      "logical_chat_id",
+      "source_event_namespace_id",
+      "message_id",
+      "record_kind",
+      "accepted_delivery_attempt_id",
+      "expected_parts",
+      "source_payload_schema_id",
+      "canonical_message_digest",
+      "source_event_fingerprint",
+      "first_ingress_generation",
+      "first_ingress_frame_index",
+      "state",
+    ],
+    "finalizationIngressResult",
+  );
+  if (row.state !== "awaiting_order" && row.state !== "quarantined_collision") {
+    throw new CommandAdjudicationRepositoryConflictError(
+      "signed command source is no longer retained in a finalizable ingress state",
+    );
+  }
+  if (row.accepted_delivery_attempt_id === null) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "signed command source lost its accepted delivery attempt",
+    );
+  }
+  const scopeKind =
+    row.route_kind === "server_control"
+      ? "server_control"
+      : row.route_kind === "chat"
+        ? "chat"
+        : null;
+  const recordKind =
+    row.record_kind === "new_chat" ? "new_chat" : row.record_kind === "user" ? "user" : null;
+  if (
+    scopeKind === null ||
+    recordKind === null ||
+    (scopeKind === "server_control" &&
+      (row.logical_chat_id !== null || recordKind !== "new_chat")) ||
+    (scopeKind === "chat" && (row.logical_chat_id === null || recordKind !== "user"))
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "signed command source scope or record kind is invalid",
+    );
+  }
+  return frozen({
+    stableSemanticResultId: semanticResultId(
+      row.stable_semantic_result_id,
+      "finalizationIngressResult.stableSemanticResultId",
+    ),
+    brokerRouteId: prefixedRepositoryId(
+      row.broker_route_id,
+      "rcr_",
+      "finalizationIngressResult.brokerRouteId",
+    ),
+    collaborationServerId: parseA1CanonicalId(
+      "collaborationServer",
+      row.collaboration_server_id,
+      "finalizationIngressResult.collaborationServerId",
+    ),
+    scopeKind,
+    logicalChatId:
+      row.logical_chat_id === null
+        ? null
+        : parseA1CanonicalId(
+            "logicalChat",
+            row.logical_chat_id,
+            "finalizationIngressResult.logicalChatId",
+          ),
+    sourceEventNamespaceId: parseA1SafeId(
+      row.source_event_namespace_id,
+      "finalizationIngressResult.sourceEventNamespaceId",
+    ),
+    messageId: parseA1SafeId(row.message_id, "finalizationIngressResult.messageId"),
+    recordKind,
+    acceptedDeliveryAttemptId: parseA1SafeId(
+      row.accepted_delivery_attempt_id,
+      "finalizationIngressResult.acceptedDeliveryAttemptId",
+    ),
+    expectedParts: parseNonNegativeSafeInteger(
+      row.expected_parts,
+      "finalizationIngressResult.expectedParts",
+    ),
+    sourcePayloadSchemaId: String(row.source_payload_schema_id),
+    canonicalMessageDigest: parseA1Digest(
+      row.canonical_message_digest,
+      "finalizationIngressResult.canonicalMessageDigest",
+    ),
+    sourceEventFingerprint: parseA1Digest(
+      row.source_event_fingerprint,
+      "finalizationIngressResult.sourceEventFingerprint",
+    ),
+    firstIngressGeneration: parseNonNegativeSafeInteger(
+      row.first_ingress_generation,
+      "finalizationIngressResult.firstIngressGeneration",
+    ),
+    firstIngressFrameIndex: parseNonNegativeSafeInteger(
+      row.first_ingress_frame_index,
+      "finalizationIngressResult.firstIngressFrameIndex",
+    ),
+    state: row.state,
+  });
+}
+
+function findFinalizationIngress(
+  transaction: HostStateRepositorySqlTransaction,
+  stableSemanticResultId: A1SafeId,
+): FinalizationIngress | null {
+  const value = sqlGet(
+    transaction,
+    `SELECT stable_semantic_result_id, broker_route_id, collaboration_server_id,
+            route_kind, logical_chat_id, source_event_namespace_id, message_id,
+            record_kind, accepted_delivery_attempt_id, expected_parts,
+            source_payload_schema_id, canonical_message_digest,
+            source_event_fingerprint, first_ingress_generation,
+            first_ingress_frame_index, state
+       FROM authenticated_ingress_results
+      WHERE stable_semantic_result_id = ? LIMIT 1`,
+    [stableSemanticResultId],
+  );
+  return value === undefined ? null : finalizationIngressFromRow(value);
+}
+
+interface CompletionSelection {
+  readonly triggerIngressObservationId: A1SafeId;
+  readonly terminalGeneration: number;
+  readonly terminalFrameIndex: number;
+}
+
+function selectCompletionObservation(
+  transaction: HostStateRepositorySqlTransaction,
+  ingress: FinalizationIngress,
+): CompletionSelection {
+  const candidate = rawRow(
+    sqlGet(
+      transaction,
+      `SELECT expected_parts, received_parts, state
+         FROM ingress_delivery_candidates
+        WHERE broker_route_id = ? AND stable_semantic_result_id = ?
+          AND delivery_attempt_id = ? LIMIT 1`,
+      [ingress.brokerRouteId, ingress.stableSemanticResultId, ingress.acceptedDeliveryAttemptId],
+    ),
+    ["expected_parts", "received_parts", "state"],
+    "acceptedIngressCandidate",
+  );
+  if (
+    candidate.state !== "complete" ||
+    candidate.expected_parts !== ingress.expectedParts ||
+    candidate.received_parts !== ingress.expectedParts
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "accepted ingress candidate is not exactly complete",
+    );
+  }
+  const observations = sqlAll(
+    transaction,
+    `SELECT observation.ingress_observation_id, observation.delivery_attempt_id,
+            observation.channel_generation, observation.frame_index,
+            observation.part, observation.parts, observation.disposition
+       FROM authenticated_ingress_observations AS observation
+       JOIN authenticated_ingress_parts AS part
+         ON part.broker_route_id = observation.broker_route_id
+        AND part.stable_semantic_result_id = observation.stable_semantic_result_id
+        AND part.delivery_attempt_id = observation.delivery_attempt_id
+        AND part.part = observation.part
+        AND part.parts = observation.parts
+        AND part.first_ingress_generation = observation.channel_generation
+        AND part.first_ingress_frame_index = observation.frame_index
+      WHERE observation.broker_route_id = ?
+        AND observation.stable_semantic_result_id = ?
+        AND observation.delivery_attempt_id = ?
+        AND observation.disposition = 'new_part'
+      ORDER BY observation.part`,
+    [ingress.brokerRouteId, ingress.stableSemanticResultId, ingress.acceptedDeliveryAttemptId],
+  );
+  const selected = selectA1CompletionObservation({
+    acceptedDeliveryAttemptId: ingress.acceptedDeliveryAttemptId,
+    expectedParts: ingress.expectedParts,
+    observations: observations.map((value) => {
+      const row = rawRow(
+        value,
+        [
+          "ingress_observation_id",
+          "delivery_attempt_id",
+          "channel_generation",
+          "frame_index",
+          "part",
+          "parts",
+          "disposition",
+        ],
+        "acceptedIngressCompletionObservation",
+      );
+      if (row.disposition !== "new_part") {
+        throw new CommandAdjudicationRepositoryPersistenceError(
+          "accepted completion observation is not a newly retained part",
+        );
+      }
+      return {
+        ingressObservationId: String(row.ingress_observation_id),
+        deliveryAttemptId: String(row.delivery_attempt_id),
+        cursor: {
+          version: 1,
+          channelGeneration: parseNonNegativeSafeInteger(
+            row.channel_generation,
+            "acceptedIngressCompletionObservation.channelGeneration",
+          ),
+          frameIndex: parseNonNegativeSafeInteger(
+            row.frame_index,
+            "acceptedIngressCompletionObservation.frameIndex",
+          ),
+        },
+        part: parseNonNegativeSafeInteger(row.part, "acceptedIngressCompletionObservation.part"),
+        parts: parseNonNegativeSafeInteger(row.parts, "acceptedIngressCompletionObservation.parts"),
+        disposition: "new_part",
+      } as const;
+    }),
+  });
+  return frozen({
+    triggerIngressObservationId: prefixedRepositoryId(
+      selected.triggerIngressObservationId,
+      "rio_",
+      "completionSelection.triggerIngressObservationId",
+    ),
+    terminalGeneration: selected.terminalIngressCursor.channelGeneration,
+    terminalFrameIndex: selected.terminalIngressCursor.frameIndex,
+  });
 }
 
 function assertRouteHeadEligible(
@@ -1186,6 +1760,90 @@ function signedResultDigest(
   }
 }
 
+interface PreparedSemanticResult {
+  readonly recordKind: A1SemanticResultRecordKind;
+  readonly payloadSchemaId: A1SemanticResultPayloadSchemaId;
+  readonly payloadBytes: Uint8Array;
+  readonly payloadArtifactDigest: A1Digest;
+  readonly storedSemanticResultDigest: A1Digest;
+}
+
+function prepareRejectedSemanticResult(
+  ingress: FinalizationIngress,
+  command: CollaborationCommandRecord,
+): PreparedSemanticResult {
+  if (
+    command.commandSeq === null ||
+    command.disposition !== "rejected" ||
+    command.sourceRef !== ingress.stableSemanticResultId ||
+    command.sourceEventId !== ingress.messageId ||
+    command.scopeKind !== ingress.scopeKind ||
+    command.logicalChatId !== ingress.logicalChatId
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "signed rejected command no longer matches its retained ingress source",
+    );
+  }
+  const recordKind: A1SemanticResultRecordKind =
+    ingress.recordKind === "new_chat" ? "chat_creation_result" : "action_result";
+  const payloadSchemaId: A1SemanticResultPayloadSchemaId =
+    recordKind === "chat_creation_result"
+      ? A1_CHAT_CREATION_RESULT_PAYLOAD_SCHEMA_ID
+      : A1_ACTION_RESULT_PAYLOAD_SCHEMA_ID;
+  const payloadBytes =
+    recordKind === "chat_creation_result"
+      ? encodeA1RejectedChatCreationResultPayloadV1Bytes({
+          v: 1,
+          resultId: ingress.stableSemanticResultId,
+          sourceMsgId: ingress.messageId,
+          decision: "rejected",
+          targetLogicalChatId: null,
+          commandSeq: command.commandSeq,
+        })
+      : encodeA1RejectedActionResultPayloadV1Bytes({
+          v: 1,
+          resultId: ingress.stableSemanticResultId,
+          sourceMsgId: ingress.messageId,
+          sourceRecordKind: ingress.recordKind,
+          decision: "rejected",
+          commandSeq: command.commandSeq,
+        });
+  const storedDigestPreimage = canonicalA1StoredSemanticResultPreimage({
+    storedSemanticResultSchemaId: payloadSchemaId,
+    exactCompactUtf8Payload: payloadBytes,
+  });
+  try {
+    return frozen({
+      recordKind,
+      payloadSchemaId,
+      payloadBytes,
+      payloadArtifactDigest: digestBytes(payloadBytes),
+      storedSemanticResultDigest: digestBytes(storedDigestPreimage),
+    });
+  } finally {
+    storedDigestPreimage.fill(0);
+  }
+}
+
+function deriveResultDeliveryId(
+  stableSemanticResultId: A1SafeId,
+  triggerIngressObservationId: A1SafeId,
+): A1SafeId {
+  const preimage = canonicalA1ResultDeliveryIdPreimage({
+    ingressResultId: stableSemanticResultId,
+    triggerIngressObservationId,
+  });
+  try {
+    return prefixedRepositoryId(
+      `rrd_${createHash("sha256").update(preimage).digest("base64url")}`,
+      "rrd_",
+      "resultDelivery.resultDeliveryId",
+    );
+  } finally {
+    preimage.fill(0);
+  }
+}
+
 function findReadyEntry(
   transaction: HostStateRepositorySqlTransaction,
   stableSemanticResultId: A1SafeId,
@@ -1265,6 +1923,72 @@ function findReservation(
     [collaborationServerId, signerSequence],
   );
   return value === undefined ? null : reservationFromRow(value);
+}
+
+function findAcceptanceBySignerSequence(
+  transaction: HostStateRepositorySqlTransaction,
+  collaborationServerId: CollaborationServerId,
+  signerSequence: number,
+): ServerSignedRecordAcceptanceRecord | null {
+  const value = sqlGet(
+    transaction,
+    `SELECT ${ACCEPTANCE_ROW_KEYS.join(", ")} FROM server_signed_record_acceptances
+      WHERE collaboration_server_id = ? AND signer_sequence = ? LIMIT 1`,
+    [collaborationServerId, signerSequence],
+  );
+  return value === undefined ? null : acceptanceFromRow(value);
+}
+
+function findCommonResult(
+  transaction: HostStateRepositorySqlTransaction,
+  commandResultId: A1SafeId,
+): CollaborationCommandResultRecord | null {
+  const value = sqlGet(
+    transaction,
+    `SELECT ${COMMON_RESULT_ROW_KEYS.join(", ")} FROM collaboration_command_results
+      WHERE command_result_id = ? LIMIT 1`,
+    [commandResultId],
+  );
+  return value === undefined ? null : commonResultFromRow(value);
+}
+
+function findTerminalResult(
+  transaction: HostStateRepositorySqlTransaction,
+  stableSemanticResultId: A1SafeId,
+): A1IngressTerminalResultRecord | null {
+  const value = sqlGet(
+    transaction,
+    `SELECT ${TERMINAL_RESULT_ROW_KEYS.join(", ")} FROM a1_ingress_terminal_results
+      WHERE stable_semantic_result_id = ? LIMIT 1`,
+    [stableSemanticResultId],
+  );
+  return value === undefined ? null : terminalResultFromRow(value);
+}
+
+function findResultDelivery(
+  transaction: HostStateRepositorySqlTransaction,
+  resultDeliveryId: A1SafeId,
+): A1IngressResultDeliveryRecord | null {
+  const value = sqlGet(
+    transaction,
+    `SELECT ${RESULT_DELIVERY_ROW_KEYS.join(", ")} FROM a1_ingress_result_deliveries
+      WHERE result_delivery_id = ? LIMIT 1`,
+    [resultDeliveryId],
+  );
+  return value === undefined ? null : resultDeliveryFromRow(value);
+}
+
+function findResultDeliveryByCommandResult(
+  transaction: HostStateRepositorySqlTransaction,
+  commandResultId: A1SafeId,
+): A1IngressResultDeliveryRecord | null {
+  const value = sqlGet(
+    transaction,
+    `SELECT ${RESULT_DELIVERY_ROW_KEYS.join(", ")} FROM a1_ingress_result_deliveries
+      WHERE command_result_id = ? LIMIT 1`,
+    [commandResultId],
+  );
+  return value === undefined ? null : resultDeliveryFromRow(value);
 }
 
 function putCanonicalArtifact(
@@ -1759,7 +2483,7 @@ function assertExactResultPayload(
   const command = findCommand(transaction, preparation.commandId);
   if (
     command === null ||
-    command.state !== "decision_reserved" ||
+    (command.state !== "decision_reserved" && command.state !== "decided") ||
     command.canonicalCommandRecordDigest !== preparation.canonicalCommandRecordDigest
   ) {
     throw new CommandAdjudicationRepositoryPersistenceError(
@@ -1828,6 +2552,458 @@ function verifyCommandResultSignature(
     payloadBytes.fill(0);
     signatureBytes.fill(0);
   }
+}
+
+interface SignedFinalizationSource {
+  readonly command: CollaborationCommandRecord;
+  readonly adjudication: A1IngressAdjudicationRecord;
+  readonly ingress: FinalizationIngress;
+  readonly preparation: CollaborationCommandResultPreparationRecord;
+  readonly signingGroup: CollaborationCommandCompoundSigningGroupRecord;
+  readonly signatureReservation: ServerSignatureReservationRecord;
+  readonly signer: CommandSignerEvidence;
+}
+
+function requireSignedFinalizationSource(
+  transaction: HostStateRepositorySqlTransaction,
+  machineIdentityId: string,
+  request: FinalizeSignedRejectedCommandResultRequest,
+): SignedFinalizationSource {
+  const command = findCommand(transaction, request.expectedCommandId);
+  if (command === null) {
+    throw new CommandAdjudicationRepositoryConflictError("finalization command is unknown");
+  }
+  if (
+    (command.state !== "decision_reserved" && command.state !== "decided") ||
+    command.disposition !== "rejected" ||
+    command.commandSeq === null ||
+    command.canonicalCommandRecordDigest === null ||
+    command.decisionEvidenceRef === null ||
+    command.decisionEvidenceDigest === null ||
+    (command.state === "decision_reserved" && command.currentCommandResultId !== null) ||
+    (command.state === "decided" &&
+      command.currentCommandResultId !== request.expectedCommandResultId)
+  ) {
+    throw new CommandAdjudicationRepositoryConflictError(
+      "finalization command is not the exact frozen rejected decision",
+    );
+  }
+  const expectedResultId = deriveCollaborationCommandResultId(
+    command.collaborationServerId,
+    command.commandId,
+  );
+  if (expectedResultId !== request.expectedCommandResultId) {
+    throw new CommandAdjudicationRepositoryConflictError(
+      "finalization command result identity does not recompute",
+    );
+  }
+  const adjudication = findAdjudication(transaction, command.sourceRef);
+  if (
+    adjudication === null ||
+    (adjudication.state !== "deciding" && adjudication.state !== "terminal") ||
+    adjudication.commandId !== command.commandId ||
+    adjudication.commandSeq !== command.commandSeq ||
+    adjudication.disposition !== "rejected" ||
+    adjudication.commandResultId !== expectedResultId ||
+    adjudication.commandResultPreparationId !== request.expectedCommandResultPreparationId ||
+    (command.state === "decision_reserved") !== (adjudication.state === "deciding")
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "finalization command and ingress adjudication lifecycle are inconsistent",
+    );
+  }
+  const ingress = findFinalizationIngress(transaction, command.sourceRef);
+  if (
+    ingress === null ||
+    ingress.collaborationServerId !== command.collaborationServerId ||
+    ingress.scopeKind !== command.scopeKind ||
+    ingress.logicalChatId !== command.logicalChatId ||
+    ingress.sourceEventNamespaceId !== command.sourceEventNamespaceId ||
+    ingress.messageId !== command.sourceEventId ||
+    command.targetLogicalChatId !== ingress.logicalChatId
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "finalization command lost its exact retained ingress source",
+    );
+  }
+  const retainedIngress: AwaitingIngressResult = frozen({
+    stableSemanticResultId: ingress.stableSemanticResultId,
+    brokerRouteId: ingress.brokerRouteId,
+    collaborationServerId: ingress.collaborationServerId,
+    scopeKind: ingress.scopeKind,
+    logicalChatId: ingress.logicalChatId,
+    sourceEventNamespaceId: ingress.sourceEventNamespaceId,
+    messageId: ingress.messageId,
+    recordKind: ingress.recordKind,
+    acceptedDeliveryAttemptId: ingress.acceptedDeliveryAttemptId,
+    sourcePayloadSchemaId: ingress.sourcePayloadSchemaId,
+    canonicalMessageDigest: ingress.canonicalMessageDigest,
+    sourceEventFingerprint: ingress.sourceEventFingerprint,
+    firstIngressGeneration: ingress.firstIngressGeneration,
+    firstIngressFrameIndex: ingress.firstIngressFrameIndex,
+  });
+  const expectedCommandPayload = commonPayloadForRejectedIngress(retainedIngress);
+  const expectedSourceDigest = deriveSourceCommandIdentityDigest(
+    machineIdentityId,
+    retainedIngress,
+  );
+  const expectedCommandId = deriveCommandId(command.collaborationServerId, expectedSourceDigest);
+  const commandPayload = readCanonicalArtifact(
+    transaction,
+    command.collaborationServerId,
+    command.canonicalCommandPayloadRef,
+    expectedCommandPayload.schemaId,
+    expectedCommandPayload.digest,
+  );
+  try {
+    if (
+      command.commandId !== expectedCommandId ||
+      command.sourceCommandIdentityDigest !== expectedSourceDigest ||
+      command.mutationFamily !== expectedCommandPayload.mutationFamily ||
+      command.canonicalCommandPayloadSchemaId !== expectedCommandPayload.schemaId ||
+      command.canonicalCommandPayloadDigest !== expectedCommandPayload.digest ||
+      !equalSnapshot(commandPayload, expectedCommandPayload.bytes)
+    ) {
+      throw new CommandAdjudicationRepositoryPersistenceError(
+        "finalization command does not recompute from retained ingress evidence",
+      );
+    }
+  } finally {
+    commandPayload.destroy();
+    expectedCommandPayload.bytes.fill(0);
+  }
+  const decisionEvidenceBytes = canonicalA1CommandDecisionEvidence(
+    rejectedDecisionEvidence(command),
+  );
+  const decisionEvidence = readCanonicalArtifact(
+    transaction,
+    command.collaborationServerId,
+    command.decisionEvidenceRef,
+    A1_COMMAND_DECISION_EVIDENCE_SCHEMA_ID,
+    command.decisionEvidenceDigest,
+  );
+  try {
+    if (
+      digestBytes(decisionEvidenceBytes) !== command.decisionEvidenceDigest ||
+      !equalSnapshot(decisionEvidence, decisionEvidenceBytes)
+    ) {
+      throw new CommandAdjudicationRepositoryPersistenceError(
+        "finalization decision evidence does not recompute",
+      );
+    }
+  } finally {
+    decisionEvidence.destroy();
+    decisionEvidenceBytes.fill(0);
+  }
+  const commandRecordBytes = canonicalA1CommandRecord(
+    commandContractRecord(command, command.commandSeq, "rejected", command.decisionEvidenceDigest),
+  );
+  try {
+    if (digestBytes(commandRecordBytes) !== command.canonicalCommandRecordDigest) {
+      throw new CommandAdjudicationRepositoryPersistenceError(
+        "finalization canonical command record does not recompute",
+      );
+    }
+  } finally {
+    commandRecordBytes.fill(0);
+  }
+  const preparation = findPreparation(transaction, request.expectedCommandResultPreparationId);
+  if (
+    preparation === null ||
+    preparation.state !== "signed" ||
+    preparation.commandId !== command.commandId ||
+    preparation.commandResultId !== expectedResultId ||
+    preparation.canonicalCommandRecordDigest !== command.canonicalCommandRecordDigest
+  ) {
+    throw new CommandAdjudicationRepositoryConflictError(
+      "finalization requires the exact signed command-result preparation",
+    );
+  }
+  const signingGroup = findGroup(transaction, preparation.compoundSigningGroupId);
+  const signatureReservation = findReservation(
+    transaction,
+    preparation.collaborationServerId,
+    preparation.signerSequence,
+  );
+  if (
+    signingGroup === null ||
+    signatureReservation === null ||
+    signingGroup.state !== "result_signed" ||
+    signingGroup.resultPreparationRef !== preparation.commandResultPreparationId ||
+    signingGroup.commandResultId !== preparation.commandResultId ||
+    signingGroup.commandId !== preparation.commandId ||
+    signingGroup.signingLeaseId !== preparation.signingLeaseId ||
+    signatureReservation.state !== "signed" ||
+    signatureReservation.signingLeaseId !== preparation.signingLeaseId ||
+    signatureReservation.purpose !== "collaboration_command_result" ||
+    signatureReservation.canonicalPayloadSchemaId !== A1_COMMAND_RESULT_SCHEMA_ID ||
+    signatureReservation.canonicalPayloadRef !== preparation.canonicalPayloadRef ||
+    signatureReservation.canonicalPayloadDigest !== preparation.canonicalPayloadDigest ||
+    signatureReservation.signedArtifactType !== COMMAND_RESULT_PREPARATION_ARTIFACT_TYPE ||
+    signatureReservation.signedArtifactId !== preparation.commandResultPreparationId ||
+    signatureReservation.signature === null ||
+    signatureReservation.signedRecordDigest !== request.expectedSignedRecordDigest
+  ) {
+    throw new CommandAdjudicationRepositoryConflictError(
+      "finalization signed reservation graph does not match the request",
+    );
+  }
+  const signer = requireCommandSignerEvidence(transaction, preparation);
+  const canonicalPayload = assertExactResultPayload(transaction, preparation, signer);
+  try {
+    verifyCommandResultSignature(
+      signer.publicKey,
+      canonicalPayload,
+      signatureReservation.signature,
+    );
+  } finally {
+    canonicalPayload.destroy();
+  }
+  if (
+    signedResultDigest(
+      preparation.canonicalPayloadDigest,
+      signer.identityKeyId,
+      signer.keyGeneration,
+      preparation.signerSequence,
+      signatureReservation.signature,
+    ) !== request.expectedSignedRecordDigest
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "finalization signed command-result digest does not recompute",
+    );
+  }
+  return frozen({
+    command,
+    adjudication,
+    ingress,
+    preparation,
+    signingGroup,
+    signatureReservation,
+    signer,
+  });
+}
+
+function assertExactFinalizedRejectedResult(
+  transaction: HostStateRepositorySqlTransaction,
+  machineIdentityId: string,
+  request: FinalizeSignedRejectedCommandResultRequest,
+  replayed: boolean,
+): FinalizedRejectedCommandResult | null {
+  const commonResult = findCommonResult(transaction, request.expectedCommandResultId);
+  if (commonResult === null) {
+    const command = findCommand(transaction, request.expectedCommandId);
+    if (command === null) return null;
+    const adjudication = findAdjudication(transaction, command.sourceRef);
+    const preparation = findPreparation(transaction, request.expectedCommandResultPreparationId);
+    const acceptance =
+      preparation === null
+        ? null
+        : findAcceptanceBySignerSequence(
+            transaction,
+            preparation.collaborationServerId,
+            preparation.signerSequence,
+          );
+    const terminalResult = findTerminalResult(transaction, command.sourceRef);
+    const delivery = findResultDeliveryByCommandResult(
+      transaction,
+      request.expectedCommandResultId,
+    );
+    if (
+      command.state === "decided" ||
+      adjudication?.state === "terminal" ||
+      acceptance !== null ||
+      terminalResult !== null ||
+      delivery !== null
+    ) {
+      throw new CommandAdjudicationRepositoryPersistenceError(
+        "finalized rejected command-result graph is partial",
+      );
+    }
+    return null;
+  }
+  const source = requireSignedFinalizationSource(transaction, machineIdentityId, request);
+  const signerAcceptance = findAcceptanceBySignerSequence(
+    transaction,
+    source.preparation.collaborationServerId,
+    source.preparation.signerSequence,
+  );
+  const terminalResult = findTerminalResult(transaction, source.ingress.stableSemanticResultId);
+  if (signerAcceptance === null || terminalResult === null) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "finalized rejected command-result graph is partial",
+    );
+  }
+  const resultDelivery = findResultDelivery(transaction, terminalResult.initialResultDeliveryId);
+  if (resultDelivery === null) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "finalized rejected command-result delivery is absent",
+    );
+  }
+  if (
+    source.command.state !== "decided" ||
+    source.command.currentCommandResultId !== commonResult.commandResultId ||
+    source.adjudication.state !== "terminal" ||
+    commonResult.commandResultId !== request.expectedCommandResultId ||
+    commonResult.commandId !== request.expectedCommandId ||
+    commonResult.commandResultPreparationId !== request.expectedCommandResultPreparationId ||
+    commonResult.collaborationServerId !== source.command.collaborationServerId ||
+    commonResult.canonicalCommandRecordDigest !== source.command.canonicalCommandRecordDigest ||
+    commonResult.sourceRef !== source.command.sourceRef ||
+    commonResult.scopeKind !== source.command.scopeKind ||
+    commonResult.logicalChatId !== source.command.logicalChatId ||
+    commonResult.targetLogicalChatId !== source.command.targetLogicalChatId ||
+    commonResult.commandSeq !== source.command.commandSeq ||
+    commonResult.canonicalPayloadRef !== source.preparation.canonicalPayloadRef ||
+    commonResult.canonicalPayloadDigest !== source.preparation.canonicalPayloadDigest ||
+    commonResult.compoundSigningGroupId !== source.preparation.compoundSigningGroupId ||
+    commonResult.signerSequence !== source.preparation.signerSequence ||
+    commonResult.serverKeyGeneration !== source.signer.keyGeneration ||
+    commonResult.signerIdentityKeyId !== source.signer.identityKeyId ||
+    commonResult.signerScopeCertificateId !== source.signer.scopeCertificateId ||
+    commonResult.signature !== source.signatureReservation.signature ||
+    commonResult.signedRecordDigest !== request.expectedSignedRecordDigest ||
+    commonResult.acceptedAtJournalSeq !== request.expectedAcceptedAtJournalSeq ||
+    commonResult.createdAtMs !== source.preparation.preparedAtMs ||
+    commonResult.finalizedAtMs !== terminalResult.terminalAtMs ||
+    signerAcceptance.collaborationServerId !== source.command.collaborationServerId ||
+    signerAcceptance.acceptedAtJournalSeq !== request.expectedAcceptedAtJournalSeq ||
+    signerAcceptance.signedRecordDigest !== request.expectedSignedRecordDigest ||
+    signerAcceptance.signerIdentityKeyId !== source.signer.identityKeyId ||
+    signerAcceptance.signerKeyGeneration !== source.signer.keyGeneration ||
+    signerAcceptance.signerScopeCertificateId !== source.signer.scopeCertificateId ||
+    signerAcceptance.signerSequence !== source.preparation.signerSequence ||
+    signerAcceptance.historicalReattestationId !== null ||
+    signerAcceptance.acceptedAtMs !== terminalResult.terminalAtMs
+  ) {
+    throw new CommandAdjudicationRepositoryConflictError(
+      "finalized common result or signer acceptance does not exactly match the request",
+    );
+  }
+  const acceptancePrefix = rawRow(
+    sqlGet(
+      transaction,
+      `SELECT COUNT(*) AS accepted_count,
+              MIN(accepted_at_journal_seq) AS minimum_seq
+         FROM server_signed_record_acceptances
+        WHERE collaboration_server_id = ? AND accepted_at_journal_seq <= ?`,
+      [source.command.collaborationServerId, request.expectedAcceptedAtJournalSeq],
+    ),
+    ["accepted_count", "minimum_seq"],
+    "signedRecordAcceptancePrefix",
+  );
+  if (
+    acceptancePrefix.accepted_count !== request.expectedAcceptedAtJournalSeq + 1 ||
+    acceptancePrefix.minimum_seq !== 0
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "signed-record acceptance journal is not a dense zero-based prefix",
+    );
+  }
+  const completion = selectCompletionObservation(transaction, source.ingress);
+  const expectedResultDeliveryId = deriveResultDeliveryId(
+    source.ingress.stableSemanticResultId,
+    completion.triggerIngressObservationId,
+  );
+  if (
+    terminalResult.stableSemanticResultId !== source.ingress.stableSemanticResultId ||
+    terminalResult.collaborationServerId !== source.command.collaborationServerId ||
+    terminalResult.brokerRouteId !== source.ingress.brokerRouteId ||
+    terminalResult.commandId !== source.command.commandId ||
+    terminalResult.commandResultId !== commonResult.commandResultId ||
+    terminalResult.acceptedIngressDeliveryAttemptId !== source.ingress.acceptedDeliveryAttemptId ||
+    terminalResult.triggerIngressObservationId !== completion.triggerIngressObservationId ||
+    terminalResult.initialResultDeliveryId !== expectedResultDeliveryId ||
+    resultDelivery.resultDeliveryId !== expectedResultDeliveryId ||
+    resultDelivery.stableSemanticResultId !== source.ingress.stableSemanticResultId ||
+    resultDelivery.sourceRef !== source.ingress.stableSemanticResultId ||
+    resultDelivery.commandResultId !== commonResult.commandResultId ||
+    resultDelivery.triggerIngressObservationId !== completion.triggerIngressObservationId ||
+    resultDelivery.brokerRouteId !== source.ingress.brokerRouteId ||
+    resultDelivery.targetRef !== source.ingress.brokerRouteId ||
+    resultDelivery.createdAtMs !== terminalResult.terminalAtMs
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "finalized terminal result or delivery identity does not recompute",
+    );
+  }
+  const coordinator = rawRow(
+    sqlGet(
+      transaction,
+      `SELECT acquired_at_ms, heartbeat_deadline_ms, released_at_ms
+         FROM coordinator_leases
+        WHERE coordinator_lease_id = ? AND collaboration_server_id = ?
+          AND coordinator_epoch = ? LIMIT 1`,
+      [
+        terminalResult.finalizationCoordinatorLeaseId,
+        terminalResult.collaborationServerId,
+        terminalResult.finalizationCoordinatorEpoch,
+      ],
+    ),
+    ["acquired_at_ms", "heartbeat_deadline_ms", "released_at_ms"],
+    "finalizationCoordinatorEvidence",
+  );
+  const acquiredAtMs = parseNonNegativeSafeInteger(
+    coordinator.acquired_at_ms,
+    "finalizationCoordinatorEvidence.acquiredAtMs",
+  );
+  const heartbeatDeadlineMs = parseNonNegativeSafeInteger(
+    coordinator.heartbeat_deadline_ms,
+    "finalizationCoordinatorEvidence.heartbeatDeadlineMs",
+  );
+  const releasedAtMs =
+    coordinator.released_at_ms === null
+      ? null
+      : parseNonNegativeSafeInteger(
+          coordinator.released_at_ms,
+          "finalizationCoordinatorEvidence.releasedAtMs",
+        );
+  if (
+    terminalResult.terminalAtMs < acquiredAtMs ||
+    terminalResult.terminalAtMs >= heartbeatDeadlineMs ||
+    (releasedAtMs !== null && terminalResult.terminalAtMs > releasedAtMs)
+  ) {
+    throw new CommandAdjudicationRepositoryPersistenceError(
+      "terminal result does not retain a valid finalization coordinator fence",
+    );
+  }
+  const semantic = prepareRejectedSemanticResult(source.ingress, source.command);
+  const semanticPayload = readCanonicalArtifact(
+    transaction,
+    source.command.collaborationServerId,
+    terminalResult.semanticResultPayloadRef,
+    semantic.payloadSchemaId,
+    semantic.payloadArtifactDigest,
+  );
+  try {
+    if (
+      terminalResult.semanticResultRecordKind !== semantic.recordKind ||
+      terminalResult.semanticResultPayloadSchemaId !== semantic.payloadSchemaId ||
+      terminalResult.semanticResultPayloadArtifactDigest !== semantic.payloadArtifactDigest ||
+      terminalResult.storedSemanticResultDigest !== semantic.storedSemanticResultDigest ||
+      resultDelivery.semanticResultRecordKind !== semantic.recordKind ||
+      resultDelivery.semanticResultPayloadSchemaId !== semantic.payloadSchemaId ||
+      resultDelivery.semanticResultPayloadRef !== terminalResult.semanticResultPayloadRef ||
+      resultDelivery.semanticResultPayloadArtifactDigest !== semantic.payloadArtifactDigest ||
+      resultDelivery.storedSemanticResultDigest !== semantic.storedSemanticResultDigest ||
+      !equalSnapshot(semanticPayload, semantic.payloadBytes)
+    ) {
+      throw new CommandAdjudicationRepositoryPersistenceError(
+        "terminal A1 semantic result payload does not exactly recompute",
+      );
+    }
+  } finally {
+    semanticPayload.destroy();
+    semantic.payloadBytes.fill(0);
+  }
+  return frozen({
+    command: source.command,
+    adjudication: source.adjudication,
+    commonResult,
+    signerAcceptance,
+    terminalResult,
+    resultDelivery,
+    replayed,
+  });
 }
 
 function exactReplacementResult(
@@ -2577,6 +3753,264 @@ class BoundCommandAdjudicationRepository implements CommandAdjudicationRepositor
       }
       return result;
     });
+  }
+
+  finalizeSignedRejectedCommandResult(
+    requestValue: FinalizeSignedRejectedCommandResultRequest,
+  ): FinalizedRejectedCommandResult {
+    const request = parseFinalizeRequest(requestValue);
+    return this.#executor.transaction((transaction) => {
+      const authority = requireCurrentAuthority(
+        transaction,
+        this.#machineIdentityId,
+        request.fence,
+        this.#nowMs,
+      );
+      const replay = assertExactFinalizedRejectedResult(
+        transaction,
+        this.#machineIdentityId,
+        request,
+        true,
+      );
+      if (replay !== null) return replay;
+      const source = requireSignedFinalizationSource(transaction, this.#machineIdentityId, request);
+      if (source.command.collaborationServerId !== authority.collaborationServerId) {
+        throw new CommandAdjudicationRepositoryConflictError(
+          "finalization command belongs to another fenced server",
+        );
+      }
+      const nextAcceptance = rawRow(
+        sqlGet(
+          transaction,
+          `SELECT COALESCE(MAX(accepted_at_journal_seq) + 1, 0) AS next_seq
+             FROM server_signed_record_acceptances
+            WHERE collaboration_server_id = ?`,
+          [authority.collaborationServerId],
+        ),
+        ["next_seq"],
+        "nextSignedRecordAcceptance",
+      );
+      if (
+        parseNonNegativeSafeInteger(
+          nextAcceptance.next_seq,
+          "nextSignedRecordAcceptance.nextSeq",
+        ) !== request.expectedAcceptedAtJournalSeq
+      ) {
+        throw new CommandAdjudicationRepositoryConflictError(
+          "signed-record acceptance journal sequence compare-and-swap failed",
+        );
+      }
+      if (
+        source.preparation.signedAtMs === null ||
+        source.signatureReservation.signedAtMs === null
+      ) {
+        throw new CommandAdjudicationRepositoryPersistenceError(
+          "signed finalization source has no signing timestamp",
+        );
+      }
+      const terminalAtMs = Math.max(
+        authority.nowMs,
+        source.preparation.signedAtMs,
+        source.signatureReservation.signedAtMs,
+        source.command.decidedAtMs ?? source.command.createdAtMs,
+      );
+      if (terminalAtMs >= authority.heartbeatDeadlineMs) {
+        throw new CommandAdjudicationStaleCoordinatorError();
+      }
+      const completion = selectCompletionObservation(transaction, source.ingress);
+      const resultDeliveryId = deriveResultDeliveryId(
+        source.ingress.stableSemanticResultId,
+        completion.triggerIngressObservationId,
+      );
+      const semantic = prepareRejectedSemanticResult(source.ingress, source.command);
+      let semanticPayloadRef: A1SafeId;
+      try {
+        semanticPayloadRef = putCanonicalArtifact(
+          transaction,
+          source.command.collaborationServerId,
+          semantic.payloadSchemaId,
+          semantic.payloadArtifactDigest,
+          semantic.payloadBytes,
+          this.#randomBytes,
+          terminalAtMs,
+        );
+      } finally {
+        semantic.payloadBytes.fill(0);
+      }
+      const deliveryAttemptId = allocateA1DeliveryAttemptId(this.#randomBytes);
+      runExactlyOne(
+        transaction,
+        `INSERT INTO collaboration_command_results (
+          command_result_id, collaboration_server_id, command_id,
+          canonical_command_record_digest, result_version,
+          supersedes_command_result_id, source_kind, source_ref, scope_kind,
+          logical_chat_id, target_logical_chat_id, command_seq, disposition,
+          canonical_payload_schema_id, canonical_payload_ref,
+          canonical_payload_digest, command_result_preparation_id,
+          compound_signing_group_id, signer_sequence, server_key_generation,
+          signer_identity_key_id, signer_scope_certificate_id,
+          signature_algorithm, signature, signed_record_digest,
+          accepted_at_journal_seq, created_at_ms, finalized_at_ms
+        ) VALUES (?, ?, ?, ?, 1, NULL, 'a1_ingress', ?, ?, ?, ?, ?, 'rejected',
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Ed25519', ?, ?, ?, ?, ?)`,
+        [
+          request.expectedCommandResultId,
+          source.command.collaborationServerId,
+          source.command.commandId,
+          source.command.canonicalCommandRecordDigest,
+          source.command.sourceRef,
+          source.command.scopeKind,
+          source.command.logicalChatId,
+          source.command.targetLogicalChatId,
+          source.command.commandSeq,
+          A1_COMMAND_RESULT_SCHEMA_ID,
+          source.preparation.canonicalPayloadRef,
+          source.preparation.canonicalPayloadDigest,
+          source.preparation.commandResultPreparationId,
+          source.preparation.compoundSigningGroupId,
+          source.preparation.signerSequence,
+          source.signer.keyGeneration,
+          source.signer.identityKeyId,
+          source.signer.scopeCertificateId,
+          source.signatureReservation.signature,
+          request.expectedSignedRecordDigest,
+          request.expectedAcceptedAtJournalSeq,
+          source.preparation.preparedAtMs,
+          terminalAtMs,
+        ],
+        "collaboration command result insert",
+      );
+      runExactlyOne(
+        transaction,
+        `INSERT INTO a1_ingress_terminal_results (
+          stable_semantic_result_id, collaboration_server_id, broker_route_id,
+          command_id, command_result_id, accepted_ingress_delivery_attempt_id,
+          trigger_ingress_observation_id, initial_result_delivery_id,
+          semantic_result_record_kind, semantic_result_payload_schema_id,
+          semantic_result_payload_ref, semantic_result_payload_artifact_digest,
+          stored_semantic_result_digest, finalization_coordinator_lease_id,
+          finalization_coordinator_epoch, adjudication_state, terminal_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'terminal', ?)`,
+        [
+          source.ingress.stableSemanticResultId,
+          source.command.collaborationServerId,
+          source.ingress.brokerRouteId,
+          source.command.commandId,
+          request.expectedCommandResultId,
+          source.ingress.acceptedDeliveryAttemptId,
+          completion.triggerIngressObservationId,
+          resultDeliveryId,
+          semantic.recordKind,
+          semantic.payloadSchemaId,
+          semanticPayloadRef,
+          semantic.payloadArtifactDigest,
+          semantic.storedSemanticResultDigest,
+          request.fence.coordinatorLeaseId,
+          request.fence.coordinatorEpoch,
+          terminalAtMs,
+        ],
+        "A1 ingress terminal result insert",
+      );
+      runExactlyOne(
+        transaction,
+        `INSERT INTO a1_ingress_result_deliveries (
+          result_delivery_id, stable_semantic_result_id, source_kind, source_ref,
+          command_result_id, trigger_ingress_observation_id, broker_route_id,
+          target_kind, target_ref, delivery_attempt_id,
+          semantic_result_record_kind, semantic_result_payload_schema_id,
+          semantic_result_payload_ref, semantic_result_payload_artifact_digest,
+          stored_semantic_result_digest, state, created_at_ms
+        ) VALUES (?, ?, 'a1_ingress', ?, ?, ?, ?, 'a1_broker', ?, ?, ?, ?, ?, ?, ?,
+                  'pending_seal', ?)`,
+        [
+          resultDeliveryId,
+          source.ingress.stableSemanticResultId,
+          source.ingress.stableSemanticResultId,
+          request.expectedCommandResultId,
+          completion.triggerIngressObservationId,
+          source.ingress.brokerRouteId,
+          source.ingress.brokerRouteId,
+          deliveryAttemptId,
+          semantic.recordKind,
+          semantic.payloadSchemaId,
+          semanticPayloadRef,
+          semantic.payloadArtifactDigest,
+          semantic.storedSemanticResultDigest,
+          terminalAtMs,
+        ],
+        "A1 ingress pending-seal result delivery insert",
+      );
+      runExactlyOne(
+        transaction,
+        `INSERT INTO server_signed_record_acceptances (
+          collaboration_server_id, accepted_at_journal_seq, signed_record_digest,
+          signer_identity_key_id, signer_key_generation,
+          signer_scope_certificate_id, signer_sequence, accepted_at_ms,
+          historical_reattestation_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+        [
+          source.command.collaborationServerId,
+          request.expectedAcceptedAtJournalSeq,
+          request.expectedSignedRecordDigest,
+          source.signer.identityKeyId,
+          source.signer.keyGeneration,
+          source.signer.scopeCertificateId,
+          source.preparation.signerSequence,
+          terminalAtMs,
+        ],
+        "command-result signer acceptance insert",
+      );
+      runExactlyOne(
+        transaction,
+        `UPDATE a1_ingress_adjudications
+            SET terminal_at_ms = ?, state = 'terminal'
+          WHERE stable_semantic_result_id = ? AND state = 'deciding'
+            AND command_id = ? AND command_result_id = ?
+            AND command_result_preparation_id = ?`,
+        [
+          terminalAtMs,
+          source.ingress.stableSemanticResultId,
+          source.command.commandId,
+          request.expectedCommandResultId,
+          request.expectedCommandResultPreparationId,
+        ],
+        "A1 ingress adjudication terminalization",
+      );
+      runExactlyOne(
+        transaction,
+        `UPDATE collaboration_commands
+            SET current_command_result_id = ?, state = 'decided'
+          WHERE command_id = ? AND collaboration_server_id = ?
+            AND state = 'decision_reserved' AND current_command_result_id IS NULL`,
+        [
+          request.expectedCommandResultId,
+          source.command.commandId,
+          source.command.collaborationServerId,
+        ],
+        "collaboration command final result",
+      );
+      const landed = assertExactFinalizedRejectedResult(
+        transaction,
+        this.#machineIdentityId,
+        request,
+        false,
+      );
+      if (landed === null) {
+        throw new CommandAdjudicationRepositoryPersistenceError(
+          "finalized rejected command-result graph disappeared in its transaction",
+        );
+      }
+      return landed;
+    });
+  }
+
+  reconcileFinalizedRejectedCommandResult(
+    requestValue: FinalizeSignedRejectedCommandResultRequest,
+  ): FinalizedRejectedCommandResult | null {
+    const request = parseFinalizeRequest(requestValue);
+    return this.#executor.transaction((transaction) =>
+      assertExactFinalizedRejectedResult(transaction, this.#machineIdentityId, request, true),
+    );
   }
 
   abortRejectedResultPreparation(

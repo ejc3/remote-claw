@@ -89,7 +89,7 @@
 > passages later in this historical document describe only the terminal Claude edge; outer layers
 > reconnect server/chat edges and never create another native app.
 >
-> A1.0 through dormant A1.7b1 have landed. A1.0 supplies the shared canonical writer and
+> A1.0 through dormant A1.8a0 have landed. A1.0 supplies the shared canonical writer and
 > host-state contracts; A1.1 supplies the Linux secure-SQLite kernel and verified protected artifacts;
 > A1.2 supplies schema v3 and its high-level server/project/chat/binding/edge/coordinator repository.
 > Migration `003-durable-host-records` has 81 ordered statements and digest
@@ -232,10 +232,32 @@
 > A1.7b1 ends at a signed-but-unaccepted preparation: command `decision_reserved`, A1 sidecar
 > `deciding`, preparation `signed`, group `result_signed`, and signer reservation `signed`. It has no
 > final common result, signer acceptance, ingress terminalization, source result/delivery outbox,
-> native attempt/effect, viewer projection, or production wiring. A1.8a must create final result +
-> acceptance + ingress terminal + source outbox/delivery atomically, and an admitted arm must create
-> its pinned attempt/front-door dispatch/effect gate in that same transaction. A1.7b1 and A1.8a form
-> one advertised capability gate; neither can enable a partial live path.
+> native attempt/effect, viewer projection, or production wiring within schema v10.
+>
+> A1.8a0 advances the dormant host through schema v11 migration
+> `011-a1-rejected-result-finalization`. Its 38 ordered statements are locked to digest
+> `SkkuAFJed-7GT9XyXXPCub7VFauqNY6eu0u4IQJEInc`; the exact 647-object manifest contains 73 tables,
+> 147 indexes, and 427 triggers. It adds exactly `collaboration_command_results`,
+> `a1_ingress_terminal_results`, and `a1_ingress_result_deliveries`. One transaction consumes only
+> the already-signed rejected/no-finalization-artifact preparation, inserts the immutable common
+> result plus next dense signer acceptance, moves the command and adjudication sidecar to
+> `decided`/`terminal`, stores the exact compact rejected `action_result` or
+> `chat_creation_result` artifact, and inserts one causal plaintext delivery intent in
+> `pending_seal`. The schema-v8 ingress row remains immutable evidence in `awaiting_order` or a later
+> `quarantined_collision`, no cursor advances, and the preparation/group/reservation stay
+> `signed`/`result_signed`/`signed`.
+>
+> Finalization intentionally does not require the source route to remain current or gap-free after
+> signing. A narrow takeover rule lets the exact current successor accept the predecessor-lease
+> signature only when it was validly stored before supersession and the same current key,
+> generation, certificate, and custody chain still hold; it does not widen generic superseded-lease,
+> rotation, retired-certificate, or historical-reattestation acceptance. A later successor signing
+> lease must be durably acquired strictly after that predecessor acceptance, including across a
+> same-millisecond wall-clock tie. `pending_seal` retains only
+> semantic payload refs/digests and immutable broker-route linkage. A1.8a0 implements no ciphertext,
+> output parts/signatures, claim/seal/publish, broker call, cursor movement, native attempt/effect,
+> viewer projection, driver operation, production wiring, or capability advertisement. Full A1.8a
+> still owns the admitted atomic arm and A1.8b owns sealing/publishing.
 >
 > Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
 > plain and help paths, trace mode, and the local `--rc-identity` action do not. A1.4 registration is
@@ -248,9 +270,9 @@
 > adapter; it signs the protected payload, obtains a fresh nonce-bound callable-port proof, and then
 > synchronously enters the closed transaction-local finalizer. No real driver performs durable owner registration, A1 binding activation, or root
 > activation, and no A1 remote mutation, inference, or live broker capability is enabled. The
-> A1.7b0 signer and A1.7b1 command adjudicator remain direct-only dormant host state. A1.8a atomic
-> result/acceptance/terminal/outbox/effect completion is next; later A1.8 work owns one-time dispatch
-> and evidence-only recovery.
+> The A1.7b0 signer, A1.7b1 command adjudicator, and A1.8a0 rejected finalizer remain direct-only
+> dormant host state. Full A1.8a admitted atomic arming is next; A1.8b owns sealing/publishing,
+> one-time dispatch, and evidence-only recovery.
 
 ## 1. What changes and why
 
@@ -1514,10 +1536,12 @@ call). See §14.)
   stopping at `awaiting_order`. A1.7b0 supplies the dormant server-signer prerequisite and
   current-server route-install compatibility. A1.7b1 now adds deterministic A1-source command
   identity, shared ready-journal position, global command order, a rejected decision, and a
-  signed-but-unaccepted result preparation. A1.8a must atomically add the immutable final result,
-  signer acceptance, ingress terminalization, source result/delivery outbox, and any admitted
-  attempt/front-door-dispatch/effect arm before any forward or result delivery; viewer-projection
-  `seq` remains explicitly separate.
+  signed-but-unaccepted result preparation. A1.8a0 now atomically closes that rejected-only arm into
+  an immutable common result, dense signer acceptance, logical ingress terminal overlay, exact
+  semantic artifact, and inert `pending_seal` delivery intent without advancing the ingress cursor or
+  requiring later route health. It neither seals nor publishes that intent. Full A1.8a must add any
+  admitted attempt/front-door-dispatch/effect arm atomically, and A1.8b must seal/publish before any
+  forward or result delivery; viewer-projection `seq` remains explicitly separate.
   A1.6 retains ciphertext frame bodies on every route from
   genesis. A1.7a also retains decrypted plaintext part evidence for chat and
   server-control routes; future checkpointed discovery-only scope-bus ciphertext may be compacted only
