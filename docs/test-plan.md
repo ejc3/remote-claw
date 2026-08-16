@@ -114,8 +114,10 @@ about the current A0 implementation:
 | A1.7b1 | Implemented dormant foundation; no production wiring or independent capability claim | Schema-v10 `010-common-command-adjudication`, exact five-table/619-object boundary, shared ready/control journal closure, A1-ingress-only route-head admission, deterministic source/command/result/group/preparation identities, small `unsupported_recognized` persistence, global order, rejected-only decision, distinct creation/decision fences, signer binding/store, abort/reprepare generations, crash reconciliation, semantic reopen, and a hard signed-but-unaccepted terminal boundary |
 | A1.8a0 | Implemented dormant rejected-only closure; no production wiring or capability claim | Schema-v11 `011-a1-rejected-result-finalization`, exact three-table/647-object boundary, one-transaction common result + dense signer acceptance + `decided`/`terminal` overlay + exact semantic artifact + inert `pending_seal` intent, immutable base ingress evidence, no cursor movement or post-sign route-health dependency, narrow safe predecessor-signature takeover with strictly later successor-lease acquisition, crash reconciliation, and semantic reopen |
 | A1.8a1-E0 | Implemented pure identity contract; no authority state or capability | Six E-side canonical namespaces/types/parsers; four deterministic attestation/snapshot ID derivations; locked vectors, exact-preimage sensitivity, hostile shape/namespace/integer rejection, and a code boundary with no evidence digest/artifact codec, schema, repository, signer, pointer, port, owner operation, runtime wiring, or production capability |
-| A1.8a1-E1 | Design incomplete; blocked before implementation | After the five reference freeze groups close: exact evidence digests; bounded parent/child artifact recomputation; schema-v12 legacy-signer treatment; dependency-ordered listener/isolation/capability signature acceptance; nonterminal key-rotation barrier; semantic reopen; and proof that accepted evidence never changes either transport pointer or imports a production path |
-| A1.8a1-I | Planned after E1 | One-transaction null/null-or-matched snapshot/credentialless-ingress pair install and replacement; live callable-port proof; pair-only withdrawal with A1.4-owned physical-port teardown; parent close/detach/reattach/takeover closure; exact unknown-commit reconciliation and absent-generation reuse; hostile-SQL closure; no admitted command, dispatch, effect, native call, or advertised capability |
+| A1.8a1-E1a | Implemented pure ref-free parent contract; no authority state or capability | Four strict 64 KiB parent codecs; fixed schema-first byte order and ordered role/schema/digest/length commitments; closed role/schema/bound/scope registry; derived-ID checks; exact byte/digest vectors; allocation-safe raw hashing through 16 MiB; rejection of refs, hostile bytes/shapes, reordered roles, wrong schemas, and oversized children; no child semantic parser, collector, artifact write, schema, repository, signer, pointer, port, owner operation, runtime wiring, or capability |
+| A1.8a1-E1b | Planned collector-backed evidence gate | Every registered Linux/OpenCode child codec and a real collector fixture must recompute the exact four E1a parent commitments; reserved schema names or synthetic commitments are insufficient |
+| A1.8a1-E1c | Planned stateful accepted evidence after E1b | Exhaustive legacy E-purpose quarantine/nonadoption; new-lineage-only workspace changes; dependency-ordered listener/isolation/capability acceptance; exact unsigned-snapshot/accepted-inert staging; immutable artifact links and dense transition receipts; request-bound reconciliation and semantic reopen; nonterminal E-owned rotation barrier; both transport pointers byte-identical |
+| A1.8a1-I | Planned after E1c | One-transaction null/null-or-matched snapshot/credentialless-ingress pair install and replacement; live callable-port proof; pair-only withdrawal with A1.4-owned physical-port teardown; parent close/detach/reattach/takeover closure; exact unknown-commit reconciliation and absent-generation reuse; hostile-SQL closure; no admitted command, dispatch, effect, native call, or advertised capability |
 | A1.8a2 | Planned after I | Add an admitted command's pinned native attempt/front-door dispatch/protected effect arm atomically without widening the rejected-only finalizer or exposing a partial path |
 | A1.8b | Planned after full A1.8a | Seal/publish causal result delivery, then one-time dispatch, protected authorization consumption, uncertainty quarantine, native read-back, and evidence-only recovery without replaying a possibly started effect |
 | A1.9 | Planned after the protected-handle and dispatch foundations | Runtime-scoped inference identity, encrypted exact request/response retention, connector leases, and ambiguous-upstream no-silent-retry proof |
@@ -382,7 +384,7 @@ tests retain the immutable v8 evidence row in `awaiting_order` or later
 orphan artifacts, and inconsistent completion anchors. Negative gates prove that `pending_seal` is
 unclaimable plaintext semantic intent: no ciphertext, output part/signature, claim/seal/publish,
 effect/attempt, projection, native/broker operation, cursor movement, or production import exists.
-A1.8a1-E1/I must first establish the dormant native-binding authority foundation; A1.8a2 still needs
+A1.8a1-E1c/I must first establish the dormant native-binding authority foundation after E1b; A1.8a2 still needs
 the admitted attempt/front-door-dispatch/effect atomic arm, and A1.8b still needs sealing/publishing
 and one-time delivery before any capability can be advertised.
 
@@ -399,19 +401,27 @@ mutation, key-rotation barrier, transport-pointer write, callable-port access, r
 operation, protocol packet, runtime wiring, or production capability landed. E0 therefore supplies
 identity vocabulary, not accepted evidence or authority.
 
-E1 is not ready for an implementation gate. It remains blocked on five freeze groups: exact bytes,
-decoders, bounds, child inventories, and platform/build/kernel child codecs for the four named parent
-input schemas; the complete workspace/link lifecycle; schema-v12 treatment of any pre-v12 row using
-an E signer purpose; the snapshot/attestation staging cycle and per-phase row inventory; and exact
-repository request/result/reconciliation shapes. After those close, E1's gate must lock every
-evidence digest vector; parse and recompute every bounded registered artifact; pin exact schema-v12
-migration bytes/count/digest/manifest; verify the three exact runtime-owner signatures and
+A1.8a1-E1a's passed gate locks all four strict parent parsers/writers/decoders, schema-first canonical
+order, fixed child roles, role/schema/digest/length sensitivity, 64 KiB parent and per-role child
+bounds, fatal UTF-8/truncation/trailing/presence/integer rejection, derived-ID cross-checks, exact
+round-trip vectors, and allocation-safe raw artifact hashing through 16 MiB. It proves refs are absent
+from every commitment and byte vector and that no child semantic parser, collector, artifact write,
+schema, repository, signer, pointer, port, owner operation, runtime wiring, or capability landed.
+
+E1b's gate must parse and recompute every bounded registered child, prove its exact Linux/OpenCode
+measurement semantics, and run a real collector fixture that recreates the four E1a parents. E1c may
+pin a future migration only after that collector-backed byte set settles. E1c's gate must verify the
+three exact runtime-owner signatures and
 acceptances in listener → isolation → capability order; race two attachments at the same
 runtime/incarnation/key generation and prove only one singleton listener/isolation reservation is
 allocated while the other joins its exact accepted tuple; reject phase skips, orphan prefixes,
-signed-but-unaccepted abandonment, generic signer mutation, key rotation while a phase is
-nonterminal, and every cross-server/chat/workspace/runtime/incarnation/attachment transplant; prove
-request-bound unknown-commit recovery and semantic-reopen no-extra-row closure; and prove that
+signed-but-unaccepted abandonment, generic signer mutation, in-lineage workspace replacement, key
+rotation while an E-owned phase is nonterminal, and every cross-server/chat/workspace/runtime/
+incarnation/attachment transplant; prove exhaustive immutable quarantine/nonadoption of every
+pre-E1c E-purpose signer row; verify `capability_prepared` has only the unsigned snapshot artifact and
+reservation while `accepted_inert` atomically co-lands normalized snapshot/attestation/acceptance;
+prove ref-free caller requests and parent/recipe coordinates, repository-local immutable artifact links, dense transition receipts,
+exact landed/absent/retry reconciliation, and semantic-reopen no-extra-row closure; and prove that
 accepted evidence leaves both transport pointers byte-identical after every success and fault. I's later gate
 must reject owner/coordinator/channel fence transplants, prove the pointer XOR state impossible,
 exact pair CAS/replacement/withdrawal, stale or missing live-port refusal, process-loss

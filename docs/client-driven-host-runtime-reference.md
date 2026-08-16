@@ -6,9 +6,11 @@
 > requirements.
 
 **Status:** selected architecture; A1.0 through dormant A1.8a0 are
-implemented, and A1.8a1-E0 now implements only the six E-side canonical ID namespaces/types/parsers
-(`nwb_*`, `nlra_*`, `nria_*`, `nbcs_*`, `ncsa_*`, and `nbao_*`) plus four deterministic derivations
-and their locked vectors. The ordinary production CLI supplies no registration adapter and invokes no A1 broker,
+implemented. A1.8a1-E0 implements the six E-side canonical ID namespaces/types/parsers (`nwb_*`,
+`nlra_*`, `nria_*`, `nbcs_*`, `ncsa_*`, and `nbao_*`) plus four deterministic derivations and their
+locked vectors. A1.8a1-E1a now implements the pure, ref-free commitment grammar, strict bounded
+writer/decoder, and digest helper for the four workspace/listener/isolation/capability parent
+envelopes. The ordinary production CLI supplies no registration adapter and invokes no A1 broker,
 ingress-actor, command-adjudication, server-signer, or result-finalization operation, so every real driver and the viewer
 remain on their A0 paths. A1.7a stops at durable `awaiting_order`; schema v9 supplies server-scoped
 key custody/signing authority; and schema v10 now provides A1-ingress-only ready materialization,
@@ -16,12 +18,14 @@ global common-command order, a rejected decision, and replaceable signed result 
 A1.8a0's schema v11 now atomically closes only that signed rejected arm into a common result, signer
 acceptance, logical ingress terminal overlay, exact semantic artifact, and one inert plaintext
 `pending_seal` intent. It adds no admitted/effect arm, cursor movement, claim/seal/publish, broker
-call, projection, production wiring, or capability advertisement. E0 adds no evidence digest or
-artifact codec, SQLite schema or migration, repository, signer mutation, key-rotation barrier,
-transport-pointer write, callable-port access, owner operation, protocol packet, or production
-capability. A1.8a1-E1 is the remaining stateful accepted-evidence boundary and is not design-frozen;
-five blocking contract groups are recorded in §4.1. A1.8a1-I remains planned after E1, while A1.8a2
-admitted arming and A1.8b delivery remain planned after I.
+call, projection, production wiring, or capability advertisement. E1a adds no collector-backed
+Linux/OpenCode child codec or real collector fixture, SQLite schema or migration, repository,
+signer mutation, key-rotation barrier, transport-pointer write, callable-port access, owner
+operation, protocol packet, or production capability. A1.8a1-E1b is the planned collector-backed
+child-evidence gate. A1.8a1-E1c is the planned stateful accepted-evidence boundary after E1b; its
+workspace, legacy-signer, phase-staging, and reconciliation contracts are frozen in §4.1, but it has
+no migration number or implementation. A1.8a1-I remains planned after E1c, while A1.8a2 admitted
+arming and A1.8b delivery remain planned after I.
 
 **Current external behavior remains compatible:** today `--rc-app` hosts an in-memory `RelayCore`
 that lazily creates one Claude-shaped `Session` per intercepted Claude RC session. A host-scoped
@@ -195,8 +199,9 @@ superseded authority, rotation, retired certificates, and historical reattestati
 Any later successor signing lease must be durably acquired strictly after the predecessor acceptance,
 including when the wall-clock values would otherwise share one millisecond.
 `pending_seal` has no ciphertext, output part/signature, claim/seal/publish, broker operation,
-effect/attempt, projection, native dispatch, or production path. A1.8a1-E0's identity-only contract
-has landed. The next stateful authority work is E1 only after its five freeze blockers close;
+effect/attempt, projection, native dispatch, or production path. A1.8a1-E0's identity contract and
+E1a's pure ref-free parent-envelope contract have landed. E1b next owns the exact collector-backed
+Linux/OpenCode child codecs and a real collector fixture; E1c then owns stateful accepted evidence.
 A1.8a1-I later installs the exact snapshot and credentialless callable-port ingress pair, A1.8a2 then
 owns the admitted arm, and A1.8b owns sealing/publishing.
 
@@ -217,8 +222,9 @@ service and tests: ordinary launches, drivers, and the viewer make zero `/api/a1
 no runtime-owner broker or ingress operation and no real-driver integration. Schema-v8 ingress,
 schema-v9 server signing, schema-v10 command adjudication, and schema-v11 rejected finalization are
 reachable only through direct host-state/custody/repository modules and tests. E0's pure identity
-helpers are exported from the host-state barrel but add no owner/runtime operation; E1 evidence and I
-pair-install implementations do not exist. A1.7b1, A1.8a0, and E0 still advertise nothing.
+helpers and E1a's pure parent-envelope codecs are exported from the host-state barrel but add no
+owner/runtime operation; E1b collector-backed child evidence, E1c accepted-evidence state, and I
+pair-install implementations do not exist. A1.7b1, A1.8a0, E0, and E1a still advertise nothing.
 Malformed wire and runtime values fail closed at their trust or canonical boundary instead of being
 accepted and failing later or being silently coerced.
 
@@ -487,7 +493,7 @@ The coordinator may allocate globally monotonic journal offsets and command sequ
 That execution model remains the integrated target. A1.7a implements dormant route-local actor claims
 and evidence-preserving ingress queues for `server_control` and chat routes. A1.7b1 now materializes
 and globally sequences rejected common commands through signed preparation; A1.8a0 atomically closes
-that rejected arm into an inert final-result/delivery-intent graph. A1.8a1-E1/I first owns the dormant
+that rejected arm into an inert final-result/delivery-intent graph. A1.8a1-E1c/I first owns the dormant
 native-authority pair; admitted decisions and native-facing per-lane effects remain A1.8a2 work, and
 sealed publication remains A1.8b work.
 
@@ -742,8 +748,9 @@ ncil_${base64url(SHA256(
 
 The four implemented builders are `nativeListenerRegistrationAttestationId`,
 `nativeRuntimeIsolationAttestationId`, `nativeBindingCapabilitySnapshotId`, and
-`nativeCapabilitySnapshotAttestationId`. E0 supplies no canonical evidence digest or artifact
-writer/decoder beneath these identifiers.
+`nativeCapabilitySnapshotAttestationId`. E1a additionally supplies the four strict ref-free parent
+writers/decoders and a bounded raw-artifact digest helper beneath these identifiers; it does not
+parse any committed child bytes.
 
 `nwb_*`, `nbao_*`, `nbai_*`, and `nbaw_*` bodies are generated once from 16 CSPRNG bytes and retained before
 their first mutation. Derived-ID content is deliberately absent from the ID preimages: different
@@ -754,7 +761,7 @@ identities even when that incarnation is retained; a capability change or loss/r
 volatile callable port requires supersession under the rules below. Exact replay reuses every retained ID.
 Same ID with different canonical bytes after its identity-owning attestation, snapshot, or ingress
 row landed is equivocation, never permission to allocate a replacement under the same generation.
-An aborted pre-attestation E plan does not own `nlra_*`/`nria_*`, but a later plan under the same tuple
+An aborted pre-attestation E1c plan does not own `nlra_*`/`nria_*`, but a later plan under the same tuple
 must reuse its exact listener/isolation input-vector digest; changed singleton input still requires a new
 incarnation. A prepare proved absent by close/reopen retained no
 row and consumed no generation: that abandoned operation ID is never retried after its authority or
@@ -2052,12 +2059,22 @@ interface NativeBindingIncarnationRecord {
 
 interface OpenCodeBindingWorkspaceRecord {
   nativeBindingId: string;
+  nativeBindingIncarnationId: string;
   collaborationServerId: string;
   logicalChatId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  projectId: string;
+  attachmentLeaseId: string;
+  nativeRegistrationPublicationId: string;
+  linkGeneration: 1;
   projectTargetSelectorMappingId: string;
   projectTargetSelectorMappingGeneration: number;
+  projectTargetSelectorMappingDigest: string;
   nativeWorkspaceBindingId: string;
-  state: "starting" | "current" | "superseded" | "closed";
+  createdAtMs: number;
+  terminalAtMs: number | null;
+  state: "current" | "superseded" | "closed";
 }
 
 interface LocalNativeConversationRecord {
@@ -2102,6 +2119,10 @@ interface NativeWorkspaceBindingRecord {
   nativeIncarnation: number;
   projectId: string;
   nativeWorkspaceId: string | null;
+  workspaceSlot:
+    | { kind: "native_workspace_id"; value: string }
+    | { kind: "canonical_directory_path_digest"; value: string };
+  predecessorNativeWorkspaceBindingId: string | null;
   directoryNormalizationSchemaId: string;
   canonicalDirectoryRef: string;
   canonicalDirectoryPathDigest: string;
@@ -2112,6 +2133,8 @@ interface NativeWorkspaceBindingRecord {
   workspaceGeneration: number;
   evidenceRef: string;
   nativeWorkspaceBindingDigest: string;
+  createdAtMs: number;
+  terminalAtMs: number | null;
   state: "current" | "superseded" | "closed";
 }
 
@@ -2811,8 +2834,6 @@ interface NativeBindingCapabilitySnapshot {
   proofTupleDigest: string;
   evidenceRef: string;
   evidenceDigest: string;
-  runtimeOwnerAttestationRef: string;
-  runtimeOwnerAttestationDigest: string;
   canonicalSnapshotDigest: string;
   verifiedAtMs: number;
 }
@@ -2944,9 +2965,97 @@ interface NativeBindingCapabilitySnapshotStatus {
   revokedAtMs: number | null;
 }
 
-interface NativeBindingAuthorityEvidenceRecipe {
+interface NativeEvidenceArtifactCommitmentV1<
+  Role extends NativeBindingAuthorityArtifactRole = NativeBindingAuthorityArtifactRole,
+> {
+  role: Role;
+  artifactSchemaId: (typeof NATIVE_BINDING_AUTHORITY_ARTIFACT_SPECS)[Role]["artifactSchemaId"];
+  artifactDigest: string;
+  byteLength: number;
+}
+
+interface NativeWorkspaceBindingInputV1 {
   schemaVersion: 1;
+  schemaId: "remote-claw/native-workspace-binding-input/v1";
+  nativeWorkspaceBindingId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  projectId: string;
+  nativeWorkspaceId: string | null;
+  directoryNormalizationSchemaId: "remote-claw/posix-absolute-directory-normalization/v1";
+  filesystemIdentitySchemaId: "remote-claw/linux-no-follow-filesystem-identity/v1";
+  workspaceGeneration: number;
+  artifacts: readonly NativeEvidenceArtifactCommitmentV1[];
+}
+
+interface NativeListenerEvidenceInputVectorV1 {
+  schemaVersion: 1;
+  schemaId: "remote-claw/native-listener-evidence-input-vector/v1";
+  nativeListenerRegistrationAttestationId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  descriptor: { product: "opencode"; access: "server" };
+  engineVersion: string;
+  surfaceSchemaKind: "openapi";
+  routeResolutionSchemaId: "remote-claw/native-listener-route-resolution/v1";
+  artifacts: readonly NativeEvidenceArtifactCommitmentV1[];
+}
+
+interface NativeIsolationEvidenceInputVectorV1 {
+  schemaVersion: 1;
+  schemaId: "remote-claw/native-isolation-evidence-input-vector/v1";
+  runtimeIsolationAttestationId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  descriptor: { product: "opencode"; access: "server" };
+  nativeListenerRegistrationAttestationId: string;
+  listenerSignedRecordDigest: string;
+  processIdentityPolicySchemaId: "remote-claw/exact-process-socket-policy/v1";
+  artifacts: readonly NativeEvidenceArtifactCommitmentV1[];
+}
+
+interface NativeBindingCapabilityInputVectorV1 {
+  schemaVersion: 1;
+  schemaId: "remote-claw/native-binding-capability-input-vector/v1";
+  capabilitySnapshotId: string;
+  capabilitySnapshotAttestationId: string;
+  collaborationServerId: string;
+  logicalChatId: string;
+  nativeBindingId: string;
+  nativeBindingIncarnationId: string;
+  nativeConversationLeaseId: string;
+  nativeRegistrationPublicationId: string;
+  nativeConversationId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  projectId: string;
+  attachmentId: string;
+  attachmentLeaseId: string;
+  nativeWorkspaceBindingId: string;
+  canonicalDirectoryPathDigest: string;
+  nativeWorkspaceBindingDigest: string;
+  capabilityGeneration: number;
+  descriptor: { product: "opencode"; access: "server" };
+  engineVersion: string;
+  nativeSurfaceSchemaId: string;
+  nativeListenerRegistrationAttestationId: string;
+  listenerSignedRecordDigest: string;
+  runtimeIsolationAttestationId: string;
+  isolationSignedRecordDigest: string;
+  slashCommandNormalizationSchemaId: "remote-claw/opencode-slash-command-normalization/v1";
+  verifiedAtMs: number;
+  artifacts: readonly NativeEvidenceArtifactCommitmentV1[];
+}
+
+interface NativeBindingAuthorityEvidenceRecipe {
   canonicalRecipeSchemaId: "remote-claw/native-binding-authority-evidence-recipe/v1";
+  schemaVersion: 1;
   collaborationServerId: string;
   logicalChatId: string;
   runtimeId: string;
@@ -2967,17 +3076,17 @@ interface NativeBindingAuthorityEvidenceRecipe {
   runtimeIsolationAttestationId: string;
   capabilitySnapshotAttestationId: string;
   workspaceInputSchemaId: "remote-claw/native-workspace-binding-input/v1";
-  workspaceInputRef: string;
   workspaceInputDigest: string;
+  workspaceInputByteLength: number;
   listenerInputVectorSchemaId: "remote-claw/native-listener-evidence-input-vector/v1";
-  listenerInputVectorRef: string;
   listenerInputVectorDigest: string;
+  listenerInputVectorByteLength: number;
   isolationInputVectorSchemaId: "remote-claw/native-isolation-evidence-input-vector/v1";
-  isolationInputVectorRef: string;
   isolationInputVectorDigest: string;
+  isolationInputVectorByteLength: number;
   capabilityInputVectorSchemaId: "remote-claw/native-binding-capability-input-vector/v1";
-  capabilityInputVectorRef: string;
   capabilityInputVectorDigest: string;
+  capabilityInputVectorByteLength: number;
 }
 
 interface NativeBindingAuthorityEvidenceOperation {
@@ -2998,11 +3107,16 @@ interface NativeBindingAuthorityEvidenceOperation {
   nativeWorkspaceBindingId: string;
   capabilityGeneration: number;
   capabilitySnapshotId: string;
+  canonicalSnapshotSchemaId: "remote-claw/native-binding-capability-snapshot/v1";
+  capabilitySnapshotRef: string | null;
+  canonicalSnapshotDigest: string | null;
   nativeListenerRegistrationAttestationId: string;
   runtimeIsolationAttestationId: string;
   capabilitySnapshotAttestationId: string;
+  evidenceRecipeSchemaId: "remote-claw/native-binding-authority-evidence-recipe/v1";
   evidenceRecipeRef: string;
   evidenceRecipeDigest: string;
+  evidenceRecipeByteLength: number;
   listenerSignerSequence: number;
   isolationSignerSequence: number | null;
   capabilitySignerSequence: number | null;
@@ -3021,6 +3135,369 @@ interface NativeBindingAuthorityEvidenceOperation {
   capabilityAcceptedAtMs: number | null;
   abortedAtMs: number | null;
 }
+
+interface NativeBindingAuthorityArtifactLinkBase {
+  nativeBindingAuthorityOperationId: string;
+  artifactIndex: number;
+  artifactRef: ProtectedHandleRef<"artifact">;
+  scopeKind: "runtime" | "native_binding";
+  scopeId: string;
+  artifactDigest: string;
+  byteLength: number;
+}
+
+type NativeBindingAuthorityRegisteredArtifactLink<
+  Role extends NativeBindingAuthorityArtifactRole = NativeBindingAuthorityArtifactRole,
+> = Role extends NativeBindingAuthorityArtifactRole
+  ? NativeBindingAuthorityArtifactLinkBase & {
+      artifactRole: Role;
+      artifactSchemaId: (typeof NATIVE_BINDING_AUTHORITY_ARTIFACT_SPECS)[Role]["artifactSchemaId"];
+    }
+  : never;
+
+type NativeBindingAuthorityArtifactLink =
+  | NativeBindingAuthorityRegisteredArtifactLink
+  | (NativeBindingAuthorityArtifactLinkBase & {
+        artifactRole: "recipe.authority_evidence";
+        artifactSchemaId: "remote-claw/native-binding-authority-evidence-recipe/v1";
+      })
+  | (NativeBindingAuthorityArtifactLinkBase & {
+        artifactRole: "capability.canonical_snapshot";
+        artifactSchemaId: "remote-claw/native-binding-capability-snapshot/v1";
+      });
+
+type NativeBindingAuthorityEvidenceTransitionKind =
+  | "prepare"
+  | "accept_listener"
+  | "prepare_isolation"
+  | "accept_isolation"
+  | "prepare_capability"
+  | "accept_capability"
+  | "abort";
+
+type NativeBindingAuthorityEvidenceTransitionRequestSchemaId =
+  | "remote-claw/native-binding-authority-evidence-prepare-request/v1"
+  | "remote-claw/native-binding-authority-evidence-accept-listener-request/v1"
+  | "remote-claw/native-binding-authority-evidence-prepare-isolation-request/v1"
+  | "remote-claw/native-binding-authority-evidence-accept-isolation-request/v1"
+  | "remote-claw/native-binding-authority-evidence-prepare-capability-request/v1"
+  | "remote-claw/native-binding-authority-evidence-accept-capability-request/v1"
+  | "remote-claw/native-binding-authority-evidence-abort-request/v1";
+
+interface NativeBindingAuthorityTransitionReceipt {
+  nativeBindingAuthorityOperationId: string;
+  transitionOrdinal: number;
+  transitionKind: NativeBindingAuthorityEvidenceTransitionKind;
+  requestSchemaId: NativeBindingAuthorityEvidenceTransitionRequestSchemaId;
+  fromState:
+    | "absent"
+    | "listener_prepared"
+    | "listener_accepted"
+    | "isolation_prepared"
+    | "isolation_accepted"
+    | "capability_prepared";
+  toState:
+    | "listener_prepared"
+    | "listener_accepted"
+    | "isolation_prepared"
+    | "isolation_accepted"
+    | "capability_prepared"
+    | "accepted_inert"
+    | "aborted";
+  runtimeOwnerServiceLeaseId: string;
+  runtimeOwnerServiceEpoch: number;
+  coordinatorLeaseId: string;
+  coordinatorEpoch: number;
+  transitionRequestDigest: string;
+  retainedGraphDigest: string;
+  committedAtMs: number;
+}
+
+interface NativeBindingAuthorityLegacySignerQuarantine {
+  runtimeId: string;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  signerSequence: number;
+  purpose:
+    | "listener_registration_attestation"
+    | "runtime_isolation_attestation"
+    | "native_capability_snapshot";
+  reservationState: "reserved" | "bound" | "signed" | "aborted";
+  canonicalPayloadSchemaId: string | null;
+  canonicalPayloadDigest: string | null;
+  signedRecordDigest: string | null;
+  acceptedAtMs: number | null;
+  quarantineReason: "pre_e1c_reserved_purpose_nonadoptable";
+}
+
+interface NativeBindingAuthorityRefFreeArtifactSnapshotV1 {
+  role: NativeBindingAuthorityArtifactRole;
+  artifactIndex: number;
+  artifactSchemaId: NativeBindingAuthorityArtifactSchemaId;
+  artifactDigest: string;
+  byteLength: number;
+  canonicalBytes: Uint8Array;
+}
+
+interface NativeBindingAuthorityRefFreeParentTreeV1 {
+  parent: NativeBindingAuthorityRefFreeArtifactSnapshotV1;
+  children: readonly NativeBindingAuthorityRefFreeArtifactSnapshotV1[];
+}
+
+interface NativeBindingAuthorityRefFreeEvidenceTreeV1 {
+  workspace: NativeBindingAuthorityRefFreeParentTreeV1;
+  listener: NativeBindingAuthorityRefFreeParentTreeV1;
+  isolation: NativeBindingAuthorityRefFreeParentTreeV1;
+  capability: NativeBindingAuthorityRefFreeParentTreeV1;
+  recipe: {
+    schemaId: "remote-claw/native-binding-authority-evidence-recipe/v1";
+    digest: string;
+    byteLength: number;
+    canonicalBytes: Uint8Array;
+  };
+}
+
+interface NativeBindingAuthorityEvidenceCasV1 {
+  collaborationServerId: string;
+  logicalChatId: string;
+  projectId: string;
+  projectTargetSelectorMappingId: string;
+  projectTargetSelectorMappingGeneration: number;
+  projectTargetSelectorMappingDigest: string;
+  expectedProjectTargetSelectorMappingState: "current" | "superseded";
+  nativeBindingId: string;
+  nativeBindingIncarnationId: string;
+  nativeConversationLeaseId: string;
+  expectedNativeConversationLeaseState: "ready";
+  nativeRegistrationPublicationId: string;
+  nativeRegistrationPublicationDigest: string;
+  nativeConversationId: string;
+  runtimeId: string;
+  nativeIncarnation: number;
+  runtimeOwnerIdentityKeyId: string;
+  runtimeOwnerKeyGeneration: number;
+  attachmentId: string;
+  attachmentLeaseId: string;
+  expectedTransportEpoch: number;
+  expectedBindingGateGeneration: number;
+  expectedBindingGatePhase: "ready";
+  expectedCurrentCapabilitySnapshotId: string | null;
+  expectedCurrentNativeClientIngressLeaseId: string | null;
+  nativeWorkspaceBindingId: string;
+  workspaceGeneration: number;
+  workspaceSlot:
+    | { kind: "native_workspace_id"; value: string }
+    | { kind: "canonical_directory_path_digest"; value: string };
+  canonicalDirectoryPathDigest: string;
+  nativeWorkspaceBindingDigest: string;
+  openCodeWorkspaceLinkGeneration: 1;
+  capabilityGeneration: number;
+  capabilitySnapshotId: string;
+  nativeListenerRegistrationAttestationId: string;
+  runtimeIsolationAttestationId: string;
+  capabilitySnapshotAttestationId: string;
+  runtimeOwnerServiceLeaseId: string;
+  runtimeOwnerServiceEpoch: number;
+  coordinatorLeaseId: string;
+  coordinatorEpoch: number;
+}
+
+interface NativeBindingAuthoritySignedPhaseV1 {
+  purpose:
+    | "listener_registration_attestation"
+    | "runtime_isolation_attestation"
+    | "native_capability_snapshot";
+  signerSequence: number;
+  canonicalPayloadSchemaId: string;
+  canonicalPayloadDigest: string;
+  signature: string;
+  signedRecordDigest: string;
+}
+
+interface NativeBindingAuthorityEvidenceRequestBaseV1 {
+  nativeBindingAuthorityOperationId: string;
+  expectedTransitionOrdinal: number;
+  cas: NativeBindingAuthorityEvidenceCasV1;
+  evidenceTree: NativeBindingAuthorityRefFreeEvidenceTreeV1;
+}
+
+type PrepareNativeBindingAuthorityEvidenceRequestV1 =
+  NativeBindingAuthorityEvidenceRequestBaseV1 & {
+    requestSchemaId: "remote-claw/native-binding-authority-evidence-prepare-request/v1";
+    transitionKind: "prepare";
+    fromState: "absent";
+    expectedTransitionOrdinal: 1;
+    expectedNextSignerSequence: number;
+  } &
+    (
+      | {
+          toState: "listener_prepared";
+          acceptedPrefix: { kind: "none"; listener: null; isolation: null };
+          expectedNextSignerPurpose: "listener_registration_attestation";
+        }
+      | {
+          toState: "isolation_prepared";
+          acceptedPrefix: {
+            kind: "listener";
+            listener: NativeBindingAuthoritySignedPhaseV1 & {
+              purpose: "listener_registration_attestation";
+            };
+            isolation: null;
+          };
+          expectedNextSignerPurpose: "runtime_isolation_attestation";
+        }
+      | {
+          toState: "capability_prepared";
+          acceptedPrefix: {
+            kind: "listener_isolation";
+            listener: NativeBindingAuthoritySignedPhaseV1 & {
+              purpose: "listener_registration_attestation";
+            };
+            isolation: NativeBindingAuthoritySignedPhaseV1 & {
+              purpose: "runtime_isolation_attestation";
+            };
+          };
+          expectedNextSignerPurpose: "native_capability_snapshot";
+        }
+    );
+
+type AcceptListenerEvidenceRequestV1 = NativeBindingAuthorityEvidenceRequestBaseV1 & {
+  requestSchemaId: "remote-claw/native-binding-authority-evidence-accept-listener-request/v1";
+  transitionKind: "accept_listener";
+  fromState: "listener_prepared";
+  toState: "listener_accepted";
+  expectedOperationDigest: string;
+  signedPhase: NativeBindingAuthoritySignedPhaseV1 & {
+    purpose: "listener_registration_attestation";
+  };
+};
+
+type PrepareIsolationEvidenceRequestV1 = NativeBindingAuthorityEvidenceRequestBaseV1 & {
+  requestSchemaId: "remote-claw/native-binding-authority-evidence-prepare-isolation-request/v1";
+  transitionKind: "prepare_isolation";
+  fromState: "listener_accepted";
+  toState: "isolation_prepared";
+  expectedOperationDigest: string;
+  expectedListenerSignedRecordDigest: string;
+  expectedNextSignerSequence: number;
+};
+
+type AcceptIsolationEvidenceRequestV1 = NativeBindingAuthorityEvidenceRequestBaseV1 & {
+  requestSchemaId: "remote-claw/native-binding-authority-evidence-accept-isolation-request/v1";
+  transitionKind: "accept_isolation";
+  fromState: "isolation_prepared";
+  toState: "isolation_accepted";
+  expectedOperationDigest: string;
+  signedPhase: NativeBindingAuthoritySignedPhaseV1 & {
+    purpose: "runtime_isolation_attestation";
+  };
+};
+
+type PrepareCapabilityEvidenceRequestV1 = NativeBindingAuthorityEvidenceRequestBaseV1 & {
+  requestSchemaId: "remote-claw/native-binding-authority-evidence-prepare-capability-request/v1";
+  transitionKind: "prepare_capability";
+  fromState: "isolation_accepted";
+  toState: "capability_prepared";
+  expectedOperationDigest: string;
+  expectedIsolationSignedRecordDigest: string;
+  expectedNextSignerSequence: number;
+  canonicalSnapshotSchemaId: "remote-claw/native-binding-capability-snapshot/v1";
+  canonicalSnapshotDigest: string;
+  canonicalSnapshotByteLength: number;
+  canonicalSnapshotBytes: Uint8Array;
+};
+
+type AcceptCapabilityEvidenceRequestV1 = NativeBindingAuthorityEvidenceRequestBaseV1 & {
+  requestSchemaId: "remote-claw/native-binding-authority-evidence-accept-capability-request/v1";
+  transitionKind: "accept_capability";
+  fromState: "capability_prepared";
+  toState: "accepted_inert";
+  expectedOperationDigest: string;
+  expectedCanonicalSnapshotDigest: string;
+  signedPhase: NativeBindingAuthoritySignedPhaseV1 & {
+    purpose: "native_capability_snapshot";
+  };
+};
+
+type AbortNativeBindingAuthorityEvidenceRequestV1 =
+  NativeBindingAuthorityEvidenceRequestBaseV1 & {
+    requestSchemaId: "remote-claw/native-binding-authority-evidence-abort-request/v1";
+    transitionKind: "abort";
+    fromState:
+      | "listener_prepared"
+      | "listener_accepted"
+      | "isolation_prepared"
+      | "isolation_accepted"
+      | "capability_prepared";
+    toState: "aborted";
+    expectedOperationDigest: string;
+    expectedOpenReservation:
+      | {
+          purpose:
+            | "listener_registration_attestation"
+            | "runtime_isolation_attestation"
+            | "native_capability_snapshot";
+          signerSequence: number;
+          state: "reserved" | "bound";
+        }
+      | null;
+  };
+
+type NativeBindingAuthorityEvidenceMutationRequestV1 =
+  | PrepareNativeBindingAuthorityEvidenceRequestV1
+  | AcceptListenerEvidenceRequestV1
+  | PrepareIsolationEvidenceRequestV1
+  | AcceptIsolationEvidenceRequestV1
+  | PrepareCapabilityEvidenceRequestV1
+  | AcceptCapabilityEvidenceRequestV1
+  | AbortNativeBindingAuthorityEvidenceRequestV1;
+
+interface NativeBindingAuthorityEvidenceRequestEnvelopeV1 {
+  transitionRequestDigest: string;
+  originalRequest: NativeBindingAuthorityEvidenceMutationRequestV1;
+}
+
+interface ReconcileNativeBindingAuthorityEvidenceRequestV1 {
+  requestSchemaId: "remote-claw/native-binding-authority-evidence-reconcile-request/v1";
+  retainedOriginalRequest: NativeBindingAuthorityEvidenceRequestEnvelopeV1;
+}
+
+interface NativeBindingAuthorityEvidenceCurrentGraphProjectionV1 {
+  projectionKind: "fully_validated_native_binding_authority_evidence_graph";
+  status:
+    | "listener_prepared"
+    | "listener_accepted"
+    | "isolation_prepared"
+    | "isolation_accepted"
+    | "capability_prepared"
+    | "accepted_inert"
+    | "aborted";
+  nativeBindingAuthorityOperationId: string;
+  operationDigest: string;
+  latestTransitionOrdinal: number;
+  latestTransitionRequestDigest: string;
+  retainedGraphDigest: string;
+}
+
+interface NativeBindingAuthorityEvidenceLandedResultV1 {
+  outcome: "landed";
+  operation: NativeBindingAuthorityEvidenceOperation;
+  attemptedTransition: NativeBindingAuthorityTransitionReceipt;
+  artifactLinks: readonly NativeBindingAuthorityArtifactLink[];
+  current: NativeBindingAuthorityEvidenceCurrentGraphProjectionV1;
+}
+
+interface NativeBindingAuthorityEvidenceAbsentResultV1 {
+  outcome: "absent";
+  status: "absent";
+  nativeBindingAuthorityOperationId: string;
+  transitionRequestDigest: string;
+  retryDisposition: "same_bytes" | "forbidden";
+}
+
+type ReconcileNativeBindingAuthorityEvidenceResultV1 =
+  | NativeBindingAuthorityEvidenceLandedResultV1
+  | NativeBindingAuthorityEvidenceAbsentResultV1;
 
 interface NativeBindingAuthorityInstallOperation {
   nativeBindingAuthorityInstallOperationId: string;
@@ -3073,54 +3550,167 @@ interface NativeBindingAuthorityWithdrawalOperation {
 
 <a id="41-a18a1-native-binding-authority-freeze-planned-dormant"></a>
 
-### 4.1 A1.8a1 native-binding authority (E0 implemented; E1/I planned, dormant)
+### 4.1 A1.8a1 native-binding authority (E0/E1a implemented; E1b/E1c/I planned, dormant)
 
-Full admitted arming is not the next
-safe write. Delivery now distinguishes the implemented identity-only subset from the two stateful
-authority boundaries:
+Full admitted arming is not the next safe write. Delivery separates pure contracts, collector proof,
+durable accepted evidence, and installation:
 
 1. **A1.8a1-E0 — canonical identities (implemented).** The pure host-state contract registers and
    parses `nwb_*`, `nlra_*`, `nria_*`, `nbcs_*`, `ncsa_*`, and `nbao_*`, and derives the exact
-   `nlra_*`, `nria_*`, `nbcs_*`, and `ncsa_*` vectors above. It creates no evidence digest, artifact,
-   row, signature, pointer, port, operation, packet, or capability.
-2. **A1.8a1-E1 — accepted evidence (design incomplete).** The host is intended to retain and verify one exact OpenCode
-   `{product:"opencode",access:"server"}` binding-scoped `user_text` proof chain. The capability
-   snapshot must be accepted but inert. E1 must never write either column on `NativeTransportLeaseRecord`: a
-   first-install transport therefore remains null/null, while replacement evidence leaves the exact
-   predecessor pair byte-identical and current until I atomically replaces it.
-3. **A1.8a1-I — atomic install (planned after E1).** A later transaction installs that exact accepted snapshot and one
-   credentialless authenticated callable-port ingress lease as a pair. It is the sole operation that
-   may install or repoint a non-null pair. New parent rows initialize null/null; withdrawal and parent
-   lifecycle may write null/null only. No operation may write one pointer alone. I still creates no
-   command decision, native attempt, dispatch, effect gate, or native call.
+   `nlra_*`, `nria_*`, `nbcs_*`, and `ncsa_*` vectors above.
+2. **A1.8a1-E1a — ref-free parent envelopes (implemented).** The pure host-state contract fixes the
+   four parent DTOs, their ordered role/schema/digest/length commitments, strict parsers and bounded
+   canonical writer/decoder, cross-coordinate derived-ID checks, locked vectors, and bounded artifact
+   digest helper. It creates no protected artifact, row, signature, pointer, port, operation, packet,
+   or capability.
+3. **A1.8a1-E1b — collector-backed child evidence (planned).** This slice must implement every
+   registered Linux/OpenCode platform, filesystem, namespace, process, executable/build, route,
+   operation, family, slash-normalization, translator, and injectivity-proof child codec and exercise
+   them through a real collector fixture. E1a's role names do not prove those child semantics.
+4. **A1.8a1-E1c — accepted evidence (planned after E1b).** The host will retain and verify one exact
+   OpenCode `{product:"opencode",access:"server"}` binding-scoped `user_text` proof chain. The
+   capability snapshot is accepted but inert. E1c never writes either column on
+   `NativeTransportLeaseRecord`: first-install evidence leaves null/null and replacement evidence
+   leaves the exact predecessor pair byte-identical until I.
+5. **A1.8a1-I — atomic install (planned after E1c).** A later transaction installs that exact accepted
+   snapshot and one credentialless authenticated callable-port ingress lease as a pair. It is the sole
+   operation that may install or repoint a non-null pair. New parents initialize null/null;
+   withdrawal and parent lifecycle may write null/null only. No operation writes one pointer alone.
+   I still creates no command decision, native attempt, dispatch, effect gate, or native call.
 
-**E1 freeze blockers.** E1 must not receive a migration number or implementation until all five
-groups are closed:
+**Five-group freeze disposition.** The earlier E1 freeze is now split at the collector boundary. It
+does not assign a migration number or claim stateful implementation:
 
-1. Define exact canonical parent bytes, strict decoders, bounds, closed child inventories, and every
-   referenced platform/build/kernel child codec for
-   `remote-claw/native-workspace-binding-input/v1`,
-   `remote-claw/native-listener-evidence-input-vector/v1`,
-   `remote-claw/native-isolation-evidence-input-vector/v1`, and
-   `remote-claw/native-binding-capability-input-vector/v1`.
-2. Freeze executable `NativeWorkspaceBindingRecord`/`OpenCodeBindingWorkspaceRecord` creation
-   preconditions, generation scope, first-install/replacement CAS, current uniqueness, exact-replay
-   and link identity, terminal-transition owner, parent-close/mapping-replacement behavior, and exact
-   per-E1-phase row inventory.
-3. Freeze schema-v12 migration and reopen treatment for any pre-v12 reservation, signed record, or
-   acceptance using `listener_registration_attestation`, `runtime_isolation_attestation`, or
-   `native_capability_snapshot`. The current generic signer surface admits these reserved purpose
-   literals, so an upgrade cannot assume such rows are absent without an executable rule and proof.
-4. Break the capability-snapshot/attestation staging cycle: `NativeBindingCapabilitySnapshot`
-   currently requires the runtime-owner attestation that can exist only after the snapshot digest is
-   signed. The freeze must state whether `capability_prepared` retains only unsigned snapshot bytes
-   and exactly which normalized snapshot/attestation rows land together at `accepted_inert`.
-5. Define every evidence repository request/result/status shape and the exact retained full original
-   request used for request-bound unknown-commit reconciliation.
+1. The four parent envelopes, 64 KiB parent bound, exact ordered child-role inventories, and ref-free
+   commitment primitive are implemented by E1a. Exact child bytes and their Linux/OpenCode
+   collectors remain E1b's release gate; a reserved child schema name is not accepted evidence.
+2. E1c's workspace/link rule is frozen: an operation may only bind the exact selector mapping already
+   pinned by the logical chat, plus its runtime/native incarnation, binding incarnation, attachment
+   lease, ready publication, and one immutable workspace identity. The pinned mapping may be
+   `current` or `superseded`, but never `closed`; E1c never chases the selector's newer current mapping
+   or rewrites the chat's retained generation. It may exact-replay that mapping but never replace or
+   retarget a workspace inside the same lineage. A directory, native-workspace identity, filesystem
+   identity, mount namespace, pinned selector mapping, or link change first withdraws any installed
+   pair, closes the old workspace/binding lineage through its parent owner, and prepares a new lineage.
+3. E1c's legacy-signer rule is frozen: every pre-E1c row using
+   `listener_registration_attestation`, `runtime_isolation_attestation`, or
+   `native_capability_snapshot` is preserved in an exhaustive immutable legacy quarantine and is
+   never adopted. Post-upgrade generic signer methods and database triggers reject those purposes;
+   only E1c's transaction-scoped phase methods may create E-owned reservations. Legacy quarantined
+   rows never block rotation, while every E-owned nonterminal operation does.
+4. E1c's staging rule is frozen: `capability_prepared` retains the exact unsigned canonical snapshot
+   artifact and its bound capability-signature reservation. The semantic
+   `NativeBindingCapabilitySnapshot` has no capability-attestation fields. One
+   `capability_prepared → accepted_inert` transaction co-lands the normalized snapshot, normalized
+   capability attestation, signature acceptance, final artifact links, and immutable transition
+   receipt after verifying the stored signature; no normalized snapshot exists earlier.
+5. E1c's repository rule is frozen: callers retain the complete ref-free request bytes and stable
+   transition-request digest under their caller-retained `nbao_*`. That ID is also the repository's
+   local FK; no second operation-token identity exists. The repository allocates every random
+   `rcph_*` only inside the transaction, links them through immutable role/index rows, and writes one dense
+   immutable receipt per state transition. Reconciliation is against the original request and its
+   exact receipt, never merely the operation's current state; it returns landed only after validating
+   the complete retained graph, absent only when no matching receipt/graph landed, and a retry
+   disposition that permits only the same-byte request while its named predecessor authority remains
+   current. Changed bytes or a partial/extra graph are conflict or corruption. A later transition
+   makes an absent retry forbidden, but does not change an earlier exact landed result into absence.
 
-Everything below for E1 and I is a non-executable target constrained by those blockers. It must not
-be read as a claim that an E1 schema, repository, signer boundary, validator, or authority operation
-exists.
+Everything below for E1c and I is a frozen but non-executable target. It must not be read as a claim
+that a stateful evidence schema, migration, repository, signer boundary, validator, collector, or
+authority operation exists.
+
+**Implemented E1a byte contract.** Every commitment encodes exactly
+`str(role) || str(artifactSchemaId) || bytes(base64urlDecode(artifactDigest)) || uint(byteLength)`.
+It contains no `rcph_*`, scope, timestamp, storage kind, or database identity. Each parent begins
+with `str(schemaId) || uint(schemaVersion)`—canonical byte order deliberately differs from the DTO's
+TypeScript declaration order—then encodes the following fields and finally
+`uint(artifactCount) || commitments`. Strings use `str`, digests use decoded 32-byte `bytes`,
+positive safe integers use `uint`, and only `nativeWorkspaceId` uses `optionalStr`:
+
+```text
+workspace = nativeWorkspaceBindingId, runtimeId, nativeIncarnation, projectId,
+  nativeWorkspaceId, directoryNormalizationSchemaId, filesystemIdentitySchemaId,
+  workspaceGeneration
+
+listener = nativeListenerRegistrationAttestationId, runtimeId, nativeIncarnation,
+  runtimeOwnerIdentityKeyId, runtimeOwnerKeyGeneration, descriptor.product, descriptor.access,
+  engineVersion, surfaceSchemaKind, routeResolutionSchemaId
+
+isolation = runtimeIsolationAttestationId, runtimeId, nativeIncarnation,
+  runtimeOwnerIdentityKeyId, runtimeOwnerKeyGeneration, descriptor.product, descriptor.access,
+  nativeListenerRegistrationAttestationId, listenerSignedRecordDigest,
+  processIdentityPolicySchemaId
+
+capability = capabilitySnapshotId, capabilitySnapshotAttestationId, collaborationServerId,
+  logicalChatId, nativeBindingId, nativeBindingIncarnationId, nativeConversationLeaseId,
+  nativeRegistrationPublicationId, nativeConversationId, runtimeId, nativeIncarnation,
+  runtimeOwnerIdentityKeyId, runtimeOwnerKeyGeneration, projectId, attachmentId,
+  attachmentLeaseId, nativeWorkspaceBindingId, canonicalDirectoryPathDigest,
+  nativeWorkspaceBindingDigest, capabilityGeneration, descriptor.product, descriptor.access,
+  engineVersion, nativeSurfaceSchemaId, nativeListenerRegistrationAttestationId,
+  listenerSignedRecordDigest, runtimeIsolationAttestationId, isolationSignedRecordDigest,
+  slashCommandNormalizationSchemaId, verifiedAtMs
+```
+
+All four parent byte strings are 1–65,536
+bytes. Decoders reject noncanonical/fatal UTF-8, invalid optional presence, unsafe integers,
+truncation, trailing bytes, the wrong role/schema/order/count, zero length, and a child length above
+that role's bound. `nativeBindingAuthorityArtifactDigest` snapshots and hashes 1–16,777,216 bytes.
+Both the parent reader and raw digest helper reject an intrinsically oversized input before taking
+the immutable snapshot, so a caller cannot force a full copy above the public bound.
+Listener, isolation, snapshot, and snapshot-attestation IDs are rederived from their parent
+coordinates during parse. `engineVersion` is nonempty and at most 256 UTF-8 bytes;
+`nativeSurfaceSchemaId` is nonempty and at most 1,024 UTF-8 bytes; descriptor and schema selectors
+are the exact literals shown in the DTOs. Locked tests prove exact byte round trips and sensitivity to every child
+role, digest, and length.
+
+The closed role order and schema registry is below. Unannotated child bounds are 16,777,216 bytes;
+the parent entries are 65,536 bytes. `runtime` versus `native_binding` is future storage-scope
+metadata only and is not part of the commitment bytes.
+
+```text
+parent.workspace_input [runtime, 64 KiB] = remote-claw/native-workspace-binding-input/v1
+parent.listener_input [runtime, 64 KiB] = remote-claw/native-listener-evidence-input-vector/v1
+parent.isolation_input [runtime, 64 KiB] = remote-claw/native-isolation-evidence-input-vector/v1
+parent.capability_input [native_binding, 64 KiB] = remote-claw/native-binding-capability-input-vector/v1
+
+workspace.canonical_directory [runtime, 16 KiB] = remote-claw/posix-canonical-directory-evidence/v1
+workspace.filesystem_identity [runtime, 64 KiB] = remote-claw/linux-no-follow-filesystem-identity/v1
+workspace.allowed_root [runtime, 1 MiB] = remote-claw/linux-allowed-root-ancestry/v1
+workspace.mount_namespace [runtime, 64 KiB] = remote-claw/linux-mount-namespace-identity/v1
+
+listener.native_executable [runtime] = remote-claw/native-executable-chunk-manifest/v1
+listener.front_door_executable [runtime] = remote-claw/front-door-executable-chunk-manifest/v1
+listener.front_door_build_manifest [runtime] = remote-claw/front-door-build-closure-manifest/v1
+listener.generated_surface [runtime] = remote-claw/native-generated-openapi-surface/v1
+listener.build_route_registry [runtime] = remote-claw/native-listener-build-route-registry/v1
+listener.measured_dispatch_table [runtime] = remote-claw/native-listener-measured-dispatch-table/v1
+
+isolation.raw_listener_socket [runtime, 64 KiB] = remote-claw/linux-raw-listener-socket-identity/v1
+isolation.raw_listener_peer_vector [runtime] = remote-claw/native-runtime-isolation-peer-vector/v1
+isolation.exact_process_socket_policy [runtime] = remote-claw/linux-exact-process-socket-policy-evidence/v1
+isolation.tool_namespace_policy [runtime] = remote-claw/linux-tool-namespace-policy-evidence/v1
+isolation.provider_facade_allowed_process [runtime, 1 MiB] = remote-claw/native-runtime-isolation-provider-peer/v1
+isolation.provider_facade_policy [runtime] = remote-claw/linux-provider-facade-policy-evidence/v1
+isolation.network_namespace [runtime, 64 KiB] = remote-claw/linux-network-namespace-identity/v1
+isolation.mount_namespace [runtime, 64 KiB] = remote-claw/linux-mount-namespace-identity/v1
+
+capability.native_surface [native_binding] = remote-claw/native-surface-schema-artifact/v1
+capability.listener_route_manifest [native_binding] = remote-claw/native-listener-route-manifest-artifact/v1
+capability.operation_classification_vector [native_binding] = remote-claw/native-operation-classification-vector/v1
+capability.family_capability_vector [native_binding, 1 MiB] = remote-claw/native-mutation-family-vector/v1
+capability.slash_normalizer_implementation [native_binding] = remote-claw/opencode-slash-normalizer-implementation/v1
+capability.slash_command_table [native_binding, 64 KiB] = remote-claw/opencode-slash-command-table/v1
+capability.request_translator_implementation [native_binding] = remote-claw/native-request-translator-implementation/v1
+capability.request_translator_build_manifest [native_binding] = remote-claw/native-request-translator-build-manifest/v1
+capability.translation_injectivity_proof [native_binding] = remote-claw/native-request-translation-injectivity-proof/v1
+capability.user_text_family_evidence [native_binding] = remote-claw/native-user-text-family-evidence/v1
+```
+
+The four fixed child orders are the workspace, listener, isolation, and capability subsequences shown
+above. E1a reserves each child role/schema/bound and verifies its content commitment; it does not
+define or validate the committed child's semantic bytes. E1b must close those leaf codecs and
+produce the commitments from a real collector before E1c may treat a parent as evidence.
 
 A snapshot-only current pointer is forbidden. Evidence may survive a crash or signer handoff while
 inert, but a transport lease is valid only in one of these two states:
@@ -3155,18 +3745,28 @@ Withdrawal is one committed `nbaw_*` insertion whose trigger terminalizes only i
 clears only their exact parent pair. No public/component update path can stage an intermediate state,
 and hostile SQL cannot use the operation row to name a different old or new tuple.
 
-The candidate E1 logical schema is intentionally normalized but is not migration-ready. E1 is intended to own
+The candidate E1c logical schema is intentionally normalized but has no migration number or pinned
+bytes. E1c is intended to own
 `native_binding_authority_evidence_operations`, `native_workspace_bindings`,
 `opencode_binding_workspaces`, `native_listener_registration_attestations`,
 `native_runtime_isolation_attestations`, `native_binding_capability_snapshots`, and
-`native_capability_snapshot_attestations`. Listener manifests, manifest entries, operation
+`native_capability_snapshot_attestations`, plus
+`native_binding_authority_artifact_links`, `native_binding_authority_transition_receipts`, and an
+exhaustive immutable legacy-E-purpose quarantine inventory. Listener manifests, manifest entries, operation
 classifications, the one family entry, slash-normalization tables, isolation peer/handler vectors,
 workspace/path evidence, and build/proof material remain bounded immutable protected artifacts. The
-repository and secure-reopen validator parse every artifact and recompute every item, vector, and
-record digest; a ref/digest pair is never treated as opaque authority. Manifest and classification
+repository and secure-reopen validator use E1b's codecs to parse every artifact and recompute every
+item, vector, parent, recipe, and record digest; a ref/digest pair is never treated as opaque
+authority. Canonical parent and recipe bytes use role/schema/digest/length content commitments and
+never repository refs for their artifact coordinates.
+Repository-allocated refs live only in append-only role/index link rows whose composite joins close
+the protected handle, scope, schema, digest, and byte length. Their exact primary key is
+`(nativeBindingAuthorityOperationId,artifactRole,artifactIndex)`; every E1a role is correlated to its
+registry schema, while `recipe.authority_evidence` and `capability.canonical_snapshot` are correlated
+to their exact local schemas. Manifest and classification
 vectors contain 1–4,096 entries, have identical cardinality and order, and each exact encoded artifact
 is at most 16,777,216 bytes. The snapshot's `familyCapabilityVectorRef` resolves a separately bounded
-artifact. E1's family vector must contain exactly one entry, `user_text`, whose
+artifact. E1c's family vector must contain exactly one entry, `user_text`, whose
 manifest entry is a `binding_adapter` operation; no second operation may claim that family, and every
 other operation has null family fields. The slash-normalization schema is exactly
 `remote-claw/opencode-slash-command-normalization/v1`; its exact four-entry UTF-8-ordered table maps
@@ -3179,7 +3779,7 @@ A1.8a1-I is intended to own `native_binding_capability_snapshot_statuses`,
 foreign keys and parent-lifecycle triggers for the two existing transport-pointer columns. Evidence
 records are immutable. Preparing I inserts the snapshot status and ingress together in `prepared`;
 the prepared ingress joins the immutable accepted snapshot and attestation plus that prepared status,
-but it is not current authority. Partial unique indexes allow at most one nonterminal E operation and
+but it is not current authority. Partial unique indexes allow at most one nonterminal E1c operation and
 one prepared I operation per attachment lease; successors must advance or abort either plan before
 allocating the next retained generation. A second cross-attachment partial unique index on
 `(runtimeId,nativeIncarnation,runtimeOwnerKeyGeneration)` applies exactly while the state is
@@ -3198,7 +3798,7 @@ equal `committedAtMs`; terminal times are null while prepared/current and equal 
 supersession, withdrawal, or parent-lifecycle transition time when terminal. Every non-null later
 time is monotone from `preparedAtMs`.
 
-The three signed evidence records use the existing runtime-owner sequence ledger and these exact
+The three E1c signed evidence records use the existing runtime-owner sequence ledger and these exact
 purpose/schema pairs: `listener_registration_attestation` with
 `remote-claw/native-listener-registration-attestation/v1`,
 `runtime_isolation_attestation` with
@@ -3209,25 +3809,35 @@ reservation supplies the purpose, payload schema/ref, and signed artifact ID. It
 recomputes the canonical bytes, verifies Ed25519 under the named current runtime-owner key, and
 requires exact composite joins to both that signed reservation and its acceptance row. Generic
 signature acceptance alone cannot make evidence installable. The shared public
-reserve/bind/store/accept/abort signature methods must reject all three E1 purposes and every
-operation-attached E1 reservation. Only transaction-scoped E1 phase methods may create or mutate those
+reserve/bind/store/accept/abort signature methods must reject all three E purposes and every
+operation-attached E1c reservation. Database triggers enforce the same boundary. On upgrade, every
+pre-E1c reservation, stored signature, or acceptance with one of these purpose literals is enumerated
+into the immutable legacy quarantine, remains byte-preserved and nonadoptable, and is excluded from
+E1c joins and rotation blockers regardless of its old state. Secure reopen proves the quarantine is
+exhaustive in both directions. The quarantine's primary/composite FK is the exact
+`(runtimeId,runtimeOwnerIdentityKeyId,runtimeOwnerKeyGeneration,signerSequence)` reservation key; its
+purpose, state, schema/digests, and nullable acceptance time must equal the legacy source rows. The
+upgrade inserts exactly one sidecar for every matching pre-upgrade reservation and no other row;
+post-upgrade triggers forbid update/delete or new generic E-purpose rows. Only transaction-scoped E1c phase methods may create or mutate E-owned
 rows. Phase abort must atomically abort its still-reserved/bound reservation and the `nbao_*` operation;
 no public mutator can strand a nonterminal operation on an aborted or unattached reservation.
 
 Evidence is deliberately phase-closed because the isolation payload commits to the accepted listener
 signed-record digest and the binding snapshot commits to the accepted isolation digest. The exact
 canonical `remote-claw/native-binding-authority-evidence-recipe/v1` protected artifact contains the
-operation's static scope/identity tuple followed by the ordered refs and digests for workspace,
-listener/build/manifest, raw isolation proof, operation-classification/family/slash, and build-proof
-inputs. It contains no signature or future signer sequence, is at most 16,777,216 bytes, and its
-digest is `SHA256(bytes(exactCanonicalRecipe))`. Every later payload is derived only
+operation's static scope/identity tuple followed by the four ordered parent
+schema/digest/byte-length commitments. It contains no `rcph_*`, signature, future signer sequence,
+storage scope, or database identity, is at most 16,777,216 bytes, and its digest is raw
+`SHA256(exactCanonicalRecipe)`, with no additional canonical `bytes(...)` length prefix. That makes
+the recipe digest identical to the protected artifact's content coordinate. Every later payload is derived only
 from that recipe plus the prior phase's accepted signed-record digest.
 `exactCanonicalRecipe` is the canonical writer output for every
-`NativeBindingAuthorityEvidenceRecipe` field in declaration order: strings use `str`, non-negative
-safe integers use `uint`, and every `*Digest` contributes its decoded 32 bytes. The four parent schema
-IDs currently reserve names only: no bytes beneath them are authoritative until blocker 1 defines
-each parent envelope, registered child codec, parser, re-encoder, and bound. The eventual recipe must
-not become permission to smuggle an untyped aggregate blob.
+`NativeBindingAuthorityEvidenceRecipe` field in the displayed order, beginning with schema ID then
+version: strings use `str`, non-negative
+safe integers use `uint`, every `*Digest` contributes its decoded 32 bytes, and every parent length
+uses `uint`. E1a has closed the four parent envelope parsers, re-encoders, bounds, and commitment
+inventories; E1b must close every registered child codec and collector. The recipe is not permission
+to smuggle an untyped aggregate blob.
 
 The candidate `prepareNativeBindingAuthorityEvidence` operation would allocate capability generation one for the first evidence
 operation on an attachment lease and thereafter exactly
@@ -3241,23 +3851,34 @@ tuple collide and require a new native incarnation, while key rotation selects t
 generation-bound IDs above. When no accepted listener exists, the target prepare state is
 `listener_prepared` with only its exact reservation. The planned orchestrator binds, signs,
 stores, and accepts that reservation before moving to `listener_accepted`; it then derives and reserves isolation and advances through
-`isolation_prepared`/`isolation_accepted`. The intended final labels are `capability_prepared` and
-`accepted_inert`, but blocker 4 must close their exact snapshot/artifact/attestation row inventory
-before those transitions are implementable. Each transition must be one request-bound
-transaction and store at most the one next reservation or artifact whose payload is then derivable. Accepted
+`isolation_prepared`/`isolation_accepted`. The `capability_prepared` transition retains the exact
+unsigned canonical snapshot protected artifact and bound capability reservation, but no normalized
+snapshot or capability attestation. The operation's fixed `canonicalSnapshotSchemaId` is always
+`remote-claw/native-binding-capability-snapshot/v1`; `capabilitySnapshotRef` and
+`canonicalSnapshotDigest` are both null before `capability_prepared` and both non-null from
+`capability_prepared` onward. The direct operation fields and its immutable
+`capability.canonical_snapshot` link own that exact unsigned artifact before normalized rows exist.
+After protected signing, one
+`capability_prepared → accepted_inert` transaction verifies the stored signature and co-lands the
+normalized snapshot, normalized capability attestation, signature acceptance, complete final link
+set, transition receipt, and final bundle digest. The snapshot's semantic bytes contain no
+capability-attestation ref or digest, so the attestation signs an already-fixed snapshot digest and
+there is no cycle. Each transition is one request-bound transaction and stores only the exact next
+reservation, artifact, normalized row set, links, and receipt named by that phase. Accepted
 earlier phases remain immutable evidence; a valid phase prefix is not corruption. Any missing,
 extra, or changed row outside that exact prefix is corruption.
 
 Abort is permitted from a nonterminal phase only before its current reservation becomes `signed`;
 it atomically aborts that unresolved reservation, marks the operation `aborted`, and retains/burns the
-capability generation. A stored signature must instead be exactly accepted and the phase advanced,
-so no signed-but-unaccepted row is abandoned. Runtime-owner key rotation, key revocation/destruction,
-and parent-key replacement are blocked while any evidence operation or its current reservation is
-nonterminal. They are also blocked while an I operation is `prepared`; that plan must first install
-or successor-abort. Once the E operation is `accepted_inert`, rotation may leave that evidence
+capability generation. A stored E-owned signature must instead be exactly accepted and the phase
+advanced, so no signed-but-unaccepted E1c row is abandoned. Runtime-owner key rotation, key
+revocation/destruction, and parent-key replacement are blocked while any E1c evidence operation or
+its current reservation is nonterminal. Quarantined legacy E-purpose rows never satisfy this barrier
+and never become E1c authority. Rotation is also blocked while an I operation is `prepared`; that
+plan must first install or successor-abort. Once the E1c operation is `accepted_inert`, rotation may leave that evidence
 historical and non-installable; installation requires its named key still current, otherwise a later
 evidence operation under the next capability generation is required. An installed pair must be
-withdrawn before its signing key can rotate. None of these E transitions writes a transport pointer, so a later
+withdrawn before its signing key can rotate. None of these E1c transitions writes a transport pointer, so a later
 replacement may prepare and accept its next generation while the predecessor pair remains current.
 
 The target binding snapshot repeats the exact collaboration server, logical chat, binding,
@@ -3265,10 +3886,29 @@ binding incarnation, native conversation lease and ready publication, native `se
 attachment/lease, workspace ID/digest, engine/build/manifest/isolation tuple, total operation vector,
 one `user_text` family digest, and dense capability generation. The candidate
 `NativeWorkspaceBindingRecord` owns the exact normalized path bytes and filesystem/mount identity,
-and `OpenCodeBindingWorkspaceRecord` joins that workspace to the immutable project-target selector
-generation. Blocker 2 must still define who creates, replaces, supersedes, and closes these rows,
-their generation/CAS and current uniqueness, and the exact handling of parent or selector changes;
-old selector mappings may never be rewritten to retrofit a workspace. A cross-server, cross-chat, cross-session, cross-workspace,
+and `OpenCodeBindingWorkspaceRecord` pins that workspace to the logical chat's already-retained
+project-target selector generation, runtime/native incarnation, binding incarnation, attachment
+lease, and ready publication. That selector row may be current or superseded but not closed; E1c
+never follows a replacement mapping for an existing chat.
+
+The workspace lineage key is exactly `(runtimeId,nativeIncarnation,projectId,workspaceSlot)`. When
+`nativeWorkspaceId` is present, the slot is the tagged `native_workspace_id` value; otherwise it is
+the tagged `canonical_directory_path_digest` value. Generation one has a null predecessor. Later
+generations are dense and require one exact predecessor CAS over predecessor ID, generation, and
+workspace digest after the old workspace is drained/terminal and the old binding lineage is no
+longer writable. Only a new binding lineage may insert generation `predecessor+1`; a partial unique
+constraint permits one current row per lineage key. Exact replay returns the retained row, while
+changed bytes under its ID or generation collide.
+
+An OpenCode link is unique on `(nativeBindingIncarnationId,linkGeneration)` and E1c permits only
+`linkGeneration:1`. Its row stores the exact mapping ID/generation/digest, runtime/incarnation,
+project, attachment lease, ready publication, and creation/terminal times. E1c may insert that row
+only as `current` or exact-replay it; it never replaces, retargets, supersedes, or increments the link
+inside the binding incarnation. The A1.4 parent lifecycle alone supplies its terminal transition.
+Any directory,
+native-workspace, filesystem, mount-namespace, mapping, or link change first withdraws the installed
+pair and lets the A1.4 parent owner close the old workspace/binding lineage; only a new lineage may
+prepare the changed workspace. Old selector mappings are never rewritten to retrofit a workspace. A cross-server, cross-chat, cross-session, cross-workspace,
 cross-attachment, or cross-incarnation transplant therefore changes a direct field, composite key,
 or recomputed digest before installation.
 
@@ -3345,8 +3985,7 @@ the parent; new parent rows initialize both pointers null. Coordinator or owner 
 revocation, process/socket replacement, manifest drift, or workspace-identity drift likewise makes
 the old pair non-current before a successor becomes writable.
 
-The candidate repository method-name surface is narrow, but blocker 5 leaves every request, result,
-and reconciliation input shape unresolved:
+The candidate repository method-name surface is narrow and has no generic component mutator:
 
 ```text
 prepareNativeBindingAuthorityEvidence
@@ -3362,36 +4001,97 @@ reconcileNativeBindingAuthorityWithdrawal
 readNativeBindingAuthorityInventory
 ```
 
-The eventual evidence orchestrator must use closed purpose-specific bind/sign/store steps internally;
-`advanceNativeBindingAuthorityEvidence` may commit only the exact next phase named above, and abort
+The future evidence orchestrator must use closed purpose-specific bind/sign/store steps internally;
+`advanceNativeBindingAuthorityEvidence` accepts exactly the five discriminated advance variants shown
+above and may commit only their named transition; abort
 must be unavailable after that phase's signature is stored until the exact acceptance advances it. No
 generic `sign(bytes)`, `acceptSnapshot`, `activateSnapshot`, or pointer mutation escapes. Every
-operation is request-bound by its caller-retained `nbao_*`, `nbai_*`, or `nbaw_*` plus a canonical
-operation digest and a full original request whose exact type is still blocker 5. The target evidence reconciliation statuses are
+evidence mutation uses a version-one caller-retained request envelope containing the method kind,
+`nbao_*`, expected transition ordinal and predecessor state, requested
+successor state, exact scope/key/generation coordinates, and the complete immutable child, parent,
+recipe, and prior-acceptance byte snapshots needed by that transition. Its stable
+`transitionRequestDigest` is raw SHA-256 of the exact canonical original-request bytes and excludes
+every `rcph_*` and repository output. Those canonical bytes encode, in order, request schema,
+transition kind, `nbao_*`, ordinal, from/to state, optional expected operation digest, every CAS field
+in `NativeBindingAuthorityEvidenceCasV1` declaration order, workspace/listener/isolation/capability
+trees followed by recipe, and the selected variant fields in declaration order. Each artifact
+snapshot encodes role, index, schema, decoded digest, byte length, and its exact canonical bytes. The
+four tree roots and children must equal E1a's fixed parent/role orders, and E1b must parse each child;
+`artifactIndex` is zero for these singleton roles. The caller retains the digest together with the
+whole original request. No later request reconstructs bytes from a returned ref.
+
+Prepare uses ordinal one and `fromState:"absent"`. It lands at `listener_prepared` when neither
+singleton acceptance exists, `isolation_prepared` when the exact listener acceptance is reusable, or
+`capability_prepared` when the exact listener and isolation acceptances are reusable; the
+accepted-prefix signed-record coordinates, `acceptedPrefix.kind`, next signer purpose, and expected
+next signer sequence are a three-arm discriminated union and must match that choice. The five advances
+are exactly listener accept, isolation prepare, isolation accept, capability prepare, and capability
+accept. Prepare variants carry the expected next signer sequence; accept variants carry the exact
+signature and signed-record coordinate. Abort names the exact next ordinal and operation digest and
+either the one still `reserved|bound` reservation or null at an accepted prefix; it is rejected once
+an E-owned signature is stored. Reconcile accepts only
+`ReconcileNativeBindingAuthorityEvidenceRequestV1`, which embeds the retained original envelope.
+
+Every request CASes the exact A1.4 ready lease/publication/gate, transport epoch and unchanged pointer
+pair, owner/coordinator fences, runtime and key generation, binding/incarnation/attachment,
+capability generation, workspace/link generation, and the logical chat's pinned mapping
+ID/generation/digest. That mapping may be current or superseded but never closed. Mixed pointer
+nullness, a closed pinned mapping, or any changed named coordinate rejects before a write; a newer
+global mapping does not alter or invalidate the chat's retained non-closed mapping.
+
+The caller-retained `nbao_*` is the sole local FK for the operation, artifact links, normalized rows,
+and receipts. After validating the request and allocating the exact next signer sequence, the
+repository computes and returns `operationDigest`; the caller does not predeclare it. Random protected
+handles are allocated only inside the transaction. Each successful state change inserts exactly one
+append-only receipt at the dense ordinal with transition kind, request schema, from/to state, exact
+owner/coordinator lease IDs and epochs, `transitionRequestDigest`, `retainedGraphDigest`, and commit
+time. A current-state column is a projection of the latest receipt and is never sufficient historical
+proof. Secure reopen uses the receipt's independently retained request schema, kind, from/to state,
+owner and coordinator fences, digest, and graph digest rather than trusting that projection.
+
+Every successful mutation returns exactly `NativeBindingAuthorityEvidenceLandedResultV1`.
+Reconciliation returns the status-discriminated
+`ReconcileNativeBindingAuthorityEvidenceResultV1`: either that landed result after revalidating its
+complete linked graph, or the exact absent result with `retryDisposition:"same_bytes"|"forbidden"`.
+The evidence status is
 `absent|listener_prepared|listener_accepted|isolation_prepared|isolation_accepted|capability_prepared|accepted_inert|aborted`;
 install reconciliation returns only `absent|prepared|committed|aborted`; withdrawal reconciliation
 returns only `absent|committed`.
-Every non-absent result includes and revalidates the complete retained operation and exact linked
-graph; partial or changed graphs throw persistence corruption rather than becoming a status. On
-unknown commit, the poisoned database handle closes and secure reopen reconciles that exact request.
+
+`attemptedTransition` is the immutable receipt for the exact original request being reconciled;
+`current.status` and its latest receipt identify the operation's present durable phase. If later
+transitions have landed, reconciliation of an earlier exact request still returns `outcome:"landed"`
+with that earlier attempted receipt and the later fully validated current projection—it never reports
+the earlier request absent merely because the current state advanced.
+
+Before creating the opaque `current` projection, the repository revalidates the operation and every
+dense receipt; workspace and OpenCode link; protected artifacts and immutable links; all signer
+reservations, stored signatures, and acceptances; normalized listener and isolation attestations; and
+the phase-appropriate unsigned snapshot or normalized snapshot/attestation/bundle rows. The
+projection's `retainedGraphDigest` commits to that complete graph. Partial, extra, or changed graphs
+throw persistence corruption rather than becoming a status. On unknown commit, the poisoned database handle closes and secure reopen reconciles that exact
+request. Absence permits `same_bytes` only if no receipt or operation graph for the request landed, no
+later transition consumed its predecessor, and the request's exact parent/key/coordinator fences
+remain admissible and its pinned mapping remains non-closed. Otherwise absence is `forbidden`; the caller must close or start a fresh operation
+under the appropriate new lineage. A same operation ID with changed bytes is a collision.
 For I prepare/install, proved absence permits one same-byte retry only while the original A1.4 parent
 lease/publication and port entry remain live. If preparation landed, later loss closes the exact
 prepared plan and consumes its retained generations. If preparation was proved absent, there is no
 row to burn: recovery abandons that `nbai_*`, uses a new operation and evidence for the successor
 parent lineage, and may reuse the still-next ingress generation/derived `ncil_*`. Once any successor
 row lands, replaying the abandoned request collides. E phase retries instead require their exact
-recipe/key/phase authority. Withdrawal is DB-only, so an absent `nbaw_*` may exact-retry under the
+recipe/key/phase authority and next receipt ordinal. Withdrawal is DB-only, so an absent `nbaw_*` may exact-retry under the
 current successor fence even when no port is live, or the successor may submit a fresh operation
 against the unchanged exact pair. Changed bytes under any retained identity collide. A mixed pointer
 pair, committed operation without its exact rows, or same operation ID with changed bytes is
 corruption.
 
-The target operation and lease digest formulas are below; E0 exports none of these builders, and E1
-cannot lock its digest gate until blockers 1, 4, and 5 close the bytes and staging inputs:
+The future stateful operation and lease digest formulas are below. E1a exports none of these builders;
+E1c must implement and lock them only after E1b settles the child bytes:
 
 ```text
 evidenceRecipeDigest = SHA256(
-  bytes(exactCanonicalRecipe)
+  exactCanonicalRecipe
 )
 
 authorityEvidenceBundleDigest = SHA256(
@@ -3415,8 +4115,10 @@ evidenceOperationDigest = SHA256(
   str(projectId) || str(attachmentId) || str(attachmentLeaseId) ||
   str(nativeWorkspaceBindingId) || uint(capabilityGeneration) || str(capabilitySnapshotId) ||
   str(nativeListenerRegistrationAttestationId) || str(runtimeIsolationAttestationId) ||
-  str(capabilitySnapshotAttestationId) || str(evidenceRecipeRef) ||
-  bytes(base64urlDecode(evidenceRecipeDigest)) || uint(listenerSignerSequence)
+  str(capabilitySnapshotAttestationId) ||
+  str("remote-claw/native-binding-authority-evidence-recipe/v1") ||
+  bytes(base64urlDecode(evidenceRecipeDigest)) || uint(evidenceRecipeByteLength) ||
+  uint(listenerSignerSequence)
 )
 
 canonicalLeaseDigest = SHA256(
@@ -3463,10 +4165,14 @@ withdrawalOperationDigest = SHA256(
 )
 ```
 
-`evidenceOperationDigest` is immutable and fully known in the first transaction. The nullable
-isolation/capability signer sequences, phase timestamps, and final `authorityEvidenceBundleDigest`
+`evidenceOperationDigest` is immutable and fully known after the first transaction allocates the
+listener signer sequence. The nullable isolation/capability signer sequences,
+`capabilitySnapshotRef`, `canonicalSnapshotDigest`, phase timestamps, and final `authorityEvidenceBundleDigest`
 are monotone operation outputs validated against the exact phase reservations and acceptances; they
-are deliberately excluded from that prepare-time digest. In `authorityEvidenceBundleDigest`, the
+are deliberately excluded from that prepare-time digest. `evidenceRecipeRef`, every parent/child
+`rcph_*`, and every link-row identity are also excluded; the
+operation commits instead to the recipe schema, digest, and exact byte length. In
+`authorityEvidenceBundleDigest`, the
 three attestation-digest fields are the accepted `signedRecordDigest` values, not merely canonical
 payload digests.
 
@@ -3497,9 +4203,11 @@ The artifact never contains the connection ID itself, a socket address, or a cre
 owner recomputes those bytes from the current A1.4 lease/publication, its live registry entry, and its
 authenticated connection at prepare, install, and before invocation.
 
-Secure reopen enumerates every authority row and protected artifact once, proves dense generations
-and predecessor chains, recomputes all canonical bytes/digests and IDs, verifies the three signature
-and acceptance joins, rejects extra current/orphan rows, and proves both transport pointers are null
+Secure reopen enumerates every authority row, transition receipt, artifact link, legacy quarantine,
+and protected artifact once; proves dense transition ordinals, generations, and predecessor chains;
+recomputes all canonical bytes/digests and IDs through the E1b codecs; verifies the three signature
+and acceptance joins; proves every pre-E1c E-purpose signer row is quarantined and every E-owned row
+is operation-attached; rejects extra current/orphan rows; and proves both transport pointers are null
 or the one matched current pair. Database validation does not claim that a volatile port is live; a
 separate startup/readiness check must find the exact registry entry or withdraw the bundle before any
 consumer can be admitted.
@@ -6466,7 +7174,7 @@ command `decision_reserved`, and A1 sidecar `deciding`. The broader finalization
 section are target behavior. Schema v10 rejects group `finalized`, command `decided`, sidecar
 `terminal`, signer acceptance, and any final result/outbox/effect graph. Schema v11 A1.8a0 now
 atomically adds only the rejected final result, dense signer acceptance, logical ingress terminal
-overlay, exact semantic-result artifact, and inert `pending_seal` intent. A1.8a1-E1/I first owns the
+overlay, exact semantic-result artifact, and inert `pending_seal` intent. A1.8a1-E1c/I first owns the
 dormant native-authority pair; A1.8a2 must still add every admitted attempt/front-door-dispatch/effect
 arm, and A1.8b must seal/publish delivery. A1.7b1
 plus A1.8a0 still advertise nothing.
@@ -7293,7 +8001,7 @@ message digest, source-event fingerprint tuple, disposition, stable semantic res
 transport candidate, transport-attempt binding, and the collision/incomplete tombstone needed to
 reject replay remain indefinitely for that route. A1.7b1 retains its command/decision/preparation
 artifacts and signatures; A1.8a0 now retains the final rejected action/chat payload bytes, common
-result, signer acceptance, logical terminal overlay, and inert delivery intent. A1.8a1-E1/I must first
+result, signer acceptance, logical terminal overlay, and inert delivery intent. A1.8a1-E1c/I must first
 establish dormant native authority; A1.8a2/A1.8b separately add admitted effects and sealed/published
 delivery. Neither local chat/channel closure nor machine reset authorizes collection because copied
 bearer/key material may remain valid. A late missing part links the tombstone as
@@ -7792,13 +8500,14 @@ Its `canonicalPayloadDigest` is SHA-256 of those bytes and `signedRecordDigest` 
 bytes(base64urlDecode(canonicalPayloadDigest)) || str(runtimeOwnerIdentityKeyId) ||
 uint(runtimeOwnerKeyGeneration) || uint(signerSequence) || bytes(base64urlDecode(signature))`.
 The purpose-specific reservation and runtime-owner acceptance row must match before the snapshot
-pointer can become current. For a binding snapshot, `runtimeOwnerAttestationRef` must resolve exactly
-one attestation with `snapshotKind:"binding"`, `snapshotId == capabilitySnapshotId`, the binding
-snapshot schema/digest, and the same runtime/incarnation. For a server snapshot, the corresponding
-values are `snapshotKind:"server"`, `snapshotId == serverCapabilitySnapshotId`, and the server
-snapshot schema/digest. A TUI policy uses `snapshotKind:"tui_policy"`, its TUI policy snapshot
-ID/schema/digest, and the same runtime/incarnation. In every case `runtimeOwnerAttestationDigest` must
-equal the recomputed `signedRecordDigest`; the runtime-owner key generation and signer sequence must be
+pointer can become current. A binding snapshot contains no attestation locator or digest. Its E1c
+accepted-evidence operation and `ncsa_*` normalized attestation row join exactly one attestation with
+`snapshotKind:"binding"`, `snapshotId == capabilitySnapshotId`, the binding snapshot schema/digest,
+the same runtime/incarnation, and a recomputed `signedRecordDigest`. For a server snapshot,
+`runtimeOwnerAttestationRef` and `runtimeOwnerAttestationDigest` resolve the corresponding
+`snapshotKind:"server"`, `snapshotId == serverCapabilitySnapshotId`, server snapshot schema/digest,
+and signed-record digest. A TUI policy uses `snapshotKind:"tui_policy"`, its TUI policy snapshot
+ID/schema/digest, and the same runtime/incarnation. In every case the runtime-owner key generation and signer sequence must be
 accepted under `native_capability_snapshot` for binding/server or `native_tui_policy_snapshot` for
 TUI. Snapshot refs are parsed and every component digest is recomputed; same
 ID with different content, a cross-kind/ref transplant, or a changed attestation is equivocation. A
@@ -8099,7 +8808,10 @@ The two vectors must have exactly the same `(role,manifestPosition,operationEntr
 manifest item must resolve to that position and handler in the current listener manifest and
 registration attestation; every authorization item must resolve to the one installed audience- and
 operation-specific authorization handler. Missing, duplicate, reordered, cross-role, additional, or
-same-digest/different-ref content invalidates the peer and therefore the whole isolation attestation.
+changed semantic content invalidates the peer and therefore the whole isolation attestation. Refs
+are repository-local links: equal canonical bytes at another handle do not change semantic identity,
+but they also cannot repoint or replace the exact locator retained by the operation's immutable link
+row.
 
 The vector digest is SHA-256 of
 `str("remote-claw/native-runtime-isolation-peer-vector/v1") || uint(4)` followed by each decoded
@@ -12569,7 +13281,7 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: A1.0 through dormant A1.8a0 implemented; A1.8a1-E0 identity contract implemented; E1 design incomplete; E1 through A1.11 planned.** A1 is
+**Status: A1.0 through dormant A1.8a0 implemented; A1.8a1-E0 identities and E1a parent envelopes implemented; E1b through A1.11 planned.** A1 is
 provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
 outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
 Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
@@ -12698,12 +13410,20 @@ official-client compatibility; B and C add those records on the generic A1 seams
   builders with locked vectors. The module is exported from the host-state barrel but adds no
   evidence digest or artifact codec, schema/migration, repository, signer mutation, pointer write,
   callable-port access, runtime-owner operation, or production capability.
-- **A1.8a1-E1 — OpenCode binding authority evidence (design incomplete):** after all five §4.1
-  blockers close, add immutable workspace, listener-registration, runtime-isolation, total
+- **A1.8a1-E1a — Ref-free evidence parents (implemented pure contract):** add the four strict 64 KiB
+  parent parsers/writers/decoders, closed ordered role/schema/bound/scope registry, canonical
+  role/schema/digest/length commitment, cross-coordinate ID checks, locked byte/digest vectors, and
+  bounded raw-artifact digest helper. No child semantic codec, collector, artifact write, schema,
+  repository, signer, pointer, port, operation, or production capability lands.
+- **A1.8a1-E1b — Collector-backed child evidence (planned):** implement every registered
+  Linux/OpenCode leaf codec and a real collector fixture; prove that each E1a commitment is generated
+  from exact collected bytes rather than a caller assertion.
+- **A1.8a1-E1c — OpenCode binding authority accepted evidence (planned after E1b):** add immutable workspace, listener-registration, runtime-isolation, total
   operation/family, binding-snapshot, and accepted runtime-owner attestation evidence for the one
-  binding-scoped `user_text` family. It must never change either transport pointer, so accepted
-  evidence remains inert and creates no callable authority.
-- **A1.8a1-I — Atomic binding authority install (planned after A1.8a1-E1):** install a credentialless
+  binding-scoped `user_text` family under §4.1's frozen workspace, legacy-signer, staging, and
+  reconciliation rules. It never changes either transport pointer, so accepted evidence remains
+  inert and creates no callable authority.
+- **A1.8a1-I — Atomic binding authority install (planned after A1.8a1-E1c):** install a credentialless
   authenticated callable-port ingress lease and that exact accepted capability snapshot as one
   current pair, with pair withdrawal/takeover/restart reconciliation. It still creates no admitted
   command, attempt, dispatch, effect gate, or native call.
@@ -12724,8 +13444,9 @@ official-client compatibility; B and C add those records on the generic A1 seams
   remote collaboration is unavailable.
 
 The stateful path through dormant rejected-result closure—`A1.0 → A1.1 → A1.2 → A1.3 → A1.4 → A1.5 → A1.6 → A1.7a → A1.7b0 → A1.7b1 → A1.8a0`—is implemented behind closed trusted-adapter and host-only seams.
-A1.8a1-E0's pure identity contract is also implemented, but it is not authority evidence. E1 remains
-unimplemented and design-blocked on the five §4.1 groups; I remains unimplemented after E1.
+A1.8a1-E0's pure identity contract and E1a's pure parent-envelope contract are also implemented, but
+neither is authority evidence. E1b remains the collector-backed child-codec gate; E1c remains the
+stateful accepted-evidence implementation after E1b; I remains unimplemented after E1c.
 Full A1.8a then requires A1.8a2's one-transaction admitted arm;
 A1.8b waits for A1.8a; A1.9 waits for A1.3 and the protected-handle kernel; A1.10 waits for
 A1.5–A1.8b; A1.11 is the integrated gate. An A1.8a0 `pending_seal` intent is a retained final
@@ -13168,14 +13889,27 @@ barrier, transport-pointer write, callable-port access, owner operation, protoco
 wiring, or production capability. E0 therefore supplies identity vocabulary, not accepted evidence
 or authority.
 
-After all five §4.1 freeze blockers close, A1.8a1-E1's gate must lock every evidence digest vector;
-parse and recompute all four bounded parent artifacts and every registered child codec; pin the exact
-schema-v12 statements, migration digest, and manifest; prove the specified treatment of every
-pre-v12 E-purpose signer row; verify the three Ed25519 reservations and acceptance joins in
+A1.8a1-E1a's passed gate locks all four exact parent DTOs and byte/digest vectors; fixed ordered
+role/schema/digest/length commitments; 64 KiB parent and per-role child bounds; strict round-trip,
+UTF-8, truncation, trailing-byte, presence, integer, role/order/schema, and derived-ID rejection; raw
+artifact snapshot hashing through 16 MiB; and the absence of any ref field from canonical bytes. Its
+code/diff boundary is the pure parent module, tests, and host-state barrel export. It has no child
+semantic parser, collector, protected-artifact write, schema/migration, repository, signer/custody
+mutation, pointer/port access, owner operation, runtime wiring, or production capability.
+
+A1.8a1-E1b's gate must parse and recompute every registered child codec, prove every role's exact
+Linux/OpenCode measurement semantics and bound, and run a real collector fixture whose captured bytes
+recreate all four E1a parents. Synthetic commitments and schema-name assertions cannot pass E1b.
+
+Only after E1b may A1.8a1-E1c pin its future migration statements, digest, and manifest. E1c's gate
+must prove exhaustive immutable quarantine/nonadoption of every pre-E1c E-purpose signer row; verify
+the three Ed25519 reservations and acceptance joins in
 dependency order; reject phase skips, duplicate singleton listener/isolation attestations, generic
-signature-ledger mutation, and key rotation while a phase is nonterminal; prove exact replay,
-collision, signer takeover, request-bound unknown-commit recovery, and no-extra-row semantic reopen;
-and assert both transport pointers remain byte-identical after every success and fault. A1.8a1-I's later gate must prove the two-pointer
+signature-ledger mutation, in-lineage workspace replacement, and key rotation while an E-owned phase
+is nonterminal; prove the exact unsigned-snapshot/accepted-inert row inventory, immutable artifact
+links, dense transition receipts, exact replay, collision, signer takeover, request-bound
+landed/absent/retry reconciliation, and no-extra-row semantic reopen; and assert both transport
+pointers remain byte-identical after every success and fault. A1.8a1-I's later gate must prove the two-pointer
 XOR is impossible; the installed rows match one live callable-port registry entry and one accepted
 snapshot; prepared-port loss aborts and burns exactly the landed generations while proved absence
 burns none; the one-statement trigger program makes every install/withdraw transition executable
