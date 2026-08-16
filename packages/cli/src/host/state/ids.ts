@@ -76,6 +76,36 @@ export const A1_CANONICAL_ID_SPECS = Object.freeze({
     bodyBytes: 16,
     allocation: "random",
   }),
+  nativeWorkspaceBinding: frozenCanonicalIdSpec({
+    prefix: "nwb_",
+    bodyBytes: 16,
+    allocation: "random",
+  }),
+  nativeListenerRegistrationAttestation: frozenCanonicalIdSpec({
+    prefix: "nlra_",
+    bodyBytes: 32,
+    allocation: "derived_sha256",
+  }),
+  nativeRuntimeIsolationAttestation: frozenCanonicalIdSpec({
+    prefix: "nria_",
+    bodyBytes: 32,
+    allocation: "derived_sha256",
+  }),
+  nativeBindingCapabilitySnapshot: frozenCanonicalIdSpec({
+    prefix: "nbcs_",
+    bodyBytes: 32,
+    allocation: "derived_sha256",
+  }),
+  nativeCapabilitySnapshotAttestation: frozenCanonicalIdSpec({
+    prefix: "ncsa_",
+    bodyBytes: 32,
+    allocation: "derived_sha256",
+  }),
+  nativeBindingAuthorityEvidenceOperation: frozenCanonicalIdSpec({
+    prefix: "nbao_",
+    bodyBytes: 16,
+    allocation: "random",
+  }),
   projectTargetSelectorMapping: frozenCanonicalIdSpec({
     prefix: "ptm_",
     bodyBytes: 32,
@@ -108,8 +138,24 @@ export const A1_CANONICAL_ID_SPECS = Object.freeze({
   }),
 } as const);
 
-export type A1CanonicalIdKind = keyof typeof A1_CANONICAL_ID_SPECS;
-export type A1CanonicalId<K extends A1CanonicalIdKind> = A1SafeId & {
+export type NativeBindingAuthorityCanonicalIdKind =
+  | "nativeWorkspaceBinding"
+  | "nativeListenerRegistrationAttestation"
+  | "nativeRuntimeIsolationAttestation"
+  | "nativeBindingCapabilitySnapshot"
+  | "nativeCapabilitySnapshotAttestation"
+  | "nativeBindingAuthorityEvidenceOperation";
+
+/**
+ * Existing selected-persistence subset retained for compatibility with its exhaustive fixtures.
+ * `HostCanonicalIdKind` is the complete registry, including native-binding-authority evidence IDs.
+ */
+export type A1CanonicalIdKind = Exclude<
+  keyof typeof A1_CANONICAL_ID_SPECS,
+  NativeBindingAuthorityCanonicalIdKind
+>;
+export type HostCanonicalIdKind = keyof typeof A1_CANONICAL_ID_SPECS;
+export type A1CanonicalId<K extends HostCanonicalIdKind> = A1SafeId & {
   readonly [canonicalIdBrand]: K;
 };
 
@@ -123,6 +169,16 @@ export type CoordinatorLeaseId = A1CanonicalId<"coordinatorLease">;
 export type RegistrationAttemptId = A1CanonicalId<"registrationAttempt">;
 export type NativeConversationLeaseId = A1CanonicalId<"nativeConversationLease">;
 export type ProtectedHandleId = A1CanonicalId<"protectedHandle">;
+export type NativeWorkspaceBindingId = A1CanonicalId<"nativeWorkspaceBinding">;
+export type NativeListenerRegistrationAttestationId =
+  A1CanonicalId<"nativeListenerRegistrationAttestation">;
+export type NativeRuntimeIsolationAttestationId =
+  A1CanonicalId<"nativeRuntimeIsolationAttestation">;
+export type NativeBindingCapabilitySnapshotId = A1CanonicalId<"nativeBindingCapabilitySnapshot">;
+export type NativeCapabilitySnapshotAttestationId =
+  A1CanonicalId<"nativeCapabilitySnapshotAttestation">;
+export type NativeBindingAuthorityEvidenceOperationId =
+  A1CanonicalId<"nativeBindingAuthorityEvidenceOperation">;
 export type ProjectTargetSelectorMappingId = A1CanonicalId<"projectTargetSelectorMapping">;
 export type NativeDeliveryAttemptId = A1CanonicalId<"nativeDeliveryAttempt">;
 export type CollaborationCommandId = A1CanonicalId<"collaborationCommand">;
@@ -188,7 +244,7 @@ export function parseA1SafeId(value: unknown, field = "id"): A1SafeId {
   return value as A1SafeId;
 }
 
-export function parseA1CanonicalId<K extends A1CanonicalIdKind>(
+export function parseA1CanonicalId<K extends HostCanonicalIdKind>(
   kind: K,
   value: unknown,
   field: string = kind,
@@ -250,7 +306,7 @@ export function isA1SafeId(value: unknown): value is A1SafeId {
   }
 }
 
-export function isA1CanonicalId<K extends A1CanonicalIdKind>(
+export function isA1CanonicalId<K extends HostCanonicalIdKind>(
   kind: K,
   value: unknown,
 ): value is A1CanonicalId<K> {

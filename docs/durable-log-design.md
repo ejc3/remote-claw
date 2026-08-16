@@ -93,9 +93,11 @@ local transcript completeness or replay.
 > runtime-owner broker or ingress operation exists, and the dormant actor is absent from production
 > barrels/run paths. No production path invokes the dormant command adjudicator or server signer.
 > A1.8a0 adds no ciphertext, output part/signature, claim/seal/publish, broker call, effect/attempt,
-> projection, native dispatch, or production wiring. A1.8a1 is now design-frozen but unimplemented:
-> E may retain accepted OpenCode `user_text` binding evidence without changing either native-transport
-> authority pointer; I later installs an accepted capability snapshot and a credentialless
+> projection, native dispatch, or production wiring. A1.8a1-E0 now implements only six canonical
+> E-side ID namespaces/types/parsers and four deterministic attestation/snapshot ID derivations. It
+> adds no evidence digest/artifact codec, schema, repository, signer, pointer, port, operation, or
+> production capability. E1 remains the stateful accepted-evidence boundary and is not design-frozen;
+> I later installs an accepted capability snapshot and a credentialless
 > authenticated callable-port ingress lease as one matched pair. Neither creates an admitted command,
 > dispatch, effect, native call, production operation, or capability claim. A1.8a2 admitted arming and
 > A1.8b sealing/publishing remain deferred; A1.7b1 plus A1.8a0 still advertise nothing.
@@ -123,7 +125,9 @@ local transcript completeness or replay.
 - A1 host-state and runtime-owner code:
   `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,migration-v11,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-result-finalization,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
   `packages/cli/src/host/native/evidence.ts`, `packages/cli/src/host/server-signer/**`, and
-  `packages/cli/src/host/runtime-owner/**`. A1.2 implements the generic v3
+  `packages/cli/src/host/runtime-owner/**`. A1.8a1-E0 additionally lives in
+  `packages/cli/src/host/state/{ids,native-binding-authority}.ts`, their tests, and the host-state
+  barrel. It contains only the six E-side ID contracts and four deterministic builders. A1.2 implements the generic v3
   server/project/chat/binding/edge/coordinator operations described below. A1.3 implements the v4
   runtime-owner tables/repository and live owner daemon. A1.4 implements the v5 registration graph,
   canonical evidence, reverse port transport, and closed trusted-adapter service. A1.5 implements the
@@ -138,10 +142,12 @@ local transcript completeness or replay.
   in that same command-result orchestrator. It still does not implement
   private Claude RC rows, connect an ordinary native driver to durable registration/root activation,
   or install the ingress actor into a live runtime.
-- Frozen design only, with no files or migration yet: A1.8a1-E's immutable signed native-binding
-  evidence and A1.8a1-I's atomic capability-snapshot/credentialless-callable-port pair install. The
-  exact identities, logical tables, artifact bounds, pair-CAS, lifecycle, recovery, and exclusions
-  are owned by the [technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
+- No E1/I migration, repository, signer boundary, validator, or operation exists. E1 is blocked on
+  exact canonical codecs for four parent input artifacts and all registered platform/build/kernel
+  children; the workspace/link lifecycle; pre-v12 treatment of the three E signer purposes; the
+  snapshot/attestation staging cycle; and exact repository request/result/reconciliation shapes.
+  Planned evidence and pair-install constraints are tracked in the
+  [technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 - A1.6 broker code:
   `apps/web/lib/broker/{a1-contract,a1-http,a1-json,a1-sqlite}.ts` and
   `apps/web/app/api/a1/**/route.ts`. It is deliberately separate from the A0 `BrokerBackend` and its
@@ -619,11 +625,12 @@ There is no claim, encryption, output part/signature, sealing, publication, brok
 attempt, projection, native dispatch, or production wiring in A1.8a0. A1.8a2 owns admitted atomic
 arming after the A1.8a1 authority foundation; A1.8b owns sealing/publishing and one-time dispatch.
 
-The next durable authority design is deliberately split before any admitted arm. A1.8a1-E freezes
-immutable workspace/listener/isolation/operation-family/capability-snapshot evidence and exact
-runtime-owner signature acceptance in dependency-ordered listener → isolation → capability phases,
-with key rotation blocked while a phase is nonterminal, but never changes either existing transport
-pointer. A1.8a1-I later
+The next durable authority work remains split before any admitted arm. A1.8a1-E0 has landed only the
+six E-side ID contracts and four derivations. A1.8a1-E1 is intended to add immutable
+workspace/listener/isolation/operation-family/capability-snapshot evidence and exact runtime-owner
+signature acceptance in dependency-ordered listener → isolation → capability phases, with key
+rotation blocked while a phase is nonterminal, but its design is blocked on the five groups in the
+source map above and it must never change either existing transport pointer. A1.8a1-I later
 adds snapshot status, credentialless native-client ingress, and an install-operation ledger; one
 transaction installs or replaces the exact pair and both pointers, and parent close/detach/reattach,
 takeover, channel loss, or process loss withdraws the pair before a successor is writable. The
@@ -721,7 +728,7 @@ scope was only durable addressing through A1.6. A1.7a adds dormant ingress queue
 serialization; A1.7b0 adds their server-signing prerequisite; A1.7b1 adds rejected-only common
 proposal decisions, server-wide order, and signed preparations; and A1.8a0 atomically closes that
 rejected arm into a final result, acceptance, terminal overlay, and inert `pending_seal` intent.
-A1.8a1-E/I first owns the design-frozen inert evidence and matched native-authority pair; A1.8a2
+A1.8a1-E1/I first owns the inert evidence and matched native-authority pair after E1's design closes; A1.8a2
 still owns admitted attempt/dispatch/effect arming, and A1.8b owns sealing/publishing and
 one-time delivery.
 
@@ -1574,7 +1581,10 @@ demonstrates every property below:
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.
-- **A1.8a1 — native-binding authority: DESIGN FROZEN; no schema or operation implemented.** E retains
+- **A1.8a1 — native-binding authority: E0 IDENTITIES IMPLEMENTED; E1 DESIGN INCOMPLETE; NO SCHEMA OR OPERATION.** E0 supplies only
+  the six E-side namespace/parser contracts and four deterministic ID builders. E1 remains blocked
+  on the four parent/child codec set, workspace lifecycle, pre-v12 E-purpose signer-row treatment,
+  snapshot/attestation staging, and request/result reconciliation shapes; it must retain
   accepted-but-inert exact evidence without changing either transport pointer. I later owns the one-transaction
   null/null-or-matched-pair CAS, predecessor withdrawal, parent lifecycle integration, exact
   request-bound unknown-commit reconciliation, hostile-SQL semantic reopen, and separate live-port

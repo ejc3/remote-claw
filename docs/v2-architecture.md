@@ -258,17 +258,22 @@
 > output parts/signatures, claim/seal/publish, broker call, cursor movement, native attempt/effect,
 > viewer projection, driver operation, production wiring, or capability advertisement.
 >
-> A1.8a1 is now design-frozen but unimplemented. A1.8a1-E may retain exact signed OpenCode
-> `user_text` binding evidence through dependency-ordered listener/isolation/capability phases,
-> with key rotation blocked while a phase is nonterminal, without changing either transport
-> authority pointer. A1.8a1-I
+> A1.8a1-E0 now implements only the six E-side canonical ID namespaces/types/parsers and four
+> deterministic attestation/snapshot ID derivations. It adds no evidence digest/artifact codec,
+> schema, repository, signer, pointer, port, runtime operation, protocol packet, or production
+> capability. A1.8a1-E1 is intended to retain exact signed OpenCode `user_text` binding evidence
+> through dependency-ordered listener/isolation/capability phases, with key rotation blocked while a
+> phase is nonterminal, without changing either transport authority pointer, but E1 is not
+> design-frozen. Its blockers are the four parent and platform/build/kernel child codec set,
+> workspace lifecycle, pre-v12 E-purpose signer-row treatment, snapshot/attestation staging, and
+> request/result reconciliation shapes. A1.8a1-I
 > later installs one accepted capability snapshot and one credentialless authenticated callable-port
 > ingress lease as a matched pair in one transaction; a snapshot-only pointer is forbidden. The
 > volatile port remains useful only on its exact authenticated runtime-owner channel and must be
 > withdrawn and replaced after process loss. Pair withdrawal never unregisters the A1.4-owned shared
-> physical port; only exact parent-lease closure/replacement may do that. Neither slice creates an admitted command, native
+> physical port; only exact parent-lease closure/replacement may do that. Neither E1 nor I creates an admitted command, native
 > attempt, dispatch, effect, native call, production operation, or advertised capability. The
-> exhaustive contract is in the [host-runtime reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
+> implemented E0 boundary and unresolved E1/I design are in the [host-runtime reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 > A1.8a2 still owns the admitted atomic arm and A1.8b owns sealing/publishing.
 >
 > Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
@@ -283,8 +288,9 @@
 > synchronously enters the closed transaction-local finalizer. No real driver performs durable owner registration, A1 binding activation, or root
 > activation, and no A1 remote mutation, inference, or live broker capability is enabled. The
 > A1.7b0 signer, A1.7b1 command adjudicator, and A1.8a0 rejected finalizer remain direct-only
-> dormant host state. A1.8a1-E/I is design-frozen but unimplemented; A1.8a2 admitted atomic arming
-> follows it. A1.8b owns sealing/publishing,
+> dormant host state. E0 is a pure identity export with no authority operation; A1.8a1-E1/I remains
+> unimplemented. E1 must close its blockers, then I must land, before A1.8a2 admitted atomic arming.
+> A1.8b owns sealing/publishing,
 > one-time dispatch, and evidence-only recovery.
 
 ## 1. What changes and why
@@ -1555,7 +1561,7 @@ call). See §14.)
   signed-but-unaccepted result preparation. A1.8a0 now atomically closes that rejected-only arm into
   an immutable common result, dense signer acceptance, logical ingress terminal overlay, exact
   semantic artifact, and inert `pending_seal` delivery intent without advancing the ingress cursor or
-  requiring later route health. It neither seals nor publishes that intent. A1.8a1-E/I first retains
+  requiring later route health. It neither seals nor publishes that intent. A1.8a1-E1/I first retains
   and later installs the dormant matched capability-snapshot/credentialless-ingress authority pair;
   A1.8a2 must add any admitted attempt/front-door-dispatch/effect arm atomically, and A1.8b must seal/publish before any
   forward or result delivery; viewer-projection `seq` remains explicitly separate.
