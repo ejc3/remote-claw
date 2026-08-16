@@ -4,6 +4,7 @@ export * from "./digests.js";
 export * from "./dispatch.js";
 export * from "./ids.js";
 export * from "./ingress.js";
+export * from "./native-binding-authority.js";
 export * from "./native-root.js";
 export * from "./path.js";
 export * from "./protected.js";

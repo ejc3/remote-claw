@@ -83,6 +83,27 @@ describe("selected A1 identifier contracts", () => {
     ).toBe(4);
   });
 
+  it("reserves the six dormant native-binding-authority evidence namespaces", () => {
+    expect(A1_CANONICAL_ID_SPECS.nativeWorkspaceBinding).toEqual({
+      prefix: "nwb_",
+      bodyBytes: 16,
+      allocation: "random",
+    });
+    expect(A1_CANONICAL_ID_SPECS.nativeBindingAuthorityEvidenceOperation).toEqual({
+      prefix: "nbao_",
+      bodyBytes: 16,
+      allocation: "random",
+    });
+    expect(
+      [
+        A1_CANONICAL_ID_SPECS.nativeListenerRegistrationAttestation,
+        A1_CANONICAL_ID_SPECS.nativeRuntimeIsolationAttestation,
+        A1_CANONICAL_ID_SPECS.nativeBindingCapabilitySnapshot,
+        A1_CANONICAL_ID_SPECS.nativeCapabilitySnapshotAttestation,
+      ].every((spec) => spec.bodyBytes === 32 && spec.allocation === "derived_sha256"),
+    ).toBe(true);
+  });
+
   it("rejects wrong prefixes, byte lengths, padding, and noncanonical trailing bits", () => {
     expect(() => parseA1CanonicalId("collaborationServer", `rcl_${encoded(16)}`)).toThrow(
       HostStateContractError,

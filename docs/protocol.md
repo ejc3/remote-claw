@@ -97,15 +97,19 @@ does not depend on later route health. The intent cannot be claimed, sealed, enc
 published, or sent in A1.8a0; there is no cursor movement, admitted/effect arm, broker call, viewer
 projection, driver operation, production path, or capability advertisement.
 
-**Frozen A1.8a1 native-binding authority design.** No implementation or wire operation has landed.
-A1.8a1-E may retain exact signed OpenCode `user_text` workspace/listener/isolation/capability evidence,
-but it never changes either native-transport authority pointer and the evidence is inert. A1.8a1-I later
+**A1.8a1 native-binding authority status.** A1.8a1-E0 now implements only the six E-side canonical
+ID namespaces/types/parsers and four deterministic attestation/snapshot ID derivations; no database,
+evidence, authority, or wire operation has landed. A1.8a1-E1 is the remaining stateful evidence
+boundary, is not design-frozen, and must never change either native-transport authority pointer.
+A1.8a1-I later
 installs one accepted capability snapshot plus one credentialless authenticated callable-port ingress
 lease as an indivisible pair. It stores no URL, socket, bearer, provider credential, or readable
 secret; loss of the live authenticated channel withdraws writability and requires a new ingress
 generation. It creates no admitted command, attempt, dispatch, effect, native call, packet, production
-operation, or advertised capability. See the
-[canonical frozen contract](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
+operation, or advertised capability. E1 is blocked on the four parent and platform/build/kernel child
+codecs, workspace lifecycle, pre-v12 E-purpose signer-row treatment, snapshot/attestation staging,
+and repository request/result reconciliation shapes recorded in the
+[current authority design](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 
 **Driver modes share one relay.** The diagram above is the MITM (`--rc-app`) path, but it is not the
 only driver. Every current harness produces a `Session`. Claude MITM, OpenCode, and tmux register that
@@ -478,8 +482,8 @@ from `assembling` to `awaiting_order`. That is the terminal success state for A1
 common-command, command-result/signature, server-scope signer, result-delivery, checkpoint, outbox,
 effect, dispatch, viewer, or native table. A1.7b0 supplies the server-signer prerequisite and A1.7b1
 now orders an eligible source and signs a rejected result preparation. A1.8a0 atomically finalizes
-only that rejected common/source result into an inert delivery intent; A1.8a1-E/I first supplies the
-design-frozen dormant native-binding authority pair, and A1.8a2/A1.8b still own any admitted effect
+only that rejected common/source result into an inert delivery intent; A1.8a1-E1/I first supplies the
+dormant native-binding authority pair after E1's design blockers close, and A1.8a2/A1.8b still own any admitted effect
 and sealed publication before a live capability exists.
 Ordinary CLI launches, every current driver, runtime-owner RPC,
 `HostRcRelay`, and the viewer make zero calls into this actor, so the as-built live protocol remains
@@ -657,7 +661,7 @@ The maximum reachable successful state in A1.7b1 is command `decision_reserved`,
 Schema triggers and semantic reopen reject command `decided`, ingress `terminal`, group `finalized`,
 and any acceptance or final-result graph in schema v10. A1.8a0 now supplies one atomic rejected-only
 transaction for the final common result, signer acceptance, logical ingress terminalization, and
-inert delivery intent. A1.8a1-E/I must first retain and atomically install the exact dormant native
+inert delivery intent. A1.8a1-E1/I must first retain and atomically install the exact dormant native
 authority pair; A1.8a2 must then create an admitted decision's pinned native attempt,
 front-door dispatch, and one-use effect gate, while A1.8b must seal/publish. A signed preparation or
 plaintext `pending_seal` intent alone never authorizes delivery or mutation.
@@ -750,24 +754,32 @@ projection, capability, attempt, effect gate, or dispatch authority. Schema/repo
 closure live in `packages/cli/src/host/state/{migration-v11,command-result-finalization,command-adjudication-repository,command-adjudication-validator}.ts`;
 and the crash-reconciling composition is the dormant
 `packages/cli/src/host/server-signer/command-result-orchestrator.ts`. None is invoked by an ordinary
-CLI, driver, runtime-owner RPC, relay, viewer, or broker route. A1.8a1-E/I first supplies the dormant
+CLI, driver, runtime-owner RPC, relay, viewer, or broker route. A1.8a1-E1/I first supplies the dormant
 native-binding authority foundation; A1.8a2 still owns the admitted attempt/front-door-dispatch/effect
 arm, and A1.8b owns sealing and publication. A1.7b1 plus A1.8a0
 therefore still advertise no capability.
 
+A1.8a1-E0 lives only in
+`packages/cli/src/host/state/{ids,native-binding-authority}.ts`, their tests, and the host-state barrel.
+It exports the six E-side ID contracts and four deterministic builders, but no evidence digest or
+artifact codec, migration, repository, signer mutation, pointer/port access, runtime-owner operation,
+driver invocation, or wire surface.
+
 ---
 
-## 3f. Frozen A1.8a1 native-binding authority design (not implemented)
+## 3f. A1.8a1 native-binding authority (E0 identities implemented; E1/I planned)
 
-A1.8a1 introduces no protocol packet or live operation. It freezes two later durable boundaries so
-native authority cannot be inferred from a caller-supplied capability claim or installed halfway.
+A1.8a1-E0 introduces no protocol packet or live operation. It freezes only the six E-side ID
+namespaces/parsers and the four deterministic derivations. The two later stateful boundaries remain:
 
-1. **A1.8a1-E:** retain and cryptographically close the exact workspace, listener-registration,
+1. **A1.8a1-E1:** retain and cryptographically close the exact workspace, listener-registration,
    runtime-isolation, operation-family, binding-capability-snapshot, and snapshot-attestation graph.
    Neither existing `NativeTransportLeaseRecord` pointer changes: first-install evidence leaves
    null/null, while replacement evidence leaves the predecessor pair intact. A valid accepted
-   signature is evidence, not ingress authority.
-2. **A1.8a1-I:** install or replace the accepted snapshot and a credentialless authenticated
+   signature is evidence, not ingress authority. E1 is not design-frozen and cannot land until the
+   reference closes the four parent/child codec set, workspace lifecycle, legacy E-purpose signer
+   rows, snapshot/attestation staging, and request/result reconciliation shapes.
+2. **A1.8a1-I:** after E1, install or replace the accepted snapshot and a credentialless authenticated
    callable-port ingress lease in one SQLite transaction. The only valid pointer states are
    null/null or one exact current pair. Parent close, detach, transport replacement, takeover, or
    loss of the process-memory port must withdraw the pair before another becomes writable.
@@ -789,11 +801,12 @@ preparation burns none, so a new operation may reuse the still-next derived ingr
 the parent lineage is recovered. Withdrawal is DB-only: an absent `nbaw_*` may exact-retry under the
 current successor fence or be replaced by a fresh successor-fenced cleanup even when no port is live.
 
-E progresses through listener, isolation, and capability reservations in dependency order; it never
-pretends all three payloads exist before the preceding signed-record digest. Key rotation/revocation
-is barred while one of those phases is nonterminal, and an installed pair must be withdrawn before
-its signing key rotates. This prevents a stored signature from becoming permanently unacceptably
-bound to a retired key.
+E1 must progress through listener, isolation, and capability reservations in dependency order and
+must never pretend a payload exists before the preceding signed-record digest. Its exact
+`capability_prepared`/`accepted_inert` row staging remains a freeze blocker. The eventual schema must
+bar key rotation/revocation while one of those phases is nonterminal, and an installed pair must be
+withdrawn before its signing key rotates. This prevents a stored signature from becoming permanently
+unacceptably bound to a retired key.
 
 These planned stages do not relax schema-v10/v11 rejected-only rules and do not create or consume an
 admitted result, `nat_*` attempt, front-door dispatch, effect gate, dispatch authorization,
@@ -1255,7 +1268,8 @@ guarantees.
    finalizer are implemented and tested, but ordinary CLI
    launches, drivers, runtime-owner RPC, `HostRcRelay`, and the viewer do not invoke them. A dormant
    `pending_seal` intent is neither a sealed/published result nor delivery, authorization, effect, or
-   viewer projection. Design-frozen A1.8a1 authority, A1.8a2 admitted arming, A1.8b sealing/publishing, and later milestones must
+   viewer projection. A1.8a1-E0 supplies only identity vocabulary; the blocked E1 evidence design,
+   planned I install, A1.8a2 admitted arming, A1.8b sealing/publishing, and later milestones must
    land before A1 can replace the A0 relay described above.
 
 ### Capture-grounded protocol surfaces (observed via `--rc-trace`)

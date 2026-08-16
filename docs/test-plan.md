@@ -113,8 +113,9 @@ about the current A0 implementation:
 | A1.7b0 | Implemented dormant prerequisite; no production wiring | Schema-v9 migration `009-server-scope-signer`; initial self-anchor, AES-GCM-wrapped server Ed25519 custody without raw-key export, coordinator-fenced bootstrap/current leases, immutable signer sequences and payload bindings, dense per-server `acceptedAtJournalSeq` signed-record acceptance, non-closed-bootstrap `stale_bootstrap_fence` fail-stop versus installed-lease supersession/next-token takeover, exact replay/collision/reconciliation, semantic reopen, and compatibility admission of dormant route installation for an exact signer-activated current server; no command/result, generic host output, broker publish, outbox/effect, native dispatch, or projection claim |
 | A1.7b1 | Implemented dormant foundation; no production wiring or independent capability claim | Schema-v10 `010-common-command-adjudication`, exact five-table/619-object boundary, shared ready/control journal closure, A1-ingress-only route-head admission, deterministic source/command/result/group/preparation identities, small `unsupported_recognized` persistence, global order, rejected-only decision, distinct creation/decision fences, signer binding/store, abort/reprepare generations, crash reconciliation, semantic reopen, and a hard signed-but-unaccepted terminal boundary |
 | A1.8a0 | Implemented dormant rejected-only closure; no production wiring or capability claim | Schema-v11 `011-a1-rejected-result-finalization`, exact three-table/647-object boundary, one-transaction common result + dense signer acceptance + `decided`/`terminal` overlay + exact semantic artifact + inert `pending_seal` intent, immutable base ingress evidence, no cursor movement or post-sign route-health dependency, narrow safe predecessor-signature takeover with strictly later successor-lease acquisition, crash reconciliation, and semantic reopen |
-| A1.8a1-E | Design frozen; implementation next | Exact ID/digest vectors, bounded protected evidence, dependency-ordered listener/isolation/capability signature acceptance, nonterminal key-rotation barrier, semantic reopen, and proof that accepted evidence never changes either transport authority pointer or imports a production path |
-| A1.8a1-I | Planned after E | One-transaction null/null-or-matched snapshot/credentialless-ingress pair install and replacement; live callable-port proof; pair-only withdrawal with A1.4-owned physical-port teardown; parent close/detach/reattach/takeover closure; exact unknown-commit reconciliation and absent-generation reuse; hostile-SQL closure; no admitted command, dispatch, effect, native call, or advertised capability |
+| A1.8a1-E0 | Implemented pure identity contract; no authority state or capability | Six E-side canonical namespaces/types/parsers; four deterministic attestation/snapshot ID derivations; locked vectors, exact-preimage sensitivity, hostile shape/namespace/integer rejection, and a code boundary with no evidence digest/artifact codec, schema, repository, signer, pointer, port, owner operation, runtime wiring, or production capability |
+| A1.8a1-E1 | Design incomplete; blocked before implementation | After the five reference freeze groups close: exact evidence digests; bounded parent/child artifact recomputation; schema-v12 legacy-signer treatment; dependency-ordered listener/isolation/capability signature acceptance; nonterminal key-rotation barrier; semantic reopen; and proof that accepted evidence never changes either transport pointer or imports a production path |
+| A1.8a1-I | Planned after E1 | One-transaction null/null-or-matched snapshot/credentialless-ingress pair install and replacement; live callable-port proof; pair-only withdrawal with A1.4-owned physical-port teardown; parent close/detach/reattach/takeover closure; exact unknown-commit reconciliation and absent-generation reuse; hostile-SQL closure; no admitted command, dispatch, effect, native call, or advertised capability |
 | A1.8a2 | Planned after I | Add an admitted command's pinned native attempt/front-door dispatch/protected effect arm atomically without widening the rejected-only finalizer or exposing a partial path |
 | A1.8b | Planned after full A1.8a | Seal/publish causal result delivery, then one-time dispatch, protected authorization consumption, uncertainty quarantine, native read-back, and evidence-only recovery without replaying a possibly started effect |
 | A1.9 | Planned after the protected-handle and dispatch foundations | Runtime-scoped inference identity, encrypted exact request/response retention, connector leases, and ambiguous-upstream no-silent-retry proof |
@@ -381,19 +382,37 @@ tests retain the immutable v8 evidence row in `awaiting_order` or later
 orphan artifacts, and inconsistent completion anchors. Negative gates prove that `pending_seal` is
 unclaimable plaintext semantic intent: no ciphertext, output part/signature, claim/seal/publish,
 effect/attempt, projection, native/broker operation, cursor movement, or production import exists.
-A1.8a1-E/I must first establish the dormant native-binding authority foundation; A1.8a2 still needs
+A1.8a1-E1/I must first establish the dormant native-binding authority foundation; A1.8a2 still needs
 the admitted attempt/front-door-dispatch/effect atomic arm, and A1.8b still needs sealing/publishing
 and one-time delivery before any capability can be advertised.
 
-A1.8a1 is design-frozen but has no implementation gate to report as passed. Its later focused evidence
-gate must lock every `nwb_*`/`nlra_*`/`nria_*`/`nbcs_*`/`ncsa_*`/`ncil_*`/`nbao_*`/`nbai_*`/`nbaw_*` identity and
-canonical digest vector; enforce bounded, exhaustive listener/classification/family artifacts; verify
-the three exact runtime-owner signatures and acceptances in listener → isolation → capability order;
-race two attachments at the same runtime/incarnation/key generation and prove only one singleton
-listener/isolation reservation is allocated while the other joins its exact accepted tuple; reject
-phase skips, orphan prefixes, signed-but-unaccepted abandonment, key rotation while a phase is
-nonterminal, and every cross-server/chat/workspace/runtime/incarnation/attachment transplant; and
-prove that accepted evidence leaves both transport pointers byte-identical. Its later install gate
+A1.8a1-E0's passed gate is intentionally identity-only. It locks the canonical
+namespace/type/parser contract for `nwb_*`, `nlra_*`, `nria_*`, `nbcs_*`, `ncsa_*`, and `nbao_*`;
+fixed success vectors, domain separation, and exact-preimage sensitivity for
+`nativeListenerRegistrationAttestationId`, `nativeRuntimeIsolationAttestationId`,
+`nativeBindingCapabilitySnapshotId`, and `nativeCapabilitySnapshotAttestationId`; rejection of
+missing, extra, accessor, cross-namespace, wrong-prefix, wrong-length, padded/noncanonical-base64url,
+zero, negative, fractional, and unsafe inputs; and the selected random-versus-derived allocation
+metadata. The code/diff boundary contains only pure ID contracts, tests, and their host-state barrel
+export: no evidence digest or artifact codec, SQLite schema/migration, repository, signer/custody
+mutation, key-rotation barrier, transport-pointer write, callable-port access, runtime-owner
+operation, protocol packet, runtime wiring, or production capability landed. E0 therefore supplies
+identity vocabulary, not accepted evidence or authority.
+
+E1 is not ready for an implementation gate. It remains blocked on five freeze groups: exact bytes,
+decoders, bounds, child inventories, and platform/build/kernel child codecs for the four named parent
+input schemas; the complete workspace/link lifecycle; schema-v12 treatment of any pre-v12 row using
+an E signer purpose; the snapshot/attestation staging cycle and per-phase row inventory; and exact
+repository request/result/reconciliation shapes. After those close, E1's gate must lock every
+evidence digest vector; parse and recompute every bounded registered artifact; pin exact schema-v12
+migration bytes/count/digest/manifest; verify the three exact runtime-owner signatures and
+acceptances in listener → isolation → capability order; race two attachments at the same
+runtime/incarnation/key generation and prove only one singleton listener/isolation reservation is
+allocated while the other joins its exact accepted tuple; reject phase skips, orphan prefixes,
+signed-but-unaccepted abandonment, generic signer mutation, key rotation while a phase is
+nonterminal, and every cross-server/chat/workspace/runtime/incarnation/attachment transplant; prove
+request-bound unknown-commit recovery and semantic-reopen no-extra-row closure; and prove that
+accepted evidence leaves both transport pointers byte-identical after every success and fault. I's later gate
 must reject owner/coordinator/channel fence transplants, prove the pointer XOR state impossible,
 exact pair CAS/replacement/withdrawal, stale or missing live-port refusal, process-loss
 non-writability, and parent close/detach/reattach/takeover closure. Race a late predecessor withdrawal

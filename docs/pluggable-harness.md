@@ -114,16 +114,21 @@ depend on post-sign route health. A narrow current-successor rule closes a valid
 signature without granting generic superseded-lease, rotation, retired-certificate, or historical
 acceptance. Any later successor signing lease must be durably acquired strictly after the predecessor
 acceptance, including across a same-millisecond wall-clock tie.
-A1.8a1 is design-frozen but unimplemented. A1.8a1-E may retain exact signed OpenCode `user_text`
-native-binding evidence through dependency-ordered listener/isolation/capability phases, with key
-rotation blocked while a phase is nonterminal, without changing either existing transport authority pointer. A1.8a1-I
+A1.8a1-E0 now implements only the six E-side canonical ID namespaces/types/parsers and four
+deterministic attestation/snapshot ID derivations. It adds no evidence digest/artifact codec, schema,
+repository, signer, pointer, port, runtime operation, or production capability. A1.8a1-E1 is intended
+to retain exact signed OpenCode `user_text` native-binding evidence through dependency-ordered
+listener/isolation/capability phases, with key rotation blocked while a phase is nonterminal, without
+changing either existing transport authority pointer, but its design is not frozen. E1 is blocked on
+the four parent and platform/build/kernel child codec set, workspace lifecycle, pre-v12 E-purpose
+signer-row treatment, snapshot/attestation staging, and request/result reconciliation shapes. A1.8a1-I
 later installs one accepted capability snapshot plus one credentialless authenticated callable-port
 ingress lease as an atomic matched pair. The port is usable only on its exact live authenticated
 runtime-owner channel; no URL, socket, bearer, provider credential, or readable secret is stored.
 Authority withdrawal changes only the exact durable pair; the A1.4 parent alone owns physical-port
 unregistration, so late predecessor cleanup cannot disable a successor generation.
-Neither slice adds a `Session` consumer, admitted command, attempt, dispatch, effect, native call,
-production operation, or capability claim. The canonical contract is
+Neither E1 nor I adds a `Session` consumer, admitted command, attempt, dispatch, effect, native call,
+production operation, or capability claim. The implemented E0 boundary and unresolved E1/I design are
 [in the technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
 best-effort autostart that daemon after identity load. For the ordinary CLI, authenticated health is
@@ -143,7 +148,7 @@ launches, all three drivers, runtime-owner RPC, and the viewer make zero `/api/a
 no production A1 ingress actor, command adjudicator, server signer, or result finalizer, and no native
 effect, checkpoint, inference, or projection. A1.8a0's `pending_seal` row is unclaimable and has no
 ciphertext, output part/signature, seal/publish, broker call, effect/attempt, projection, native
-dispatch, or production wiring. A1.8a1-E/I first supplies only the dormant matched native-authority
+dispatch, or production wiring. A1.8a1-E1/I first supplies only the dormant matched native-authority
 foundation; A1.8a2 must add the admitted attempt/front-door dispatch/effect arm atomically, and A1.8b
 must seal and publish delivery. A1.7b1 plus A1.8a0 advertise nothing.
 
@@ -691,10 +696,12 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 - `packages/cli/src/broker/a1-client.ts` and `apps/web/{lib/broker/a1-*,app/api/a1/**/route.ts}` — the
   dormant negotiation-first client and the separate selected SQLite/libSQL A1 provider. They are not
   invoked by any current driver, `HostRcRelay`, runtime-owner operation, or viewer path.
-- `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
+- `packages/cli/src/host/state/{ids,native-binding-authority,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
   — A1.0's exact-shape parsers, canonical ID and digest contracts, pure database-path resolver,
   record/runtime shapes, protected-operation interfaces, separated first-dispatch and evidence-only
-  reconciliation capabilities, and digest builders.
+  reconciliation capabilities, and digest builders; plus A1.8a1-E0's six E-side canonical ID
+  contracts and four deterministic builders. The E0 module and tests are exported through the
+  host-state barrel but contain no authority operation or runtime wiring.
 - `packages/cli/src/host/state/{secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,migration-v11,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-result-finalization,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
   `packages/cli/src/host/native/evidence.ts`, and `packages/cli/src/host/runtime-owner/**` — A1.1–A1.8a0's
   Linux-only, descriptor-anchored SQLite kernel and protected-artifact operations. The supported Node
@@ -765,9 +772,9 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   production operation invokes adjudication, signing, or finalization. Its `pending_seal` intent has
   no claim/seal/publish surface, ciphertext/output signature, broker call, effect, or native
   attempt/dispatch.
-- Planned only—no files, migration, barrel, or operation exists yet: A1.8a1-E's exact native-binding
-  authority contracts/evidence and A1.8a1-I's atomic snapshot/credentialless-callable-port pair
-  repository. They will reuse the protected artifact/signature ledgers and callable-port registry,
+- No E1/I migration, repository, signer boundary, validator, or operation exists yet. E1's exact
+  native-binding authority evidence remains blocked on its five freeze groups, and A1.8a1-I's atomic
+  snapshot/credentialless-callable-port pair repository remains planned after E1. They may reuse the protected artifact/signature ledgers and callable-port registry,
   but must remain outside every production run path until their own dormant proof gate passes.
 - `packages/cli/src/host/runtime-owner/{auth,protocol,server,client,service,daemon,bootstrap,key-custody,production}.ts`
   plus `packages/cli/src/runtime-owner-cli.ts` — the machine-scoped Linux owner. It mutually
@@ -920,7 +927,7 @@ driver into that graph. A1.7a now uses A1.2 actor scopes for dormant route-local
 `awaiting_order`; A1.7b0 supplies the dormant server signer and current-server route-install
 compatibility; and A1.7b1 supplies rejected-only common command order through a signed-but-unaccepted
 preparation. A1.8a0 atomically closes only that rejected arm into a final result, acceptance, terminal
-overlay, and inert `pending_seal` intent. A1.8a1-E/I first owns the design-frozen inert evidence and
+overlay, and inert `pending_seal` intent. A1.8a1-E1/I first owns the inert evidence and
 matched credentialless native-authority pair; A1.8a2 owns admitted attempt/dispatch/effect arming,
 while A1.8b owns sealing/publishing, one-time dispatch, and evidence-only recovery. Nested targets/edges remain
 rejected until N1. A1.3's schema and repository can persist runtime
