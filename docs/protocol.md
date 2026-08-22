@@ -100,9 +100,13 @@ projection, driver operation, production path, or capability advertisement.
 **A1.8a1 native-binding authority status.** A1.8a1-E0 implements the six E-side canonical ID
 contracts and four deterministic attestation/snapshot ID derivations. E1a now implements the four
 strict, 64 KiB ref-free parent-envelope codecs, closed role/schema/bound/scope registry, exact locked
-byte/digest vectors, and bounded raw-artifact digest helper. It does not parse committed child bytes,
-write an artifact or database, or create authority or a wire operation. E1b next owns the exact
-collector-backed Linux/OpenCode child codecs and a real collector fixture. E1c then owns stateful
+byte/digest vectors, and bounded raw-artifact digest helper. E1b1 now implements strict
+role-correlated native/front-door executable-content manifest codecs and one direct-only Linux
+stable-FD collector. Its retained real OpenCode 1.17.5 Linux arm64 proof closes only the native role;
+generic collection has front-door temporary-file coverage, but no retained or provenance-bound
+actual front-door observation exists. E1b1 proves no pathname, process, front door, currentness, complete
+parent, authority, or wire operation. E1b2 workspace, E1b3 front-door/listener, E1b4 isolation, and
+E1b5 capability/full-parent closure remain planned. E1c then owns stateful
 accepted evidence and must never change either native-transport authority pointer. A1.8a1-I later
 installs one accepted capability snapshot plus one credentialless authenticated callable-port ingress
 lease as an indivisible pair. It stores no URL, socket, bearer, provider credential, or readable
@@ -485,7 +489,7 @@ common-command, command-result/signature, server-scope signer, result-delivery, 
 effect, dispatch, viewer, or native table. A1.7b0 supplies the server-signer prerequisite and A1.7b1
 now orders an eligible source and signs a rejected result preparation. A1.8a0 atomically finalizes
 only that rejected common/source result into an inert delivery intent; A1.8a1-E1c/I first supplies the
-dormant native-binding authority pair after E1b's collector gate, and A1.8a2/A1.8b still own any admitted effect
+dormant native-binding authority pair after E1b5's full-parent gate, and A1.8a2/A1.8b still own any admitted effect
 and sealed publication before a live capability exists.
 Ordinary CLI launches, every current driver, runtime-owner RPC,
 `HostRcRelay`, and the viewer make zero calls into this actor, so the as-built live protocol remains
@@ -761,30 +765,42 @@ native-binding authority foundation; A1.8a2 still owns the admitted attempt/fron
 arm, and A1.8b owns sealing and publication. A1.7b1 plus A1.8a0
 therefore still advertise no capability.
 
-A1.8a1-E0/E1a live only in
-`packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence}.ts`,
-their tests, and the host-state barrel. E0 exports the six E-side ID contracts and four deterministic
-builders. E1a exports four strict parent parsers/writers/decoders, a ref-free commitment registry, and
-a bounded raw digest helper, but no child semantic codec, collector, artifact write, migration,
-repository, signer mutation, pointer/port access, runtime-owner operation, driver invocation, or wire
-surface.
+A1.8a1-E0/E1a/E1b1 live in
+`packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence}.ts`,
+their tests, the host-state barrel, and direct-only
+`packages/cli/src/host/native/linux-executable-collector.ts`. E0 exports the six E-side ID contracts
+and four deterministic builders. E1a exports four strict parent parsers/writers/decoders, a ref-free
+commitment registry, and a bounded raw digest helper. E1b1 exports both executable-manifest codecs
+and directly collects stable content only when called; no driver, runtime-owner operation, relay,
+viewer, or broker path calls it. The retained native proof/probe/verifier live under
+`spikes/opencode-native/` and retain no raw executable or chunk bytes.
 
 ---
 
-## 3f. A1.8a1 native-binding authority (E0/E1a implemented; E1b/E1c/I planned)
+## 3f. A1.8a1 native-binding authority (E0/E1a/E1b1 implemented; E1b2–E1b5/E1c/I planned)
 
-A1.8a1-E0 and E1a introduce no protocol packet or live operation. E0 freezes the six E-side ID
+A1.8a1-E0, E1a, and E1b1 introduce no protocol packet or live operation. E0 freezes the six E-side ID
 namespaces/parsers and four deterministic derivations. E1a freezes the four canonical parent DTOs and
 their strict canonical bytes. Each parent commitment is exactly
 `role + artifactSchemaId + decoded artifactDigest + byteLength` in its fixed role order and excludes
 all `rcph_*`. The future recipe likewise commits to each parent by schema, digest, and byte length,
-not ref; refs are future repository-local graph locators only. The remaining boundaries are:
+not ref; refs are future repository-local graph locators only. E1b1 freezes 1 MiB source chunks, a
+256 MiB source ceiling, 64 KiB canonical manifest artifacts, strict role/schema correlation, and a
+two-pass same-descriptor collector. That proves only stable native executable content. The remaining
+boundaries are:
 
-1. **A1.8a1-E1b:** implement the registered platform, filesystem, namespace, process,
-   executable/build, route, operation/family, slash-normalization, translator, and injectivity-proof
-   child codecs and produce all four E1a parents from a real Linux/OpenCode collector fixture. E1a's
-   content commitments alone are not semantic proof.
-2. **A1.8a1-E1c:** retain and cryptographically close the exact workspace, listener-registration,
+1. **A1.8a1-E1b1 (implemented):** strict native/front-door executable-manifest codecs plus a
+   direct-only stable-FD Linux collector and retained real native OpenCode 1.17.5 vector. The
+   generic collector is tested for the front-door role, but no actual front-door observation or
+   provenance is retained; no pathname, process, front door, currentness, complete parent, or
+   authority is proved.
+2. **A1.8a1-E1b2:** close symlink-free canonical-directory, filesystem-identity,
+   allowed-root-ancestry, mount-namespace, and workspace-parent evidence.
+3. **A1.8a1-E1b3:** collect the actual front-door executable and close build, generated-surface,
+   route-registry, measured-dispatch, and listener-parent evidence.
+4. **A1.8a1-E1b4:** close process, socket, policy, peer, namespace, and isolation-parent evidence.
+5. **A1.8a1-E1b5:** close the remaining capability child codecs and reproduce all four E1a parents.
+6. **A1.8a1-E1c:** retain and cryptographically close the exact workspace, listener-registration,
    runtime-isolation, operation-family, binding-capability-snapshot, and snapshot-attestation graph.
    Neither existing `NativeTransportLeaseRecord` pointer changes: first-install evidence leaves
    null/null, while replacement evidence leaves the predecessor pair intact. A valid accepted
@@ -794,7 +810,7 @@ not ref; refs are future repository-local graph locators only. The remaining bou
    `accepted_inert` co-lands normalized snapshot, attestation, and acceptance. Caller-retained
    requests are ref-free, while their caller-retained `nbao_*`, repository-owned artifact links, and
    dense transition receipts prove exact historical reconciliation; no second operation token exists.
-3. **A1.8a1-I:** after E1c, install or replace the accepted snapshot and a credentialless authenticated
+7. **A1.8a1-I:** after E1c, install or replace the accepted snapshot and a credentialless authenticated
    callable-port ingress lease in one SQLite transaction. The only valid pointer states are
    null/null or one exact current pair. Parent close, detach, transport replacement, takeover, or
    loss of the process-memory port must withdraw the pair before another becomes writable.
@@ -1283,8 +1299,10 @@ guarantees.
    finalizer are implemented and tested, but ordinary CLI
    launches, drivers, runtime-owner RPC, `HostRcRelay`, and the viewer do not invoke them. A dormant
    `pending_seal` intent is neither a sealed/published result nor delivery, authorization, effect, or
-   viewer projection. A1.8a1-E0 supplies identity vocabulary and E1a supplies ref-free parent
-   envelopes only; the planned E1b collector proof, E1c stateful evidence, I install, A1.8a2 admitted
+   viewer projection. A1.8a1-E0 supplies identity vocabulary, E1a supplies ref-free parent
+   envelopes, and E1b1 supplies direct-only executable-content manifests/collector without path,
+   process, front-door, currentness, complete-parent, or authority proof. Planned E1b2–E1b5 closure,
+   E1c stateful evidence, I install, A1.8a2 admitted
    arming, A1.8b sealing/publishing, and later milestones must
    land before A1 can replace the A0 relay described above.
 

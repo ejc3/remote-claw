@@ -1,6 +1,8 @@
 # OpenCode native protocol proof
 
-This package retains a model-free runtime proof against the pinned OpenCode 1.17.5 native server.
+This package retains two narrow proofs against the pinned OpenCode 1.17.5 Linux arm64 release: a
+model-free native-server protocol run and a two-pass executable-content manifest of the real native
+binary. The executable proof reads but does not execute the binary and retains no raw chunk bytes.
 
 Run the retained-evidence verifier with:
 
@@ -8,13 +10,23 @@ Run the retained-evidence verifier with:
 pnpm --filter @remote-claw/opencode-native-proof test:run
 ```
 
-The retained run pins Linux arm64, Node 22.23.1, and the exact launcher and native-binary hashes recorded in the evidence. Emitted paths use stable placeholders because the install location is not part of the proof. The package does not install OpenCode. A fresh run only works on a host where `opencode`, `unshare`, and `ip` are available and `opencode` resolves to those exact pinned 1.17.5 launcher and native bytes; the probe fails closed otherwise. On a matching host, write fresh JSON to standard output with:
+The retained runs pin Linux arm64 and the exact launcher/native-binary hashes recorded in the
+evidence; the protocol proof additionally pins Node 22.23.1. Emitted paths use stable placeholders
+because the install location is not part of either proof. The package does not install OpenCode. A
+fresh protocol run requires `opencode`, `unshare`, and `ip`; executable regeneration requires the
+same pinned `opencode` launcher/native bytes. Both probes fail closed on a mismatch. On a matching
+host, write fresh JSON to standard output with:
 
 ```bash
 node spikes/opencode-native/probe.mjs
+node spikes/opencode-native/executable-manifest-probe.mjs
 ```
 
-`verify-evidence.mjs` pins both the retained JSON bytes and the exact `probe.mjs` bytes. Intentionally replacing either artifact therefore also requires reviewing the new run and updating its corresponding expected hash.
+The package aliases are `pnpm --filter @remote-claw/opencode-native-proof proof` and
+`pnpm --filter @remote-claw/opencode-native-proof proof:executable`. `verify-evidence.mjs` and
+`verify-executable-manifest.mjs` pin both retained JSON files and both exact probe programs.
+Intentionally replacing any artifact therefore requires reviewing the new run and updating its
+corresponding expected hash.
 
 The probe starts the pinned native executable inside a private network namespace containing only loopback and no default route. It supplies fresh empty `HOME` and XDG directories, constructs the child environment from a fixed allowlist with no provider credentials, and routes proxy-aware connection attempts to a local deny server.
 
@@ -24,7 +36,7 @@ The retained OpenAPI hash and selected schema assertions show that session creat
 
 The prompt requests no model reply, and the probe supplies no provider credential through the child environment or fresh `HOME`/XDG trees. This fixture therefore does not exercise provider inference. OpenCode can still make unrelated startup connection attempts; the private namespace prevents external routing and the local deny server closes proxy-aware attempts. Their targets and protocols are not retained, so the fixture does not classify them.
 
-## Scope boundary
+## Protocol-fixture scope boundary
 
 This is a narrow native-protocol fact proof, not an OpenCode driver adjudication, coexistence, or parity proof. It does not prove:
 
@@ -42,3 +54,12 @@ This is a narrow native-protocol fact proof, not an OpenCode driver adjudication
 - provider-façade behavior, inference-request recovery, or the exact-process provider/network fence;
 - the selected writable A2 tuple of server-scoped `{new_chat}` and binding-scoped `{user_text}`; or
 - mount/filesystem isolation, including whether the child could read an absolute ambient host path outside the fresh homes.
+
+## Executable-fixture scope boundary
+
+The executable proof establishes two stable complete reads of one opened native-binary descriptor
+and the exact retained content manifest. `O_NOFOLLOW` applies only to the opened final component, and
+the fixture does not prove a pathname, all-component symlink policy, running process, executable
+mapping, actual front door or its provenance, currentness, complete parent, authority, or production
+capability. The offline verifier reconstructs retained descriptor/vector/manifest bytes and digests;
+only live regeneration on the matching pinned binary can recompute chunk digests from raw bytes.

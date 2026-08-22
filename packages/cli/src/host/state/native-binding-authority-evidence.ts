@@ -39,6 +39,7 @@ import {
   parseNonEmptyString,
   parseNullable,
   parsePositiveSafeInteger,
+  snapshotExactArray,
 } from "./validation.js";
 
 export const NATIVE_WORKSPACE_BINDING_INPUT_SCHEMA_ID =
@@ -130,10 +131,15 @@ export const NATIVE_BINDING_AUTHORITY_ARTIFACT_SPECS = Object.freeze({
     "runtime",
     65_536,
   ),
-  "listener.native_executable": spec("remote-claw/native-executable-chunk-manifest/v1", "runtime"),
+  "listener.native_executable": spec(
+    "remote-claw/native-executable-chunk-manifest/v1",
+    "runtime",
+    MAX_NATIVE_EVIDENCE_PARENT_BYTES,
+  ),
   "listener.front_door_executable": spec(
     "remote-claw/front-door-executable-chunk-manifest/v1",
     "runtime",
+    MAX_NATIVE_EVIDENCE_PARENT_BYTES,
   ),
   "listener.front_door_build_manifest": spec(
     "remote-claw/front-door-build-closure-manifest/v1",
@@ -435,12 +441,10 @@ function parseFixedCommitments<R extends readonly NativeBindingAuthorityArtifact
   roles: R,
   field: string,
 ): FixedCommitments<R> {
-  if (!Array.isArray(value) || value.length !== roles.length) {
-    reject(field, `must contain exactly ${roles.length} ordered commitments`);
-  }
+  const commitments = snapshotExactArray(value, roles.length, field);
   return Object.freeze(
     roles.map((role, index) =>
-      parseNativeEvidenceArtifactCommitment(value[index], role, `${field}[${index}]`),
+      parseNativeEvidenceArtifactCommitment(commitments[index], role, `${field}[${index}]`),
     ),
   ) as FixedCommitments<R>;
 }
