@@ -1,0 +1,983 @@
+{
+	"proofSchemaId": "remote-claw/retained-opencode-executable-manifest-proof/v1",
+	"proofSchemaVersion": 1,
+	"proofScope": "two-pass, descriptor-stable canonical executable manifest for the pinned real OpenCode 1.17.5 Linux arm64 native binary",
+	"scopeLimits": {
+		"binaryExecuted": false,
+		"serverStarted": false,
+		"providerCredentialsRead": false,
+		"networkAccessUsed": false,
+		"rawChunkBytesRetained": false
+	},
+	"probe": {
+		"file": "executable-manifest-probe.mjs",
+		"sha256": "e9ad440c6ca3e6c1e16bfc8a3225a0a7a0a89540f6a613cb0f31f94fe2febc91"
+	},
+	"opencode": {
+		"version": "1.17.5",
+		"launcherPath": "<opencode-launcher>",
+		"launcherSha256": "d167e30e12cca32cc4a5da0003ee0deb1120b5ca5ee2d64cef23aec44a3c9fa9",
+		"nativeBinaryPath": "<opencode-native-binary>",
+		"platform": "linux",
+		"architecture": "arm64"
+	},
+	"collection": {
+		"openFlags": "O_RDONLY|O_NOFOLLOW|O_NONBLOCK",
+		"sameOpenFileDescriptorForBothPasses": true,
+		"regularFile": true,
+		"executableMode": true,
+		"passCount": 2,
+		"preBetweenPostFstatStable": true,
+		"eofVerifiedEachPass": true,
+		"rawChunkBytesRetained": false,
+		"maxFileByteLength": 268435456,
+		"maxChunkCount": 256,
+		"maxManifestByteLength": 65536
+	},
+	"manifest": {
+		"schemaId": "remote-claw/native-executable-chunk-manifest/v1",
+		"schemaVersion": 1,
+		"chunkingSchemaId": "remote-claw/fixed-executable-chunking/v1",
+		"digestAlgorithm": "SHA-256",
+		"nominalChunkBytes": 1048576,
+		"fileByteLength": 156412048,
+		"rawFileSha256": "_hg5rFxBfF_EoI3SaEZZB8PoxsoV5__ZPzqNxG1j0zk",
+		"chunkCount": 150,
+		"chunks": [
+			{
+				"chunkIndex": 0,
+				"byteOffset": 0,
+				"byteLength": 1048576,
+				"chunkDigest": "jQnzJPxhvoEIIwwoRG8gD-OTVlQgda_Qm4demov1zmE"
+			},
+			{
+				"chunkIndex": 1,
+				"byteOffset": 1048576,
+				"byteLength": 1048576,
+				"chunkDigest": "CwbPXa55q4e5j68-X4ep5uOzxwUkJYrPOX9GHT3hVgs"
+			},
+			{
+				"chunkIndex": 2,
+				"byteOffset": 2097152,
+				"byteLength": 1048576,
+				"chunkDigest": "sGk4XiHgAn5_JO9Iv3doOgkOwY5_j1MsuZaWEjPkJbo"
+			},
+			{
+				"chunkIndex": 3,
+				"byteOffset": 3145728,
+				"byteLength": 1048576,
+				"chunkDigest": "XHfno3Xp1XXSWGzOP_I3dCC7joutKWxtVWF4tibDB2w"
+			},
+			{
+				"chunkIndex": 4,
+				"byteOffset": 4194304,
+				"byteLength": 1048576,
+				"chunkDigest": "IH9qVyrkPsJ5lbYErpYAViaNmOKV_lS4loBbOOa_D0I"
+			},
+			{
+				"chunkIndex": 5,
+				"byteOffset": 5242880,
+				"byteLength": 1048576,
+				"chunkDigest": "_1CzlvqykDC9S4_7GKJHVXhiDNG9UJ6e0ro6wGkj9jo"
+			},
+			{
+				"chunkIndex": 6,
+				"byteOffset": 6291456,
+				"byteLength": 1048576,
+				"chunkDigest": "zDskWrGIBBho9bXO0cLYpsjzXBTVw7x-9lP63_-4kzY"
+			},
+			{
+				"chunkIndex": 7,
+				"byteOffset": 7340032,
+				"byteLength": 1048576,
+				"chunkDigest": "PKYwNh7688BnO6Ij97Al7AgwxnapltxKUhi_K9VgLek"
+			},
+			{
+				"chunkIndex": 8,
+				"byteOffset": 8388608,
+				"byteLength": 1048576,
+				"chunkDigest": "T18EPIb0IgFu1N0hGkKMO0opFQfuNAIhAYQjtH1epzM"
+			},
+			{
+				"chunkIndex": 9,
+				"byteOffset": 9437184,
+				"byteLength": 1048576,
+				"chunkDigest": "PMJoIQ38y37bclYB1R4vjQdRBPdK3YoZoXnVaQtjRcY"
+			},
+			{
+				"chunkIndex": 10,
+				"byteOffset": 10485760,
+				"byteLength": 1048576,
+				"chunkDigest": "nguPa01eAslbjSrs0O07u1nDZ-NyqmKFDEcpTmollQE"
+			},
+			{
+				"chunkIndex": 11,
+				"byteOffset": 11534336,
+				"byteLength": 1048576,
+				"chunkDigest": "rfYF2HscWd12BVVpjy3IJorKdO58xQ6LecC93deGN6s"
+			},
+			{
+				"chunkIndex": 12,
+				"byteOffset": 12582912,
+				"byteLength": 1048576,
+				"chunkDigest": "ZzTPi3Z2Y6XTwPnj9nFUTuTCXQTVF4Qe_AP7J4-p2Q0"
+			},
+			{
+				"chunkIndex": 13,
+				"byteOffset": 13631488,
+				"byteLength": 1048576,
+				"chunkDigest": "dZC0_9Y5A8AT2WHNkF5lV2ffDjsyJ3eg7JSVEIAy0vU"
+			},
+			{
+				"chunkIndex": 14,
+				"byteOffset": 14680064,
+				"byteLength": 1048576,
+				"chunkDigest": "oEgcnd1KV6j2tpdpJ15JTzaLeh0JS7sVoAEi0lgGox4"
+			},
+			{
+				"chunkIndex": 15,
+				"byteOffset": 15728640,
+				"byteLength": 1048576,
+				"chunkDigest": "JeAQRXMVTmHtxqQnhc4FWaaxytqfQiK4bb2lMEyUd7A"
+			},
+			{
+				"chunkIndex": 16,
+				"byteOffset": 16777216,
+				"byteLength": 1048576,
+				"chunkDigest": "TEgRAKKQ7icKb1OuLSveux-dkKkX8PAv5BGULYg_RGg"
+			},
+			{
+				"chunkIndex": 17,
+				"byteOffset": 17825792,
+				"byteLength": 1048576,
+				"chunkDigest": "WInApyXvMg1pD1PNogw7D54MhPqF5cqFuJvLyH3XXyU"
+			},
+			{
+				"chunkIndex": 18,
+				"byteOffset": 18874368,
+				"byteLength": 1048576,
+				"chunkDigest": "nCWzx8rtznELo1PcYCdx_vw99F0HmMkyWjdWj4lWQtc"
+			},
+			{
+				"chunkIndex": 19,
+				"byteOffset": 19922944,
+				"byteLength": 1048576,
+				"chunkDigest": "HAjZtSk4mk42ruvTOeAK7RASuYaItvfrLUWFrOZrpSg"
+			},
+			{
+				"chunkIndex": 20,
+				"byteOffset": 20971520,
+				"byteLength": 1048576,
+				"chunkDigest": "Ap0as3W7BL_j32-Cyg_XFMyIwZm4vApmQqXvMu0psIc"
+			},
+			{
+				"chunkIndex": 21,
+				"byteOffset": 22020096,
+				"byteLength": 1048576,
+				"chunkDigest": "en0xM_N0Ng2-DeyJbYXMPQ9xfw9xDU4kvKa4HgjbR78"
+			},
+			{
+				"chunkIndex": 22,
+				"byteOffset": 23068672,
+				"byteLength": 1048576,
+				"chunkDigest": "yBDxdU5O-ezdoOaKSlbCRQKtmsBTzZOuKt5iPvoK_5Q"
+			},
+			{
+				"chunkIndex": 23,
+				"byteOffset": 24117248,
+				"byteLength": 1048576,
+				"chunkDigest": "8m4af2aC5UxSqZkLPFmIIRfJ55UhhwwByn9TUcNSeDk"
+			},
+			{
+				"chunkIndex": 24,
+				"byteOffset": 25165824,
+				"byteLength": 1048576,
+				"chunkDigest": "P2b_F9evBzhm9WvR8cCgCLGcsJELnYzQXsRFzlOkyiU"
+			},
+			{
+				"chunkIndex": 25,
+				"byteOffset": 26214400,
+				"byteLength": 1048576,
+				"chunkDigest": "zUhS67dx9XZGhHvbVatZofmqJ-e84fVT_R2LgeHLvXE"
+			},
+			{
+				"chunkIndex": 26,
+				"byteOffset": 27262976,
+				"byteLength": 1048576,
+				"chunkDigest": "cU_j30xAehOCPc13KYhATOeuMsZsnPxHHhOgpzQAWSA"
+			},
+			{
+				"chunkIndex": 27,
+				"byteOffset": 28311552,
+				"byteLength": 1048576,
+				"chunkDigest": "DW9AG5pqHQKbTgSL_w3K59DCYTXkSBkUDR9HAuTd99E"
+			},
+			{
+				"chunkIndex": 28,
+				"byteOffset": 29360128,
+				"byteLength": 1048576,
+				"chunkDigest": "qRHH6ghGnyq8FtmIYv-7DQMGSsdlk7kOH7yvkZgkB8o"
+			},
+			{
+				"chunkIndex": 29,
+				"byteOffset": 30408704,
+				"byteLength": 1048576,
+				"chunkDigest": "i-gyIZzvPwtaPnTrS4OHne7i_VxOxvH7Mb_Urv4mOV8"
+			},
+			{
+				"chunkIndex": 30,
+				"byteOffset": 31457280,
+				"byteLength": 1048576,
+				"chunkDigest": "18b0elAPl8W2ePvjBQc0kqAtjjRQyUXBo61wHfRqvuM"
+			},
+			{
+				"chunkIndex": 31,
+				"byteOffset": 32505856,
+				"byteLength": 1048576,
+				"chunkDigest": "dbZF4SQedLS2exxkeGdT3KCmtxeBYBq6kfrzkgsqfwo"
+			},
+			{
+				"chunkIndex": 32,
+				"byteOffset": 33554432,
+				"byteLength": 1048576,
+				"chunkDigest": "unDny8eNOMoZ7OywZNdLKTmYVNh80bhZp1L_1CdaKIg"
+			},
+			{
+				"chunkIndex": 33,
+				"byteOffset": 34603008,
+				"byteLength": 1048576,
+				"chunkDigest": "ZMAqwETD2RlQv1FK8d-RfLYhpF7mnnwZtKnqOcWXHTM"
+			},
+			{
+				"chunkIndex": 34,
+				"byteOffset": 35651584,
+				"byteLength": 1048576,
+				"chunkDigest": "dPvvj4woLIgq2-XJ7e27QsG2G6nR4CsQ_Hyx5YNI0Ko"
+			},
+			{
+				"chunkIndex": 35,
+				"byteOffset": 36700160,
+				"byteLength": 1048576,
+				"chunkDigest": "caFrsI6dk_hIWI61BmG6-zC6MzfK9jlr2AmKwMvXR6s"
+			},
+			{
+				"chunkIndex": 36,
+				"byteOffset": 37748736,
+				"byteLength": 1048576,
+				"chunkDigest": "fTV4Sb82aSmOQgEYZRzjn5QuWYxOhs4mSI97Mm7x6eg"
+			},
+			{
+				"chunkIndex": 37,
+				"byteOffset": 38797312,
+				"byteLength": 1048576,
+				"chunkDigest": "poOezdlyhpE_0KgnCREIFzPDgNuQxhVe3MIYBYhmO7g"
+			},
+			{
+				"chunkIndex": 38,
+				"byteOffset": 39845888,
+				"byteLength": 1048576,
+				"chunkDigest": "htG_yi1_8OCtFgUHHFVIYB0dtGpUYV3wRS2R2lSa0f0"
+			},
+			{
+				"chunkIndex": 39,
+				"byteOffset": 40894464,
+				"byteLength": 1048576,
+				"chunkDigest": "scI-FKAvw6rIZ3Etb-CIPorqlEQf4TCVfBPuWPTtJ4w"
+			},
+			{
+				"chunkIndex": 40,
+				"byteOffset": 41943040,
+				"byteLength": 1048576,
+				"chunkDigest": "mXjW3qfpXJJ5tRhAXG3SMi2zz2hTUyaIXIW0pAmMDbY"
+			},
+			{
+				"chunkIndex": 41,
+				"byteOffset": 42991616,
+				"byteLength": 1048576,
+				"chunkDigest": "7inaTrUnb-bMIsUXGuKgFwyg_WkdqVqIp7MYFHdQGmE"
+			},
+			{
+				"chunkIndex": 42,
+				"byteOffset": 44040192,
+				"byteLength": 1048576,
+				"chunkDigest": "Mgd0ZL17AzcYlHeRaJuGs8J71T139jIigkwpE2Otv2I"
+			},
+			{
+				"chunkIndex": 43,
+				"byteOffset": 45088768,
+				"byteLength": 1048576,
+				"chunkDigest": "oZsR3y1Yd6LD2BHCazVsAvq-2uSCTb6_UOElxMQFpgk"
+			},
+			{
+				"chunkIndex": 44,
+				"byteOffset": 46137344,
+				"byteLength": 1048576,
+				"chunkDigest": "v5ZEvErj7wKOw8di9Tm55aX5N1Filb8sG4RS4GlLnxM"
+			},
+			{
+				"chunkIndex": 45,
+				"byteOffset": 47185920,
+				"byteLength": 1048576,
+				"chunkDigest": "7LJHdkd6pmrYRbnw74ZV8C9Rznox-_x0gSUCM_qds-A"
+			},
+			{
+				"chunkIndex": 46,
+				"byteOffset": 48234496,
+				"byteLength": 1048576,
+				"chunkDigest": "1HfXAp1IdtJ4X9LxQio0Bbahlfe4btxyujXH41ClL48"
+			},
+			{
+				"chunkIndex": 47,
+				"byteOffset": 49283072,
+				"byteLength": 1048576,
+				"chunkDigest": "zOjkoF-VFVenNUG1Um4UnSoG_JBqAQKbR7j58BpgR0A"
+			},
+			{
+				"chunkIndex": 48,
+				"byteOffset": 50331648,
+				"byteLength": 1048576,
+				"chunkDigest": "m0Y622ON8AO89Mwp_5ujErhLGH3kOK4wi3fDxzMnd58"
+			},
+			{
+				"chunkIndex": 49,
+				"byteOffset": 51380224,
+				"byteLength": 1048576,
+				"chunkDigest": "ceBDhw-4I_-fRaCgBvAKtdmhKrHD3wnVhODk2zENbKw"
+			},
+			{
+				"chunkIndex": 50,
+				"byteOffset": 52428800,
+				"byteLength": 1048576,
+				"chunkDigest": "Z1TtrIwq1Sd1CQsjM6DQxt3LTJsLoOEInMTSMXINvxc"
+			},
+			{
+				"chunkIndex": 51,
+				"byteOffset": 53477376,
+				"byteLength": 1048576,
+				"chunkDigest": "PH85f6dw-AZJhRqoha-G_lKg5OZLvj-RnzXki57HVJQ"
+			},
+			{
+				"chunkIndex": 52,
+				"byteOffset": 54525952,
+				"byteLength": 1048576,
+				"chunkDigest": "EGSfVcMlzup4B_jgCViCjWFxkEMGUb7cOCqCUKCt-gQ"
+			},
+			{
+				"chunkIndex": 53,
+				"byteOffset": 55574528,
+				"byteLength": 1048576,
+				"chunkDigest": "bjcJxy0yhhxHFfRR6EBgh9-S3OT-10FrHc9W2lczFFc"
+			},
+			{
+				"chunkIndex": 54,
+				"byteOffset": 56623104,
+				"byteLength": 1048576,
+				"chunkDigest": "G159lOIl2Yb9JN3sd42A5Ydy2ec9gI-3OTA_hu9vai4"
+			},
+			{
+				"chunkIndex": 55,
+				"byteOffset": 57671680,
+				"byteLength": 1048576,
+				"chunkDigest": "aNMtRSPZllUkFUknTGInyVBQSKwyKahCHjilxx7KHZg"
+			},
+			{
+				"chunkIndex": 56,
+				"byteOffset": 58720256,
+				"byteLength": 1048576,
+				"chunkDigest": "TZZu9ljao54qBvd9R-KCDotQ84oOsOMH9NWiqEQ0iks"
+			},
+			{
+				"chunkIndex": 57,
+				"byteOffset": 59768832,
+				"byteLength": 1048576,
+				"chunkDigest": "dIllQnxT245mmCIdEcjS6SDGgXc7OhWnavY8YyNVUVU"
+			},
+			{
+				"chunkIndex": 58,
+				"byteOffset": 60817408,
+				"byteLength": 1048576,
+				"chunkDigest": "7cNIacu8e3t2AJdATuDiqP_UzT02XzlKueXu73foS-A"
+			},
+			{
+				"chunkIndex": 59,
+				"byteOffset": 61865984,
+				"byteLength": 1048576,
+				"chunkDigest": "EJRunqRm4kQ72uy1t9nObMx--SCY1czswoNiVmM9K3c"
+			},
+			{
+				"chunkIndex": 60,
+				"byteOffset": 62914560,
+				"byteLength": 1048576,
+				"chunkDigest": "NhKBPzIwzZ3W3Bp1PEaqdMIEsQpawB5Biz7A5x8cx-I"
+			},
+			{
+				"chunkIndex": 61,
+				"byteOffset": 63963136,
+				"byteLength": 1048576,
+				"chunkDigest": "DlezDJijOvh2J9lv3jfdnxvpVQNGvIgMbnLCGbX9OmQ"
+			},
+			{
+				"chunkIndex": 62,
+				"byteOffset": 65011712,
+				"byteLength": 1048576,
+				"chunkDigest": "tpShX33GahKW36Oj1usSRFSDKv3o732ih0QBQVD5BKw"
+			},
+			{
+				"chunkIndex": 63,
+				"byteOffset": 66060288,
+				"byteLength": 1048576,
+				"chunkDigest": "vTRVAXKkimoDoV3NqbLUMroYCoAn3EIfNsYF0W99xnk"
+			},
+			{
+				"chunkIndex": 64,
+				"byteOffset": 67108864,
+				"byteLength": 1048576,
+				"chunkDigest": "1PU_QLrLOjR0NG5cQPpDFNlWA2ypNOpnXqpy_awnUdk"
+			},
+			{
+				"chunkIndex": 65,
+				"byteOffset": 68157440,
+				"byteLength": 1048576,
+				"chunkDigest": "FGQqe95W9ztZmUDJM_orPiB5H-CiRm1r8q06oiZmv38"
+			},
+			{
+				"chunkIndex": 66,
+				"byteOffset": 69206016,
+				"byteLength": 1048576,
+				"chunkDigest": "jiLH64z3dbvWQ1QhQA7IW7O9LuZ0AfX8EJE86HMGP24"
+			},
+			{
+				"chunkIndex": 67,
+				"byteOffset": 70254592,
+				"byteLength": 1048576,
+				"chunkDigest": "lELMCx_hyzxYdeQpWmjE8f5dq-60K5lC6wk1LOfet_w"
+			},
+			{
+				"chunkIndex": 68,
+				"byteOffset": 71303168,
+				"byteLength": 1048576,
+				"chunkDigest": "FZCLuKl8jOr8SfZICiQe4vpvEU2ETLdFrbXmoLw9BKk"
+			},
+			{
+				"chunkIndex": 69,
+				"byteOffset": 72351744,
+				"byteLength": 1048576,
+				"chunkDigest": "piq3S7ExMie8wTLPDLNzjVbEh2Gw5GZOE07KGnNwWJo"
+			},
+			{
+				"chunkIndex": 70,
+				"byteOffset": 73400320,
+				"byteLength": 1048576,
+				"chunkDigest": "_nj3_F-zvKNzwP8c7k3V-UQpxS4j_qE4FYPL6FiDY8w"
+			},
+			{
+				"chunkIndex": 71,
+				"byteOffset": 74448896,
+				"byteLength": 1048576,
+				"chunkDigest": "68H1G4VPCo9LIHvH-11NCqCZlL3gwGB81A_M3bXRyT0"
+			},
+			{
+				"chunkIndex": 72,
+				"byteOffset": 75497472,
+				"byteLength": 1048576,
+				"chunkDigest": "MQQkuVUFUeec0iyY6r7LD1rFhCPz5rM-GVzjdf3Uykk"
+			},
+			{
+				"chunkIndex": 73,
+				"byteOffset": 76546048,
+				"byteLength": 1048576,
+				"chunkDigest": "YK6HyPGocvUSqYP0olsaDLL65znuLlJocDqzpTlex8g"
+			},
+			{
+				"chunkIndex": 74,
+				"byteOffset": 77594624,
+				"byteLength": 1048576,
+				"chunkDigest": "SszGsYOC0W8KarI1ewdzhcJF6KFDTO9fK7E1VSLpMao"
+			},
+			{
+				"chunkIndex": 75,
+				"byteOffset": 78643200,
+				"byteLength": 1048576,
+				"chunkDigest": "uIUkMNoI3VuYz4rjj41Hp5qAdRuRdyEtYU9RKpim76I"
+			},
+			{
+				"chunkIndex": 76,
+				"byteOffset": 79691776,
+				"byteLength": 1048576,
+				"chunkDigest": "v-tJyfljtGkl_yxosh2M5vrEO4u_KX4MNU9LEGgXrXQ"
+			},
+			{
+				"chunkIndex": 77,
+				"byteOffset": 80740352,
+				"byteLength": 1048576,
+				"chunkDigest": "sxITn3oMqRMjiovFa76110SSOpCQJdpR_I72g1KXRdE"
+			},
+			{
+				"chunkIndex": 78,
+				"byteOffset": 81788928,
+				"byteLength": 1048576,
+				"chunkDigest": "0UDeDjk04XYcNgaqqBm4uN7fwmBw7KzJuCCNx8jBX00"
+			},
+			{
+				"chunkIndex": 79,
+				"byteOffset": 82837504,
+				"byteLength": 1048576,
+				"chunkDigest": "_5U_RL82Upey1-FLAQAkKB99kHuoCrS_hV6p8GCuvOg"
+			},
+			{
+				"chunkIndex": 80,
+				"byteOffset": 83886080,
+				"byteLength": 1048576,
+				"chunkDigest": "YVsn-uq3PGDxzdP32Kef331lqTLIWMc1pZZtmrbqd3k"
+			},
+			{
+				"chunkIndex": 81,
+				"byteOffset": 84934656,
+				"byteLength": 1048576,
+				"chunkDigest": "yBTT-H3PM2QQdBb5Sa_YupcOsOh5PyBFMNP0pPJeyuE"
+			},
+			{
+				"chunkIndex": 82,
+				"byteOffset": 85983232,
+				"byteLength": 1048576,
+				"chunkDigest": "tVdw26eRyeecs5puwhSibA9FvfRZ7wWFSa1D2IItgXE"
+			},
+			{
+				"chunkIndex": 83,
+				"byteOffset": 87031808,
+				"byteLength": 1048576,
+				"chunkDigest": "2mjj70TpkdBp6KFi7E4HD4ufU1pIzSOD2yFRQuo6T_I"
+			},
+			{
+				"chunkIndex": 84,
+				"byteOffset": 88080384,
+				"byteLength": 1048576,
+				"chunkDigest": "ToGJBeo0irceaSCxd0gsF9iOItD9nXsqSSopL0TSZzM"
+			},
+			{
+				"chunkIndex": 85,
+				"byteOffset": 89128960,
+				"byteLength": 1048576,
+				"chunkDigest": "vnwONKs16t6qDrDSyOtvl3pFiVaSIN0WgyrD1fA7lB4"
+			},
+			{
+				"chunkIndex": 86,
+				"byteOffset": 90177536,
+				"byteLength": 1048576,
+				"chunkDigest": "ik99-0ydnr6qKKLFoM0j86-uHaWXHo2FJsnGFYtjtkc"
+			},
+			{
+				"chunkIndex": 87,
+				"byteOffset": 91226112,
+				"byteLength": 1048576,
+				"chunkDigest": "Fz13vxT_XIbSDvNrE6Nc2by7Y0Q7D2XIK-_rSHs5tWc"
+			},
+			{
+				"chunkIndex": 88,
+				"byteOffset": 92274688,
+				"byteLength": 1048576,
+				"chunkDigest": "NuixJtgPtIn-6kTULKco5uVPpEIQFwPXncxspG1TWKM"
+			},
+			{
+				"chunkIndex": 89,
+				"byteOffset": 93323264,
+				"byteLength": 1048576,
+				"chunkDigest": "aF9W99CKdf8PpoHmkBhEhq5vNOyMbzCydBu6Vp3789o"
+			},
+			{
+				"chunkIndex": 90,
+				"byteOffset": 94371840,
+				"byteLength": 1048576,
+				"chunkDigest": "OM7dfq0YZah3hhx8xH8gToDEg_Ie1wr_IN3zd5AWax4"
+			},
+			{
+				"chunkIndex": 91,
+				"byteOffset": 95420416,
+				"byteLength": 1048576,
+				"chunkDigest": "AZ1efBoMwAX3_zoo7a8FT8jF6MB9h1hUZ1KPDwfWt5E"
+			},
+			{
+				"chunkIndex": 92,
+				"byteOffset": 96468992,
+				"byteLength": 1048576,
+				"chunkDigest": "kMr9AgGpSzzAFAx_HwsDAtjRGJdau9v17d5AXxCbaow"
+			},
+			{
+				"chunkIndex": 93,
+				"byteOffset": 97517568,
+				"byteLength": 1048576,
+				"chunkDigest": "nKaUpVbfVAyEzDD9-nn0rVbrq_mJKv2A7ZdADY-EH3s"
+			},
+			{
+				"chunkIndex": 94,
+				"byteOffset": 98566144,
+				"byteLength": 1048576,
+				"chunkDigest": "3Yx0QprIn9_KjVN452xhl2d7bDmXiDhhJXAuNI-6u-w"
+			},
+			{
+				"chunkIndex": 95,
+				"byteOffset": 99614720,
+				"byteLength": 1048576,
+				"chunkDigest": "l7DNnCZt9l9wJD695dZDNnvoKMg_X8RbIZTSfudHrrY"
+			},
+			{
+				"chunkIndex": 96,
+				"byteOffset": 100663296,
+				"byteLength": 1048576,
+				"chunkDigest": "qVty88n6W0-jaIoQHoh6An9m0EtxgXVcRpF-yrY5PFQ"
+			},
+			{
+				"chunkIndex": 97,
+				"byteOffset": 101711872,
+				"byteLength": 1048576,
+				"chunkDigest": "VCrg2WsvjV8UzuHFpvjs-LErTPwAqDyYrD0XqP1e7n8"
+			},
+			{
+				"chunkIndex": 98,
+				"byteOffset": 102760448,
+				"byteLength": 1048576,
+				"chunkDigest": "M71k7KjAKN2xQZmDnDN_E2j5Xb1EspGYHf0Hhge2BOk"
+			},
+			{
+				"chunkIndex": 99,
+				"byteOffset": 103809024,
+				"byteLength": 1048576,
+				"chunkDigest": "QJApMqp2Ib2Uw0Y9reU3Ncdchq4UJPysUODm2zZ60SM"
+			},
+			{
+				"chunkIndex": 100,
+				"byteOffset": 104857600,
+				"byteLength": 1048576,
+				"chunkDigest": "AGh-3LNz0pJe-kmViO2PWtvFDChSxtFrgaTYk7c5BnM"
+			},
+			{
+				"chunkIndex": 101,
+				"byteOffset": 105906176,
+				"byteLength": 1048576,
+				"chunkDigest": "BJ_sxX7Fk83aNFuFobRvKR9UYu5-QSImY-NQBASm11E"
+			},
+			{
+				"chunkIndex": 102,
+				"byteOffset": 106954752,
+				"byteLength": 1048576,
+				"chunkDigest": "a-IaIqYjS1mT2pnhF0dk2Ry17r6PminF-1gfLkEmu7k"
+			},
+			{
+				"chunkIndex": 103,
+				"byteOffset": 108003328,
+				"byteLength": 1048576,
+				"chunkDigest": "Ur7SVYiktjya1ygPhl85KhpibvNo7phhWWWuL6fMxqY"
+			},
+			{
+				"chunkIndex": 104,
+				"byteOffset": 109051904,
+				"byteLength": 1048576,
+				"chunkDigest": "POwEA9h5YJnj7FxEgJpibaY2HfuzBxqTYCMoZLhG3FA"
+			},
+			{
+				"chunkIndex": 105,
+				"byteOffset": 110100480,
+				"byteLength": 1048576,
+				"chunkDigest": "AQw5Lg1S6wOj2DR2r7d8lM7xmS6Ja07Oa2aZ9pIkZns"
+			},
+			{
+				"chunkIndex": 106,
+				"byteOffset": 111149056,
+				"byteLength": 1048576,
+				"chunkDigest": "GfqO31eXQfYmzC-yLogytKy49gg68AYIsTFyNf2BgrI"
+			},
+			{
+				"chunkIndex": 107,
+				"byteOffset": 112197632,
+				"byteLength": 1048576,
+				"chunkDigest": "jVlCN-LRNjWbWV9pt-oK4OCew5IqBiNcww_jLOQji3E"
+			},
+			{
+				"chunkIndex": 108,
+				"byteOffset": 113246208,
+				"byteLength": 1048576,
+				"chunkDigest": "_rudfbV3POys2kQFE9JbA-17rDuUUxG7HIHVSoxnZ-Q"
+			},
+			{
+				"chunkIndex": 109,
+				"byteOffset": 114294784,
+				"byteLength": 1048576,
+				"chunkDigest": "mS8U7uEYFPqr-9ywRTeGUsJmM01KNTp82lQD2zWOnVI"
+			},
+			{
+				"chunkIndex": 110,
+				"byteOffset": 115343360,
+				"byteLength": 1048576,
+				"chunkDigest": "p9jthoi2IlPxwSW_Vks6z7U0tsYouK8Q179-zD0HTnI"
+			},
+			{
+				"chunkIndex": 111,
+				"byteOffset": 116391936,
+				"byteLength": 1048576,
+				"chunkDigest": "-2pSGuchS-9Fbhbw705xtH3LLJo0EXlsZ2BseiXouC8"
+			},
+			{
+				"chunkIndex": 112,
+				"byteOffset": 117440512,
+				"byteLength": 1048576,
+				"chunkDigest": "AjezvfB-pIgiqF4VyfuAM39XKTLlvMTss0nQ1jj6LYQ"
+			},
+			{
+				"chunkIndex": 113,
+				"byteOffset": 118489088,
+				"byteLength": 1048576,
+				"chunkDigest": "BMWXQNtLg2wwodYvtaWz_i5sWJwdKeHNtQTlgJ7VvAs"
+			},
+			{
+				"chunkIndex": 114,
+				"byteOffset": 119537664,
+				"byteLength": 1048576,
+				"chunkDigest": "dEniHkXn9DlrsU09WfYvAujKDALbAz2OEOt-pPPLztM"
+			},
+			{
+				"chunkIndex": 115,
+				"byteOffset": 120586240,
+				"byteLength": 1048576,
+				"chunkDigest": "7wcQc-azXRKaEJAWXcWjgF4jFutseWolgi9x4cRIsbY"
+			},
+			{
+				"chunkIndex": 116,
+				"byteOffset": 121634816,
+				"byteLength": 1048576,
+				"chunkDigest": "_xIZaYfTA8We0HFN-TruERF94h4WGjDV_QU1wSAzl08"
+			},
+			{
+				"chunkIndex": 117,
+				"byteOffset": 122683392,
+				"byteLength": 1048576,
+				"chunkDigest": "Iyn47SoXwAfERoryaZD4U6mJRsSNbZ8PmEQhxNFD-MI"
+			},
+			{
+				"chunkIndex": 118,
+				"byteOffset": 123731968,
+				"byteLength": 1048576,
+				"chunkDigest": "l9BPHY5ibcxDqjEXzL9xZO-tIe517b-vOkK96Wf9Ixs"
+			},
+			{
+				"chunkIndex": 119,
+				"byteOffset": 124780544,
+				"byteLength": 1048576,
+				"chunkDigest": "gKoPMnPkDGdWkt4_EqMG25Yj-cv2AGh6lKVgmjJ8FXQ"
+			},
+			{
+				"chunkIndex": 120,
+				"byteOffset": 125829120,
+				"byteLength": 1048576,
+				"chunkDigest": "5XxIWAgb_dsh475rRlDtIw8HDmZbZmpHWTZ9DlRoi6s"
+			},
+			{
+				"chunkIndex": 121,
+				"byteOffset": 126877696,
+				"byteLength": 1048576,
+				"chunkDigest": "vDSyQB6lZquKJkb9KorCWE1OFve3MOD5JK7irTPP8XE"
+			},
+			{
+				"chunkIndex": 122,
+				"byteOffset": 127926272,
+				"byteLength": 1048576,
+				"chunkDigest": "qvZZLANGjYbULXtiEbbFNrG7_Y9hvl2gwM9Legr-X50"
+			},
+			{
+				"chunkIndex": 123,
+				"byteOffset": 128974848,
+				"byteLength": 1048576,
+				"chunkDigest": "9wf_6LRCAyjKvypXAsGVMrNLSJVtFZqxhA-HKfw-Bjc"
+			},
+			{
+				"chunkIndex": 124,
+				"byteOffset": 130023424,
+				"byteLength": 1048576,
+				"chunkDigest": "XjvNmMmwfD7RAg5YzjGNp-5kIFeAN_AcsxD8CQc1RJ4"
+			},
+			{
+				"chunkIndex": 125,
+				"byteOffset": 131072000,
+				"byteLength": 1048576,
+				"chunkDigest": "fglf-1WlL3lB2f_DnumUJrHsmQkmQPcCh-TzgnhLjDQ"
+			},
+			{
+				"chunkIndex": 126,
+				"byteOffset": 132120576,
+				"byteLength": 1048576,
+				"chunkDigest": "bRKeqSDAmh9DyLGI7QWCaBkC_G9Nf9EIOl9wxHYXeuM"
+			},
+			{
+				"chunkIndex": 127,
+				"byteOffset": 133169152,
+				"byteLength": 1048576,
+				"chunkDigest": "Y8D03Lv2k46kPz_LJjayLYM3LoIdYRFBo8glZTfdZ3U"
+			},
+			{
+				"chunkIndex": 128,
+				"byteOffset": 134217728,
+				"byteLength": 1048576,
+				"chunkDigest": "V5jXg9yIDjZ7IHrCKsT0Y86DFOa4Be2Ic36EYvGq_v0"
+			},
+			{
+				"chunkIndex": 129,
+				"byteOffset": 135266304,
+				"byteLength": 1048576,
+				"chunkDigest": "ZcjYuGjHzXOzohpMCrS38-tmmBmE7g8Ult7AcVoUEnk"
+			},
+			{
+				"chunkIndex": 130,
+				"byteOffset": 136314880,
+				"byteLength": 1048576,
+				"chunkDigest": "f4mDAeXt5sIRdyTOYOK3m4z4uj1M9g8vECbEJL05cLI"
+			},
+			{
+				"chunkIndex": 131,
+				"byteOffset": 137363456,
+				"byteLength": 1048576,
+				"chunkDigest": "1nRBVJfmL784Md_M-1VRqbilAsoyBA2a_xgfYISjZ0A"
+			},
+			{
+				"chunkIndex": 132,
+				"byteOffset": 138412032,
+				"byteLength": 1048576,
+				"chunkDigest": "yNgEaX5Szt5YzkxaMlvDusFZa4TzoolMfgy3xdDXYiA"
+			},
+			{
+				"chunkIndex": 133,
+				"byteOffset": 139460608,
+				"byteLength": 1048576,
+				"chunkDigest": "q-z_HlS4Bbl12tV1oLo1aiE_-o4N-CqYIxswBdSBl24"
+			},
+			{
+				"chunkIndex": 134,
+				"byteOffset": 140509184,
+				"byteLength": 1048576,
+				"chunkDigest": "J_K9-KiPcXglu0bUmX_2neWpS32RPDzoWsZVtPd-Rp8"
+			},
+			{
+				"chunkIndex": 135,
+				"byteOffset": 141557760,
+				"byteLength": 1048576,
+				"chunkDigest": "Y6T9kwxPoU1eynI7NClKoh9sbOnnJuup9ZDKRhDDSSs"
+			},
+			{
+				"chunkIndex": 136,
+				"byteOffset": 142606336,
+				"byteLength": 1048576,
+				"chunkDigest": "ViXNv4n9MERWooXtdqlpNqwcTb5b5jZA_B-LhI8imOo"
+			},
+			{
+				"chunkIndex": 137,
+				"byteOffset": 143654912,
+				"byteLength": 1048576,
+				"chunkDigest": "Rtob86ec-NDZ9eiV-Rrv_Yhw_PVY7CoWuqMfGzapyew"
+			},
+			{
+				"chunkIndex": 138,
+				"byteOffset": 144703488,
+				"byteLength": 1048576,
+				"chunkDigest": "LKdQY1tWRJBQ79C4iSPRzaXGael4eSqzHL1C7X9HFUs"
+			},
+			{
+				"chunkIndex": 139,
+				"byteOffset": 145752064,
+				"byteLength": 1048576,
+				"chunkDigest": "qOlF4cV8pogXgPdpZBMvOoF4e1r3ydDykGjouriVbPw"
+			},
+			{
+				"chunkIndex": 140,
+				"byteOffset": 146800640,
+				"byteLength": 1048576,
+				"chunkDigest": "Tbn2lw6L7GE0veQNgbhrSagItCPxvBm_MrlDdv9TbAM"
+			},
+			{
+				"chunkIndex": 141,
+				"byteOffset": 147849216,
+				"byteLength": 1048576,
+				"chunkDigest": "M8KfIqs_1Mzrzvk8sVh9VmDey3mdWlWTCh87cMDt9cA"
+			},
+			{
+				"chunkIndex": 142,
+				"byteOffset": 148897792,
+				"byteLength": 1048576,
+				"chunkDigest": "57lPSt4y_wIFuGa3HHPp_PMEEh-ykhkG3wetq7nYGRM"
+			},
+			{
+				"chunkIndex": 143,
+				"byteOffset": 149946368,
+				"byteLength": 1048576,
+				"chunkDigest": "sNUZqMLgQgeASnnTuWW73M_OV9zB4oxl4NWoZmNDBmk"
+			},
+			{
+				"chunkIndex": 144,
+				"byteOffset": 150994944,
+				"byteLength": 1048576,
+				"chunkDigest": "8bbtNHsainR_hpMfzhHD6BmlKMfOfg6Q-jetW9GUk2Y"
+			},
+			{
+				"chunkIndex": 145,
+				"byteOffset": 152043520,
+				"byteLength": 1048576,
+				"chunkDigest": "zxYgr_GqXHpHY2pKIZWiyw8fQQh3KEHMJRXaeh1APqk"
+			},
+			{
+				"chunkIndex": 146,
+				"byteOffset": 153092096,
+				"byteLength": 1048576,
+				"chunkDigest": "WA8OokigL_gIMBq_xlMSCuAZsdwnMLyV7zDXBVeUh6g"
+			},
+			{
+				"chunkIndex": 147,
+				"byteOffset": 154140672,
+				"byteLength": 1048576,
+				"chunkDigest": "rzVDyK8NqHgp6CTGtT9o23zJwVtjOFA2TNzTW8zB5ng"
+			},
+			{
+				"chunkIndex": 148,
+				"byteOffset": 155189248,
+				"byteLength": 1048576,
+				"chunkDigest": "VMa3kuHBHnvzzPl2fIAtLBrYqWrbcCO3efL5sLSWZFg"
+			},
+			{
+				"chunkIndex": 149,
+				"byteOffset": 156237824,
+				"byteLength": 174224,
+				"chunkDigest": "xIksXYgFjfvcCYKoR-MduYhM2e7gzoVNQJqUT6O19EE"
+			}
+		],
+		"chunkVectorDigest": "d14lrmnOFib3qvN7y_d0NqAoApcwv8YugDaN_Q1eDOM"
+	},
+	"chunkVectorAudit": {
+		"domain": "remote-claw/executable-chunk-vector/v1",
+		"canonicalFieldOrder": [
+			"domain",
+			"manifestSchemaId",
+			"schemaVersion",
+			"chunkingSchemaId",
+			"digestAlgorithm",
+			"nominalChunkBytes",
+			"fileByteLength",
+			"chunkCount",
+			"chunks[chunkIndex,byteOffset,byteLength,chunkDigest]"
+		],
+		"preimageByteLength": 10996,
+		"digest": "d14lrmnOFib3qvN7y_d0NqAoApcwv8YugDaN_Q1eDOM"
+	},
+	"canonicalManifestAudit": {
+		"canonicalFieldOrder": [
+			"schemaId",
+			"schemaVersion",
+			"chunkingSchemaId",
+			"digestAlgorithm",
+			"nominalChunkBytes",
+			"fileByteLength",
+			"rawFileSha256",
+			"chunkCount",
+			"chunks[chunkIndex,byteOffset,byteLength,chunkDigest]",
+			"chunkVectorDigest"
+		],
+		"byteLength": 11026,
+		"bytesBase64url": "AAAAL3JlbW90ZS1jbGF3L25hdGl2ZS1leGVjdXRhYmxlLWNodW5rLW1hbmlmZXN0L3YxAAAACAAAAAAAAAABAAAAKHJlbW90ZS1jbGF3L2ZpeGVkLWV4ZWN1dGFibGUtY2h1bmtpbmcvdjEAAAAHU0hBLTI1NgAAAAgAAAAAABAAAAAAAAgAAAAACVKokAAAACD-GDmsXEF8X8SgjdJoRlkHw-jGyhXn_9k_Oo3EbWPTOQAAAAgAAAAAAAAAlgAAAAgAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAgAAAAAABAAAAAAACCNCfMk_GG-gQgjDChEbyAP45NWVCB1r9Cbh16ai_XOYQAAAAgAAAAAAAAAAQAAAAgAAAAAABAAAAAAAAgAAAAAABAAAAAAACALBs9drnmrh7mPrz5fh6nm47PHBSQlis85f0YdPeFWCwAAAAgAAAAAAAAAAgAAAAgAAAAAACAAAAAAAAgAAAAAABAAAAAAACCwaTheIeACfn8k70i_d2g6CQ7Bjn-PUyy5lpYSM-QlugAAAAgAAAAAAAAAAwAAAAgAAAAAADAAAAAAAAgAAAAAABAAAAAAACBcd-ejdenVddJYbM4_8jd0ILuOi60pbG1VYXi2JsMHbAAAAAgAAAAAAAAABAAAAAgAAAAAAEAAAAAAAAgAAAAAABAAAAAAACAgf2pXKuQ-wnmVtgSulgBWJo2Y4pX-VLiWgFs45r8PQgAAAAgAAAAAAAAABQAAAAgAAAAAAFAAAAAAAAgAAAAAABAAAAAAACD_ULOW-rKQML1Lj_sYokdVeGIM0b1Qnp7SujrAaSP2OgAAAAgAAAAAAAAABgAAAAgAAAAAAGAAAAAAAAgAAAAAABAAAAAAACDMOyRasYgEGGj1tc7RwtimyPNcFNXDvH72U_rf_7iTNgAAAAgAAAAAAAAABwAAAAgAAAAAAHAAAAAAAAgAAAAAABAAAAAAACA8pjA2HvrzwGc7oiP3sCXsCDDGdqmW3EpSGL8r1WAt6QAAAAgAAAAAAAAACAAAAAgAAAAAAIAAAAAAAAgAAAAAABAAAAAAACBPXwQ8hvQiAW7U3SEaQow7SikVB-40AiEBhCO0fV6nMwAAAAgAAAAAAAAACQAAAAgAAAAAAJAAAAAAAAgAAAAAABAAAAAAACA8wmghDfzLfttyVgHVHi-NB1EE90rdihmhedVpC2NFxgAAAAgAAAAAAAAACgAAAAgAAAAAAKAAAAAAAAgAAAAAABAAAAAAACCeC49rTV4CyVuNKuzQ7Tu7WcNn43KqYoUMRylOaiWVAQAAAAgAAAAAAAAACwAAAAgAAAAAALAAAAAAAAgAAAAAABAAAAAAACCt9gXYexxZ3XYFVWmPLcgmisp07nzFDot5wL3d14Y3qwAAAAgAAAAAAAAADAAAAAgAAAAAAMAAAAAAAAgAAAAAABAAAAAAACBnNM-LdnZjpdPA-eP2cVRO5MJdBNUXhB78A_snj6nZDQAAAAgAAAAAAAAADQAAAAgAAAAAANAAAAAAAAgAAAAAABAAAAAAACB1kLT_1jkDwBPZYc2QXmVXZ98OOzInd6DslJUQgDLS9QAAAAgAAAAAAAAADgAAAAgAAAAAAOAAAAAAAAgAAAAAABAAAAAAACCgSByd3UpXqPa2l2knXklPNot6HQlLuxWgASLSWAajHgAAAAgAAAAAAAAADwAAAAgAAAAAAPAAAAAAAAgAAAAAABAAAAAAACAl4BBFcxVOYe3GpCeFzgVZprHK2p9CIrhtvaUwTJR3sAAAAAgAAAAAAAAAEAAAAAgAAAAAAQAAAAAAAAgAAAAAABAAAAAAACBMSBEAopDuJwpvU64tK967H52QqRfw8C_kEZQtiD9EaAAAAAgAAAAAAAAAEQAAAAgAAAAAARAAAAAAAAgAAAAAABAAAAAAACBYicCnJe8yDWkPU82iDDsPngyE-oXlyoW4m8vIfddfJQAAAAgAAAAAAAAAEgAAAAgAAAAAASAAAAAAAAgAAAAAABAAAAAAACCcJbPHyu3OcQujU9xgJ3H-_D30XQeYyTJaN1aPiVZC1wAAAAgAAAAAAAAAEwAAAAgAAAAAATAAAAAAAAgAAAAAABAAAAAAACAcCNm1KTiaTjau69M54ArtEBK5hoi29-stRYWs5mulKAAAAAgAAAAAAAAAFAAAAAgAAAAAAUAAAAAAAAgAAAAAABAAAAAAACACnRqzdbsEv-Pfb4LKD9cUzIjBmbi8CmZCpe8y7SmwhwAAAAgAAAAAAAAAFQAAAAgAAAAAAVAAAAAAAAgAAAAAABAAAAAAACB6fTEz83Q2Db4N7Ilthcw9D3F_D3ENTiS8prgeCNtHvwAAAAgAAAAAAAAAFgAAAAgAAAAAAWAAAAAAAAgAAAAAABAAAAAAACDIEPF1Tk757N2g5opKVsJFAq2awFPNk64q3mI--gr_lAAAAAgAAAAAAAAAFwAAAAgAAAAAAXAAAAAAAAgAAAAAABAAAAAAACDybhp_ZoLlTFKpmQs8WYghF8nnlSGHDAHKf1NRw1J4OQAAAAgAAAAAAAAAGAAAAAgAAAAAAYAAAAAAAAgAAAAAABAAAAAAACA_Zv8X168HOGb1a9HxwKAIsZywkQudjNBexEXOU6TKJQAAAAgAAAAAAAAAGQAAAAgAAAAAAZAAAAAAAAgAAAAAABAAAAAAACDNSFLrt3H1dkaEe9tVq1mh-aon57zh9VP9HYuB4cu9cQAAAAgAAAAAAAAAGgAAAAgAAAAAAaAAAAAAAAgAAAAAABAAAAAAACBxT-PfTEB6E4I9zXcpiEBM564yxmyc_EceE6CnNABZIAAAAAgAAAAAAAAAGwAAAAgAAAAAAbAAAAAAAAgAAAAAABAAAAAAACANb0AbmmodAptOBIv_Dcrn0MJhNeRIGRQNH0cC5N330QAAAAgAAAAAAAAAHAAAAAgAAAAAAcAAAAAAAAgAAAAAABAAAAAAACCpEcfqCEafKrwW2Yhi_7sNAwZKx2WTuQ4fvK-RmCQHygAAAAgAAAAAAAAAHQAAAAgAAAAAAdAAAAAAAAgAAAAAABAAAAAAACCL6DIhnO8_C1o-dOtLg4ed7uL9XE7G8fsxv9Su_iY5XwAAAAgAAAAAAAAAHgAAAAgAAAAAAeAAAAAAAAgAAAAAABAAAAAAACDXxvR6UA-XxbZ4--MFBzSSoC2ONFDJRcGjrXAd9Gq-4wAAAAgAAAAAAAAAHwAAAAgAAAAAAfAAAAAAAAgAAAAAABAAAAAAACB1tkXhJB50tLZ7HGR4Z1PcoKa3F4FgGrqR-vOSCyp_CgAAAAgAAAAAAAAAIAAAAAgAAAAAAgAAAAAAAAgAAAAAABAAAAAAACC6cOfLx404yhns7LBk10spOZhU2HzRuFmnUv_UJ1ooiAAAAAgAAAAAAAAAIQAAAAgAAAAAAhAAAAAAAAgAAAAAABAAAAAAACBkwCrARMPZGVC_UUrx35F8tiGkXuaefBm0qeo5xZcdMwAAAAgAAAAAAAAAIgAAAAgAAAAAAiAAAAAAAAgAAAAAABAAAAAAACB0---PjCgsiCrb5cnt7btCwbYbqdHgKxD8fLHlg0jQqgAAAAgAAAAAAAAAIwAAAAgAAAAAAjAAAAAAAAgAAAAAABAAAAAAACBxoWuwjp2T-EhYjrUGYbr7MLozN8r2OWvYCYrAy9dHqwAAAAgAAAAAAAAAJAAAAAgAAAAAAkAAAAAAAAgAAAAAABAAAAAAACB9NXhJvzZpKY5CARhlHOOflC5ZjE6GziZIj3sybvHp6AAAAAgAAAAAAAAAJQAAAAgAAAAAAlAAAAAAAAgAAAAAABAAAAAAACCmg57N2XKGkT_QqCcJEQgXM8OA25DGFV7cwhgFiGY7uAAAAAgAAAAAAAAAJgAAAAgAAAAAAmAAAAAAAAgAAAAAABAAAAAAACCG0b_KLX_w4K0WBQccVUhgHR20alRhXfBFLZHaVJrR_QAAAAgAAAAAAAAAJwAAAAgAAAAAAnAAAAAAAAgAAAAAABAAAAAAACCxwj4UoC_DqshncS1v4Ig-iuqURB_hMJV8E-5Y9O0njAAAAAgAAAAAAAAAKAAAAAgAAAAAAoAAAAAAAAgAAAAAABAAAAAAACCZeNbep-lcknm1GEBcbdIyLbPPaFNTJohchbSkCYwNtgAAAAgAAAAAAAAAKQAAAAgAAAAAApAAAAAAAAgAAAAAABAAAAAAACDuKdpOtSdv5swixRca4qAXDKD9aR2pWoinsxgUd1AaYQAAAAgAAAAAAAAAKgAAAAgAAAAAAqAAAAAAAAgAAAAAABAAAAAAACAyB3RkvXsDNxiUd5Fom4azwnvVPXf2MiKCTCkTY62_YgAAAAgAAAAAAAAAKwAAAAgAAAAAArAAAAAAAAgAAAAAABAAAAAAACChmxHfLVh3osPYEcJrNWwC-r7a5IJNvr9Q4SXExAWmCQAAAAgAAAAAAAAALAAAAAgAAAAAAsAAAAAAAAgAAAAAABAAAAAAACC_lkS8SuPvAo7Dx2L1Obnlpfk3UWKVvywbhFLgaUufEwAAAAgAAAAAAAAALQAAAAgAAAAAAtAAAAAAAAgAAAAAABAAAAAAACDsskd2R3qmathFufDvhlXwL1HOejH7_HSBJQIz-p2z4AAAAAgAAAAAAAAALgAAAAgAAAAAAuAAAAAAAAgAAAAAABAAAAAAACDUd9cCnUh20nhf0vFCKjQFtqGV97hu3HK6NcfjUKUvjwAAAAgAAAAAAAAALwAAAAgAAAAAAvAAAAAAAAgAAAAAABAAAAAAACDM6OSgX5UVV6c1QbVSbhSdKgb8kGoBAptHuPnwGmBHQAAAAAgAAAAAAAAAMAAAAAgAAAAAAwAAAAAAAAgAAAAAABAAAAAAACCbRjrbY43wA7z0zCn_m6MSuEsYfeQ4rjCLd8PHMyd3nwAAAAgAAAAAAAAAMQAAAAgAAAAAAxAAAAAAAAgAAAAAABAAAAAAACBx4EOHD7gj_59FoKAG8Aq12aEqscPfCdWE4OTbMQ1srAAAAAgAAAAAAAAAMgAAAAgAAAAAAyAAAAAAAAgAAAAAABAAAAAAACBnVO2sjCrVJ3UJCyMzoNDG3ctMmwug4QicxNIxcg2_FwAAAAgAAAAAAAAAMwAAAAgAAAAAAzAAAAAAAAgAAAAAABAAAAAAACA8fzl_p3D4BkmFGqiFr4b-UqDk5ku-P5GfNeSLnsdUlAAAAAgAAAAAAAAANAAAAAgAAAAAA0AAAAAAAAgAAAAAABAAAAAAACAQZJ9VwyXO6ngH-OAJWIKNYXGQQwZRvtw4KoJQoK36BAAAAAgAAAAAAAAANQAAAAgAAAAAA1AAAAAAAAgAAAAAABAAAAAAACBuNwnHLTKGHEcV9FHoQGCH35Lc5P7XQWsdz1baVzMUVwAAAAgAAAAAAAAANgAAAAgAAAAAA2AAAAAAAAgAAAAAABAAAAAAACAbXn2U4iXZhv0k3ex3jYDlh3LZ5z2Aj7c5MD-G729qLgAAAAgAAAAAAAAANwAAAAgAAAAAA3AAAAAAAAgAAAAAABAAAAAAACBo0y1FI9mWVSQVSSdMYifJUFBIrDIpqEIeOKXHHsodmAAAAAgAAAAAAAAAOAAAAAgAAAAAA4AAAAAAAAgAAAAAABAAAAAAACBNlm72WNqjnioG931H4oIOi1Dzig6w4wf01aKoRDSKSwAAAAgAAAAAAAAAOQAAAAgAAAAAA5AAAAAAAAgAAAAAABAAAAAAACB0iWVCfFPbjmaYIh0RyNLpIMaBdzs6Fadq9jxjI1VRVQAAAAgAAAAAAAAAOgAAAAgAAAAAA6AAAAAAAAgAAAAAABAAAAAAACDtw0hpy7x7e3YAl0BO4OKo_9TNPTZfOUq55e7vd-hL4AAAAAgAAAAAAAAAOwAAAAgAAAAAA7AAAAAAAAgAAAAAABAAAAAAACAQlG6epGbiRDva7LW32c5szH75IJjVzOzCg2JWYz0rdwAAAAgAAAAAAAAAPAAAAAgAAAAAA8AAAAAAAAgAAAAAABAAAAAAACA2EoE_MjDNndbcGnU8Rqp0wgSxClrAHkGLPsDnHxzH4gAAAAgAAAAAAAAAPQAAAAgAAAAAA9AAAAAAAAgAAAAAABAAAAAAACAOV7MMmKM6-HYn2W_eN92fG-lVA0a8iAxucsIZtf06ZAAAAAgAAAAAAAAAPgAAAAgAAAAAA-AAAAAAAAgAAAAAABAAAAAAACC2lKFffcZqEpbfo6PW6xJEVIMq_ejvfaKHRAFBUPkErAAAAAgAAAAAAAAAPwAAAAgAAAAAA_AAAAAAAAgAAAAAABAAAAAAACC9NFUBcqSKagOhXc2pstQyuhgKgCfcQh82xgXRb33GeQAAAAgAAAAAAAAAQAAAAAgAAAAABAAAAAAAAAgAAAAAABAAAAAAACDU9T9Auss6NHQ0blxA-kMU2VYDbKk06mdeqnL9rCdR2QAAAAgAAAAAAAAAQQAAAAgAAAAABBAAAAAAAAgAAAAAABAAAAAAACAUZCp73lb3O1mZQMkz-is-IHkf4KJGbWvyrTqiJma_fwAAAAgAAAAAAAAAQgAAAAgAAAAABCAAAAAAAAgAAAAAABAAAAAAACCOIsfrjPd1u9ZDVCFADshbs70u5nQB9fwQkTzocwY_bgAAAAgAAAAAAAAAQwAAAAgAAAAABDAAAAAAAAgAAAAAABAAAAAAACCUQswLH-HLPFh15ClaaMTx_l2r7rQrmULrCTUs5963_AAAAAgAAAAAAAAARAAAAAgAAAAABEAAAAAAAAgAAAAAABAAAAAAACAVkIu4qXyM6vxJ9kgKJB7i-m8RTYRMt0WtteagvD0EqQAAAAgAAAAAAAAARQAAAAgAAAAABFAAAAAAAAgAAAAAABAAAAAAACCmKrdLsTEyJ7zBMs8Ms3ONVsSHYbDkZk4TTsoac3BYmgAAAAgAAAAAAAAARgAAAAgAAAAABGAAAAAAAAgAAAAAABAAAAAAACD-ePf8X7O8o3PA_xzuTdX5RCnFLiP-oTgVg8voWINjzAAAAAgAAAAAAAAARwAAAAgAAAAABHAAAAAAAAgAAAAAABAAAAAAACDrwfUbhU8Kj0sge8f7XU0KoJmUveDAYHzUD8zdtdHJPQAAAAgAAAAAAAAASAAAAAgAAAAABIAAAAAAAAgAAAAAABAAAAAAACAxBCS5VQVR55zSLJjqvssPWsWEI_Pmsz4ZXON1_dTKSQAAAAgAAAAAAAAASQAAAAgAAAAABJAAAAAAAAgAAAAAABAAAAAAACBgrofI8ahy9RKpg_SiWxoMsvrnOe4uUmhwOrOlOV7HyAAAAAgAAAAAAAAASgAAAAgAAAAABKAAAAAAAAgAAAAAABAAAAAAACBKzMaxg4LRbwpqsjV7B3OFwkXooUNM718rsTVVIukxqgAAAAgAAAAAAAAASwAAAAgAAAAABLAAAAAAAAgAAAAAABAAAAAAACC4hSQw2gjdW5jPiuOPjUenmoB1G5F3IS1hT1EqmKbvogAAAAgAAAAAAAAATAAAAAgAAAAABMAAAAAAAAgAAAAAABAAAAAAACC_60nJ-WO0aSX_LGiyHYzm-sQ7i78pfgw1T0sQaBetdAAAAAgAAAAAAAAATQAAAAgAAAAABNAAAAAAAAgAAAAAABAAAAAAACCzEhOfegypEyOKi8VrvrXXRJI6kJAl2lH8jvaDUpdF0QAAAAgAAAAAAAAATgAAAAgAAAAABOAAAAAAAAgAAAAAABAAAAAAACDRQN4OOTThdhw2BqqoGbi43t_CYHDsrMm4II3HyMFfTQAAAAgAAAAAAAAATwAAAAgAAAAABPAAAAAAAAgAAAAAABAAAAAAACD_lT9EvzZSl7LX4UsBACQoH32Qe6gKtL-FXqnwYK686AAAAAgAAAAAAAAAUAAAAAgAAAAABQAAAAAAAAgAAAAAABAAAAAAACBhWyf66rc8YPHN0_fYp5_ffWWpMshYxzWllm2atup3eQAAAAgAAAAAAAAAUQAAAAgAAAAABRAAAAAAAAgAAAAAABAAAAAAACDIFNP4fc8zZBB0FvlJr9i6lw6w6Hk_IEUw0_Sk8l7K4QAAAAgAAAAAAAAAUgAAAAgAAAAABSAAAAAAAAgAAAAAABAAAAAAACC1V3Dbp5HJ55yzmm7CFKJsD0W99FnvBYVJrUPYgi2BcQAAAAgAAAAAAAAAUwAAAAgAAAAABTAAAAAAAAgAAAAAABAAAAAAACDaaOPvROmR0GnooWLsTgcPi59TWkjNI4PbIVFC6jpP8gAAAAgAAAAAAAAAVAAAAAgAAAAABUAAAAAAAAgAAAAAABAAAAAAACBOgYkF6jSKtx5pILF3SCwX2I4i0P2deypJKikvRNJnMwAAAAgAAAAAAAAAVQAAAAgAAAAABVAAAAAAAAgAAAAAABAAAAAAACC-fA40qzXq3qoOsNLI62-XekWJVpIg3RaDKsPV8DuUHgAAAAgAAAAAAAAAVgAAAAgAAAAABWAAAAAAAAgAAAAAABAAAAAAACCKT337TJ2evqooosWgzSPzr64dpZcejYUmycYVi2O2RwAAAAgAAAAAAAAAVwAAAAgAAAAABXAAAAAAAAgAAAAAABAAAAAAACAXPXe_FP9chtIO82sTo1zZvLtjRDsPZcgr7-tIezm1ZwAAAAgAAAAAAAAAWAAAAAgAAAAABYAAAAAAAAgAAAAAABAAAAAAACA26LEm2A-0if7qRNQspyjm5U-kQhAXA9edzGykbVNYowAAAAgAAAAAAAAAWQAAAAgAAAAABZAAAAAAAAgAAAAAABAAAAAAACBoX1b30Ip1_w-mgeaQGESGrm807IxvMLJ0G7pWnfvz2gAAAAgAAAAAAAAAWgAAAAgAAAAABaAAAAAAAAgAAAAAABAAAAAAACA4zt1-rRhlqHeGHHzEfyBOgMSD8h7XCv8g3fN3kBZrHgAAAAgAAAAAAAAAWwAAAAgAAAAABbAAAAAAAAgAAAAAABAAAAAAACABnV58GgzABff_OijtrwVPyMXowH2HWFRnUo8PB9a3kQAAAAgAAAAAAAAAXAAAAAgAAAAABcAAAAAAAAgAAAAAABAAAAAAACCQyv0CAalLPMAUDH8fCwMC2NEYl1q72_Xt3kBfEJtqjAAAAAgAAAAAAAAAXQAAAAgAAAAABdAAAAAAAAgAAAAAABAAAAAAACCcppSlVt9UDITMMP36efStVuur-Ykq_YDtl0ANj4QfewAAAAgAAAAAAAAAXgAAAAgAAAAABeAAAAAAAAgAAAAAABAAAAAAACDdjHRCmsif38qNU3jnbGGXZ3tsOZeIOGElcC40j7q77AAAAAgAAAAAAAAAXwAAAAgAAAAABfAAAAAAAAgAAAAAABAAAAAAACCXsM2cJm32X3AkPr3l1kM2e-goyD9fxFshlNJ-50eutgAAAAgAAAAAAAAAYAAAAAgAAAAABgAAAAAAAAgAAAAAABAAAAAAACCpW3LzyfpbT6NoihAeiHoCf2bQS3GBdVxGkX7Ktjk8VAAAAAgAAAAAAAAAYQAAAAgAAAAABhAAAAAAAAgAAAAAABAAAAAAACBUKuDZay-NXxTO4cWm-Oz4sStM_ACoPJisPReo_V7ufwAAAAgAAAAAAAAAYgAAAAgAAAAABiAAAAAAAAgAAAAAABAAAAAAACAzvWTsqMAo3bFBmYOcM38TaPldvUSykZgd_QeGB7YE6QAAAAgAAAAAAAAAYwAAAAgAAAAABjAAAAAAAAgAAAAAABAAAAAAACBAkCkyqnYhvZTDRj2t5Tc1x1yGrhQk_KxQ4ObbNnrRIwAAAAgAAAAAAAAAZAAAAAgAAAAABkAAAAAAAAgAAAAAABAAAAAAACAAaH7cs3PSkl76SZWI7Y9a28UMKFLG0WuBpNiTtzkGcwAAAAgAAAAAAAAAZQAAAAgAAAAABlAAAAAAAAgAAAAAABAAAAAAACAEn-zFfsWTzdo0W4WhtG8pH1Ri7n5BIiZj41AEBKbXUQAAAAgAAAAAAAAAZgAAAAgAAAAABmAAAAAAAAgAAAAAABAAAAAAACBr4hoipiNLWZPameEXR2TZHLXuvo-aKcX7WB8uQSa7uQAAAAgAAAAAAAAAZwAAAAgAAAAABnAAAAAAAAgAAAAAABAAAAAAACBSvtJViKS2PJrXKA-GXzkqGmJu82jumGFZZa4vp8zGpgAAAAgAAAAAAAAAaAAAAAgAAAAABoAAAAAAAAgAAAAAABAAAAAAACA87AQD2HlgmePsXESAmmJtpjYd-7MHGpNgIyhkuEbcUAAAAAgAAAAAAAAAaQAAAAgAAAAABpAAAAAAAAgAAAAAABAAAAAAACABDDkuDVLrA6PYNHavt3yUzvGZLolrTs5rZpn2kiRmewAAAAgAAAAAAAAAagAAAAgAAAAABqAAAAAAAAgAAAAAABAAAAAAACAZ-o7fV5dB9ibML7IuiDK0rLj2CDrwBgixMXI1_YGCsgAAAAgAAAAAAAAAawAAAAgAAAAABrAAAAAAAAgAAAAAABAAAAAAACCNWUI34tE2NZtZX2m36grg4J7DkioGI1zDD-Ms5COLcQAAAAgAAAAAAAAAbAAAAAgAAAAABsAAAAAAAAgAAAAAABAAAAAAACD-u519tXc87KzaRAUT0lsD7XusO5RTEbscgdVKjGdn5AAAAAgAAAAAAAAAbQAAAAgAAAAABtAAAAAAAAgAAAAAABAAAAAAACCZLxTu4RgU-qv73LBFN4ZSwmYzTUo1OnzaVAPbNY6dUgAAAAgAAAAAAAAAbgAAAAgAAAAABuAAAAAAAAgAAAAAABAAAAAAACCn2O2GiLYiU_HBJb9WSzrPtTS2xii4rxDXv37MPQdOcgAAAAgAAAAAAAAAbwAAAAgAAAAABvAAAAAAAAgAAAAAABAAAAAAACD7alIa5yFL70VuFvDvTnG0fcssmjQReWxnYGx6Jei4LwAAAAgAAAAAAAAAcAAAAAgAAAAABwAAAAAAAAgAAAAAABAAAAAAACACN7O98H6kiCKoXhXJ-4Azf1cpMuW8xOyzSdDWOPothAAAAAgAAAAAAAAAcQAAAAgAAAAABxAAAAAAAAgAAAAAABAAAAAAACAExZdA20uDbDCh1i-1pbP-LmxYnB0p4c21BOWAntW8CwAAAAgAAAAAAAAAcgAAAAgAAAAAByAAAAAAAAgAAAAAABAAAAAAACB0SeIeRef0OWuxTT1Z9i8C6MoMAtsDPY4Q636k88vO0wAAAAgAAAAAAAAAcwAAAAgAAAAABzAAAAAAAAgAAAAAABAAAAAAACDvBxBz5rNdEpoQkBZdxaOAXiMW62x5aiWCL3HhxEixtgAAAAgAAAAAAAAAdAAAAAgAAAAAB0AAAAAAAAgAAAAAABAAAAAAACD_Ehlph9MDxZ7QcU35Ou4REX3iHhYaMNX9BTXBIDOXTwAAAAgAAAAAAAAAdQAAAAgAAAAAB1AAAAAAAAgAAAAAABAAAAAAACAjKfjtKhfAB8RGivJpkPhTqYlGxI1tnw-YRCHE0UP4wgAAAAgAAAAAAAAAdgAAAAgAAAAAB2AAAAAAAAgAAAAAABAAAAAAACCX0E8djmJtzEOqMRfMv3Fk760h7nXtv686Qr3pZ_0jGwAAAAgAAAAAAAAAdwAAAAgAAAAAB3AAAAAAAAgAAAAAABAAAAAAACCAqg8yc-QMZ1aS3j8SowbbliP5y_YAaHqUpWCaMnwVdAAAAAgAAAAAAAAAeAAAAAgAAAAAB4AAAAAAAAgAAAAAABAAAAAAACDlfEhYCBv92yHjvmtGUO0jDwcOZltmakdZNn0OVGiLqwAAAAgAAAAAAAAAeQAAAAgAAAAAB5AAAAAAAAgAAAAAABAAAAAAACC8NLJAHqVmq4omRv0qisJYTU4W97cw4PkkruKtM8_xcQAAAAgAAAAAAAAAegAAAAgAAAAAB6AAAAAAAAgAAAAAABAAAAAAACCq9lksA0aNhtQte2IRtsU2sbv9j2G-XaDAz0t6Cv5fnQAAAAgAAAAAAAAAewAAAAgAAAAAB7AAAAAAAAgAAAAAABAAAAAAACD3B__otEIDKMq_KlcCwZUys0tIlW0VmrGED4cp_D4GNwAAAAgAAAAAAAAAfAAAAAgAAAAAB8AAAAAAAAgAAAAAABAAAAAAACBeO82YybB8PtECDljOMY2n7mQgV4A38ByzEPwJBzVEngAAAAgAAAAAAAAAfQAAAAgAAAAAB9AAAAAAAAgAAAAAABAAAAAAACB-CV_7VaUveUHZ_8Oe6ZQmseyZCSZA9wKH5POCeEuMNAAAAAgAAAAAAAAAfgAAAAgAAAAAB-AAAAAAAAgAAAAAABAAAAAAACBtEp6pIMCaH0PIsYjtBYJoGQL8b01_0Qg6X3DEdhd64wAAAAgAAAAAAAAAfwAAAAgAAAAAB_AAAAAAAAgAAAAAABAAAAAAACBjwPTcu_aTjqQ_P8smNrItgzcugh1hEUGjyCVlN91ndQAAAAgAAAAAAAAAgAAAAAgAAAAACAAAAAAAAAgAAAAAABAAAAAAACBXmNeD3IgONnsgesIqxPRjzoMU5rgF7YhzfoRi8ar-_QAAAAgAAAAAAAAAgQAAAAgAAAAACBAAAAAAAAgAAAAAABAAAAAAACBlyNi4aMfNc7OiGkwKtLfz62aYGYTuDxSW3sBxWhQSeQAAAAgAAAAAAAAAggAAAAgAAAAACCAAAAAAAAgAAAAAABAAAAAAACB_iYMB5e3mwhF3JM5g4rebjPi6PUz2Dy8QJsQkvTlwsgAAAAgAAAAAAAAAgwAAAAgAAAAACDAAAAAAAAgAAAAAABAAAAAAACDWdEFUl-Yvvzgx38z7VVGpuKUCyjIEDZr_GB9ghKNnQAAAAAgAAAAAAAAAhAAAAAgAAAAACEAAAAAAAAgAAAAAABAAAAAAACDI2ARpflLO3ljOTFoyW8O6wVlrhPOiiUx-DLfF0NdiIAAAAAgAAAAAAAAAhQAAAAgAAAAACFAAAAAAAAgAAAAAABAAAAAAACCr7P8eVLgFuXXa1XWgujVqIT_6jg34KpgjGzAF1IGXbgAAAAgAAAAAAAAAhgAAAAgAAAAACGAAAAAAAAgAAAAAABAAAAAAACAn8r34qI9xeCW7RtSZf_ad5alLfZE8POhaxlW0935GnwAAAAgAAAAAAAAAhwAAAAgAAAAACHAAAAAAAAgAAAAAABAAAAAAACBjpP2TDE-hTV7Kcjs0KUqiH2xs6ecm66n1kMpGEMNJKwAAAAgAAAAAAAAAiAAAAAgAAAAACIAAAAAAAAgAAAAAABAAAAAAACBWJc2_if0wRFaihe12qWk2rBxNvlvmNkD8H4uEjyKY6gAAAAgAAAAAAAAAiQAAAAgAAAAACJAAAAAAAAgAAAAAABAAAAAAACBG2hvzp5z40Nn16JX5Gu_9iHD89VjsKha6ox8bNqnJ7AAAAAgAAAAAAAAAigAAAAgAAAAACKAAAAAAAAgAAAAAABAAAAAAACAsp1BjW1ZEkFDv0LiJI9HNpcZp6Xh5KrMcvULtf0cVSwAAAAgAAAAAAAAAiwAAAAgAAAAACLAAAAAAAAgAAAAAABAAAAAAACCo6UXhxXymiBeA92lkEy86gXh7WvfJ0PKQaOi6uJVs_AAAAAgAAAAAAAAAjAAAAAgAAAAACMAAAAAAAAgAAAAAABAAAAAAACBNufaXDovsYTS95A2BuGtJqAi0I_G8Gb8yuUN2_1NsAwAAAAgAAAAAAAAAjQAAAAgAAAAACNAAAAAAAAgAAAAAABAAAAAAACAzwp8iqz_UzOvO-TyxWH1WYN7LeZ1aVZMKHztwwO31wAAAAAgAAAAAAAAAjgAAAAgAAAAACOAAAAAAAAgAAAAAABAAAAAAACDnuU9K3jL_AgW4Zrccc-n88wQSH7KSGQbfB62rudgZEwAAAAgAAAAAAAAAjwAAAAgAAAAACPAAAAAAAAgAAAAAABAAAAAAACCw1RmowuBCB4BKedO5Zbvcz85X3MHijGXg1ahmY0MGaQAAAAgAAAAAAAAAkAAAAAgAAAAACQAAAAAAAAgAAAAAABAAAAAAACDxtu00exqKdH-Gkx_OEcPoGaUox85-DpD6N61b0ZSTZgAAAAgAAAAAAAAAkQAAAAgAAAAACRAAAAAAAAgAAAAAABAAAAAAACDPFiCv8apcekdjakohlaLLDx9BCHcoQcwlFdp6HUA-qQAAAAgAAAAAAAAAkgAAAAgAAAAACSAAAAAAAAgAAAAAABAAAAAAACBYDw6iSKAv-AgwGr_GUxIK4Bmx3CcwvJXvMNcFV5SHqAAAAAgAAAAAAAAAkwAAAAgAAAAACTAAAAAAAAgAAAAAABAAAAAAACCvNUPIrw2oeCnoJMa1P2jbfMnBW2M4UDZM3NNbzMHmeAAAAAgAAAAAAAAAlAAAAAgAAAAACUAAAAAAAAgAAAAAABAAAAAAACBUxreS4cEee_PM-XZ8gC0sGtipattwI7d58vmwtJZkWAAAAAgAAAAAAAAAlQAAAAgAAAAACVAAAAAAAAgAAAAAAAKokAAAACDEiSxdiAWN-9wJgqhH4x25iEzZ7uDOhU1AmpRPo7X0QQAAACB3XiWuac4WJveq83vL93Q2oCgClzC_xi6ANo39DV4M4w",
+		"sha256": "54dcae0f611f2ebe8e91531c73d475f1e2aaf1ea57304e9e0b5aca1ac03e3af8"
+	}
+}

@@ -5,7 +5,8 @@
 	"scripts": {
 		"check": "biome check .",
 		"proof": "node probe.mjs",
-		"test:run": "node verify-evidence.mjs"
+		"proof:executable": "node executable-manifest-probe.mjs",
+		"test:run": "node verify-evidence.mjs && node verify-executable-manifest.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.16"

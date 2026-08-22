@@ -96,9 +96,12 @@ local transcript completeness or replay.
 > projection, native dispatch, or production wiring. A1.8a1-E0 implements six canonical E-side ID
 > contracts and four deterministic attestation/snapshot ID derivations. E1a now implements the four
 > pure ref-free parent-envelope codecs, closed role/schema/bound/scope registry, and bounded raw digest
-> helper; it parses no child semantics and adds no artifact write, schema, repository, signer,
-> pointer, port, operation, or production capability. E1b next owns collector-backed Linux/OpenCode
-> child codecs and a real collector fixture. E1c then owns stateful accepted evidence under the frozen
+> helper. E1b1 now implements strict native/front-door executable-content manifest codecs and a
+> direct-only two-pass stable-FD Linux collector. The retained real OpenCode 1.17.5 Linux arm64 vector
+> closes only the native role; generic collection has temporary-file coverage for the front-door role
+> but no retained or provenance-bound actual front-door observation, and no pathname, process,
+> currentness, complete parent, or authority is proved. E1b2 workspace, E1b3 front-door/listener,
+> E1b4 isolation, and E1b5 capability/full-parent closure remain planned. E1c then owns stateful accepted evidence under the frozen
 > workspace, legacy-signer, staging, and receipt-backed reconciliation rules. I later installs an accepted capability snapshot and a credentialless
 > authenticated callable-port ingress lease as one matched pair. Neither creates an admitted command,
 > dispatch, effect, native call, production operation, or capability claim. A1.8a2 admitted arming and
@@ -127,10 +130,14 @@ local transcript completeness or replay.
 - A1 host-state and runtime-owner code:
   `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,migration-v11,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-result-finalization,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
   `packages/cli/src/host/native/evidence.ts`, `packages/cli/src/host/server-signer/**`, and
-  `packages/cli/src/host/runtime-owner/**`. A1.8a1-E0/E1a additionally live in
-  `packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence}.ts`,
+  `packages/cli/src/host/runtime-owner/**`. A1.8a1-E0/E1a/E1b1 additionally live in
+  `packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence}.ts`,
   their tests, and the host-state barrel. E0 contains the six E-side ID contracts and four
-  deterministic builders; E1a contains the four ref-free parent codecs and raw digest helper. A1.2 implements the generic v3
+  deterministic builders; E1a contains the four ref-free parent codecs and raw digest helper. E1b1's
+  direct-only collector and tests live in `packages/cli/src/host/native/linux-executable-collector.ts`
+  and `packages/cli/src/host/native/linux-executable-collector.test.ts`, respectively,
+  while its retained proof/probe/verifier live under `spikes/opencode-native/`; no raw executable or
+  chunk bytes are checked in. A1.2 implements the generic v3
   server/project/chat/binding/edge/coordinator operations described below. A1.3 implements the v4
   runtime-owner tables/repository and live owner daemon. A1.4 implements the v5 registration graph,
   canonical evidence, reverse port transport, and closed trusted-adapter service. A1.5 implements the
@@ -146,8 +153,9 @@ local transcript completeness or replay.
   private Claude RC rows, connect an ordinary native driver to durable registration/root activation,
   or install the ingress actor into a live runtime.
 - No E1c/I migration, repository, signer boundary, validator, or operation exists. E1a has closed the
-  four parent inputs and their ref-free content commitments, while E1b still owns every registered
-  platform/build/kernel child codec and real collector proof. E1c's prospective workspace/new-lineage
+  four parent inputs and their ref-free content commitments. E1b1 has closed both executable-manifest
+  codecs and only the native role's real retained collector proof; E1b2–E1b5 still own workspace,
+  actual front-door/listener, isolation, capability, and complete four-parent proof. E1c's prospective workspace/new-lineage
   rule, exhaustive legacy E-purpose quarantine, unsigned-snapshot/accepted-inert staging, and
   caller-retained request plus immutable transition-receipt reconciliation are frozen. There is no
   migration number or pin. Planned evidence and pair-install constraints are tracked in the
@@ -629,9 +637,11 @@ There is no claim, encryption, output part/signature, sealing, publication, brok
 attempt, projection, native dispatch, or production wiring in A1.8a0. A1.8a2 owns admitted atomic
 arming after the A1.8a1 authority foundation; A1.8b owns sealing/publishing and one-time dispatch.
 
-The next durable authority work remains split before any admitted arm. A1.8a1-E0 identities and E1a's
-ref-free parent envelopes have landed as pure contracts. E1b next supplies exact collector-backed
-Linux/OpenCode child bytes. E1c is intended to add immutable
+The next durable authority work remains split before any admitted arm. A1.8a1-E0 identities, E1a's
+ref-free parent envelopes, and E1b1's executable-content manifests/collector have landed. E1b1 is
+direct-only and proves one stable native-executable content observation, not a pathname, process,
+front door, currentness, complete parent, or authority. E1b2 through E1b5 next close workspace,
+front-door/listener, isolation, capability, and all four parent byte sets. E1c is intended to add immutable
 workspace/listener/isolation/operation-family/capability-snapshot evidence and exact runtime-owner
 signature acceptance in dependency-ordered listener → isolation → capability phases, with key
 rotation blocked while an E-owned phase is nonterminal. E1c uses caller-retained ref-free semantic
@@ -735,7 +745,7 @@ scope was only durable addressing through A1.6. A1.7a adds dormant ingress queue
 serialization; A1.7b0 adds their server-signing prerequisite; A1.7b1 adds rejected-only common
 proposal decisions, server-wide order, and signed preparations; and A1.8a0 atomically closes that
 rejected arm into a final result, acceptance, terminal overlay, and inert `pending_seal` intent.
-A1.8a1-E1c/I first owns the inert evidence and matched native-authority pair after E1b's collector gate; A1.8a2
+A1.8a1-E1c/I first owns the inert evidence and matched native-authority pair after E1b5's full-parent gate; A1.8a2
 still owns admitted attempt/dispatch/effect arming, and A1.8b owns sealing/publishing and
 one-time delivery.
 
@@ -1588,10 +1598,14 @@ demonstrates every property below:
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.
-- **A1.8a1 — native-binding authority: E0 IDENTITIES AND E1a REF-FREE PARENTS IMPLEMENTED; E1b/E1c/I PLANNED; NO STATEFUL SCHEMA OR OPERATION.** E0 supplies
+- **A1.8a1 — native-binding authority: E0/E1a/E1b1 IMPLEMENTED; E1b2–E1b5/E1c/I PLANNED; NO STATEFUL SCHEMA OR OPERATION.** E0 supplies
   the six E-side namespace/parser contracts and four deterministic ID builders. E1a supplies four
-  strict bounded parent codecs and a closed ref-free commitment registry, but no child semantic
-  parser or collector. E1b owns exact Linux/OpenCode child codecs and the real collector fixture.
+  strict bounded parent codecs and a closed ref-free commitment registry. E1b1 supplies both strict
+  executable-manifest codecs, the direct-only stable-FD collector, and retained native OpenCode proof;
+  generic collection also covers the front-door role in temporary-file tests, but no actual
+  front-door observation or provenance is retained and no path/process/currentness or authority is
+  proved. E1b2–E1b5
+  own workspace, actual front-door/listener, isolation, capability, and full-parent closure.
   E1c then retains accepted-but-inert evidence without changing either transport pointer, under the
   frozen new-lineage workspace rule, exhaustive legacy-signer quarantine, exact snapshot staging,
   local artifact-link graph, and dense receipt-backed reconciliation. I later owns the one-transaction

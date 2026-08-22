@@ -18,6 +18,13 @@ const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
     ]),
   ],
   [
+    resolve(SOURCE_ROOT, "host/native/linux-executable-collector.ts"),
+    new Set([
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "native-binding-authority-executable-evidence"),
+    ]),
+  ],
+  [
     resolve(SOURCE_ROOT, "host/runtime-owner/key-custody.ts"),
     new Set([resolve(STATE_ROOT, "ids"), resolve(STATE_ROOT, "protected")]),
   ],
@@ -88,7 +95,8 @@ const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
   ],
 ]);
 
-const DORMANT_ORCHESTRATION_MODULES = new Set([
+const DORMANT_PRODUCTION_MODULES = new Set([
+  resolve(SOURCE_ROOT, "host/native/linux-executable-collector"),
   resolve(SOURCE_ROOT, "host/server-signer/orchestrator"),
   resolve(SOURCE_ROOT, "host/server-signer/command-result-orchestrator"),
 ]);
@@ -155,7 +163,7 @@ describe("A1 host-state boundary", () => {
     }
   });
 
-  it("keeps dormant signer orchestration outside every production import graph", async () => {
+  it("keeps dormant modules outside every production import graph", async () => {
     const sourcePaths = (await sourceFiles(SOURCE_ROOT)).filter(
       (path) => !/\.test\.[cm]?[jt]sx?$/.test(path),
     );
@@ -189,7 +197,7 @@ describe("A1 host-state boundary", () => {
       visited.add(current);
       for (const dependency of imports.get(current) ?? []) pending.push(dependency);
     }
-    for (const dormant of DORMANT_ORCHESTRATION_MODULES) {
+    for (const dormant of DORMANT_PRODUCTION_MODULES) {
       expect(visited, dormant).not.toContain(dormant);
     }
   });

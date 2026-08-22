@@ -53,6 +53,62 @@ export function parseExactRecord(
   return snapshot;
 }
 
+export function snapshotExactArray(
+  value: unknown,
+  expectedLength: number,
+  field: string,
+): readonly unknown[] {
+  let isArray: boolean;
+  let ownKeys: (string | symbol)[];
+  try {
+    isArray = Array.isArray(value);
+    ownKeys = isArray ? Reflect.ownKeys(value as object) : [];
+  } catch {
+    reject(field, "could not be inspected safely");
+  }
+  if (!isArray) {
+    reject(field, "must be an array");
+  }
+
+  const expectedKeys = new Set<string>(["length"]);
+  for (let index = 0; index < expectedLength; index++) expectedKeys.add(String(index));
+  if (
+    ownKeys.length !== expectedKeys.size ||
+    ownKeys.some((key) => typeof key !== "string" || !expectedKeys.has(key))
+  ) {
+    reject(field, `must contain exactly ${expectedLength} indexed entries`);
+  }
+
+  let lengthDescriptor: PropertyDescriptor | undefined;
+  try {
+    lengthDescriptor = Object.getOwnPropertyDescriptor(value as object, "length");
+  } catch {
+    reject(field, "could not be inspected safely");
+  }
+  if (
+    lengthDescriptor === undefined ||
+    !Object.hasOwn(lengthDescriptor, "value") ||
+    lengthDescriptor.value !== expectedLength
+  ) {
+    reject(field, `must contain exactly ${expectedLength} indexed entries`);
+  }
+
+  const snapshot: unknown[] = [];
+  for (let index = 0; index < expectedLength; index++) {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value as object, String(index));
+    } catch {
+      reject(field, "could not be inspected safely");
+    }
+    if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) {
+      reject(field, "must contain only own indexed data properties");
+    }
+    snapshot.push(descriptor.value as unknown);
+  }
+  return Object.freeze(snapshot);
+}
+
 export function parseNonEmptyString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0) {
     reject(field, "must be a non-empty string");

@@ -8,9 +8,14 @@
 **Status:** selected architecture; A1.0 through dormant A1.8a0 are
 implemented. A1.8a1-E0 implements the six E-side canonical ID namespaces/types/parsers (`nwb_*`,
 `nlra_*`, `nria_*`, `nbcs_*`, `ncsa_*`, and `nbao_*`) plus four deterministic derivations and their
-locked vectors. A1.8a1-E1a now implements the pure, ref-free commitment grammar, strict bounded
+locked vectors. A1.8a1-E1a implements the pure, ref-free commitment grammar, strict bounded
 writer/decoder, and digest helper for the four workspace/listener/isolation/capability parent
-envelopes. The ordinary production CLI supplies no registration adapter and invokes no A1 broker,
+envelopes. A1.8a1-E1b1 implements strict role-correlated native/front-door executable-content
+manifest codecs and a direct-only Linux collector that observes one regular executable through two
+stable passes over one file descriptor. The native role has retained proof from the pinned real
+OpenCode 1.17.5 Linux arm64 binary. The generic collector also accepts the front-door role and is
+covered with temporary-file tests, but no retained or provenance-bound actual front-door observation
+exists. The ordinary production CLI supplies no registration adapter and invokes no A1 broker,
 ingress-actor, command-adjudication, server-signer, or result-finalization operation, so every real driver and the viewer
 remain on their A0 paths. A1.7a stops at durable `awaiting_order`; schema v9 supplies server-scoped
 key custody/signing authority; and schema v10 now provides A1-ingress-only ready materialization,
@@ -18,11 +23,12 @@ global common-command order, a rejected decision, and replaceable signed result 
 A1.8a0's schema v11 now atomically closes only that signed rejected arm into a common result, signer
 acceptance, logical ingress terminal overlay, exact semantic artifact, and one inert plaintext
 `pending_seal` intent. It adds no admitted/effect arm, cursor movement, claim/seal/publish, broker
-call, projection, production wiring, or capability advertisement. E1a adds no collector-backed
-Linux/OpenCode child codec or real collector fixture, SQLite schema or migration, repository,
-signer mutation, key-rotation barrier, transport-pointer write, callable-port access, owner
-operation, protocol packet, or production capability. A1.8a1-E1b is the planned collector-backed
-child-evidence gate. A1.8a1-E1c is the planned stateful accepted-evidence boundary after E1b; its
+call, projection, production wiring, or capability advertisement. E1b1 adds no pathname, running-process,
+front-door, currentness, complete-parent, or authority proof; SQLite schema or migration; repository;
+signer mutation; key-rotation barrier; transport-pointer write; callable-port access; owner
+operation; protocol packet; or production capability. A1.8a1-E1b2 workspace evidence,
+E1b3 front-door/listener evidence, E1b4 isolation evidence, and E1b5 capability/full-parent closure
+remain planned. A1.8a1-E1c is the planned stateful accepted-evidence boundary after E1b5; its
 workspace, legacy-signer, phase-staging, and reconciliation contracts are frozen in §4.1, but it has
 no migration number or implementation. A1.8a1-I remains planned after E1c, while A1.8a2 admitted
 arming and A1.8b delivery remain planned after I.
@@ -200,8 +206,11 @@ Any later successor signing lease must be durably acquired strictly after the pr
 including when the wall-clock values would otherwise share one millisecond.
 `pending_seal` has no ciphertext, output part/signature, claim/seal/publish, broker operation,
 effect/attempt, projection, native dispatch, or production path. A1.8a1-E0's identity contract and
-E1a's pure ref-free parent-envelope contract have landed. E1b next owns the exact collector-backed
-Linux/OpenCode child codecs and a real collector fixture; E1c then owns stateful accepted evidence.
+E1a's pure ref-free parent-envelope contract have landed. E1b1's executable-content manifest codecs,
+direct-only stable-FD Linux collector, and retained native OpenCode fixture have also landed; they do
+not prove a pathname, process, front door, currentness, complete parent, or authority. E1b2 workspace,
+E1b3 front-door/listener, E1b4 isolation, and E1b5 capability/full-parent closure remain before E1c's
+stateful accepted evidence.
 A1.8a1-I later installs the exact snapshot and credentialless callable-port ingress pair, A1.8a2 then
 owns the admitted arm, and A1.8b owns sealing/publishing.
 
@@ -222,9 +231,11 @@ service and tests: ordinary launches, drivers, and the viewer make zero `/api/a1
 no runtime-owner broker or ingress operation and no real-driver integration. Schema-v8 ingress,
 schema-v9 server signing, schema-v10 command adjudication, and schema-v11 rejected finalization are
 reachable only through direct host-state/custody/repository modules and tests. E0's pure identity
-helpers and E1a's pure parent-envelope codecs are exported from the host-state barrel but add no
-owner/runtime operation; E1b collector-backed child evidence, E1c accepted-evidence state, and I
-pair-install implementations do not exist. A1.7b1, A1.8a0, E0, and E1a still advertise nothing.
+helpers, E1a's pure parent-envelope codecs, and E1b1's executable-manifest codecs are exported from
+the host-state barrel. E1b1's Linux collector is direct-only and absent from every runtime-owner,
+driver, relay, viewer, and broker path. None adds an owner/runtime operation; E1b2–E1b5 child
+evidence, E1c accepted-evidence state, and I pair-install implementations do not exist. A1.7b1,
+A1.8a0, E0, E1a, and E1b1 still advertise nothing.
 Malformed wire and runtime values fail closed at their trust or canonical boundary instead of being
 accepted and failing later or being silently coerced.
 
@@ -3550,7 +3561,7 @@ interface NativeBindingAuthorityWithdrawalOperation {
 
 <a id="41-a18a1-native-binding-authority-freeze-planned-dormant"></a>
 
-### 4.1 A1.8a1 native-binding authority (E0/E1a implemented; E1b/E1c/I planned, dormant)
+### 4.1 A1.8a1 native-binding authority (E0/E1a/E1b1 implemented; E1b2–E1b5/E1c/I planned, dormant)
 
 Full admitted arming is not the next safe write. Delivery separates pure contracts, collector proof,
 durable accepted evidence, and installation:
@@ -3563,27 +3574,46 @@ durable accepted evidence, and installation:
    canonical writer/decoder, cross-coordinate derived-ID checks, locked vectors, and bounded artifact
    digest helper. It creates no protected artifact, row, signature, pointer, port, operation, packet,
    or capability.
-3. **A1.8a1-E1b — collector-backed child evidence (planned).** This slice must implement every
-   registered Linux/OpenCode platform, filesystem, namespace, process, executable/build, route,
-   operation, family, slash-normalization, translator, and injectivity-proof child codec and exercise
-   them through a real collector fixture. E1a's role names do not prove those child semantics.
-4. **A1.8a1-E1c — accepted evidence (planned after E1b).** The host will retain and verify one exact
+3. **A1.8a1-E1b1 — executable-content manifests and collector (implemented).** Strict codecs close
+   the native and front-door executable-manifest grammars. A direct-only Linux collector performs two
+   stable complete reads of one owned file descriptor, and a retained real OpenCode 1.17.5 Linux
+   arm64 vector closes only `listener.native_executable`. The generic collector is tested for the
+   front-door role too, but E1b1 retains no actual front-door observation or provenance. This slice
+   proves no pathname, running process, front door, currentness, complete parent, authority, or
+   production capability.
+4. **A1.8a1-E1b2 — workspace evidence (planned).** This slice owns canonical-directory,
+   no-follow filesystem-identity, allowed-root-ancestry, mount-namespace, and workspace-parent
+   closure. V1 rejects symlinks in every selector and allowed-root path component.
+5. **A1.8a1-E1b3 — front-door and listener evidence (planned).** This slice owns the actual
+   front-door executable and collector capture, build closure, generated surface, build-route
+   registry, measured dispatch table, and listener-parent closure.
+6. **A1.8a1-E1b4 — runtime-isolation evidence (planned).** This slice owns every process, socket,
+   policy, peer, network-namespace, mount-namespace, and isolation-parent proof.
+7. **A1.8a1-E1b5 — capability evidence and full four-parent closure (planned).** This slice owns the
+   remaining operation/family, slash-normalization, translator, injectivity, and capability child
+   codecs, then recreates all four E1a parent commitments from collected evidence.
+8. **A1.8a1-E1c — accepted evidence (planned after E1b5).** The host will retain and verify one exact
    OpenCode `{product:"opencode",access:"server"}` binding-scoped `user_text` proof chain. The
    capability snapshot is accepted but inert. E1c never writes either column on
    `NativeTransportLeaseRecord`: first-install evidence leaves null/null and replacement evidence
    leaves the exact predecessor pair byte-identical until I.
-5. **A1.8a1-I — atomic install (planned after E1c).** A later transaction installs that exact accepted
+9. **A1.8a1-I — atomic install (planned after E1c).** A later transaction installs that exact accepted
    snapshot and one credentialless authenticated callable-port ingress lease as a pair. It is the sole
    operation that may install or repoint a non-null pair. New parents initialize null/null;
    withdrawal and parent lifecycle may write null/null only. No operation writes one pointer alone.
    I still creates no command decision, native attempt, dispatch, effect gate, or native call.
 
-**Five-group freeze disposition.** The earlier E1 freeze is now split at the collector boundary. It
+**Nine-slice freeze disposition.** The earlier E1 freeze is now split at executable content,
+workspace, front-door/listener, isolation, capability/full-parent, accepted-evidence, and install
+boundaries. It
 does not assign a migration number or claim stateful implementation:
 
 1. The four parent envelopes, 64 KiB parent bound, exact ordered child-role inventories, and ref-free
-   commitment primitive are implemented by E1a. Exact child bytes and their Linux/OpenCode
-   collectors remain E1b's release gate; a reserved child schema name is not accepted evidence.
+   commitment primitive are implemented by E1a. E1b1 closes both executable-manifest codecs and
+   generic stable-FD collection for both roles, but only the native role has a real retained proof;
+   E1b2
+   through E1b5 must close every other registered child and recreate all four parents before E1c; a
+   reserved child schema name is not accepted evidence.
 2. E1c's workspace/link rule is frozen: an operation may only bind the exact selector mapping already
    pinned by the logical chat, plus its runtime/native incarnation, binding incarnation, attachment
    lease, ready publication, and one immutable workspace identity. The pinned mapping may be
@@ -3615,9 +3645,10 @@ does not assign a migration number or claim stateful implementation:
    current. Changed bytes or a partial/extra graph are conflict or corruption. A later transition
    makes an absent retry forbidden, but does not change an earlier exact landed result into absence.
 
-Everything below for E1c and I is a frozen but non-executable target. It must not be read as a claim
-that a stateful evidence schema, migration, repository, signer boundary, validator, collector, or
-authority operation exists.
+Everything below that describes E1c and I is a frozen but non-executable target. It must not be read
+as a claim that a stateful evidence schema, migration, repository, signer boundary, validator, or
+authority operation exists. E1b1's collector does not implement any planned E1b2–E1b5 collector
+chain or unblock E1c.
 
 **Implemented E1a byte contract.** Every commitment encodes exactly
 `str(role) || str(artifactSchemaId) || bytes(base64urlDecode(artifactDigest)) || uint(byteLength)`.
@@ -3679,8 +3710,8 @@ workspace.filesystem_identity [runtime, 64 KiB] = remote-claw/linux-no-follow-fi
 workspace.allowed_root [runtime, 1 MiB] = remote-claw/linux-allowed-root-ancestry/v1
 workspace.mount_namespace [runtime, 64 KiB] = remote-claw/linux-mount-namespace-identity/v1
 
-listener.native_executable [runtime] = remote-claw/native-executable-chunk-manifest/v1
-listener.front_door_executable [runtime] = remote-claw/front-door-executable-chunk-manifest/v1
+listener.native_executable [runtime, 64 KiB] = remote-claw/native-executable-chunk-manifest/v1
+listener.front_door_executable [runtime, 64 KiB] = remote-claw/front-door-executable-chunk-manifest/v1
 listener.front_door_build_manifest [runtime] = remote-claw/front-door-build-closure-manifest/v1
 listener.generated_surface [runtime] = remote-claw/native-generated-openapi-surface/v1
 listener.build_route_registry [runtime] = remote-claw/native-listener-build-route-registry/v1
@@ -3707,10 +3738,119 @@ capability.translation_injectivity_proof [native_binding] = remote-claw/native-r
 capability.user_text_family_evidence [native_binding] = remote-claw/native-user-text-family-evidence/v1
 ```
 
+**Implemented E1b1 executable-content contract.**
+`packages/cli/src/host/state/native-binding-authority-executable-evidence.ts` supplies
+`CanonicalExecutableManifestArtifact` and strict role-correlated codecs for both executable roles.
+Three bounds are independent: every non-final source chunk is exactly 1,048,576 bytes and the final
+chunk is 1–1,048,576 bytes; source files are 1–268,435,456 bytes, hence 1–256 chunks; and a canonical
+manifest artifact is 1–65,536 bytes. No raw source chunk is a protected artifact or retained vector
+field. The exact schema/domain literals are:
+
+```text
+native role schema = remote-claw/native-executable-chunk-manifest/v1
+front-door role schema = remote-claw/front-door-executable-chunk-manifest/v1
+chunking schema = remote-claw/fixed-executable-chunking/v1
+chunk digest domain = remote-claw/executable-chunk/v1
+chunk-vector digest domain = remote-claw/executable-chunk-vector/v1
+digest algorithm = SHA-256
+```
+
+For a selected role with role-correlated manifest schema `R`, source length `L`, nominal chunk length
+`N = 1,048,576`, ordered chunk row `i = {chunkIndex,byteOffset,byteLength,chunkDigest}`, and exact raw
+chunk bytes `B_i`, the canonical formulas are:
+
+```text
+chunkDigest_i = SHA256(
+  str("remote-claw/executable-chunk/v1") || str(R) || uint(1) ||
+  uint(L) || uint(N) || uint(i.chunkIndex) || uint(i.byteOffset) || bytes(B_i)
+)
+
+chunkVectorDigest = SHA256(
+  str("remote-claw/executable-chunk-vector/v1") || str(R) || uint(1) ||
+  str("remote-claw/fixed-executable-chunking/v1") || str("SHA-256") ||
+  uint(N) || uint(L) || uint(chunkCount) ||
+  each i: (
+    uint(i.chunkIndex) || uint(i.byteOffset) || uint(i.byteLength) ||
+    bytes(base64urlDecode(i.chunkDigest))
+  )
+)
+
+canonicalManifestBytes =
+  str(R) || uint(1) || str("remote-claw/fixed-executable-chunking/v1") || str("SHA-256") ||
+  uint(N) || uint(L) || bytes(base64urlDecode(rawFileSha256)) || uint(chunkCount) ||
+  each i: (
+    uint(i.chunkIndex) || uint(i.byteOffset) || uint(i.byteLength) ||
+    bytes(base64urlDecode(i.chunkDigest))
+  ) ||
+  bytes(base64urlDecode(chunkVectorDigest))
+
+artifactDigest = SHA256(canonicalManifestBytes)
+```
+
+Here `rawFileSha256` is plain SHA-256 over the exact source bytes from offset zero through `L`, not a
+canonical-domain digest. The DTO field order is
+`schemaId,schemaVersion,chunkingSchemaId,digestAlgorithm,nominalChunkBytes,fileByteLength,rawFileSha256,chunkCount,chunks,chunkVectorDigest`;
+each chunk is `chunkIndex,byteOffset,byteLength,chunkDigest`. The strict parser and canonical
+decode/re-encode boundary reject unknown fields, the wrong role-correlated schema, role/schema
+transplants, noncanonical or fatal UTF-8, invalid/unsafe integers, wrong offsets or lengths, wrong
+chunk count/vector digest, truncation, trailing bytes, zero/oversized input, and noncanonical digest
+encoding.
+
+`packages/cli/src/host/native/linux-executable-collector.ts` exposes the direct-only
+`collectLinuxExecutableEvidence` and nominal `CollectedExecutableContentManifest`. On Linux it opens
+one final path component once with `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`, owns that descriptor until close,
+and runs a close attempt on every success, error, or cancellation exit. A close failure is reported
+when collection otherwise succeeded; an earlier collection failure remains the primary diagnostic.
+It requires a linked, nonempty regular
+file with at least one execute bit and a size no greater than 268,435,456 bytes. It records pre-read
+`fstat`, positionally reads offsets `0..L` plus an EOF probe, checks a middle `fstat`, yields once,
+repeats the full positional read plus EOF probe on the same descriptor, and checks a final `fstat`.
+It accepts only when both raw digests and every ordered chunk digest match and
+`dev,ino,mode,nlink,size,mtimeNs,ctimeNs` are unchanged across all three stats. `O_NOFOLLOW` covers
+only the opened final component: this observation proves stable content on one descriptor, not a
+pathname, full-path symlink policy, running process, executable mapping, front door, currentness,
+complete E1a parent, authority, or production capability.
+
+`CollectedExecutableContentManifest` is a compile-time nominal result only. Its non-enumerable symbol
+marker is not runtime authenticity or provenance, and later authority code must invoke the trusted
+collector boundary and independently reparse/recompute the returned canonical bytes and commitment;
+it must never trust the marker or a TypeScript assertion as evidence.
+
+The retained deterministic JSON proof
+`spikes/opencode-native/executable-manifest-evidence-1.17.5.json` has proof schema
+`remote-claw/retained-opencode-executable-manifest-proof/v1` and SHA-256
+`2d72aed48760e320317b94009d90ea290b094f9f6b26796074c421f3e5749901`; its generator/probe SHA-256 is
+`e9ad440c6ca3e6c1e16bfc8a3225a0a7a0a89540f6a613cb0f31f94fe2febc91`, and the pinned launcher SHA-256
+is `d167e30e12cca32cc4a5da0003ee0deb1120b5ca5ee2d64cef23aec44a3c9fa9`. It describes the real OpenCode
+1.17.5 Linux arm64 native binary: 156,412,048 bytes; raw SHA-256
+`_hg5rFxBfF_EoI3SaEZZB8PoxsoV5__ZPzqNxG1j0zk`; 150 chunks; 174,224-byte final chunk; first/last
+chunk digests `jQnzJPxhvoEIIwwoRG8gD-OTVlQgda_Qm4demov1zmE` and
+`xIksXYgFjfvcCYKoR-MduYhM2e7gzoVNQJqUT6O19EE`; 10,996-byte vector preimage with digest
+`d14lrmnOFib3qvN7y_d0NqAoApcwv8YugDaN_Q1eDOM`; and 11,026 canonical manifest bytes with SHA-256
+`54dcae0f611f2ebe8e91531c73d475f1e2aaf1ea57304e9e0b5aca1ac03e3af8` and E1a artifact digest
+`VNyuD2EfLr6OkVMcc9R18eKq8epXME6eC1rKGsA-Ovg`. The offline verifier pins the evidence and probe bytes
+and independently rebuilds canonical bytes and digests; live regeneration on a matching release host
+is a separate check. The binary was not executed, no server was started, no provider credential or
+network access was used, and neither the raw executable nor raw chunk bytes are checked in.
+
+**Bounded-review hardening ledger (not E1b1 release blockers).** Cooperative abort is checked around
+operations but cannot interrupt a kernel-stalled `open`, `read`, `fstat`, or `close`. A caller-owned
+growable `SharedArrayBuffer` can race either a chunk snapshot or manifest-decoder snapshot and cause a
+transient allocation beyond the logical cap before the post-copy length check rejects it; that is a
+local-process denial-of-service hardening item, not accepted evidence or an authority bypass.
+Deterministic post-first-read cancellation covers failure-path descriptor close, while injected
+close-error and `nlink=0` branches remain later test hardening. The
+offline verifier pins all 150 chunk descriptors, the vector, and the manifest and independently rebuilds their
+canonical bytes/digests, but only live regeneration on the pinned matching 1.17.5 arm64 release host
+recomputes all chunk digests from the 156,412,048-byte binary.
+
 The four fixed child orders are the workspace, listener, isolation, and capability subsequences shown
 above. E1a reserves each child role/schema/bound and verifies its content commitment; it does not
-define or validate the committed child's semantic bytes. E1b must close those leaf codecs and
-produce the commitments from a real collector before E1c may treat a parent as evidence.
+define or validate the committed child's semantic bytes. E1b1 closes the two executable-manifest
+grammars and generic collector behavior for both roles, but only the native role's real retained
+proof. E1b2 through E1b5 must close the
+remaining leaf codecs, the actual front-door executable observation, and all four parents before E1c
+may treat any parent as evidence.
 
 A snapshot-only current pointer is forbidden. Evidence may survive a crash or signer handoff while
 inert, but a transport lease is valid only in one of these two states:
@@ -3755,7 +3895,7 @@ bytes. E1c is intended to own
 exhaustive immutable legacy-E-purpose quarantine inventory. Listener manifests, manifest entries, operation
 classifications, the one family entry, slash-normalization tables, isolation peer/handler vectors,
 workspace/path evidence, and build/proof material remain bounded immutable protected artifacts. The
-repository and secure-reopen validator use E1b's codecs to parse every artifact and recompute every
+repository and secure-reopen validator use the E1b1–E1b5 codecs to parse every artifact and recompute every
 item, vector, parent, recipe, and record digest; a ref/digest pair is never treated as opaque
 authority. Canonical parent and recipe bytes use role/schema/digest/length content commitments and
 never repository refs for their artifact coordinates.
@@ -3836,7 +3976,7 @@ from that recipe plus the prior phase's accepted signed-record digest.
 version: strings use `str`, non-negative
 safe integers use `uint`, every `*Digest` contributes its decoded 32 bytes, and every parent length
 uses `uint`. E1a has closed the four parent envelope parsers, re-encoders, bounds, and commitment
-inventories; E1b must close every registered child codec and collector. The recipe is not permission
+inventories; E1b1–E1b5 must close every registered child codec and collector. The recipe is not permission
 to smuggle an untyped aggregate blob.
 
 The candidate `prepareNativeBindingAuthorityEvidence` operation would allocate capability generation one for the first evidence
@@ -4016,7 +4156,7 @@ transition kind, `nbao_*`, ordinal, from/to state, optional expected operation d
 in `NativeBindingAuthorityEvidenceCasV1` declaration order, workspace/listener/isolation/capability
 trees followed by recipe, and the selected variant fields in declaration order. Each artifact
 snapshot encodes role, index, schema, decoded digest, byte length, and its exact canonical bytes. The
-four tree roots and children must equal E1a's fixed parent/role orders, and E1b must parse each child;
+four tree roots and children must equal E1a's fixed parent/role orders, and the E1b1–E1b5 codecs must parse each child;
 `artifactIndex` is zero for these singleton roles. The caller retains the digest together with the
 whole original request. No later request reconstructs bytes from a returned ref.
 
@@ -4087,7 +4227,7 @@ pair, committed operation without its exact rows, or same operation ID with chan
 corruption.
 
 The future stateful operation and lease digest formulas are below. E1a exports none of these builders;
-E1c must implement and lock them only after E1b settles the child bytes:
+E1c must implement and lock them only after E1b5 closes the complete child byte set:
 
 ```text
 evidenceRecipeDigest = SHA256(
@@ -4205,7 +4345,7 @@ authenticated connection at prepare, install, and before invocation.
 
 Secure reopen enumerates every authority row, transition receipt, artifact link, legacy quarantine,
 and protected artifact once; proves dense transition ordinals, generations, and predecessor chains;
-recomputes all canonical bytes/digests and IDs through the E1b codecs; verifies the three signature
+recomputes all canonical bytes/digests and IDs through the E1b1–E1b5 codecs; verifies the three signature
 and acceptance joins; proves every pre-E1c E-purpose signer row is quarantined and every E-owned row
 is operation-attached; rejects extra current/orphan rows; and proves both transport pointers are null
 or the one matched current pair. Database validation does not claim that a volatile port is live; a
@@ -9153,7 +9293,7 @@ agent/system fields, extra keys, extra/reordered parts, and every other header/q
 forbidden. The native session's brokered provider path chooses its normal configured model; the
 collaboration adapter cannot override it.
 Selected A2 accepts a workspace directory only when its canonical filesystem path is an absolute
-POSIX path whose UTF-8 bytes match `^/[A-Za-z0-9._~/-]*$` after symlink/filesystem-identity resolution.
+POSIX path whose UTF-8 bytes match `^/[A-Za-z0-9._~/-]*$` after symlink-free filesystem-identity validation.
 Empty components other than the leading slash, `.`/`..`, percent, backslash, space, colon, non-ASCII,
 non-UTF-8 filesystem bytes, NUL, CR/LF, and every C0/DEL byte are unsupported rather than encoded into
 a header. The `x-opencode-directory` value is that exact byte string with no trimming, percent/base64
@@ -11480,9 +11620,11 @@ transition/native observation, never a fabricated remote-claw proposal.
 
 OpenCode workspace selection resolves before either front door authorizes a request. The initial
 `directoryNormalizationSchemaId` rejects NUL, relative paths, `..`, conflicting case aliases, and
-multiple selector values; resolves symlinks once inside the runtime's mount namespace; requires the
-resolved object under the configured allowed root; and records platform-specific filesystem identity
-without following another link at dispatch. `canonicalDirectoryPathDigest` commits only to the exact
+multiple selector values; rejects symlinks in every selector and allowed-root path component inside
+the runtime's mount namespace; requires the opened directory under the configured allowed root; and
+records platform-specific filesystem identity without following a link at dispatch. Arbitrary-link
+following is outside v1 and would require Linux `openat2` semantics or a native shim in a later schema.
+`canonicalDirectoryPathDigest` commits only to the exact
 header/path bytes as defined in the common-to-native translation rules above. The separate
 `nativeWorkspaceBindingDigest` is:
 
@@ -13281,7 +13423,7 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: A1.0 through dormant A1.8a0 implemented; A1.8a1-E0 identities and E1a parent envelopes implemented; E1b through A1.11 planned.** A1 is
+**Status: A1.0 through dormant A1.8a0 implemented; A1.8a1-E0 identities, E1a parent envelopes, and E1b1 executable-content manifests/collector implemented; E1b2–E1b5/E1c/I and A1.8a2 through A1.11 planned.** A1 is
 provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
 outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
 Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
@@ -13415,10 +13557,20 @@ official-client compatibility; B and C add those records on the generic A1 seams
   role/schema/digest/length commitment, cross-coordinate ID checks, locked byte/digest vectors, and
   bounded raw-artifact digest helper. No child semantic codec, collector, artifact write, schema,
   repository, signer, pointer, port, operation, or production capability lands.
-- **A1.8a1-E1b — Collector-backed child evidence (planned):** implement every registered
-  Linux/OpenCode leaf codec and a real collector fixture; prove that each E1a commitment is generated
-  from exact collected bytes rather than a caller assertion.
-- **A1.8a1-E1c — OpenCode binding authority accepted evidence (planned after E1b):** add immutable workspace, listener-registration, runtime-isolation, total
+- **A1.8a1-E1b1 — Executable-content manifests and collector (implemented):** add both strict
+  role-correlated executable-manifest codecs, one direct-only stable-FD Linux collector, and retained
+  real OpenCode 1.17.5 proof for `listener.native_executable`. The generic collector has front-door
+  temporary-file coverage, but no retained actual front-door observation or provenance exists; no
+  pathname, process, currentness, complete parent, authority, or production capability is proved.
+- **A1.8a1-E1b2 — Workspace evidence (planned):** close the symlink-free canonical-directory,
+  filesystem-identity, allowed-root-ancestry, mount-namespace, and workspace-parent evidence.
+- **A1.8a1-E1b3 — Front-door and listener evidence (planned):** collect the actual front-door
+  executable and close build, generated-surface, route-registry, measured-dispatch, and listener-parent evidence.
+- **A1.8a1-E1b4 — Runtime-isolation evidence (planned):** close every registered process, socket,
+  policy, peer, namespace, and isolation-parent proof.
+- **A1.8a1-E1b5 — Capability evidence and full four-parent closure (planned):** close every remaining
+  capability child and recreate all four E1a parents from collected evidence.
+- **A1.8a1-E1c — OpenCode binding authority accepted evidence (planned after E1b5):** add immutable workspace, listener-registration, runtime-isolation, total
   operation/family, binding-snapshot, and accepted runtime-owner attestation evidence for the one
   binding-scoped `user_text` family under §4.1's frozen workspace, legacy-signer, staging, and
   reconciliation rules. It never changes either transport pointer, so accepted evidence remains
@@ -13444,9 +13596,10 @@ official-client compatibility; B and C add those records on the generic A1 seams
   remote collaboration is unavailable.
 
 The stateful path through dormant rejected-result closure—`A1.0 → A1.1 → A1.2 → A1.3 → A1.4 → A1.5 → A1.6 → A1.7a → A1.7b0 → A1.7b1 → A1.8a0`—is implemented behind closed trusted-adapter and host-only seams.
-A1.8a1-E0's pure identity contract and E1a's pure parent-envelope contract are also implemented, but
-neither is authority evidence. E1b remains the collector-backed child-codec gate; E1c remains the
-stateful accepted-evidence implementation after E1b; I remains unimplemented after E1c.
+A1.8a1-E0's pure identity contract, E1a's pure parent-envelope contract, and E1b1's executable-content
+contract are also implemented, but none is authority evidence. E1b2 through E1b5 remain the
+workspace, front-door/listener, isolation, and capability/full-parent gates; E1c remains the stateful
+accepted-evidence implementation after E1b5; I remains unimplemented after E1c.
 Full A1.8a then requires A1.8a2's one-transaction admitted arm;
 A1.8b waits for A1.8a; A1.9 waits for A1.3 and the protected-handle kernel; A1.10 waits for
 A1.5–A1.8b; A1.11 is the integrated gate. An A1.8a0 `pending_seal` intent is a retained final
@@ -13897,11 +14050,23 @@ code/diff boundary is the pure parent module, tests, and host-state barrel expor
 semantic parser, collector, protected-artifact write, schema/migration, repository, signer/custody
 mutation, pointer/port access, owner operation, runtime wiring, or production capability.
 
-A1.8a1-E1b's gate must parse and recompute every registered child codec, prove every role's exact
-Linux/OpenCode measurement semantics and bound, and run a real collector fixture whose captured bytes
-recreate all four E1a parents. Synthetic commitments and schema-name assertions cannot pass E1b.
+A1.8a1-E1b1's passed gate locks both strict role-correlated executable-manifest codecs; the fixed
+1,048,576-byte chunk, 268,435,456-byte source, 256-chunk, and 65,536-byte manifest bounds; exact
+chunk/vector/manifest formulas; role/schema-transplant rejection; two complete same-descriptor reads
+with stable metadata and EOF checks; a close attempt on every post-open exit, with an earlier failure
+remaining primary if close also fails; and an offline verifier that
+independently rebuilds the retained 150-chunk OpenCode vector. Its code/diff boundary is
+`native-binding-authority-executable-evidence.ts`, direct-only `linux-executable-collector.ts`, their
+tests/barrel export, and the retained proof/probe/verifier under `spikes/opencode-native/`. Raw chunks
+never persist. The gate proves only one stable native-executable content observation, not a pathname,
+running process, actual front door, currentness, complete parent, authority, or production wiring.
 
-Only after E1b may A1.8a1-E1c pin its future migration statements, digest, and manifest. E1c's gate
+A1.8a1-E1b2 must prove symlink-free workspace evidence; E1b3 must prove the actual front-door and
+listener evidence; E1b4 must prove runtime isolation; and E1b5 must prove capability evidence and
+recreate all four E1a parents. Synthetic commitments and schema-name assertions cannot pass those
+gates.
+
+Only after E1b5 may A1.8a1-E1c pin its future migration statements, digest, and manifest. E1c's gate
 must prove exhaustive immutable quarantine/nonadoption of every pre-E1c E-purpose signer row; verify
 the three Ed25519 reservations and acceptance joins in
 dependency order; reject phase skips, duplicate singleton listener/isolation attestations, generic

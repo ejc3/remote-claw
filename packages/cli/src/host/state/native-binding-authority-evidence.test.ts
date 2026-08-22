@@ -223,6 +223,20 @@ describe("A1.8a1-E1a native binding evidence parents", () => {
     expectTypeOf<
       NativeEvidenceArtifactCommitmentV1<"workspace.canonical_directory">["artifactSchemaId"]
     >().toEqualTypeOf<"remote-claw/posix-canonical-directory-evidence/v1">();
+    expectTypeOf(
+      NATIVE_BINDING_AUTHORITY_ARTIFACT_SPECS["listener.native_executable"],
+    ).toEqualTypeOf<{
+      readonly artifactSchemaId: "remote-claw/native-executable-chunk-manifest/v1";
+      readonly maxByteLength: 65536;
+      readonly scopeKind: "runtime";
+    }>();
+    expectTypeOf(
+      NATIVE_BINDING_AUTHORITY_ARTIFACT_SPECS["listener.front_door_executable"],
+    ).toEqualTypeOf<{
+      readonly artifactSchemaId: "remote-claw/front-door-executable-chunk-manifest/v1";
+      readonly maxByteLength: 65536;
+      readonly scopeKind: "runtime";
+    }>();
     expect(Object.keys(NATIVE_BINDING_AUTHORITY_ARTIFACT_SPECS)).toEqual([
       "parent.workspace_input",
       "parent.listener_input",
@@ -333,6 +347,15 @@ describe("A1.8a1-E1a native binding evidence parents", () => {
         ],
       }),
     ).toThrow(/must equal workspace\.canonical_directory/);
+
+    const hostileArtifacts = [...selected.workspace.artifacts];
+    Object.defineProperty(hostileArtifacts, "map", { value: () => [] });
+    expect(() =>
+      parseNativeWorkspaceBindingInput({
+        ...selected.workspace,
+        artifacts: hostileArtifacts,
+      }),
+    ).toThrow(/artifacts must contain exactly 4 indexed entries/);
 
     expect(() =>
       parseNativeWorkspaceBindingInput({

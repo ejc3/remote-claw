@@ -1,7 +1,8 @@
 # OpenCode native protocol proof
 
-**Status:** evidence captured 2026-07-29; this is narrow compatibility evidence for one pinned
-OpenCode build, not proof of the selected A2 request, TUI coexistence, or shared-writer adjudication.
+**Status:** protocol evidence captured 2026-07-29; the executable manifest evidence is separately
+retained without a capture timestamp. These are narrow facts for one pinned OpenCode build, not proof
+of the selected A2 request, TUI coexistence, or shared-writer adjudication.
 
 ## Result
 
@@ -14,6 +15,21 @@ Sending the same request a second time returned another empty `204`. It did not 
 The retained 58-event decoded SSE sequence contains exactly one selected connection, session-create, and session-delete event and exactly two selected message and part updates for the caller ID, in order and cross-checked against both history snapshots. The fixture requested no assistant reply and observed no assistant event for the session.
 
 The probe deleted the native session, required session/history reads to return the pinned not-found shape, required the session list to become empty, disposed the server, and verified process-group exit, closed loopback socket and SSE/proxy resources, and removal of its temporary root.
+
+## Executable-content addendum
+
+The same pinned release also has a retained A1.8a1-E1b1 native-executable manifest. A separate probe
+opened the real Linux arm64 native binary once with `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`, required a
+nonempty executable regular file, performed two complete positional reads plus EOF checks on that
+one descriptor, and required stable device, inode, mode, link count, size, modification time, and
+change time. It read but did not execute the binary, started no server, used no network or provider
+credential, and retained no raw executable or chunk bytes.
+
+The resulting manifest covers 156,412,048 bytes in 150 domain-separated 1 MiB chunks, with a
+174,224-byte final chunk. Generic collection also has temporary-file coverage for the front-door
+role, but this retained proof closes only `listener.native_executable`; it does not observe or
+provenance-bind an actual front door, pathname, running process, executable mapping, currentness,
+complete parent, or authority.
 
 ## Relationship to selected A2
 
@@ -58,12 +74,23 @@ they are not the complete linearly proved history snapshot and native-order evid
 - OpenAPI SHA-256: `0cded4547ac93d617517419233f08f134eb002dae111534e5c02031803e35721`.
 - Probe SHA-256: `ebb2ca1ea48a0c86d31bce5746fd30a6913bd4f7ed54fe9928dad69fd8d50b6a`.
 - Retained evidence SHA-256: `a5641094f970884067aed3cf191cc40670420448ba938053f5ee056c02cc97bd`.
-- Checked files: `spikes/opencode-native/probe.mjs`, `evidence-1.17.5.json`, and `verify-evidence.mjs`.
+- Executable raw SHA-256 (base64url): `_hg5rFxBfF_EoI3SaEZZB8PoxsoV5__ZPzqNxG1j0zk`.
+- Executable probe SHA-256: `e9ad440c6ca3e6c1e16bfc8a3225a0a7a0a89540f6a613cb0f31f94fe2febc91`.
+- Retained executable evidence SHA-256: `2d72aed48760e320317b94009d90ea290b094f9f6b26796074c421f3e5749901`.
+- Executable chunk-vector digest (base64url): `d14lrmnOFib3qvN7y_d0NqAoApcwv8YugDaN_Q1eDOM`.
+- Canonical executable manifest: 11,026 bytes; SHA-256 `54dcae0f611f2ebe8e91531c73d475f1e2aaf1ea57304e9e0b5aca1ac03e3af8`.
+- Checked files: `spikes/opencode-native/{probe.mjs,evidence-1.17.5.json,verify-evidence.mjs,executable-manifest-probe.mjs,executable-manifest-evidence-1.17.5.json,verify-executable-manifest.mjs}`.
 
 The retained fixture uses stable placeholders for the launcher, native binary, and disposable proof
 root. Exact executable identity remains pinned by the launcher/native hashes above.
 
-The verifier pins the full evidence bytes and exact probe bytes. It also checks the selected OpenAPI schemas for session creation metadata, caller `messageID`, `noReply`, the global pending-permission list, and the nondeprecated permission-reply request shape. The fixture observes an empty pending list but does not create or answer a permission request.
+The two verifiers pin both full evidence files and both exact probe programs. The protocol verifier
+also checks the selected OpenAPI schemas for session creation metadata, caller `messageID`,
+`noReply`, the global pending-permission list, and the nondeprecated permission-reply request shape.
+The fixture observes an empty pending list but does not create or answer a permission request. The
+executable verifier independently rebuilds all retained descriptor, vector, and manifest canonical
+bytes/digests; because raw binary/chunk bytes are deliberately absent, recomputing chunk digests
+requires live regeneration on a matching release host.
 
 ## Isolation
 
@@ -84,6 +111,7 @@ On a matching Linux host, produce fresh evidence on standard output:
 
 ```bash
 node spikes/opencode-native/probe.mjs
+node spikes/opencode-native/executable-manifest-probe.mjs
 ```
 
 ## Missing positive release fixture
