@@ -121,8 +121,9 @@ strict native/front-door executable-content manifest codecs and a direct-only tw
 Linux collector. Its retained real OpenCode 1.17.5 Linux arm64 proof closes only the native role; the
 generic collector has front-door temporary-file coverage, but no retained or provenance-bound actual
 front-door observation exists. It proves no pathname, process, currentness, complete parent,
-authority, or production capability. E1b2 workspace, E1b3 front-door/listener, E1b4 isolation, and
-E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode `user_text` native-binding evidence through
+authority, or production capability. E1b2's exact leaf bytes, synchronous Linux observation, and
+historical-only gate are design-frozen but unimplemented; E1b3 front-door/listener, E1b4 isolation,
+and E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode `user_text` native-binding evidence through
 dependency-ordered listener/isolation/capability phases, with key rotation blocked while an E-owned
 phase is nonterminal and neither existing transport authority pointer changed. Its workspace/new-
 lineage, exhaustive legacy-signer quarantine, unsigned-snapshot/accepted-inert staging, and
@@ -133,7 +134,8 @@ runtime-owner channel; no URL, socket, bearer, provider credential, or readable 
 Authority withdrawal changes only the exact durable pair; the A1.4 parent alone owns physical-port
 unregistration, so late predecessor cleanup cannot disable a successor generation.
 Neither E1c nor I adds a `Session` consumer, admitted command, attempt, dispatch, effect, native call,
-production operation, or capability claim. The implemented E0/E1a/E1b1 boundary and planned E1b2–E1b5/E1c/I design are
+production operation, or capability claim. The implemented E0/E1a/E1b1 boundary,
+frozen-but-unimplemented E1b2 contract, and planned E1b3–E1b5/E1c/I design are
 [in the technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
 best-effort autostart that daemon after identity load. For the ordinary CLI, authenticated health is
@@ -782,8 +784,9 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   attempt/dispatch.
 - No E1c/I migration, repository, signer boundary, validator, or operation exists yet. E1b1 closes
   only executable-manifest vocabulary plus the native role's retained stable-content observation;
-  E1b2–E1b5 workspace, actual front-door/listener, isolation, capability, and full-parent evidence
-  remain planned, and A1.8a1-I's atomic
+  E1b2's workspace contract is design-frozen but unimplemented; E1b2–E1b5 workspace, actual
+  front-door/listener, isolation, capability, and full-parent evidence remain planned, and
+  A1.8a1-I's atomic
   snapshot/credentialless-callable-port pair repository remains planned after E1c. They may reuse the protected artifact/signature ledgers and callable-port registry,
   but must remain outside every production run path until their own dormant proof gate passes.
 - `packages/cli/src/host/runtime-owner/{auth,protocol,server,client,service,daemon,bootstrap,key-custody,production}.ts`

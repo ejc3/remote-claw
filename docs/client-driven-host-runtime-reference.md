@@ -26,9 +26,10 @@ acceptance, logical ingress terminal overlay, exact semantic artifact, and one i
 call, projection, production wiring, or capability advertisement. E1b1 adds no pathname, running-process,
 front-door, currentness, complete-parent, or authority proof; SQLite schema or migration; repository;
 signer mutation; key-rotation barrier; transport-pointer write; callable-port access; owner
-operation; protocol packet; or production capability. A1.8a1-E1b2 workspace evidence,
-E1b3 front-door/listener evidence, E1b4 isolation evidence, and E1b5 capability/full-parent closure
-remain planned. A1.8a1-E1c is the planned stateful accepted-evidence boundary after E1b5; its
+operation; protocol packet; or production capability. A1.8a1-E1b2's four exact leaf DTOs, digest DAG,
+synchronous Linux observation, and proof gate are design-frozen in §4.1, but no E1b2 codec or
+collector exists. E1b3 front-door/listener evidence, E1b4 isolation evidence, and E1b5
+capability/full-parent closure remain planned. A1.8a1-E1c is the planned stateful accepted-evidence boundary after E1b5; its
 workspace, legacy-signer, phase-staging, and reconciliation contracts are frozen in §4.1, but it has
 no migration number or implementation. A1.8a1-I remains planned after E1c, while A1.8a2 admitted
 arming and A1.8b delivery remain planned after I.
@@ -3561,7 +3562,7 @@ interface NativeBindingAuthorityWithdrawalOperation {
 
 <a id="41-a18a1-native-binding-authority-freeze-planned-dormant"></a>
 
-### 4.1 A1.8a1 native-binding authority (E0/E1a/E1b1 implemented; E1b2–E1b5/E1c/I planned, dormant)
+### 4.1 A1.8a1 native-binding authority (E0/E1a/E1b1 implemented; E1b2 design frozen; E1b2–E1b5/E1c/I implementation planned, dormant)
 
 Full admitted arming is not the next safe write. Delivery separates pure contracts, collector proof,
 durable accepted evidence, and installation:
@@ -3581,9 +3582,12 @@ durable accepted evidence, and installation:
    front-door role too, but E1b1 retains no actual front-door observation or provenance. This slice
    proves no pathname, running process, front door, currentness, complete parent, authority, or
    production capability.
-4. **A1.8a1-E1b2 — workspace evidence (planned).** This slice owns canonical-directory,
-   no-follow filesystem-identity, allowed-root-ancestry, mount-namespace, and workspace-parent
-   closure. V1 rejects symlinks in every selector and allowed-root path component.
+4. **A1.8a1-E1b2 — workspace evidence (design frozen; implementation planned).** This slice owns
+   canonical-directory, no-follow filesystem-identity, allowed-root-ancestry, shared runtime
+   mount-namespace, and workspace-parent closure. Its exact leaf bytes, dependency DAG, synchronous
+   two-chain Linux algorithm, historical-only boundary, and executable gate are frozen below. V1
+   rejects symlinks in every selector and allowed-root path component and mount crossings below the
+   configured allowed root.
 5. **A1.8a1-E1b3 — front-door and listener evidence (planned).** This slice owns the actual
    front-door executable and collector capture, build closure, generated surface, build-route
    registry, measured dispatch table, and listener-parent closure.
@@ -3843,6 +3847,325 @@ close-error and `nlink=0` branches remain later test hardening. The
 offline verifier pins all 150 chunk descriptors, the vector, and the manifest and independently rebuilds their
 canonical bytes/digests, but only live regeneration on the pinned matching 1.17.5 arm64 release host
 recomputes all chunk digests from the 156,412,048-byte binary.
+
+**Frozen E1b2 workspace-evidence contract (implementation planned; none has landed).** E1b2's durable
+endpoint is four strict leaf codecs, one synchronous Linux observation boundary, and exact
+reconstruction of E1a's workspace parent. It adds no protected-artifact write, SQLite schema or
+migration, repository, signer/custody mutation, pointer or port access, runtime-owner operation,
+driver import, protocol packet, production wiring, currentness claim, or authority. The planned
+code/diff boundary is
+`packages/cli/src/host/state/native-binding-authority-workspace-evidence.ts`, its tests, a pure
+host-state barrel export, and direct-only
+`packages/cli/src/host/native/linux-workspace-collector.ts` plus its tests, together with the
+corresponding dormant-import assertions in `packages/cli/src/host/state/dormant.test.ts`. The
+collector remains absent from the native barrel and every production importer.
+
+The four leaf DTOs use exact own data fields in the declaration order below. `U64Decimal` is either
+`"0"` or a nonzero ASCII decimal string with no leading zero and value at most
+18,446,744,073,709,551,615. Every kernel u64 field is encoded as `bytes(u64be(value))`, where `u64be`
+is the exact unsigned eight-byte big-endian representation. It never passes through a JavaScript
+`number` or `CanonicalWriter.uint`. Schema versions, native incarnation, indexes, and bounded counts
+remain safe integers encoded with `uint`. Filesystem magic values are first normalized as unsigned
+32-bit values and then represented by the same u64 DTO/encoding. Exact canonical artifact bounds are
+16,384 bytes for `P`, 65,536 each for `F` and `M`, and 1,048,576 for `A`; the reconstructed E1a
+workspace parent remains 65,536 bytes.
+
+```text
+LinuxMountNamespaceIdentityV1 =
+  schemaId, schemaVersion, runtimeId, nativeIncarnation, namespaceKind,
+  bootId, namespaceDevice, namespaceInode, namespaceFilesystemMagic
+
+PosixCanonicalDirectoryEvidenceV1 =
+  schemaId, schemaVersion, runtimeId, nativeIncarnation,
+  directoryNormalizationSchemaId, mountNamespaceArtifactDigest,
+  canonicalDirectory, canonicalDirectoryPathDigest
+
+LinuxNoFollowFilesystemIdentityV1 =
+  schemaId, schemaVersion, runtimeId, nativeIncarnation,
+  mountNamespaceArtifactDigest, canonicalDirectoryArtifactDigest,
+  canonicalDirectoryPathDigest, fileKind,
+  directoryDevice, directoryInode, mountId, filesystemMagic
+
+LinuxAllowedRootAncestryEntryV1 =
+  index, component, directoryDevice, directoryInode, mountId, filesystemMagic
+
+LinuxAllowedRootAncestryV1 =
+  schemaId, schemaVersion, runtimeId, nativeIncarnation,
+  mountNamespaceArtifactDigest, canonicalDirectoryArtifactDigest,
+  filesystemIdentityArtifactDigest, suffixMountPolicy,
+  allowedRoot, allowedRootPathDigest, canonicalDirectoryPathDigest,
+  allowedRootEntryCount, allowedRootEntries,
+  targetEntryCount, targetEntries
+```
+
+The exact literals are:
+
+```text
+LinuxMountNamespaceIdentityV1.schemaId = remote-claw/linux-mount-namespace-identity/v1
+PosixCanonicalDirectoryEvidenceV1.schemaId = remote-claw/posix-canonical-directory-evidence/v1
+LinuxNoFollowFilesystemIdentityV1.schemaId = remote-claw/linux-no-follow-filesystem-identity/v1
+LinuxAllowedRootAncestryV1.schemaId = remote-claw/linux-allowed-root-ancestry/v1
+schemaVersion = 1
+directoryNormalizationSchemaId = remote-claw/posix-absolute-directory-normalization/v1
+namespaceKind = mnt
+namespaceFilesystemMagic = 1853056627
+fileKind = directory
+suffixMountPolicy = same_mount_as_allowed_root
+```
+
+`namespaceFilesystemMagic` is Linux `NSFS_MAGIC` `0x6e736673`. It records a generic runtime mount
+namespace, not a workspace or role: both `workspace.mount_namespace` and
+`isolation.mount_namespace` commit the same runtime-scoped schema. The mount artifact therefore has
+no project, workspace, path, allowed-root, generation, or role field. E1b2 implements the shared
+codec; E1b4 must reuse or recollect it rather than define another mount schema. Canonical `bootId` is
+the 36-byte lowercase UUID without an LF; the collector may consume one validated final LF but does
+not retain it. Device values may be zero. Namespace/directory inode, mount ID, and filesystem magic
+must be positive; the namespace magic must equal the fixed literal above.
+
+An E1b2 path is `/` or an absolute POSIX path with 1–256 non-root components. Its exact UTF-8 form is
+1–4,095 bytes, every component is 1–255 bytes, and the JavaScript input contains only Unicode scalar
+values. NUL, a relative path, `//`, the exact components `.` or `..`, and a trailing slash other than
+`/` reject; no normalization, `resolve`, `realpath`, percent decoding, Unicode normalization, or
+case folding occurs. Backslash, percent, colon, spaces, controls other than NUL, and non-ASCII Unicode
+are ordinary POSIX component bytes at this evidence layer; filesystem names that cannot be supplied
+as exact valid UTF-8 are unsupported. Selected A2 deliberately applies its
+separate, narrower ASCII/header grammar before dispatch. Containment is an exact component-prefix
+comparison, never string `startsWith`; the configured allowed root is inclusive, so target equal to
+allowed root and allowed root `/` are valid.
+
+For an exact accepted path `p`:
+
+```text
+pathDigest(p) = SHA256(
+  str("remote-claw/canonical-directory-path/v1") || str(p)
+)
+```
+
+`canonicalDirectoryPathDigest = pathDigest(canonicalDirectory)` and
+`allowedRootPathDigest = pathDigest(allowedRoot)`. These path-only digests are deliberately not a
+leaf artifact digest. With `digest(x) = SHA256(x)` over exact canonical artifact bytes and every
+`*ArtifactDigest` encoded as its decoded 32-byte `bytes`, the acyclic dependency graph and exact leaf
+bytes are:
+
+```text
+M =
+  str("remote-claw/linux-mount-namespace-identity/v1") || uint(1) ||
+  str(runtimeId) || uint(nativeIncarnation) || str("mnt") || str(bootId) ||
+  bytes(u64be(namespaceDevice)) || bytes(u64be(namespaceInode)) ||
+  bytes(u64be(1853056627))
+mountNamespaceArtifactDigest = digest(M)
+
+P =
+  str("remote-claw/posix-canonical-directory-evidence/v1") || uint(1) ||
+  str(runtimeId) || uint(nativeIncarnation) ||
+  str("remote-claw/posix-absolute-directory-normalization/v1") ||
+  bytes(base64urlDecode(mountNamespaceArtifactDigest)) ||
+  str(canonicalDirectory) || bytes(base64urlDecode(canonicalDirectoryPathDigest))
+canonicalDirectoryArtifactDigest = digest(P)
+
+F =
+  str("remote-claw/linux-no-follow-filesystem-identity/v1") || uint(1) ||
+  str(runtimeId) || uint(nativeIncarnation) ||
+  bytes(base64urlDecode(mountNamespaceArtifactDigest)) ||
+  bytes(base64urlDecode(canonicalDirectoryArtifactDigest)) ||
+  bytes(base64urlDecode(canonicalDirectoryPathDigest)) || str("directory") ||
+  bytes(u64be(directoryDevice)) || bytes(u64be(directoryInode)) ||
+  bytes(u64be(mountId)) || bytes(u64be(filesystemMagic))
+filesystemIdentityArtifactDigest = digest(F)
+
+entry(e) =
+  uint(e.index) || str(e.component) ||
+  bytes(u64be(e.directoryDevice)) || bytes(u64be(e.directoryInode)) ||
+  bytes(u64be(e.mountId)) || bytes(u64be(e.filesystemMagic))
+
+A =
+  str("remote-claw/linux-allowed-root-ancestry/v1") || uint(1) ||
+  str(runtimeId) || uint(nativeIncarnation) ||
+  bytes(base64urlDecode(mountNamespaceArtifactDigest)) ||
+  bytes(base64urlDecode(canonicalDirectoryArtifactDigest)) ||
+  bytes(base64urlDecode(filesystemIdentityArtifactDigest)) ||
+  str("same_mount_as_allowed_root") ||
+  str(allowedRoot) || bytes(base64urlDecode(allowedRootPathDigest)) ||
+  bytes(base64urlDecode(canonicalDirectoryPathDigest)) ||
+  uint(allowedRootEntryCount) || each allowedRootEntries: entry(e) ||
+  uint(targetEntryCount) || each targetEntries: entry(e)
+allowedRootArtifactDigest = digest(A)
+```
+
+Each ancestry vector has 1–257 exact indexed entries. Entry zero is the explicit root tuple with
+`index:0` and `component:"/"`; entry `i+1` names exact path component `i`. Counts equal component
+count plus one, indexes are dense, names reconstruct the corresponding exact path, every
+allowed-root entry equals the target entry at the same overlapping index, and the final target tuple
+equals `F`'s device, inode, mount ID, and filesystem magic. Target components after the allowed-root
+boundary must retain the allowed root's final mount ID. This permits the mount containing the allowed
+root but rejects a nested mount or bind crossing below it; callers can choose the mounted workspace
+itself as the configured allowed root. All four leaves repeat the same `runtimeId` and
+`nativeIncarnation`.
+
+The workspace parent remains E1a's separately fixed order
+`canonical_directory, filesystem_identity, allowed_root, mount_namespace`. It commits the exact
+`P,F,A,M` artifact digests and byte lengths alongside these trusted-orchestrator context fields:
+
+```text
+nativeWorkspaceBindingId, runtimeId, nativeIncarnation, projectId, nativeWorkspaceId,
+directoryNormalizationSchemaId, filesystemIdentitySchemaId, workspaceGeneration
+```
+
+E1b2 accepts and strictly parses that non-filesystem context but does not allocate `nwb_*`, select an
+allowed-root default, or enforce predecessor/dense-generation state. It derives `workspaceSlot`
+locally as the tagged `native_workspace_id` when `nativeWorkspaceId` is present and otherwise the
+tagged `canonical_directory_path_digest`; slot is a returned future-orchestration value, not another
+canonical field. E1c alone owns allocation, lineage, predecessor CAS, and dense generations.
+
+The digest vocabulary remains intentionally distinct:
+
+```text
+canonicalDirectoryPathDigest = pathDigest(canonicalDirectory)
+filesystemIdentityDigest     = filesystemIdentityArtifactDigest
+allowedRootDigest             = allowedRootArtifactDigest
+mountNamespaceDigest          = mountNamespaceArtifactDigest
+workspaceInputDigest          = SHA256(exact E1a workspace-parent bytes)
+nativeWorkspaceBindingDigest  = the separate downstream formula in §9.3
+```
+
+The noncanonical verification entry point is
+`verifyCanonicalWorkspaceEvidenceBundle(input): Promise<CanonicalWorkspaceEvidenceBundle>`.
+`input` is one exact-own-key operational record, which is never itself encoded or hashed:
+
+```text
+CanonicalWorkspaceEvidenceBundleInput =
+  mountNamespaceBytes, canonicalDirectoryBytes, filesystemIdentityBytes,
+  allowedRootBytes, workspaceParentBytes
+```
+
+Each value is a genuine `Uint8Array` containing the raw bounded canonical artifact bytes, not a
+caller-decoded DTO. Before its first `await`, the verifier validates each source length against that
+artifact's own bound, snapshots all five inputs, and rechecks every snapshot length; every later
+parse, comparison, and hash uses only those caller-independent snapshots. The verifier independently
+parses and canonically re-encodes all five artifacts, rejects unless each re-encoding is byte-identical
+to its snapshot, and hashes those exact snapshots. It then recomputes
+`mountNamespaceArtifactDigest`, `canonicalDirectoryArtifactDigest`,
+`filesystemIdentityArtifactDigest`, and `allowedRootArtifactDigest`; verifies every `M → P → F → A`
+dependency; requires all leaf and parent `runtimeId`/`nativeIncarnation` values to agree; requires
+the parent's `directoryNormalizationSchemaId` and `filesystemIdentitySchemaId` to equal the frozen
+leaf schemas; and requires the parent's four commitments to contain exactly the E1a `P,F,A,M` roles,
+schema IDs, recomputed digests, and snapshot byte lengths. The returned outer objects, DTOs, and
+arrays are frozen and have exact keys `mountNamespace`, `canonicalDirectory`, `filesystemIdentity`,
+`allowedRoot`, `workspaceParent`, `workspaceSlot`, and `workspaceInputDigest`. Each artifact entry
+holds its caller-independent bytes in `ProtectedByteSnapshot` rather than exposing a mutable typed
+array, plus its parsed DTO; `workspaceSlot` follows the rule above, and `workspaceInputDigest` hashes
+the exact parent snapshot. No verifier overload accepts already decoded leaves, precomputed digests,
+commitments, or a caller-selected slot.
+
+`canonicalDirectoryRef` retains typed `PosixCanonicalDirectoryEvidenceV1` bytes; consumers parse
+that artifact to extract the exact path. No unregistered fifth raw-path artifact exists.
+
+**Frozen synchronous Linux observation.** The public boundary is
+`collectLinuxWorkspaceEvidence(input): Promise<CollectedLinuxWorkspaceEvidence>`, with one exact
+operational input record and one exact result shape:
+
+```text
+CollectLinuxWorkspaceEvidenceInput =
+  runtimeId, nativeIncarnation, allowedRoot, canonicalDirectory
+
+CollectedLinuxWorkspaceEvidence =
+  mountNamespace, canonicalDirectory, filesystemIdentity, allowedRoot
+```
+
+The four result entries contain frozen parsed DTOs, workspace-role E1a commitments, and
+caller-independent `ProtectedByteSnapshot` canonical bytes. A nominal collected-result marker is
+compile-time provenance only: a later consumer passes the four raw byte snapshots plus its separately
+built parent bytes through `verifyCanonicalWorkspaceEvidenceBundle` and never trusts that marker or
+the returned commitments.
+
+Before touching the filesystem, the collector strictly parses the exact input shape, both paths,
+runtime coordinates, and explicit allowed root. It then calls one internal synchronous observation
+phase that performs every namespace/path/proc operation on one JavaScript/kernel thread, with no
+promise filesystem API and no `await`:
+
+1. Require Linux `O_NOFOLLOW`, `O_DIRECTORY`, and `O_NONBLOCK`; validate `/proc/thread-self`,
+   `/proc/self/fd`, and `/proc/self/fdinfo` have `PROC_SUPER_MAGIC` `0x9fa0`; and open
+   `/proc/sys/kernel/random/boot_id` with `O_RDONLY|O_NOFOLLOW|O_NONBLOCK` for a bounded read. The
+   accepted boot form is exactly 36 UUID bytes or those bytes plus one final LF, with lowercase hex
+   and an EOF probe; no other suffix or whitespace is accepted.
+2. Open `/proc/thread-self/ns/mnt` with `O_RDONLY|O_NONBLOCK`, deliberately without `O_NOFOLLOW`:
+   this procfs namespace handle is a required magic symlink. Require a linked regular held FD,
+   `statfs(/proc/self/fd/N) == NSFS_MAGIC`, exact operational link text `mnt:[<fstat inode>]`, and one
+   at-most-16,384-byte plus EOF `fdinfo` containing exactly one canonical decimal `mnt_id` line. FD numbers, proc paths,
+   fdinfo text, and readlink text are validation machinery and never canonical evidence.
+3. Open and retain one `/` FD with
+   `O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK`. Independently walk the allowed root and target from
+   that same held root through `/proc/self/fd/<parent>/<one-component>` with those same flags,
+   retaining both complete chains. Do not reuse allowed-root prefix FDs as the target chain.
+4. Sweep every retained FD twice. Each sweep requires a linked directory; exact `fstat` versus
+   `stat(/proc/self/fd/N)` device/inode equality; at-most-16,384-byte plus EOF fdinfo with exactly one `mnt_id`; and
+   `statfs` filesystem magic. The two sweeps must agree on device, inode, mode, uid, gid, mount ID,
+   and filesystem magic; mutable directory size and timestamps are neither identity nor canonical
+   fields. Both independently resolved chains must have identical overlapping prefix tuples.
+5. Reopen `/` and perform fresh full chained walks for the allowed root and target, again
+   independently. Each fresh child repeats the directory/link, proc-descriptor identity, exact
+   fdinfo, and statfs checks before its tuple is compared with the retained counterpart. The fresh
+   walk streams one child FD at a time: after a child is safely open and sampled, its temporary
+   non-root parent closes before the next edge, while immutable facts are retained for the final
+   prefix comparison. The two fresh prefix vectors must agree. This is a complete final
+   absolute-selector check, not a set of edge opens from stale parent FDs. Any temporary close
+   failure aborts collection while final cleanup still attempts every remaining owned close.
+6. While all primary guardians remain held, open and validate a second thread mount-namespace FD and
+   reread boot ID. Require byte-identical pre/post boot IDs and namespace device/inode/magic. Snapshot
+   deeply frozen facts, then attempt every close in reverse ownership order. Cleanup continues after
+   a close failure; an earlier collection failure remains primary, while otherwise the first close
+   failure is reported.
+
+Only after the synchronous phase returns and every owned FD has closed may the public promise await
+pure canonical encoding and hashing over those frozen facts. It performs no later filesystem or procfs
+I/O. The exact input has no `AbortSignal`: an event-loop callback cannot change a signal while this
+same-thread phase is running, so E1b2 makes no false cooperative mid-call cancellation claim. A future
+production caller that needs preemption must use the separately required isolated same-namespace
+collector with a hard parent-enforced timeout.
+
+The maximum primary retained path set is one shared root plus 256 allowed-root and 256 target
+descriptors; streamed final rewalks add only a bounded root/current-child pair rather than another
+complete retained vector. Including namespace/proc descriptors remains bounded, and
+`EMFILE`, a malformed/oversized proc file, a race, a non-directory,
+an unlinked directory, a symlink at any selected component, or any mismatch fails closed. Node has no
+`openat`, `openat2`, `O_PATH`, `statx`, descriptor `fstatfs`, or mount-table snapshot. The proc-FD
+substitute therefore requires readable directories and a trusted procfs/mount namespace without a
+hostile same-namespace `CAP_SYS_ADMIN`; execute-only ancestors and an attacker able to replace procfs
+require a native shim. `O_NONBLOCK` does not bound a kernel-stalled autofs or remote-filesystem open,
+so production wiring also requires a supported local-filesystem policy or an isolated same-namespace
+collector with a hard parent-enforced timeout.
+
+This algorithm proves one bounded historical observation. A namespace FD pins the namespace object,
+not an immutable mount table, and all directory guardians close before return. It does not prove
+atomic continuity or exclude ABA between samples, currentness after return, an alternate bind/casefold
+alias, an actual runtime process, or authority. Before E1c/I/A2 may consume these bytes, the design
+must land a recollection-or-retained-guardian boundary. Within one exact runtime/incarnation, E1c
+must also enforce one active workspace slot per physical
+`(mountNamespaceArtifactDigest,directoryDevice,directoryInode)` target, rejecting a different
+path/native-workspace alias unless it is exact replay of the same lineage; this is intentionally not
+a global cross-runtime key, so isolated runtimes may use equal directories. `mnt_id` remains
+separately retained and cannot replace that physical uniqueness key. E1b4 must bind every actual
+process to the same shared mount artifact.
+
+**Frozen E1b2 proof gate.** The implementation does not pass on schema-name assertions or synthetic
+parent commitments. It must prove exact DTO shape and canonical round trip; locked synthetic vectors
+and every-field digest sensitivity; identical LF-free `M` bytes from both accepted boot-file forms;
+signed high-bit `statfs.type` normalization to its unsigned 32-bit u64 value; u64 zero/max and
+noncanonical decimal rejection; allocation-safe
+count/bound handling; dependency, runtime/incarnation, and cross-leaf transplant rejection; rejection
+of every non-shared role/schema transplant while permitting the exact mount bytes only under the two
+registered runtime mount roles; the entire Unicode/path grammar including `/`, equality/inclusive-root, 255/4,095-byte
+edges, backslash, lone surrogates, prefix-confusion, and target escape; every-position root/target
+symlink and non-directory rejection; deterministic replacement races between independent walks,
+sweeps, and final rewalks; nested-mount refusal; missing/duplicate/oversized fdinfo; wrong nsfs
+magic/link/inode and pre/post namespace/boot mismatch; close ordering, primary-error precedence, and
+full `/proc/self/fd` leak enumeration on success and every injected failure; exact workspace-parent
+recreation in E1a order; live ephemeral Linux procfs/nsfs/fdinfo collection; no promise-fs call in the
+observation phase, no filesystem call after that phase, and no misleading mid-call `AbortSignal`
+surface; and no production importer. A privileged `unshare -Ur -m` job must exercise real
+namespace and bind-mount behavior without silently skipping before E1b2 is treated as a release
+gate. Focused tests precede one frozen-tree full local gate, doc sync, independent review, and green
+CI.
 
 The four fixed child orders are the workspace, listener, isolation, and capability subsequences shown
 above. E1a reserves each child role/schema/bound and verifies its content commitment; it does not
@@ -9248,7 +9571,8 @@ new_chat =
   bytes(base64urlDecode(nativeCreationIntentDigest))
 ```
 
-`canonicalDirectory` is the exact safe path decoded from the retained
+`canonicalDirectory` is extracted by strictly decoding the retained typed
+`PosixCanonicalDirectoryEvidenceV1` at
 `NativeWorkspaceBindingRecord.canonicalDirectoryRef`, and
 `canonicalDirectoryPathDigest = SHA256(str("remote-claw/canonical-directory-path/v1") ||
 str(canonicalDirectory))`. The header carries those exact path bytes. The workspace record,
@@ -11619,11 +11943,14 @@ native lifecycle methods remains allowed by its pinned TUI policy and becomes po
 transition/native observation, never a fabricated remote-claw proposal.
 
 OpenCode workspace selection resolves before either front door authorizes a request. The initial
-`directoryNormalizationSchemaId` rejects NUL, relative paths, `..`, conflicting case aliases, and
-multiple selector values; rejects symlinks in every selector and allowed-root path component inside
-the runtime's mount namespace; requires the opened directory under the configured allowed root; and
-records platform-specific filesystem identity without following a link at dispatch. Arbitrary-link
-following is outside v1 and would require Linux `openat2` semantics or a native shim in a later schema.
+`directoryNormalizationSchemaId` rejects NUL, relative paths, `.`/`..`, repeated/trailing slashes,
+and multiple selector spellings unless they are the same exact byte string; rejects symlinks in every
+selector and allowed-root path component inside the collector thread's validated runtime mount
+namespace; requires the opened directory under the explicit configured allowed root; and records
+platform-specific filesystem identity. A casefold or bind alias is not inferred from spelling:
+future E1c must enforce the physical-target uniqueness rule frozen in §4.1. Arbitrary-link following
+and hostile same-namespace mount administration are outside the pure-Node v1 boundary and require
+Linux `openat2` semantics or a native shim.
 `canonicalDirectoryPathDigest` commits only to the exact
 header/path bytes as defined in the common-to-native translation rules above. The separate
 `nativeWorkspaceBindingDigest` is:
@@ -11647,12 +11974,16 @@ SHA256(
 ```
 
 The immutable `NativeWorkspaceBindingRecord` owns the exact path bytes, path digest, and full binding
-digest. Its `canonicalDirectoryRef` must decode to `canonicalResolvedDirectoryBytes` and recompute
-`canonicalDirectoryPathDigest`; every other field must recompute `nativeWorkspaceBindingDigest`. Every
+digest. Its `canonicalDirectoryRef` must decode as typed
+`PosixCanonicalDirectoryEvidenceV1`, whose `canonicalDirectory` yields
+`canonicalResolvedDirectoryBytes` and recomputes `canonicalDirectoryPathDigest`; every other field
+must recompute `nativeWorkspaceBindingDigest`. Every
 `workspace`/`directory` query, `x-opencode-directory` header, route-derived selector, lease, snapshot,
-request target, and read-back must resolve to its one current record; missing or conflicting aliases,
-a replaced directory identity, symlink swap, mount change, wrong workspace, or stale generation
-rejects before dispatch.
+request target, and read-back must resolve to its one current record. E1b2 alone is historical and
+does not satisfy this dispatch-time statement: the later E1c/I/A2 design must recollect or retain a
+guardian through authorization. Once that boundary lands, missing or conflicting aliases, a replaced
+directory identity, symlink swap, mount change, wrong workspace, or stale generation rejects before
+dispatch.
 
 Every OpenCode discovery snapshot also pins the native store it actually read. The version-specific
 `nativeStoreBackendSchemaId` names the measured OpenCode storage layout and the exact extraction rules
@@ -13423,7 +13754,7 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: A1.0 through dormant A1.8a0 implemented; A1.8a1-E0 identities, E1a parent envelopes, and E1b1 executable-content manifests/collector implemented; E1b2–E1b5/E1c/I and A1.8a2 through A1.11 planned.** A1 is
+**Status: A1.0 through dormant A1.8a0 implemented; A1.8a1-E0 identities, E1a parent envelopes, and E1b1 executable-content manifests/collector implemented; E1b2 design frozen but unimplemented; E1b3–E1b5/E1c/I and A1.8a2 through A1.11 planned.** A1 is
 provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
 outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
 Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
@@ -13562,8 +13893,9 @@ official-client compatibility; B and C add those records on the generic A1 seams
   real OpenCode 1.17.5 proof for `listener.native_executable`. The generic collector has front-door
   temporary-file coverage, but no retained actual front-door observation or provenance exists; no
   pathname, process, currentness, complete parent, authority, or production capability is proved.
-- **A1.8a1-E1b2 — Workspace evidence (planned):** close the symlink-free canonical-directory,
-  filesystem-identity, allowed-root-ancestry, mount-namespace, and workspace-parent evidence.
+- **A1.8a1-E1b2 — Workspace evidence (design frozen; implementation planned):** implement the exact
+  four-leaf digest DAG, synchronous two-chain Linux observation, and historical-only workspace-parent
+  closure frozen in §4.1.
 - **A1.8a1-E1b3 — Front-door and listener evidence (planned):** collect the actual front-door
   executable and close build, generated-surface, route-registry, measured-dispatch, and listener-parent evidence.
 - **A1.8a1-E1b4 — Runtime-isolation evidence (planned):** close every registered process, socket,
@@ -14061,10 +14393,12 @@ tests/barrel export, and the retained proof/probe/verifier under `spikes/opencod
 never persist. The gate proves only one stable native-executable content observation, not a pathname,
 running process, actual front door, currentness, complete parent, authority, or production wiring.
 
-A1.8a1-E1b2 must prove symlink-free workspace evidence; E1b3 must prove the actual front-door and
-listener evidence; E1b4 must prove runtime isolation; and E1b5 must prove capability evidence and
-recreate all four E1a parents. Synthetic commitments and schema-name assertions cannot pass those
-gates.
+A1.8a1-E1b2's exact byte/collector design is frozen above but no implementation has landed. Its gate
+must prove the four-leaf digest DAG, full-u64 canonical values, synchronous independent no-follow
+walks, race/namespace/mount rejection, exact workspace-parent recreation, historical-only boundary,
+and no production importer. E1b3 must prove the actual front-door and listener evidence; E1b4 must
+prove runtime isolation; and E1b5 must prove capability evidence and recreate all four E1a parents.
+Synthetic commitments and schema-name assertions cannot pass those gates.
 
 Only after E1b5 may A1.8a1-E1c pin its future migration statements, digest, and manifest. E1c's gate
 must prove exhaustive immutable quarantine/nonadoption of every pre-E1c E-purpose signer row; verify

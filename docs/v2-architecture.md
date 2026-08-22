@@ -270,8 +270,9 @@
 > `rcph_*`; refs remain repository-local links. E1a parses no
 > child semantics and adds no artifact write, schema, repository, signer, pointer, port, runtime
 > operation, protocol packet, or production capability. E1b1 proves no pathname, process, front door,
-> currentness, complete parent, or authority. E1b2 workspace, E1b3 front-door/listener, E1b4
-> isolation, and E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode
+> currentness, complete parent, or authority. E1b2's four-leaf digest DAG, synchronous independent
+> no-follow path observation, and historical-only proof gate are design-frozen but unimplemented;
+> E1b3 front-door/listener, E1b4 isolation, and E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode
 > `user_text` binding evidence through dependency-ordered listener/isolation/capability phases, with
 > key rotation blocked while an E-owned phase is nonterminal and neither transport pointer changed.
 > Its workspace/new-lineage, exhaustive legacy-signer quarantine, unsigned-snapshot/accepted-inert
@@ -283,7 +284,8 @@
 > withdrawn and replaced after process loss. Pair withdrawal never unregisters the A1.4-owned shared
 > physical port; only exact parent-lease closure/replacement may do that. Neither E1c nor I creates an admitted command, native
 > attempt, dispatch, effect, native call, production operation, or advertised capability. The
-> implemented E0/E1a/E1b1 boundary and planned E1b2–E1b5/E1c/I design are in the [host-runtime reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
+> implemented E0/E1a/E1b1 boundary, frozen-but-unimplemented E1b2 contract, and planned
+> E1b3–E1b5/E1c/I design are in the [host-runtime reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 > A1.8a2 still owns the admitted atomic arm and A1.8b owns sealing/publishing.
 >
 > Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
@@ -300,7 +302,8 @@
 > A1.7b0 signer, A1.7b1 command adjudicator, and A1.8a0 rejected finalizer remain direct-only
 > dormant host state. E0 identities, E1a parent envelopes, and E1b1 executable-manifest codecs are
 > host-state exports with no authority operation; E1b1's Linux collector is direct-only and absent
-> from all production paths. A1.8a1-E1b2–E1b5/E1c/I remain unimplemented. E1b2 through E1b5 must
+> from all production paths. A1.8a1-E1b2–E1b5/E1c/I remain unimplemented; E1b2's exact bytes and
+> collector gate are only design-frozen. E1b2 through E1b5 must
 > close workspace, actual front-door/listener, isolation, capability, and all four parents; then E1c
 > and I must land before A1.8a2 admitted atomic arming.
 > A1.8b owns sealing/publishing,

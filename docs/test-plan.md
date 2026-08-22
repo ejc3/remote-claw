@@ -116,7 +116,7 @@ about the current A0 implementation:
 | A1.8a1-E0 | Implemented pure identity contract; no authority state or capability | Six E-side canonical namespaces/types/parsers; four deterministic attestation/snapshot ID derivations; locked vectors, exact-preimage sensitivity, hostile shape/namespace/integer rejection, and a code boundary with no evidence digest/artifact codec, schema, repository, signer, pointer, port, owner operation, runtime wiring, or production capability |
 | A1.8a1-E1a | Implemented pure ref-free parent contract; no authority state or capability | Four strict 64 KiB parent codecs; fixed schema-first byte order and ordered role/schema/digest/length commitments; closed role/schema/bound/scope registry; derived-ID checks; exact byte/digest vectors; allocation-safe raw hashing through 16 MiB; rejection of refs, hostile bytes/shapes, reordered roles, wrong schemas, and oversized children; no child semantic parser, collector, artifact write, schema, repository, signer, pointer, port, owner operation, runtime wiring, or capability |
 | A1.8a1-E1b1 | Implemented executable-content manifests/collector; direct-only and non-authoritative | Both strict role-correlated codecs; 1 MiB chunks, 256 MiB source and 64 KiB manifest bounds; two stable complete reads of one Linux FD; raw/chunk digest equality, metadata/EOF, success-close, and deterministic post-first-read abort-close gates; schema-transplant rejection; generic front-door temporary-file coverage; retained real OpenCode 1.17.5 native vector independently rebuilt offline; no retained actual front-door provenance or path/process/currentness/full-parent/authority proof |
-| A1.8a1-E1b2 | Planned workspace evidence | V1 rejects symlinks in every selector/allowed-root component; canonical-directory, no-follow filesystem identity, allowed-root ancestry, mount namespace, and exact workspace-parent closure |
+| A1.8a1-E1b2 | Design frozen; implementation planned | Four strict u64-safe leaf codecs in a mount-namespace → canonical-directory → filesystem-identity → allowed-root-ancestry digest DAG; synchronous independent no-follow allowed-root/target walks; two fact sweeps and fresh full rewalks; same-mount suffix policy; exact E1a workspace-parent reconstruction; historical-only, direct-only, and no authority |
 | A1.8a1-E1b3 | Planned front-door/listener evidence | Actual front-door executable collection plus build closure, generated surface, build-route registry, measured dispatch, and listener-parent closure |
 | A1.8a1-E1b4 | Planned runtime-isolation evidence | Every registered process/socket/policy/peer/network/mount-namespace child and isolation-parent closure |
 | A1.8a1-E1b5 | Planned capability/full-parent evidence | Every remaining capability child plus exact recreation of all four E1a parent commitments; reserved schema names or synthetic commitments are insufficient |
@@ -421,8 +421,16 @@ rebuilt retained 150-chunk native OpenCode vector. No retained actual front-door
 The direct-only collector and its nominal result type do not prove runtime authenticity, pathname,
 process, front door, currentness, complete parent, authority, or production wiring.
 
-E1b2's gate must prove symlink-free workspace evidence, E1b3 actual front-door/listener evidence,
-E1b4 isolation evidence, and E1b5 capability evidence plus recreation of all four E1a parents. E1c
+E1b2's frozen gate requires strict exact-shape/canonical leaf codecs and locked vectors; full-u64
+zero/max/noncanonical rejection; every-field and cross-leaf digest sensitivity; the complete Unicode
+POSIX path grammar and exact component-prefix containment; independent allowed-root/target descriptor
+chains, two stable fact sweeps, fresh full chained rewalks, every-position symlink/non-directory/race
+rejection, same-mount suffix enforcement, bounded exact fdinfo/boot/namespace checks, exhaustive FD
+cleanup and error precedence, live Linux collection, exact E1a workspace-parent recreation, no
+promise-fs observation, no filesystem call after the synchronous observation, no misleading
+mid-call `AbortSignal` surface, and no production importer. It remains historical evidence rather than
+current authority. E1b3 must prove actual front-door/listener evidence, E1b4 isolation evidence, and
+E1b5 capability evidence plus recreation of all four E1a parents. E1c
 may pin a future migration only after E1b5's byte set settles. E1c's gate must verify the
 three exact runtime-owner signatures and
 acceptances in listener → isolation → capability order; race two attachments at the same

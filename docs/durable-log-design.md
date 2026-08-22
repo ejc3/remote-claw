@@ -100,7 +100,8 @@ local transcript completeness or replay.
 > direct-only two-pass stable-FD Linux collector. The retained real OpenCode 1.17.5 Linux arm64 vector
 > closes only the native role; generic collection has temporary-file coverage for the front-door role
 > but no retained or provenance-bound actual front-door observation, and no pathname, process,
-> currentness, complete parent, or authority is proved. E1b2 workspace, E1b3 front-door/listener,
+> currentness, complete parent, or authority is proved. E1b2's exact leaf bytes, synchronous Linux
+> observation, and historical-only gate are design-frozen but unimplemented; E1b3 front-door/listener,
 > E1b4 isolation, and E1b5 capability/full-parent closure remain planned. E1c then owns stateful accepted evidence under the frozen
 > workspace, legacy-signer, staging, and receipt-backed reconciliation rules. I later installs an accepted capability snapshot and a credentialless
 > authenticated callable-port ingress lease as one matched pair. Neither creates an admitted command,
@@ -154,7 +155,8 @@ local transcript completeness or replay.
   or install the ingress actor into a live runtime.
 - No E1c/I migration, repository, signer boundary, validator, or operation exists. E1a has closed the
   four parent inputs and their ref-free content commitments. E1b1 has closed both executable-manifest
-  codecs and only the native role's real retained collector proof; E1b2–E1b5 still own workspace,
+  codecs and only the native role's real retained collector proof; E1b2's workspace contract is
+  design-frozen but unimplemented, while E1b2–E1b5 still own workspace,
   actual front-door/listener, isolation, capability, and complete four-parent proof. E1c's prospective workspace/new-lineage
   rule, exhaustive legacy E-purpose quarantine, unsigned-snapshot/accepted-inert staging, and
   caller-retained request plus immutable transition-receipt reconciliation are frozen. There is no
@@ -640,7 +642,8 @@ arming after the A1.8a1 authority foundation; A1.8b owns sealing/publishing and 
 The next durable authority work remains split before any admitted arm. A1.8a1-E0 identities, E1a's
 ref-free parent envelopes, and E1b1's executable-content manifests/collector have landed. E1b1 is
 direct-only and proves one stable native-executable content observation, not a pathname, process,
-front door, currentness, complete parent, or authority. E1b2 through E1b5 next close workspace,
+front door, currentness, complete parent, or authority. E1b2's exact workspace contract is now
+design-frozen but unimplemented. E1b2 through E1b5 next close workspace,
 front-door/listener, isolation, capability, and all four parent byte sets. E1c is intended to add immutable
 workspace/listener/isolation/operation-family/capability-snapshot evidence and exact runtime-owner
 signature acceptance in dependency-ordered listener → isolation → capability phases, with key
@@ -1598,13 +1601,13 @@ demonstrates every property below:
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.
-- **A1.8a1 — native-binding authority: E0/E1a/E1b1 IMPLEMENTED; E1b2–E1b5/E1c/I PLANNED; NO STATEFUL SCHEMA OR OPERATION.** E0 supplies
+- **A1.8a1 — native-binding authority: E0/E1a/E1b1 IMPLEMENTED; E1b2 DESIGN FROZEN BUT UNIMPLEMENTED; E1b2–E1b5/E1c/I IMPLEMENTATION PLANNED; NO STATEFUL SCHEMA OR OPERATION.** E0 supplies
   the six E-side namespace/parser contracts and four deterministic ID builders. E1a supplies four
   strict bounded parent codecs and a closed ref-free commitment registry. E1b1 supplies both strict
   executable-manifest codecs, the direct-only stable-FD collector, and retained native OpenCode proof;
   generic collection also covers the front-door role in temporary-file tests, but no actual
   front-door observation or provenance is retained and no path/process/currentness or authority is
-  proved. E1b2–E1b5
+  proved. E1b2's four-leaf/synchronous-collector contract is frozen but has no code. E1b2–E1b5
   own workspace, actual front-door/listener, isolation, capability, and full-parent closure.
   E1c then retains accepted-but-inert evidence without changing either transport pointer, under the
   frozen new-lineage workspace rule, exhaustive legacy-signer quarantine, exact snapshot staging,

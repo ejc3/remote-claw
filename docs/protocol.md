@@ -105,8 +105,10 @@ role-correlated native/front-door executable-content manifest codecs and one dir
 stable-FD collector. Its retained real OpenCode 1.17.5 Linux arm64 proof closes only the native role;
 generic collection has front-door temporary-file coverage, but no retained or provenance-bound
 actual front-door observation exists. E1b1 proves no pathname, process, front door, currentness, complete
-parent, authority, or wire operation. E1b2 workspace, E1b3 front-door/listener, E1b4 isolation, and
-E1b5 capability/full-parent closure remain planned. E1c then owns stateful
+parent, authority, or wire operation. E1b2's exact four-leaf digest DAG, synchronous independent
+no-follow root/target observation, and historical-only proof gate are design-frozen, but its codecs
+and collector remain unimplemented. E1b3 front-door/listener, E1b4 isolation, and E1b5
+capability/full-parent closure remain planned. E1c then owns stateful
 accepted evidence and must never change either native-transport authority pointer. A1.8a1-I later
 installs one accepted capability snapshot plus one credentialless authenticated callable-port ingress
 lease as an indivisible pair. It stores no URL, socket, bearer, provider credential, or readable
@@ -777,7 +779,7 @@ viewer, or broker path calls it. The retained native proof/probe/verifier live u
 
 ---
 
-## 3f. A1.8a1 native-binding authority (E0/E1a/E1b1 implemented; E1b2–E1b5/E1c/I planned)
+## 3f. A1.8a1 native-binding authority (E0/E1a/E1b1 implemented; E1b2 design frozen; E1b2–E1b5/E1c/I implementation planned)
 
 A1.8a1-E0, E1a, and E1b1 introduce no protocol packet or live operation. E0 freezes the six E-side ID
 namespaces/parsers and four deterministic derivations. E1a freezes the four canonical parent DTOs and
@@ -794,8 +796,12 @@ boundaries are:
    generic collector is tested for the front-door role, but no actual front-door observation or
    provenance is retained; no pathname, process, front door, currentness, complete parent, or
    authority is proved.
-2. **A1.8a1-E1b2:** close symlink-free canonical-directory, filesystem-identity,
-   allowed-root-ancestry, mount-namespace, and workspace-parent evidence.
+2. **A1.8a1-E1b2 (design frozen; implementation planned):** close strict runtime-scoped
+   mount-namespace → canonical-directory → filesystem-identity → allowed-root-ancestry bytes and the
+   exact workspace parent. The Linux observation synchronously resolves allowed root and target as
+   independent no-follow chains from one root, rejects a mount crossing below the allowed root, and
+   returns only historical evidence. Exact DTOs/formulas and the executable gate are in the
+   [technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 3. **A1.8a1-E1b3:** collect the actual front-door executable and close build, generated-surface,
    route-registry, measured-dispatch, and listener-parent evidence.
 4. **A1.8a1-E1b4:** close process, socket, policy, peer, namespace, and isolation-parent evidence.
