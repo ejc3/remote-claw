@@ -12,6 +12,11 @@ SigV4/bearer auth, control-plane synthesis, body translation, and launch wiring 
 `CountTokens` IAM actions and account model access (see Credentials), and (b) stripping the body fields
 mantle rejects (`metadata`, `context_management`, `diagnostics`, nested `cache_control.scope`).
 
+> **Release scope:** this is an implementation and live-proof record. The supported
+> [Claude 1.0](release-finish-line.md) surface uses only the Claude MITM lane. The implemented tmux and
+> OpenCode rows below are experimental/internal compatibility evidence, not stable driver choices or
+> Claude 1.0 release gates. Their presence must not weaken the MITM lane's release proof.
+
 > **Native RC needs a claude.ai login (OAuth), NOT the pretend-API-key path.** This is the single most
 > important operational fact, found in the 2026-06-28 live run: native `/remote-control` is a claude.ai
 > account feature. With an `ANTHROPIC_API_KEY` set (the "accountless" pretend-key path, mode 1 below)
@@ -23,8 +28,9 @@ mantle rejects (`metadata`, `context_management`, `diagnostics`, nested `cache_c
 > **Takeaways:** for native RC + Bedrock, the host must be **logged into claude.ai** (`claude /login`);
 > if claude shows the "Detected a custom API key" dialog, answer **No (recommended)** so it uses the
 > claude.ai login — OR pass **`--rc-accountless`** (below) to run native RC with no login at all. An
-> **accountless** Bedrock-only shop also gets remote control via the provider-agnostic
-> **`--rc-driver=tmux`** path (which uses `CLAUDE_CODE_USE_BEDROCK` and needs no claude.ai account).
+> implemented experimental **`--rc-driver=tmux`** path can also exercise accountless Bedrock remote
+> control (it uses `CLAUDE_CODE_USE_BEDROCK` and needs no claude.ai account), but it is not a supported
+> Claude 1.0 product path.
 > **Fabricated-credential finding (tested live 2026-06-28):** the OAuth **token can be 100%
 > fake** — native RC + Bedrock works end-to-end (full viewer round-trip, zero-Anthropic) with a real
 > `.claude.json` config + a **bogus** access/refresh token, because the MITM intercepts everything and
@@ -42,13 +48,13 @@ mantle rejects (`metadata`, `context_management`, `diagnostics`, nested `cache_c
 > **NO real claude.ai login ever** — `cse_…` minted, worker SSE connected, zero api.anthropic.com.
 > So a Bedrock-only shop needs **no** Anthropic account at all for native RC.
 
-**Driver matrix on Bedrock (all three proven live via the web viewer, 2026-06-28):**
+**Bedrock proof inventory (all three proven live via the web viewer on 2026-06-28; not a stable-support matrix):**
 
 | driver | Bedrock surface | how | proof |
 |---|---|---|---|
 | **mitm** (`--rc-inference=bedrock`) | `bedrock-mantle` | MITM translates `/v1/messages`, synthesizes the control plane; native RC (OAuth) | `KUMQUAT`, `anthropic.claude-opus-4-8`, mantle 200, zero anthropic |
-| **tmux** (`--rc-driver=tmux`) | `bedrock-runtime` | plain `claude` w/ `CLAUDE_CODE_USE_BEDROCK=1`, `ANTHROPIC_MODEL=us.anthropic.claude-opus-4-8`; capture by transcript, inject by send-keys | `BLUEBERRY`, claude "Amazon Bedrock" |
-| **opencode** (`--rc-driver=opencode`) | `bedrock-runtime` | `opencode serve` with the `amazon-bedrock` provider; driver bridges HTTP+SSE | `CRANBERRY`, `providerID=amazon-bedrock modelID=us.anthropic.claude-opus-4-8` |
+| **tmux (experimental)** (`--rc-driver=tmux`) | `bedrock-runtime` | plain `claude` w/ `CLAUDE_CODE_USE_BEDROCK=1`, `ANTHROPIC_MODEL=us.anthropic.claude-opus-4-8`; capture by transcript, inject by send-keys | `BLUEBERRY`, claude "Amazon Bedrock" |
+| **opencode (experimental)** (`--rc-driver=opencode`) | `bedrock-runtime` | `opencode serve` with the `amazon-bedrock` provider; driver bridges HTTP+SSE | `CRANBERRY`, `providerID=amazon-bedrock modelID=us.anthropic.claude-opus-4-8` |
 
 ## The goal (verbatim ask)
 
@@ -60,8 +66,9 @@ A Bedrock-only shop has **no Anthropic account**. Native `claude --remote-contro
 only — it is **disabled** the moment `CLAUDE_CODE_USE_BEDROCK=1` puts claude into Bedrock-transport
 mode (verified: the string `CLAUDE_CODE_USE_BEDROCK` gates the provider path; RC registers against
 `api.anthropic.com/v1/code/sessions`, which the Bedrock transport never reaches). So those users
-cannot use the native phone/TUI Remote Control at all — today their only option is the provider-
-agnostic **tmux driver** (`--rc-driver=tmux`), which is a *reconstruction*, not the native RC spine.
+cannot use Anthropic's native phone/TUI Remote Control in that transport mode. The implemented
+provider-agnostic **tmux driver** (`--rc-driver=tmux`) is available only as an experimental/internal
+reconstruction, not the supported Claude 1.0 RC spine.
 
 This design keeps the **native RC protocol** by never tripping the gate: run claude in ordinary
 **first-party Anthropic mode** (RC always enabled there) behind remote-claw's existing MITM, and have
@@ -135,7 +142,7 @@ way. `launch.ts` injects the pretend key unconditionally in bedrock mode (defens
 holds no real Anthropic credential); when an OAuth login is also present, claude prompts "Detected a
 custom API key" and the **recommended No** keeps it on the claude.ai login (→ RC stays enabled). For an
 accountless shop that needs remote control, use `--rc-driver=tmux` (provider-agnostic, no claude.ai
-account). Note (tested 2026-06-28): the OAuth **token** may be fully fabricated once `.claude.json` has
+account) only for experimental compatibility testing. Note (tested 2026-06-28): the OAuth **token** may be fully fabricated once `.claude.json` has
 been seeded by one real login (the MITM never validates it); a *from-scratch* config does not enable
 native RC — see the Status banner's fabricated-credential finding.
 
@@ -234,7 +241,7 @@ See Appendix A for the cited request/response facts for both paths.
      for first-use auto-subscribe, so foundation-model **entitlement is AVAILABLE account-wide**. ✅
   4. **A successful completion** — **proven** (2026-06-28): `bedrock ← status=200 text/event-stream`,
      real reply, through both the `--print` and the full native-RC round-trip. ✅
-- **bedrock-runtime is ALSO live now** (the surface opencode / plain-`claude` / the tmux driver use):
+- **bedrock-runtime is ALSO live now** (the surface the experimental OpenCode/plain-`claude`/tmux paths use):
   `bedrock:InvokeModel`/`InvokeModelWithResponseStream`/`Converse`/`ConverseStream` on `anthropic.*`
   foundation models + account inference profiles is granted, so the **tmux** and **opencode** drivers
   reach Bedrock directly via cross-region inference profiles (`us.anthropic.claude-opus-4-8`, etc.).

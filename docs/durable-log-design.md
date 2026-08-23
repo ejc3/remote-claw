@@ -1,27 +1,33 @@
 # Durable Log Design for remote-claw
 
-This design treats the adapter-local RC store as the durable private remote-control
-protocol server of record, not as the owner of the semantic native conversation
-or canonical logical-chat identity. The remote-claw server remains authoritative for
-stable logical-chat identity and collaborator proposal order. The broker/Turso frame log is still the
-durable viewer transport, but it is not enough to reconstruct Claude remote-control server
-state: the wrapper must durably store RC event ids, RC sequence numbers,
-worker epochs, downstream delivery state, and compaction boundaries before it
-can safely accept resume/re-bridge after restart.
+> **Status (2026-08-23): parked post-1.0 availability design.** The sole active authority is
+> [Claude 1.0](release-finish-line.md), which uses broker-backed, fail-stop `cse_*` incarnations and
+> does not add an adapter-local durable coordinator. Wrapper or native death ends the old session,
+> discloses a potentially incomplete tail, and never replays its commands into a successor. None of
+> the local RC-store schema or restart/adoption phases below is a current release prerequisite.
+
+If a future product decision requires transparent resume/re-bridge or complete unpublished-tail
+recovery after wrapper restart, this design treats the adapter-local RC store as the durable private
+remote-control protocol server of record, not as the owner of the semantic native conversation or
+canonical logical-chat identity. In that stronger availability model, the broker/Turso frame log is
+not enough to reconstruct private RC server state: the wrapper would durably store RC event IDs,
+sequence numbers, worker epochs, downstream delivery state, and compaction boundaries before
+accepting resume/re-bridge.
 
 The older transcript-first direction in `PLAN.md` is superseded for this
 purpose. Historical investigations reported that local Claude JSONL exposed
 `/compact` summaries but fresh `claude --remote-control` sessions did not write
 a complete local transcript and `--remote-control --resume <U>` did not replay
 prior history to a fresh accepting server. Those behaviors remain gates below,
-not tracked guarantees. The design therefore makes the durable MITM log the
-primary source of truth for private RC protocol state rather than relying on
-local transcript completeness or replay.
+not tracked guarantees. If this parked design is resumed, the durable MITM log—not local transcript
+completeness or replay—would be its primary private RC protocol source of truth.
 
-> **Scope update (2026-07-26):** this document remains the detailed storage plan for the current
-> synthetic Claude RC server. [Client-driven Host Runtime](client-driven-host-runtime.md) narrows the
-> future coordinator journal to its direct remote collaborators' proposal order, forwarding decisions,
-> correlation, delivery, and recovery evidence. Direct TUI input stays on the native path.
+> **Scope update (2026-08-23):** this document preserves the optional detailed storage plan for a
+> restart-resumable synthetic Claude RC server. The sole active product endpoint and release authority is
+> [Claude 1.0](release-finish-line.md). [Client-driven Host Runtime](client-driven-host-runtime.md)
+> records an optional parked generalized-host architecture. If that work is deliberately resumed,
+> its coordinator journal would narrow to direct remote collaborators' proposal order, forwarding
+> decisions, correlation, delivery, and recovery evidence. Direct TUI input stays on the native path.
 > Native Claude/Codex/OpenCode state owns conversation context, final local/remote interleaving, and
 > completed execution; the provider transport owns the representation it accepted and can read back,
 > not proof of what a particular device rendered. One paired host contains many independent logical
@@ -93,30 +99,14 @@ local transcript completeness or replay.
 > runtime-owner broker or ingress operation exists, and the dormant actor is absent from production
 > barrels/run paths. No production path invokes the dormant command adjudicator or server signer.
 > A1.8a0 adds no ciphertext, output part/signature, claim/seal/publish, broker call, effect/attempt,
-> projection, native dispatch, or production wiring. A1.8a1-E0 implements six canonical E-side ID
-> contracts and four deterministic attestation/snapshot ID derivations. E1a now implements the four
-> pure ref-free parent-envelope codecs, closed role/schema/bound/scope registry, and bounded raw digest
-> helper. E1b1 now implements strict native/front-door executable-content manifest codecs and a
-> direct-only two-pass stable-FD Linux collector. The retained real OpenCode 1.17.5 Linux arm64 vector
-> closes only the native role; generic collection has temporary-file coverage for the front-door role
-> but no retained or provenance-bound actual front-door observation, and no pathname, process,
-> currentness, complete parent, or authority is proved. E1b2 now implements four strict full-u64
-> `M → P → F → A` leaf codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only
-> Linux observation. The collector returns only four leaves; the verifier consumes their raw views plus
-> separately built E1a parent bytes. A non-skipping local-direct/hosted-CI-demoted test proves real
-> namespace and bind-mount behavior. E1b2 remains historical-only and proves no currentness, process,
-> authority, stateful acceptance, production wiring, or capability. E1b3's design is frozen but
-> unimplemented: E1b3a owns pure codecs plus one deterministic dormant Node ESM bundle, and E1b3b
-> owns direct-only capture plus the retained raw-seven-view `N/X/B/S/R/D/L` proof. Its positive route
-> inventory is closed to one prompt-binding route, four observer reads, and the legacy `/event`
-> observer stream; session/TUI/server creation and all unlisted routes remain deny-only. Final
-> executable/build/OpenAPI/registry/measurement/parent digests are post-build sidecars rather than
-> self-referential bundle content. No E1b3 package, listener, capture, fixture, authority, or production
-> import exists yet. E1b4 isolation and E1b5 capability/full-parent closure remain planned. E1c then owns stateful accepted evidence under the frozen
-> workspace, legacy-signer, staging, and receipt-backed reconciliation rules. I later installs an accepted capability snapshot and a credentialless
-> authenticated callable-port ingress lease as one matched pair. Neither creates an admitted command,
-> dispatch, effect, native call, production operation, or capability claim. A1.8a2 admitted arming and
-> A1.8b sealing/publishing remain deferred; A1.7b1 plus A1.8a0 still advertise nothing.
+> projection, native dispatch, or production wiring. A1.7b1 plus A1.8a0 still advertise nothing.
+> Those artifacts remain implemented-state and audit inventory, not an active release sequence. The
+> [A1 OpenCode vertical slice](a1-opencode-vertical-slice.md) is an optional parked expansion: if it is
+> resumed after Claude 1.0, its proposal joins live activation, one durable start-before-byte attempt,
+> exact read-back, and sealed viewer delivery. Neither it nor the historical local-attestation and
+> evidence-tree phases are Claude 1.0 prerequisites. Every later use of “selected A1” is retained
+> historical terminology for that parked design, not a current product selection or release
+> requirement.
 
 ## Source Map
 
@@ -141,17 +131,7 @@ local transcript completeness or replay.
 - A1 host-state and runtime-owner code:
   `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend,secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,migration-v11,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-result-finalization,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
   `packages/cli/src/host/native/evidence.ts`, `packages/cli/src/host/server-signer/**`, and
-  `packages/cli/src/host/runtime-owner/**`. A1.8a1-E0/E1a/E1b1/E1b2 additionally live in
-  `packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence,native-binding-authority-workspace-evidence}.ts`,
-  their tests, and the host-state barrel. E0 contains the six E-side ID contracts and four
-  deterministic builders; E1a contains the four ref-free parent codecs and raw digest helper. E1b1's
-  direct-only collector and tests live in `packages/cli/src/host/native/linux-executable-collector.ts`
-  and `packages/cli/src/host/native/linux-executable-collector.test.ts`, respectively, while its
-  retained proof/probe/verifier live under `spikes/opencode-native/`; no raw executable or chunk bytes
-  are checked in. E1b2's workspace codecs/verifier and tests live in the matching host-state files,
-  while its direct-only collector and tests live in
-  `packages/cli/src/host/native/linux-workspace-collector.ts` and
-  `packages/cli/src/host/native/linux-workspace-collector.test.ts`. A1.2 implements the generic v3
+  `packages/cli/src/host/runtime-owner/**`. A1.2 implements the generic v3
   server/project/chat/binding/edge/coordinator operations described below. A1.3 implements the v4
   runtime-owner tables/repository and live owner daemon. A1.4 implements the v5 registration graph,
   canonical evidence, reverse port transport, and closed trusted-adapter service. A1.5 implements the
@@ -166,19 +146,14 @@ local transcript completeness or replay.
   in that same command-result orchestrator. It still does not implement
   private Claude RC rows, connect an ordinary native driver to durable registration/root activation,
   or install the ingress actor into a live runtime.
-- No E1c/I migration, repository, signer boundary, validator, or operation exists. E1a has closed the
-  four parent inputs and their ref-free content commitments. E1b1 has closed both executable-manifest
-  codecs and only the native role's real retained collector proof. E1b2 has closed the workspace leaf
-  codecs, raw-byte DAG/parent verifier, synchronous direct-only collector, and non-skipping dual-path
-  least-privilege namespace/bind-mount gate, but remains historical-only and non-authoritative.
-  E1b3's pure-codec/deterministic-bundle plus direct-capture/raw-seven-view design is frozen in the
-  technical reference and test plan, but no E1b3 package, listener, collector, or retained fixture
-  exists. E1b3–E1b5 still own actual front-door/listener, isolation, capability, and complete
-  four-parent proof. E1c's prospective workspace/new-lineage
-  rule, exhaustive legacy E-purpose quarantine, unsigned-snapshot/accepted-inert staging, and
-  caller-retained request plus immutable transition-receipt reconciliation are frozen. There is no
-  migration number or pin. Planned evidence and pair-install constraints are tracked in the
-  [technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
+- Merged audit-only native-authority utilities remain exported from
+  `packages/cli/src/host/state/index.ts`:
+  `{native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence,native-binding-authority-workspace-evidence}.ts`
+  implement six canonical IDs/four derivations plus bounded parent, executable-manifest, and workspace
+  codecs. Direct-only collectors live in
+  `packages/cli/src/host/native/{linux-executable-collector,linux-workspace-collector}.ts`, with
+  dormancy tests proving no production importer. These are regression and audit tools only, never
+  activation/admission/dispatch authority and never a Claude 1.0, A1-V1, or A1-V2 prerequisite.
 - A1.6 broker code:
   `apps/web/lib/broker/{a1-contract,a1-http,a1-json,a1-sqlite}.ts` and
   `apps/web/app/api/a1/**/route.ts`. It is deliberately separate from the A0 `BrokerBackend` and its
@@ -234,9 +209,9 @@ fact is that worker bridge/SSE does not provide history
 `lastSequenceNum`, `from_sequence_num`, or `Last-Event-ID` on client-side
 `/events/stream`, not worker bridge recovery. None is a verified production
 contract. The implemented client therefore sends none of them; caller-driven
-history pagination is the only current primitive, and the outward-connector reconnect gate in
-[Client-driven Host Runtime proof gates](client-driven-host-runtime.md#proof-gates) must establish any
-cursor.
+history pagination is the only current primitive. If the parked outward connector is resumed, its
+reconnect work must establish any cursor under the historical proof inventory in the
+[frozen generalized-design archive](client-driven-host-runtime-generalized-design-archive.md#14-proof-gates).
 
 The tracked client POST shape returns `duplicate`, `event_id`, and
 `sequence_num` (`docs/phase0-findings.md` §4b). A historical replay experiment
@@ -249,7 +224,7 @@ Downstream user input and upstream user echo are the same logical event when
 they share an event id. The viewer transcript must merge those records instead
 of rendering the downstream user message and the worker echo as two user turns.
 Delivery acknowledgements are separate durable state, not transcript messages.
-This is a projector invariant for the selected host-runtime Claude correlation gate.
+This is a projector invariant for the parked restart-resumable host-runtime correlation design.
 
 **Historical investigation claim — interrupt.** Pressing escape during a
 turn produced one empty successful result event after the user event, with no
@@ -634,8 +609,12 @@ finalized-group states and has no final-result, signer-acceptance, source result
 effect, attempt, dispatch, viewer, native, or production surface. The v9 acceptance table remains,
 but A1.7b1 inserts no command-result acceptance row. That schema-v10 boundary requires a later atomic
 final common result, signer acceptance, ingress terminalization, and source result/delivery intent. A1.8a0 now
-implements that boundary only for the already-signed rejected arm; the admitted attempt/front-door
-dispatch/effect arm remains A1.8a2 work. A1.7b1 by itself therefore advertises nothing.
+implements that boundary only for the already-signed rejected arm. If the parked A1 expansion is
+resumed, its proposed A1-V1 gate would add the ordinary alpha CLI, `rcp2.` onboarding/discovery, the
+real mediated TUI/private-listener boundary, signed admission, one command-keyed start-before-byte
+execution, exact read-back and output self-recognition, sealed publication, hostile-child isolation,
+and browser rendering as one complete local-provider product loop. A1.7b1 by itself therefore
+advertises nothing.
 
 V11 adds rejected-only atomic terminal closure, not an executable or publishable outbox. The finalizer
 requires the exact signed `rejected` preparation with no finalization artifact, then atomically inserts
@@ -653,35 +632,10 @@ reattestation. Any later successor signing lease must be durably acquired strict
 predecessor acceptance, including across a same-millisecond wall-clock tie. `pending_seal` stores only
 plaintext semantic refs/digests and target route linkage.
 There is no claim, encryption, output part/signature, sealing, publication, broker call, effect,
-attempt, projection, native dispatch, or production wiring in A1.8a0. A1.8a2 owns admitted atomic
-arming after the A1.8a1 authority foundation; A1.8b owns sealing/publishing and one-time dispatch.
-
-The next durable authority work remains split before any admitted arm. A1.8a1-E0 identities, E1a's
-ref-free parent envelopes, E1b1's executable-content manifests/collector, and E1b2's workspace
-codecs/verifier/collector have landed. E1b1 is
-direct-only and proves one stable native-executable content observation, not a pathname, process,
-front door, currentness, complete parent, or authority. E1b2's collector returns four historical leaf
-artifacts after synchronous independent no-follow observation, while its raw-byte verifier consumes
-those four views plus separately built E1a parent bytes; neither creates current authority. E1b3's
-design is now frozen into E1b3a pure codecs/deterministic dormant bundle and E1b3b direct-only
-capture/raw-seven-view retained proof, but it has no implementation. E1b3 through E1b5 next close
-front-door/listener, isolation, capability, and all four parent byte sets. E1c is intended to add immutable
-workspace/listener/isolation/operation-family/capability-snapshot evidence and exact runtime-owner
-signature acceptance in dependency-ordered listener → isolation → capability phases, with key
-rotation blocked while an E-owned phase is nonterminal. E1c uses caller-retained ref-free semantic
-requests whose parents and recipe commit only to schema/digest/length coordinates, repository-local
-artifact links, and dense transition receipts; it never changes either
-existing transport pointer. A1.8a1-I later
-adds snapshot status, credentialless native-client ingress, and an install-operation ledger; one
-transaction installs or replaces the exact pair and both pointers, and parent close/detach/reattach,
-takeover, channel loss, or process loss withdraws the pair before a successor is writable. The
-ingress retains only a typed callable-port handle plus authenticated-channel evidence and full
-binding/runtime/workspace/attachment/fence coordinates—never a URL, socket path, bearer, provider
-credential, or readable secret. Secure reopen closes the durable graph but never substitutes for a
-live port-registry proof. Pair withdrawal cannot unregister the A1.4-owned physical port; only exact
-parent-lease closure/replacement may do that after its current authority pair is withdrawn. No
-migration number, statement count, digest, or manifest is claimed until
-the later schema bytes settle.
+attempt, projection, native dispatch, or production wiring in A1.8a0. If the parked vertical proposal
+is resumed, it would add the whole admitted execution-through-viewer path in A1-V1, then promote that
+exact path to a credentialed A1-V2 outcome; it does not add an intermediate local
+authority-evidence phase.
 
 V4 additionally validates one machine-scoped runtime-owner state row, contiguous retained service
 epochs and owner journal, exact process-start-bound lease acquisition/renewal/release, derived
@@ -768,10 +722,10 @@ retry; this does not make an arbitrary unknown ordinary SQLite commit safe to re
 scope was only durable addressing through A1.6. A1.7a adds dormant ingress queues and route-local
 serialization; A1.7b0 adds their server-signing prerequisite; A1.7b1 adds rejected-only common
 proposal decisions, server-wide order, and signed preparations; and A1.8a0 atomically closes that
-rejected arm into a final result, acceptance, terminal overlay, and inert `pending_seal` intent.
-A1.8a1-E1c/I first owns the inert evidence and matched native-authority pair after E1b5's full-parent gate; A1.8a2
-still owns admitted attempt/dispatch/effect arming, and A1.8b owns sealing/publishing and
-one-time delivery.
+rejected arm into a final result, acceptance, terminal overlay, and inert `pending_seal` intent. If
+resumed, the parked A1 OpenCode vertical would own the complete user-runnable local-provider topology
+in A1-V1 and promote that same topology to exhaustive recovery, connector isolation, and normal
+advertisement in A1-V2.
 
 A1.3's daemon listens on one machine-scoped Linux abstract Unix socket. Both peers derive one HKDF key
 from the machine secret and prove possession over a fresh 32-byte challenge, with separate server and
@@ -1354,10 +1308,11 @@ Close/archive:
 - Archive does not delete raw log or broker frames.
 - Resume after close reopens or continues the session with a new epoch.
 
-## Brokered Native Provider Mode
+## Brokered native provider mode (parked post-1.0 proposal)
 
-Add this only on top of the coordinator control journal in
-[Client-driven Host Runtime](client-driven-host-runtime.md). This is not
+This optional mode is not part of Claude 1.0. If deliberately resumed, add it only on top of the
+coordinator control journal preserved in the
+[frozen generalized-design archive](client-driven-host-runtime-generalized-design-archive.md). This is not
 passthrough: inner Claude stays on remote-claw's private synthetic RC/API
 façade and never receives a real Anthropic credential, session, bridge, or
 network route. A separate remote-claw-owned connector acts as the real outward
@@ -1397,10 +1352,10 @@ worker/app:
 The A1/A2 branch statuses and file paths below are a preserved planning snapshot, not current
 instructions: those branches were integrated and the broker layout has since moved to
 `apps/web/lib/broker/{sqlite-multi,turso-cloud-locator,vercel}.ts` plus shared interfaces. The unbuilt B
-phases are likewise superseded by the shared/Claude phases in
-[Client-driven Host Runtime delivery plan](client-driven-host-runtime.md#delivery-plan). Keep this
-section for provenance and
-test intent; re-read current code before implementing any item.
+phases are preserved only in the
+[frozen generalized-design archive](client-driven-host-runtime-generalized-design-archive.md#13-delivery-plan).
+They do not add work to the [Claude 1.0 finish line](release-finish-line.md). Keep this section for
+provenance and test intent; re-read current code before implementing any item.
 
 Historical branch phase called “A1” - A0-compatible durable broker frames:
 
@@ -1571,11 +1526,14 @@ Phase B5 - Archive/close fidelity:
 - Broker tests from A1/A2: Turso publish idempotency, subscribe by cursor,
   `maxSeq` continuity, retention.
 
-## Combined Claude Durability Release Gate
+## Historical generalized Claude durability gate (parked post-1.0)
 
-The numbered B PR slices in [Client-driven Host Runtime](client-driven-host-runtime-reference.md#13-delivery-plan)
-land independently and pass the relevant subset of these checks while keeping dependent capabilities
-disabled. The combined Claude durability capability is not complete until the integrated B release
+[Claude 1.0](release-finish-line.md) is the sole active release gate. The numbered B PR slices in the
+[frozen generalized-design archive](client-driven-host-runtime-generalized-design-archive.md#13-delivery-plan)
+record a broader post-1.0 wrapper proposal. They do not define current implementation order or add a
+Claude 1.0 prerequisite. If that parked B work is deliberately resumed, each slice would land
+independently and pass the relevant subset of these checks while keeping dependent capabilities
+disabled. The generalized durability capability would not be complete until its integrated release
 demonstrates every property below:
 
 - The wrapper can be killed and restarted without losing the ability to answer
@@ -1622,27 +1580,6 @@ demonstrates every property below:
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.
-- **A1.8a1 — native-binding authority: E0/E1a/E1b1/E1b2 IMPLEMENTED; E1b3 DESIGN FROZEN, IMPLEMENTATION ABSENT; E1b4–E1b5/E1c/I IMPLEMENTATION PLANNED; NO STATEFUL SCHEMA OR OPERATION.** E0 supplies
-  the six E-side namespace/parser contracts and four deterministic ID builders. E1a supplies four
-  strict bounded parent codecs and a closed ref-free commitment registry. E1b1 supplies both strict
-  executable-manifest codecs, the direct-only stable-FD collector, and retained native OpenCode proof;
-  generic collection also covers the front-door role in temporary-file tests, but no actual
-  front-door observation or provenance is retained and no path/process/currentness or authority is
-  proved. E1b2 supplies four strict full-u64 workspace leaf codecs, a bounded raw-five-view verifier,
-  synchronous direct-only collection, and a non-skipping real namespace/bind-mount proof. Its
-  collector returns no context-bearing E1a parent, and its output remains historical-only and
-  non-authoritative. E1b3a is frozen as pure codecs plus a deterministic dormant Node ESM bundle;
-  E1b3b is frozen as direct-only capture plus a retained raw-seven-view proof with a closed six-route
-  positive inventory and deny-only fallback. Neither is implemented. E1b3–E1b5 own actual
-  front-door/listener, isolation, capability, and full-parent closure.
-  E1c then retains accepted-but-inert evidence without changing either transport pointer, under the
-  frozen new-lineage workspace rule, exhaustive legacy-signer quarantine, exact snapshot staging,
-  local artifact-link graph, and dense receipt-backed reconciliation. I later owns the one-transaction
-  null/null-or-matched-pair CAS, predecessor withdrawal, parent lifecycle integration, exact
-  request-bound unknown-commit reconciliation, hostile-SQL semantic reopen, and separate live-port
-  proof. The selected ingress is credentialless and channel-authenticated. Synthetic proof cannot
-  satisfy the later live OpenCode fixture, and neither subtranche may create an admitted result,
-  attempt, dispatch, effect, native call, or production import.
 - **B.2 — unknown resume policy: DECIDED.** Production rejects unknown `cse_` resumes by default.
   Explicit debug adoption may be retained, but it must mark history incomplete and name
   an existing logical-chat/native-binding target explicitly. An unknown `cse_`

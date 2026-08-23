@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 // These run against docs/index.html (served by the webServer in playwright.config.ts), which
-// renders docs/v2-architecture.md live via marked.js — so they guard both the page chrome
+// renders docs/*.md live via marked.js — so they guard both the page chrome
 // (the mobile TOC drawer) and the rendered markdown (the ordered-list "jumble" regression).
 
 async function openDocAndToc(page: import("@playwright/test").Page) {
@@ -108,15 +108,13 @@ test("a doc-reference link opens that doc in the viewer, not the raw markdown", 
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
-test("the host-runtime reference opens as a rendered viewer tab", async ({ page }) => {
-  await page.goto("/index.html#host");
-  await expect(page.locator("article h1")).toContainText("Client-driven host runtime", {
+test("the default docs route opens the active Claude 1.0 finish line", async ({ page }) => {
+  await page.goto("/index.html");
+  await expect(page.locator("article h1")).toContainText("remote-claw Claude 1.0 finish line", {
     timeout: 15000,
   });
-  await page.locator('article a[href="client-driven-host-runtime-reference.md"]').first().click();
-  await expect(page.locator("article h1")).toContainText("technical reference");
-  await expect(page.locator(".tab.active")).toHaveText("Host Runtime Reference");
-  await expect(page).toHaveURL(/#host-ref$/);
+  await expect(page.locator(".tab.active")).toHaveText("Claude 1.0 Finish Line");
+  await expect(page).toHaveURL(/#release$/);
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
@@ -127,7 +125,7 @@ test("the pinned Codex proof opens as a rendered viewer tab", async ({ page }) =
   });
   await page.locator('article a[href="codex-app-server-multiclient-proof.md"]').first().click();
   await expect(page.locator("article h1")).toContainText("Codex app-server multi-client proof");
-  await expect(page.locator(".tab.active")).toHaveText("Codex Multi-client Proof");
+  await expect(page.locator(".tab.active")).toHaveText("Codex Research Proof");
   await expect(page).toHaveURL(/#codex-proof$/);
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
@@ -139,50 +137,15 @@ test("the pinned OpenCode proof opens as a rendered viewer tab", async ({ page }
   });
   await page.locator('article a[href="opencode-native-proof.md"]').first().click();
   await expect(page.locator("article h1")).toContainText("OpenCode native protocol proof");
-  await expect(page.locator(".tab.active")).toHaveText("OpenCode Native Proof");
+  await expect(page.locator(".tab.active")).toHaveText("OpenCode Research Proof");
   await expect(page).toHaveURL(/#opencode-proof$/);
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
-test("the host-runtime source does not hard-wrap prose", async ({ request }) => {
-  const response = await request.get("/client-driven-host-runtime.md");
-  expect(response.ok()).toBe(true);
-
-  const wrappedLines: number[] = [];
-  let inFence = false;
-  let previousLineHadContent = false;
-  for (const [index, line] of (await response.text()).split("\n").entries()) {
-    if (line.startsWith("```")) {
-      inFence = !inFence;
-      previousLineHadContent = false;
-      continue;
-    }
-    if (inFence || line.trim() === "") {
-      previousLineHadContent = false;
-      continue;
-    }
-
-    const startsMarkdownBlock =
-      /^(?:#{1,6}\s|<|>|\||\s*(?:[-+*]|\d+\.)\s)/.test(line);
-    if (previousLineHadContent && !startsMarkdownBlock) wrappedLines.push(index + 1);
-    previousLineHadContent = true;
-  }
-
-  expect(wrappedLines, "iOS Markdown previews render soft source wraps as new lines").toEqual([]);
-});
-
-test("core host-runtime diagrams fit the mobile code block without horizontal scrolling", async ({
+test("active release diagrams fit the mobile code block without horizontal scrolling", async ({
   page,
 }) => {
-  const docs = [
-    { id: "host", diagrams: ["server A", "Codex direct", "coding state"] },
-    {
-      id: "host-ref",
-      diagrams: ["server A", "Codex direct", "(server, logical chat)", "real Codex TUI"],
-    },
-    { id: "opencode", diagrams: ["encrypted broker + web", "many collaborators"] },
-    { id: "harness", diagrams: ["chosen adapter"] },
-  ];
+  const docs = [{ id: "release", diagrams: ["real browser"] }];
 
   for (const { id, diagrams } of docs) {
     await page.goto(`/index.html?diagram-fit=${id}#${id}`);
@@ -198,12 +161,12 @@ test("core host-runtime diagrams fit the mobile code block without horizontal sc
   }
 });
 
-test("a composite doc-and-section hash loads and scrolls the selected design", async ({ page }) => {
-  await page.goto("/index.html#host:delivery-plan");
-  await expect(page.locator("article h1")).toContainText("Client-driven host runtime", {
+test("a composite doc-and-section hash loads and scrolls the active finish line", async ({ page }) => {
+  await page.goto("/index.html#release:minimum-command-safety-contract");
+  await expect(page.locator("article h1")).toContainText("remote-claw Claude 1.0 finish line", {
     timeout: 15000,
   });
-  await expect(page.locator(".tab.active")).toHaveText("Client-driven Host Runtime");
-  await expect(page).toHaveURL(/#host:delivery-plan$/);
-  await expect(page.locator('[id="delivery-plan"]')).toBeInViewport();
+  await expect(page.locator(".tab.active")).toHaveText("Claude 1.0 Finish Line");
+  await expect(page).toHaveURL(/#release:minimum-command-safety-contract$/);
+  await expect(page.locator('[id="minimum-command-safety-contract"]')).toBeInViewport();
 });

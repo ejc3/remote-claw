@@ -1,12 +1,16 @@
 # Ephemeral one-time credential handoff (OTK)
 
-**Status:** **SHIPPED (code)** — PR1 (clawsec `handoff.ts`), PR2 (zero-knowledge `HandoffStore` +
+**Status:** **IMPLEMENTED (code)** — PR1 (clawsec `handoff.ts`), PR2 (zero-knowledge `HandoffStore` +
 `/api/handoff`), PR3 (QR `otk1_` + web client + §3.6 non-extractable storage). Research-grounded (8-angle
 workflow) **and adversarially reviewed** (codex + 7-dimension red-team on the design; codex + `/code-review`
-per PR; all resolutions in §8). The §1 invariant was honestly scoped after review. **One v1 must-have is NOT a
-repo artifact:** the WAF rate-limit rule (§3.3, must-have #5) is an infra deploy-gate provisioned out-of-band
-via the Vercel Firewall — no test/CI can assert it exists — so the route is not deploy-safe until it is
-provisioned and verified by hand.
+per PR; all resolutions in §8). The §1 invariant was honestly scoped after review.
+
+> **Claude 1.0 release scope:** manual pass onboarding is sufficient. QR/OTK handoff may be enabled only
+> when every §5 control ships together, including the out-of-band WAF rate limit. If that rule is not
+> verified, the handoff route and QR/OTK UI/CLI path stay disabled; the missing WAF rule then does not
+> block the core [Claude 1.0 finish line](release-finish-line.md). Safety is conditional on feature
+> enablement, never optional within an enabled handoff flow.
+
 **Goal:** replace the *forever pass embedded in the QR* with a **one-time, short-TTL bootstrap token**, so the
 handoff store is — to an *honest-but-curious* broker, a DB dump, or a passive log/edge observer — a store it
 **cannot read**, that yields a blob to **one** caller **once**.
@@ -134,7 +138,7 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   is needed — it compares 256-bit SHA-256 values, not a usable timing oracle).
 - **The proof closes the edge-pre-burn (review CONFIRMED):** the claim presents `claimProof`; the server stores
   only `SHA256(claimProof)`. A TLS-terminating edge/log that sees only `id = SHA256(OTK)` **cannot** burn or
-  claim (it lacks `claimProof`, which needs OTK). This is **mandatory in v1** (no longer deferred).
+  claim (it lacks `claimProof`, which needs OTK). This is **mandatory whenever OTK handoff is enabled**.
 - **No Bearer auth** (it would re-introduce handoff↔identity correlation); the **256-bit `id` + proof** are the
   gate. Abuse bounded by: the pre-parse size cap, a **deployed Vercel WAF rate-limit rule** on
   `/api/handoff` (matched by `path` prefix) keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a token bucket;
@@ -143,7 +147,7 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   global counter an attacker could deliberately trip to deny pairings. The honest residual tradeoff runs the
   other way: a coarse per-IP key can throttle legitimate clients behind one shared egress IP (carrier-grade
   NAT), so the per-IP limit is set generously — 20 / 60 s ≫ the ~2 requests a real pairing needs. This
-  rate-limit is an **out-of-band infra deploy gate**
+  rate-limit is an **out-of-band infra deploy gate for any deployment that enables handoff**
   (provisioned in the Vercel Firewall, not in `vercel.json`/CI — §5 #5), atop the short TTL, single-read, and
   the dedicated Turso DB so PUT write-contention can't touch relay frames. **Abuse telemetry lives at the edge, not the app:** the WAF
   dashboard (claim-rate, per-IP throttle hits, brute-force volume) is where §4's online-attack guarantees are
@@ -163,15 +167,16 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   manual entry (the original behavior, not a deep link), and the bare pass still prints (default mode under a
   hard live-credential warning; `--rc-quiet` prints only the pass, for piping). Host-side **interception
   detection** (a non-consuming `lookup` poll of its own `id` →
-  alarm + re-mint if the row vanishes before the phone confirms) is a **deferred follow-up**, not in v1: the
-  route exposes no lookup verb. In v1, §4's "detectable" is delivered **viewer-side** (next bullet).
+  alarm + re-mint if the row vanishes before the phone confirms) is a **deferred follow-up**, not in the
+  enabled baseline: the route exposes no lookup verb. In that baseline, §4's "detectable" is delivered
+  **viewer-side** (next bullet).
 - Web client (`app/page.tsx`): on an `otk1_` fragment, **strip it immediately** (`history.replaceState`), then
   **require an explicit user gesture** ("Pair this device") **before** the destructive POST claim — so a
   webview/prefetch/unfurler that runs JS can't auto-burn it. After the claim, **reveal the resolved pass's
   `identity_id`** for the user to confirm against the host's `--rc-pass` output **before the credential is
   trusted/used** (the binding — anti-QR-swap; RFC 8628/CIBA `binding_message`). The confirm is necessarily
   *after* the claim (the binding value lives inside the sealed box) but *before* connect; if it fails to match,
-  the user re-pairs (this is v1's viewer-side "detectable"). After a successful claim+confirm, **decrypt,
+  the user re-pairs (this is the enabled baseline's viewer-side "detectable"). After a successful claim+confirm, **decrypt,
   wrap the pass with one non-extractable AES-256-GCM device key in IndexedDB, and store only the wrapped
   ciphertext in tab-scoped sessionStorage** (see §3.6) — never a raw pass or OTK in browser storage. Serve
   the route with `Referrer-Policy: no-referrer` + the existing strict
@@ -180,11 +185,12 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
 
 ### 3.5 What the OTK delivers (scope) — explicit decision
 
-v1 wraps the **existing `rcp1_` pass** (simplest; trivial migration). This **hardens delivery, not the
+The implemented OTK flow wraps the **existing `rcp1_` pass** (simplest; trivial migration). This **hardens delivery, not the
 credential's authority**: a claimed pass still grants full read+steer and shared-key inbound authority.
 Machine reset moves future host service to a new identity but does not revoke copied passes against
-retained old routes. In selected A1, the separate certified server-output signature prevents a pass
-holder from forging projections or announcements; the shipped A0 envelope does not.
+retained old routes. A future asymmetric server-output-signature design could prevent a pass holder
+from forging projections or announcements; the shipped A0 envelope does not, and Claude 1.0 explicitly
+retains that mutually trusted pass-holder model.
 
 > **Deferred follow-ups (higher value, tracked):** (a) deliver a *scoped / expiring / per-viewer-revocable*
 > grant so a compromised **viewer** is recoverable without resetting `S`; (b) a **pinned/native client** to
@@ -223,14 +229,15 @@ Neither makes a *server-delivered* viewer ZK against its own server (that's the 
 | Malicious/compromised **viewer** post-claim | full forever credential | unchanged while resident: same-origin malicious JS can use the non-extractable wrapping key to unwrap and exfiltrate the pass (→ §3.5(a)); §3.6 protects passive storage copies |
 
 **Net:** a clear win for the leaked-QR / history / shoulder-surf / lost-phone threats and it removes the
-never-expiring-capability anti-pattern — **conditional on the v1 must-haves shipping together** (§5). It does
+never-expiring-capability anti-pattern — **conditional on all enabled-feature must-haves shipping together** (§5). It does
 **not** make the web client ZK against a malicious app-delivery server, does **not** cryptographically erase
 backups, and does **not** reduce the post-claim credential's authority (only passive at-rest exposure). Some
 guarantees move from *structural* (secret never sent) to *operational* (atomicity + TTL + sweep + rate-limit).
 
-## 5. Decisions, v1 must-haves, non-goals
+## 5. Decisions, enabled-feature must-haves, non-goals
 
-**v1 must-haves (the net-security claim is conditional on ALL of these):** (1) atomic burn-on-touch on the
+**Must-haves whenever QR/OTK handoff is enabled (the net-security claim is conditional on ALL of
+these):** (1) atomic burn-on-touch on the
 **cloud primary** (fail closed on Vercel/file); (2) **256-bit OTK**, distinct-PRF `id`/`wrapKey`/`claimProof`;
 (3) **mandatory claim proof-of-OTK**; (4) **dedicated frequent sweep** + read-time expiry; (5) **mandatory
 WAF rate-limit** (uniform fail-closed responses + pre-parse size cap are in-repo, but the **rate-limit rule
@@ -240,12 +247,14 @@ itself is an out-of-band infra deploy-gate** — see below); (6) **user gesture 
 `409`-on-conflict with host
 re-mint.
 
-> **#5 is the one must-have that lives outside the repo.** The per-IP rate-limit rule can't live in `vercel.json`
+> **#5 is the one enabled-feature must-have that lives outside the repo.** The per-IP rate-limit rule can't live in `vercel.json`
 > and no test/CI can assert it exists; it is provisioned via the Vercel Firewall (dashboard/API) — now **deployed**
 > as `handoff-per-ip-rate-limit` (20 req / 60 s per IP, token bucket; excess denied), with Vercel's always-on
 > System Mitigations as the global volumetric backstop (no custom global rule). So "the net-security claim is
-> conditional on ALL must-haves" includes a control the codebase cannot self-check: treat the WAF rule as an
-> infra release gate verified out-of-band, not a shipped artifact (mirrors `route.ts`'s deploy-gate note).
+> conditional on ALL must-haves" includes a control the codebase cannot self-check: when handoff is
+> enabled, treat the WAF rule as an infra release gate verified out-of-band, not a shipped artifact
+> (mirrors `route.ts`'s deploy-gate note). When handoff is disabled, this conditional gate does not block
+> manual-pass Claude 1.0.
 
 - **No PAKE** (high-entropy OTK ⇒ SPAKE2 adds EC-correctness surface for zero gain; NIST SP 800-63B).
 - **TTL = 10 min, configurable**, hard-capped; shorter is safer (it's the leaked-QR window).
@@ -292,7 +301,7 @@ written" — it overclaimed.* This revision applies the survivors. Key resolutio
   malicious-app-delivery-server case is an explicit limit (→ pinned/native client follow-up §3.5(b)).
 - **[HIGH] "forget/cannot re-serve" vs WAL/PITR/backups** → §1 downgraded to confidentiality + API-enforced
   one-time; backups documented as non-erasing.
-- **[HIGH/CONFIRMED] edge sees `SHA256(OTK)` ⇒ pre-burn/substitute** → claim proof-of-OTK **mandatory v1**
+- **[HIGH/CONFIRMED] edge sees `SHA256(OTK)` ⇒ pre-burn/substitute** → claim proof-of-OTK **mandatory when enabled**
   (§3.1/§3.3).
 - **[HIGH/CONFIRMED] TTL not physically enforced (daily cron)** → burn-on-touch `DELETE…RETURNING` + discard
   expired + **dedicated frequent sweep** + a **PUT-time opportunistic reaper** (the floor when the `*/5` cron

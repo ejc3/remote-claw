@@ -1,5 +1,10 @@
 # OpenCode native protocol proof
 
+**Project status:** retained optional OpenCode audit evidence. Durable OpenCode/A1 is parked
+multi-engine platform work, not the next tranche or a blocker for the active
+[Claude 1.0 finish line](../../docs/release-finish-line.md). This package remains useful because its
+narrow facts and negative boundaries do not depend on that roadmap decision.
+
 This package retains two narrow proofs against the pinned OpenCode 1.17.5 Linux arm64 release: a
 model-free native-server protocol run and a two-pass executable-content manifest of the real native
 binary. The executable proof reads but does not execute the binary and retains no raw chunk bytes.
@@ -44,6 +49,9 @@ This is a narrow native-protocol fact proof, not an OpenCode driver adjudication
 - a complete callable TUI/adapter/observer/creation front-door manifest, exact-process TUI authority,
   or spawned-tool denial of the raw private OpenCode listener;
 - leases, takeover, an in-flight handoff barrier, or crash recovery;
+- the implemented schema-v6 terminal-root authority being revalidated by any later activation;
+- attachment to one exact existing session or durable write-ahead/reconciliation of one session
+  creation after a lost response;
 - runtime permission-request races, replies, or terminal permission state;
 - arbitrary metadata-field semantics or idempotency of session-creation POSTs;
 - control-event handling or source attribution;
@@ -51,8 +59,11 @@ This is a narrow native-protocol fact proof, not an OpenCode driver adjudication
 - same-ID prompt behavior with model replies or across a native-server restart;
 - SSE reconnect, replay, gap detection, subscribe/snapshot linearization, status convergence, or
   long-running stream behavior;
-- provider-façade behavior, inference-request recovery, or the exact-process provider/network fence;
-- the selected writable A2 tuple of server-scoped `{new_chat}` and binding-scoped `{user_text}`; or
+- provider-façade behavior, write-ahead/start-once inference requests, no resend after ambiguous
+  connector delivery, or the exact-process provider/network fence;
+- causal assistant attribution through exact `assistant.parentID` during a concurrent TUI turn;
+- one atomic observation-to-terminal-or-quarantine transition with its matching output intent;
+- the optional binding-scoped `{user_text}` design, or any later server-scoped `{new_chat}` design; or
 - mount/filesystem isolation, including whether the child could read an absolute ambient host path outside the fresh homes.
 
 ## Executable-fixture scope boundary

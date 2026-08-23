@@ -89,7 +89,7 @@
 
 <section class="hero">
   <h1>Watching your terminal AI from your phone — privately</h1>
-  <p>remote-claw is a small tool you install next to a terminal coding-AI agent (like Claude Code or Codex). It lets you watch and steer that session from another device, over the internet, <b>without the relay in the middle being able to read it</b>. This page explains, in plain terms, how it protects you and what each piece is for.</p>
+  <p>remote-claw is a small tool you install next to the real Claude Code TUI. It lets you watch and steer that session from another device, over the internet, <b>without the relay in the middle being able to read it</b>. This page explains, in plain terms, how it protects you and what each piece is for.</p>
   <div class="badges">
     <span class="badge ok"><b>plain-language</b> design</span>
     <span class="badge">the relay is a dumb, blind mailbox</span>
@@ -105,12 +105,12 @@
 <script id="src" type="text/markdown">
 # Watching your terminal AI from your phone — privately
 
-> **Historical overview.** This standalone page predates the shipped pluggable broker and the selected
-> client-driven host runtime. It is retained for design history, not as the current protocol contract.
-> Read the [live architecture](index.html) and
-> [Client-driven Host Runtime](client-driven-host-runtime.md) for current behavior.
+> **Historical, non-authoritative overview.** This standalone page predates the current Claude product
+> boundary and is retained for design history, not as a protocol or roadmap contract. The sole active
+> release target is the [Claude 1.0 finish line](release-finish-line.md); generalized Claude/Codex/OpenCode
+> work is parked. Read the [live architecture](index.html) and [protocol](protocol.md) for current behavior.
 
-You run a **coding-AI agent in your terminal** — a tool like Claude Code or Codex that reads and edits files and runs commands on your computer. **remote-claw is a small program you install alongside it.** It lets you **watch that session, and send it prompts, from your phone or a browser** — over the internet — while the server that connects the two is **never able to read what you're doing**.
+You run the **real Claude Code TUI in your terminal**. **remote-claw is a small program you install alongside it.** It lets you **watch that session, and send it prompts, from your phone or a browser** — over the internet — while the server that connects the two is **never able to read what you're doing**.
 
 This page explains how, in plain terms. No prior knowledge needed.
 
@@ -118,7 +118,7 @@ This page explains how, in plain terms. No prior knowledge needed.
 
 - **Your machine** — the computer running the AI session. It is the source of truth: it holds the real conversation, and it owns its own identity. (One machine can run several sessions at once; they all share that machine's single identity.)
 - **A viewer** — your phone, or a browser tab, watching a session (and optionally sending it prompts).
-- **The relay** — a small service in the cloud that passes messages between your machine and your viewers. Think of it as a **mailbox**: it routes envelopes, but (in the private modes) it can't open them. Depending on the selected backend, it keeps sealed envelopes in process memory, persists them in one Workflow run until that run reaches its fixed cap, or durably retains them in SQLite/libSQL; it never stores plaintext conversation history, has **no accounts**, and holds **no plaintext list of your machines**.
+- **The relay** — a small service in the cloud that passes messages between your machine and your viewers. Think of it as a **mailbox**: it routes envelopes, but (in the private modes) it can't open them. Depending on the configured backend, it keeps sealed envelopes in process memory, persists them in one Workflow run until that run reaches its fixed cap, or durably retains them in SQLite/libSQL; it never stores plaintext conversation history, has **no accounts**, and holds **no plaintext list of your machines**.
 
 ## Each machine has its own identity
 
@@ -154,7 +154,7 @@ In **Sealed** and **Managed**, every message the relay handles is locked. All it
 - the **scrambled body** of a message, which it cannot unlock, and
 - a small **routing label** — which machine and which session a message is for — so it knows where to deliver it. The relay can *check* that label against the sender and may retain it with sealed frames or in a channel catalog, but it does not keep a plaintext account directory of your machines.
 
-It **cannot** read your transcripts, your prompts, your keys, or which session you're looking at — and it **cannot write a new message, or a fake "online" notice, in your name.** But a blind mailbox can still **drop, delay, reorder, or replay** the sealed mail it's handed, or simply refuse to deliver: it can stay silent or hand you *stale* mail, even though it can't forge *new* mail. An honestly timestamped old announce ages from connected to reconnecting to disconnected. Current A0 does not reject a valid announce whose sender timestamp is far in the future, however, so only the selected next phase's two-sided clock-skew check can claim an unconditional stale-online bound. Outright suppression can be **noticed, but not prevented**. The Workflow profile persists a stream that readers can resume by frame index; it does not evict a rolling window, but its one run has a fixed 25,000-event cap and the current adapter has no pre-cap rollover. SQLite/libSQL can durably retain the opaque envelopes and expose recovery cursors. Neither gives the relay plaintext history or accounts — it remains a blind mailbox.
+It **cannot** read your transcripts, your prompts, your keys, or which session you're looking at — and it **cannot write a new message, or a fake "online" notice, in your name.** But a blind mailbox can still **drop, delay, reorder, or replay** the sealed mail it's handed, or simply refuse to deliver: it can stay silent or hand you *stale* mail, even though it can't forge *new* mail. An honestly timestamped old announce ages from connected to reconnecting to disconnected. Current A0 does not reject a valid announce whose sender timestamp is far in the future, however, so it cannot claim an unconditional stale-online bound; a parked future clock-skew design could add that check. Outright suppression can be **noticed, but not prevented**. The Workflow profile persists a stream that readers can resume by frame index; it does not evict a rolling window, but its one run has a fixed 25,000-event cap and the current adapter has no pre-cap rollover. SQLite/libSQL can durably retain the opaque envelopes and expose recovery cursors. Neither gives the relay plaintext history or accounts — it remains a blind mailbox.
 
 ## If a device or secret is stolen
 
@@ -187,7 +187,7 @@ Keeping the design small is a feature. Three things we considered and chose **no
 - **Open mode** sees everything — it is a trust-the-server mode, and is labeled as one. (The loud "no encryption" banner is only there so you can't switch it on by accident; the banner is *not* protection.)
 - A **leaked pass or secret remains valid for its old identity even after reset**. Reset moves legitimate future service to a replacement identity; retention and stopping the old host path limit what the old capability can still reach.
 - Even when sealed, the relay still sees **routing metadata** — stable labels for which machine and session, plus the timing and size of traffic. It can tell *that* a session exists and *when* it's active, even though it can never read *what* is happening. remote-claw protects the contents, not the existence of a session.
-- The relay can't forge, but it can **drop, delay, reorder, or replay** sealed mail. An honestly timestamped old "online" notice ages out through the current 45-second connected and 30-second reconnecting display states. Current A0 has no future-skew admission check, so its bound is not unconditional; the selected next phase adds that check. Suppression and stale liveness can be *detected*, not *prevented*.
+- The relay can't forge, but it can **drop, delay, reorder, or replay** sealed mail. An honestly timestamped old "online" notice ages out through the current 45-second connected and 30-second reconnecting display states. Current A0 has no future-skew admission check, so its bound is not unconditional; a parked future design could add that check. Suppression and stale liveness can be *detected*, not *prevented*.
 - Your machine stores the AI's transcript **in the clear on its own disk**. If your machine itself is compromised, that transcript is readable no matter what the relay does — remote-claw protects the *connection*, not a hacked computer.
 - **Managed mode** (automatic key delivery) is future work: it first needs a safe way to **pair a new device** — the relay must learn a device's public key without being able to swap in its own. It isn't built yet.
 
@@ -228,7 +228,7 @@ Each frame is sealed with **AES-256-GCM** under a *fresh per-message key*: `K_ms
 
 ### Presence
 
-"This session is online" is a small frame **authenticated under the presence key**, carrying the sender's wall-clock `sent_at` **inside** the sealed payload. The shipped viewer accepts generation-ordered announces, shows one connected while its age is under 45 seconds, then shows reconnecting for 30 seconds before retaining it as disconnected. Because `sent_at` is sealed, the relay can't edit an old announce to refresh it. A correctly timestamped replay therefore ages out, but current A0 does not reject a valid future-skewed timestamp and cannot promise a hard worst-case bound. The selected next phase adds a certified two-sided clock-skew check. Presence is **timestamp-driven**, needing no challenge or round-trip; clock assumptions touch only the online indicator — message confidentiality and message-id replay defense are clock-free.
+"This session is online" is a small frame **authenticated under the presence key**, carrying the sender's wall-clock `sent_at` **inside** the sealed payload. The shipped viewer accepts generation-ordered announces, shows one connected while its age is under 45 seconds, then shows reconnecting for 30 seconds before retaining it as disconnected. Because `sent_at` is sealed, the relay can't edit an old announce to refresh it. A correctly timestamped replay therefore ages out, but current A0 does not reject a valid future-skewed timestamp and cannot promise a hard worst-case bound. A parked future design could add a certified two-sided clock-skew check. Presence is **timestamp-driven**, needing no challenge or round-trip; clock assumptions touch only the online indicator — message confidentiality and message-id replay defense are clock-free.
 
 ### The relay stays blind
 
