@@ -4204,6 +4204,14 @@ the target later isolation/socket work must execute; it does not claim that a pr
 maps those bytes, owns a socket, has an isolated peer, or is current after collection. E1b4 owns those
 claims. The selected release tuple is exact:
 
+The sub-slice gates are asymmetric by design. E1b3a has an exact prerequisite premerge gate but owns
+no subset of the final 106 case IDs: several final IDs have parameterized assertions spanning both
+sub-slices. E1b3a may exercise `measure` and pure serve/parser/default-deny components, but it does not
+complete a socket-backed FD-5 serve. E1b3b owns the first successful inherited-listener serve inside
+the demoted private proof namespace, the complete `gate-case-ids-v1.json`, and the only final E1b3
+release claim. This split is an atomic boundary, not a permission to waive E1b3a behavior from the
+later 106-ID rerun.
+
 ```text
 descriptor = {product:"opencode",access:"server"}
 engineVersion = "1.17.5"
@@ -4220,9 +4228,11 @@ esbuildVersion = 0.28.0
 
 The output is one `0555` executable, LF-normalized, single-file ESM bundle with the exact shebang
 `#!/usr/bin/env node`. The shebang is file-format evidence only and is never the authority execution
-path. It is not a Node SEA. The collector holds both Node and bundle descriptors, invokes the held Node
-as `/proc/self/fd/<nodeFd>` with the only fixed arguments `--input-type=module -`, and supplies the
-held bundle descriptor as standard input. Role, mode, challenge, target, secret, expected digest, and
+path. It is not a Node SEA. The host opens and holds its own exact `/proc/self/exe` only for pre/post
+observation and copies those verified bytes to invocation-bound `/runtime/node`. The target gate
+invokes that exact private-root copy with the only fixed arguments `--input-type=module -` and supplies
+the byte-equal `/runtime/target` bundle copy as standard input. There is no
+caller-supplied Node path or `/proc/self/fd/<nodeFd>` execution arm. Role, mode, challenge, target, secret, expected digest, and
 path never travel on argv or in the ambient environment. Every measurement and serve spawn uses
 `shell:false`, fixed cwd `/`, and a newly constructed null-prototype environment with zero own keys;
 it never spreads or inherits `process.env`. Thus `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`,
@@ -4331,9 +4341,245 @@ stricter public bounds:
 | `D`, measured dispatch table | 4,194,304 |
 | `L`, E1a listener parent | 65,536 |
 
-The exact pre-await aggregate ceiling is therefore 19,070,976 bytes. Each outer length is checked
+The exact seven-view aggregate ceiling is therefore 19,070,976 bytes. Each outer length is checked
 before copying; each nested count is checked against both its fixed maximum and remaining encoded
 bytes before allocation. No untrusted canonical integer selects an array size before those checks.
+
+The executable gate has one additional cycle-free, byte-authoritative platform input. It is not an
+E1a evidence leaf and does not change the seven-view verifier. It records the closed userspace needed
+to run those leaves without exposing the host root:
+
+```text
+PrivateRootRuntimeFileV1 =
+  entryIndex, guestPath, purpose, normalizedMode,
+  fileByteLength, rawFileSha256, entryDigest
+
+PrivateRootElfConsumerV1 =
+  consumerIndex, consumerRole, linkageKind,
+  executableByteLength, executableRawSha256, consumerDigest
+
+PrivateRootElfNeedV1 =
+  needIndex, consumerKind, consumerIndex, consumerDigest,
+  dependencyOrdinal, dependencyKind,
+  neededName, runtimeFileIndex, needDigest
+
+E1b3SeccompPredicateV1 =
+  predicateIndex, argumentIndex, operator, mask, value, predicateDigest
+
+E1b3SeccompRuleV1 =
+  ruleIndex, syscallName, syscallNumber, action, errnoNumber,
+  predicateCount, predicates, ruleDigest
+
+E1b3SeccompPolicyV1 =
+  schemaId, schemaVersion, targetArchitecture, auditArchitecture,
+  x32SyscallBit, defaultAction,
+  ruleCount, rules, ruleVectorDigest
+
+E1b3TargetLandlockRuleV1 =
+  ruleIndex, resourceSelector, allowedAccessFs, ruleDigest
+
+E1b3TargetLandlockRoleV1 =
+  roleIndex, role, ruleCount, rules, roleDigest
+
+E1b3TargetLandlockPolicyV1 =
+  schemaId, schemaVersion, minimumAbi, handledAccessFs,
+  roleCount, roles, roleVectorDigest
+
+E1b3PrivateRootPlatformManifestV1 =
+  schemaId, schemaVersion, targetOperatingSystem, targetArchitecture,
+  runnerUid, runnerGid,
+  gateAbiSchemaId, gateSourceByteLength, gateSourceRawSha256,
+  gateExecutableByteLength, gateExecutableRawSha256,
+  gateCompilerId, gateCompilerVersion, gateBinutilsVersion,
+  gateBuildArgumentVectorDigest,
+  seccompPolicyByteLength, seccompPolicyDigest,
+  targetLandlockPolicyByteLength, targetLandlockPolicyDigest,
+  rootByteLimit, rootInodeLimit, workByteLimit, workInodeLimit,
+  devByteLimit, devInodeLimit,
+  runtimeFileCount, runtimeFiles, runtimeFileVectorDigest,
+  elfConsumerCount, elfConsumers, elfConsumerVectorDigest,
+  elfNeedCount, elfNeeds, elfNeedVectorDigest
+```
+
+The schema ID is `remote-claw/e1b3-private-root-platform-manifest/v1`, version is `1`, operating
+system is `linux`, and architecture is exact `arm64 | x64`. `runnerUid = runnerGid = 60000`; the
+fixed setup demotes to outer UID/GID 60000 and inner unshare maps only that identity to the same
+deliberately nonzero namespace identity. Outer-root-owned protected files are therefore unmapped to
+the target while `/work/operation` alone maps to its owner. The new
+user namespace isolates user/user-session keyrings, while the anonymous-session replacement closes
+the separately inherited session keyring.
+The fixed limits are root `402,653,184` bytes and `4,096` inodes, work `67,108,864` bytes and
+`16,384` inodes, and dev `1,048,576` bytes and `16` inodes. The root and work limits are independent;
+their sum is not presented as one filesystem capacity.
+
+Runtime files are 1–256 unique root-relative absolute `guestPath` values in bytewise order, use only
+purpose `elf_interpreter | shared_library | elf_interpreter_and_shared_library`, mode `0555` for
+either interpreter-bearing purpose and `0444` for a shared-library-only entry, cap one file and the
+aggregate at `67,108,864` bytes, and cap canonical manifest bytes at
+`262,144`. A guest path cannot equal or descend from `/.oldroot,/dev,/io,/proc,/runtime,/tcb,/work`
+and its complete proper-parent vector is derived canonically rather than supplied. Across all entries,
+that vector plus the fixed root directories must fit the 64-directory cap. Inside the sealed root no
+entry is a symlink, alias, hard link, cache, hwcaps alternative, locale, configuration, certificate,
+helper, executable target, or ambient search directory. Each entry digest is:
+
+```text
+digest(str("remote-claw/e1b3-private-root-runtime-file/v1") ||
+  uint(entryIndex) || str(guestPath) || str(purpose) || uint(normalizedMode) ||
+  uint(fileByteLength) || bytes(rawFileSha256))
+```
+
+The runtime-file vector digest uses domain
+`remote-claw/e1b3-private-root-runtime-file-vector/v1`, the count, and the entry digests in index
+order. Root consumers are exact: the arm64 vector is
+`node_release_runtime,opencode_release_native,esbuild_release_native`; the x64 vector is
+`node_ci_runtime,esbuild_ci_native`. `linkageKind` is exact `dynamic | static`, every length/hash
+commits the actual root executable, and each consumer digest is:
+
+```text
+digest(str("remote-claw/e1b3-private-root-elf-consumer/v1") ||
+  uint(consumerIndex) || str(consumerRole) || str(linkageKind) ||
+  uint(executableByteLength) || bytes(executableRawSha256))
+```
+
+The consumer-vector digest uses domain
+`remote-claw/e1b3-private-root-elf-consumer-vector/v1`, the count, and those digests in order.
+A bounded Node-core ELF parser, never `ldd`, validates ELF class, endianness, machine and all
+program/dynamic-table bounds. Each `dynamic` root consumer must have exactly one `PT_INTERP` edge plus
+every ordered recursive `DT_NEEDED` edge; each `static` root consumer must positively have no
+`PT_INTERP`, dynamic section, or needed edge. Gate-init is separately required static. The parser
+rejects `DT_RPATH`, `DT_RUNPATH`, unresolved or duplicate SONAMEs, a cycle, an unlisted `dlopen`
+dependency, and any interpreter/cache/hwcaps/alias fallback.
+
+`consumerKind` is exact `root_consumer | runtime_file`. Its index selects the corresponding consumer
+or runtime-file record and `consumerDigest` must equal that selected record's digest; an edge label
+cannot be transplanted to different executable or DSO bytes. `dependencyKind` is exact
+`interpreter | needed`; an interpreter edge must select `elf_interpreter` or the dual-purpose value,
+while a needed edge must select `shared_library` or the dual-purpose value. The latter closes Ubuntu's
+real case where libc has a `DT_NEEDED` edge to the same SONAME/inode already selected as `PT_INTERP`,
+without duplicating or aliasing loader bytes. The root consumer's unique interpreter is ordinal
+zero and each `needed` ordinal preserves dynamic-table order. `neededName` is empty only for an
+interpreter edge; a needed name must equal the selected ELF's validated `DT_SONAME` when present and
+otherwise its uniquely resolved basename. Every runtime-file entry must be reachable from at least
+one exact root-consumer closure, so an unused file cannot widen the sealed root or Landlock set.
+`elfConsumerCount` is exactly three on arm64 and two on x64; `elfNeedCount` is 1–4,096, dense and
+ordered by root-consumer traversal followed by runtime-file index and each consumer's dependency
+order. `needDigest` and the vector digest use the exact domains
+`remote-claw/e1b3-private-root-elf-need/v1` and
+`remote-claw/e1b3-private-root-elf-need-vector/v1`, respectively, and encode every displayed field.
+Successful matching-host build/capture/measure/serve runs establish that the closed manifest also
+covers runtime loads; a missing need fails rather than exposing another host file.
+
+`gateAbiSchemaId` is `remote-claw/e1b3-private-root-gate-init/v1`. The gate is a static,
+libc-independent executable built from one checked-in C source for both architectures. Its exact
+source and two binary tuples are retained as build-toolchain items below.
+
+The seccomp policy schema ID is `remote-claw/e1b3-seccomp-policy/v1`, version is `1`, architecture is
+exact `arm64 | x64`, and `auditArchitecture` is respectively `0xc00000b7 | 0xc000003e`.
+`x32SyscallBit` is zero on arm64 and `0x40000000` on x64; the filter kills on an audit-architecture
+mismatch and, only on x64, on that bit before rule evaluation. `defaultAction` is exact `allow`.
+Predicate operators are exact `eq | masked_eq | masked_zero | masked_nonzero`; arguments are 0–5 and
+`mask`/`value` are canonical nonnegative safe integers. A masked predicate evaluates the complete
+64-bit syscall argument. Actions are exact `allow | errno | kill_process`; `errnoNumber` is zero
+except exact Linux `EPERM=1` or `ENOSYS=38`. Predicates are ANDed in dense index order; rules use
+first-match order, have unique `(syscallNumber,predicate-vector)` coordinates, and end each filtered
+socket syscall with its unconditional `EPERM` rule. The digests are exact:
+
+```text
+predicateDigest = digest(
+  str("remote-claw/e1b3-seccomp-predicate/v1") ||
+  uint(predicateIndex) || uint(argumentIndex) || str(operator) ||
+  uint(mask) || uint(value))
+ruleDigest = digest(
+  str("remote-claw/e1b3-seccomp-rule/v1") ||
+  uint(ruleIndex) || str(syscallName) || uint(syscallNumber) ||
+  str(action) || uint(errnoNumber) || uint(predicateCount) ||
+  each bytes(predicateDigest))
+ruleVectorDigest = digest(
+  str("remote-claw/e1b3-seccomp-rule-vector/v1") ||
+  uint(ruleCount) || each bytes(ruleDigest))
+```
+
+Canonical policy bytes encode every displayed policy/rule/predicate field in that order using the
+same `str`, `uint`, and decoded-32-byte `bytes` primitives. The exact rule inventory is 51
+rules on arm64 and 52 on x64, in this order:
+
+1. Thirteen `socket` allows followed by one unconditional deny. Allowed forms admit only optional
+   `SOCK_CLOEXEC|SOCK_NONBLOCK` plus: AF_UNIX stream/datagram/seqpacket with protocol zero;
+   AF_INET/AF_INET6 stream with protocol zero or TCP and datagram with protocol zero or UDP; and
+   AF_NETLINK raw/datagram with exact NETLINK_ROUTE. A `masked_zero` predicate rejects every unknown
+   type/flag bit.
+2. Three `socketpair` allows for AF_UNIX stream/datagram/seqpacket, protocol zero and the same optional
+   flags, followed by one unconditional deny.
+3. Unconditional `clone3 -> ENOSYS`; legacy `clone -> EPERM` only when its flags have any exact
+   `CLONE_NEWUSER|NEWNS|NEWNET|NEWIPC|NEWPID|NEWCGROUP|NEWUTS|NEWTIME` bit; unconditional
+   `io_uring_setup -> ENOSYS`; and unconditional `io_uring_enter | io_uring_register -> EPERM`.
+4. Unconditional `EPERM`, in displayed order, for
+   `keyctl,add_key,request_key,unshare,setns,mount,umount2,pivot_root,chroot,open_tree,move_mount,`
+   `fsopen,fsconfig,fsmount,mount_setattr,open_by_handle_at,name_to_handle_at,mknod,mknodat,`
+   `pidfd_getfd,ptrace,process_vm_readv,process_vm_writev,bpf,perf_event_open,userfaultfd,`
+   `memfd_create,execveat,capset`; arm64 omits only nonexistent legacy `mknod`.
+
+Syscall numbers, socket/domain/protocol/type constants, allowed flag mask, and the legacy-clone mask
+are encoded as their target UAPI integers, not inferred from labels. Ordinary `execve`, the three
+Landlock syscalls, and further seccomp restriction fall through to allow.
+
+The target-only filesystem policy schema ID is
+`remote-claw/e1b3-target-landlock-policy/v1`, version is `1`, `minimumAbi=3`, and
+`handledAccessFs=32767`: every ABI-1-through-3 right from `EXECUTE` through `TRUNCATE` is handled.
+`allowedAccessFs` is the canonical nonnegative safe-integer mask. Resource selectors are the exact closed set
+`runner_node | operation_target | selected_interpreter_set | selected_dso_set | dev_null |
+dev_urandom | own_proc | operation_work`. Their exact masks are executable `5`, read-only `4`, null
+read/write `6`, own-proc read/read-dir `12`, and operation-work
+read/write/read-dir/remove-dir/remove-file/make-dir/make-reg/refer/truncate `25022`. The five dense
+role vectors are exact:
+
+```text
+build:
+  runner_node=5, operation_target=5, selected_interpreter_set=5,
+  selected_dso_set=4, dev_null=6, dev_urandom=4, own_proc=12, operation_work=25022
+capture:
+  operation_target=5, selected_interpreter_set=5, selected_dso_set=4,
+  dev_null=6, dev_urandom=4, own_proc=12, operation_work=25022
+package_measure | measure | serve, each as its own role vector:
+  runner_node=5, operation_target=4, selected_interpreter_set=5,
+  selected_dso_set=4, dev_null=6, dev_urandom=4, own_proc=12, operation_work=25022
+```
+
+Within each role, entries retain the displayed order. The selected interpreter/DSO sets are the exact
+transitive closures of only that role's Node/esbuild or OpenCode consumers; the DSO set excludes an
+inode already in the interpreter set, so a dual-purpose loader receives the single stronger mask 5.
+An empty set adds no rule.
+No rule admits an unreferenced platform file. Landlock digests are exact:
+
+```text
+ruleDigest = digest(
+  str("remote-claw/e1b3-target-landlock-rule/v1") ||
+  uint(ruleIndex) || str(resourceSelector) || uint(allowedAccessFs))
+roleDigest = digest(
+  str("remote-claw/e1b3-target-landlock-role/v1") ||
+  uint(roleIndex) || str(role) || uint(ruleCount) || each bytes(ruleDigest))
+roleVectorDigest = digest(
+  str("remote-claw/e1b3-target-landlock-role-vector/v1") ||
+  uint(roleCount) || each bytes(roleDigest))
+```
+
+Canonical Landlock bytes encode every displayed field in order. Each complete policy is nonempty and
+at most 65,536 bytes; its manifest retains the exact length and SHA-256 of those canonical bytes. The
+gate binary carries the two complete byte strings in unique allocated, non-writable, non-executable
+ELF sections named `.remote_claw.seccomp` and `.remote_claw.landlock`. Gate startup
+parses those same embedded seccomp bytes to construct the installed BPF, and target mode parses those
+same embedded Landlock bytes to select rights and the fixed paths chosen by invocation fields plus
+platform-manifest guest-path records; there is no second policy
+table. The build gate independently extracts both sections, strictly decodes/re-encodes them, compares
+their lengths/digests with the platform manifest and their complete bytes with separately generated
+expected records, and verifies the behavioral matrix. A missing/duplicate/writable section,
+unconsumed field, numeric/label mismatch, or source path that constructs enforcement outside those
+parsers rejects.
+
+The per-platform manifest binds the matching gate binary, both complete policies, and complete
+runtime-file/ELF closure. Its canonical bytes encode every displayed field and nested record in order.
+The release arm64 manifest is additionally committed by `S`; both platform manifests are committed by
+`B`, so no fixture-lock-only runtime substitution can preserve `N/X/B/S/R/D/L`.
 
 **Generated OpenAPI artifact `S`.** The generation probe retains the exact successful `GET /doc`
 response body; it does not parse and reserialize JSON. The selected record is:
@@ -4342,6 +4588,7 @@ response body; it does not parse and reserialize JSON. The selected record is:
 NativeGeneratedOpenApiSurfaceV1 =
   schemaId, schemaVersion, descriptor, engineVersion,
   targetOperatingSystem, targetArchitecture,
+  privateRootPlatformManifestByteLength, privateRootPlatformManifestDigest,
   nativeExecutableManifestArtifactDigest, nativeExecutableRawSha256,
   captureSchemaId, captureRoute, mediaType, openApiVersion,
   documentByteLength, documentRawSha256, documentBytes,
@@ -4357,7 +4604,10 @@ The literals are `remote-claw/native-generated-openapi-surface/v1`, version `1`,
 `remote-claw/opencode-openapi-doc-capture/v1`, route `/doc`, and media type `application/json`.
 Canonical `S` encodes those fields in the displayed order; descriptor encodes as
 `str("opencode") || str("server")`, digests as decoded `bytes`, `operationId` with `optionalStr`, and
-each operation in vector order. An operation digest is:
+each operation in vector order. The platform-manifest length is positive and at most `262,144`; its
+digest is the exact arm64 manifest's artifact SHA-256. Construction computes that manifest before
+`S`; final verification requires its complete canonical bytes to equal `B` toolchain item 11, so this
+one-way `S -> B.item[11]` link introduces no cycle. An operation digest is:
 
 ```text
 digest(
@@ -4368,9 +4618,14 @@ digest(
 )
 ```
 
-`operationVectorDigest` is
-`digest(str("remote-claw/native-generated-openapi-operation-vector/v1") || uint(operationCount) ||
-each bytes(operationDigest))`. Operations are ordered by bytewise UTF-8 path and then the fixed
+`operationVectorDigest` is:
+
+```text
+digest(str("remote-claw/native-generated-openapi-operation-vector/v1") ||
+  uint(operationCount) || each bytes(operationDigest))
+```
+
+Operations are ordered by bytewise UTF-8 path and then the fixed
 `GET,PUT,POST,DELETE,PATCH,OPTIONS,HEAD,TRACE` method order, and `operationIndex` equals vector
 position. Only exact lowercase OpenAPI path-item keys `get,put,post,delete,patch,options,head,trace`
 become operations; `nativeMethod` is their listed uppercase spelling. Each zero-based
@@ -4461,13 +4716,23 @@ NativeListenerBuildRouteRegistryV1 =
 
 Canonical `R` encodes those fields in the displayed order and begins with
 `str("remote-claw/native-listener-build-route-registry/v1") || uint(1)`. Every one of `S`'s operations
-appears exactly once, in `S` order, in a disposition arm encoded as either
-`uint(operationIndex) || bytes(operationDigest) || str("exposed") || uint(entryIndex)` or
-`uint(operationIndex) || bytes(operationDigest) || str("not_front_door_exposed") ||
-str("not_selected_e1c_surface")`. `dispositionCount = S.operationCount`; each disposition's operation
-index equals vector position and its digest equals that `S` item. `dispositionVectorDigest` is
-`digest(str("remote-claw/native-listener-surface-disposition-vector/v1") ||
-uint(dispositionCount) || each complete encoded arm in vector order)`.
+appears exactly once, in `S` order, in one of these disposition arms:
+
+```text
+uint(operationIndex) || bytes(operationDigest) ||
+  str("exposed") || uint(entryIndex)
+uint(operationIndex) || bytes(operationDigest) ||
+  str("not_front_door_exposed") || str("not_selected_e1c_surface")
+```
+
+`dispositionCount = S.operationCount`; each disposition's operation index equals vector position and
+its digest equals that `S` item. `dispositionVectorDigest` is:
+
+```text
+digest(str("remote-claw/native-listener-surface-disposition-vector/v1") ||
+  uint(dispositionCount) || each complete encoded arm in vector order)
+```
+
 An exposed operation resolves to exactly one `source:"openapi"` entry; unexposed operations resolve
 to none. Wrapper entries use only the closed wrapper inventory and never impersonate an OpenAPI
 operation.
@@ -4507,8 +4772,9 @@ authorization symbols by role =
 Those IDs name the following exact parsers rather than implementation labels. The Node HTTP server is
 created with `insecureHTTPParser:false`, `maxHeaderSize:16384`, `joinDuplicateHeaders:false`, and
 `requestTimeout:30000`, then sets `server.maxHeadersCount = 0` so Node does not silently discard a
-header before application code checks and caps the complete `rawHeaders` vector at eight. Application
-code performs the exact Host check below. Only HTTP/1.1 origin-form requests are accepted. The raw
+header before application code checks and caps the complete `rawHeaders` vector at eight header pairs
+(`rawHeaders.length <= 16`, with an even alternating name/value length). Application code performs the
+exact Host check below. Only HTTP/1.1 origin-form requests are accepted. The raw
 target is 1–4,096 ASCII bytes and must begin with `/`.
 Absolute/authority/asterisk form, a fragment, any `?` (including a bare one), percent, backslash,
 non-ASCII or control byte, `//`, a trailing slash other than `/`, and exact `.` or `..` components reject. Method is
@@ -4524,10 +4790,20 @@ ASCII alphanumeric bytes. It is emitted unchanged; percent aliases, empty captur
 suffix, and another component reject. An otherwise well-formed path has components matching
 `[A-Za-z0-9._~-]+`; if it matches no positive parser it is eligible only for the role's HTTP fallback.
 
-Before semantic header parsing, the raw header vector is capped by the server bounds and rejects two
-names equal under ASCII case folding, obs-fold, leading/trailing value SP or HTAB, NUL/CR/LF in a
-value, and every name outside `host`, `connection`, `content-length`, `content-type`, and
-`x-opencode-directory`. There is exactly one `host` equal byte-for-byte to
+Before Node can normalize header whitespace, a bounded pre-parser observer installed first on each
+accepted socket captures exactly one request line and header block through the first `\r\n\r\n`.
+It retains at most 16,384 bytes, never consumes or rewrites socket data, admits no pipelined second
+request, and correlates exactly one captured block with exactly one `IncomingMessage` on that socket.
+Missing, late, duplicate, truncated, oversized, or parser-disagreeing capture rejects. Each raw header
+line has exactly one framing SP after `:`; zero SP, additional leading SP/HTAB, or trailing SP/HTAB
+rejects. That single separator is framing rather than part of the field value. This raw-octet check is
+required because Node 22 trims surrounding OWS even in `rawHeaders`, so `rawHeaders` alone cannot prove
+the selected wire grammar.
+
+The correlated raw header block and the capped eight-pair `rawHeaders` vector then reject two names
+equal under ASCII case folding, obs-fold, NUL/CR/LF in a value, and every name outside `host`,
+`connection`, `content-length`, `content-type`, and `x-opencode-directory`. There is exactly one
+`host` equal byte-for-byte to
 `127.0.0.1:<the inherited listener's decimal port>` and exactly one `connection: close`;
 `transfer-encoding`, `expect`, proxy/auth/cookie, forwarding, range, conditional, and upgrade headers
 never enter an ordinary request. Header names are then lowercased for the canonical semantic vector;
@@ -4628,9 +4904,14 @@ bytes with backpressure until upstream EOF; it does not parse, replay, merge, or
 is no post-header retry: an upstream error after stream headers destroys both directions. Client
 disconnect aborts the one upstream request, and every terminal path destroys or closes both sides.
 
-`orderedBuildRouteEntryVectorDigest` is
-`digest(str("remote-claw/native-listener-build-route-vector/v1") || uint(entryCount) || each
-bytes(buildRouteEntryDigest))`. The vector concatenates kinds in exact
+`orderedBuildRouteEntryVectorDigest` is:
+
+```text
+digest(str("remote-claw/native-listener-build-route-vector/v1") ||
+  uint(entryCount) || each bytes(buildRouteEntryDigest))
+```
+
+The vector concatenates kinds in exact
 `tui,binding_adapter,server_creation,observer` order and, within a kind, applies the already frozen
 non-fallback-before-fallback, priority-descending, registration-order-ascending traversal. A remaining
 tie rejects. Version one requires exactly the 14 rows above. Registration order is globally unique and dense `0..entryCount-1`; complete match
@@ -4640,48 +4921,59 @@ most 2,097,152 UTF-8 bytes, methods 1–32 bytes, paths 1–4,095 bytes, symbol 
 IDs 1–1,024 bytes.
 
 **Build-closure artifact `B`.** `packages/opencode-front-door` builds with exact
-`esbuild@0.28.0` options: entry point `src/front-door.ts`, `bundle:true`, `platform:"node"`,
-`format:"esm"`, `target:"node22"`, tree shaking enabled, `metafile:true`, `sourcemap:false`,
-`legalComments:"none"`, `charset:"utf8"`, `write:false`, no minification, output logical path
-`front-door.mjs`, and the fixed LF/shebang. The only plugin is the retained
+`esbuild@0.28.0` options: `entryPoints:["src/front-door.ts"]`, `bundle:true`, `platform:"node"`,
+`format:"esm"`, `target:"node22"`, `treeShaking:true`, `metafile:true`, `sourcemap:false`,
+`legalComments:"none"`, `charset:"utf8"`, `write:false`, `minify:false`,
+`outfile:"front-door.mjs"`, `banner:{js:"#!/usr/bin/env node"}`, `absWorkingDir:"/"`, and
+`logLevel:"silent"`. The only plugin is the retained
 `remote-claw-snapshot-v1` resolver/loader below. The normalized metafile contains only
 package-relative POSIX logical IDs; absolute paths, `..`, timestamps, temp roots, undeclared external
-packages, and platform-dependent output text reject. Two builds from independently collected source
-snapshots must produce byte-identical bundle and normalized-metafile bytes.
+packages, warnings, a CR byte, and platform-dependent output text reject. Two builds from independently
+collected source snapshots must produce byte-identical bundle and normalized-metafile bytes.
 
-Each clean build runs in a dedicated child under the same held Node/startup-hook exclusion rules as
-measurement. It has `shell:false`, cwd `/`, fixed `--input-type=module -` argv, and no inherited
+Each clean build runs in a dedicated child under the same host-held-source/private-root-copy Node
+observation and startup-hook exclusion rules as measurement. It has `shell:false`, cwd `/`, fixed
+`--input-type=module -` argv, and no inherited
 descriptor other than the exact stdio/FD map below. The build driver itself is held toolchain item 7
 and is standard input; held toolchain item 3 (`esbuild/lib/main.js`) is FD 3; a bounded canonical
-source snapshot is FD 4; and the held platform-native esbuild ELF is FD 5. Standard output is the
-bounded build result and stderr must be empty on success. The child environment is a new
-null-prototype record with exactly
-`ESBUILD_BINARY_PATH=/proc/self/fd/5` and `ESBUILD_WORKER_THREADS=0`, in that insertion order, and no
-other key. Before using either value the driver requires that exact two-entry environment.
+source snapshot is FD 4; there is no FD 5. The platform-native esbuild ELF is the immutable,
+manifest-bound `/runtime/target` file in the sealed private root. Standard output is the bounded build
+result and stderr must be empty on success. The child environment is a new null-prototype record with
+exactly `ESBUILD_BINARY_PATH=/runtime/target` and `ESBUILD_WORKER_THREADS=0`, in that insertion order,
+and no other key. Before using either value the driver requires that exact two-entry environment.
 
-The build runner's private stable-file holder opens items 3 and 7 once with Linux
-`O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK`, requires a linked regular file of at most 1 MiB, performs
-two complete positional SHA-256/EOF passes with unchanged full stat before the child, lends the same
-descriptor as FD 3 or standard input, and repeats both passes and stat after reap. All four hashes,
-lengths, and stats must match the corresponding file item. It closes exactly once on every exit and
-does not enter a production barrel. The held Node executable is checked before/after the same child
-against item 0 or 1 under the executable holder's 256 MiB rules.
+The fixed outer caller opens linked source item 7 once with Linux
+`O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK`, performs two complete positional SHA-256/EOF passes before
+the host call and two afterward, and separately creates/verifies the read-only link-count-zero FD-3
+capsule described below. Host mode never reopens item 7 by path: it performs its own pre/post two-pass
+observations only on that capsule. Host mode separately opens linked source item 3 with the same flags
+and four-pass rules, and holds/checks its own `/proc/self/exe` Node source against item 0 or 1 under the
+256 MiB rules. Every applicable original/capsule hash, length, stat and expected item must match. The
+host copies verified bytes into authenticated internal capsules/data; no source descriptor crosses
+setup, which closes every host FD before gate-init.
+
+PID 1 independently opens and hashes byte-equal `/runtime/program.mjs` and `/runtime/node` plus copied
+item-3 data, then creates fresh private descriptions for inner standard input and FD 3. It repeats
+those private observations after child reap. Source and private descriptions deliberately do not
+share identity or offsets; equality is by the two authenticated byte tuples and invocation file
+vector. Each mode closes its own descriptions exactly once on every exit, and no holder enters a
+production barrel.
 
 The driver reads the exact held JS API bytes from numeric FD 3 and executes those bytes directly with
 Node's `vm.compileFunction`; it never imports or resolves the ambient `esbuild` package. The synthetic
 CommonJS filename/directory are exactly `/remote-claw/esbuild/lib/main.js` and
 `/remote-claw/esbuild/lib`. Its injected `require` accepts only exact unprefixed Node builtins
 `child_process,crypto,fs,os,path,tty`; `require.resolve`, `pnpapi`, `worker_threads`, relative,
-absolute, package, and every other request throw. Item 3's held pre/post stable-file length/hash must
-equal that file item's content fields. Because worker threads are disabled, the JS API starts only the
-native service at `/proc/self/fd/5`. The build child holds FD 5 until that service terminates; path
-resolution at the service's `execve` selects that descriptor's executable image, after which normal
-close-on-exec semantics may close FD 5 inside the service. The service is not required to retain or
-observe the descriptor after successful exec. The outer holder remains open throughout and its
-pre/post role-neutral executable observation must equal the sole selected-entry proof nested in item
-4 on arm64 or item 5 on x64. That proof is the exact `bin/esbuild` entry of the same canonical
-native-package tree, so the package-tree digest binds both the selected path and bytes actually
-executed; it is never compared to the package-tree byte length or digest.
+absolute, package, and every other request throw. Item 3's host source and PID-1 private-copy pre/post
+length/hash must each equal that file item's content fields. Because worker threads are disabled, the JS API starts only the
+native service at exact `/runtime/target`. That regular file was copied from the host's held native
+capsule, is committed by the authenticated invocation and platform manifests, and is read-only before
+the child can execute. The target Landlock arm permits execution of that exact inode and no writable
+work file. The host holder remains open throughout and its pre/post role-neutral executable
+observation must equal the sole selected-entry proof nested in item 4 on arm64 or item 5 on x64. That
+proof is the exact `bin/esbuild` entry of the same canonical native-package tree, so the package-tree
+digest binds both the selected source bytes and bytes copied to the executable target; it is never
+compared to the package-tree byte length or digest.
 
 Before spawning, the parent opens every admitted non-builtin front-door module without following the
 final symlink, performs two full positional reads with unchanged regular-file identity/size/mode,
@@ -4789,7 +5081,7 @@ exactly to esbuild loader as `text/typescript → ts`, `text/javascript → js`,
 front-door builtin allowlist is exactly `node:fs,node:http,node:net`. Each used builtin becomes one
 empty `runtime_builtin` module in `B`, and an allowed-but-unused builtin creates no module.
 
-There are exactly eight toolchain items, with `itemIndex` equal to vector position:
+There are exactly thirteen toolchain items, with `itemIndex` equal to vector position:
 
 | Index | Role | Version | Platform | Content kind |
 | ---: | --- | --- | --- | --- |
@@ -4801,8 +5093,28 @@ There are exactly eight toolchain items, with `itemIndex` equal to vector positi
 | 5 | `esbuild_ci_native` | `0.28.0` | `linux-x64` | `package_tree` |
 | 6 | `dependency_lock` | `pnpm-lock-v9.0` | `platform-independent` | `file` |
 | 7 | `build_driver` | `remote-claw/opencode-front-door-build/v1` | `platform-independent` | `file` |
+| 8 | `private_root_gate_source` | `remote-claw/e1b3-private-root-gate-init/v1` | `platform-independent` | `file` |
+| 9 | `private_root_gate_release` | `remote-claw/e1b3-private-root-gate-init/v1` | `linux-arm64` | `file` |
+| 10 | `private_root_gate_ci` | `remote-claw/e1b3-private-root-gate-init/v1` | `linux-x64` | `file` |
+| 11 | `private_root_release_platform` | `ubuntu-24.04` | `linux-arm64` | `runtime_manifest` |
+| 12 | `private_root_ci_platform` | `ubuntu-24.04` | `linux-x64` | `runtime_manifest` |
 
-For `file`, `contentByteLength` and `contentSha256` cover the exact file. For `package_tree`, they
+For `file`, `contentByteLength` and `contentSha256` cover the exact file. For `runtime_manifest`, they
+cover the complete canonical `E1b3PrivateRootPlatformManifestV1` bytes. Items 8–10 are nonempty,
+mode-normalized `0444,0555,0555`; item 8 is fatal-UTF-8 LF-only C source and at most `1,048,576`
+bytes, while each static ELF is at most `1,048,576` bytes. The two manifests' source and gate tuples
+must equal items 8 and 9 or 10 item-for-item. Arm consumer 0 equals item 0's top-level file
+length/hash, consumer 1 equals `N`'s raw native file length/hash, and consumer 2 equals item 4's sole
+`selectedExecutableEntries[0]` length/hash. X64 consumer 0 equals item 1's top-level file tuple and
+consumer 1 equals item 5's sole selected-executable tuple. The corresponding linkage facts and every
+edge must rederive from those exact bytes. No selected
+executable entry is nested in items 8–12 because the exact file or manifest itself is already the
+selected content. Item 6 is specifically the
+whole regular file at repository-relative path `pnpm-lock.yaml`: from the held
+`packages/opencode-front-door` package-root descriptor the custodian opens two exact no-follow parent
+directory components and then `pnpm-lock.yaml` with `O_NOFOLLOW`, and two complete stable reads must
+match before any build target executes. It is never a caller-selected lock path or a parsed subset of
+the lock. For `package_tree`, the content fields
 cover these exact canonical tree bytes:
 
 ```text
@@ -4814,33 +5126,195 @@ for each entry in bytewise UTF-8 relative-path order:
 
 Item 3 is the exact real locked `esbuild/lib/main.js` regular file before any execution and item 7 is
 exact `packages/opencode-front-door/build/build-driver.mjs`; their file content fields are the held
-bytes supplied on FD 3 and standard input, respectively. They are platform-independent because item
-3 excludes the host-materialized `esbuild/bin/esbuild`, which is neither hashed into item 3 nor path
-resolved at runtime. Items 4 and 5 each have `selectedExecutableEntryCount = 1`; their sole entry has exact
+bytes supplied on FD 3 and standard input, respectively. Item 7 is nonempty, fatal-UTF-8, contains no
+NUL/CR, and is at most 1,048,576 bytes; those same exact bytes contain PID-1 custodian and inner-driver
+modes without a loader or unmeasured wrapper. They are platform-independent because item 3 excludes
+the host-materialized `esbuild/bin/esbuild`, which is neither hashed into item 3 nor path resolved at
+runtime. Items 4 and 5 each have `selectedExecutableEntryCount = 1`; their sole entry has exact
 `relativePosixPath = "bin/esbuild"`, `normalizedMode = 365` (`0555`), and the length/hash of that
 regular file. The tuple must equal the unique same-path entry in the item's canonical package-tree
 bytes. Every other item has count zero and an empty entry vector. The retained item therefore binds
 the whole native package tree while the nested proof separately and unambiguously selects the ELF
 that the build holds and executes.
 
-The pnpm root is the real package root selected by the exact lock; release/CI native roots are the
+The new private package declares these exact development dependencies and no runtime dependency:
+`@biomejs/biome: "2.4.16"`, `@types/node: "25.9.2"`, `esbuild: "0.28.0"`, `pnpm: "10.29.1"`,
+`typescript: "6.0.3"`, and `vitest: "4.1.8"`. The pnpm and esbuild roots are those direct package roots
+selected by the exact lock, never an ambient transitive copy or whichever global CLI happens to be on `PATH`.
+The gate separately requires the invoking pnpm CLI to report exact `10.29.1`. Release/CI native roots are the
 matching real `@esbuild/linux-arm64` and `@esbuild/linux-x64` package roots. Front-door source modules
 are separately retained in the module vector, and `node_modules` is never an implicit recipe or
 source subtree.
 
-The matching arm64 generation host recomputes items 0, 2–4, 6, and 7. The x64 CI host recomputes
-items 1–3 and 5–7 and requires its output bytes to match the retained arm64 output; it verifies the
-unchanged arm64 item coordinates/integrity against the lock and retained generation record but does
-not claim to have executed an absent arm64 binary. Any arm64 item/pin change therefore requires a new
-matching-host candidate rather than offline x64 self-consistency.
+“Selected by the exact lock” is an executable relation, not a version label. Item 6 is nonempty and at
+most 4,194,304 bytes. Both the production builder and Node-core-only independent verifier fatal-decode
+the copied whole file as UTF-8, require LF line endings and final LF, and use the same closed
+line-oriented pnpm-lock-v9 projection parser—not a platform YAML library. Its accepted lexical grammar
+is exact:
+
+```text
+document       = (block-map | block-sequence | blank)* EOF
+blank          = LF
+indent         = 0..64 ASCII spaces, with an even count
+block-map      = indent key ":" (LF | " " scalar LF)
+block-sequence = indent "- " scalar LF
+key            = plain-key | single-quoted
+scalar         = plain-scalar | single-quoted | flow-map | flow-sequence
+single-quoted  = "'" (printable ASCII except "'" | "''")* "'"
+flow-map       = "{}" | "{" flow-pair (", " flow-pair)* "}"
+flow-sequence  = "[]" | "[" flow-atom (", " flow-atom)* "]"
+flow-pair      = key ": " flow-atom
+flow-atom      = flow-plain | single-quoted
+```
+
+A plain key/scalar is 1–4,096 printable ASCII bytes, has no leading/trailing space or `#`, and may not
+begin with any byte in this exact set:
+
+```text
+- ? : , [ ] { } # & * ! | > ' " % @ `
+```
+
+A plain key has no `": "`; `flow-plain` additionally has no comma, bracket, or brace. Single quotes
+decode only the exact doubled-quote escape. Double quotes,
+backslash escapes, tabs, NUL/CR, comments, multiline/block values, nested flow values, tags,
+aliases/anchors, merge/explicit-complex keys, and multiple
+documents reject. Indentation forms a stack: a child is exactly two spaces deeper than its parent;
+only an empty-valued map entry may own a child; a node is exclusively map or scalar-sequence; and every
+decoded mapping key is unique within its node. Blank lines carry no indentation or spaces. The root is
+a map. Depth over 32, more than 65,536 entries in one map/sequence, or more than 2,097,152 decoded
+scalar bytes rejects before allocation from a declared or observed count. Tests feed every accepted
+lexical arm and every rejection boundary to both implementations and require an identical selected
+projection.
+
+The root must contain unique exact `lockfileVersion: '9.0'`, `importers`, `packages`, and `snapshots`
+entries. Root `overrides` is required to be exactly the two unrelated current entries
+`postcss@<8.5.10: '>=8.5.10'` and
+`'@astryxdesign/core': file:./vendor/astryxdesign-core-0.1.8.tgz`; `patchedDependencies` is absent.
+The `importers` map must contain exactly one entry with key
+`packages/opencode-front-door`; other unique monorepo importer keys and their closed subtrees are
+permitted and do not participate in this projection. That selected importer's `devDependencies` must
+contain the six exact
+package/specifier pairs above; in particular `pnpm` and `esbuild` both have identical exact specifier
+and resolved version `10.29.1` and `0.28.0`, respectively, with no alias, peer suffix, workspace,
+link/file/git/tarball, patch, catalog, or alternate selector.
+
+The resolver follows those exact importer references to unique canonical `packages` and `snapshots`
+keys for `pnpm@10.29.1` and `esbuild@0.28.0`. Each matching `packages` record has exactly one
+`resolution.integrity` field shaped `sha512-` plus canonical base64 decoding to 64 bytes. The esbuild
+snapshot's unique `optionalDependencies` entries map `@esbuild/linux-arm64` and
+`@esbuild/linux-x64` to exact `0.28.0`; each target has one matching exact-version package record with
+the same integrity rule and one matching snapshot record with exact `optional: true`. Snapshot records
+do not carry or inherit an integrity field. The exact root-override allowlist above and absent
+`patchedDependencies` close alternate selection for these four packages. From the held repository root,
+the four exact no-follow package roots are:
+
+```text
+node_modules/.pnpm/pnpm@10.29.1/node_modules/pnpm
+node_modules/.pnpm/esbuild@0.28.0/node_modules/esbuild
+node_modules/.pnpm/@esbuild+linux-arm64@0.28.0/node_modules/@esbuild/linux-arm64
+node_modules/.pnpm/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64
+```
+
+Every component is opened/verified without following a symlink; the platform opens only its matching
+native root. The resolver verifies the held package root's exact-own `package.json` name/version and
+then computes the item-2/3/4-or-5 bytes from that same root. A package found through `PATH`, Node
+resolution, another importer, another same-version store entry, or a caller path cannot satisfy the
+edge. Both implementations also derive these bounded ephemeral bytes from the copied lock:
+
+```text
+str("remote-claw/front-door-build-lock-edge-projection/v1") || uint(1) ||
+str("packages/opencode-front-door") || uint(6) ||
+for @biomejs/biome, @types/node, esbuild, pnpm, typescript, vitest in that order:
+  str(packageName) || str(exactSpecifier) || str(exactResolvedVersion) ||
+uint(4) ||
+for pnpm@10.29.1, esbuild@0.28.0,
+    @esbuild/linux-arm64@0.28.0, @esbuild/linux-x64@0.28.0 in that order:
+  str(exactPackageKey) || str(resolutionIntegrity) ||
+str("pnpm@10.29.1") || str("esbuild@0.28.0") ||
+uint(2) ||
+str("@esbuild/linux-arm64") || str("0.28.0") ||
+str("@esbuild/linux-x64") || str("0.28.0") ||
+str("@esbuild/linux-arm64@0.28.0") || uint(1) ||
+str("@esbuild/linux-x64@0.28.0") || uint(1)
+```
+
+For all six dependencies, `exactSpecifier` and `exactResolvedVersion` are the literal decoded importer
+`specifier` and `version` scalars; the latter includes its complete peer suffix when pnpm emits one,
+while its resolved base package key must still equal the exact declared version. Pnpm and esbuild have
+no peer suffix as required above. The projection is at most 4,096 bytes, is not an artifact or extra
+build input, and exists only as an authenticated transport/result field: item 6 binds the complete
+lock. The independent verifier recomputes it from returned lock bytes and requires exact equality with
+the host-derived returned projection before `B` construction.
+
+The gate source is compiled from an exact three-key environment in insertion order:
+`PATH=/usr/bin`, `LC_ALL=C`, and `SOURCE_DATE_EPOCH=0`, with no other key. The compiler path itself is
+absolute; the fixed PATH exists only for that pinned GCC driver to resolve its target assembler and
+linker under `/usr/bin`. Tests require the exact environment and prove an inherited or substituted
+tool cannot influence either output. On arm64, Ubuntu package `gcc-13-aarch64-linux-gnu` is exactly
+`13.3.0-6ubuntu2~24.04.1` and cross package `gcc-13-x86-64-linux-gnu` is exactly
+`13.3.0-6ubuntu2~24.04.1cross1`; the x64 job requires the symmetric native/cross release assignment.
+Each platform manifest records its native non-cross release, while the opposite-architecture rebuild
+is an independently required gate fact. Target binutils packages are exactly `2.42-4ubuntu2.10`. Each compile runs from the fixed
+package build directory through the verified absolute compiler path and this exact common argv tail,
+with only compiler and output filename selected by the closed architecture table:
+
+```text
+-std=c11 -Os -Wall -Wextra -Werror
+-nostdlib -nostartfiles -nodefaultlibs -static -no-pie -fno-pie
+-ffreestanding -fno-builtin -fno-ident -fno-stack-protector
+-fno-asynchronous-unwind-tables -fno-unwind-tables
+-Wl,--build-id=none -Wl,--no-undefined -Wl,-z,noexecstack -Wl,-e,_start
+-o private-root-gate-init-linux-<arch> private-root-gate-init.c
+```
+
+The source supplies custom `_start` and raw architecture-specific syscall shims and may leave no
+undefined symbol or libgcc reference. Post-link ELF validation requires static non-PIE `ET_EXEC`, the
+fixed `_start` entry, no `PT_INTERP`, dynamic section, `DT_NEEDED`, build ID, `.comment`, writable-
+executable segment or executable stack, and exactly one correctly flagged section of each frozen
+policy name above. `gateCompilerId` is exact
+`ubuntu:gcc-13-aarch64-linux-gnu | ubuntu:gcc-13-x86-64-linux-gnu`; the version fields are the exact
+matching-native package and binutils releases above. The per-platform digest is:
+
+```text
+gateBuildArgumentVectorDigest = digest(
+  str("remote-claw/e1b3-private-root-gate-build-argv/v1") ||
+  uint(argumentCount) || each str(argument))
+```
+
+It commits the complete architecture-specific vector including absolute compiler path. Both required hosts rebuild
+both architecture binaries and require byte equality with items 9 and 10; an architecture is never
+accepted merely because the other job recorded its hash.
+
+The matching arm64 generation host recomputes items `0,2,3,4,6,7,8,9,10,11`. The dedicated E1b3 x64 CI job
+uses exact `actions/setup-node` input `22.23.2` and exact pnpm `10.29.1`; a floating major-version job
+cannot satisfy this gate. That x64 job recomputes items `1,2,3,5,6,7,8,9,10,12` and requires source snapshot,
+bundle, normalized metafile, complete lock, lock-edge projection, and every platform-independent item
+to match the arm64 gate byte-for-byte. Each matching host alone approves its own Node/native package
+tree and platform-manifest closure; both cross-rebuild gate items 9 and 10. The committed candidate
+`B` is the only cross-platform handoff: both jobs verify the same raw candidate bytes, each requires
+exact equality for every item it can measure, and each treats the other platform's Node/native/runtime
+evidence as opaque bytes that only the other required gate may approve. There is no unnamed
+generation-record DTO or extra fixture file. Arm item 11 is admitted only after the build response
+verifies consumers 0/2 and the capture response independently verifies consumers 0/1 against the same
+constant; x64 item 12 is admitted only after its build verifies both consumers. Any
+arm64 item/pin change therefore requires a new matching-host candidate rather than offline x64
+self-consistency, and the symmetric rule holds for x64.
 
 The tree root itself is omitted. Every descendant must be a directory or a regular file; symlinks,
-devices, sockets, FIFOs, two in-tree paths sharing one device/inode, empty/absolute/dot/dot-dot/backslash/NUL paths, duplicate
-UTF-8 path bytes, and changes during two complete descriptor-held walks reject. `normalizedMode` is
-`365` (`0555`) when any execute bit is set and `292` (`0444`) otherwise. There are at most 8,192
-files, 1,048,576 aggregate path bytes, 268,435,456 bytes per file, and 536,870,912 aggregate file
-bytes. No file or subtree is implicitly excluded. Actual content hashes land only with the settled
-fixture, not in this design-only commit.
+devices, sockets, FIFOs, empty/absolute/dot/dot-dot/backslash/NUL paths, duplicate UTF-8 path bytes, and
+changes between two complete descriptor-held walks reject. Regular-file aliases are permitted because
+pnpm's content-addressed installation may hardlink equal files: every pathname is independently
+counted, read, hashed, and encoded, and both walks must preserve that pathname's exact device/inode,
+mode, length, and content hash. Two aliases of one inode must therefore have the same mode/length/hash,
+but remain two distinct ordered records; neither alias can suppress the other. The selected executable
+path is still uniquely named and held/observed directly. `normalizedMode` is `365` (`0555`) when any
+execute bit is set and `292` (`0444`) otherwise.
+There are at most 8,192 files, 8,192 directories, and 16,384 total descendants; each relative path is
+at most 4,095 UTF-8 bytes; aggregate path bytes across files and directories are at most 2,097,152;
+one file is at most 268,435,456 bytes; and aggregate file bytes are at most 536,870,912. Directory
+records are traversal facts and do not enter the canonical file-only tree bytes. No file or subtree is
+implicitly excluded. Actual content hashes land only with the settled fixture, not in this design-only
+commit.
 
 The six nested digests and vectors are exact and always exclude their own digest field:
 
@@ -4856,7 +5330,7 @@ itemDigest = digest(
 )
 
 toolchainVectorDigest = digest(
-  str("remote-claw/front-door-build-toolchain-vector/v1") || uint(8) ||
+  str("remote-claw/front-door-build-toolchain-vector/v1") || uint(13) ||
   each bytes(itemDigest) in item-index order
 )
 
@@ -4902,10 +5376,15 @@ vector position; closures are ordered by `listener,authorization,target`, then r
 export symbol in bytewise UTF-8 order.
 
 Every closure is referenced, and every route's three symbol IDs resolve to the corresponding unique
-closure kind. Shared modules may occur in several exact closures. Toolchain item count is exactly eight;
+closure kind. Shared modules may occur in several exact closures. Toolchain item count is exactly thirteen;
 modules at 4,096; one module's content at 1,048,576 bytes; aggregate module content at 6,291,456
 bytes; edges at 65,536 and 256 per module; closure count at 12,288; module IDs at 512 UTF-8 bytes; and
 export symbols at 256 bytes.
+
+Each dotted measured symbol ID is also the root module's exact ECMAScript string-literal named export,
+for example `export { implementation as "listener.tui.v1" }`; there is no separate ID-to-export map.
+The route module imports that named export under a local identifier so esbuild cannot discard the
+root. Any substituted identifier export, alias table, or unbound label rejects.
 
 The normalized-metafile bytes are canonical binary, not JSON. They begin with
 `str("remote-claw/normalized-esbuild-metafile/v1") || uint(1)` and then encode the displayed outer
@@ -4928,6 +5407,12 @@ FrontDoorBuildClosureManifestV1 =
   targetOperatingSystem, targetArchitecture, frontDoorBuildTargetId,
   frontDoorExecutableFormat, nodeRuntimeVersion, pnpmVersion, esbuildVersion,
   toolchainItemCount, toolchainItems, toolchainVectorDigest,
+  privateRootReleasePlatformManifestByteLength,
+  privateRootReleasePlatformManifestRawSha256,
+  privateRootReleasePlatformManifestBytes,
+  privateRootCiPlatformManifestByteLength,
+  privateRootCiPlatformManifestRawSha256,
+  privateRootCiPlatformManifestBytes,
   moduleCount, modules, moduleVectorDigest, entryModuleIndex,
   closureCount, closures, closureVectorDigest,
   generatedSurfaceArtifactDigest, buildRouteRegistryArtifactDigest,
@@ -4938,8 +5423,10 @@ FrontDoorBuildClosureManifestV1 =
 
 Canonical `B` encodes those fields exactly in that order and begins with
 `str("remote-claw/front-door-build-closure-manifest/v1") || uint(1)`. Nested records encode every
-displayed field in order, including their already computed digest as decoded `bytes` at the end. The
-metafile length/hash recompute from `normalizedMetafileBytes`. The root formula is exact:
+displayed field in order, including their already computed digest as decoded `bytes` at the end. Both
+private-root platform lengths/hashes recompute from their canonical bytes and equal toolchain items 11
+and 12; `S`'s length/digest equals the complete release view, not merely a separately supplied hash.
+The metafile length/hash recompute from `normalizedMetafileBytes`. The root formula is exact:
 
 ```text
 buildInputRootDigest = digest(
@@ -5045,7 +5532,8 @@ length. Detached/resized/growable shared buffers, hostile species/proxy/getter b
 views, or mutation after copying cannot select allocation sizes or later digest bytes.
 
 The verifier strictly decodes, canonically re-encodes, byte-compares, and hashes every snapshot. It
-checks `N/X` role correlation; all `N → S → R`, `X/S/R → B`, and `X/B/S/R → D` links; every surface
+checks `N/X` role correlation; all `N -> S -> R`, `X/S/R -> B`, and `X/B/S/R -> D` links; exact
+`S -> B.item[11]`, runtime-manifest-to-Node/esbuild/OpenCode/gate, and ELF-need links; every surface
 operation/disposition; every toolchain/module/edge/closure; every symbol/closure resolution; all route
 uniqueness and ordering; every binary-bound identity; exact measured-projection and derived-`D`
 item/order equality; and both
@@ -5068,44 +5556,666 @@ exposes exactly `nativeBinaryDigest`, `frontDoorBinaryDigest`, `frontDoorBuildMa
 `measuredDispatchTableDigest`, and `listenerParentDigest` for later E1c orchestration. It returns no
 signed record or authority.
 
-**Direct-only provenance collection and retained proof.** E1b3b extends the direct-only E1b1 native
-module with two direct-file, non-barrel held-handle primitives; neither adds an executable-manifest
-role or schema. `inspectStableLinuxExecutableWithHeldHandle` is role-neutral: it opens the path once
-with E1b1's Linux no-follow/nonblocking regular-linked-executable and 256 MiB rules, performs two
-complete positional SHA-256/EOF passes with unchanged full stat before the callback, lends only the
-borrowed numeric FD to one trusted callback, and repeats both complete passes plus stat afterward. It
-returns only a frozen `{fileByteLength,rawFileSha256}` observation. All four hashes and every stat must
-match. `collectLinuxExecutableEvidenceWithHeldHandle(path,role,callback)` accepts only E1b1's closed
-native/front-door role set, performs the complete role-specific two-pass canonical manifest collection
-before and after the callback on the same open handle, and requires identical canonical manifests.
-Both helpers reject callback close/replacement, changed descriptor identity, truncation/growth, or
-unequal pre/post observations; every exit closes exactly once, and an earlier observation/callback
-error remains primary over cleanup failure. The existing public path API, closed two-role evidence
-registry, and production exports do not change.
+**Direct-only provenance collection and retained proof.** No E1b3 cross-owner or fixed-operation API
+lends a caller-selected target/tool descriptor or `FileHandle`, accepts an operation callback, or
+returns a raw child/stream. The only outer process-launch descriptors are the implementation-owned,
+read-only, link-count-zero program capsule at fixed FD 3 and canonical-request capsule at fixed FD 4;
+neither descriptor number nor capsule is present in an operation DTO or exposed to caller code. A
+numeric descriptor is not an ownership capability: a callback can close `N`, execute
+substituted bytes at the reused number, restore the original file at `N`, and satisfy pre/post stat and
+hash checks; cleanup can then close a descriptor it no longer owns. Merely hiding `N` also fails: after
+an asynchronous yield, unrelated caller JavaScript can enumerate `/proc/self/fd` and perform the same
+close/reuse/restore sequence.
 
-The E1b3 collector uses the role-specific primitive for the pinned native executable and cleanly built
-`0555` bundle. It uses the role-neutral primitive for Node and requires its length/raw hash to equal the
-matching `node_release_runtime` or `node_ci_runtime` file item in `B`; Node is never mislabeled as an
-E1a listener child. OpenCode native capture executes its held native ELF descriptor. Bundle
-measurement executes the held Node descriptor with fixed `--input-type=module -` and connects the held
-bundle descriptor to standard input; it never asks Node to resolve the bundle through
-`/proc/self/fd/N`. It uses the exact empty environment and fixed cwd above, sends the control record on
-FD 3, captures FD 4, and supplies no FD 5 in
-measurement mode. It captures all four sealed role tables under hard parent timeouts and requires the
-same exact front-door manifest after every child. Every pipe, child, FD, and temporary root
-closes/reaps on every exit. The collector returns only the six leaf artifacts. A caller separately
-constructs `L` and invokes the raw verifier; a nominal TypeScript brand, arbitrary path, hand
-inventory, caller-supplied measured JSON, or digest-only comparison is not provenance.
+Every E1b3 build, capture, measurement, and serve custodian is therefore one fixed, fresh, one-shot
+**host process**, never an asynchronous holder in the caller's process. Before any yield its closed
+`.mjs --host` mode exact-parses the complete outer request, synchronously opens every operation-derived
+path, performs the specified stable no-follow snapshots, and creates implementation-owned `O_TMPFILE`
+capsules for the selected target, path-free operation data, and authenticated inner request. Build and
+capture may receive outer paths because only this unprivileged host resolves them. `package_measure`,
+`measure`, and `serve` instead receive the bounded front-door bundle bytes directly; a build result
+exists only in memory and check mode never creates a host pathname. No caller path, destination, FD,
+PID, helper, runtime-file selector, or timeout appears in the inner request.
+
+The host completes collection, one bounded `spawnSync`, namespace teardown, response-file relay and
+all postobservations without yielding caller JavaScript. The response HMAC independently makes
+numeric-pipe or response-file substitution fail closed. Any later promise work is pure canonical
+decoding/hashing over copied bytes. The outer FD-3 program and FD-4 request capsules remain the only
+caller-to-host launch descriptors. The additional Node, target, data, inner-request, gate and runtime
+capsules are internal host custody only, use distinct descriptions above the reserved low-FD range,
+and never enter an operation DTO or public result.
+
+There is one measured static gate-init, not a caller-selectable supervisor or program. E1b3a executes
+the exact item-7
+`packages/opencode-front-door/build/build-driver.mjs` bytes directly in its closed PID-1
+`build | package_measure` mode; the same retained bytes run as the unchanged inner build driver when
+the outer `build` operation supplies them on standard input. E1b3b executes the exact fixture-pinned
+`spikes/opencode-native/e1b3/listener-evidence-probe.mjs` bytes directly in its closed PID-1
+`capture | measure | serve` mode. Both programs are self-contained, Node-core-only ESM: no TypeScript,
+loader, `tsx`, Vitest, package import, dynamic import, or caller-selected code/path can execute. The
+gate source, two binaries, and two platform manifests are the exact additional toolchain items 8–12;
+there is no uncommitted executable input. Node
+22.23.2's inability to resolve this repository's `.js`-suffixed TypeScript import graph is irrelevant.
+Each program is nonempty, fatal-UTF-8, contains no NUL or CR, and is at most 1,048,576 bytes before its
+first copy/allocation; the item-7 and fixture-lock pins then apply independently.
+
+Both programs embed byte-identical, implementation-pinned canonical arm64 and x64 platform-manifest
+byte constants; neither accepts a manifest, source path or
+runtime selector from a caller. This is cycle-free: a platform manifest binds gate/runtime/consumer
+bytes but not item 7 or the probe, while `B` later binds item 7 and both manifest constants. Host mode
+selects only the constant matching its asserted architecture, strictly decodes/re-encodes it, opens
+every decoded runtime `guestPath` through the frozen safe host-root resolution below, and requires
+every copied byte to match. A
+`build` operation verifies the manifest's Node and matching esbuild consumer tuples; `capture` verifies
+its Node and OpenCode tuples; bundle measurement/serve verifies Node and the role-selected runtime
+closure. The final arm64 gate requires build and capture against the same embedded manifest bytes
+before constructing `S` or `B.item[11]`; the x64 build verifies every x64 root consumer before
+`B.item[12]`. No individual operation is allowed to claim an unverified consumer, and an early build
+result remains non-authoritative transport evidence. Source tests independently extract both
+constants from item 7 and the probe and require byte equality with each other, the two `B` items, and
+the fixture lock.
+
+Runtime source collection treats a baked guest path and a host symlink route separately. From one held
+O_PATH description of host `/`, host mode opens each exact manifest `guestPath` with `openat2`,
+`RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV`, and fixed read-only/CLOEXEC/NONBLOCK flags. Ordinary bounded
+root-owned symlinks such as `/lib -> usr/lib` may therefore resolve inside that held host root, but a
+magic link, escape, mount crossing, non-root-owned component, group/world-writable directory, loop,
+missing component, or nonregular final inode rejects. Two full reads of the held final inode must match; after wrapper
+teardown a fresh identical resolution and two more reads must reproduce its identity/bytes. Setup
+does not infer component ownership from `openat2`: host mode also performs a bounded at-most-40-hop
+`fstatat(AT_SYMLINK_NOFOLLOW)`/`readlinkat` walk from the same held root. Every directory must be
+root-owned and non-group/world-writable. Every ordinary symlink must be root-owned and reside in an
+already validated non-group/world-writable directory; its reported mode is not used because Linux
+symlink permission bits are fixed/ignored. The bounded link target must remain inside the held root,
+and the walk's resolved final tuple must equal the atomic `openat2` result before and after the
+wrapper. Setup
+copies only those held bytes to the manifest's baked `guestPath` as a new regular file, so the private
+root contains no symlink. The “no alias/cache/hwcaps fallback” rule applies to the private loader and
+ELF dependency resolution; safe pre-privilege source resolution cannot silently add another guest
+path or change a retained hash.
+
+On entry the fresh no-user-worker host first requires valid distinct bounded standard streams 0, 1,
+and 2, its inherited current-UID-owned `0600` link-count-zero read-only regular program capsule on FD
+3, and an independently opened capsule with the same properties for the canonical request on FD 4.
+Both capsules have position zero, a unique device/inode pair, and an exact read-only `fdinfo` access
+mode. It synchronously opens CLOEXEC `/dev/null`
+reservations until the returned lowest-free FD is above 5, closes that one probe FD, and holds every
+reservation at or below 5 through namespace teardown. Reservation or close failure returns no frame.
+The host synchronously opens and twice observes
+literal `/proc/self/exe`, its FD-3 program capsule, and the bounded FD-4 request capsule; requires exact
+Node `22.23.2`; requires both capsules to equal the immutable length/raw-SHA-256 coordinates copied into
+the exact host argv by the outer `spawnSync`; requires the redundant program tuple encoded in the
+canonical host request to equal FD 3; and keeps both capsule descriptors plus the Node descriptor
+through the wrapper call. Item 7's external
+length/hash pin settles in E1b3a tests and `B`; the listener program is pinned by
+`probeRawSha256`/`fixtureFiles`. The matching program tuple is repeated in the host response and the
+fixed caller compares it with its independently verified expectation before exposing an operation
+result. It then stable-snapshots every operation input, creates read-only link-count-zero target/data/
+request capsules plus one gate/runtime capsule per closed manifest entry, and retains the original
+descriptions for postobservation. The privileged setup receives only the host PID and a fixed ordered
+vector of internal FD/length/hash/role coordinates. It may open only those `/proc/<hostPid>/fd/<n>`
+coordinates and fixed system paths; it never receives or walks a caller path or parses request bytes.
+
+After wrapper teardown the host repeats every source and capsule observation, validates and reads the
+one private response inode only through the setup relay, closes all reservations and sources exactly
+once, and only then frames a public result. A postobservation, close, relay, or cleanup failure discards
+every result byte. No Node, program, module, gate, loader, launch-root, source-FD, source-PID, pin, or
+timeout selector is a caller DTO field.
+
+The gate-init `--init` mode becomes PID 1, validates the inherited locked mount subtree, creates and
+verifies one recursive self-bind clone of `/mnt`, pivots that child-created clone to the sealed root,
+detaches the old root, remounts the private proc, and verifies the isolated numeric UID/GID 60000 identity with empty
+groups and every capability set/bounding/ambient bit zero, joins and verifies a new empty anonymous
+session keyring, sets `no_new_privs`, installs the inherited
+seccomp filter, and execs exact `/runtime/node /runtime/program.mjs`. Node verifies and consumes the
+complete request from private FD 0, replaces FD 0 with private null before any target, and retains the
+setup-owned private response FD only in PID 1. Every nested executable is started through gate-init
+`target` mode. That mode accepts only a direct PID-1 parent and the operation-derived fixed target arm,
+installs the frozen Landlock allowlist for the selected target, loader/runtime files, its exact
+`/work/operation` subtree, private null/urandom, and required read-only `/proc/self` facts, and then
+execs `/runtime/target` or `/runtime/node`; it grants no access to `/io`, `/proc/1`, the response inode,
+program, or gate coordinate. The child receives only operation pipes/null and cannot recover PID 1's
+request, MAC key, response description, or old root through `/proc`, `pidfd_getfd`, ptrace, or
+process-VM calls.
+
+PID 1 may use its own asynchronous Node-core state machine because no caller code, import, user Worker,
+or second operation exists in that process. It closes/reaps every resource it directly owns and
+requires private `/proc` to contain PID 1 alone before writing one response. It atomically completes
+the setup-owned private response file only after target teardown and exits. Kernel PID-namespace
+teardown kills any survivor; the outer setup validates and relays that file only after inner unshare
+returns. The host parses nothing until the complete wrapper returns and relay stdout reaches EOF. No
+claim depends on Node reaping an unknown adopted grandchild.
+
+The outer caller-to-host mode is also process-only. In one no-yield phase the fixed fresh test/proof
+caller, which imports no user code and has no user Worker or outstanding user async/thread-pool work,
+opens and two-pass observes its literal `/proc/self/exe` plus the hard-pinned source program and makes
+one fixed private snapshot of the latter. It creates two anonymous already-unlinked capsules with Linux
+`O_TMPFILE|O_DIRECTORY|O_RDWR|O_CLOEXEC` on exact `/tmp`, immediately `fchmod`s each to `0600`, and
+rejects any other mode. Into the first it positionally
+writes and twice verifies the exact program snapshot; into the second it does the same for the complete
+canonical request, including that snapshot's length/raw-SHA-256 tuple. For each it opens an independent
+`O_RDONLY|O_CLOEXEC` description through `/proc/self/fd/<writerFd>`, verifies position zero, device/inode,
+ownership, mode, link count, length, hash, and read-only `fdinfo`, then closes the only writable
+description before launch. It retains the original program/Node descriptors separately for final
+post-observation, but does not pass either original program descriptor to the child. The only
+evidence-bearing invocation is then the synchronous:
+
+```text
+spawnSync("/proc/self/exe",
+  ["--input-type=module", "-", "--host",
+   programByteLengthDecimal, programRawSha256Hex,
+   requestByteLengthDecimal, requestRawSha256Hex],
+  fixedOptions)
+```
+
+For Node's Linux numeric open flags, the exact expression is
+`0x400000 | fs.constants.O_DIRECTORY | 0x2 | 0x80000`. The gate requires `O_DIRECTORY = 0x4000` and
+combined flags `0x484002` on arm64 or `O_DIRECTORY = 0x10000` and combined flags `0x490002` on x64,
+preflights anonymous-file support on `/tmp`, and never falls back to a named file. The independent
+reader uses exact `fs.constants.O_RDONLY | 0x80000` (`0x80000`) and shares neither open-file description
+nor offset with the closed writer.
+Exact `fixedOptions` are `shell:false`, cwd `/`, `detached:true`, `encoding:null`, fixed
+`stdio:["pipe","pipe","pipe",programCapsuleReadFd,requestCapsuleReadFd]`, a newly constructed zero-key
+environment, the exact verified program snapshot as `input`, `maxBuffer` equal to the operation's
+complete host-call response ceiling, and
+`timeout:185_000,killSignal:"SIGTERM"` for build/capture or
+`timeout:125_000,killSignal:"SIGTERM"` for package measurement/measurement/serve. These whole-call
+bounds start before host collection and outlive the shorter namespace bounds below. The host reads its
+request only from inherited FD 4; standard input is exact ESM source and reaches EOF before program
+evaluation. No caller JavaScript yields from pre-observation through child reap, stdout/stderr EOF,
+repeat two-pass observation of both original files and both capsules, descriptor close, and pipe close; an
+external timeout or overflow returns no evidence and the next case waits for the already shorter inner
+teardown boundary. Its request and response are exact:
+
+```text
+host-call request =
+  str("remote-claw/e1b3-host-call-request/v1") || uint(1) ||
+  str(operation) || uint(programByteLength) || bytes(programRawSha256) ||
+  bytes(operationPayload)
+host-call response =
+  str("remote-claw/e1b3-host-call-response/v1") || uint(1) ||
+  str(operation) || bytes(hostRequestRawSha256) ||
+  uint(programByteLength) || bytes(programRawSha256) ||
+  str(status) || bytes(publicResultOrErrorPayload)
+```
+
+The four host coordinates are internal closed arguments, not DTO fields or caller-selectable pins:
+lengths are shortest positive decimal and hashes are 64 lowercase hex computed from the exact two
+private in-memory snapshots passed to this one `spawnSync`. They contain no request byte, path, key, or
+secret. Host mode rejects every other argv shape and compares both complete capsules with these
+coordinates before parsing the request or constructing the inner MAC key. Host-call status is exact
+`ok | error`; build/capture request bytes are at most 98,304, while package measurement/measurement/
+serve request bytes are at most 8,519,680 because their outer payload contains at most 8,388,608
+front-door bytes plus its manifest and framing. Response uses the matching complete operation ceiling, successful stderr is empty, and
+canonical EOF/trailing/exit rules mirror the inner status matrix. `hostRequestRawSha256` is SHA-256 of
+the exact complete canonical host-call request, with no implicit framing prefix; the caller requires it
+to equal its private request snapshot before interpreting status or payload. The external E1b3a test verifies the
+item-7 tuple before this argv; the E1b3b proof verifies item 7 through `B` and the probe through the
+fixture lock. Host mode accepts no path, program/Node selector, caller-chosen pin, timeout, or
+environment override. Both programs accept host mode only under the exact Node argv and four closed
+snapshot coordinates above, zero environment, source snapshot on standard input, held matching
+read-only program capsule on FD 3, and matching read-only request capsule on FD 4. Each accepts no user argument with zero environment in its
+copied PID-1 mode. Item 7 alone also accepts exact `--input-type=module -` plus its two-key environment
+for inner-driver mode. Every other argv/FD/environment mode rejects before target open.
+The unauthenticated outer frame is safe only under this exact synchronous no-worker pipe custody. A
+test-local async outer-call control must demonstrate close/reuse/restore injection, while the real
+`spawnSync` call must defer the same scheduled callback until every host-call resource is gone and
+must reject all canonical-frame mutation, truncation, trailing, exit, timeout, and overflow cases. A
+verify-then-rename/replace control must execute a substituted source under a vulnerable path launch,
+while the real stdin launch executes only the verified snapshot, FD 3 exposes the separately opened
+read-only capsule of those same bytes, and any original/capsule/request observation or program-tuple
+change fails. The two anonymous capsules have no pathname to clean after caller or host loss.
+
+The path-free root instance is itself authenticated:
+
+```text
+E1b3PrivateRootInvocationManifestV1 =
+  schemaId, schemaVersion, operation,
+  platformManifestByteLength, platformManifestDigest,
+  programByteLength, programRawSha256,
+  runnerNodeByteLength, runnerNodeRawSha256,
+  targetRole, targetByteLength, targetRawSha256,
+  dataByteLength, dataRawSha256,
+  responseByteLimit, invocationFileVectorDigest
+```
+
+The schema ID is `remote-claw/e1b3-private-root-invocation-manifest/v1`, version is `1`, and the
+complete canonical record is at most 4,096 bytes. Its platform length/digest recompute from the exact
+selected canonical `E1b3PrivateRootPlatformManifestV1` bytes carried in operation data. Define
+`privateRootInvocationManifestDigest` as SHA-256 of the complete canonical invocation-manifest bytes,
+without an implicit length prefix. `targetRole` is derived, never selected:
+`build -> esbuild_native`, `capture -> opencode_native`, and
+`package_measure | measure | serve -> front_door_bundle`. Program, Node, target and data map only to
+`/runtime/program.mjs`, `/runtime/node`, `/runtime/target`, and `/io/data`. Their modes are fixed
+`0444,0555,0555,0444`; request is `/io/request` mode `0400`; gate/runtime files come only from the
+selected platform manifest. The file-vector digest uses domain
+`remote-claw/e1b3-private-root-invocation-file-vector/v1` and commits the fixed path, role, mode,
+length, and raw hash, in bytewise path order, for exactly the immutable Node, program, target, data,
+gate, interpreter, and DSO inputs. It excludes `/io/request`, the response inode, proc/dev/work state,
+and every directory. This avoids a manifest/request hash cycle: setup separately requires
+`/io/request` to equal the host capsule coordinate before launch, PID 1 authenticates and hashes the
+complete request, and the response echoes that `requestRawSha256`. Setup separately owns and validates
+the initially empty response inode, its fixed limit and its final identity. Build data is at most 33,554,432
+bytes; every other operation's data is at most 2,097,152. The target cap is 268,435,456 for build/
+capture and 8,388,608 for the three bundle operations. Program and gate each cap at 1,048,576, Node at
+268,435,456, and platform runtime files aggregate at 67,108,864. In addition to those individual
+ceilings, the exact selected invocation's protected regular files must total at most `335,544,320`
+bytes across at most 128 files and 64 directories, below the `402,653,184`-byte root limit. No encoded length can select a copy
+until the operation cap and this simultaneous-sum inequality pass.
+
+The outer Bash redirects the inner-unshare child from the setup-owned request file, to the pre-opened
+setup-owned response temp file, and to private null. Thus `sudo` descriptor policy exposes no host pipe
+to PID 1. Request-prefix, request, response-prefix, and response bytes are exact:
+
+```text
+request prefix =
+  str("remote-claw/e1b3-gate-program-request/v1") || uint(1) ||
+  str(operation) || bytes(nonce) || bytes(ipcMacKey) ||
+  bytes(privateRootInvocationManifestBytes) ||
+  uint(dataByteLength) || bytes(dataRawSha256)
+request = request prefix ||
+  bytes(HMAC-SHA-256(ipcMacKey,
+    str("remote-claw/e1b3-gate-program-request-mac/v1") || bytes(request prefix)))
+
+response prefix =
+  str("remote-claw/e1b3-gate-program-response/v1") || uint(1) ||
+  str(operation) || bytes(nonce) || bytes(requestRawSha256) ||
+  bytes(privateRootInvocationManifestDigest) ||
+  str(status) || bytes(payloadBytes)
+response = response prefix ||
+  bytes(HMAC-SHA-256(ipcMacKey,
+    str("remote-claw/e1b3-gate-program-response-mac/v1") || bytes(response prefix)))
+```
+
+Request bytes are nonempty and at most 16,384 bytes. Nonce, MAC key, every raw hash, and every MAC are
+exactly 32 bytes. `dataRawSha256` is SHA-256 of exact `/io/data` bytes; after request-MAC
+append, `requestRawSha256` is SHA-256 of the complete canonical `request` bytes including that MAC.
+Neither hash, nor `privateRootInvocationManifestDigest`, includes an implicit `bytes(...)` length
+prefix. PID 1 strictly re-encodes the invocation
+manifest, verifies the complete platform/root/file/FD/mount state, copies data before interpretation,
+and requires its actual program/`/proc/self/exe`/target/data observations to equal that manifest before
+target open. The host independently parses its snapshotted request, hashes the exact embedded
+invocation-manifest bytes, and requires the response's decoded manifest digest to equal that 32-byte
+result. Status is
+exactly `ok | error`. For `ok`, payload bytes use the exact operation-specific grammar below; for
+`error`, payload bytes are exactly `str(errorCode)` from the closed set below. A canonical error frame
+exits program/namespace nonzero and can only select a fixed host exception after teardown and MAC
+verification; it never returns evidence. Malformed input, crash, timeout, or inability to authenticate
+may emit nothing and exits nonzero. Only a canonical `ok` frame with program exit zero, the entire
+system-wrapper chain exit zero, empty stderr, complete EOF, matching operation/nonce/request digest and
+invocation digest, and timing-safe request/response MACs returns a result. No trailing byte or
+second frame is permitted. Request/response/program-copy bytes are gate transport, never artifact
+evidence.
+
+The **outer** operation payloads are exact. Every path field uses the E1b2 path grammar: `/` or an absolute
+POSIX path with 1–256 non-root components, exact scalar-value UTF-8 length 1–4,095 bytes, component
+length 1–255 bytes, no NUL, `//`, exact `.`/`..` component, or non-root trailing slash, and no
+normalization, resolution, decoding, or case folding. The fixed operation applies its additional
+regular-executable, regular-file, package-root, or current-UID-owned `0700` directory checks after
+that syntactic validation. After those snapshots, the inner operation-data grammar below contains no
+path. `stable(E)` and `stable(O)` both encode
+`uint(fileByteLength)||bytes(rawFileSha256)`. Each displayed `bytes` field is copied, bounded, and
+encoded with the canonical `bytes(...)` primitive; each path uses `str(...)`. Exact
+`packageTreeFacts(role)` bytes are:
+
+```text
+str(role) || uint(entryCount) || uint(canonicalTreeByteLength) ||
+  bytes(canonicalTreeRawSha256) || uint(selectedExecutableEntryCount) ||
+  each selected executable entry in the item schema's displayed order
+```
+
+Role is exact `pnpm_release_package | esbuild_release_native | esbuild_ci_native`;
+the platform selects exactly one native arm. The item-7 program accepts
+only `build | package_measure`; the listener-probe program accepts only
+`capture | measure | serve`:
+
+```text
+outer build request =
+  str(nativeEsbuildExecutablePath) || str(esbuildJsApiPath) || str(sourceRootPath) ||
+  stable(nativeEsbuildExpectation) || stable(esbuildJsExpectation)
+inner build data =
+  bytes(sourceSnapshotBytes) || bytes(esbuildJsApiBytes) ||
+  bytes(dependencyLockBytes) || bytes(lockEdgeProjectionBytes) ||
+  packageTreeFacts(pnpm_release_package) ||
+  packageTreeFacts(matching esbuild native role) ||
+  stable(nativeEsbuildExpectation) || stable(esbuildJsExpectation) ||
+  bytes(privateRootPlatformManifestBytes)
+build ok =
+  bytes(sourceSnapshotBytes) || bytes(bundleBytes) || bytes(normalizedMetafileBytes) ||
+  bytes(dependencyLockBytes) || bytes(lockEdgeProjectionBytes) ||
+  packageTreeFacts(pnpm_release_package) ||
+  packageTreeFacts(matching esbuild native role) ||
+  stable(nativeEsbuildObservation) || stable(esbuildJsObservation)
+
+outer package_measure request =
+  bytes(frontDoorExecutableBytes) || stable(frontDoorExpectation)
+inner package_measure data =
+  stable(frontDoorExpectation) || bytes(privateRootPlatformManifestBytes)
+package_measure ok =
+  stable(frontDoorObservation) ||
+  bytes(tuiResponse) || bytes(bindingAdapterResponse) ||
+  bytes(serverCreationResponse) || bytes(observerResponse)
+
+outer capture request =
+  str(nativeExecutablePath) || bytes(expectedNativeExecutableManifestBytes)
+inner capture data =
+  bytes(expectedNativeExecutableManifestBytes) ||
+  bytes(privateRootPlatformManifestBytes)
+capture ok =
+  executableFacts(native) ||
+  bytes(openApiDocumentBytes)
+
+outer measure request =
+  bytes(frontDoorExecutableBytes) || bytes(expectedFrontDoorExecutableManifestBytes)
+inner measure data =
+  bytes(expectedFrontDoorExecutableManifestBytes) ||
+  bytes(privateRootPlatformManifestBytes)
+measure ok =
+  executableFacts(front_door) ||
+  bytes(tuiResponse) || bytes(bindingAdapterResponse) ||
+  bytes(serverCreationResponse) || bytes(observerResponse)
+
+outer serve request =
+  bytes(frontDoorExecutableBytes) || bytes(expectedFrontDoorExecutableManifestBytes)
+inner serve data =
+  bytes(expectedFrontDoorExecutableManifestBytes) ||
+  bytes(privateRootPlatformManifestBytes)
+serve ok =
+  executableFacts(front_door) ||
+  bytes(readyResponseBytes) || bytes(clientRequestBytes) || bytes(targetRequestBytes) ||
+  bytes(targetResponseBytes) || bytes(clientResponseBytes)
+```
+
+The role in `executableFacts(role)` is fixed by the operation, not encoded or caller-selected. Its
+exact bytes are
+`uint(fileByteLength)||bytes(rawFileSha256)||uint(chunkCount)||` followed, in dense chunk-index order,
+by `uint(chunkIndex)||uint(byteOffset)||uint(byteLength)||bytes(chunkDigest)`. File/chunk limits,
+offsets, lengths, digest domains, and 32-byte decoded hashes are exactly E1b1's fixed executable
+chunking contract. The custodian derives the same facts in two complete pre-operation passes and two
+complete post-operation passes over its one held target and requires all four vectors to match. It
+strictly reconstructs and byte-compares the caller's expected canonical role manifest before target
+execution. After authenticating the response, host mode independently reconstructs the
+role constants and chunk-vector digest from the returned facts, canonically encodes the manifest, and
+requires exact equality with the snapshotted expected bytes before returning that manifest.
+
+The wire `ok` payload remains exactly the smaller operation grammar above. After complete response
+authentication, the host constructs these exact public result sequences and no others:
+
+```text
+build result =
+  bytes(sourceSnapshotBytes) || bytes(bundleBytes) || bytes(normalizedMetafileBytes) ||
+  bytes(dependencyLockBytes) || bytes(lockEdgeProjectionBytes) ||
+  packageTreeFacts(pnpm_release_package) ||
+  packageTreeFacts(matching esbuild native role) ||
+  bytes(privateRootPlatformManifestBytes) ||
+  stable(nodeObservation from runner prefix) ||
+  stable(nativeEsbuildObservation) || stable(esbuildJsObservation) ||
+  stable(driverObservation from program prefix)
+
+package_measure result =
+  stable(nodeObservation from runner prefix) || stable(frontDoorObservation) ||
+  bytes(tuiResponse) || bytes(bindingAdapterResponse) ||
+  bytes(serverCreationResponse) || bytes(observerResponse)
+
+capture result =
+  stable(nodeObservation from runner prefix) ||
+  bytes(canonical native manifest reconstructed from executableFacts(native)) ||
+  bytes(openApiDocumentBytes)
+
+measure result =
+  stable(nodeObservation from runner prefix) ||
+  bytes(canonical front-door manifest reconstructed from executableFacts(front_door)) ||
+  bytes(tuiResponse) || bytes(bindingAdapterResponse) ||
+  bytes(serverCreationResponse) || bytes(observerResponse)
+
+serve result =
+  stable(nodeObservation from runner prefix) ||
+  bytes(canonical front-door manifest reconstructed from executableFacts(front_door)) ||
+  bytes(readyResponseBytes) || bytes(clientRequestBytes) || bytes(targetRequestBytes) ||
+  bytes(targetResponseBytes) || bytes(clientResponseBytes)
+```
+
+The authenticated invocation manifest is the single source of `nodeObservation` and, for `build`,
+`driverObservation`: host mode constructs those two-field stable observations from its runner and
+program length/hash pairs. It also returns a fresh copy of the exact selected platform-manifest bytes
+only for `build`; capture/measurement/serve bind the same digest through their invocation manifests
+without duplicating it in the public result. These coordinates never occur again inside an `ok` payload. All other stable
+observations and executable facts describe distinct target inputs. A payload/prefix duplicate or an
+attempt to return a second interpretation is noncanonical and rejects.
+Before any public result is constructed, `build` requires its native-esbuild and JS-API observations
+to equal their two snapshotted request expectations, while `package_measure` requires its front-door
+observation to equal its snapshotted request expectation. The listener operations apply the stronger
+four-pass facts-to-expected-manifest equality above. No observation can be merely returned without
+that operation-specific equality.
+
+For `build`, fresh unprivileged host mode copies the exact stable dependency-lock bytes, derives the
+at-most-4,096-byte canonical lock-edge projection, collects the source snapshot, and computes both
+complete package-tree fact records before privilege. Each bounded descriptor-held tree walk
+double-reads every regular file with unchanged full metadata. Two complete pre-wrapper walks and two
+complete post-wrapper walks must produce identical descendant inventories, per-entry facts, canonical
+tree length/hash, and selected-executable tuple; the host retains only the root/selected handles needed
+for those postobservations and closes every other source descriptor before setup. It places the copied
+lock/projection/snapshot/facts and JS-API bytes in authenticated path-free operation data and copies the
+selected native bytes through the target capsule.
+
+PID 1 never opens a host package, lock, source, or tree path. It authenticates and copies those
+records, independently rederives the lock projection from copied lock bytes, compares every echoed
+fact with the request, and observes only its sealed private copies. The inner child can consume only
+the copied source snapshot and item-3 bytes, item 7 on standard input, and immutable
+`/runtime/target`; it has cwd `/`, its closed two-key environment, and no lock, package-tree,
+package resolver, ambient module, or filesystem source path. Node and all four admitted build inputs
+receive the specified full pre/post held observations. Consequently an ambient unselected-tree
+mutate/restore after snapshot cannot alter either the child or retained provenance, while any change
+to a byte actually admitted to the build rejects or remains irrelevant because the child sees only its
+immutable copied snapshot. Tests prove both arms explicitly and never claim raw filesystem-event
+monitoring. Host mode returns the authenticated projection bytes unchanged. The independent verifier
+derives the projection again from returned lock bytes with its separate parser and requires exact byte
+equality before artifact construction. The host builds items 2, matching 4-or-5, and 6 only from these
+authenticated returned facts/copied lock/projection bytes. Post-wrapper walks are equality/change
+gates only and never replace or reconstruct retained facts. The other platform's
+native item comes only from its separately gated matching-host record.
+
+An `error` payload is only `str(errorCode)`, where the closed set is:
+
+```text
+INVALID_INPUT | UNSUPPORTED_PLATFORM | PROVENANCE_MISMATCH | CHANGED | PROTOCOL |
+TIMEOUT | CHILD_FAILED | IO | CLEANUP_FAILED
+```
+
+It carries no path, diagnostic, raw child output, or partial result. The host maps it to a fixed local
+exception only after authenticating the complete response.
+
+Exit handling is exact: an `ok` frame requires program and complete wrapper-chain exit `0` plus empty
+stderr; an authenticated `error` frame requires program exit `1`, propagates a nonzero wrapper status,
+and may be parsed only after teardown to throw its fixed exception, never to return evidence. A signal,
+malformed/missing frame, wrapper failure, diagnostic overflow, or coreutils timeout discards every
+captured byte and returns only the fixed local failure.
+
+The key exists only in the host's authenticated request capsule, the sealed `/io/request` copy, and
+host/PID-1 program memory; it never
+appears on argv, in the environment, response, result, error, or log. The host retains no request view
+exposed to caller code. After namespace teardown it validates framing and ceilings, then verifies the
+timing-safe MAC before interpreting payload bytes. It accepts only one canonical response with matching
+request digest, operation, nonce, program/runner observations, EOF, empty successful stderr, zero
+success status, and no timeout. Malformed, replaced, replayed, or forged output rejects.
+
+Only fixed item-7/probe **host mode** opens caller-derived target/tool/source handles, and it does so
+synchronously before privilege; only their closed copies/facts enter the namespace. Copied PID-1 mode
+opens private target/listener state only. Each mode verifies its complete request before its first
+mode-permitted open, reserves low FDs before each nested spawn, preobserves every handle it owns before
+executing target bytes, performs exactly one fixed operation with no later command or caller-selected
+code, normally kills and reaps each direct child while those children reap their own, postobserves the
+same mode-owned handles, and closes every resource before emitting its authenticated response. The program enforces the earlier
+operation deadline and process-group cleanup inside the fixed nested deadline ladder below. On
+direct-child crash it reaps that child and fails. It neither claims `waitpid` authority over an adopted
+nonchild nor treats a bounded `/proc` poll as reaping: any remaining PID makes success impossible, and
+program-PID-1 exit triggers kernel namespace teardown. Host loss does not falsely claim an immediate
+parent-death signal: the orphaned detached coreutils monitor remains bounded by its already armed fixed
+deadline, forwards TERM/KILL to the wrapper group, and `--kill-child=KILL` makes namespace PID 1
+terminal. The private mount namespace then destroys its protected-root, work, and dev tmpfs mounts
+even if no userspace cleanup instruction runs. The host PID/FD setup coordinates are internal only;
+no parent identity or retained-parent pipe
+enters an operation payload. Build and measurement nested spawns reserve through FD 4 and have no FD
+5; serve alone maps its inherited listener to FD 5. Native capture uses the same conservative 0--5
+reservation range without lending FD 5 to its target.
+
+The build program is the exact self-contained, package-relative toolchain item-7 `build-driver.mjs` in
+closed `--host`, PID-1 custodian, and inner-driver modes. Toolchain items 8–12 explicitly commit the
+gate source, both architecture binaries, and both platform manifests, so no executable or runtime
+input remains uncommitted. Its package tests and the E1b3b proof invoke only its canonical process ABI; no
+`run-build.ts`, helper, driver, or program path/expectation API exists. Item 7 does not embed or claim
+to verify its own hash. Before invoking `--host`, the separate E1b3a test contains and verifies the
+implementation-settled item-7 length/raw-SHA-256 constant; E1b3b verifies the same tuple through `B`.
+Host mode then stable-observes and copies its inherited read-only FD-3 program capsule, and the
+returned program observation must equal both the immutable argv coordinates and that independently
+verified external expectation.
+The direct item-7 host custodian owns and verifies its pinned Node image, native esbuild, item 3, its
+own retained item-7 copy, lock, source tree and derived snapshot, then supplies only their authenticated
+copies/facts to PID 1. PID 1 launches the unchanged inner build ABI in a
+distinct child with item 7 on standard input and items 3/snapshot on FDs 3/4, no FD 5, and exact
+`ESBUILD_BINARY_PATH=/runtime/target`. This separation is mandatory:
+item-3 code never executes in the FD-owning outer custodian. Package-local E1b3a measurement uses the same fixed outer program with its separate closed
+`package_measure`
+operation. E1b3b uses fixture-pinned `listener-evidence-probe.mjs` directly; no separate listener
+custodian/supervisor file or selector enters its DTOs, barrel, or package exports.
+
+This closes the JS/API-level descriptor-table ABA inside the supported gate: the target-owning program
+is a separate self-contained process and the fresh host's whole namespace call is synchronous, so a
+scheduled attacker callback cannot run until no target or result descriptor remains. The vulnerable
+asynchronous harness must demonstrate that the same callback does win if one yield is introduced.
+Calling the host launcher in an arbitrary process that already has a
+user-created `worker_threads` peer yields no E1b3 evidence: workers share the process FD table and
+cannot be excluded by lexical TypeScript ownership. Package tests and the proof workspace therefore
+invoke the host call only in their fixed fresh process, and dormancy prevents every production caller.
+Native `ptrace`, cross-process `/proc/<pid>/fd` access, arbitrary process-memory mutation, a preexisting
+user Worker, or an independently compromised same-UID gate runner is not an E1b3 evidence claim; E1b4
+owns stronger process/peer/isolation evidence. No substituted sentinel may execute in the supported
+program.
+
+E1b3b adds no operation to `linux-executable-collector.ts`; the existing path-only
+`collectLinuxExecutableEvidence(path,role,options)` API, closed two-role evidence registry, and
+production exports and implementation remain unchanged. Its asynchronous same-process holder remains
+historical E1b1 evidence and is explicitly not called, imported, or composed into E1b3; fixing that
+earlier direct-only API is separately recorded hardening, not a prerequisite for this dormant proof.
+The fixture-pinned probe's closed `capture` operation owns the native handle across pre-manifest
+collection, the private-namespace `/doc` processes and three
+captures, termination/reap, and identical post-manifest collection; it returns only authenticated
+copied native facts and document bytes. Its `measure` operation
+owns Node and the cleanly materialized `0555` bundle and performs all four fixed role measurements.
+For each role the custodian opens an offset-zero same-file duplicate from its held bundle descriptor,
+verifies it against the holder, maps it only to child standard input, supplies copied control on FD 3,
+captures FD 4, and supplies no FD 5. It returns only the authenticated frozen Node observation, one
+identical pre/post front-door manifest, and four copied responses.
+Its `serve` operation owns Node, bundle, target stub,
+private-namespace listener creation, FD-5 mapping, readiness, bounded transaction, termination, reap,
+and postverification end to end; it returns no live socket or child.
+
+The three listener-probe process payload/result field projections are exact:
+
+```text
+CaptureHeldLinuxOpenCodeSurfaceInputV1 = {
+  nativeExecutablePath: string,
+  expectedNativeExecutableManifestBytes: Uint8Array
+}
+CaptureHeldLinuxOpenCodeSurfaceResultV1 = {
+  nodeObservation: StableFileObservationV1,
+  nativeExecutableManifestBytes: Uint8Array,
+  openApiDocumentBytes: Uint8Array
+}
+
+MeasureHeldLinuxFrontDoorInputV1 = {
+  frontDoorExecutableBytes: Uint8Array,
+  expectedFrontDoorExecutableManifestBytes: Uint8Array
+}
+MeasureHeldLinuxFrontDoorResultV1 = {
+  nodeObservation: StableFileObservationV1,
+  frontDoorExecutableManifestBytes: Uint8Array,
+  measurementResponseBytes: readonly [Uint8Array, Uint8Array, Uint8Array, Uint8Array]
+}
+
+ProveHeldLinuxFrontDoorServeInputV1 = {
+  frontDoorExecutableBytes: Uint8Array,
+  expectedFrontDoorExecutableManifestBytes: Uint8Array
+}
+FrontDoorServeTranscriptV1 = {
+  readyResponseBytes: Uint8Array,
+  clientRequestBytes: Uint8Array,
+  targetRequestBytes: Uint8Array,
+  targetResponseBytes: Uint8Array,
+  clientResponseBytes: Uint8Array
+}
+ProveHeldLinuxFrontDoorServeResultV1 = {
+  nodeObservation: StableFileObservationV1,
+  frontDoorExecutableManifestBytes: Uint8Array,
+  transcript: FrontDoorServeTranscriptV1
+}
+```
+
+These displayed object forms only label the positional fields in the canonical process payload; no
+JavaScript object or TypeScript API crosses the seam. All three byte decoders reject a missing, extra,
+or reordered field; truncation or trailing bytes; or a malformed path, bounded executable byte view,
+expectation, manifest, or tuple
+before opening anything. Source/import scans
+separately prove that no function-, signal-, stream-, descriptor-, or handle-valued API exists.
+The internally pinned `/proc/self/exe` observation is returned as `nodeObservation` and must equal the
+matching `B` toolchain item in the final proof. Each expected manifest is a
+caller-independent snapshot of complete canonical E1b1 `N` or `X` bytes, capped at 65,536 bytes,
+strictly decoded/re-encoded and byte-compared before use; a digest or decoded DTO cannot substitute.
+Capture uses only the private work tmpfs's precreated `/work/operation`: it creates exact
+`/work/operation/proof` mode `0700` plus all HOME/XDG/TMP/workspace children below it, and normally removes
+that tree before response. A crash cannot persist it because the outer private mount-namespace lifetime
+destroys the tmpfs after process teardown. Measurement creates canonical controls with fresh 32-byte challenges internally and returns
+only responses in exact `tui,binding_adapter,server_creation,observer` order. Each response is at most
+1,048,576 bytes and their aggregate ceiling is 4,194,304 bytes. Capture bodies are each at most
+1,048,576 bytes; the operation requires the frozen two-from-one-process/one-from-a-fresh-process
+equality and returns one copied common body.
+
+Serve accepts no proof configuration: it first asserts the already-entered demoted loopback-only
+namespace, then internally owns one observer control/challenge, target origin, both listeners, ports,
+stub, and fixed `GET /session/status` to a two-byte `{}` JSON success transaction. No socket, server,
+port, child, stream, descriptor, handle, `/proc` path, callback, control, challenge, role, target
+origin, request plan, timeout, or environment is an input or output key. Dynamic values may appear
+only inside the copied transcript after teardown. `readyResponseBytes` is at most 4,096 bytes; each
+request/response view is at most 65,536 bytes; the complete transcript is at most 266,240 bytes. Every
+returned byte view is a fresh fixed non-shared copy and each returned tuple/object is frozen.
+
+The fixed self-contained listener probe has the closed internal operation set
+`capture | measure | serve`. Its one owned-handle observation core performs the same E1b1
+stat/two-pass/EOF/chunk rules and emits the exact authenticated bounded `executableFacts(role)` record;
+its host mode independently reconstructs the role-specific canonical manifest and the gate requires
+that output to equal the existing pure codec's strict re-encoding byte-for-byte. No asynchronous
+same-process `FileHandle` helper, duplicate path reopen, handle reader, extra helper program, or probe
+protocol enters a barrel or package export. Import-graph and adversarial tests enforce that exact
+boundary.
+
+The proof supplies exact expected native/Node/bundle evidence derived from the pinned fixture and the
+clean build before any probe operation can execute bytes. The Node observation must equal the matching
+`node_release_runtime` or `node_ci_runtime` item in `B`; Node is never mislabeled as an E1a listener
+child. The front-door manifest must equal the canonical manifest reconstructed item-for-item from the
+clean build's returned bundle bytes, not merely match one digest. For OpenCode capture the host holds
+and observes the source native ELF while gate-init executes only its byte-equal invocation-bound
+`/runtime/target` copy. For bundle measurement the host similarly holds and observes Node and bundle
+sources while gate-init executes `/runtime/node` with fixed `--input-type=module -` and supplies the
+byte-equal `/runtime/target` bundle copy as standard input. Every pipe, child,
+descriptor, and every userspace cleanup closes/reaps on normal exit; sealed-root/work lifetime closes the
+hard-crash case. The three probe operations return only the
+copied facts needed to construct the six leaf artifacts. The proof separately constructs `L` and
+invokes the raw verifier; a nominal TypeScript
+brand, arbitrary path, hand inventory, caller-supplied measured JSON, or digest-only comparison is not
+provenance.
 
 The complete raw OpenAPI origin is regenerated only on a matching Linux-arm64 host. The probe verifies
-the pinned launcher/native bytes, holds the same native descriptor through two-pass measurement,
-executes that FD in a loopback-only network namespace with a fresh `0700` proof root/cwd and an
-environment constructed from scratch using the already retained real-proof contract: exact keys
+the pinned native bytes, holds the same native descriptor through two-pass measurement, and executes
+only its byte-equal invocation-bound `/runtime/target` copy in the private-root loopback-only namespace
+with exact `/work/operation` `0700` proof cwd and an
+environment constructed from scratch using the retained semantic proof contract but private-root
+coordinates: exact keys
 `ALL_PROXY,HOME,HTTPS_PROXY,HTTP_PROXY,LANG,LC_ALL,NO_PROXY,OPENCODE_DISABLE_AUTOUPDATE,PATH,TERM,TMPDIR,`
 `XDG_CACHE_HOME,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME,all_proxy,http_proxy,https_proxy,no_proxy`
 and no others. HOME/XDG/TMPDIR name distinct precreated `0700` children; cwd is the empty workspace
-child; LANG/LC_ALL are `C.UTF-8`, TERM is `dumb`, `OPENCODE_DISABLE_AUTOUPDATE` is `true`, and PATH is exactly
-`/usr/local/bin:/usr/bin:/bin`. Every proxy spelling points to the proof-owned loopback deny proxy
+child; LANG/LC_ALL are `C.UTF-8`, TERM is `dumb`, `OPENCODE_DISABLE_AUTOUPDATE` is `true`, and PATH is
+exactly `/runtime`. That directory contains only the closed copied program inputs; no shell, package
+manager, system helper, or host executable exists. Every proxy spelling points to the proof-owned loopback deny proxy
 except both NO_PROXY spellings, which are empty. It has no Node/Bun/loader hook, TLS override, provider
 variable, or credential, and the namespace has no external route. The probe requests only bounded
 `GET /doc` and starts no session or model
@@ -5144,7 +6254,12 @@ FixtureLockV1 =
   targetOperatingSystem, targetArchitecture,
   frontDoorBuildTargetId, frontDoorExecutableFormat,
   nodeRuntimeVersion, pnpmVersion, esbuildVersion,
-  launcherByteLength, launcherRawSha256,
+  privateRootReleaseManifestByteLength, privateRootReleaseManifestArtifactDigest,
+  privateRootCiManifestByteLength, privateRootCiManifestArtifactDigest,
+  gateSourceByteLength, gateSourceRawSha256,
+  gateReleaseByteLength, gateReleaseRawSha256,
+  gateCiByteLength, gateCiRawSha256,
+  seccompPolicyDigest, targetLandlockPolicyDigest,
   nativeExecutableByteLength, nativeExecutableRawSha256,
   nativeManifestByteLength, nativeManifestArtifactDigest,
   openApiMethod, openApiRoute, openApiMediaType,
@@ -5155,26 +6270,68 @@ FixtureLockV1 =
   surfaceOperationCount, surfaceDispositionCount, registryEntryCount,
   measuredEntryCount, orderedEntryVectorDigest,
   buildInputRootDigest, sourceFileSetDigest,
-  probeRawSha256, independentVerifierRawSha256,
+  setupScriptRawSha256, probeRawSha256, independentVerifierRawSha256,
   gateCaseManifestRawSha256, expandedAssertionCount,
   fixtureFileCount, fixtureFiles, fixtureFileSetDigest
 ```
 
 `schemaId` is `remote-claw/opencode-listener-evidence-fixture-lock/v1`, version is `1`, descriptor and
 release/build tuple equal the selected constants, method/route/media are exact `GET`, `/doc`, and
-`application/json`, and `frontDoorFileMode` is `365` (`0555`). `artifacts` is exactly seven entries in
-`N,X,B,S,R,D,L` order, each with logical name, schema ID, byte length, and raw canonical-artifact
-SHA-256. Every lock field named `*RawSha256`, including file/program hashes, is exactly 64 lowercase
+`application/json`, and `frontDoorFileMode` is `365` (`0555`). The two nested JSON object projections
+have these exact key orders and no other key:
+
+```text
+FixtureArtifactV1 =
+  logicalName, schemaId, byteLength, artifactDigest
+
+FixtureFileV1 =
+  path, normalizedMode, byteLength, rawSha256
+```
+
+`artifacts` is exactly seven `FixtureArtifactV1` entries in `N,X,B,S,R,D,L` order. Their exact
+`logicalName` strings and matching `schemaId` strings are, respectively,
+`listener.native_executable` / `remote-claw/native-executable-chunk-manifest/v1`,
+`listener.front_door_executable` / `remote-claw/front-door-executable-chunk-manifest/v1`,
+`listener.front_door_build_manifest` / `remote-claw/front-door-build-closure-manifest/v1`,
+`listener.generated_surface` / `remote-claw/native-generated-openapi-surface/v1`,
+`listener.build_route_registry` / `remote-claw/native-listener-build-route-registry/v1`,
+`listener.measured_dispatch_table` / `remote-claw/native-listener-measured-dispatch-table/v1`, and
+`parent.listener_input` / `remote-claw/native-listener-evidence-input-vector/v1`.
+Each `artifactDigest` is the unpadded base64url SHA-256 of the exact canonical artifact bytes and each
+`byteLength` is its positive safe JSON-integer length. Every lock field named `*RawSha256`, including
+file/program hashes and each `FixtureFileV1.rawSha256`, is exactly 64 lowercase
 hex characters; canonical artifact/vector/root digest fields remain unpadded base64url decoding to 32
-bytes. `artifactCount = 7`, `fixtureFileCount = 13`, `surfaceDispositionCount =
-surfaceOperationCount`, and both registry/measured entry counts equal `14`. `fixtureFiles` lists every
-file above except the lock itself in displayed bytewise path order,
-with normalized mode, byte length, and raw SHA-256. Its digest is
-`digest(str("remote-claw/opencode-listener-fixture-file-vector/v1") || uint(fixtureFileCount) ||
-each str(path)||uint(mode)||uint(length)||bytes(rawSha256))`. The three explicit program/manifest
-hashes must equal their matching file-vector items. `sourceFileSetDigest` is
-`digest(str("remote-claw/opencode-front-door-source-file-vector/v1") || uint(count) || each
-str(path)||uint(mode)||uint(length)||bytes(rawSha256))` over exact `package.json`, `tsconfig.json`, and
+bytes. `artifactCount = 7`, `fixtureFileCount = 13`, `surfaceDispositionCount = surfaceOperationCount`,
+and both registry/measured entry counts equal `14`. `fixtureFiles` lists every
+file above except the lock itself in displayed bytewise path order as exact `FixtureFileV1` objects.
+Each `path` is that one relative POSIX filename; `normalizedMode` is JSON integer `365` (`0555`) when
+any source execute bit is set and `292` (`0444`) otherwise; and `byteLength` is a positive safe JSON
+integer. Its digest is:
+
+```text
+digest(str("remote-claw/opencode-listener-fixture-file-vector/v1") ||
+  uint(fixtureFileCount) ||
+  each str(path) || uint(mode) || uint(length) || bytes(hexDecode(rawSha256)))
+```
+
+The three explicit program/manifest file hashes must equal their matching file-vector items. The
+private-root/gate fields must equal `B` items 8–12 and both decoded policy digests; the arm manifest
+must also equal `S`'s length/digest link and its native consumer tuple must equal `N` item-for-item.
+`setupScriptRawSha256` equals the raw SHA-256 of the exact literal script bytes displayed below; the
+gate extracts those bytes independently from both item 7 and the probe, requires byte equality, and
+requires E1b3a's settled setup-script constant plus this E1b3b lock field to match. Before every
+namespace spawn, host mode independently hashes that same immutable byte buffer, requires the settled
+constant, round-trips its ASCII/LF bytes through the exact JavaScript string used as the Bash `-ceu`
+argv element, and requires byte equality; the spawn vector may not reconstruct or select a second
+script value.
+`sourceFileSetDigest` is:
+
+```text
+digest(str("remote-claw/opencode-front-door-source-file-vector/v1") ||
+  uint(count) || each str(path) || uint(mode) || uint(length) || bytes(SHA256(fileBytes)))
+```
+
+It covers exact `package.json`, `tsconfig.json`, and
 every regular descendant of `src/` and `build/`, in bytewise relative-path order; symlinks,
 nonregulars, and unlisted generated/output/`node_modules` paths reject. `expandedAssertionCount` is
 pinned only after implementation settles. The directory rejects a missing/extra/symlink/nonregular
@@ -5194,30 +6351,418 @@ fact: 386,197 body bytes and raw SHA-256
 not `S`; E1b3 must retain and independently parse the complete matching body before it can close the
 surface leaf.
 
-On capable hosts the measurement gate uses direct unprivileged user/network namespaces. Hosted CI may
-use the already reviewed E1b2 pattern only to create a private PID/network namespace with fixed
-absolute system commands; before package or repository code it must restore the nonzero runner UID/GID,
-clear supplementary groups and every capability set, set `no_new_privs`, and assert that state in both
-shell and test code. Neither path may skip or run project code privileged. The proof opens no external
-route, receives no secret environment, uses dependencies already installed from the lock, and leaves
-the worktree byte-identical. P08 seeds the parent with hostile `NODE_OPTIONS`, `NODE_PATH`,
-`LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, proxy, and TLS/config variables. It requires the compiled
-bundle to reject any nonempty `process.env`, verifies the spawn call's null-prototype zero-key `env`,
-uses a `NODE_OPTIONS --require` sentinel that would write a marker if inherited, uses a nonexistent
-`LD_PRELOAD` sentinel that would produce loader diagnostics if inherited, and proves identical clean
-measurement plus private-namespace serve results with no marker or unexpected stderr. These are
-parameterized assertions under the fixed P08 requirement, not a new top-level case ID.
+Every E1b3 target-execution gate, including E1b3a build/measurement, runs its fixed one-operation
+program as PID 1 of a private PID namespace inside private mount, network, and IPC namespaces. The
+hosted path is mandatory and non-skipping. Its protected root is constructed from capsules and sealed;
+gate-init recursively self-binds the locked inherited subtree inside the child mount namespace, pivots
+that clone into place, and strips the old root before any Node/package/build/target/probe byte runs.
+The privileged setup wrapper necessarily sees fixed host system paths and
+`/proc/<hostPid>/fd/<internalFd>`; the “no host path/FD” invariant begins at gate-init PID 1 and
+applies to all descendants.
+
+The host calls `/usr/bin/sudo` directly with this fixed outer vector. `coreutilsLimit` is the closed
+operation-derived literal `155s | 95s` below and never comes from a DTO:
+
+```text
+["/usr/bin/sudo", "-n",
+ "/usr/bin/setpriv", "--pdeathsig", "KILL",
+ "/usr/bin/timeout", "--signal=TERM", "--kill-after=2s", coreutilsLimit,
+ "/usr/bin/setpriv", "--pdeathsig", "KILL",
+ "/usr/bin/unshare", "--mount", "--net", "--ipc", "--pid", "--fork", "--kill-child=KILL", "--",
+ "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "LC_ALL=C",
+ "/bin/bash", "--noprofile", "--norc", "-ceu",
+ setupScriptBytes,
+ "remote-claw-e1b3-private-root-system-v1",
+ canonicalHostPid, capsuleCoordinateVector]
+```
+
+Three pinned `setpriv` invocations implement two parent-death edges plus one demotion. The first makes
+loss of sudo kill the still-armed timeout; the second makes loss of timeout kill the outer unshare
+monitor. Setup's two exact ancestry reads close either outer pre-arm race: loss before
+`PR_SET_PDEATHSIG` changes the observed chain and rejects before a mount, while loss after it delivers
+`SIGKILL`. Outer unshare's pinned `--pid --fork --kill-child=KILL` makes setup PID 1 of a private outer
+PID namespace. Monitor loss kills setup, and setup loss makes the kernel kill every helper and nested
+descendant, so no per-helper or inner pre-arm race exists. The third setpriv only performs the fixed
+UID/GID 60000 and single-`CAP_SYS_ADMIN` demotion needed to create the child user/mount/PID namespace;
+inner unshare's own `--kill-child=KILL` kills its PID 1 on monitor loss. Neither unshare chain performs
+the final capability, keyring or seccomp closure; static gate-init owns those.
+`capsuleCoordinateVector` is not a DTO. It is the
+fixed ordered positive-decimal FD/length/lowercase-hex-SHA-256 triple for gate, Node, program, target,
+data, authenticated request, and then each runtime entry in manifest index order, preceded by the
+exact platform and count. It contains no path, key, request bytes, destination, helper selector, or
+timeout. The script chooses every destination from its own closed per-platform table. It embeds both
+exact canonical platform-manifest constants and their matching item-9/item-10 gate tuples; runtime
+count and guest paths derive only from the selected decoded constant. A supplied coordinate can never
+select a pathname, platform, or privileged executable tuple.
+
+`setupScriptBytes` are one LF-only ASCII literal shared byte-for-byte by item 7 and the proof probe.
+The E1b3a implementation must settle its raw hash after the gate binaries and destination tables
+freeze, extract it independently from item 7, and require equality with the package constant. E1b3b
+later extracts both item 7 and the newly added probe, requires byte equality, and matches both against
+the fixture lock. Its exact control flow is closed:
+
+1. Require root EUID/EGID, zero caller environment except the two displayed keys, matching
+   architecture, a host PID that is the fresh fixed host, canonical coordinate grammar/count/order,
+   and no preexisting proof coordinate. Before any mount, read strict `/proc` facts and require the
+   live host-proc ancestry
+   `host -> sudo -> timeout -> outer-unshare monitor -> this setup PID`, with exact executable
+   identities, parent links, start times, command coordinates and operation-derived timeout literal.
+   The inherited host-mounted proc reports host PIDs; setup separately requires strict `NSpid` ending
+   in `1`, its outer PID-namespace identity distinct from the host's, and PID-namespace PPID zero. It
+   does not equate Bash `BASHPID=1` with host-proc stat field 1. Recheck the same facts immediately
+   after. Also require no existing process with real/effective/
+   saved/fs UID 60000. A parent-death race or shared-runner identity therefore rejects before setup work.
+2. Make mount propagation recursively private; require only initially down `lo` in the new net
+   namespace and bring it up with fixed `/usr/sbin/ip`. The normalized post-state is exact: one
+   interface `lo` with index 1, loopback/up/lower-up flags, MTU 65536 and zero MAC; addresses only
+   `127.0.0.1/8` and `::1/128`, both host scope; and local-table routes only
+   `(local,127.0.0.0/8,host)`, `(local,127.0.0.1,host)`,
+   `(broadcast,127.255.255.255,link)`, and `(local,::1,host)`, all through `lo` with no gateway.
+   Routing rules are exactly IPv4 priorities `0 -> local,32766 -> main,32767 -> default` and IPv6
+   `0 -> local,32766 -> main`, all from `all`. Any other interface, address, route, rule, default
+   route, gateway or non-loopback next hop rejects.
+3. Mount protected root tmpfs at exact outer `/mnt` as
+   `rw,nodev,nosuid,size=402653184,nr_inodes=4096,mode=0755`; mount
+   `/mnt/work` as
+   `rw,nodev,nosuid,noexec,size=67108864,nr_inodes=16384,mode=0755`; and mount
+   `/mnt/dev` as `rw,nosuid,noexec,size=1048576,nr_inodes=16,mode=0755`.
+4. Create the fixed root directories
+   `/.oldroot,/dev,/io,/proc,/runtime,/tcb,/work/control,/work/operation` plus every and only proper
+   parent directory of the selected manifest's interpreter/DSO guest paths. The script derives that
+   bytewise parent closure from its embedded per-platform table; a coordinate cannot add a directory.
+   Runtime parents may include such exact empty scaffolding as `/lib`, `/lib64`, or `/usr/lib` only
+   when a retained guest path requires it. Outer root owns every directory except `/work/operation`,
+   which is chowned to UID/GID 60000 mode `0700`; `/work/control` is outer-root mode `0700`.
+   Runtime parents are `0755` while files are installed and become `0555` before sealing. The one user
+   map leaves protected owners unmapped and maps only the operation subtree to the runner. No
+   undeclared directory or file exists: in particular there is no ambient repository path,
+   configuration, certificate store, package manager, shell, host executable, socket, FIFO, symlink,
+   or device.
+5. Create exactly `/dev/null` character 1:3 mode `0666` and `/dev/urandom` character 1:9 mode
+   `0444`, then remount dev `ro,nosuid,noexec` without `nodev`. Reject any third entry or device
+   tuple.
+6. Open each source capsule once through its fixed `/proc/<hostPid>/fd/<fd>`, require a distinct
+   read-only link-count-zero regular file with the asserted length/hash, copy exactly to a same-directory
+   temporary regular file, verify EOF/mode/owner/length/hash, and rename once to its fixed coordinate.
+   Copy Node/program/target/data/request to
+   `/runtime/node,/runtime/program.mjs,/runtime/target,/io/data,/io/request`; copy each manifest
+   runtime entry to its fixed guest path; and copy the platform's pinned gate bytes once to
+   `/tcb/gate-init` mode `0555`. Runtime
+   interpreter files are `0555`, libraries/data/program are `0444`, Node/target are `0555`, and
+   request is root `0400`. Gate bytes must equal the script's embedded platform pin before the gate
+   can execute.
+7. Create root-owned `/work/control/.response.tmp` mode `0600`; validate the complete root
+   inventory, selected immutable-input invocation-file vector, request capsule coordinate, response
+   inode/limit, platform runtime manifest, content aggregate
+   `<=335544320`, regular-file/directory counts `<=128/64`, and every protected write failure; then
+   remount protected root `ro,nodev,nosuid`.
+8. Recheck the exact five-process host ancestry and absence of every other outer-UID-60000 process.
+   By scanning strict host-proc stat/status/ns facts, require the outer PID namespace to contain only
+   setup as live PID 1 with no child or zombie. Close every source, capsule, old-root directory, and
+   setup scratch FD, then invoke this exact inner vector:
+
+   ```text
+   /usr/bin/env -i /usr/bin/setpriv --reuid=60000 --regid=60000 --clear-groups --bounding-set=-all,+sys_admin --inh-caps=-all,+sys_admin --ambient-caps=-all,+sys_admin --no-new-privs /usr/bin/unshare --user --map-current-user --keep-caps --mount --pid --fork --kill-child=KILL --mount-proc=/mnt/proc -- /mnt/tcb/gate-init --init
+   ```
+
+   The complete chain has zero environment, cwd `/`, FD 0 opened on `/mnt/io/request`, the
+   non-`CLOEXEC` response description on FD 1, FD 2 on private null, and every FD above 2 closed. The
+   explicit `-all,+sys_admin` capability forms prevent an inherited bit from surviving demotion.
+   Before forking PID 1, inner unshare therefore has UID/GID 60000, empty supplementary groups, NNP
+   one, and only `CAP_SYS_ADMIN` in every inheritable/permitted/effective/bounding/ambient set. That
+   temporary initial-namespace capability exists only so hosted kernels cannot reject user-namespace
+   creation. Unshare creates the mount namespace with the new user namespace, after which the
+   capability has no authority in the ancestor namespace; inner `--kill-child=KILL` kills PID 1 on
+   monitor loss. Setup loss at any point destroys the outer PID namespace and kernel-kills this entire
+   chain even before setpriv or unshare can arm anything.
+9. After inner unshare exits, treat only status zero or one as eligible for opaque response relay. Its
+   synchronous return proves the pinned monitor has exited and the monitor's response-FD alias has
+   closed before setup touches the inode; the privileged shell neither parses the canonical frame nor
+   knows its MAC key. Validate the response as the original outer-root-owned regular inode, mode
+   `0600`, link count one, nonempty length within the fixed global response ceiling, and no extra
+   work/control entry. Re-scan host proc and require the
+   outer PID namespace again contains only live, non-zombie setup PID 1; every synchronous system
+   helper must have been waited and reaped. Then rename the inode to `response.bin`, relay
+   it with pinned system `cat` to wrapper stdout, and only then tear down proc/dev/work/root in reverse
+   order and exit with the same status. The unprivileged host subsequently requires status zero with a
+   canonical authenticated `ok`, or status one with a canonical authenticated `error`; any mismatch is
+   discarded. Every other inner exit relays no byte and performs the same bounded teardown.
+
+Apart from the exact setup script interpreted by pinned Bash/system tools, static gate-init is the
+only repository-built executable that runs with namespace capabilities. `--init` requires PID 1/PPID
+0, EUID/EGID 60000, a strict one-row whitespace parse plus EOF of each `/proc/self/{uid,gid}_map`
+whose three integers are exactly `60000,60000,1`, exact `/proc/self/setgroups` bytes `deny\n`, an
+already empty supplementary-group vector, the full new-userns capability state expected from
+`--keep-caps`, zero environment, exact argv, and exact FDs 0/1/2. Before changing root, it parses the
+inherited `/mnt` subtree from `/proc/self/mountinfo` and requires exactly the protected root plus its
+work/dev/proc children with the frozen filesystems, flags, roots, and parent graph. A less-privileged
+user-owned mount namespace locks that inherited tree; the independent P08 preflight proves direct
+pivot returns `EINVAL`, but production gate-init never performs that destructive negative probe.
+Gate-init calls exact raw `mount("/mnt", "/mnt", NULL, MS_BIND|MS_REC, NULL)`, reparses mountinfo, and requires one
+fresh top/work/dev/proc mount-ID set with the same superblocks, roots, flags, and nested parent graph;
+a missing, plain nonrecursive, extra, changed, or still-inherited mount rejects. It then changes into
+`/mnt`, calls `pivot_root(".", ".oldroot")`, changes to `/`, detaches `/.oldroot`, and proves no
+old-root pathname, root, cwd, directory descriptor, or scratch descriptor remains. After detach, the
+complete **visible namespace** mount inventory is exactly the four cloned mounts at `/`, `/work`,
+`/dev`, and `/proc`; no inherited mount ID appears in mountinfo. This is a reachability and visible-
+inventory claim, not a claim that every detached mount object's kernel refcount is zero. Within
+gate-init's descriptor table, request FD 0, response FD 1, and private-null FD 2 are the only bounded
+detached-source exceptions: because they were opened before the recursive clone, their immutable
+`struct file` paths may retain the corresponding source root/work/dev mount IDs. Gate-init requires
+exactly those three regular/regular/character inode, type, mode, access-mode, offset, and source-mount
+correlations; none is a directory or permits pathname traversal, and no fourth source-mount
+description survives in that table. Gate-init's exact hash-bound current `mm->exe_file`, originally
+execed from the source root, is a separate non-FD regular-file reference; gate-init validates its
+`/proc/self/exe` bytes/identity and closes the verification handle, and the mapping disappears when it
+execs cloned `/runtime/node`. The pinned system `unshare` monitor outside the child PID namespace and
+private proc may likewise retain its own system-executable mapping and its copies of exact stdio while
+it waits; it executes no repository byte, exposes no directory FD to the child, and exits with all
+aliases closed before setup validation.
+It remounts the private proc `ro,nosuid,nodev,noexec`, revalidates all four mount flags and namespace
+identities, requires root/dev writes to fail while bounded work and null/urandom behavior succeed, and applies fixed
+umask/resource limits, closes range 3 through UINT_MAX, locks the no-root/set-ID securebits, resets the
+new user namespace's bounding set, verifies supplementary groups remain empty without calling the
+now-denied `setgroups(2)`, and drops every bounding, ambient,
+inheritable, permitted, and effective capability while retaining all real/effective/saved/fs GIDs and
+UIDs at 60000. It verifies every `Cap*` value zero, joins a new anonymous session keyring after that
+transition, proves it has no links,
+sets `no_new_privs`, installs the architecture-checked seccomp filter, and execs only
+`/runtime/node /runtime/program.mjs` with zero environment. Failure at any step exits without a
+response.
+
+Seccomp proof is relational rather than tied to a host's ambient filter count. Immediately before
+install, gate-init snapshots `Seccomp` mode and `Seccomp_filters`; it accepts only mode zero with count
+zero or mode filter with a positive count. Installing its policy must change mode to filter and
+increase the count by exactly one. PID 1 retains that post-count. Before Landlock, every direct target
+gate requires its own mode/count to equal PID 1's exact inherited values by comparing strict
+`/proc/self/status` and `/proc/1/status` fields; no absolute container-dependent count is pinned.
+
+Before dropping capability, gate-init sets these exact soft/hard rlimits for PID 1 and every
+descendant: `CORE=0/0`, `NOFILE=256/256`, `NPROC=64/64`,
+`FSIZE=67108864/67108864`, `STACK=16777216/16777216`, `DATA=2147483648/2147483648`,
+`AS=161061273600/161061273600`, `MEMLOCK=0/0`, `MSGQUEUE=0/0`, `SIGPENDING=256/256`,
+`NICE=0/0`, `RTPRIO=0/0`, and `RTTIME=0/0`. `CPU` is `145/150` seconds for build/capture and
+`85/90` otherwise. It requires the inherited hard limits to permit these exact reductions, reads them
+back, and fails before Node if any value differs. The unusually high 150-GiB address-space ceiling is
+deliberate: pinned Bun reserves roughly 135 GiB of sparse virtual address space. This dormant,
+fixed-input proof does not claim hostile-target physical-memory containment; exact target hashes, the
+64-process/thread ceiling, bounded files, and outer wall deadlines define E1b3's resource scope, while
+E1b4 must add the live runtime's kernel-enforced aggregate resource envelope before authority.
+
+The inherited seccomp policy is a targeted deny/domain filter rather than a brittle Node syscall
+allowlist:
+
+- an architecture mismatch or x86 x32 syscall kills the process;
+- `socket` permits AF_UNIX stream/datagram/seqpacket, AF_INET/AF_INET6 stream/datagram with protocol
+  zero/TCP/UDP, and AF_NETLINK raw/datagram only with NETLINK_ROUTE; `socketpair` permits only
+  AF_UNIX; every other family/protocol, including AF_VSOCK, AF_PACKET and AF_XDP, returns `EPERM`;
+- `clone3` and `io_uring_setup` return `ENOSYS`; `io_uring_enter` and `io_uring_register` return
+  `EPERM`; legacy `clone` rejects every
+  `CLONE_NEWUSER|NEWNS|NEWNET|NEWIPC|NEWPID|NEWCGROUP|NEWUTS|NEWTIME` bit;
+- `keyctl,add_key,request_key,unshare,setns,mount,umount2,pivot_root,chroot,open_tree,move_mount,`
+  `fsopen,fsconfig,fsmount,mount_setattr,open_by_handle_at,name_to_handle_at,mknod,mknodat,`
+  `pidfd_getfd,ptrace,process_vm_readv,process_vm_writev,bpf,perf_event_open,userfaultfd,`
+  `memfd_create,execveat,capset` are denied; and
+- ordinary `execve`, the three Landlock syscalls, and further seccomp restriction remain available.
+  Node 22 and OpenCode must prove the `clone3/io_uring_setup -> ENOSYS` fallbacks; `EPERM` cannot
+  substitute because the selected Bun executable traps on that clone3 result.
+
+Every direct operation target starts as
+`/tcb/gate-init --target <closed-role>` with exact newly created operation stdio/FD mappings.
+Target mode requires non-PID1, direct PID-1 parent, UID/GID 60000, empty groups/capabilities,
+`no_new_privs=1`, the inherited seccomp filter, exact role/argv/zero-or-role-fixed environment, and
+the exact FD table. PID 1 first creates two distinct link-count-zero `O_TMPFILE` control capsules in
+private work, closes their writers, and maps read-only canonical invocation-manifest and selected
+platform-manifest descriptions to FD 6 and FD 7. Operation stdio/control/listener descriptors retain
+their separately frozen FD 0–5 ABI and no descriptor above 7 enters target mode. Missing, swapped,
+aliased, writable, nonzero-offset, malformed or trailing control data rejects. Target mode
+strictly parses both controls, rederives the platform/invocation/file-vector digests and role, requires
+Landlock ABI at least 3, and creates the one ABI-1-through-3 filesystem ruleset at exact FD 8. It then
+streams every policy object itself from the sealed root in canonical order. Because FD 5 is absent for
+every non-serve role, the raw ruleset syscall result is not assumed to be 8: target gate immediately
+moves it to free FD 8 with `dup3(...,O_CLOEXEC)` and closes the original, or sets `FD_CLOEXEC` if the
+syscall already returned 8, then verifies its identity. For each exact fixed
+Node/target/device/work/proc path and each role-reachable interpreter/DSO in runtime-file-index order,
+it opens one `O_PATH|O_NOFOLLOW` handle and, for a regular file, one separate read-only no-follow
+description for full two-pass hash/stat/EOF verification. Any open that occupies a role-ABI hole below
+9 is immediately duplicated with `F_DUPFD_CLOEXEC` to the lowest free FD at or above 9 and the original
+is closed before parsing, hashing, or `landlock_add_rule`. These handles never come from PID 1 or a DTO
+and are checked against the embedded policy plus authenticated manifests before use.
+
+For `own_proc`, gate target never grants the `/proc/self` symlink itself: it opens fixed `/proc`,
+derives its own positive decimal PID from `getpid()`, and opens that exact no-follow directory entry;
+the entry must be the same inode reached by a separately validated `/proc/self` link. The exec keeps
+the PID, so the rule covers the target process but not a forked child's distinct proc directory.
+
+The ruleset uses only ABI-1-through-3 rights. Its executable/read matrix is exact: `build` grants execute/read to
+`/runtime/node` and immutable native-esbuild `/runtime/target`; `capture` grants execute/read only to
+the OpenCode `/runtime/target`; and `package_measure | measure | serve` grants execute/read to
+`/runtime/node` but only read to bundle `/runtime/target`, which becomes Node standard input. Each arm
+also grants execute/read to its exact interpreter and read to every exact recursive DSO. Common rules
+grant read/write null, read-only urandom, and read/read-dir access to the target launcher's
+O_PATH-resolved **own** `/proc/self` inode. No rule covers broad `/proc`, `/proc/1`, or a later child's
+distinct proc inode. The exact role work subtree receives read/write/create-regular/
+create-directory/remove/rename/truncate but no execute, device, FIFO, socket or symlink creation.
+No rule covers `/io,/etc,/sys,/run,/tmp`, program, response, gate, cache, hwcaps, or another root
+file. Immediately after adding one object's rule, the launcher closes that object's read handle and
+O_PATH handle before opening the next; it never retains the object set as descriptors. Thus the gate's
+maximum live table is 11 descriptors even when all role FDs 0--5 are occupied, and remains below the
+fixed 256 limit at the maximum accepted 128-file/64-directory manifest. After the final object it
+closes FDs 6/7 and has no control, O_PATH, policy-byte, or hash handle at FD 9 or above, while retaining
+exactly the validated ruleset FD 8. It calls
+`landlock_restrict_self(8,0)`, closes FD 8, proves the operation FD
+table is again the exact role-specific subset of 0--5 (with FD 5 present only for `serve`), proves
+`/proc/1/fd` inaccessible, and execs the fixed role target. Landlock
+is inherited by the entire target subtree. A missing, aliased, prematurely closed, extra, or surviving
+ruleset/handle rejects. In the build arm,
+esbuild resolves fixed `ESBUILD_BINARY_PATH=/runtime/target`; its forked service needs no access to a
+process-relative proc inode.
+
+Before target launch PID 1 authenticates and copies request/data, zeroes the request MAC key after
+initializing response-MAC state, replaces FD 0 with private null, and verifies the exact root,
+invocation manifest, namespaces, interfaces, credentials, keyring, seccomp mode/filter count, and FD
+inventory. During the inner `unshare --pid --fork` wait, exactly two trusted descriptors alias the
+writable response open description: inner PID 1's FD 1 and the pinned system `unshare` monitor's FD 1.
+PID 1 has no second local alias. The monitor is outside the child PID namespace, is absent from its
+private proc, executes no repository byte, and neither reads nor writes FD 1. PID 1's FD 1 remains
+deliberately non-`CLOEXEC` across the gate-init-to-Node exec. Trusted spawn file actions replace child
+FD 1 with the separately created operation-output description and close every inherited response
+alias before `/tcb/gate-init --target` begins; no target-gate entry FD aliases the response. Setting
+`CLOEXEC` on PID 1's response FD is a required negative mutation: it must prevent a response and fail
+the operation.
+Before Landlock, trusted target gate compares `fstat(1)` with `statx` facts for PID 1's FD 1, requires
+distinct device/inode/type and the role's exact pipe-or-private-null identity, and never opens the
+parent description. Target
+Landlock plus the seccomp `pidfd_getfd/ptrace/process_vm` denials prevent reopening it through PID 1. After the operation PID 1
+reaps all descendants, postverifies every protected file and mount, requires private proc exactly
+`{1}`, writes one bounded authenticated frame to FD 1, closes it, and exits. A leaked live or zombie
+descendant changes success to error; PID-namespace destruction remains the final cleanup backstop.
+
+The selected OpenCode environment retains the exact credentialless keys documented above but maps
+HOME/XDG/TMP/cwd below `/work/operation` and sets `PATH=/runtime`. Private root contains no
+`openssl.cnf` or other runtime data by default. If a real retained operation demonstrates one
+additional file need, the tranche blocks for a new bounded manifest entry and Landlock rule; it never
+falls back to the host root. Actual build, package measurement, capture, four-role measurement and
+serve must all pass this sparse root. Matching arm64 has already proved the pinned OpenCode binary can
+return the exact 386,197-byte `/doc` body from a private root; the implementation gate must repeat
+that proof under the final gate-init filters.
+
+Both Ubuntu 24.04 jobs pin exact system packages `sudo=1.9.15p5-3ubuntu5.24.04.2`,
+`bash=5.2.21-2ubuntu4`, `util-linux=2.39.3-9ubuntu6.5`, `mount=2.39.3-9ubuntu6.5`,
+`coreutils=9.4-3ubuntu6.2`, and `iproute2=6.1.0-1ubuntu6.4`, plus the architecture-specific
+GCC/binutils releases frozen above; each
+records raw package facts before setup. Both
+preflight O_TMPFILE, private mount/net/IPC plus nested outer/inner PID/proc namespaces, locked
+inherited-tree direct-pivot rejection, recursive self-bind clone/pivot/detach with nested-mount
+preservation, mknod, both parent-death edges, both util-linux `--kill-child` monitor/child race
+closures, setup-PID-1 descendant teardown, seccomp-filter architecture, Landlock ABI >=3, closed ELF parsing, and at least 1 GiB
+scratch. Mount calls use util-linux internal-only mode and no filesystem helper. No capability or
+kernel feature may silently skip.
+
+Deadlines are nested and monotonic. Build/capture target work is 120 seconds; package measurement,
+measurement and serve target work is 60 seconds; cleanup grace is 2 seconds. PID 1 must complete in
+130/70 seconds, coreutils timeout uses exact `155s/95s`, the host's namespace `spawnSync` fallback
+is `160_000/100_000` ms, the complete caller-to-host bound is `185_000/125_000` ms, and the
+external absence bound is `190_000/130_000` ms. Host collection begins inside the complete bound;
+root copy/verification/teardown has the gap between PID-1 and coreutils bounds. Only one parameterized
+case per deadline class waits a real outer bound; mutation cases fail immediately.
+
+Coreutils timeout runs inside sudo and owns its child command group. At its deadline it signals the
+second setpriv/outer-unshare monitor, never sudo. Killing timeout alone either changes the setup's exact
+preflight ancestry before work or triggers the monitor's armed signal; its pinned `--kill-child=KILL`
+kills setup PID 1, and outer PID-namespace destruction kernel-kills every synchronous helper, inner
+monitor, inner PID 1, and nested descendant. Killing sudo triggers the same cascade at the first edge;
+killing setup directly destroys the outer PID namespace; killing the inner monitor triggers its own
+`--kill-child=KILL`. Host loss leaves sudo plus the independently armed timeout alive only until the
+same fixed deadline. No case sends a reuse-prone numeric-PID or negative-PGID signal, and no loss path
+may invent evidence.
+A separate test-only freestanding static no-libc root fault harness, reproducibly built from frozen
+source with the gate compiler recipe but never admitted as gate/system provenance, opens `pidfd_open`
+handles after each exact proc identity is known, rechecks each pidfd's target PID plus
+start-time/executable/namespace facts, and uses only `pidfd_send_signal` for injection. It keeps every
+pidfd through signal injection, pollable death, and disappearance of the target proc entry, then closes
+each pidfd exactly once **before** the namespace-absence scan; a held pidfd is not allowed to pin the
+namespace whose destruction the harness is proving. Only after every close does it use the recorded
+PID/start-time/namespace-inode tuples to scan for a live member, PID reuse, or surviving namespace; a
+numeric PID is selection data, never signal authority. The harness records process-group and
+PID/mount/net/IPC namespace identities, including both PID namespaces, before fault injection; on host
+loss it accepts no frame, waits the armed coreutils bound, and proves every identity and setup marker
+absent before the next case. Simultaneous destruction by an independent root adversary remains outside
+this dormant E1b3 claim and is E1b4 work. The harness has no request, response, capsule, secret, or
+evidence FD and cannot make a positive case pass.
+
+The stock positive vector proves the outer monitor's child-pidfd/parent-death race closure, setup's
+outer PID-1/PPID-0 and host-proc `NSpid` facts, the demoted ID/capability/NNP state, both unshare
+monitor-to-PID-1 kill cascades, and synchronous helper wait/reap before relay. Deterministic loss cases
+stop the real sudo, timeout, outer monitor, setup, inner monitor, and inner PID 1 before and after each
+child arm; setup has a live foreground helper and inner descendant in the relevant cases. Every case
+must leave no helper, monitor, PID 1, mount, namespace, zombie, or frame. A test-only stopped helper
+cannot satisfy system provenance or emit evidence.
+
+Normal, error, signal, ENOSPC/inode exhaustion, copy/hash mismatch, helper failure, target crash,
+response failure and every injected parent loss remove both tmpfs mounts, private dev/proc, all
+processes/namespaces, and every named byte. Host-held link-count-zero capsules die with their final
+descriptions. The proof opens no external route, receives no credential environment, uses only locked
+dependencies, and leaves the worktree byte-identical. It seeds pathname and abstract AF_UNIX, FIFO,
+host device, host executable/cwd, AF_VSOCK and parent-keyring sentinels and proves all inaccessible
+while loopback HTTP and required null/urandom behavior still work.
+
+A capable local gate may replace only the initial sudo namespace creation with an equivalent
+unprivileged user-namespace setup after proving the same root/gate/manifests and every assertion. The
+hosted path remains mandatory; neither path may skip. Apart from the exact script, pinned system tools,
+and static gate-init, no repository/package/build/target/probe byte is interpreted before the UID,
+keyring, NNP and seccomp transition.
 
 <a id="e1b3-release-gate"></a>
 
-**E1b3 owner map and executable release gate.** One integration owner alone changes package manifests,
-lockfile, barrels, workflow, proof pins, and synchronized docs. Non-overlapping implementation owners
-are `packages/opencode-front-door/**` for the build target; the generated surface and
-`spikes/opencode-native/e1b3/**` for proof; one new listener-evidence state module/test for codecs and
-raw verification; and the E1b3 collector/test plus the non-barrel held-handle extension in
-`linux-executable-collector.ts` for trusted capture. Only the pure codec may enter the host-state
+**E1b3 owner map and executable release gate.** The frozen non-overlapping implementation ownership is
+exact:
+
+- the codec owner changes only
+  `packages/cli/src/host/state/native-binding-authority-listener-evidence.ts`, its adjacent
+  `.test.ts`, and the existing `packages/cli/src/host/state/native-binding-authority-evidence.ts`
+  plus its adjacent `.test.ts`; changes to the existing pair are limited to replacing the four
+  `B/S/R/D` registry ceilings with the exact stricter values above and locking those values; the new
+  nested private-root manifest/ELF codecs remain in the listener-evidence file;
+- the front-door owner changes only `packages/opencode-front-door/**` except its `package.json`, and is
+  the sole owner of the gate-init source, its fixed cross-build recipe, generated arm64/x64 binaries,
+  runtime/ELF resolver, setup literal, and E1b3a root-gate tests;
+- the proof owner changes only `spikes/opencode-native/generate-e1b3.mjs`,
+  `spikes/opencode-native/e1b3/listener-evidence-probe.mjs`, and
+  `spikes/opencode-native/e1b3/verify-listener-evidence.mjs`; and
+- one integration owner alone changes `package.json`, `packages/opencode-front-door/package.json`,
+  `spikes/opencode-native/package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`,
+  `packages/cli/src/host/state/index.ts`, `.github/workflows/native-proofs.yml`, `.gitattributes`,
+  `spikes/opencode-native/e1b3/README.md`, the generated fixture outputs listed above (every
+  directory entry other than that README and the two `.mjs` implementations), and synchronized
+  Markdown.
+
+The existing E1b1 `linux-executable-collector.ts` and its test are byte-for-byte unchanged. Only the pure codec may enter the host-state
 barrel. No collector, build, measurement, fixture, or proof module enters a production barrel or
 package export.
+
+The integration owner adds exact `.github/workflows/native-proofs.yml` job `e1b3-x64`, pinned to
+Ubuntu 24.04, `actions/setup-node` input `22.23.2`, and pnpm `10.29.1`. Its path filter includes
+the complete `packages/**` and `apps/**` trees because those are the dormancy scan's production
+source, bare-import, package-manifest, and transitive-workspace-reachability inputs; narrowing this to
+only the new package or codec files would let a later production consumer evade the gate. It also
+includes `spikes/opencode-native/**`, `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`,
+`.gitattributes`, `docs/**`, and the workflow itself. In E1b3a the job runs the E1b3a focused commands below; in
+E1b3b it additionally runs the offline `test:e1b3` command below against the committed candidate. The
+required matching-arm64 live generation/compare command is exact:
+
+```bash
+pnpm --filter @remote-claw/opencode-native-proof run proof:e1b3
+```
+
+That package script is exact `node generate-e1b3.mjs --check`: before any target open it requires exact
+`process.platform === "linux"` and `process.arch === "arm64"`; it performs the live private-namespace
+generation into bounded in-memory buffers, reads the committed E1b3 fixture only for comparison,
+compares every candidate and platform-common byte, and requires a byte-identical worktree. Check mode
+creates no host pathname and never updates pins. Candidate regeneration is a separate explicit
+maintainer action that owns its named writes and cannot satisfy the release gate. The x64 job and
+matching-arm64 command must both approve the same committed `B`; neither platform may synthesize or
+bless the other platform's executable/tree observations.
 
 Dormancy is checked across both source imports and workspace-package reachability. The new package is
 `private:true`, has no `bin`, `main`, `exports`, `start`, `preinstall`, `install`, `postinstall`,
@@ -5240,11 +6785,20 @@ one-for-one onto the ascending IDs and cannot be substituted while preserving on
   four new leaves and the parent.
 - `P01`–`P08`: arbitrary executable; test shim; executable-role transplant; raw front-door digest
   mismatch; executable-manifest mismatch; two clean builds differ; toolchain/build-input mismatch;
-  held release/CI interpreter omitted, substituted, or influenced by inherited Node/loader environment.
+  held release/CI interpreter, recursive DSO, gate source/binary, seccomp/Landlock policy, or platform
+  manifest omitted, substituted, or influenced by inherited Node/loader environment. Parameterized
+  P08 also proves the Landlock ruleset remains exact FD 8 through `restrict_self` and no later, while
+  premature close, alias, or surviving policy handle rejects. At each role's exact occupied/absent
+  FD-5 shape and at the maximum accepted 128-file/64-directory inventory, streaming normalization
+  keeps every temporary object/read handle at FD 9 or above, closes it after its one rule, and proves
+  the live table never exceeds 11 descriptors under `RLIMIT_NOFILE=256`; direct pivot of the locked
+  inherited tree returns `EINVAL`; only the exact recursive
+  self-bind clone preserves work/dev/proc and permits pivot/detach; missing/nonrecursive/changed clones
+  reject; and old-root/pathname+abstract-UNIX/FIFO/device/AF_VSOCK/keyring sentinels are unreachable.
 - `B01`–`B12`: omitted dependency; extra dependency; changed dependency bytes; duplicate dependency;
   reordered closure; label/symbol without content closure; dynamic import; runtime asset omitted;
-  native add-on; symlink/nonregular input; input changes during build; closure transplanted across
-  binaries.
+  native add-on; symlink/nonregular input; an admitted build byte changes or differs from its retained
+  snapshot/held observation; closure transplanted across binaries.
 - `S01`–`S10`: raw OpenAPI byte change; whitespace-only raw change; duplicate JSON key;
   malformed UTF-8/JSON; byte/depth/value/count overflow; operation add/delete;
   method/path/operation-ID/span change; engine-version mismatch; native-binary transplant; three
@@ -5266,9 +6820,16 @@ one-for-one onto the ascending IDs and cannot be substituted while preserving on
 - `Q01`–`Q18`: each of seven inputs mutates before first await; overlapping views; growable shared
   buffer resize; buffer detach/shrink; hostile getter/species/proxy; returned-byte alias mutation;
   executable truncation; executable growth; same-length executable mutation; mode change;
-  unlink; rename/replacement; close failure; primary error plus close failure; cancellation at every
-  asynchronous phase; measurement pipe close and child reap; build-temp cleanup; exact
-  `/proc/self/fd` and stdin-held-bundle equality on success and every injected failure.
+  unlink; rename/replacement; close failure; primary error plus close failure; hard-timeout or external
+  host-only, coreutils-monitor-only, outer-unshare-monitor, setup-PID-1, inner-monitor, or inner-PID-1
+  loss before and after each child arm and while a foreground helper is live; measurement protocol close and
+  child reap; build-temp/private-root/work/dev cleanup including inode/byte exhaustion; exact
+  outer-capsule and stdin-held-bundle equality on success and every injected failure; response-FD
+  `CLOEXEC` or target-entry alias substitution rejects with no frame. Parameterized
+  Q cases cover every capsule/root/runtime copy phase, PID/mount/net/IPC/user namespace, recursive
+  clone/pivot/detach and mount-ID/parent/flag relation,
+  new keyring, capability/NNP/seccomp/Landlock transition, response-file relay, process/mount absence,
+  and root/work/dev byte/inode boundary without adding a second top-level meaning.
 - `D01`–`D06`: production-root or workspace-dependency reachability; package/native barrel, `bin`, or
   lifecycle-script exposure; schema/migration/state mutation; CLI flag/protocol/operation/health-bit
   change; non-proof listener/network/broker/provider call; import/dependency allowlist differs from the
@@ -5280,7 +6841,71 @@ emit the exact unique ID set with no missing, duplicate, or unknown value and co
 description too; the expanded assertion count and case-manifest digest are pinned only after
 implementation bytes settle.
 
-The focused commands are exact:
+That file and the 106-ID exact-set teardown first land in E1b3b. E1b3a deliberately emits no partial
+case-ID manifest. Its prerequisite gate is nevertheless exact and must prove all of the following
+before its PR may merge:
+
+- complete strict synthetic-fixture parse/encode/decode and digest-vector tests for all four `B/S/R/D`
+  codecs, every field and bound, without constructing a retained or authoritative leaf;
+- two independently captured canonical source snapshots produce identical bundle and normalized
+  metafile bytes under exact Node 22.23.2, pnpm 10.29.1, and esbuild 0.28.0 inputs;
+- build driver/JS API/snapshot occupy standard input/FD 3/FD 4, respectively, with no FD 5, cwd `/`,
+  exact immutable `/runtime/target` as `ESBUILD_BINARY_PATH`, the exact two-key environment in
+  insertion order, bounded canonical output, empty successful
+  stderr, timeout kill/reap, stable pre/post held inputs, and complete FD/temp cleanup;
+- missing, swapped, closed, substituted, or extra descriptors reject; hostile Node/loader/esbuild,
+  npm/pnpm, proxy, and TLS environment cannot execute a sentinel or select an ambient package, source
+  reread, download, or network fallback;
+- a test-local vulnerable numeric-FD harness demonstrates that close/substitute/execute/restore can
+  pass naive pre/post checks and that cleanup can close a replacement, while every real cross-owner or
+  fixed-operation API exposes no caller-selected descriptor, capsule, handle, child, callback, helper selector, or
+  function-valued hook; the vulnerable async control proves a scheduled attacker can
+  enumerate/close/reuse/restore its FDs, while a scheduled callback against every real synchronous
+  host call runs only after all launcher/custodian resources are gone and no substituted sentinel executes;
+  request/response mutation,
+  truncation, trailing data, replay, operation/nonce/request-digest/program/runner transplant, wrong
+  HMAC, external-program termination, timeout, target-child crash, and host loss all reject and emit no
+  acceptable result; a live host reaps its direct child and requires namespace-init exit/result EOF,
+  while a killed-host case makes the external harness wait the fixed bound and prove the recorded
+  process/group/namespace identities absent before the next case;
+  missing, extra, or reordered positional fields and trailing bytes reject before open; the API/import
+  scan proves there is no descriptor/callback/function-valued request seam; and each
+  Node/native-esbuild/JS-API/driver expectation mismatch rejects before its distinct execution sentinel
+  can run; a closed, aliased, or invalid standard stream rejects before target open, while valid
+  occupied/pressure cases across every host/program FD 0--5 still place all internal
+  exec-path/mapped sources above 5 and preserve the exact child ABI;
+- both static gate binaries rebuild byte-identically from the pinned source/toolchain; both private-
+  root manifests and every ELF edge round-trip; malformed ELF/RPATH/RUNPATH/cache/hwcaps/alias and
+  runtime/gate/policy/architecture transplants reject; the x64 build and package-measure operations
+  run under the exact sealed root, user/PID/mount/net/IPC namespaces, empty keyring, zero caps, NNP,
+  seccomp and target Landlock policy with no host-path/device/socket/key route; the stock system chain
+  proves nested outer/inner PID namespaces, both monitor/child race closures, foreground-helper reap
+  and setup-PID-1 destruction, direct inherited-tree `EINVAL`, the recursive clone's fresh
+  mount-ID/parent/flag relations, pivot/detach, exact Landlock FD-8 restrict/close ordering, and
+  streaming object-handle closure with maximum live FD count 11 under the maximum accepted file/
+  directory inventory and every role's occupied/absent FD-5 state, and non-`CLOEXEC` PID-1 response
+  survival with no target alias; test-only stopped helpers cannot satisfy the positive chain or emit
+  evidence;
+- internally pinned Node source observation and byte-equal `/runtime/node` target measurement use the
+  invocation-bound bundle copy on standard input, control/response on FD 3/FD 4, no FD 5,
+  cwd `/`, and a zero-key environment, and return the exact sealed declaration vectors for all four
+  roles; and
+- the exact 14-row declaration inventory, seal behavior, pure request/path/header/body resolution,
+  fallback/upgrade/CONNECT/method-override default-deny behavior, and full workspace/package/import
+  dormancy scan pass without opening a listener.
+
+E1b3a must not add `/doc` capture, actual surface pins, the retained fixture or proof workspace,
+direct collector wiring, the raw-seven-view verifier, or a successful socket-backed serve. E1b3b must
+rerun all of the behavior above as applicable while proving the complete 106-ID actual bundle.
+For this boundary, a complete synthetic codec validates each leaf's self-contained canonical
+semantics, internal hashes, and vectors, including `S` raw-document lexing, duplicate-key/depth/value
+bounds, exact operation-span and `operationId` extraction, and ordering. Cross-artifact digest/link
+values remain synthetic inputs in E1b3a. E1b3b's surface resolution exclusively means actual `/doc`
+capture plus `N` to `S`, `S` to `R`, `S` to `B.item[11]`, `X/S/R` to `B`, runtime-root links, and
+`X/B/S/R` to `D` correlation, measured
+projection comparison, and raw-seven-view verification.
+
+The E1b3a prerequisite commands are exact:
 
 ```bash
 pnpm --filter @remote-claw/opencode-front-door run test:e1b3a
@@ -5288,7 +6913,25 @@ pnpm --filter @remote-claw/opencode-front-door run check
 pnpm --filter @remote-claw/opencode-front-door run typecheck
 pnpm --filter @remote-claw/cli exec vitest run \
   src/host/state/native-binding-authority-listener-evidence.test.ts \
-  src/host/native/linux-listener-evidence-collector.test.ts \
+  src/host/state/dormant.test.ts
+pnpm --filter @remote-claw/cli run typecheck
+pnpm --filter @remote-claw/cli run check
+git diff --check
+```
+
+This is the exact focused prerequisite, not the whole PR gate. On the frozen E1b3a tree it is followed
+by the repository-wide `pnpm check`, `pnpm typecheck`, and `pnpm test`, mandatory doc sync and render
+checks, bounded independent read-only review, and green CI before merge. A subsequent byte change
+invalidates the affected results.
+
+The E1b3b final focused commands are exact and rerun the shared surfaces:
+
+```bash
+pnpm --filter @remote-claw/opencode-front-door run test:e1b3a
+pnpm --filter @remote-claw/opencode-front-door run check
+pnpm --filter @remote-claw/opencode-front-door run typecheck
+pnpm --filter @remote-claw/cli exec vitest run \
+  src/host/state/native-binding-authority-listener-evidence.test.ts \
   src/host/state/dormant.test.ts
 pnpm --filter @remote-claw/opencode-native-proof run test:e1b3
 pnpm --filter @remote-claw/opencode-native-proof run check
@@ -5299,22 +6942,101 @@ git diff --check
 
 `test:e1b3a` performs the two clean builds and declaration/default-deny tests. `test:e1b3` runs the
 retained proof, Node-core-only independent verifier, exact case-manifest comparison, and private-
-namespace inherited-FD measurement/serve checks. After code/schema/
+root inherited-FD measurement/serve checks. After code/schema/
 fixture freeze, run one combined focused gate, one full `pnpm check`, `pnpm typecheck`, and `pnpm test`,
 mandatory cross-doc/render sync, bounded independent read-only review, and CI. Any later code, schema,
 or fixture change invalidates those results.
 
+The only private cross-slice handoff is the canonical fixed-program process ABI above: exact selected
+program source on outer standard input, the four immutable program/request argv coordinates, fixed
+read-only anonymous program/request capsules on outer FD 3/FD 4, and then the authenticated private
+request/data/response-file inner ABI. Item-7 `build-driver.mjs` instantiates it only for
+`build | package_measure`; fixture-pinned `listener-evidence-probe.mjs` instantiates the same closed
+shape only for `capture | measure | serve`.
+Neither capsule/FD number enters the operation DTO and there is no cross-package TypeScript import.
+Exact `build-driver.mjs --host` accepts one bounded
+canonical host request, internally runs the copied PID-1 `build` or `package_measure` program, and
+emits one bounded canonical public result only after teardown and MAC verification. Its required
+`build` payload has this exact field projection:
+
+```text
+{
+  nativeEsbuildExecutablePath: string,
+  esbuildJsApiPath: string,
+  sourceRootPath: string,
+  nativeEsbuildExpectation: StableFileExpectationV1,
+  esbuildJsExpectation: StableFileExpectationV1
+}
+```
+
+The object form only labels the positional canonical bytes; no JavaScript object crosses the process
+seam. `StableFileExpectationV1` projects
+`{fileByteLength:number,rawFileSha256:string}` with canonical base64url SHA-256. Before opening
+anything host mode rejects a missing, extra, or reordered field, truncation or trailing bytes, or an
+invalid path or expectation, and snapshots all
+decoded data. Source/import scans prove there is no signal/promise/stream/function request API.
+`sourceRootPath` is the package root: host mode collects every and only regular descendant
+below its exact `src/` child, and the
+snapshot requires all records to be reachable from `src/front-door.ts`; build/tests/configuration are
+not source-snapshot modules.
+
+Item-7 host mode is the authenticated process launcher specified above. After the external test/proof
+has verified item 7's settled tuple, host mode verifies/copies exact internally pinned
+`/proc/self/exe` and its inherited immutable FD-3 program capsule; the copied Node is also the only
+nested build Node. Host mode owns source collection and all four complete pre/post source
+observations, requires the two Node/driver coordinates and two caller expectations before privilege,
+and authenticates only copied path-free records into PID 1. PID 1 verifies its private copies and
+performs the exact distinct inner build spawn. Before emitting it requires every direct
+child reaped, every owned resource closed, and private `/proc` to contain PID 1 alone, then emits once
+and exits. Host mode returns only after that exit, complete wrapper teardown, and result EOF.
+
+Outer build/capture requests are at most 98,304 bytes; package measurement/measurement/serve requests
+are at most 8,519,680 because they carry the bounded bundle bytes. Inner authenticated requests are at
+most 16,384, inner data is at most 33,554,432 for build and 2,097,152 otherwise, and both item-7 and
+probe program bytes are at most 1,048,576. Each complete inner authenticated build response and outer
+host-call build response is at most 26,214,404 bytes; diagnostic stderr is at most 65,536. Package
+measurement and four-role measurement responses are at most 8,388,608; capture is 2,097,152; serve is
+1,048,576. Before allocation, tests construct each simultaneous maximum including source IDs/content,
+bundle, metafile, dependency lock, lock projection, package-tree facts, platform manifest, invocation
+vector, observations, MAC/framing, capsule coordinates, and outer request digest, and prove both
+frames and the 335,544,320-byte protected-content aggregate fit. Target/PID1/coreutils/host/caller/
+external-absence seconds are exact `120/130/155/160/185/190` for build/capture and
+`60/70/95/100/125/130` otherwise, with a two-second cleanup grace. Every deadline is monotonic.
+
+The exact public `build` result resolves only to
+`{sourceSnapshotBytes:Uint8Array,bundleBytes:Uint8Array,normalizedMetafileBytes:Uint8Array,dependencyLockBytes:Uint8Array,lockEdgeProjectionBytes:Uint8Array,pnpmPackageTreeFacts:PackageTreeFactsV1,nativePackageTreeFacts:PackageTreeFactsV1,privateRootPlatformManifestBytes:Uint8Array,nodeObservation:StableFileObservationV1,nativeEsbuildObservation:StableFileObservationV1,esbuildJsObservation:StableFileObservationV1,driverObservation:StableFileObservationV1}`.
+`PackageTreeFactsV1` is exact-own
+`{role:string,entryCount:number,canonicalTreeByteLength:number,canonicalTreeRawSha256:string,selectedExecutableEntryCount:number,selectedExecutableEntries:readonly FrontDoorBuildToolchainExecutableEntryV1[]}`;
+its role is the exact operation-selected literal, its SHA-256 is canonical unpadded base64url, and its
+entry vector is deeply copied and frozen.
+Every byte view is a fresh fixed-length copy backed by its own non-shared `ArrayBuffer`; every frozen
+observation has the same exact shape as an expectation. It retains no returned buffer and exposes no
+decoded snapshot DTO, path, descriptor, handle, child, artifact digest, authority brand, final leaf,
+or live claim. For `build | package_measure`, package tests and the E1b3b proof invoke exact
+`build-driver.mjs --host` only from a fresh no-user-worker process; E1b3b invokes the separately pinned
+probe for its other three operations. No package export or production dependency exposes either.
+The canonical process and child-FD ABIs, not a TypeScript shape, are the durable handoff under later
+schema versions.
+
 Release-blocking P0 findings are any reachable production listener/native request/state/signature/
 pointer/port/capability path, any proof socket outside the private namespace, or any credential or
-external-network use. P1 findings are arbitrary/test executable provenance; omitted or label-only
+external-network use; reachable host-root/socket/FIFO/device/keyring/AF_VSOCK state from PID 1 or a
+target is equally P0. P1 findings are arbitrary/test executable provenance; omitted or label-only
 build closure; surface not bound to the pinned native bytes; hidden, missing, ambiguous, late, or
 spoofed dispatch; digest-only rather than item-wise equality; cross-leaf/build/version/parent
 transplants; mutable post-await inputs; count/allocation overflow; nondeterministic clean builds;
-repeatable FD/pipe/child/temp leakage; a skipped gate or privileged project-code execution; or a process/socket/
+repeatable FD/pipe/child/temp leakage; a skipped gate; a missing runtime edge, private-root/gate/policy
+transplant, unbound dynamic loader/DSO, old-root/response-FD recovery, non-reproducible gate binary, or
+graceful seccomp/Landlock degradation; privileged interpretation of mutable/unpinned repository bytes
+other than the exact frozen setup script/static gate TCB; privileged execution of Node/package/build/
+target/probe bytes; or a process/socket/
 currentness claim beyond this historical observation. Later-slice work, not an E1b3 blocker while it
 remains dormant, is post-close pathname/process currentness, actual socket/peer/isolation binding,
 kernel-stall preemption beyond the hard child timeout, unsupported-platform reproducibility, and
-additional randomized fuzzing after the deterministic matrix.
+additional randomized fuzzing after the deterministic matrix. The earlier E1b1 path-only collector's
+async same-process FD-table hardening is also recorded separately; its historical artifact stays valid,
+but E1b3 never calls that API and no later authority consumer may compose it without an isolated or
+otherwise non-yielding custody revision.
 
 One downstream loose end is recorded without widening E1b3: before E1c implementation, its first
 prepare recipe must be made phase-progressive or otherwise obtain the future listener/isolation signed-
