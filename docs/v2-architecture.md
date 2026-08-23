@@ -291,8 +291,13 @@
 > fixture, and only final E1b3 release claim. The caller-to-host handoff is immutable argv-bound
 > program source on stdin, four bound argv coordinates, and redundant read-only program/request
 > capsules at FD 3/FD 4; the fresh fixed host snapshots path inputs or bundle bytes into internal
-> target/data/runtime capsules, and no host path, FD, PID, destination, helper or timeout crosses the
-> inner operation seam. Fixed outer unshare makes setup PID 1 in a private outer PID namespace and
+> target/data/gate/manifest capsules, and no host path, FD, PID, destination, helper or timeout crosses
+> the inner operation seam. Node owns no runtime-source capsule: two closed modes of the same pinned
+> static gate run as demoted UID/GID 60000 with zero capabilities, NNP, fresh keyrings, canonical
+> seccomp, private-null stdin, bounded empty-output captures and exact manifest/facts/copy FDs. Install alone fills setup-precreated runtime
+> temp inodes; verify freshly repeats the Linux openat2/dirfd route, identity and byte proof after target
+> reap and before response validation, with no request/response access. Fixed outer unshare makes
+> setup PID 1 in a private outer PID namespace and
 > contains every synchronous helper and nested descendant while creating the private mount/net/IPC
 > environment. Setup creates and validates the sparse root/work/dev/input state, seals immutable
 > root/input and dev, and retains only bounded noexec writable work; inner unshare creates the child
@@ -306,9 +311,11 @@
 > the arm manifest. Every direct target also receives ABI-3 Landlock access only to its exact executable
 > and runtime files, noexec work subtree, null/urandom, and exact own `/proc/self`; PID 1's request/
 > response, host paths/sockets/FIFOs/devices/executables, AF_VSOCK and inherited keyrings are unreachable.
-> PID 1 writes one HMAC frame to a private response inode after reaping; setup relays it only after
-> namespace exit and validates full process/mount/namespace teardown. Checked parent-death/deadline
-> chains accept nothing on loss. This closes the proof gate's same-isolate ABA and host-route/credential
+> PID 1 writes one HMAC frame to a private response inode after reaping. After inner exit and mandatory
+> resolver/control/response/process checks, setup relays the opaque file and then tears down; the host
+> accepts only after wrapper exit, relay EOF, authentication and postobservations. Checked
+> parent-death/deadline chains accept nothing on loss. This closes the
+> proof gate's same-isolate ABA and host-route/credential
 > hazards but deliberately leaves hostile external peers, live mappings and currentness to E1b4.
 > E1b4 isolation and E1b5 capability/full-parent closure remain planned.
 > E1c then retains exact signed OpenCode
