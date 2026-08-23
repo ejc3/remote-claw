@@ -5570,20 +5570,26 @@ close/reuse/restore sequence.
 Every E1b3 build, capture, measurement, and serve custodian is therefore one fixed, fresh, one-shot
 **host process**, never an asynchronous holder in the caller's process. Before any yield its closed
 `.mjs --host` mode exact-parses the complete outer request, synchronously opens every operation-derived
-path, performs the specified stable no-follow snapshots, and creates implementation-owned `O_TMPFILE`
-capsules for the selected target, path-free operation data, and authenticated inner request. Build and
-capture may receive outer paths because only this unprivileged host resolves them. `package_measure`,
+target/tool/source path, performs the specified stable no-follow snapshots, and creates
+implementation-owned `O_TMPFILE` capsules for the selected target, path-free operation data,
+authenticated inner request, matching gate binary, and selected platform manifest. Runtime
+`guestPath` source resolution is the sole exception: Node 22 exposes neither `openat2` nor the required
+dirfd-relative walk, so the demoted static-gate resolver below owns that fixed operation inside the
+outer private namespaces. Build and capture may receive outer paths because only this unprivileged
+host or that fixed resolver resolves them. `package_measure`,
 `measure`, and `serve` instead receive the bounded front-door bundle bytes directly; a build result
 exists only in memory and check mode never creates a host pathname. No caller path, destination, FD,
 PID, helper, runtime-file selector, or timeout appears in the inner request.
 
-The host completes collection, one bounded `spawnSync`, namespace teardown, response-file relay and
-all postobservations without yielding caller JavaScript. The response HMAC independently makes
+The host completes collection and one bounded `spawnSync` whose setup validates and relays the opaque
+response before final namespace teardown; only after wrapper exit and response EOF does the host run
+all postobservations, without yielding caller JavaScript. The response HMAC independently makes
 numeric-pipe or response-file substitution fail closed. Any later promise work is pure canonical
 decoding/hashing over copied bytes. The outer FD-3 program and FD-4 request capsules remain the only
-caller-to-host launch descriptors. The additional Node, target, data, inner-request, gate and runtime
-capsules are internal host custody only, use distinct descriptions above the reserved low-FD range,
-and never enter an operation DTO or public result.
+caller-to-host launch descriptors. The additional Node, target, data, inner-request, gate and
+platform-manifest capsules are internal host custody only, use distinct descriptions above the
+reserved low-FD range, and never enter an operation DTO or public result. There is no per-runtime
+source capsule or caller-to-resolver descriptor seam.
 
 There is one measured static gate-init, not a caller-selectable supervisor or program. E1b3a executes
 the exact item-7
@@ -5599,40 +5605,127 @@ there is no uncommitted executable input. Node
 Each program is nonempty, fatal-UTF-8, contains no NUL or CR, and is at most 1,048,576 bytes before its
 first copy/allocation; the item-7 and fixture-lock pins then apply independently.
 
-Both programs embed byte-identical, implementation-pinned canonical arm64 and x64 platform-manifest
-byte constants; neither accepts a manifest, source path or
-runtime selector from a caller. This is cycle-free: a platform manifest binds gate/runtime/consumer
-bytes but not item 7 or the probe, while `B` later binds item 7 and both manifest constants. Host mode
-selects only the constant matching its asserted architecture, strictly decodes/re-encodes it, opens
-every decoded runtime `guestPath` through the frozen safe host-root resolution below, and requires
-every copied byte to match. A
+Both programs embed byte-identical, implementation-pinned canonical arm64/x64 platform-manifest byte
+constants **and** the corresponding settled item-9/item-10 gate ELF byte constants; neither accepts a
+manifest, gate, source path, resolver phase, architecture, or runtime selector from a caller. This is
+cycle-free: gate source/policies produce the two ELFs, each platform manifest binds its matching gate
+and runtime/consumer bytes but not item 7 or the probe, the two programs then embed those settled
+manifest/ELF constants, and `B` finally binds item 7 plus items 9–12. Host mode selects only the pair
+matching its asserted `process.arch`, strictly decodes/re-encodes the manifest, requires the embedded
+ELF length/hash to equal its manifest gate tuple, and creates separate read-only link-count-zero gate
+and manifest capsules. Setup, not Node, runs the frozen safe host-root resolution below and requires
+every copied runtime byte to match. A
 `build` operation verifies the manifest's Node and matching esbuild consumer tuples; `capture` verifies
 its Node and OpenCode tuples; bundle measurement/serve verifies Node and the role-selected runtime
 closure. The final arm64 gate requires build and capture against the same embedded manifest bytes
 before constructing `S` or `B.item[11]`; the x64 build verifies every x64 root consumer before
 `B.item[12]`. No individual operation is allowed to claim an unverified consumer, and an early build
 result remains non-authoritative transport evidence. Source tests independently extract both
-constants from item 7 and the probe and require byte equality with each other, the two `B` items, and
-the fixture lock.
+manifest and gate-ELF constant pairs from item 7 and the probe and require byte equality with each
+other, items 9–12, each manifest's gate tuple, and the fixture lock. The complete program remains
+within its 1,048,576-byte cap after both ELFs are embedded; any deterministic constant compression
+must itself be frozen and its decoded bytes must compare exactly before capsule creation.
 
-Runtime source collection treats a baked guest path and a host symlink route separately. From one held
-O_PATH description of host `/`, host mode opens each exact manifest `guestPath` with `openat2`,
-`RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV`, and fixed read-only/CLOEXEC/NONBLOCK flags. Ordinary bounded
-root-owned symlinks such as `/lib -> usr/lib` may therefore resolve inside that held host root, but a
-magic link, escape, mount crossing, non-root-owned component, group/world-writable directory, loop,
-missing component, or nonregular final inode rejects. Two full reads of the held final inode must match; after wrapper
-teardown a fresh identical resolution and two more reads must reproduce its identity/bytes. Setup
-does not infer component ownership from `openat2`: host mode also performs a bounded at-most-40-hop
-`fstatat(AT_SYMLINK_NOFOLLOW)`/`readlinkat` walk from the same held root. Every directory must be
-root-owned and non-group/world-writable. Every ordinary symlink must be root-owned and reside in an
-already validated non-group/world-writable directory; its reported mode is not used because Linux
-symlink permission bits are fixed/ignored. The bounded link target must remain inside the held root,
-and the walk's resolved final tuple must equal the atomic `openat2` result before and after the
-wrapper. Setup
-copies only those held bytes to the manifest's baked `guestPath` as a new regular file, so the private
-root contains no symlink. The “no alias/cache/hwcaps fallback” rule applies to the private loader and
-ELF dependency resolution; safe pre-privilege source resolution cannot silently add another guest
-path or change a retained hash.
+Runtime source collection treats a baked guest path and a host symlink route separately. Node does not
+pretend to provide Linux syscalls it lacks. After setup has copied and independently verified the
+program-embedded gate and platform-manifest capsules, the same static gate exposes exactly two
+additional closed argv shapes, `--resolve-platform-install` and `--resolve-platform-verify`. There is
+no phase, role, path, architecture, destination, helper, or policy argument: the compiled architecture
+and strict canonical manifest select the one fixed table internally. Both modes run synchronously
+inside the private outer PID/mount/net/IPC namespaces through pinned `setpriv` as UID/GID 60000, empty
+groups, all capability sets empty, NNP one, zero environment and cwd `/`. Gate entry immediately joins
+and verifies a fresh anonymous session keyring, parses the same embedded canonical seccomp policy used
+by init, installs it, and accepts only its exact resolver FD table. It receives neither request nor
+response FD or pathname and writes no stdout/stderr byte. FD 0 is read-only private null. FDs 1 and 2
+are distinct setup-created, UID/GID-60000-owned, single-link `0600` regular output-capture inodes opened
+write-only at offset zero; their bytes are bounded by the work-tmpfs quota. Setup retains their exact
+identities and, after resolver exit, requires their complete type/device/inode/owner/mode/link-count/
+length/mtime/ctime tuples unchanged and both offsets still zero before removing them. Any attempted
+stdout/stderr byte therefore rejects rather than disappearing into null.
+
+Setup opens the root-only selected manifest under `/work/control` as read-only FD 3 at offset zero. For
+install it supplies the precreated facts inode as write-only FD 4 and each same-directory precreated
+runtime destination temporary inode as dense read/write FDs `5..(5+runtimeFileCount-1)`, all at offset
+zero; for verify, FD 4 and that dense private-copy vector are freshly opened read-only at offset zero.
+Every one of those and the two output-capture inodes must be distinct from request, response, gate,
+Node, program, target, data and every other resolver inode. The resolver never
+opens, creates, names, renames or removes a private-root destination. From one internally opened
+`O_PATH` description of fixed host `/`, it opens each exact manifest `guestPath` with `openat2`,
+`RESOLVE_IN_ROOT|RESOLVE_NO_MAGICLINKS|RESOLVE_NO_XDEV`, and fixed
+read-only/CLOEXEC/NONBLOCK flags. Ordinary bounded root-owned symlinks such as `/lib -> usr/lib` may
+therefore resolve inside that held host root, but a magic link, escape, mount crossing, non-root-owned
+component, group/world-writable directory, loop, missing component, or nonregular final inode rejects.
+It also performs the bounded at-most-40-hop
+`fstatat(AT_SYMLINK_NOFOLLOW)`/`statx(AT_SYMLINK_NOFOLLOW)`/`readlinkat` walk from that same held root.
+Every no-follow `statx` result must include `STATX_MNT_ID`, and every field it shares with `fstatat`
+must match.
+Every directory is root-owned and non-group/world-writable. Every ordinary symlink is root-owned and
+resides in an already validated non-group/world-writable directory; its reported mode is ignored
+because Linux symlink permission bits are fixed. The bounded link target remains inside the held root,
+and the walk's resolved final tuple equals the atomic `openat2` result.
+
+Install performs two full reads with unchanged
+`mountId,device,inode,uid,gid,mode,linkCount,byteLength,mtimeNs,ctimeNs` and equal manifest-bound
+hashes, writes only the corresponding preopened temporary destination, verifies that private copy,
+and emits one strict
+canonical `remote-claw/e1b3-runtime-source-resolution-facts/v1` record to FD 4. That record binds the
+architecture, complete platform-manifest digest, host-root mount tuple, dense runtime index and guest
+path, the complete at-most-40-component ownership/type/ordinary-symlink-target walk, atomic final
+tuple, and stable byte length/hash for every entry. Setup independently validates
+exit plus the facts inode/type/owner/mode/length bounds, hashes every temporary copy, changes each to
+fixed outer-root ownership and its manifest `normalizedMode`, renames each once to the fixed baked
+`guestPath`, makes the facts inode root-only, and then seals the tree. After inner namespace exit and
+target reap but before examining or relaying the response, verify freshly
+repeats every openat2/walk/double-read and compares the complete canonical source facts byte-for-byte.
+It independently double-reads, stats, hashes and checks each read-only sealed-copy FD against fixed
+outer-root ownership plus the manifest's exact type/mode/length/hash tuple. Any mismatch discards the
+response. Setup then removes all
+resolver facts/control state before enforcing the sole-response inventory.
+
+The resolution-facts canonical order is exact:
+
+```text
+str("remote-claw/e1b3-runtime-source-resolution-facts/v1") || uint(1) ||
+str(targetArchitecture) || bytes(platformManifestDigest) || stableTuple(hostRoot) ||
+uint(runtimeFileCount) ||
+for each dense runtimeFileIndex:
+  uint(runtimeFileIndex) || str(guestPath) || uint(componentCount) ||
+  for each dense componentIndex:
+    uint(componentIndex) || str(relativePathFromRoot) || str(componentKind) ||
+    stableTuple(component) || optionalStr(ordinarySymlinkTarget) ||
+  stableTuple(atomicFinal) || uint(fileByteLength) || bytes(rawFileSha256)
+
+stableTuple =
+  bytes(u64be(mountId)) || bytes(u64be(deviceMajor)) || bytes(u64be(deviceMinor)) ||
+  bytes(u64be(inode)) || bytes(u64be(uid)) || bytes(u64be(gid)) ||
+  bytes(u64be(mode)) || bytes(u64be(linkCount)) || bytes(u64be(byteLength)) ||
+  bytes(u64be(mtimeNs)) || bytes(u64be(ctimeNs))
+```
+
+`componentKind` is exact `directory | ordinary_symlink | regular_final`; the optional target is
+non-null only for `ordinary_symlink`. Indices are dense. Every `stableTuple` field is one exact
+unsigned 64-bit big-endian value inside the displayed canonical `bytes` wrapper; selected-host
+timestamps must be nonnegative. Remaining `uint` fields are bounded canonical nonnegative safe
+integers. The record is nonempty and at most 4,194,304 bytes, has at most 5,120 component rows and
+2,097,152 aggregate UTF-8 component/target
+bytes, and rejects a count before allocating or writing its rows. Symlink mode is recorded for exact
+pre/post equality but never treated as a permission decision. Copy identity is deliberately absent
+from source facts because setup changes ownership/mode and rename may change ctime while sealing.
+Instead, install verifies the temporary bytes; setup independently hashes/finalizes them; and verify
+requires each sealed copy to be a regular single-link file with fixed outer-root ownership plus the
+manifest's final mode, length and hash. Independent tests decode, re-encode and byte-compare the
+complete install output; setup itself requires only exit zero plus the exact facts
+inode/type/mode/owner/nonempty/size bounds before it independently verifies each copied file.
+Manifest/facts/output-capture/temporary-control bytes and inodes count against their live root/work tmpfs quotas and
+the simultaneous-allocation proof even though the invocation-file digest and immutable-input aggregate
+exclude resolver control state.
+
+The private root therefore contains only new regular files at the manifest's baked guest paths and no
+runtime symlink. A transient host mutate/restore after the immutable install copy cannot influence the
+bytes admitted to the target; the fresh post-resolution equality proves the selected route/identity/
+bytes again but does not claim one source FD survived across execution. The “no alias/cache/hwcaps
+fallback” rule applies to the private loader and ELF dependency resolution; safe source resolution
+cannot silently add another guest path or change a retained hash.
 
 On entry the fresh no-user-worker host first requires valid distinct bounded standard streams 0, 1,
 and 2, its inherited current-UID-owned `0600` link-count-zero read-only regular program capsule on FD
@@ -5650,17 +5743,21 @@ through the wrapper call. Item 7's external
 length/hash pin settles in E1b3a tests and `B`; the listener program is pinned by
 `probeRawSha256`/`fixtureFiles`. The matching program tuple is repeated in the host response and the
 fixed caller compares it with its independently verified expectation before exposing an operation
-result. It then stable-snapshots every operation input, creates read-only link-count-zero target/data/
-request capsules plus one gate/runtime capsule per closed manifest entry, and retains the original
-descriptions for postobservation. The privileged setup receives only the host PID and a fixed ordered
-vector of internal FD/length/hash/role coordinates. It may open only those `/proc/<hostPid>/fd/<n>`
-coordinates and fixed system paths; it never receives or walks a caller path or parses request bytes.
+result. It then stable-snapshots every operation input, creates read-only link-count-zero
+target/data/request capsules plus the selected embedded gate and platform-manifest capsules, and
+retains each applicable operation-input description for postobservation. The privileged setup receives
+only the host PID and a fixed ordered vector of internal FD/length/hash/role coordinates. It may open
+only those `/proc/<hostPid>/fd/<n>` coordinates and fixed system paths; it never receives or walks a
+caller path or parses request bytes. Runtime source paths remain solely inside the gate resolver's
+strict manifest operation and never become coordinates.
 
-After wrapper teardown the host repeats every source and capsule observation, validates and reads the
-one private response inode only through the setup relay, closes all reservations and sources exactly
-once, and only then frames a public result. A postobservation, close, relay, or cleanup failure discards
-every result byte. No Node, program, module, gate, loader, launch-root, source-FD, source-PID, pin, or
-timeout selector is a caller DTO field.
+After wrapper teardown the host repeats every applicable operation-source and capsule observation,
+validates and reads the one private response inode only through the setup relay, closes all
+reservations and sources exactly once, and only then frames a public result. Runtime route/source/copy
+equality has already been reverified by the demoted gate after target reap and before setup considered
+that response. A postobservation, close, resolver, relay, or cleanup failure discards every result
+byte. No Node, program, module, gate, loader, launch-root, source-FD, source-PID, pin, or timeout
+selector is a caller DTO field.
 
 The gate-init `--init` mode becomes PID 1, validates the inherited locked mount subtree, creates and
 verifies one recursive self-bind clone of `/mnt`, pivots that child-created clone to the sealed root,
@@ -5791,8 +5888,9 @@ without an implicit length prefix. `targetRole` is derived, never selected:
 selected platform manifest. The file-vector digest uses domain
 `remote-claw/e1b3-private-root-invocation-file-vector/v1` and commits the fixed path, role, mode,
 length, and raw hash, in bytewise path order, for exactly the immutable Node, program, target, data,
-gate, interpreter, and DSO inputs. It excludes `/io/request`, the response inode, proc/dev/work state,
-and every directory. This avoids a manifest/request hash cycle: setup separately requires
+gate, interpreter, and DSO inputs. It excludes `/io/request`, the response inode, the root-only
+resolver manifest/facts and temporary-inode control state, proc/dev/work state, and every directory;
+the copied runtime bytes themselves remain included. This avoids a manifest/request hash cycle: setup separately requires
 `/io/request` to equal the host capsule coordinate before launch, PID 1 authenticates and hashes the
 complete request, and the response echoes that `requestRawSha256`. Setup separately owns and validates
 the initially empty response inode, its fixed limit and its final identity. Build data is at most 33,554,432
@@ -6376,24 +6474,37 @@ operation-derived literal `155s | 95s` below and never comes from a DTO:
  canonicalHostPid, capsuleCoordinateVector]
 ```
 
-Three pinned `setpriv` invocations implement two parent-death edges plus one demotion. The first makes
-loss of sudo kill the still-armed timeout; the second makes loss of timeout kill the outer unshare
+Five pinned `setpriv` invocations implement two parent-death edges plus three demotion calls. The first
+makes loss of sudo kill the still-armed timeout; the second makes loss of timeout kill the outer unshare
 monitor. Setup's two exact ancestry reads close either outer pre-arm race: loss before
 `PR_SET_PDEATHSIG` changes the observed chain and rejects before a mount, while loss after it delivers
 `SIGKILL`. Outer unshare's pinned `--pid --fork --kill-child=KILL` makes setup PID 1 of a private outer
 PID namespace. Monitor loss kills setup, and setup loss makes the kernel kill every helper and nested
-descendant, so no per-helper or inner pre-arm race exists. The third setpriv only performs the fixed
-UID/GID 60000 and single-`CAP_SYS_ADMIN` demotion needed to create the child user/mount/PID namespace;
-inner unshare's own `--kill-child=KILL` kills its PID 1 on monitor loss. Neither unshare chain performs
-the final capability, keyring or seccomp closure; static gate-init owns those.
+descendant, so no per-helper or inner pre-arm race exists. The third and fifth calls run the exact
+install and verify resolver argv under UID/GID 60000, empty groups, every capability set empty, NNP,
+zero environment and their closed FD tables; setup synchronously waits and reaps each one. The fourth
+setpriv only performs the fixed UID/GID 60000 and single-`CAP_SYS_ADMIN` demotion needed to create the
+child user/mount/PID namespace; inner unshare's own `--kill-child=KILL` kills its PID 1 on monitor
+loss. Neither unshare chain performs
+the final capability, keyring or seccomp closure; static gate-init owns those, and each resolver gate
+independently owns its earlier empty-keyring/seccomp closure.
+
+The third/fifth resolver command vectors differ only in the final closed mode and are exact:
+
+```text
+/usr/bin/env -i /usr/bin/setpriv --reuid=60000 --regid=60000 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs /mnt/tcb/gate-init --resolve-platform-install
+/usr/bin/env -i /usr/bin/setpriv --reuid=60000 --regid=60000 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs /mnt/tcb/gate-init --resolve-platform-verify
+```
+
 `capsuleCoordinateVector` is not a DTO. It is the
-fixed ordered positive-decimal FD/length/lowercase-hex-SHA-256 triple for gate, Node, program, target,
-data, authenticated request, and then each runtime entry in manifest index order, preceded by the
-exact platform and count. It contains no path, key, request bytes, destination, helper selector, or
-timeout. The script chooses every destination from its own closed per-platform table. It embeds both
-exact canonical platform-manifest constants and their matching item-9/item-10 gate tuples; runtime
-count and guest paths derive only from the selected decoded constant. A supplied coordinate can never
-select a pathname, platform, or privileged executable tuple.
+fixed ordered positive-decimal FD/length/lowercase-hex-SHA-256 triple for gate, platform manifest,
+Node, program, target, data and authenticated request, preceded by the exact platform and manifest
+runtime count. It contains no runtime-source coordinate, path, key, request bytes, destination, helper
+selector, resolver phase or timeout. The script chooses every private destination and resolver FD
+position from its own closed per-platform table. It embeds both exact canonical platform-manifest
+constants and their matching item-9/item-10 gate tuples; runtime count and guest paths derive only
+from the selected decoded constant. A supplied coordinate can never select a pathname, platform,
+resolver mode or privileged executable tuple.
 
 `setupScriptBytes` are one LF-only ASCII literal shared byte-for-byte by item 7 and the proof probe.
 The E1b3a implementation must settle its raw hash after the gate binaries and destination tables
@@ -6441,21 +6552,36 @@ the fixture lock. Its exact control flow is closed:
 5. Create exactly `/dev/null` character 1:3 mode `0666` and `/dev/urandom` character 1:9 mode
    `0444`, then remount dev `ro,nosuid,noexec` without `nodev`. Reject any third entry or device
    tuple.
-6. Open each source capsule once through its fixed `/proc/<hostPid>/fd/<fd>`, require a distinct
-   read-only link-count-zero regular file with the asserted length/hash, copy exactly to a same-directory
-   temporary regular file, verify EOF/mode/owner/length/hash, and rename once to its fixed coordinate.
-   Copy Node/program/target/data/request to
-   `/runtime/node,/runtime/program.mjs,/runtime/target,/io/data,/io/request`; copy each manifest
-   runtime entry to its fixed guest path; and copy the platform's pinned gate bytes once to
-   `/tcb/gate-init` mode `0555`. Runtime
-   interpreter files are `0555`, libraries/data/program are `0444`, Node/target are `0555`, and
-   request is root `0400`. Gate bytes must equal the script's embedded platform pin before the gate
-   can execute.
-7. Create root-owned `/work/control/.response.tmp` mode `0600`; validate the complete root
-   inventory, selected immutable-input invocation-file vector, request capsule coordinate, response
-   inode/limit, platform runtime manifest, content aggregate
-   `<=335544320`, regular-file/directory counts `<=128/64`, and every protected write failure; then
-   remount protected root `ro,nodev,nosuid`.
+6. Open each supplied source capsule once through its fixed `/proc/<hostPid>/fd/<fd>`, require a
+   distinct read-only link-count-zero regular file with the asserted length/hash, copy exactly to a
+   same-directory temporary regular file, verify EOF/mode/owner/length/hash, and rename once to its
+   fixed coordinate. Copy Node/program/target/data/request to
+   `/runtime/node,/runtime/program.mjs,/runtime/target,/io/data,/io/request`, the selected manifest to
+   root-only `/work/control/platform.manifest`, and the platform's pinned gate bytes once to
+   `/tcb/gate-init` mode `0555`. Gate and manifest bytes must equal the script's embedded matching
+   platform pins before the gate can execute. Precreate one same-directory `0600` temporary inode for
+   every manifest runtime destination and `/work/control/.runtime-source-facts.tmp`, plus exact
+   `/work/control/.resolver-install.stdout.tmp` and
+   `/work/control/.resolver-install.stderr.tmp`, all owned by UID/GID 60000 and pairwise distinct from
+   gate, manifest, Node, program, target, data, request and the later response. Each runtime temporary basename is exact
+   `.remote-claw-e1b3-runtime-<shortest-decimal-runtimeFileIndex>.tmp` in its final parent; manifest
+   validation reserves that prefix from every guest basename. Open private null read-only as FD 0, the
+   two output captures write-only as FDs 1/2, manifest read-only as FD 3, facts write-only as FD 4, and
+   the dense destination vector read/write as FDs 5 upward, all at offset zero; close everything else;
+   and synchronously invoke the third pinned
+   `setpriv` plus exact `/mnt/tcb/gate-init --resolve-platform-install`. After exit zero, require the
+   exact unchanged capture type/device/inode/owner/mode/link-count/length/mtime/ctime tuples plus zero
+   offsets and remove both
+   captures. Require the exact facts inode/type/mode/owner/nonempty/size bounds, hash every temporary copy, change it to
+   fixed outer-root ownership and the manifest's `normalizedMode`, and rename each once to its fixed
+   guest path. Runtime interpreter files are `0555`,
+   libraries/data/program are `0444`, Node/target are `0555`, request is root `0400`, and manifest plus
+   facts become root-only `0400`. Any helper, FD, byte, ownership, rename or close failure rejects.
+7. Only after install resolver exit/reap, create root-owned `/work/control/.response.tmp` mode `0600`;
+   validate the complete root inventory, selected immutable-input invocation-file vector, request
+   capsule coordinate, distinct resolver manifest/facts controls, response inode/limit, platform
+   runtime manifest, content aggregate `<=335544320`, regular-file/directory counts `<=128/64`, and
+   every protected write failure; then remount protected root `ro,nodev,nosuid`.
 8. Recheck the exact five-process host ancestry and absence of every other outer-UID-60000 process.
    By scanning strict host-proc stat/status/ns facts, require the outer PID namespace to contain only
    setup as live PID 1 with no child or zombie. Close every source, capsule, old-root directory, and
@@ -6475,13 +6601,24 @@ the fixture lock. Its exact control flow is closed:
    capability has no authority in the ancestor namespace; inner `--kill-child=KILL` kills PID 1 on
    monitor loss. Setup loss at any point destroys the outer PID namespace and kernel-kills this entire
    chain even before setpriv or unshare can arm anything.
-9. After inner unshare exits, treat only status zero or one as eligible for opaque response relay. Its
-   synchronous return proves the pinned monitor has exited and the monitor's response-FD alias has
-   closed before setup touches the inode; the privileged shell neither parses the canonical frame nor
-   knows its MAC key. Validate the response as the original outer-root-owned regular inode, mode
-   `0600`, link count one, nonempty length within the fixed global response ceiling, and no extra
-   work/control entry. Re-scan host proc and require the
-   outer PID namespace again contains only live, non-zombie setup PID 1; every synchronous system
+9. After inner unshare exits, create exact UID/GID-60000-owned single-link `0600`
+   `/work/control/.resolver-verify.stdout.tmp` and
+   `/work/control/.resolver-verify.stderr.tmp`, pairwise distinct from every existing inode. Open
+   private null read-only as FD 0, the two output captures write-only as FDs 1/2, the root-only
+   manifest/facts read-only as FDs 3/4, and every sealed runtime copy as dense read-only FDs 5 upward,
+   all at offset zero; close everything else and synchronously invoke the fifth pinned `setpriv` plus exact
+   `/mnt/tcb/gate-init --resolve-platform-verify`. It receives no request/response descriptor or path;
+   nonzero exit, facts/copy/source mismatch, helper or close failure discards every response byte.
+   Require both capture type/device/inode/owner/mode/link-count/length/mtime/ctime tuples unchanged and
+   both offsets zero; any output byte rejects. Remove both captures, the manifest and the facts controls
+   after resolver exit/reap. Only then treat inner status
+   zero or one as eligible for opaque response relay. Inner synchronous return proves the pinned
+   monitor has exited and its response-FD alias has closed; resolver synchronous return proves the
+   source/private-copy equality check is also complete before setup touches the response. The
+   privileged shell neither parses the canonical frame nor knows its MAC key. Validate the response
+   as the original outer-root-owned regular inode, mode `0600`, link count one, nonempty length within
+   the fixed global response ceiling, and the sole remaining work/control entry. Re-scan host proc and
+   require the outer PID namespace again contains only live, non-zombie setup PID 1; every synchronous system
    helper must have been waited and reaped. Then rename the inode to `response.bin`, relay
    it with pinned system `cat` to wrapper stdout, and only then tear down proc/dev/work/root in reverse
    order and exit with the same status. The unprivileged host subsequently requires status zero with a
@@ -6489,8 +6626,18 @@ the fixture lock. Its exact control flow is closed:
    discarded. Every other inner exit relays no byte and performs the same bounded teardown.
 
 Apart from the exact setup script interpreted by pinned Bash/system tools, static gate-init is the
-only repository-built executable that runs with namespace capabilities. `--init` requires PID 1/PPID
-0, EUID/EGID 60000, a strict one-row whitespace parse plus EOF of each `/proc/self/{uid,gid}_map`
+only repository-built executable that runs with namespace capabilities. Its two resolver entries run
+without any capability and accept only exact compiled-architecture
+`--resolve-platform-install` or `--resolve-platform-verify` argv. Each requires UID/GID 60000, empty
+groups/capability sets, NNP one, zero environment, private outer namespace identities, a fresh empty
+anonymous keyring, the installed embedded seccomp policy, read-only private-null FD 0, distinct empty
+write-only output captures on FDs 1/2, manifest/facts FDs 3/4, the exact dense runtime-copy FD suffix,
+and no other descriptor. Install alone accepts write-only facts and read/write precreated destination
+descriptions; verify requires facts/copies read-only. Either mode rejects
+a request/response/control descriptor alias, an extra FD, wrong access mode/offset, or any facts/path/
+copy mismatch, emits no byte, reaps no child, and exits only after closing every owned description.
+
+`--init` requires PID 1/PPID 0, EUID/EGID 60000, a strict one-row whitespace parse plus EOF of each `/proc/self/{uid,gid}_map`
 whose three integers are exactly `60000,60000,1`, exact `/proc/self/setgroups` bytes `deny\n`, an
 already empty supplementary-group vector, the full new-userns capability state expected from
 `--keep-caps`, zero environment, exact argv, and exact FDs 0/1/2. Before changing root, it parses the
@@ -6692,10 +6839,11 @@ this dormant E1b3 claim and is E1b4 work. The harness has no request, response, 
 evidence FD and cannot make a positive case pass.
 
 The stock positive vector proves the outer monitor's child-pidfd/parent-death race closure, setup's
-outer PID-1/PPID-0 and host-proc `NSpid` facts, the demoted ID/capability/NNP state, both unshare
-monitor-to-PID-1 kill cascades, and synchronous helper wait/reap before relay. Deterministic loss cases
-stop the real sudo, timeout, outer monitor, setup, inner monitor, and inner PID 1 before and after each
-child arm; setup has a live foreground helper and inner descendant in the relevant cases. Every case
+outer PID-1/PPID-0 and host-proc `NSpid` facts, all three demoted ID/capability/NNP states, both
+resolver keyring/seccomp/FD closures, both unshare monitor-to-PID-1 kill cascades, and synchronous
+helper wait/reap before relay. Deterministic loss cases stop the real sudo, timeout, outer monitor,
+setup, install resolver, inner monitor, inner PID 1, and verify resolver before and after each child
+arm; setup has a live foreground helper and inner descendant in the relevant cases. Every case
 must leave no helper, monitor, PID 1, mount, namespace, zombie, or frame. A test-only stopped helper
 cannot satisfy system provenance or emit evidence.
 
@@ -6794,7 +6942,12 @@ one-for-one onto the ascending IDs and cannot be substituted while preserving on
   the live table never exceeds 11 descriptors under `RLIMIT_NOFILE=256`; direct pivot of the locked
   inherited tree returns `EINVAL`; only the exact recursive
   self-bind clone preserves work/dev/proc and permits pivot/detach; missing/nonrecursive/changed clones
-  reject; and old-root/pathname+abstract-UNIX/FIFO/device/AF_VSOCK/keyring sentinels are unreachable.
+  reject; the two resolver modes accept only their exact demoted identities/argv/FD tables, embedded
+  gate/manifest pair, precreated destinations and canonical pre/post source facts; Node exposes no
+  substitute runtime path walker; missing/swapped/aliased resolver controls, a response/request alias,
+  changed route/source fact, private-copy byte/metadata, output byte, helper survivor or skipped
+  post-verify rejects;
+  and old-root/pathname+abstract-UNIX/FIFO/device/AF_VSOCK/keyring sentinels are unreachable.
 - `B01`–`B12`: omitted dependency; extra dependency; changed dependency bytes; duplicate dependency;
   reordered closure; label/symbol without content closure; dynamic import; runtime asset omitted;
   native add-on; symlink/nonregular input; an admitted build byte changes or differs from its retained
@@ -6821,8 +6974,9 @@ one-for-one onto the ascending IDs and cannot be substituted while preserving on
   buffer resize; buffer detach/shrink; hostile getter/species/proxy; returned-byte alias mutation;
   executable truncation; executable growth; same-length executable mutation; mode change;
   unlink; rename/replacement; close failure; primary error plus close failure; hard-timeout or external
-  host-only, coreutils-monitor-only, outer-unshare-monitor, setup-PID-1, inner-monitor, or inner-PID-1
-  loss before and after each child arm and while a foreground helper is live; measurement protocol close and
+  host-only, coreutils-monitor-only, outer-unshare-monitor, setup-PID-1, install-resolver,
+  inner-monitor, inner-PID-1, or verify-resolver loss before and after each applicable child arm and
+  while a foreground helper is live; measurement protocol close and
   child reap; build-temp/private-root/work/dev cleanup including inode/byte exhaustion; exact
   outer-capsule and stdin-held-bundle equality on success and every injected failure; response-FD
   `CLOEXEC` or target-entry alias substitution rejects with no frame. Parameterized
@@ -6876,7 +7030,11 @@ before its PR may merge:
   exec-path/mapped sources above 5 and preserve the exact child ABI;
 - both static gate binaries rebuild byte-identically from the pinned source/toolchain; both private-
   root manifests and every ELF edge round-trip; malformed ELF/RPATH/RUNPATH/cache/hwcaps/alias and
-  runtime/gate/policy/architecture transplants reject; the x64 build and package-measure operations
+  runtime/gate/policy/architecture transplants reject; item 7 contains both exact settled gate ELFs
+  and manifests under its final size cap; the demoted install/verify resolver modes prove their exact
+  keyring/seccomp/argv/FD tables, `openat2` plus bounded ownership walk, precreated-inode-only writes,
+  canonical facts, immutable copy, post-target equality, no response/request access and complete
+  helper reap; ordinary Node runtime-path resolution or a skipped/mutated resolver rejects; the x64 build and package-measure operations
   run under the exact sealed root, user/PID/mount/net/IPC namespaces, empty keyring, zero caps, NNP,
   seccomp and target Landlock policy with no host-path/device/socket/key route; the stock system chain
   proves nested outer/inner PID namespaces, both monitor/child race closures, foreground-helper reap
@@ -6998,7 +7156,8 @@ host-call build response is at most 26,214,404 bytes; diagnostic stderr is at mo
 measurement and four-role measurement responses are at most 8,388,608; capture is 2,097,152; serve is
 1,048,576. Before allocation, tests construct each simultaneous maximum including source IDs/content,
 bundle, metafile, dependency lock, lock projection, package-tree facts, platform manifest, invocation
-vector, observations, MAC/framing, capsule coordinates, and outer request digest, and prove both
+vector, observations, MAC/framing, capsule coordinates, resolver facts/output captures/runtime
+temporary inodes, and outer request digest, and prove both
 frames and the 335,544,320-byte protected-content aggregate fit. Target/PID1/coreutils/host/caller/
 external-absence seconds are exact `120/130/155/160/185/190` for build/capture and
 `60/70/95/100/125/130` otherwise, with a two-second cleanup grace. Every deadline is monotonic.
