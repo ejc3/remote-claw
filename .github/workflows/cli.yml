@@ -30,4 +30,155 @@ jobs:
       - name: Type check
         run: pnpm --filter @remote-claw/cli run typecheck
       - name: Unit + functional + e2e tests
-        run: pnpm --filter @remote-claw/cli run test:run
+        run: >-
+          pnpm --filter @remote-claw/cli exec vitest run
+          --exclude src/host/native/linux-workspace-collector.test.ts
+      - name: E1b2 workspace collector + real mount proof (least privilege)
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
+          runner_home="${HOME}"
+          parent_mount_namespace="$(readlink /proc/thread-self/ns/mnt)"
+          node_directory="$(dirname "$(command -v node)")"
+          pnpm_binary="$(command -v pnpm)"
+          tool_path="${node_directory}:$(dirname "${pnpm_binary}"):/usr/bin:/bin"
+          read -r -d '' demoted_command <<'REMOTE_CLAW_E1B2_DEMOTED' || true
+          expected_uid="$1"
+          expected_gid="$2"
+          pnpm_binary="$3"
+          [ "$(/usr/bin/id -u)" = "${expected_uid}" ]
+          [ "$(/usr/bin/id -g)" = "${expected_gid}" ]
+          [ "${expected_uid}" != 0 ]
+          [ "${expected_gid}" != 0 ]
+
+          status_field() {
+            /usr/bin/awk -v key="$1:" '
+              $1 == key {
+                $1 = ""
+                sub(/^[[:space:]]+/, "")
+                print
+                found = 1
+                exit
+              }
+              END { if (!found) exit 1 }
+            ' /proc/self/status
+          }
+          [ "$(status_field Uid)" = "${expected_uid} ${expected_uid} ${expected_uid} ${expected_uid}" ]
+          [ "$(status_field Gid)" = "${expected_gid} ${expected_gid} ${expected_gid} ${expected_gid}" ]
+          [ -z "$(status_field Groups)" ]
+          for field in CapInh CapPrm CapEff CapBnd CapAmb; do
+            [ "$(status_field "${field}")" = 0000000000000000 ]
+          done
+          [ "$(status_field NoNewPrivs)" = 1 ]
+
+          exec "${pnpm_binary}" --filter @remote-claw/cli exec vitest run \
+            src/host/native/linux-workspace-collector.test.ts
+          REMOTE_CLAW_E1B2_DEMOTED
+
+          # GitHub-hosted Ubuntu blocks unprivileged user-namespace UID maps. Root performs only
+          # fixed namespace/mount setup with system binaries. Before any package/repository code
+          # runs, setpriv irreversibly restores the runner UID/GID, clears supplementary groups and
+          # every capability set, and installs no_new_privs. The test asserts that exact state.
+          /usr/bin/sudo -n /usr/bin/unshare \
+            --mount \
+            --pid \
+            --fork \
+            --kill-child=KILL \
+            --mount-proc \
+            -- /bin/bash -ceu '
+            runner_uid="$1"
+            runner_gid="$2"
+            runner_home="$3"
+            parent_mount_namespace="$4"
+            repository_root="$5"
+            pnpm_binary="$6"
+            tool_path="$7"
+            demoted_command="$8"
+
+            case "${runner_uid}" in
+              ""|0|*[!0-9]*) exit 64 ;;
+            esac
+            case "${runner_gid}" in
+              ""|0|*[!0-9]*) exit 64 ;;
+            esac
+            case "${parent_mount_namespace}" in
+              "mnt:["*[!0-9]*"]"|"mnt:[]") exit 64 ;;
+              "mnt:["*"]") ;;
+              *) exit 64 ;;
+            esac
+
+            /usr/bin/mount --make-rprivate /
+            proof_root="$(/usr/bin/mktemp -d /tmp/remote-claw-e1b2-ci.XXXXXX)"
+            case "${proof_root}" in
+              /tmp/remote-claw-e1b2-ci.??????) ;;
+              *) exit 70 ;;
+            esac
+            workspace_mounted=0
+            nested_mounted=0
+            cleanup() {
+              status="$?"
+              trap - EXIT
+              if [ "${nested_mounted}" -eq 1 ]; then
+                /usr/bin/umount -- "${proof_root}/workspace/sub/nested" || status="$?"
+              fi
+              if [ "${workspace_mounted}" -eq 1 ]; then
+                /usr/bin/umount -- "${proof_root}/workspace" || status="$?"
+              fi
+              /usr/bin/rmdir -- \
+                "${proof_root}/workspace" \
+                "${proof_root}/nested-source" \
+                "${proof_root}/source/sub/nested" \
+                "${proof_root}/source/sub" \
+                "${proof_root}/source" \
+                "${proof_root}" || status="$?"
+              exit "${status}"
+            }
+            trap cleanup EXIT
+            trap "exit 129" HUP
+            trap "exit 130" INT
+            trap "exit 143" TERM
+
+            /usr/bin/mkdir -p -- \
+              "${proof_root}/source/sub/nested" \
+              "${proof_root}/workspace" \
+              "${proof_root}/nested-source"
+            /usr/bin/chown -R -- "${runner_uid}:${runner_gid}" "${proof_root}"
+            /usr/bin/mount --bind -- "${proof_root}/source" "${proof_root}/workspace"
+            workspace_mounted=1
+            /usr/bin/mount --bind -- \
+              "${proof_root}/nested-source" \
+              "${proof_root}/workspace/sub/nested"
+            nested_mounted=1
+
+            cd -- "${repository_root}"
+            /usr/bin/setpriv \
+              --reuid="${runner_uid}" \
+              --regid="${runner_gid}" \
+              --clear-groups \
+              --bounding-set=-all \
+              --inh-caps=-all \
+              --ambient-caps=-all \
+              --no-new-privs \
+              /usr/bin/env -i \
+                HOME="${runner_home}" \
+                PATH="${tool_path}" \
+                CI=true \
+                GITHUB_ACTIONS=true \
+                REMOTE_CLAW_E1B2_PROOF_MODE=github-actions-least-privilege-v1 \
+                REMOTE_CLAW_E1B2_PROOF_PARENT_MNT_NS="${parent_mount_namespace}" \
+                REMOTE_CLAW_E1B2_PROOF_ROOT="${proof_root}" \
+                REMOTE_CLAW_E1B2_PROOF_UID="${runner_uid}" \
+                REMOTE_CLAW_E1B2_PROOF_GID="${runner_gid}" \
+                /bin/bash -ceu "${demoted_command}" remote-claw-e1b2-demoted \
+                  "${runner_uid}" "${runner_gid}" "${pnpm_binary}"
+          ' remote-claw-e1b2 \
+            "${runner_uid}" \
+            "${runner_gid}" \
+            "${runner_home}" \
+            "${parent_mount_namespace}" \
+            "${GITHUB_WORKSPACE}" \
+            "${pnpm_binary}" \
+            "${tool_path}" \
+            "${demoted_command}"

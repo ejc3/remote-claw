@@ -121,8 +121,12 @@ strict native/front-door executable-content manifest codecs and a direct-only tw
 Linux collector. Its retained real OpenCode 1.17.5 Linux arm64 proof closes only the native role; the
 generic collector has front-door temporary-file coverage, but no retained or provenance-bound actual
 front-door observation exists. It proves no pathname, process, currentness, complete parent,
-authority, or production capability. E1b2's exact leaf bytes, synchronous Linux observation, and
-historical-only gate are design-frozen but unimplemented; E1b3 front-door/listener, E1b4 isolation,
+authority, or production capability. E1b2 now implements four strict full-u64 `M → P → F → A` leaf
+codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only Linux observation.
+The collector returns only four leaf artifacts; the verifier consumes their raw views plus separately
+built E1a parent bytes. A non-skipping local-direct/hosted-CI-demoted test proves real namespace and
+bind-mount behavior. E1b2 remains historical-only and proves no currentness, process, authority,
+stateful acceptance, production wiring, or capability; E1b3 front-door/listener, E1b4 isolation,
 and E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode `user_text` native-binding evidence through
 dependency-ordered listener/isolation/capability phases, with key rotation blocked while an E-owned
 phase is nonterminal and neither existing transport authority pointer changed. Its workspace/new-
@@ -134,8 +138,8 @@ runtime-owner channel; no URL, socket, bearer, provider credential, or readable 
 Authority withdrawal changes only the exact durable pair; the A1.4 parent alone owns physical-port
 unregistration, so late predecessor cleanup cannot disable a successor generation.
 Neither E1c nor I adds a `Session` consumer, admitted command, attempt, dispatch, effect, native call,
-production operation, or capability claim. The implemented E0/E1a/E1b1 boundary,
-frozen-but-unimplemented E1b2 contract, and planned E1b3–E1b5/E1c/I design are
+production operation, or capability claim. The implemented E0/E1a/E1b1/E1b2 boundary and planned
+E1b3–E1b5/E1c/I design are
 [in the technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
 best-effort autostart that daemon after identity load. For the ordinary CLI, authenticated health is
@@ -703,15 +707,17 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 - `packages/cli/src/broker/a1-client.ts` and `apps/web/{lib/broker/a1-*,app/api/a1/**/route.ts}` — the
   dormant negotiation-first client and the separate selected SQLite/libSQL A1 provider. They are not
   invoked by any current driver, `HostRcRelay`, runtime-owner operation, or viewer path.
-- `packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
+- `packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence,native-binding-authority-workspace-evidence,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
   — A1.0's exact-shape parsers, canonical ID and digest contracts, pure database-path resolver,
   record/runtime shapes, protected-operation interfaces, separated first-dispatch and evidence-only
   reconciliation capabilities, and digest builders; plus A1.8a1-E0's six E-side canonical ID
   contracts and four deterministic builders, E1a's four strict ref-free parent codecs/commitment
-  registry/raw digest helper, and E1b1's strict executable-manifest codecs. E1b1's direct-only
-  collector lives in `packages/cli/src/host/native/linux-executable-collector.ts`; its retained real
-  native OpenCode proof/probe/verifier live under `spikes/opencode-native/`, without raw executable or
-  chunk bytes. The E0/E1a/E1b1 modules and tests contain no authority operation or runtime wiring.
+  registry/raw digest helper, E1b1's strict executable-manifest codecs, and E1b2's strict workspace
+  leaf codecs/raw-five-view verifier. The direct-only collectors live in
+  `packages/cli/src/host/native/{linux-executable-collector,linux-workspace-collector}.ts`; E1b1's
+  retained real native OpenCode proof/probe/verifier live under `spikes/opencode-native/`, without raw
+  executable or chunk bytes. The E0/E1a/E1b1/E1b2 modules and tests contain no authority operation or
+  runtime wiring.
 - `packages/cli/src/host/state/{secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,migration-v11,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-result-finalization,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
   `packages/cli/src/host/native/evidence.ts`, and `packages/cli/src/host/runtime-owner/**` — A1.1–A1.8a0's
   Linux-only, descriptor-anchored SQLite kernel and protected-artifact operations. The supported Node
@@ -783,9 +789,11 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   no claim/seal/publish surface, ciphertext/output signature, broker call, effect, or native
   attempt/dispatch.
 - No E1c/I migration, repository, signer boundary, validator, or operation exists yet. E1b1 closes
-  only executable-manifest vocabulary plus the native role's retained stable-content observation;
-  E1b2's workspace contract is design-frozen but unimplemented; E1b2–E1b5 workspace, actual
-  front-door/listener, isolation, capability, and full-parent evidence remain planned, and
+  only executable-manifest vocabulary plus the native role's retained stable-content observation.
+  E1b2 closes the workspace leaf codecs, raw-byte DAG/parent verifier, synchronous direct-only
+  collector, and non-skipping dual-path least-privilege namespace/bind-mount proof, but remains historical-only and
+  non-authoritative; E1b3–E1b5 actual front-door/listener, isolation, capability, and full-parent
+  evidence remain planned, and
   A1.8a1-I's atomic
   snapshot/credentialless-callable-port pair repository remains planned after E1c. They may reuse the protected artifact/signature ledgers and callable-port registry,
   but must remain outside every production run path until their own dormant proof gate passes.

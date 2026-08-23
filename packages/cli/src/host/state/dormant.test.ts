@@ -25,6 +25,14 @@ const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
     ]),
   ],
   [
+    resolve(SOURCE_ROOT, "host/native/linux-workspace-collector.ts"),
+    new Set([
+      resolve(STATE_ROOT, "ids"),
+      resolve(STATE_ROOT, "native-binding-authority-evidence"),
+      resolve(STATE_ROOT, "native-binding-authority-workspace-evidence"),
+    ]),
+  ],
+  [
     resolve(SOURCE_ROOT, "host/runtime-owner/key-custody.ts"),
     new Set([resolve(STATE_ROOT, "ids"), resolve(STATE_ROOT, "protected")]),
   ],
@@ -97,6 +105,7 @@ const ACTIVE_STATE_IMPORT_ALLOWLIST = new Map<string, ReadonlySet<string>>([
 
 const DORMANT_PRODUCTION_MODULES = new Set([
   resolve(SOURCE_ROOT, "host/native/linux-executable-collector"),
+  resolve(SOURCE_ROOT, "host/native/linux-workspace-collector"),
   resolve(SOURCE_ROOT, "host/server-signer/orchestrator"),
   resolve(SOURCE_ROOT, "host/server-signer/command-result-orchestrator"),
 ]);
