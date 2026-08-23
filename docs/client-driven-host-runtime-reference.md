@@ -32,8 +32,9 @@ implemented in §4.1. Its non-skipping real namespace/bind-mount gate has a dire
 path and a preprovisioned, capability-free non-root hosted-CI path. The collector returns four leaf artifacts, not a context-bearing E1a parent; the
 verifier consumes its four raw leaf views plus separately built parent bytes. E1b2 remains
 historical-only and proves no currentness, process, authority, stateful acceptance, production wiring,
-or capability. E1b3 front-door/listener evidence, E1b4 isolation evidence, and E1b5
-capability/full-parent closure remain planned. A1.8a1-E1c is the planned stateful accepted-evidence boundary after E1b5; its
+or capability. E1b3's front-door/listener contract and executable gate are frozen in §4.1 but its two
+implementation sub-slices have not landed. E1b4 isolation evidence and E1b5 capability/full-parent
+closure remain planned. A1.8a1-E1c is the planned stateful accepted-evidence boundary after E1b5; its
 workspace, legacy-signer, phase-staging, and reconciliation contracts are frozen in §4.1, but it has
 no migration number or implementation. A1.8a1-I remains planned after E1c, while A1.8a2 admitted
 arming and A1.8b delivery remain planned after I.
@@ -215,8 +216,8 @@ E1a's pure ref-free parent-envelope contract have landed. E1b1's executable-cont
 direct-only stable-FD Linux collector, and retained native OpenCode fixture have also landed; they do
 not prove a pathname, process, front door, currentness, complete parent, or authority. E1b2's strict
 workspace codecs/verifier and synchronous direct-only Linux collector have also landed, but remain
-historical-only and non-authoritative. E1b3 front-door/listener, E1b4 isolation, and E1b5
-capability/full-parent closure remain before E1c's
+historical-only and non-authoritative. E1b3's front-door/listener design is frozen but unimplemented;
+E1b4 isolation and E1b5 capability/full-parent closure remain before E1c's
 stateful accepted evidence.
 A1.8a1-I later installs the exact snapshot and credentialless callable-port ingress pair, A1.8a2 then
 owns the admitted arm, and A1.8b owns sealing/publishing.
@@ -241,8 +242,9 @@ reachable only through direct host-state/custody/repository modules and tests. E
 helpers, E1a's pure parent-envelope codecs, E1b1's executable-manifest codecs, and E1b2's workspace
 codecs/verifier are exported from the host-state barrel. The E1b1 and E1b2 Linux collectors are
 direct-only and absent from every runtime-owner, driver, relay, viewer, and broker path. None adds an
-owner/runtime operation; E1b3–E1b5 child evidence, E1c accepted-evidence state, and I pair-install
-implementations do not exist. A1.7b1, A1.8a0, E0, E1a, E1b1, and E1b2 still advertise nothing.
+owner/runtime operation; E1b3's implementation, E1b4–E1b5 child evidence, E1c accepted-evidence
+state, and I pair-install implementations do not exist. A1.7b1, A1.8a0, E0, E1a, E1b1, and E1b2
+still advertise nothing.
 Malformed wire and runtime values fail closed at their trust or canonical boundary instead of being
 accepted and failing later or being silently coerced.
 
@@ -3568,7 +3570,7 @@ interface NativeBindingAuthorityWithdrawalOperation {
 
 <a id="41-a18a1-native-binding-authority-freeze-planned-dormant"></a>
 
-### 4.1 A1.8a1 native-binding authority (E0/E1a/E1b1/E1b2 implemented; E1b3–E1b5/E1c/I implementation planned, dormant)
+### 4.1 A1.8a1 native-binding authority (E0/E1a/E1b1/E1b2 implemented; E1b3 design frozen; E1b3–E1b5/E1c/I implementation planned, dormant)
 
 Full admitted arming is not the next safe write. Delivery separates pure contracts, collector proof,
 durable accepted evidence, and installation:
@@ -3600,9 +3602,12 @@ durable accepted evidence, and installation:
    and bind-mount behavior: capable hosts use direct unprivileged `unshare -Ur -m`; hosted CI uses
    fixed privileged setup followed by an asserted irreversible demotion before repository code. The
    result remains historical-only and non-authoritative.
-5. **A1.8a1-E1b3 — front-door and listener evidence (planned).** This slice owns the actual
-   front-door executable and collector capture, build closure, generated surface, build-route
-   registry, measured dispatch table, and listener-parent closure.
+5. **A1.8a1-E1b3 — front-door and listener evidence (design frozen; implementation planned).** This
+   slice owns the actual dormant front-door executable and collector capture, build closure, complete
+   generated surface, cycle-free build-route registry, measured dispatch table, and listener-parent
+   closure. E1b3a lands the pure codecs plus deterministic default-closed build target; E1b3b lands
+   direct-only collection, retained actual evidence, the raw-seven-view verifier, and the executable
+   proof gate. Neither sub-slice is authority or production wiring.
 6. **A1.8a1-E1b4 — runtime-isolation evidence (planned).** This slice owns every process, socket,
    policy, peer, network-namespace, mount-namespace, and isolation-parent proof.
 7. **A1.8a1-E1b5 — capability evidence and full four-parent closure (planned).** This slice owns the
@@ -4186,12 +4191,1144 @@ asserts that process state and the real topology. Neither path silently skips. T
 collector, and dormancy gate passed before the frozen-tree full local gate, doc sync, independent
 review, and CI.
 
+**Frozen E1b3 boundary and selected tuple.** E1b3 is a two-PR implementation under one release
+gate. E1b3a may add only the four pure leaf codecs plus the deterministic dormant front-door source,
+build, measurement, and inherited-FD activation target; its compiled declarations are independent of
+the later captured `S` bytes. E1b3b may add only direct-only collection, surface resolution, the
+retained actual fixture, the raw-seven-view verifier, and proof wiring. Neither sub-slice writes a
+protected artifact, schema, migration, repository row,
+signature, pointer, port, owner operation, protocol packet, command, attempt, dispatch, effect, or
+capability. The front door is absent from every ordinary CLI, driver, runtime-owner, relay, viewer,
+broker, and package/native-barrel production root. “Actual” means the same checked-in build target is
+the target later isolation/socket work must execute; it does not claim that a process remains alive,
+maps those bytes, owns a socket, has an isolated peer, or is current after collection. E1b4 owns those
+claims. The selected release tuple is exact:
+
+```text
+descriptor = {product:"opencode",access:"server"}
+engineVersion = "1.17.5"
+targetOperatingSystem = "linux"
+targetArchitecture = "arm64"
+surfaceSchemaKind = "openapi"
+routeResolutionSchemaId = remote-claw/native-listener-route-resolution/v1
+frontDoorBuildTargetId = remote-claw/opencode-front-door/node-esm/linux-arm64/v1
+frontDoorExecutableFormat = node_esm_bundle
+nodeRuntimeVersion = 22.23.2
+pnpmVersion = 10.29.1
+esbuildVersion = 0.28.0
+```
+
+The output is one `0555` executable, LF-normalized, single-file ESM bundle with the exact shebang
+`#!/usr/bin/env node`. The shebang is file-format evidence only and is never the authority execution
+path. It is not a Node SEA. The collector holds both Node and bundle descriptors, invokes the held Node
+as `/proc/self/fd/<nodeFd>` with the only fixed arguments `--input-type=module -`, and supplies the
+held bundle descriptor as standard input. Role, mode, challenge, target, secret, expected digest, and
+path never travel on argv or in the ambient environment. Every measurement and serve spawn uses
+`shell:false`, fixed cwd `/`, and a newly constructed null-prototype environment with zero own keys;
+it never spreads or inherits `process.env`. Thus `NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, `LD_AUDIT`, proxy/TLS/config variables, and every other loader or Node startup hook
+are absent rather than merely redacted. The bundle may import only the exact retained Node builtin
+modules in `B` and may not read `process.env`, cwd files, user config, or a package loader. The E1b3
+gate must prove that exact descriptor/argv/cwd/empty-environment launch on success and every injected
+failure. E1b4 separately binds the running
+interpreter image, held script descriptor, and their process mapping. E1b3's release fixture pins the
+selected arm64 Node executable as a build/runtime dependency; the dedicated x64 CI job pins and
+measures exact Node 22.23.2 too, independently rebuilds the platform-neutral bundle from the same
+package-integrity and recipe bytes, and requires identical bundle bytes. A cross-platform output
+mismatch blocks the tranche.
+
+The same bytes contain both measurement and future serving activation; E1b4 must not change `X` to
+make the front door runnable. After the script arrives on standard input, the child accepts exactly
+one bounded canonical control record on inherited FD 3. An accepted bootstrap writes exactly one
+mode-specific bounded canonical success response on inherited FD 4; a rejected bootstrap writes no
+success response, closes FD 4, and exits nonzero:
+
+```text
+FrontDoorBootstrapControlV1 =
+  schemaId, schemaVersion, mode, role, challenge, targetOrigin
+
+schemaId = remote-claw/opencode-front-door-bootstrap-control/v1
+schemaVersion = 1
+mode = measure | serve
+role = tui | binding_adapter | server_creation | observer
+targetOrigin = null for measure; one canonical loopback http origin for serve
+
+canonical bytes =
+  str(schemaId) || uint(1) || str(mode) || str(role) ||
+  bytes(challenge) || optionalStr(targetOrigin)
+```
+
+The control record is capped at 4,096 canonical bytes and `challenge` is exactly 32 random bytes.
+`measure` requires no FD 5, freezes the builder, emits the
+challenge plus the complete role declaration vector in traversal order on FD 4, and exits without
+opening a listener or native connection. `serve` requires one already-created listening socket on
+FD 5, the canonical `http://127.0.0.1:<1..65535>` target origin, and the same sealed declarations; it
+emits ready only from the successful listening callback after attaching that inherited socket. Its
+exact response is:
+
+```text
+FrontDoorServeReadyV1 =
+  schemaId, schemaVersion, challenge, role, targetOrigin, status
+
+schemaId = remote-claw/opencode-front-door-serve-ready/v1
+schemaVersion = 1
+status = ready
+canonical bytes =
+  str(schemaId) || uint(1) || bytes(challenge) || str(role) ||
+  str(targetOrigin) || str("ready")
+```
+
+The response is capped at 4,096 canonical bytes and must echo the exact 32-byte challenge, selected
+role, and canonical target origin from the control record. The child writes the complete record and
+closes FD 4 before serving a request; partial/trailing bytes, a second record, a mismatch, premature
+EOF, a write failure, or failure to close FD 4 before the hard readiness deadline rejects and tears
+down the child. After readiness the serve child keeps FD 5 but no preconnected native-target socket;
+each positive request owns one bounded target connection. The
+compiled server can forward only the positive routes below and returns a body-free deny for every
+fallback/upgrade entry. E1b3 exercises serve only inside its private proof namespace against a
+credentialless stub; no production root can construct this bootstrap. E1b4 later owns the real
+listener/native socket, process, peer, namespace, and currentness bindings without rebuilding the
+bundle.
+
+**Common E1b3 canonical and allocation rules.** Let `digest(x) = SHA256(x)` over exact bytes. DTO
+digests are canonical unpadded base64url encodings of exactly 32 bytes; canonical bytes use decoded
+`bytes`. `str`, `uint`, `bytes`, and `optionalStr` are the existing canonical primitives. A route
+boolean remains `str("true")` or `str("false")` so the already frozen listener-entry formula does not
+change. Every DTO is an exact own-data record. Missing, extra, inherited, symbol, accessor,
+noncanonical/fatal UTF-8, lone-surrogate, unsafe-integer, negative-zero, malformed-digest,
+truncation, trailing-byte, noncanonical-re-encoding, count, and bound violations reject. No E1b3
+artifact contains an `rcph_*`, ambient absolute build path, timestamp, signature, runtime ID,
+incarnation, or repository identity; the separately supplied E1a parent supplies the runtime
+coordinates.
+
+The semantic and artifact digest vocabulary is exact:
+
+```text
+nativeBinaryDigest = decode(N).rawFileSha256
+frontDoorBinaryDigest = decode(X).rawFileSha256
+nativeExecutableManifestArtifactDigest = digest(N)
+frontDoorExecutableManifestArtifactDigest = digest(X)
+frontDoorBuildManifestDigest = digest(B)
+generatedSurfaceSchemaDigest = digest(S)
+buildRouteRegistryDigest = digest(R)
+measuredDispatchArtifactDigest = digest(D)
+measuredDispatchTableDigest = D's separately recomputed semantic vector digest
+listenerParentDigest = digest(L)
+```
+
+`N` and `X` are the existing E1b1 native and front-door executable manifests. Binary digest always
+means the manifest's plain raw-file SHA-256; an E1a child commitment always means SHA-256 of the exact
+canonical artifact bytes. The E1b3 codecs replace the remaining generic registry ceilings with these
+stricter public bounds:
+
+| Raw view | Maximum canonical bytes |
+| --- | ---: |
+| `N`, native executable manifest | 65,536 |
+| `X`, front-door executable manifest | 65,536 |
+| `B`, front-door build closure | 8,388,608 |
+| `S`, generated OpenAPI surface | 2,097,152 |
+| `R`, build route registry | 4,194,304 |
+| `D`, measured dispatch table | 4,194,304 |
+| `L`, E1a listener parent | 65,536 |
+
+The exact pre-await aggregate ceiling is therefore 19,070,976 bytes. Each outer length is checked
+before copying; each nested count is checked against both its fixed maximum and remaining encoded
+bytes before allocation. No untrusted canonical integer selects an array size before those checks.
+
+**Generated OpenAPI artifact `S`.** The generation probe retains the exact successful `GET /doc`
+response body; it does not parse and reserialize JSON. The selected record is:
+
+```text
+NativeGeneratedOpenApiSurfaceV1 =
+  schemaId, schemaVersion, descriptor, engineVersion,
+  targetOperatingSystem, targetArchitecture,
+  nativeExecutableManifestArtifactDigest, nativeExecutableRawSha256,
+  captureSchemaId, captureRoute, mediaType, openApiVersion,
+  documentByteLength, documentRawSha256, documentBytes,
+  operationCount, operations, operationVectorDigest
+
+GeneratedOpenApiOperationV1 =
+  operationIndex, nativeMethod, canonicalPathTemplate, operationId,
+  rawOperationByteOffset, rawOperationByteLength, rawOperationSha256,
+  operationDigest
+```
+
+The literals are `remote-claw/native-generated-openapi-surface/v1`, version `1`, capture schema
+`remote-claw/opencode-openapi-doc-capture/v1`, route `/doc`, and media type `application/json`.
+Canonical `S` encodes those fields in the displayed order; descriptor encodes as
+`str("opencode") || str("server")`, digests as decoded `bytes`, `operationId` with `optionalStr`, and
+each operation in vector order. An operation digest is:
+
+```text
+digest(
+  str("remote-claw/native-generated-openapi-operation/v1") ||
+  uint(operationIndex) || str(nativeMethod) || str(canonicalPathTemplate) ||
+  optionalStr(operationId) || uint(rawOperationByteOffset) ||
+  uint(rawOperationByteLength) || bytes(rawOperationSha256)
+)
+```
+
+`operationVectorDigest` is
+`digest(str("remote-claw/native-generated-openapi-operation-vector/v1") || uint(operationCount) ||
+each bytes(operationDigest))`. Operations are ordered by bytewise UTF-8 path and then the fixed
+`GET,PUT,POST,DELETE,PATCH,OPTIONS,HEAD,TRACE` method order, and `operationIndex` equals vector
+position. Only exact lowercase OpenAPI path-item keys `get,put,post,delete,patch,options,head,trace`
+become operations; `nativeMethod` is their listed uppercase spelling. Each zero-based
+`rawOperationByteOffset` is measured from the first body byte and, together with
+`rawOperationByteLength`, selects the exact half-open JSON-value span for that method under the
+top-level `paths` object. Each raw span hash recomputes. `operationId` is derived only from that raw
+operation value: it is null if and only if the operation object has no own `operationId` member;
+otherwise that member must be a JSON string and `operationId` is its exact decoded string. A present
+null, number, boolean, array, or object rejects. The document is BOM-free
+fatal UTF-8, contains exactly one top-level object, has no duplicate key or trailing non-whitespace,
+and its exact top-level `openapi` string equals `openApiVersion`. `documentByteLength`, raw hash,
+native manifest artifact digest, and native raw hash must recompute from `documentBytes` and `N`.
+The strict parser caps the raw body at 1,048,576 bytes, nesting at 64, operations at 4,096, JSON values
+at 131,072, aggregate object members plus array elements at 262,144, one object key at 1,024 UTF-8
+bytes, and one decoded string at 262,144 UTF-8 bytes. Counts pass before materialization. `$ref`
+strings remain opaque retained document bytes: E1b3 performs no remote fetch or JSON-Schema expansion
+and makes no schema-equivalence claim from them. Exposure instead requires an exact selected
+method/path operation in `S` and the separately frozen parser/header/body schema IDs below. An
+unexposed operation remains retained and receives one explicit closed disposition in `R`.
+
+**Cycle-free build registry `R`.** The sole registration DSL lives in the dormant front-door package.
+Only `src/routes.ts` may call `defineRoute`; the constructor has no mutation API after the vector is
+built. Source and import-graph tests reject another call site, direct Node/router registration,
+dynamic import, computed `require`, native add-on, runtime-loaded route file, hidden catch-all, hidden
+upgrade handler, and registration after seal. The executable bundle contains only code and this
+digest-independent declaration shape:
+
+```text
+CompiledRouteDeclarationV1 =
+  entryIndex, frontDoorKind, source, transport, nativeMethod,
+  canonicalPathTemplate, routeParserSchemaId, pathNormalizationSchemaId,
+  queryParserSchemaId, headerParserSchemaId, bodyParserSchemaId,
+  surfaceBinding, listenerSymbolId, authorizationSymbolId, targetSymbolId,
+  registrationOrder, matchPriority, fallbackOnly
+
+surfaceBinding =
+  {kind:"openapi_operation"}
+  | {kind:"wrapper",wrapperKind}
+```
+
+One compiled declaration's canonical bytes are exact and contain no digest:
+
+```text
+str("remote-claw/compiled-front-door-route-declaration/v1") ||
+uint(entryIndex) || str(frontDoorKind) || str(source) || str(transport) ||
+str(nativeMethod) || str(canonicalPathTemplate) ||
+str(routeParserSchemaId) || str(pathNormalizationSchemaId) ||
+str(queryParserSchemaId) || str(headerParserSchemaId) || str(bodyParserSchemaId) ||
+surfaceBinding(openapi_operation => str(kind);
+               wrapper => str(kind)||str(wrapperKind)) ||
+str(listenerSymbolId) || str(authorizationSymbolId) || str(targetSymbolId) ||
+uint(registrationOrder) || uint(matchPriority) ||
+str(fallbackOnly ? "true" : "false")
+```
+
+The compiled declaration therefore contains no digest and no captured-`S` coordinate. The finalized
+`FrontDoorBuildRouteEntryV1` keeps the declaration field order, replaces its positive arm with
+`{kind:"openapi_operation",operationIndex,operationDigest}`, retains the wrapper arm unchanged,
+inserts each closure digest immediately after its matching symbol ID, and appends
+`buildRouteEntryDigest`. `entryIndex` equals vector position. Canonical nested entries encode that
+exact order with `buildRouteEntryDigest` last. Its digest preimage excludes only that final field:
+
+```text
+str("remote-claw/native-listener-build-route-entry/v1") || uint(entryIndex) ||
+str(frontDoorKind) || str(source) || str(transport) || str(nativeMethod) ||
+str(canonicalPathTemplate) || str(routeParserSchemaId) ||
+str(pathNormalizationSchemaId) || str(queryParserSchemaId) ||
+str(headerParserSchemaId) || str(bodyParserSchemaId) ||
+surfaceBinding(openapi_operation => str(kind)||uint(operationIndex)||bytes(operationDigest);
+               wrapper => str(kind)||str(wrapperKind)) ||
+str(listenerSymbolId) || bytes(listenerClosureDigest) ||
+str(authorizationSymbolId) || bytes(authorizationClosureDigest) ||
+str(targetSymbolId) || bytes(targetHandlerClosureDigest) ||
+uint(registrationOrder) || uint(matchPriority) ||
+str(fallbackOnly ? "true" : "false")
+```
+
+The outer artifact is:
+
+```text
+NativeListenerBuildRouteRegistryV1 =
+  schemaId, schemaVersion, descriptor, engineVersion,
+  targetOperatingSystem, targetArchitecture, frontDoorBuildTargetId,
+  surfaceSchemaKind, generatedSurfaceArtifactDigest, routeResolutionSchemaId,
+  dispositionCount, surfaceDispositions, dispositionVectorDigest,
+  entryCount, entries, orderedBuildRouteEntryVectorDigest
+```
+
+Canonical `R` encodes those fields in the displayed order and begins with
+`str("remote-claw/native-listener-build-route-registry/v1") || uint(1)`. Every one of `S`'s operations
+appears exactly once, in `S` order, in a disposition arm encoded as either
+`uint(operationIndex) || bytes(operationDigest) || str("exposed") || uint(entryIndex)` or
+`uint(operationIndex) || bytes(operationDigest) || str("not_front_door_exposed") ||
+str("not_selected_e1c_surface")`. `dispositionCount = S.operationCount`; each disposition's operation
+index equals vector position and its digest equals that `S` item. `dispositionVectorDigest` is
+`digest(str("remote-claw/native-listener-surface-disposition-vector/v1") ||
+uint(dispositionCount) || each complete encoded arm in vector order)`.
+An exposed operation resolves to exactly one `source:"openapi"` entry; unexposed operations resolve
+to none. Wrapper entries use only the closed wrapper inventory and never impersonate an OpenAPI
+operation.
+
+Version one has exactly six selected positive OpenAPI routes. Five are current client/proof surfaces;
+`GET /session/status` is a selected readiness requirement reported only by earlier unretained
+inspection, so E1b3b must find its exact method/path in the retained matching `S` or block rather than
+silently dropping it. It is not current evidence in this design-only slice. `/api/event`, permission
+reply, abort, summarize, session creation, and all direct-TUI mutations are not exposed.
+
+The schema and symbol aliases used by the exact entry table expand as follows:
+
+```text
+pn  = remote-claw/opencode-front-door-path-normalization/v1
+q0  = remote-claw/http-empty-query/v1
+hd  = remote-claw/opencode-directory-header/v1
+hj  = remote-claw/opencode-directory-json-header/v1
+b0  = remote-claw/http-empty-body/v1
+bp  = remote-claw/opencode-prompt-async-request/v1
+dn  = remote-claw/front-door-deny-without-parsing/v1
+
+rp = remote-claw/opencode-front-door-route/prompt-async/v1
+rl = remote-claw/opencode-front-door-route/session-list/v1
+rg = remote-claw/opencode-front-door-route/session-get/v1
+rm = remote-claw/opencode-front-door-route/session-message-list/v1
+rs = remote-claw/opencode-front-door-route/session-status/v1
+re = remote-claw/opencode-front-door-route/legacy-event/v1
+
+listener symbols by role =
+  listener.tui.v1 | listener.binding_adapter.v1 |
+  listener.server_creation.v1 | listener.observer.v1
+authorization symbols by role =
+  authorization.tui.v1 | authorization.binding_adapter.v1 |
+  authorization.server_creation.v1 | authorization.observer.v1
+```
+
+Those IDs name the following exact parsers rather than implementation labels. The Node HTTP server is
+created with `insecureHTTPParser:false`, `maxHeaderSize:16384`, `joinDuplicateHeaders:false`, and
+`requestTimeout:30000`, then sets `server.maxHeadersCount = 0` so Node does not silently discard a
+header before application code checks and caps the complete `rawHeaders` vector at eight. Application
+code performs the exact Host check below. Only HTTP/1.1 origin-form requests are accepted. The raw
+target is 1–4,096 ASCII bytes and must begin with `/`.
+Absolute/authority/asterisk form, a fragment, any `?` (including a bare one), percent, backslash,
+non-ASCII or control byte, `//`, a trailing slash other than `/`, and exact `.` or `..` components reject. Method is
+the exact uppercase Node parser token; CONNECT and method-override headers always reject. `pn` returns
+the unchanged path bytes and performs no decoding, normalization, case folding, or slash repair. `q0`
+means the raw target contains no `?`, not merely an empty decoded query.
+
+The six route parsers are total over those normalized bytes: `rp` matches only
+`/session/<sessionID>/prompt_async`; `rl` only `/session`; `rg` only
+`/session/<sessionID>`; `rm` only `/session/<sessionID>/message`; `rs` only
+`/session/status`; and `re` only `/event`. A captured `sessionID` is exactly `ses_` followed by 1–128
+ASCII alphanumeric bytes. It is emitted unchanged; percent aliases, empty captures, `_`/`-` in the
+suffix, and another component reject. An otherwise well-formed path has components matching
+`[A-Za-z0-9._~-]+`; if it matches no positive parser it is eligible only for the role's HTTP fallback.
+
+Before semantic header parsing, the raw header vector is capped by the server bounds and rejects two
+names equal under ASCII case folding, obs-fold, leading/trailing value SP or HTAB, NUL/CR/LF in a
+value, and every name outside `host`, `connection`, `content-length`, `content-type`, and
+`x-opencode-directory`. There is exactly one `host` equal byte-for-byte to
+`127.0.0.1:<the inherited listener's decimal port>` and exactly one `connection: close`;
+`transfer-encoding`, `expect`, proxy/auth/cookie, forwarding, range, conditional, and upgrade headers
+never enter an ordinary request. Header names are then lowercased for the canonical semantic vector;
+values are not trimmed or combined. `hd` requires exactly one semantic header,
+`x-opencode-directory`; `hj` requires exact `content-type: application/json` followed canonically by
+that directory header. The directory value is 1–4,095 UTF-8 bytes and the selected A2 ASCII absolute
+path grammar `^/[A-Za-z0-9._~/-]*$`: no empty non-root component, dot/dot-dot component, percent,
+backslash, space, colon, non-ASCII, control, or trailing slash. It is never decoded or rewritten.
+
+`b0` requires no `content-length` and no body bytes. `bp` requires one canonical decimal
+`content-length` with no sign or leading zero, an exact-length body of at most 1,048,576 bytes, and the
+literal compact JSON shape shown below. `messageID` is exactly `msg_` plus 22 unpadded-base64url
+characters encoding 16 bytes;
+`parts` has exactly one item; and decoded `text` is at most 1,000,000 valid UTF-8 bytes of Unicode
+scalar values. The strict string encoder at the later selected-request contract is used byte-for-byte;
+generic JSON reserialization, alternate escapes, whitespace, key reordering, or trailing bytes reject.
+This E1b3 body ceiling is the only surface these bytes prove; the 48 MiB common-command ceiling remains
+a later admitted-capability decision and cannot be advertised through this front door without a new
+proved request schema. `dn` consumes no semantic path/header/body value: after valid HTTP framing and
+basic target syntax, the matching fallback closes the connection without reading or forwarding a
+body.
+
+Every row below has `entryIndex = registrationOrder = i`. `surface` is either the resolved
+`openapi_operation` arm or one of the only two wrapper literals,
+`http_fallback_deny` and `websocket_upgrade_deny`. The path-normalization schema is `pn` for every
+row. Positive rows use the displayed route/query/header/body aliases. Wrapper rows use `dn` for all
+four parser schema fields. Listener and authorization symbols come from the row's role mapping above.
+
+| i | Role | Source / transport | Method and canonical path | Surface | Route/query/header/body | Target symbol | Priority | Fallback |
+| ---: | --- | --- | --- | --- | --- | --- | ---: | --- |
+| 0 | `tui` | `fallback` / `http` | `* *` | `http_fallback_deny` | `dn/dn/dn/dn` | `target.deny_http.v1` | 0 | true |
+| 1 | `tui` | `upgrade` / `websocket` | `* *` | `websocket_upgrade_deny` | `dn/dn/dn/dn` | `target.deny_upgrade.v1` | 0 | true |
+| 2 | `binding_adapter` | `openapi` / `http` | `POST /session/{sessionID}/prompt_async` | `openapi_operation` | `rp/q0/hj/bp` | `target.prompt_async.v1` | 500 | false |
+| 3 | `binding_adapter` | `fallback` / `http` | `* *` | `http_fallback_deny` | `dn/dn/dn/dn` | `target.deny_http.v1` | 0 | true |
+| 4 | `binding_adapter` | `upgrade` / `websocket` | `* *` | `websocket_upgrade_deny` | `dn/dn/dn/dn` | `target.deny_upgrade.v1` | 0 | true |
+| 5 | `server_creation` | `fallback` / `http` | `* *` | `http_fallback_deny` | `dn/dn/dn/dn` | `target.deny_http.v1` | 0 | true |
+| 6 | `server_creation` | `upgrade` / `websocket` | `* *` | `websocket_upgrade_deny` | `dn/dn/dn/dn` | `target.deny_upgrade.v1` | 0 | true |
+| 7 | `observer` | `openapi` / `http` | `GET /session/status` | `openapi_operation` | `rs/q0/hd/b0` | `target.session_status.v1` | 500 | false |
+| 8 | `observer` | `openapi` / `http` | `GET /session/{sessionID}/message` | `openapi_operation` | `rm/q0/hd/b0` | `target.session_messages.v1` | 400 | false |
+| 9 | `observer` | `openapi` / `http` | `GET /session/{sessionID}` | `openapi_operation` | `rg/q0/hd/b0` | `target.session_get.v1` | 300 | false |
+| 10 | `observer` | `openapi` / `http` | `GET /session` | `openapi_operation` | `rl/q0/hd/b0` | `target.session_list.v1` | 200 | false |
+| 11 | `observer` | `openapi` / `stream` | `GET /event` | `openapi_operation` | `re/q0/hd/b0` | `target.legacy_event.v1` | 100 | false |
+| 12 | `observer` | `fallback` / `http` | `* *` | `http_fallback_deny` | `dn/dn/dn/dn` | `target.deny_http.v1` | 0 | true |
+| 13 | `observer` | `upgrade` / `websocket` | `* *` | `websocket_upgrade_deny` | `dn/dn/dn/dn` | `target.deny_upgrade.v1` | 0 | true |
+
+All positive requests have an empty query and one exact canonical workspace selector in
+`x-opencode-directory`; the GET/stream semantic header vector contains only that header. The POST
+semantic header vector is exact lowercase `content-type: application/json` followed by
+`x-opencode-directory`. Its body is the selected compact `bp` object
+`{"messageID":"<nativeActionId>","parts":[{"type":"text","text":"<text>"}]}` under the strict
+encoder already frozen below; `model`, `noReply`, extra/reordered fields or parts, alternate directory
+query/header spellings, and duplicate semantic headers reject. GET/stream bodies must be empty. The
+retained legacy probe's `?directory=` form and the current compatibility client's defaults are not
+this selected front-door contract.
+
+`nativeMethod = "*"` and `canonicalPathTemplate = "*"` are valid only for the eight wrapper rows.
+Resolution first classifies the Node event as `upgrade` or `ordinary_http`; it never infers request
+transport from `Accept` or a response type. Any upgrade event considers only its role's one
+`transport:"websocket"` upgrade-deny wrapper. An ordinary request may match an exact positive
+`transport:"http"` or `transport:"stream"` entry; the winning entry's transport selects buffered or
+streaming response handling only after method/path resolution. Otherwise the role's one
+`transport:"http"` fallback-deny row wins. Thus the HTTP request for `GET /event` selects row 11 and
+then enters stream handling; it is not required to arrive preclassified as `stream`. The wildcard rows
+never forward. This is the exact v1 fallback exception to ordinary exact-method matching, so no
+unregistered catch-all or upgrade path exists.
+
+Serve behavior is exact and default-closed. The fixed body-free response helper disables `Date`, sets
+`connection: close` then `content-length: 0`, writes no other header or body, and ends once with one of
+these statuses: `400` for framing/parser/schema failure, `404` for either fallback, `413` for the
+bounded prompt body overflow, `502` for native connect/protocol/size failure, or `504` for the fixed
+10-second native connect/header or 30-second buffered-response deadline. An upgrade-deny writes the
+exact bytes `HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n` to the raw socket
+and closes it; it never emits `101`. A CONNECT event or HTTP parser `clientError` instead writes the
+same exact raw shape with status line `HTTP/1.1 400 Bad Request` and closes; if the socket is already
+unwritable it is destroyed without a write. A fallback or rejected request opens no native connection.
+
+A positive request is reconstructed from parsed canonical values and sent with Node `http.request`,
+`agent:false`, no environment proxy, redirect, DNS, credential, cookie, or caller hop-by-hop header,
+to the control record's literal `127.0.0.1` target. Its request target is the exact canonical path.
+Outbound headers are, in order, the target authority as `host`, `connection: close`, fixed
+`accept: application/json` (or `text/event-stream` for row 11), then—for row 2 only—
+`content-type: application/json`, followed by exact `x-opencode-directory` and—for row 2 only—the
+canonical decimal `content-length`. Row 2 sends the exact validated body and the other positives send
+none. The target origin cannot redirect or select another address.
+
+For `transport:"http"`, the front door accepts one final upstream status `200..599`, rejects an
+upgrade or malformed framing, buffers at most 16,777,216 body bytes, and waits for complete EOF before
+sending anything downstream. It then preserves the status and exact body bytes but emits only
+`content-type: application/json`, computed `content-length`, and `connection: close`, in that order,
+with `Date` disabled; an empty body omits content type. Status 204 or 304 additionally requires an
+empty upstream body and emits only `connection: close`, because those statuses forbid content length
+and body. For row 11, the upstream must return exactly
+status 200 and a media type whose ASCII-case-insensitive type/subtype before any optional parameters is
+`text/event-stream`. The front door emits status 200 with exactly `content-type: text/event-stream`,
+`cache-control: no-cache`, and `connection: close`, sets `sendDate:false`,
+`useChunkedEncodingByDefault:false`, and `shouldKeepAlive:false`, and copies body
+bytes with backpressure until upstream EOF; it does not parse, replay, merge, or synthesize SSE. There
+is no post-header retry: an upstream error after stream headers destroys both directions. Client
+disconnect aborts the one upstream request, and every terminal path destroys or closes both sides.
+
+`orderedBuildRouteEntryVectorDigest` is
+`digest(str("remote-claw/native-listener-build-route-vector/v1") || uint(entryCount) || each
+bytes(buildRouteEntryDigest))`. The vector concatenates kinds in exact
+`tui,binding_adapter,server_creation,observer` order and, within a kind, applies the already frozen
+non-fallback-before-fallback, priority-descending, registration-order-ascending traversal. A remaining
+tie rejects. Version one requires exactly the 14 rows above. Registration order is globally unique and dense `0..entryCount-1`; complete match
+coordinates and entry digests are unique; upgrade wrappers use only `websocket`; and every symbol and
+closure reference resolves exactly once in `B`. `R` has 1–4,096 entries, aggregate entry strings at
+most 2,097,152 UTF-8 bytes, methods 1–32 bytes, paths 1–4,095 bytes, symbol IDs 1–512 bytes, and schema
+IDs 1–1,024 bytes.
+
+**Build-closure artifact `B`.** `packages/opencode-front-door` builds with exact
+`esbuild@0.28.0` options: entry point `src/front-door.ts`, `bundle:true`, `platform:"node"`,
+`format:"esm"`, `target:"node22"`, tree shaking enabled, `metafile:true`, `sourcemap:false`,
+`legalComments:"none"`, `charset:"utf8"`, `write:false`, no minification, output logical path
+`front-door.mjs`, and the fixed LF/shebang. The only plugin is the retained
+`remote-claw-snapshot-v1` resolver/loader below. The normalized metafile contains only
+package-relative POSIX logical IDs; absolute paths, `..`, timestamps, temp roots, undeclared external
+packages, and platform-dependent output text reject. Two builds from independently collected source
+snapshots must produce byte-identical bundle and normalized-metafile bytes.
+
+Each clean build runs in a dedicated child under the same held Node/startup-hook exclusion rules as
+measurement. It has `shell:false`, cwd `/`, fixed `--input-type=module -` argv, and no inherited
+descriptor other than the exact stdio/FD map below. The build driver itself is held toolchain item 7
+and is standard input; held toolchain item 3 (`esbuild/lib/main.js`) is FD 3; a bounded canonical
+source snapshot is FD 4; and the held platform-native esbuild ELF is FD 5. Standard output is the
+bounded build result and stderr must be empty on success. The child environment is a new
+null-prototype record with exactly
+`ESBUILD_BINARY_PATH=/proc/self/fd/5` and `ESBUILD_WORKER_THREADS=0`, in that insertion order, and no
+other key. Before using either value the driver requires that exact two-entry environment.
+
+The build runner's private stable-file holder opens items 3 and 7 once with Linux
+`O_RDONLY|O_CLOEXEC|O_NOFOLLOW|O_NONBLOCK`, requires a linked regular file of at most 1 MiB, performs
+two complete positional SHA-256/EOF passes with unchanged full stat before the child, lends the same
+descriptor as FD 3 or standard input, and repeats both passes and stat after reap. All four hashes,
+lengths, and stats must match the corresponding file item. It closes exactly once on every exit and
+does not enter a production barrel. The held Node executable is checked before/after the same child
+against item 0 or 1 under the executable holder's 256 MiB rules.
+
+The driver reads the exact held JS API bytes from numeric FD 3 and executes those bytes directly with
+Node's `vm.compileFunction`; it never imports or resolves the ambient `esbuild` package. The synthetic
+CommonJS filename/directory are exactly `/remote-claw/esbuild/lib/main.js` and
+`/remote-claw/esbuild/lib`. Its injected `require` accepts only exact unprefixed Node builtins
+`child_process,crypto,fs,os,path,tty`; `require.resolve`, `pnpapi`, `worker_threads`, relative,
+absolute, package, and every other request throw. Item 3's held pre/post stable-file length/hash must
+equal that file item's content fields. Because worker threads are disabled, the JS API starts only the
+native service at `/proc/self/fd/5`. The build child holds FD 5 until that service terminates; path
+resolution at the service's `execve` selects that descriptor's executable image, after which normal
+close-on-exec semantics may close FD 5 inside the service. The service is not required to retain or
+observe the descriptor after successful exec. The outer holder remains open throughout and its
+pre/post role-neutral executable observation must equal the sole selected-entry proof nested in item
+4 on arm64 or item 5 on x64. That proof is the exact `bin/esbuild` entry of the same canonical
+native-package tree, so the package-tree digest binds both the selected path and bytes actually
+executed; it is never compared to the package-tree byte length or digest.
+
+Before spawning, the parent opens every admitted non-builtin front-door module without following the
+final symlink, performs two full positional reads with unchanged regular-file identity/size/mode,
+copies the bytes into caller-independent fixed buffers, and closes the source descriptors. It encodes
+those same buffers once as `FrontDoorBuildSourceSnapshotV1` in bytewise module-ID order and retains
+them for `B`; later path changes cannot affect the child. The driver strictly decodes, canonically
+re-encodes, byte-compares, bounds-checks, and copies FD 4 before calling esbuild. The snapshot has one
+exact `src/front-door.ts` entry, contains every and only non-builtin module later retained in `B`, and
+all records must be reachable in the normalized metafile.
+
+The one retained plugin resolves only that entry, exact relative POSIX imports between snapshot
+module IDs, and the closed `node:` builtin inventory retained as runtime-builtin modules in `B`.
+Relative resolution rejects escape, ambiguity, missing/extra extension, query, fragment, percent,
+backslash, absolute, package, and data URL forms. Its loader returns only the already copied bytes and
+the fixed loader implied by the record's media type. Exact `node:` builtins are marked external;
+every other external or unresolved import rejects. No callback reads a source path. No additional
+plugin, `define`, inject, alias, loader override, stdin source, working-directory default, package
+loader, install/download fallback, or network path exists. Tests seed both esbuild keys,
+Node/loader hooks, npm/pnpm config, and proxy variables in the parent and require the exact two-key
+child environment, held JS/native/driver bytes, snapshot-only module loads, identical clean outputs,
+no filesystem source read after snapshot, no download/network attempt, and no sentinel execution.
+
+The exact nested records are:
+
+```text
+FrontDoorBuildToolchainExecutableEntryV1 =
+  relativePosixPath, normalizedMode, fileByteLength, rawFileSha256
+
+FrontDoorBuildToolchainItemV1 =
+  itemIndex, role, version, platform, contentKind,
+  contentByteLength, contentSha256,
+  selectedExecutableEntryCount, selectedExecutableEntries,
+  itemDigest
+
+FrontDoorBuildResultV1 =
+  schemaId, schemaVersion,
+  bundleByteLength, bundleRawSha256, bundleBytes,
+  normalizedMetafileByteLength, normalizedMetafileRawSha256,
+  normalizedMetafileBytes
+
+FrontDoorBuildSourceFileV1 =
+  fileIndex, moduleId, mediaType, contentByteLength, contentBytes
+
+FrontDoorBuildSourceSnapshotV1 =
+  schemaId, schemaVersion, entryModuleId, fileCount, files
+
+FrontDoorBuildModuleV1 =
+  moduleIndex, moduleKind, moduleId, mediaType,
+  contentByteLength, contentBytes, dependencyCount, dependencyIndexes,
+  moduleDigest
+
+FrontDoorCodeClosureV1 =
+  closureIndex, closureKind, rootModuleIndex, exportSymbol,
+  reachableModuleCount, reachableModuleIndexes, closureDigest
+
+NormalizedMetafileImportV1 =
+  importIndex, dependencyModuleIndex, importKind
+
+NormalizedMetafileInputV1 =
+  inputIndex, moduleIndex, sourceByteLength, importCount, imports
+
+NormalizedMetafileOutputContributionV1 =
+  contributionIndex, moduleIndex, bytesInOutput
+
+NormalizedEsbuildMetafileV1 =
+  schemaId, schemaVersion, inputCount, inputs,
+  outputLogicalPath, entryModuleIndex, outputByteLength,
+  contributionCount, contributions
+```
+
+The build-result schema ID is `remote-claw/front-door-build-result/v1`, version is `1`, and its
+canonical standard-output bytes are exact:
+
+```text
+str("remote-claw/front-door-build-result/v1") || uint(1) ||
+uint(bundleByteLength) || bytes(bundleRawSha256) || bytes(bundleBytes) ||
+uint(normalizedMetafileByteLength) || bytes(normalizedMetafileRawSha256) ||
+bytes(normalizedMetafileBytes)
+```
+
+The bundle is nonempty and at most 8,388,608 bytes; normalized-metafile bytes are nonempty and at most
+1,048,576 bytes; each raw SHA-256 field is exactly 32 decoded bytes and recomputes over its following
+payload. Canonical stdout is at most 9,500,000 bytes. The parent enforces that ceiling while reading,
+kills and reaps on overflow, requires EOF, snapshots before parsing, strictly decodes, re-encodes and
+byte-compares the whole result, recomputes both hashes, and permits no trailing byte or second result.
+Successful stderr is empty; failure stderr is drained only to a 65,536-byte diagnostic ceiling and is
+never parsed as authority. The two clean builds must match all result payload bytes and hashes before
+the bundle forms `X` or the normalized metafile enters `B`.
+
+The source-snapshot schema ID is `remote-claw/front-door-build-source-snapshot/v1`, version is `1`,
+and `entryModuleId` is exactly `src/front-door.ts`. Its canonical bytes are exact:
+
+```text
+str("remote-claw/front-door-build-source-snapshot/v1") || uint(1) ||
+str(entryModuleId) || uint(fileCount) ||
+for each file in dense file-index and bytewise module-ID order:
+  uint(fileIndex) || str(moduleId) || str(mediaType) ||
+  uint(contentByteLength) || bytes(contentBytes)
+```
+
+There are 1–4,096 files; every ID is a unique 1–512-byte package-relative POSIX path below `src/`;
+one file is at most 1,048,576 bytes and aggregate content is at most 6,291,456 bytes. Media type maps
+exactly to esbuild loader as `text/typescript → ts`, `text/javascript → js`,
+`application/json → json`, and `application/octet-stream → binary`; no other loader exists. The
+front-door builtin allowlist is exactly `node:fs,node:http,node:net`. Each used builtin becomes one
+empty `runtime_builtin` module in `B`, and an allowed-but-unused builtin creates no module.
+
+There are exactly eight toolchain items, with `itemIndex` equal to vector position:
+
+| Index | Role | Version | Platform | Content kind |
+| ---: | --- | --- | --- | --- |
+| 0 | `node_release_runtime` | `22.23.2` | `linux-arm64` | `file` |
+| 1 | `node_ci_runtime` | `22.23.2` | `linux-x64` | `file` |
+| 2 | `pnpm_release_package` | `10.29.1` | `platform-independent` | `package_tree` |
+| 3 | `esbuild_js_api` | `0.28.0` | `platform-independent` | `file` |
+| 4 | `esbuild_release_native` | `0.28.0` | `linux-arm64` | `package_tree` |
+| 5 | `esbuild_ci_native` | `0.28.0` | `linux-x64` | `package_tree` |
+| 6 | `dependency_lock` | `pnpm-lock-v9.0` | `platform-independent` | `file` |
+| 7 | `build_driver` | `remote-claw/opencode-front-door-build/v1` | `platform-independent` | `file` |
+
+For `file`, `contentByteLength` and `contentSha256` cover the exact file. For `package_tree`, they
+cover these exact canonical tree bytes:
+
+```text
+str("remote-claw/front-door-build-package-tree/v1") || uint(entryCount) ||
+for each entry in bytewise UTF-8 relative-path order:
+  str(relativePosixPath) || uint(normalizedMode) ||
+  uint(fileByteLength) || bytes(rawFileSha256)
+```
+
+Item 3 is the exact real locked `esbuild/lib/main.js` regular file before any execution and item 7 is
+exact `packages/opencode-front-door/build/build-driver.mjs`; their file content fields are the held
+bytes supplied on FD 3 and standard input, respectively. They are platform-independent because item
+3 excludes the host-materialized `esbuild/bin/esbuild`, which is neither hashed into item 3 nor path
+resolved at runtime. Items 4 and 5 each have `selectedExecutableEntryCount = 1`; their sole entry has exact
+`relativePosixPath = "bin/esbuild"`, `normalizedMode = 365` (`0555`), and the length/hash of that
+regular file. The tuple must equal the unique same-path entry in the item's canonical package-tree
+bytes. Every other item has count zero and an empty entry vector. The retained item therefore binds
+the whole native package tree while the nested proof separately and unambiguously selects the ELF
+that the build holds and executes.
+
+The pnpm root is the real package root selected by the exact lock; release/CI native roots are the
+matching real `@esbuild/linux-arm64` and `@esbuild/linux-x64` package roots. Front-door source modules
+are separately retained in the module vector, and `node_modules` is never an implicit recipe or
+source subtree.
+
+The matching arm64 generation host recomputes items 0, 2–4, 6, and 7. The x64 CI host recomputes
+items 1–3 and 5–7 and requires its output bytes to match the retained arm64 output; it verifies the
+unchanged arm64 item coordinates/integrity against the lock and retained generation record but does
+not claim to have executed an absent arm64 binary. Any arm64 item/pin change therefore requires a new
+matching-host candidate rather than offline x64 self-consistency.
+
+The tree root itself is omitted. Every descendant must be a directory or a regular file; symlinks,
+devices, sockets, FIFOs, two in-tree paths sharing one device/inode, empty/absolute/dot/dot-dot/backslash/NUL paths, duplicate
+UTF-8 path bytes, and changes during two complete descriptor-held walks reject. `normalizedMode` is
+`365` (`0555`) when any execute bit is set and `292` (`0444`) otherwise. There are at most 8,192
+files, 1,048,576 aggregate path bytes, 268,435,456 bytes per file, and 536,870,912 aggregate file
+bytes. No file or subtree is implicitly excluded. Actual content hashes land only with the settled
+fixture, not in this design-only commit.
+
+The six nested digests and vectors are exact and always exclude their own digest field:
+
+```text
+itemDigest = digest(
+  str("remote-claw/front-door-build-toolchain-item/v1") ||
+  uint(itemIndex) || str(role) || str(version) || str(platform) ||
+  str(contentKind) || uint(contentByteLength) || bytes(contentSha256) ||
+  uint(selectedExecutableEntryCount) ||
+  for each selected executable entry in vector order:
+    str(relativePosixPath) || uint(normalizedMode) ||
+    uint(fileByteLength) || bytes(rawFileSha256)
+)
+
+toolchainVectorDigest = digest(
+  str("remote-claw/front-door-build-toolchain-vector/v1") || uint(8) ||
+  each bytes(itemDigest) in item-index order
+)
+
+moduleDigest = digest(
+  str("remote-claw/front-door-build-module/v1") ||
+  uint(moduleIndex) || str(moduleKind) || str(moduleId) || str(mediaType) ||
+  uint(contentByteLength) || bytes(contentBytes) ||
+  uint(dependencyCount) || each uint(dependencyIndex)
+)
+
+moduleVectorDigest = digest(
+  str("remote-claw/front-door-build-module-vector/v1") || uint(moduleCount) ||
+  each bytes(moduleDigest) in module-index order
+)
+
+closureDigest = digest(
+  str("remote-claw/front-door-code-closure/v1") ||
+  uint(closureIndex) || str(closureKind) || uint(rootModuleIndex) ||
+  str(exportSymbol) || bytes(toolchainVectorDigest) ||
+  uint(reachableModuleCount) ||
+  for each reachable module in module-index order:
+    uint(moduleIndex) || bytes(moduleDigest)
+)
+
+closureVectorDigest = digest(
+  str("remote-claw/front-door-code-closure-vector/v1") || uint(closureCount) ||
+  each bytes(closureDigest) in closure-index order
+)
+```
+
+Module kind is `source,generated,dependency,static_asset,runtime_builtin`. Media type is closed to
+`text/typescript,text/javascript,application/json,application/octet-stream,application/x-node-builtin`.
+Non-builtin modules retain
+their exact content bytes; a runtime builtin retains an empty content field and is bound through the
+selected Node toolchain item. Module IDs are unique. Dependencies are unique ascending indexes less
+than the current module index. Module order is the unique Kahn topological order with bytewise UTF-8
+module ID as tie-breaker; cycles reject. Every module is reachable from the build entry. Each measured
+listener, authorization, or target symbol has one root module under the matching
+`src/listeners/`, `src/authorization/`, or `src/targets/` tree, and each root module exports exactly one
+measured symbol. A closure contains the exact transitive module-level dependency set reconstructed
+from normalized metafile edges, not the whole bundle and not labels alone. `closureIndex` equals its
+vector position; closures are ordered by `listener,authorization,target`, then root module ID and
+export symbol in bytewise UTF-8 order.
+
+Every closure is referenced, and every route's three symbol IDs resolve to the corresponding unique
+closure kind. Shared modules may occur in several exact closures. Toolchain item count is exactly eight;
+modules at 4,096; one module's content at 1,048,576 bytes; aggregate module content at 6,291,456
+bytes; edges at 65,536 and 256 per module; closure count at 12,288; module IDs at 512 UTF-8 bytes; and
+export symbols at 256 bytes.
+
+The normalized-metafile bytes are canonical binary, not JSON. They begin with
+`str("remote-claw/normalized-esbuild-metafile/v1") || uint(1)` and then encode the displayed outer
+fields and nested vectors in order. Inputs are in module-index order and exclude runtime builtins;
+`inputIndex` equals input-vector position and `sourceByteLength` equals the module content length.
+Imports are unique, ordered by dependency module index, have dense `importIndex`, and version one
+permits only `import-statement`; each exactly equals the matching module dependency edge. The one
+output logical path is `front-door.mjs`, its entry and byte length equal `entryModuleIndex` and X's
+file length, and contributions are in module-index order with dense indexes and the exact nonnegative
+`bytesInOutput` values reported by esbuild. Every non-builtin module appears once as an input and once
+as an output contribution. The normalized bytes are capped at 1,048,576 and are retained inside `B`,
+so both production and independent verifiers can reconstruct every edge rather than trusting only a
+metafile hash.
+
+The outer record is:
+
+```text
+FrontDoorBuildClosureManifestV1 =
+  schemaId, schemaVersion, descriptor, engineVersion,
+  targetOperatingSystem, targetArchitecture, frontDoorBuildTargetId,
+  frontDoorExecutableFormat, nodeRuntimeVersion, pnpmVersion, esbuildVersion,
+  toolchainItemCount, toolchainItems, toolchainVectorDigest,
+  moduleCount, modules, moduleVectorDigest, entryModuleIndex,
+  closureCount, closures, closureVectorDigest,
+  generatedSurfaceArtifactDigest, buildRouteRegistryArtifactDigest,
+  normalizedMetafileByteLength, normalizedMetafileRawSha256, normalizedMetafileBytes,
+  frontDoorExecutableByteLength, frontDoorExecutableRawSha256,
+  frontDoorExecutableManifestArtifactDigest, buildInputRootDigest
+```
+
+Canonical `B` encodes those fields exactly in that order and begins with
+`str("remote-claw/front-door-build-closure-manifest/v1") || uint(1)`. Nested records encode every
+displayed field in order, including their already computed digest as decoded `bytes` at the end. The
+metafile length/hash recompute from `normalizedMetafileBytes`. The root formula is exact:
+
+```text
+buildInputRootDigest = digest(
+  str("remote-claw/front-door-build-input-root/v1") ||
+  str(frontDoorBuildTargetId) || str(frontDoorExecutableFormat) ||
+  str(nodeRuntimeVersion) || str(pnpmVersion) || str(esbuildVersion) ||
+  bytes(toolchainVectorDigest) || bytes(moduleVectorDigest) ||
+  bytes(closureVectorDigest) || bytes(digest(S)) || bytes(digest(R)) ||
+  uint(normalizedMetafileByteLength) || bytes(normalizedMetafileRawSha256) ||
+  uint(decode(X).fileByteLength) || bytes(decode(X).rawFileSha256) || bytes(digest(X))
+)
+```
+
+Thus source/module/toolchain/closure content can be computed first, `R` can bind those closure digests,
+and final `B` can bind `R` without a `B ↔ R` cycle.
+
+The bundle itself embeds only output-independent route declarations and symbol IDs. It must not embed its
+own raw digest, either executable-manifest artifact digest, any final closure/handler/listener/entry
+identity, `digest(B)`, `digest(S)`, `digest(R)`, `digest(D)`, `buildInputRootDigest`, or `digest(L)`.
+The fixed construction order is source → output-independent declarations/module/toolchain/closure
+preimages → bundle → `X`/raw bundle digest; independently capture `S`; then construct `R` → `B` →
+sealed live declarations → `D` → separately built `L`.
+This is the only meaning of “registry compiled into the binary”: the executable contains the complete
+output-independent declaration registry, never a digest that would require the file to contain its own
+hash.
+
+**Measured-dispatch artifact `D`.** A bundle instance receives the one bootstrap record on FD 3. In
+`measure` mode it builds the same role declaration array used by its compiled server, validates and
+deeply freezes it, permanently closes the builder, and emits this exact canonical response on FD 4:
+
+```text
+FrontDoorMeasurementResponseV1 =
+  schemaId, schemaVersion, challenge, role, entryCount, entries
+
+schemaId = remote-claw/opencode-front-door-measurement-response/v1
+schemaVersion = 1
+canonical bytes =
+  str(schemaId) || uint(1) || bytes(challenge) || str(role) ||
+  uint(entryCount) || each complete CompiledRouteDeclarationV1 in traversal order
+```
+
+Each role response is capped at 1,048,576 bytes and the four-response aggregate at 4,194,304 bytes.
+E1b3 measurement opens no listener. The parent requires the exact challenge, one response per role,
+no duplicate role or trailing byte, and concatenates them in
+`tui,binding_adapter,server_creation,observer` order. It compares every declaration field and vector
+position with `compiledDeclarationProjection(R.entries)` before joining `X` and `B`. That projection
+removes `operationIndex`, `operationDigest`, all three closure digests, and
+`buildRouteEntryDigest` from an `R` entry and replaces a positive surface arm with
+`{kind:"openapi_operation"}`; every other displayed declaration field remains. A child-supplied
+identity, closure, or digest is never trusted.
+
+The finalized entry is exact:
+
+```text
+MeasuredFrontDoorDispatchEntryV1 =
+  manifestPosition, buildRouteEntryDigest,
+  entryIndex, frontDoorKind, source, transport, nativeMethod,
+  canonicalPathTemplate, routeParserSchemaId, pathNormalizationSchemaId,
+  queryParserSchemaId, headerParserSchemaId, bodyParserSchemaId,
+  surfaceBinding, listenerSymbolId, authorizationSymbolId, targetSymbolId,
+  registrationOrder, matchPriority, fallbackOnly,
+  frontDoorListenerIdentityDigest, authorizationHandlerIdentityDigest,
+  handlerIdentityDigest, manifestEntryDigest
+```
+
+`manifestPosition = entryIndex = D` vector position and every declaration field equals the measured
+projection item-for-item. `surfaceBinding` therefore retains the compiled arm; the linked
+`buildRouteEntryDigest` resolves the positive row's finalized operation index/digest in `R`. The three identities are recomputed from
+`X.rawFileSha256` and the exact canonical closure bytes in `B` using the existing listener,
+authorization, and target identity domains. `manifestEntryDigest` remains exactly the formula later
+in this section. Canonical nested entries begin with
+`str("remote-claw/measured-front-door-dispatch-entry/v1")`, then encode fields in the displayed order,
+the surface arm exactly as compiled declarations, digests as decoded `bytes`, and `fallbackOnly` as
+`str("true"|"false")`. The outer record is:
+
+```text
+NativeListenerMeasuredDispatchTableV1 =
+  schemaId, schemaVersion, descriptor, engineVersion,
+  targetOperatingSystem, targetArchitecture, frontDoorBuildTargetId,
+  measurementProtocolSchemaId, routeResolutionSchemaId,
+  frontDoorExecutableManifestArtifactDigest, frontDoorExecutableRawSha256,
+  frontDoorBuildManifestArtifactDigest, generatedSurfaceArtifactDigest,
+  buildRouteRegistryArtifactDigest, buildInputRootDigest,
+  entryCount, entries, orderedEntryVectorDigest, measuredDispatchTableDigest
+```
+
+Canonical `D` begins with
+`str("remote-claw/native-listener-measured-dispatch-table/v1") || uint(1)` and encodes fields in the
+displayed order. The measurement protocol is
+`remote-claw/native-listener-sealed-registry-measurement/v1`. `orderedEntryVectorDigest` and
+`measuredDispatchTableDigest` retain the already frozen domains/formulas below. The complete measured
+declaration vector must equal `compiledDeclarationProjection(R.entries)` item-for-item and in order;
+the enriched `D` vector then must equal the deterministic derivation from `R/X/B` before either digest
+comparison. All `X/B/S/R` artifact links and `buildInputRootDigest` recompute. `D` has exactly 14
+entries in version one and the same per-string bounds as `R`.
+
+**Raw-seven-view verifier.** `verifyCanonicalListenerEvidenceBundle` accepts one exact operational
+record containing only raw genuine `Uint8Array` views `N,X,B,S,R,D,L`, with `L` the separately built
+E1a listener parent. Before its first `await`, it uses captured intrinsic typed-array buffer,
+byte-offset, byte-length, allocation, and `set` operations to validate every individual and aggregate
+bound, copy all seven views into explicit fixed-length storage, and recheck every source and snapshot
+length. Detached/resized/growable shared buffers, hostile species/proxy/getter behavior, overlapping
+views, or mutation after copying cannot select allocation sizes or later digest bytes.
+
+The verifier strictly decodes, canonically re-encodes, byte-compares, and hashes every snapshot. It
+checks `N/X` role correlation; all `N → S → R`, `X/S/R → B`, and `X/B/S/R → D` links; every surface
+operation/disposition; every toolchain/module/edge/closure; every symbol/closure resolution; all route
+uniqueness and ordering; every binary-bound identity; exact measured-projection and derived-`D`
+item/order equality; and both
+measured vector digests. It then strictly verifies `L`'s selected descriptor, engine version, surface
+kind, route-resolution schema, derived `nlra_*`, and exact six E1a commitments in order:
+
+```text
+0 listener.native_executable            schema native-executable-chunk-manifest     digest(N), len(N)
+1 listener.front_door_executable        schema front-door-executable-chunk-manifest digest(X), len(X)
+2 listener.front_door_build_manifest    schema front-door-build-closure-manifest    digest(B), len(B)
+3 listener.generated_surface            schema native-generated-openapi-surface     digest(S), len(S)
+4 listener.build_route_registry         schema native-listener-build-route-registry digest(R), len(R)
+5 listener.measured_dispatch_table      schema native-listener-measured-dispatch-table digest(D), len(D)
+```
+
+The schema literals include their exact `remote-claw/.../v1` prefixes shown in E1a's registry. The
+returned structure is deeply frozen, stores caller-independent bytes as `ProtectedByteSnapshot`, and
+exposes exactly `nativeBinaryDigest`, `frontDoorBinaryDigest`, `frontDoorBuildManifestDigest`,
+`generatedSurfaceSchemaDigest`, `buildRouteRegistryDigest`, `orderedEntryVectorDigest`,
+`measuredDispatchTableDigest`, and `listenerParentDigest` for later E1c orchestration. It returns no
+signed record or authority.
+
+**Direct-only provenance collection and retained proof.** E1b3b extends the direct-only E1b1 native
+module with two direct-file, non-barrel held-handle primitives; neither adds an executable-manifest
+role or schema. `inspectStableLinuxExecutableWithHeldHandle` is role-neutral: it opens the path once
+with E1b1's Linux no-follow/nonblocking regular-linked-executable and 256 MiB rules, performs two
+complete positional SHA-256/EOF passes with unchanged full stat before the callback, lends only the
+borrowed numeric FD to one trusted callback, and repeats both complete passes plus stat afterward. It
+returns only a frozen `{fileByteLength,rawFileSha256}` observation. All four hashes and every stat must
+match. `collectLinuxExecutableEvidenceWithHeldHandle(path,role,callback)` accepts only E1b1's closed
+native/front-door role set, performs the complete role-specific two-pass canonical manifest collection
+before and after the callback on the same open handle, and requires identical canonical manifests.
+Both helpers reject callback close/replacement, changed descriptor identity, truncation/growth, or
+unequal pre/post observations; every exit closes exactly once, and an earlier observation/callback
+error remains primary over cleanup failure. The existing public path API, closed two-role evidence
+registry, and production exports do not change.
+
+The E1b3 collector uses the role-specific primitive for the pinned native executable and cleanly built
+`0555` bundle. It uses the role-neutral primitive for Node and requires its length/raw hash to equal the
+matching `node_release_runtime` or `node_ci_runtime` file item in `B`; Node is never mislabeled as an
+E1a listener child. OpenCode native capture executes its held native ELF descriptor. Bundle
+measurement executes the held Node descriptor with fixed `--input-type=module -` and connects the held
+bundle descriptor to standard input; it never asks Node to resolve the bundle through
+`/proc/self/fd/N`. It uses the exact empty environment and fixed cwd above, sends the control record on
+FD 3, captures FD 4, and supplies no FD 5 in
+measurement mode. It captures all four sealed role tables under hard parent timeouts and requires the
+same exact front-door manifest after every child. Every pipe, child, FD, and temporary root
+closes/reaps on every exit. The collector returns only the six leaf artifacts. A caller separately
+constructs `L` and invokes the raw verifier; a nominal TypeScript brand, arbitrary path, hand
+inventory, caller-supplied measured JSON, or digest-only comparison is not provenance.
+
+The complete raw OpenAPI origin is regenerated only on a matching Linux-arm64 host. The probe verifies
+the pinned launcher/native bytes, holds the same native descriptor through two-pass measurement,
+executes that FD in a loopback-only network namespace with a fresh `0700` proof root/cwd and an
+environment constructed from scratch using the already retained real-proof contract: exact keys
+`ALL_PROXY,HOME,HTTPS_PROXY,HTTP_PROXY,LANG,LC_ALL,NO_PROXY,OPENCODE_DISABLE_AUTOUPDATE,PATH,TERM,TMPDIR,`
+`XDG_CACHE_HOME,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME,all_proxy,http_proxy,https_proxy,no_proxy`
+and no others. HOME/XDG/TMPDIR name distinct precreated `0700` children; cwd is the empty workspace
+child; LANG/LC_ALL are `C.UTF-8`, TERM is `dumb`, `OPENCODE_DISABLE_AUTOUPDATE` is `true`, and PATH is exactly
+`/usr/local/bin:/usr/bin:/bin`. Every proxy spelling points to the proof-owned loopback deny proxy
+except both NO_PROXY spellings, which are empty. It has no Node/Bun/loader hook, TLS override, provider
+variable, or credential, and the namespace has no external route. The probe requests only bounded
+`GET /doc` and starts no session or model
+work. It requires two bodies from one process and one from a fresh second process to be byte-identical,
+then remeasures the same native FD before cleanup. Normal CI is offline: it verifies the retained exact
+body and native E1b1 pins, performs two clean front-door builds, runs the rebuilt bundle's sealed
+measurement protocol, and independently rebuilds all artifacts and `L`. A native/surface pin change
+requires a fresh matching-host candidate; offline self-consistency alone cannot approve it.
+
+The byte-authoritative fixture directory is exact:
+
+```text
+spikes/opencode-native/e1b3/
+  README.md
+  fixture-lock-v1.json
+  fixture-view-v1.json
+  front-door-build-closure.bin
+  front-door-executable-manifest.bin
+  gate-case-ids-v1.json
+  generated-openapi-surface.bin
+  listener-build-route-registry.bin
+  listener-evidence-probe.mjs
+  listener-measured-dispatch-table.bin
+  listener-parent.bin
+  native-executable-manifest.bin
+  opencode-openapi-1.17.5-linux-arm64.openapi.raw
+  verify-listener-evidence.mjs
+```
+
+The opaque `.openapi.raw` body is guarded as binary/`-text` in `.gitattributes`. The exact-key lock has
+this fixed field order and no other key:
+
+```text
+FixtureLockV1 =
+  schemaId, schemaVersion, descriptor, engineVersion,
+  targetOperatingSystem, targetArchitecture,
+  frontDoorBuildTargetId, frontDoorExecutableFormat,
+  nodeRuntimeVersion, pnpmVersion, esbuildVersion,
+  launcherByteLength, launcherRawSha256,
+  nativeExecutableByteLength, nativeExecutableRawSha256,
+  nativeManifestByteLength, nativeManifestArtifactDigest,
+  openApiMethod, openApiRoute, openApiMediaType,
+  openApiByteLength, openApiRawSha256,
+  frontDoorFileMode, frontDoorByteLength, frontDoorRawSha256,
+  frontDoorManifestByteLength, frontDoorManifestArtifactDigest,
+  artifactCount, artifacts,
+  surfaceOperationCount, surfaceDispositionCount, registryEntryCount,
+  measuredEntryCount, orderedEntryVectorDigest,
+  buildInputRootDigest, sourceFileSetDigest,
+  probeRawSha256, independentVerifierRawSha256,
+  gateCaseManifestRawSha256, expandedAssertionCount,
+  fixtureFileCount, fixtureFiles, fixtureFileSetDigest
+```
+
+`schemaId` is `remote-claw/opencode-listener-evidence-fixture-lock/v1`, version is `1`, descriptor and
+release/build tuple equal the selected constants, method/route/media are exact `GET`, `/doc`, and
+`application/json`, and `frontDoorFileMode` is `365` (`0555`). `artifacts` is exactly seven entries in
+`N,X,B,S,R,D,L` order, each with logical name, schema ID, byte length, and raw canonical-artifact
+SHA-256. Every lock field named `*RawSha256`, including file/program hashes, is exactly 64 lowercase
+hex characters; canonical artifact/vector/root digest fields remain unpadded base64url decoding to 32
+bytes. `artifactCount = 7`, `fixtureFileCount = 13`, `surfaceDispositionCount =
+surfaceOperationCount`, and both registry/measured entry counts equal `14`. `fixtureFiles` lists every
+file above except the lock itself in displayed bytewise path order,
+with normalized mode, byte length, and raw SHA-256. Its digest is
+`digest(str("remote-claw/opencode-listener-fixture-file-vector/v1") || uint(fixtureFileCount) ||
+each str(path)||uint(mode)||uint(length)||bytes(rawSha256))`. The three explicit program/manifest
+hashes must equal their matching file-vector items. `sourceFileSetDigest` is
+`digest(str("remote-claw/opencode-front-door-source-file-vector/v1") || uint(count) || each
+str(path)||uint(mode)||uint(length)||bytes(rawSha256))` over exact `package.json`, `tsconfig.json`, and
+every regular descendant of `src/` and `build/`, in bytewise relative-path order; symlinks,
+nonregulars, and unlisted generated/output/`node_modules` paths reject. `expandedAssertionCount` is
+pinned only after implementation settles. The directory rejects a missing/extra/symlink/nonregular
+file or unsafe mode.
+
+The raw native executable and bundle are not checked in: the former is represented by its E1b1
+manifest/pins and the latter is rebuilt. `fixture-view-v1.json` is only a decoded projection and must
+exactly reproduce the `.bin` values. The independent Node-core-only verifier imports no production
+codec, collector, generator, helper, `clawsec`, or shared constant. It independently reimplements
+canonical parsing, hashes/domains, surface extraction, exposure totality, build closure, route
+resolution, measured equality, and parent closure. No lock field contains an ambient path, random
+port, PID, timestamp, credential, proxy, or protected reference.
+
+The implementation candidate must initially match the already retained narrow proof's exact `/doc`
+fact: 386,197 body bytes and raw SHA-256
+`0cded4547ac93d617517419233f08f134eb002dae111534e5c02031803e35721`. That earlier hash-only proof is
+not `S`; E1b3 must retain and independently parse the complete matching body before it can close the
+surface leaf.
+
+On capable hosts the measurement gate uses direct unprivileged user/network namespaces. Hosted CI may
+use the already reviewed E1b2 pattern only to create a private PID/network namespace with fixed
+absolute system commands; before package or repository code it must restore the nonzero runner UID/GID,
+clear supplementary groups and every capability set, set `no_new_privs`, and assert that state in both
+shell and test code. Neither path may skip or run project code privileged. The proof opens no external
+route, receives no secret environment, uses dependencies already installed from the lock, and leaves
+the worktree byte-identical. P08 seeds the parent with hostile `NODE_OPTIONS`, `NODE_PATH`,
+`LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, proxy, and TLS/config variables. It requires the compiled
+bundle to reject any nonempty `process.env`, verifies the spawn call's null-prototype zero-key `env`,
+uses a `NODE_OPTIONS --require` sentinel that would write a marker if inherited, uses a nonexistent
+`LD_PRELOAD` sentinel that would produce loader diagnostics if inherited, and proves identical clean
+measurement plus private-namespace serve results with no marker or unexpected stderr. These are
+parameterized assertions under the fixed P08 requirement, not a new top-level case ID.
+
+<a id="e1b3-release-gate"></a>
+
+**E1b3 owner map and executable release gate.** One integration owner alone changes package manifests,
+lockfile, barrels, workflow, proof pins, and synchronized docs. Non-overlapping implementation owners
+are `packages/opencode-front-door/**` for the build target; the generated surface and
+`spikes/opencode-native/e1b3/**` for proof; one new listener-evidence state module/test for codecs and
+raw verification; and the E1b3 collector/test plus the non-barrel held-handle extension in
+`linux-executable-collector.ts` for trusted capture. Only the pure codec may enter the host-state
+barrel. No collector, build, measurement, fixture, or proof module enters a production barrel or
+package export.
+
+Dormancy is checked across both source imports and workspace-package reachability. The new package is
+`private:true`, has no `bin`, `main`, `exports`, `start`, `preinstall`, `install`, `postinstall`,
+`prepare`, or `prepublishOnly` surface, and is absent from every production package's dependencies,
+optional dependencies, peer dependencies, and transitive workspace closure. The gate walks bare
+workspace imports as well as relative imports from the current CLI production roots
+`src/cli`, `src/run`, `src/runtime-owner-cli`, `src/index`, `src/broker/index`, and
+`src/host/rc/index`, plus the web and `clawsec` runtime roots. Only the proof workspace may name the
+front-door package as a development dependency. It also requires unchanged migration bytes/counts,
+no new `--rc-*` flag, RPC/protocol/broker/owner operation, and unchanged ordinary health capability
+bits. A package manifest, lifecycle script, workspace dependency, or bare import cannot evade the
+relative-import dormancy scan.
+
+The gate manifest freezes these exact 106 top-level IDs and meanings; the order after each colon maps
+one-for-one onto the ascending IDs and cannot be substituted while preserving only a category count:
+
+- `C01`–`C12`: missing field; extra field; wrong schema; wrong version; malformed/fatal UTF-8;
+  noncanonical integer; padded/wrong-length digest; count mismatch; duplicate/reordered item;
+  truncation/trailing byte; zero/oversized artifact; every-field byte/digest sensitivity across all
+  four new leaves and the parent.
+- `P01`–`P08`: arbitrary executable; test shim; executable-role transplant; raw front-door digest
+  mismatch; executable-manifest mismatch; two clean builds differ; toolchain/build-input mismatch;
+  held release/CI interpreter omitted, substituted, or influenced by inherited Node/loader environment.
+- `B01`–`B12`: omitted dependency; extra dependency; changed dependency bytes; duplicate dependency;
+  reordered closure; label/symbol without content closure; dynamic import; runtime asset omitted;
+  native add-on; symlink/nonregular input; input changes during build; closure transplanted across
+  binaries.
+- `S01`–`S10`: raw OpenAPI byte change; whitespace-only raw change; duplicate JSON key;
+  malformed UTF-8/JSON; byte/depth/value/count overflow; operation add/delete;
+  method/path/operation-ID/span change; engine-version mismatch; native-binary transplant; three
+  generation captures differ.
+- `R01`–`R16`: surface operation lacks disposition; registry references unknown operation; selected
+  operation missing; hidden raw handler; hidden upgrade; hidden catch-all/fallback; duplicate route
+  tuple; reordered entry; every entry-field change; wrong fallback ordering; wrong priority ordering;
+  wrong registration ordering; unresolved static/dynamic overlap; HTTP/WebSocket crossover; wrong
+  front-door audience; listener/authorization/target symbol or closure mismatch.
+- `M01`–`M12`: missing live entry; extra live entry; duplicate live entry; reordered traversal; every
+  measured-field change; hidden registration before seal; registration after seal; malformed/partial
+  measurement; oversized output; child hang/timeout; output from another executable; equal claimed
+  digest with unequal declaration vector.
+- `T01`–`T12`: native/front-door manifests swapped; executable/build mismatch; native/surface
+  mismatch; surface/registry mismatch; build/registry mismatch; registry/measured mismatch;
+  measurement from another clean build; parent role/schema transplant; correct digest with wrong
+  length; runtime/incarnation transplant; key ID/generation transplant;
+  descriptor/version/route-resolution transplant.
+- `Q01`–`Q18`: each of seven inputs mutates before first await; overlapping views; growable shared
+  buffer resize; buffer detach/shrink; hostile getter/species/proxy; returned-byte alias mutation;
+  executable truncation; executable growth; same-length executable mutation; mode change;
+  unlink; rename/replacement; close failure; primary error plus close failure; cancellation at every
+  asynchronous phase; measurement pipe close and child reap; build-temp cleanup; exact
+  `/proc/self/fd` and stdin-held-bundle equality on success and every injected failure.
+- `D01`–`D06`: production-root or workspace-dependency reachability; package/native barrel, `bin`, or
+  lifecycle-script exposure; schema/migration/state mutation; CLI flag/protocol/operation/health-bit
+  change; non-proof listener/network/broker/provider call; import/dependency allowlist differs from the
+  frozen direct-only graph.
+
+`gate-case-ids-v1.json` is the exact ordered array of `{id, requirement}` pairs above. Parameterized
+subcases cover every field, input, closure, vector position, role, phase, and injected failure. Tests
+emit the exact unique ID set with no missing, duplicate, or unknown value and compare every manifest
+description too; the expanded assertion count and case-manifest digest are pinned only after
+implementation bytes settle.
+
+The focused commands are exact:
+
+```bash
+pnpm --filter @remote-claw/opencode-front-door run test:e1b3a
+pnpm --filter @remote-claw/opencode-front-door run check
+pnpm --filter @remote-claw/opencode-front-door run typecheck
+pnpm --filter @remote-claw/cli exec vitest run \
+  src/host/state/native-binding-authority-listener-evidence.test.ts \
+  src/host/native/linux-listener-evidence-collector.test.ts \
+  src/host/state/dormant.test.ts
+pnpm --filter @remote-claw/opencode-native-proof run test:e1b3
+pnpm --filter @remote-claw/opencode-native-proof run check
+pnpm --filter @remote-claw/cli run typecheck
+pnpm --filter @remote-claw/cli run check
+git diff --check
+```
+
+`test:e1b3a` performs the two clean builds and declaration/default-deny tests. `test:e1b3` runs the
+retained proof, Node-core-only independent verifier, exact case-manifest comparison, and private-
+namespace inherited-FD measurement/serve checks. After code/schema/
+fixture freeze, run one combined focused gate, one full `pnpm check`, `pnpm typecheck`, and `pnpm test`,
+mandatory cross-doc/render sync, bounded independent read-only review, and CI. Any later code, schema,
+or fixture change invalidates those results.
+
+Release-blocking P0 findings are any reachable production listener/native request/state/signature/
+pointer/port/capability path, any proof socket outside the private namespace, or any credential or
+external-network use. P1 findings are arbitrary/test executable provenance; omitted or label-only
+build closure; surface not bound to the pinned native bytes; hidden, missing, ambiguous, late, or
+spoofed dispatch; digest-only rather than item-wise equality; cross-leaf/build/version/parent
+transplants; mutable post-await inputs; count/allocation overflow; nondeterministic clean builds;
+repeatable FD/pipe/child/temp leakage; a skipped gate or privileged project-code execution; or a process/socket/
+currentness claim beyond this historical observation. Later-slice work, not an E1b3 blocker while it
+remains dormant, is post-close pathname/process currentness, actual socket/peer/isolation binding,
+kernel-stall preemption beyond the hard child timeout, unsupported-platform reproducibility, and
+additional randomized fuzzing after the deterministic matrix.
+
+One downstream loose end is recorded without widening E1b3: before E1c implementation, its first
+prepare recipe must be made phase-progressive or otherwise obtain the future listener/isolation signed-
+record digests without pre-reservation signing. The current prose that appears to commit all four
+parents before those later phases is not executable as written. E1c must resolve that staging order in
+its own design-only pass; E1b3 creates no signed record to paper over it.
+
 The four fixed child orders are the workspace, listener, isolation, and capability subsequences shown
 above. E1a reserves each child role/schema/bound and verifies its content commitment; it does not
 define or validate the committed child's semantic bytes. E1b1 closes the two executable-manifest
 grammars and generic collector behavior for both roles, but only the native role's real retained
-proof. E1b2 closes the workspace leaves and verifies a separately built workspace parent. E1b3
-through E1b5 must close the remaining leaf codecs, the actual front-door executable observation, and all four parents before E1c
+proof. E1b2 closes the workspace leaves and verifies a separately built workspace parent. E1b3's
+design is frozen but its two implementation sub-slices have not landed. E1b3 through E1b5 must close
+the remaining leaf codecs, the actual front-door executable observation, and all four parents before E1c
 may treat any parent as evidence.
 
 A snapshot-only current pointer is forbidden. Evidence may survive a crash or signer handoff while
@@ -9162,27 +10299,33 @@ for digest in orderedEntryDigests:
 
 For selected A2, `routeResolutionSchemaId` is
 `remote-claw/native-listener-route-resolution/v1`. After the pinned parsers canonicalize a request,
-candidates must belong to the listener's exact `frontDoorKind` and identity and have the same
-transport and exact method; method override is never applied. The authorization-handler identity is
-part of every entry, so moving `/global/event`, `GET /session`, or `POST /session` between TUI,
-observer, adapter, or creation audiences changes the manifest.
-Non-fallback candidates precede fallback candidates, greater `matchPriority` precedes lower, and lower
-`registrationOrder` precedes higher. A tie after those keys is invalid rather than broken by source
-text or hash. An Upgrade request is considered only in the `websocket` transport set, so it cannot
-fall through to an HTTP route. `orderedEntryDigests` is the resulting actual dispatch traversal order,
-not lexical order.
+candidate selection uses the frozen E1b3 connection-class rule: an Upgrade considers only its role's
+WebSocket deny, while an ordinary HTTP request may select an exact `http` or `stream` positive and uses
+that transport only for response handling after selection. Positive candidates require the listener's
+exact `frontDoorKind`/identity and exact method/path; method override is never applied. The only
+wildcard candidates are the frozen fallback-only `nativeMethod:"*"`/path `"*"` rows, and an otherwise
+unmatched valid ordinary request reaches only its role's HTTP deny. The authorization-handler identity is part of every entry, so moving `/event`,
+`GET /session`, or the selected prompt route between TUI, observer, adapter, or creation audiences
+changes the manifest. Non-fallback candidates precede fallback candidates, greater `matchPriority`
+precedes lower, and lower `registrationOrder` precedes higher. A tie after those keys is invalid rather
+than broken by source text or hash. `orderedEntryDigests` is the resulting actual dispatch traversal
+order, not lexical order.
 
-The build registry is generated from the wrapper front-door registration DSL and compiled into the
-front-door binary; startup instrumentation walks that same live registry and attests it contains
-exactly the generated set—no hidden front-door route, catch-all, or upgrade and no missing handler. A
-hand-maintained inventory or `/doc` scrape is insufficient. The private native destination is
-reachable only from those generated handlers. Any exposed entry, parser, normalization rule,
-authorization/target handler identity, pinned native binary/schema, registration, or ordering
-difference changes the digest and prevents a capability snapshot from becoming current.
+The sole wrapper registration DSL generates the complete digest-independent declaration vector and
+symbol IDs compiled into the front-door bundle. The finalized `R` artifact is a post-build sidecar: it
+adds exact source-surface dispositions and closure digests but never embeds a binary-dependent identity
+back into the binary. Startup instrumentation walks the same sealed live declaration arrays and emits
+their complete items/order; the trusted parent requires exact equality with `R` before deriving `D`.
+There may be no hidden front-door route, catch-all, or upgrade and no missing handler. A hand-maintained
+inventory, `/doc` scrape without the retained body, or digest-only comparison is insufficient. Any
+exposed entry, parser, normalization rule, authorization/target symbol or closure, pinned native
+binary/surface, registration, or ordering difference changes the evidence and prevents a later
+capability snapshot from becoming current.
 
 `frontDoorBuildManifestRef` retains the deterministic build's exact route-to-module/symbol/dependency
-closure and recomputes `frontDoorBuildManifestDigest`; `frontDoorBinaryDigest` covers the executable
-bundle that serves the sockets. For each entry:
+closure and recomputes `frontDoorBuildManifestDigest`; `frontDoorBinaryDigest` is E1b1's raw-file hash
+of the executable ESM bundle. E1b4 separately binds its Node interpreter and process mapping. For each
+entry, the parent derives the final identities only after the settled bundle has been measured:
 
 ```text
 frontDoorListenerIdentityDigest =
@@ -9201,9 +10344,10 @@ handlerIdentityDigest =
          bytes(canonicalTargetHandlerModuleSymbolAndDependencyClosure))
 ```
 
-The build manifest supplies those canonical bytes and the startup attestation binds both build and
-binary digests. Labels, source paths, or function names without artifact/dependency bytes do not
-qualify.
+The build manifest supplies those canonical bytes and the later E1c startup attestation binds both
+build and binary digests. Labels, source paths, or function names without artifact/dependency bytes do
+not qualify. The bundle contains only digest-free declarations and symbol IDs; it contains none of its
+own hash, the final identity/entry digests, or the `B/R/D/L` digests.
 
 `orderedEntryVectorDigest` is SHA-256 of
 `str("remote-claw/native-listener-entry-vector/v1") || uint(count)` followed by each canonical
@@ -13773,7 +14917,7 @@ logical-chat identity across wrapper restart, or native effect fencing.
 
 ### A1 — Runtime ownership, control journal, and remote-proposal actor
 
-**Status: A1.0 through dormant A1.8a0 implemented; A1.8a1-E0 identities, E1a parent envelopes, E1b1 executable-content manifests/collector, and E1b2 workspace codecs/verifier/collector implemented; E1b3–E1b5/E1c/I and A1.8a2 through A1.11 planned.** A1 is
+**Status: A1.0 through dormant A1.8a0 implemented; A1.8a1-E0 identities, E1a parent envelopes, E1b1 executable-content manifests/collector, and E1b2 workspace codecs/verifier/collector implemented; E1b3 design frozen; E1b3–E1b5/E1c/I and A1.8a2 through A1.11 implementation planned.** A1 is
 provider-neutral. It owns generic collaboration-server, chat, native, runtime, source,
 outside-binding, capability, decision, attempt, outbox, and inference records. It does not own
 Anthropic or ChatGPT enrollment, provider cursor/ACK/envelope state, provider chat mapping, or
@@ -13916,8 +15060,10 @@ official-client compatibility; B and C add those records on the generic A1 seams
   full-u64 `M → P → F → A` digest DAG, bounded raw-five-view verifier against separately supplied E1a
   parent bytes, synchronous direct-only two-chain Linux observation, historical-only boundary, and
   non-skipping dual-path least-privilege namespace/bind-mount proof in §4.1.
-- **A1.8a1-E1b3 — Front-door and listener evidence (planned):** collect the actual front-door
-  executable and close build, generated-surface, route-registry, measured-dispatch, and listener-parent evidence.
+- **A1.8a1-E1b3 — Front-door and listener evidence (design frozen; implementation planned):** E1b3a
+  lands the strict leaf codecs and deterministic default-closed ESM build; E1b3b collects the actual
+  front-door, retains the full native surface, proves sealed live declarations, and closes the raw
+  seven-view listener parent under §4.1's executable gate.
 - **A1.8a1-E1b4 — Runtime-isolation evidence (planned):** close every registered process, socket,
   policy, peer, namespace, and isolation-parent proof.
 - **A1.8a1-E1b5 — Capability evidence and full four-parent closure (planned):** close every remaining
@@ -13950,8 +15096,8 @@ official-client compatibility; B and C add those records on the generic A1 seams
 The stateful path through dormant rejected-result closure—`A1.0 → A1.1 → A1.2 → A1.3 → A1.4 → A1.5 → A1.6 → A1.7a → A1.7b0 → A1.7b1 → A1.8a0`—is implemented behind closed trusted-adapter and host-only seams.
 A1.8a1-E0's pure identity contract, E1a's pure parent-envelope contract, E1b1's executable-content
 contract, and E1b2's workspace-evidence contract are also implemented, but none is authority
-evidence. E1b3 through E1b5 remain the front-door/listener, isolation, and capability/full-parent
-gates; E1c remains the stateful
+evidence. E1b3's design is frozen but its front-door/listener gate remains unimplemented; E1b4 and
+E1b5 remain the isolation and capability/full-parent gates. E1c remains the stateful
 accepted-evidence implementation after E1b5; I remains unimplemented after E1c.
 Full A1.8a then requires A1.8a2's one-transaction admitted arm;
 A1.8b waits for A1.8a; A1.9 waits for A1.3 and the protected-handle kernel; A1.10 waits for
@@ -14419,7 +15565,8 @@ values, bounded raw snapshots/reparse/re-encoding of four leaf views plus separa
 bytes, synchronous independent no-follow walks, race/namespace/mount rejection, exact E1a parent
 verification, historical-only boundary, and no production importer. The collector itself returns only
 the four leaf artifacts. The non-skipping local-direct/hosted-CI-demoted proof exercises a real mount
-namespace, an inclusive bind root, and nested-mount refusal. E1b3 must prove the actual front-door and listener evidence; E1b4 must
+namespace, an inclusive bind root, and nested-mount refusal. E1b3's frozen executable gate must still
+prove the actual front-door and listener evidence; E1b4 must
 prove runtime isolation; and E1b5 must prove capability evidence and recreate all four E1a parents.
 Synthetic commitments and schema-name assertions cannot pass those gates.
 

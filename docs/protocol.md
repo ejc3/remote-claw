@@ -110,8 +110,11 @@ codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only
 root/target collection. The collector returns four leaves; the verifier consumes their raw views plus
 separately built E1a parent bytes. Its non-skipping local-direct/hosted-CI-demoted proof exercises a real
 mount namespace and bind-mount policy. E1b2 remains historical-only and proves no currentness,
-process, authority, stateful acceptance, production wiring, capability, or wire operation. E1b3 front-door/listener, E1b4 isolation, and E1b5
-capability/full-parent closure remain planned. E1c then owns stateful
+process, authority, stateful acceptance, production wiring, capability, or wire operation. E1b3's
+front-door/listener contract and executable gate are frozen but unimplemented: one default-closed ESM
+build, complete raw OpenAPI surface, cycle-free declarations/closures, sealed item-wise measurement,
+and a raw-seven-view listener-parent verifier. E1b4 isolation and E1b5 capability/full-parent closure
+remain planned. E1c then owns stateful
 accepted evidence and must never change either native-transport authority pointer. A1.8a1-I later
 installs one accepted capability snapshot plus one credentialless authenticated callable-port ingress
 lease as an indivisible pair. It stores no URL, socket, bearer, provider credential, or readable
@@ -783,7 +786,7 @@ operation, relay, viewer, or broker path calls either collector. The retained na
 
 ---
 
-## 3f. A1.8a1 native-binding authority (E0/E1a/E1b1/E1b2 implemented; E1b3–E1b5/E1c/I implementation planned)
+## 3f. A1.8a1 native-binding authority (E0/E1a/E1b1/E1b2 implemented; E1b3 design frozen; E1b3–E1b5/E1c/I implementation planned)
 
 A1.8a1-E0, E1a, E1b1, and E1b2 introduce no protocol packet or live operation. E0 freezes the six E-side ID
 namespaces/parsers and four deterministic derivations. E1a freezes the four canonical parent DTOs and
@@ -811,8 +814,16 @@ boundaries are:
    package code while exercising the same real namespace and bind-mount behavior.
    Exact DTOs/formulas and the executable gate are in the
    [technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
-3. **A1.8a1-E1b3:** collect the actual front-door executable and close build, generated-surface,
-   route-registry, measured-dispatch, and listener-parent evidence.
+3. **A1.8a1-E1b3 (design frozen; implementation planned):** E1b3a adds only four pure leaf codecs and
+   the deterministic dormant Node-ESM front-door build. E1b3b collects that exact bundle, retains the
+   complete pinned OpenCode 1.17.5 `/doc` body, compares the four sealed role registries item-for-item,
+   and verifies `N,X,B,S,R,D` plus separately supplied E1a listener-parent bytes. The bundle contains
+   only output-independent declarations and symbol IDs; binary-, closure-, registry-, measured-, and parent-
+   dependent identities are post-build sidecars. The only positive routes are binding `user_text`
+   `POST /session/{sessionID}/prompt_async` and five observer routes; retained `S` must prove the
+   selected status route or E1b3b blocks. TUI/server-creation are deny-only,
+   every other OpenAPI operation has an explicit closed disposition, and no wire listener or operation
+   is installed.
 4. **A1.8a1-E1b4:** close process, socket, policy, peer, namespace, and isolation-parent evidence.
 5. **A1.8a1-E1b5:** close the remaining capability child codecs and reproduce all four E1a parents.
 6. **A1.8a1-E1c:** retain and cryptographically close the exact workspace, listener-registration,
@@ -1318,7 +1329,8 @@ guarantees.
    envelopes, E1b1 supplies direct-only executable-content manifests/collector without path,
    process, front-door, currentness, complete-parent, or authority proof, and E1b2 supplies
    historical-only workspace codecs/verifier/collector without currentness, process, authority, or
-   production proof. Planned E1b3–E1b5 closure, E1c stateful evidence, I install, A1.8a2 admitted
+   production proof. E1b3's design is frozen but its implementation gate, E1b4–E1b5 closure, E1c
+   stateful evidence, I install, A1.8a2 admitted
    arming, A1.8b sealing/publishing, and later milestones must
    land before A1 can replace the A0 relay described above.
 

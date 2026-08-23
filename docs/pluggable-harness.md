@@ -126,8 +126,14 @@ codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only
 The collector returns only four leaf artifacts; the verifier consumes their raw views plus separately
 built E1a parent bytes. A non-skipping local-direct/hosted-CI-demoted test proves real namespace and
 bind-mount behavior. E1b2 remains historical-only and proves no currentness, process, authority,
-stateful acceptance, production wiring, or capability; E1b3 front-door/listener, E1b4 isolation,
-and E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode `user_text` native-binding evidence through
+stateful acceptance, production wiring, or capability. E1b3's design is frozen but unimplemented:
+E1b3a owns pure codecs plus one deterministic dormant Node ESM bundle, and E1b3b owns direct-only
+capture plus the retained raw-seven-view `N/X/B/S/R/D/L` proof. Its positive inventory is closed to
+one prompt-binding route, four observer reads, and the legacy `/event` observer stream; session/TUI/server
+creation and every unlisted route remain deny-only. Final executable/build/OpenAPI/registry/measurement/parent
+digests stay in post-build sidecars, so the bundle contains no self-hash cycle. No E1b3 package,
+listener, capture, fixture, authority, or production import exists yet. E1b4 isolation and E1b5
+capability/full-parent closure remain planned. E1c then retains exact signed OpenCode `user_text` native-binding evidence through
 dependency-ordered listener/isolation/capability phases, with key rotation blocked while an E-owned
 phase is nonterminal and neither existing transport authority pointer changed. Its workspace/new-
 lineage, exhaustive legacy-signer quarantine, unsigned-snapshot/accepted-inert staging, and
@@ -138,8 +144,8 @@ runtime-owner channel; no URL, socket, bearer, provider credential, or readable 
 Authority withdrawal changes only the exact durable pair; the A1.4 parent alone owns physical-port
 unregistration, so late predecessor cleanup cannot disable a successor generation.
 Neither E1c nor I adds a `Session` consumer, admitted command, attempt, dispatch, effect, native call,
-production operation, or capability claim. The implemented E0/E1a/E1b1/E1b2 boundary and planned
-E1b3–E1b5/E1c/I design are
+production operation, or capability claim. The implemented E0/E1a/E1b1/E1b2 boundary, frozen E1b3
+design, and planned E1b4–E1b5/E1c/I design are
 [in the technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
 best-effort autostart that daemon after identity load. For the ordinary CLI, authenticated health is
@@ -792,8 +798,10 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   only executable-manifest vocabulary plus the native role's retained stable-content observation.
   E1b2 closes the workspace leaf codecs, raw-byte DAG/parent verifier, synchronous direct-only
   collector, and non-skipping dual-path least-privilege namespace/bind-mount proof, but remains historical-only and
-  non-authoritative; E1b3–E1b5 actual front-door/listener, isolation, capability, and full-parent
-  evidence remain planned, and
+  non-authoritative. E1b3's pure-codec/deterministic-bundle and direct-capture/raw-seven-view design is
+  frozen in documentation, but no package, listener, capture, or retained fixture exists. E1b3–E1b5
+  actual front-door/listener, isolation, capability, and full-parent evidence remain unimplemented,
+  and
   A1.8a1-I's atomic
   snapshot/credentialless-callable-port pair repository remains planned after E1c. They may reuse the protected artifact/signature ledgers and callable-port registry,
   but must remain outside every production run path until their own dormant proof gate passes.

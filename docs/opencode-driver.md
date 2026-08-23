@@ -5,7 +5,12 @@
 > ID is confirmed and, unless explicitly skipped, parent-session permission setup is proved. It is not
 > yet the isolated,
 > coordinator-owned OpenCode runtime selected in
-> [client-driven-host-runtime.md](client-driven-host-runtime.md).
+> [client-driven-host-runtime.md](client-driven-host-runtime.md). The frozen but unimplemented
+> A1.8a1-E1b3 design is a separate dormant default-closed ESM front door: it selects only
+> `POST /session/{sessionID}/prompt_async`, four HTTP observer reads, and legacy `GET /event`, with
+> `GET /session/status` still required to appear in E1b3b's retained complete surface before the gate
+> can pass. TUI/server-creation and every unlisted OpenAPI route are deny-only. The compatibility client's broader
+> route use below is not that front door and proves no listener authority.
 
 **Identity scope.** The current driver has two distinct IDs: OpenCode owns the native `ses_*`, while
 `RelayCore` creates a synthetic `cse_*` for the remote-claw broker channel and viewer row. Neither is

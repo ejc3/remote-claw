@@ -2,7 +2,10 @@
 
 **Status:** protocol evidence captured 2026-07-29; the executable manifest evidence is separately
 retained without a capture timestamp. These are narrow facts for one pinned OpenCode build, not proof
-of the selected A2 request, TUI coexistence, or shared-writer adjudication.
+of the selected A2 request, TUI coexistence, or shared-writer adjudication. A1.8a1-E1b3's design now
+selects these pinned `/doc` length/hash and native-executable facts as inputs, but E1b3 remains
+unimplemented: this fixture does not retain the raw `/doc` body, build or observe the dormant front
+door, close the listener parent, or prove process/socket/currentness or authority.
 
 ## Result
 
