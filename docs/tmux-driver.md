@@ -1,4 +1,4 @@
-# The tmux driver (Track B) — drive a plain `claude` over the broker, no MITM
+# Experimental tmux compatibility driver — drive a plain `claude` over the broker, no MITM
 
 `remote-claw` bridges a coding agent to an E2E-encrypted broker so a phone or laptop can watch and
 drive it. The **default** driver (`mitm`) runs the real `claude --remote-control` behind a local MITM
@@ -9,19 +9,23 @@ adds no remote-claw proxy or CA; user-supplied proxy/CA variables are preserved.
 talks to whichever provider it is configured for, while remote-claw bridges the session by **tailing
 claude's local transcript JSONL** (capture) and **typing into the pane via `send-keys`** (inject).
 
-> **Scope:** this document describes the shipped compatibility driver. In the selected
-> [client-driven host runtime](client-driven-host-runtime.md), tmux remains a lower-fidelity control
-> adapter but composes with the wrapped engine's private provider façade and network fence. One person
-> may keep using the real TUI in the pane while remote clients also inject into it, but both paths share
-> one native editor keystream rather than appearing to Claude as peer collaborators. Local pane
-> submissions are observed only after Claude accepts/records them, so attribution is `post_hoc`, and
-> simultaneous writable fidelity remains unsupported without a proved exclusive editor boundary.
+> **Status and support boundary:** this document describes an implemented experimental/internal
+> compatibility driver. The flag's presence does not make tmux a supported stable driver or a release
+> gate for the active [Claude 1.0 finish line](release-finish-line.md), whose only supported runtime is
+> Claude Remote Control through the MITM lane. The parked
+> [client-driven host design](client-driven-host-runtime.md) retains tmux only as possible lower-fidelity
+> platform work. Whenever the experimental path is explicitly exercised, its fail-closed readiness,
+> permission, delivery-ambiguity, and teardown constraints below still apply. One person may keep using
+> the real TUI in the pane while remote clients also inject into it, but both paths share one native
+> editor keystream rather than appearing to Claude as peer collaborators. Local pane submissions are
+> observed only after Claude accepts/records them, so attribution is `post_hoc`, and simultaneous
+> writable fidelity remains unsupported without a proved exclusive editor boundary.
 
 **Identity scope.** The shipped A0.2 driver gives its synthetic remote-claw `Session.id` (`cse_*`) a
 process-local registrar lease and separately controls a tmux pane plus a Claude transcript/session ID.
 That lease prevents publication before readiness and owns the bridge lifecycle, but it is not a
 durable remote-claw logical-chat ID. A wrapper restart does not currently recover the binding or
-reattach to the live pane (`liveReattach:false`). A1 uses a persisted
+reattach to the live pane (`liveReattach:false`). The parked A1 design proposes a persisted
 `(collaborationServerId, logicalChatId)` scope for the canonical chat within one machine. Its
 machine-facing viewer row, route, alias, channel, and cache keys use the full
 `(identity_id, collaborationServerId, logicalChatId)` triple. The binding is retained only when pane,
@@ -252,7 +256,7 @@ that Claude accepted or applied the answer.
 Those are process-level receipts, not native acceptance. A tmux command can take effect and then lose
 its completion response, so a reported paste, Enter, Escape, or `/model` failure can be
 post-dispatch. Blindly retrying such a failure can paste twice, submit twice, interrupt a later turn,
-or apply a model change twice. The selected runtime must write the remote command ID, source,
+or apply a model change twice. Any future promoted tmux runtime would have to write the remote command ID, source,
 pane/process generation, native Claude session ID, transcript identity, and pre-dispatch transcript
 cursor before the first tmux action. A post-dispatch failure remains `outcome_unknown`; it is never
 retried merely because the tmux call threw. For a prompt, the first positive application evidence is
@@ -282,7 +286,7 @@ possibly-live pane's control socket. Retention is conservative evidence preserva
 reattachment: this wrapper process is gone, its registrar lease is gone, and
 `liveReattach:false`.
 
-The selected durable runtime separates collaborator detach from native-runtime termination. Ordinary
+Any future durable tmux runtime would have to separate collaborator detach from native-runtime termination. Ordinary
 detach first fences remote injection, records the exact pane/process/session/transcript state and every
 uncertain attempt, and leaves the pane usable; only an explicit host terminate action kills it. Hook
 scratch and a blocked permission helper remain owned by the surviving runtime until their native
@@ -341,7 +345,7 @@ leaves the downstream response unacknowledged, and tears down the driver rather 
 ACK. The relay may already have projected its own gate resolution, however, so this still is not a
 native terminal receipt.
 
-The selected runtime must choose at most one answer among remote-claw's many remote collaborators,
+Any future promoted tmux runtime would have to choose at most one answer among remote-claw's many remote collaborators,
 write that proposal ahead, and then let Claude's native gate state arbitrate it against any direct TUI
 answer. A decision-file failure leaves the gate open or `outcome_unknown`; it cannot be swallowed or
 ACKed as applied. Recovery must read a proved native pending/terminal gate record, or explicitly mark
@@ -627,8 +631,8 @@ constructed, the pane exits, or Claude does not execute the marker within the re
 startup fails closed. This ensures the same settings source proves both readiness and, when enabled,
 the PreToolUse permission hook.
 
-Following a new file is only capture continuity in the shipped driver; it is not permission to keep
-the same future logical chat. The selected runtime durably records the transition's old and new native
+Following a new file is only capture continuity in the implemented experimental driver; it is not
+permission to keep the same future logical chat. Any future durable tmux runtime would have to record the transition's old and new native
 session IDs, transcript identities, source, and last committed cursors before the coordinator relies on
 the new binding. `/clear` creates a new logical chat, `/branch` creates a new logical chat with parent
 lineage, and `/compact` retains the current chat only when the hook/native transcript proves the native
@@ -654,7 +658,7 @@ transcript. Nested sub-agent user lines are never promoted to top-level local pr
 is text-based, so a simultaneous identical local and remote prompt can still be misattributed for
 display; it does not change what Claude executes.
 
-This ledger is display-only and cannot support restart or adjudication. The target command journal is
+This ledger is display-only and cannot support restart or adjudication. A future command journal would be
 written before pane injection and names the remote source plus exact native session/transcript/cursor.
 When capture observes the resulting top-level native user UUID, it atomically records that UUID as the
 command's application evidence. A direct-TUI UUID with no proved pending remote attempt remains a local
@@ -665,7 +669,7 @@ the remote attempt stays `outcome_unknown` and is not retried or relabeled by te
 
 ## 8. Summary
 
-The tmux driver is the **provider-agnostic** sibling of the MITM driver: same `Session` seam, same
+The experimental tmux driver is a **provider-agnostic compatibility** sibling of the MITM driver: same `Session` seam, same
 canonical `UpstreamPayload`, same relay/broker/viewer — but it captures by **tailing claude's
 transcript JSONL** and injects by **typing into a tmux pane**, so it works on Bedrock/Vertex where
 native Remote Control is disabled. Because the transcript's content blocks are byte-identical to the

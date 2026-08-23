@@ -1,11 +1,11 @@
 # OpenCode native protocol proof
 
 **Status:** protocol evidence captured 2026-07-29; the executable manifest evidence is separately
-retained without a capture timestamp. These are narrow facts for one pinned OpenCode build, not proof
-of the selected A2 request, TUI coexistence, or shared-writer adjudication. A1.8a1-E1b3's design now
-selects these pinned `/doc` length/hash and native-executable facts as inputs, but E1b3 remains
-unimplemented: this fixture does not retain the raw `/doc` body, build or observe the dormant front
-door, close the listener parent, or prove process/socket/currentness or authority.
+retained without a capture timestamp. These are narrow compatibility and release-audit facts for one
+pinned OpenCode build, not runtime authority. Durable A1/OpenCode is optional parked multi-engine work,
+not an active outcome or blocker for the [Claude 1.0 finish line](release-finish-line.md). If that work
+is explicitly resumed, it may use this fixture as a regression oracle, but no activation, admission,
+dispatch, or gate reconstructs a local capability/evidence tree from it.
 
 ## Result
 
@@ -21,7 +21,7 @@ The probe deleted the native session, required session/history reads to return t
 
 ## Executable-content addendum
 
-The same pinned release also has a retained A1.8a1-E1b1 native-executable manifest. A separate probe
+The same pinned release also has a retained native-executable manifest. A separate probe
 opened the real Linux arm64 native binary once with `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`, required a
 nonempty executable regular file, performed two complete positional reads plus EOF checks on that
 one descriptor, and required stable device, inode, mode, link count, size, modification time, and
@@ -29,26 +29,24 @@ change time. It read but did not execute the binary, started no server, used no 
 credential, and retained no raw executable or chunk bytes.
 
 The resulting manifest covers 156,412,048 bytes in 150 domain-separated 1 MiB chunks, with a
-174,224-byte final chunk. Generic collection also has temporary-file coverage for the front-door
-role, but this retained proof closes only `listener.native_executable`; it does not observe or
-provenance-bind an actual front door, pathname, running process, executable mapping, currentness,
+174,224-byte final chunk. Historical generic collection also has temporary-file coverage for a
+front-door role, but this retained proof closes only `listener.native_executable`; it does not observe
+or provenance-bind an actual front door, pathname, running process, executable mapping, currentness,
 complete parent, or authority.
 
-## Relationship to selected A2
+## Relationship to the optional A1 design
 
-Neither retained request is the selected A2 wire request.
+Neither retained request is the exact optional A1 `user_text` wire request.
 
 The creation probe used a `directory` query, a `title`, and metadata containing only
-`remoteClawCreationId`. Selected A2 instead requires empty query, the pinned
-`x-opencode-directory` header, no title, and this exact compact body:
-
-```json
-{"metadata":{"remoteClawCreationId":"<nativeCreationMarker>","remoteClawCreationIntentDigest":"<nativeCreationIntentDigest>"}}
-```
+`remoteClawCreationId`. The optional design must either attach an exact existing session or durably
+write ahead and reconcile one local creation before advertisement; this probe proves neither lifecycle
+or binding transaction. Remote `new_chat` and generalized session creation remain further optional
+scope, and the retained marker creates no authority for either path.
 
 The prompt probe sent caller `messageID`, `noReply:true`, and one text part. It did not send a `model`
 field, and its code did not set `x-opencode-directory` on that request. Native history recorded
-OpenCode-selected model metadata, but that is not a caller-supplied model field. Selected A2 forbids
+OpenCode-selected model metadata, but that is not a caller-supplied model field. The optional design forbids
 both `model` and `noReply` and requires exactly:
 
 ```json
@@ -61,11 +59,11 @@ semantic header vector `content-type: application/json`, then
 encoder. The current compatibility driver is different again: it sends `{model, parts}` and no caller
 `messageID`.
 
-This fixture also bypasses the common remote-claw command path. It contains no signed
-`CollaborationCommandResultRecord`, admitted-result tuple, decision/executor evidence,
-runtime-owner-signed capability snapshot, retained translator record, one-time front-door dispatch, or
-real native TUI collaborator. Its history/SSE checks establish the narrow caller-ID behavior below;
-they are not the complete linearly proved history snapshot and native-order evidence that A2 requires.
+This fixture also bypasses the common remote-claw command path. It contains no signed admitted
+`CollaborationCommandResultRecord`, command-keyed execution/start transaction, current binding
+activation, deterministic local-provider response, exact session-plus-history observer, durable
+host-output ledger, sealed outbox, browser delivery, or credential-isolated connector. Its history/SSE
+checks establish only the narrow caller-ID behavior below.
 
 ## Version and evidence pin
 
@@ -117,53 +115,71 @@ node spikes/opencode-native/probe.mjs
 node spikes/opencode-native/executable-manifest-probe.mjs
 ```
 
-## Missing positive release fixture
+## Optional tests that would still be required
 
-A2 remains non-writable until a separate checked-in fixture proves at least one exact positive
-`user_text` path end to end. That fixture must:
+No qualifying durable A1 `user_text` fixture exists in this repository today. That absence does not
+block Claude 1.0; it blocks only a future decision to advertise the optional OpenCode capability.
 
-1. enter through a real remote source and the common server-wide adjudicator;
-2. retain the exact signed admitted-result tuple, matching decision/executor evidence, current signed
-   OpenCode capability snapshot, translator input/output, generated caller `msg_*`, request bytes, and
-   one-time front-door dispatch;
-3. send exactly one selected `POST /session/{ses_*}/prompt_async` with empty query, the two selected
-   semantic headers, one strict-JSON text part, and no `model` or `noReply`;
-4. run the model path through the private provider façade while a real supervised OpenCode TUI shares
-   the same native session;
-5. prove application and applied order from one complete, linearly proved native history snapshot
-   joined to the exact message/part IDs and fingerprint, not from `204`, text matching, or SSE alone;
-   and
-6. crash and recover around adjudication, dispatch, receipt, and observation without a second native
-   send.
+If resumed, a safe local-provider fixture must be user-runnable and retain one complete positive path:
 
-The release fixture also needs the companion exact `new_chat` request: empty query, the same two
-semantic headers, no title or extra metadata, both generated marker and intent-digest fields, and
-marker/intent survival in response, discovery, and a real native-server restart. No such retained
-fixture exists in this repository today.
+1. a real browser sends an encrypted command through the real A1 broker and common adjudicator;
+2. the current schema-v6 terminal root is revalidated, and a fully signed admitted result creates one
+   execution row keyed by `commandId`;
+3. the start-before-byte transaction selects one current binding activation and sends exactly one
+   `POST /session/{ses_*}/prompt_async` with empty query, the two selected semantic headers, one
+   strict-JSON text part, and no `model` or `noReply`;
+4. the owned private listener and mediated real TUI run inside the production containment topology;
+   before a deterministic credentialless local connector may send an inference request, a separate
+   provider-request row is written ahead and started once, with no resend after ambiguity;
+5. a strict session read proves the exact `ses_*`, directory, and OpenCode version, and a complete unfiltered post-send
+   history read proves exactly one matching `msg_*` user message and one exact index-zero text part;
+6. assistant output is attributed only when `assistant.parentID` equals the exact caller `msg_*`,
+   including with a concurrent TUI turn; one transaction then consumes the observation, writes terminal
+   completion or quarantine, and inserts the matching output intent;
+7. the signed outcome and exact native output enter a durable host-output ledger, are sealed and
+   published through the broker outbox, and render in that browser; and
+8. negative cases prove empty and all U+002F-leading text, unsupported families, plaintext broker
+   storage, hostile-child access to protected local peers or ambient paths, external egress, and
+   connector credentials fail closed before native work.
+
+The optional fixture must cover both an exact existing-session attachment and durable write-ahead
+session-creation reconciliation; neither may adopt “most recent” or resend an ambiguous create. A later
+credentialed gate would rerun the same topology through the ordinary daemon and a persistent selected
+workspace, add exhaustive recovery at every start/read-back/ledger/publish and lifecycle boundary, and
+keep real connector credentials and external sockets outside the OpenCode/tool boundary. These are
+OpenCode-only gates, not active project-release gates.
+
+Native `new_chat`, generic HTTP/TUI front doors, and broader adapter or mutation families remain further
+optional scope. Native-attempt IDs remain historical/dormant and authorize no capability.
 
 ## What remains unproved
 
 This fixture does not establish:
 
 - common remote-source normalization/order, signed-result admission, exact-result-tuple authorization,
-  signed capability/translator evidence, or one-time native dispatch;
-- real OpenCode TUI plus remote-claw adapter coexistence, multi-writer order, or source attribution;
-- a complete callable TUI/adapter/observer/creation front-door manifest, exact-process TUI authority,
-  or spawned-tool denial of the raw private OpenCode listener;
-- one-adapter lease enforcement, old in-flight request takeover, wrapper restart, or native-server recovery;
+  command-keyed execution, or one-use start-before-byte dispatch;
+- mediated native-TUI/remote-claw multi-writer order or source attribution;
+- a complete production typed-adapter/TUI/observer runtime and hostile-child denial of the raw private
+  OpenCode listener;
+- binding-activation enforcement, old in-flight request takeover, wrapper restart, or native-server recovery;
 - `POST /session` idempotency behavior, arbitrary or typed-intent metadata, or marker durability across restart;
 - model-bearing, concurrent, TUI-origin, reconnect, or cross-incarnation caller-message-ID behavior;
-- a pre-dispatch runtime-owner-signed native-store open/read anchor or an exclusive no-reset/no-fork
-  store handoff across native incarnations;
+- A2 cross-incarnation session/store continuity;
 - runtime permission replies, `permission.replied` terminality, child permission inheritance, or TUI/remote permission races;
 - abort, compaction, question, or other control causality;
 - v2 `/api/event` sequence scope, replay, gap detection, subscribe/snapshot linearization, status
   convergence, or long-running SSE behavior;
-- the provider façade, inference-request recovery, exact-process provider fence, official clients, or
-  network/mount isolation for the eventual product runtime; or
-- the exact selected requests for writable server-scoped `{new_chat}` and binding-scoped
-  `{user_text}`, including empty query, canonical directory header, strict JSON without `model` or
-  `noReply`, complete front-door/TUI/provider-façade coexistence, observer linearization, recovery, and
-  isolation.
+- the credentialless alpha provider path, host-output ledger, sealing/outbox publication, browser
+  rendering, credentialed provider façade, inference-request recovery, exact-process provider fence,
+  official clients, or network/mount isolation for the eventual product runtime; or
+- the exact selected request for writable binding-scoped `{user_text}`, including empty query,
+  canonical directory header, strict JSON without `model` or `noReply`, complete
+  adapter/mediated-TUI/local-provider path, strict session-plus-history read-back, output publication, recovery, and
+  isolation. Remote session creation and generic front doors remain separate optional capabilities.
 
-Those are explicit release gates in the [OpenCode driver design](opencode-driver.md) and [host-runtime test plan](test-plan.md). The safe conclusion from this proof is deliberately small: persist a caller `msg_*` before one send and use exact native read-back as positive evidence, but never blindly resend after an ambiguous result; use the tested creation marker for correlation only after the selected typed metadata shape and recovery behavior are separately proved.
+Those are optional gates in the [OpenCode driver design](opencode-driver.md) and
+[host-runtime test plan](test-plan.md), not Claude 1.0 release gates. The safe conclusion from this
+proof is deliberately small:
+persist a unique caller `msg_*` before one send and use strict native read-back as positive evidence,
+but never blindly resend after an ambiguous result. The tested creation marker remains protocol
+research and does not authorize remote `new_chat`.

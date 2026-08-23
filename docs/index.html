@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>remote-claw — protocol &amp; plan</title>
-<meta name="description" content="Drive coding-agent sessions from your own zero-knowledge relay: the shipped Claude runtime and the selected client-driven Claude Code, Codex, and OpenCode host design.">
+<meta name="description" content="Drive a real Claude Code TUI from your own zero-knowledge relay; Claude 1.0 is the active finish line and multi-engine designs are parked research.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css">
 <style>
   :root{
@@ -128,14 +128,14 @@
 </header>
 
 <section class="hero">
-  <h1>Drive real coding-agent hosts from your own relay + client</h1>
-  <p>Today a wrapper makes the real <code>claude</code> TUI remote-controllable. In the selected next design, a person at the native TUI still talks directly to the native harness, while remote collaborators for Claude Code, Codex, and OpenCode enter through a local coordinator. The native harness keeps the conversation and decides what actually applies; the remote-claw cloud remains a dumb <b>zero-knowledge</b> pipe with <b>end-to-end encrypted</b> traffic.</p>
+  <h1>Drive a real Claude Code TUI from your own relay + client</h1>
+  <p>The working developer beta wraps the real <code>claude --remote-control</code> TUI and connects it to an owned browser through a <b>zero-knowledge</b>, <b>end-to-end encrypted</b> broker. The sole active finish line is to make that Claude path installable, failure-safe, operationally supportable, and proven as one deployed product. The broader multi-engine runtime is parked future work.</p>
   <div class="badges">
     <span class="badge ok">Phase 0 · <b>working + verified</b></span>
-    <span class="badge ok">v2 core · <b>built + proven</b></span>
+    <span class="badge ok">Claude core · <b>developer beta</b></span>
+    <span class="badge">1.0 · <b>release hardening</b></span>
     <span class="badge">end-to-end encrypted</span>
     <span class="badge">zero-knowledge broker</span>
-    <span class="badge">TUI-side <b>C1–C5 ✓</b></span>
   </div>
   <p style="font-size:14px;color:var(--muted);margin-top:6px">This page is generated live from the design docs in <code>/docs</code> — it is the single source of truth.</p>
 </section>
@@ -154,19 +154,20 @@
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
 const DOCS = [
-  {id:"host",     file:"client-driven-host-runtime.md",label:"Client-driven Host Runtime"},
-  {id:"host-ref", file:"client-driven-host-runtime-reference.md",label:"Host Runtime Reference"},
-  {id:"codex-proof",file:"codex-app-server-multiclient-proof.md",label:"Codex Multi-client Proof"},
-  {id:"opencode-proof",file:"opencode-native-proof.md",label:"OpenCode Native Proof"},
-  {id:"v2",       file:"v2-architecture.md",        label:"v2 Architecture"},
+  {id:"release",  file:"release-finish-line.md",    label:"Claude 1.0 Finish Line"},
   {id:"protocol", file:"protocol.md",               label:"Protocol & Runtime"},
+  {id:"v2",       file:"v2-architecture.md",        label:"v2 Architecture"},
   {id:"phase0",   file:"phase0-findings.md",        label:"Phase 0 Findings"},
   {id:"research", file:"remote-control-research.md",label:"RC Research"},
-  {id:"future",   file:"future-directions.md",      label:"Future Directions"},
-  {id:"harness",  file:"pluggable-harness.md",      label:"Pluggable Harness"},
-  {id:"tmux",     file:"tmux-driver.md",            label:"tmux Driver"},
-  {id:"opencode", file:"opencode-driver.md",        label:"OpenCode Driver"},
   {id:"astryx",   file:"astryx-migration.md",       label:"Astryx Migration"},
+  {id:"future",   file:"future-directions.md",      label:"Future Directions"},
+  {id:"host",     file:"client-driven-host-runtime.md",label:"Parked: Multi-engine Runtime"},
+  {id:"a1-vertical",file:"a1-opencode-vertical-slice.md",label:"Parked: OpenCode A1"},
+  {id:"harness",  file:"pluggable-harness.md",      label:"Experimental Harness"},
+  {id:"tmux",     file:"tmux-driver.md",            label:"Experimental tmux"},
+  {id:"opencode", file:"opencode-driver.md",        label:"Experimental OpenCode"},
+  {id:"codex-proof",file:"codex-app-server-multiclient-proof.md",label:"Codex Research Proof"},
+  {id:"opencode-proof",file:"opencode-native-proof.md",label:"OpenCode Research Proof"},
 ];
 const tabsEl = document.getElementById("tabs");
 const tocEl  = document.getElementById("toc");
@@ -194,10 +195,10 @@ function scrollToSection(section){
   }
 }
 function parseHash(){
-  const raw=(location.hash||"#host").slice(1);
+  const raw=(location.hash||"#release").slice(1);
   const split=raw.indexOf(":");
-  return split<0 ? {id:raw||"host",section:""} :
-    {id:raw.slice(0,split)||"host",section:raw.slice(split+1)};
+  return split<0 ? {id:raw||"release",section:""} :
+    {id:raw.slice(0,split)||"release",section:raw.slice(split+1)};
 }
 
 async function load(id,section=""){

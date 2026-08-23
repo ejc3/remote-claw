@@ -6,6 +6,10 @@ verify-everything agent workflow (62 agents, ~3.2 M tokens) — and every existi
 green as a baseline. This document collects the verifications and the triaged findings so the result is
 auditable, and tracks the fixes that close them.
 
+> **Roadmap status (2026-08-23):** this is a historical QA record, not the active release plan. The
+> sole current authority is [Claude 1.0](release-finish-line.md); parked A1 work is not required to
+> close a remaining A0 finding.
+
 > **Historical identity scope:** this report evaluates the shipped flat-session baseline. Its
 > `cse_*` session ID is a synthetic broker channel/viewer-row key, not the stable remote-claw
 > logical-chat ID targeted by the later client-driven host runtime. The collision and restart fixes
@@ -71,8 +75,11 @@ was then closed. Landed as a reviewed commit stack:
    a zero-knowledge `/api/frame-count` route) — so already-stored historical indices are skipped. A
    failed cursor read **fails closed** (no seq-0 collision). This is not semantic exactly-once: A0 does
    not persist the authenticated source digest or original `accepted` result, so a lost acknowledgement
-   or the same source ID re-appended above the sampled floor remains ambiguous. A1 must persist that
-   result with the contiguous ingress cursor before it can claim restart-safe replay.
+   or the same source ID re-appended above the sampled floor remains ambiguous. This remained unresolved
+   in that pass. The current Claude 1.0 plan closes only the live-incarnation safety gap: one relay
+   deduplicates the source ID, a session-wide fence permits at most one worker-SSE emission, and session
+   loss is reported as unknown rather than replayed. It deliberately does not add a broker dispatch CAS,
+   local restart journal, or old-session recovery; A1 is not required.
 5. **Durability discovered from the server, not the `--rc-backend` flag.** `/api/seq` reports `durable`,
    so a default-turso deployment is protected even when the host omits the flag. The gen-bump race is
    closed (a Turso `gen` only bumps on the internal `__close`+reopen; `/api/relay` rejects that sentinel).
@@ -171,8 +178,10 @@ machine-facing viewer row, route, alias, broker channel, and cache keys use the 
 `(identity_id, collaborationServerId, logicalChatId)` triple. An unproven or new native conversation
 must not silently reuse that scope. The session-ID fix removes the compatibility-channel collision and
 makes the current restart path stop automatically re-executing already-stored pre-floor indices;
-replay/re-append above the floor and lost-result recovery remain A1 work. Stable logical-chat and
-outward-binding recovery also remain unimplemented.
+replay/re-append above the floor and lost-result recovery were routed to A1 in this historical report.
+The current Claude 1.0 scope instead prevents automatic redelivery within one live incarnation and
+ends the old session honestly on wrapper death; cross-process recovery remains parked. Stable
+logical-chat and outward-binding recovery also remain unimplemented.
 
 ## Reproducing
 

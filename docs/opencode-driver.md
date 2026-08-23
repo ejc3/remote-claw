@@ -1,30 +1,27 @@
-# OpenCode driver
+# Experimental OpenCode compatibility driver
 
-> **Status:** implemented behind `--rc-driver=opencode`. The current driver registers its compatibility
-> session through the process-local host seam and fails closed until one exact canonical native session
-> ID is confirmed and, unless explicitly skipped, parent-session permission setup is proved. It is not
-> yet the isolated,
-> coordinator-owned OpenCode runtime selected in
-> [client-driven-host-runtime.md](client-driven-host-runtime.md). The frozen but unimplemented
-> A1.8a1-E1b3 design is a separate dormant default-closed ESM front door: it selects only
-> `POST /session/{sessionID}/prompt_async`, four HTTP observer reads, and legacy `GET /event`, with
-> `GET /session/status` still required to appear in E1b3b's retained complete surface before the gate
-> can pass. TUI/server-creation and every unlisted OpenAPI route are deny-only. The compatibility client's broader
-> route use below is not that front door and proves no listener authority.
+> **Status:** the A0 compatibility driver is implemented behind `--rc-driver=opencode`. It registers
+> through the process-local host seam and stays hidden until one exact native session is confirmed and,
+> unless explicitly skipped, parent permission setup is read back. This A0 behavior remains as built.
+> The durable A1/OpenCode design is optional parked multi-engine work, not the next tranche or a blocker
+> for the active [Claude 1.0 finish line](release-finish-line.md). Remote `new_chat`, a generic HTTP/TUI
+> front door, shared-runtime generalization, and every other mutation family remain unimplemented
+> optional scope. Retained native fixtures and dormant capability/evidence codecs are audit inputs, not
+> runtime authority. This implemented flag is experimental/internal, not a supported stable driver;
+> parser support, tests, and live evidence do not promote it into the Claude 1.0 release surface.
 
 **Identity scope.** The current driver has two distinct IDs: OpenCode owns the native `ses_*`, while
 `RelayCore` creates a synthetic `cse_*` for the remote-claw broker channel and viewer row. Neither is
 an implemented durable remote-claw logical-chat ID. A wrapper restart may reattach and backfill the
 same `ses_*` into a fresh compatibility channel, but it does not yet preserve one canonical
-remote-claw chat across that restart. A1 targets a persisted
+remote-claw chat across that restart. The optional A1 design targets a persisted
 `(collaborationServerId, logicalChatId)`-to-native binding; that pair identifies the canonical chat
 within one machine. Its machine-facing viewer row, chat route, alias, channel, and cache keys use the
 full `(identity_id, collaborationServerId, logicalChatId)` triple; the discovery bus is the distinct
-null-chat `(identity_id, collaborationServerId, scope_bus)` route and cursor. Typed **New chat** uses a
-third null-chat `(identity_id, collaborationServerId, server_control)` route; it enters the same common
-server-wide command/result adjudicator as official-client, automation, and nested-server starts before
-an OpenCode `ses_*` exists. A2 then proves OpenCode-specific adoption, native adjudication, and
-recovery.
+null-chat `(identity_id, collaborationServerId, scope_bus)` route and cursor. Every optional A1 remote
+command targets one already-selected `ses_*`; onboarding must either prove an exact existing session or
+durably reconcile one write-ahead local creation before advertisement. It exposes neither remote server
+control nor remote session creation.
 
 ## 1. What exists today
 
@@ -63,82 +60,43 @@ configuration selects. That provider path is outside the current driver. The dri
 currently enforce that exactly one native TUI is attached or prove which unmatched native client
 originated a user message.
 
-The selected host-runtime design changes the top half:
+The parked optional A1 path is deliberately narrower than a general native proxy:
 
 ```text
-local control
-  person
-    ↓
-  real OpenCode TUI
-    ↓
-  private OpenCode server
+browser → encrypted broker → common A1 ingress/adjudication
+        → signed admitted result → command-keyed execution row
+        → typed user_text port → private OpenCode listener ← mediated real TUI
 
-remote control
-  many collaborators
-    ↓
-  remote-claw server
-    ↓
-  one bridge
-    ↓
-  same private server
+OpenCode → selected local provider facade → connector
+                                           local/credentialless in alpha
+                                           credentialed/external only at a future gate
 
-model path
-  private OpenCode server
-    ↓
-  private provider façade
-    ↓
-  connector
+strict native observation → host-output ledger → seal/outbox → broker → browser
 ```
 
-The selected runtime keeps one real OpenCode TUI path and one epoch-fenced remote-claw adapter lease
-on the same native session. OpenCode's API is a server-wide SSE observer plus independent HTTP
-requests; it exposes no persistent writer identity whose connection count could enforce that
-cardinality. The private endpoint/runtime owner must therefore admit binding-scoped mutations only
-from the current adapter lease and the allowed TUI, admit server-scoped creation only through its
-separate one-time creation front door, reject concurrent old/new wrapper writes, and prevent
-unclassified clients. OpenCode is the final arbiter of accepted native paths. If a transparent local
-proxy is needed for supervision or isolation, the native TUI must behave exactly as it does against
-the server directly; its requests do not detour through the remote-claw coordinator. The OpenCode
-process will be network-fenced so it cannot reach a real provider directly. Its control server remains
-the native engine-control surface; provider façades are a separate model/API brokerage surface.
+Only a nonempty scalar text whose first Unicode code point is not U+002F (`/`) can reach A1 execution.
+The runtime-owned adapter accepts one typed `dispatchUserText` value and owns the method, path,
+headers, strict encoder, target session, and held connection. The command actor cannot supply a URL,
+method, header map, JSON object, or raw socket. A separate strict observer performs exact read-back.
 
-The two collaborator paths are intentionally different:
+The signed admitted result is the cross-boundary authorization. It pins the stable
+server/chat/binding/session/workspace target and adapter contract. A current binding activation is a
+revocable local handle used only at start; it is not a signed capability snapshot, an evidence tree,
+or admission authority. Normal build/version pins and executable integration tests would establish a
+future gate's provenance. Live process, socket, namespace, workspace, and lease checks would establish
+currentness.
 
-- every remote source—web, official-client, automation, or nested remote-claw—first becomes one
-  common command and crosses the same signed remote-claw adjudicator; and
-- the supervised native TUI is a separate native collaborator whose allowed requests go through its
-  own transparent front door, not through that remote command order.
+If resumed, an alpha must use the production process topology: a deterministic local connector, no provider credential
+or external provider route, a mediated real TUI, and the hostile-child filesystem/IPC/network fence.
+Any later credentialed gate must preserve the same command, request, read-back, output-ledger, onboarding,
+TUI, and isolation semantics while adding a persistent selected workspace, exhaustive recovery, a
+credential-holding external connector, normal health withdrawal, and production advertisement. Stock
+OpenCode 1.17.5 and the retained native proof do not establish either outcome by themselves.
 
-remote-claw decides which remote proposal may reach its single adapter lease. OpenCode then decides
-the applied native order between that adapter and the person at the TUI. Native history and status,
-not the remote proposal order, are authoritative for what actually mutated.
-
-Because OpenCode HTTP has no persistent writer identity, the actual listener is private. The runtime
-owner exposes four closed front-door audiences: the supervised TUI process, the current binding
-adapter lease, server-scoped creation, and an internal read-only observer. Their complete generated
-allowlist is default-deny by method/path/query/header/body/Upgrade and audience. The binding and TUI
-paths retain exact target-session scope; a valid adapter credential
-aimed at another `ses_*`, child, or permission is rejected. Raw listener access, a second TUI,
-unclassified third clients, and stale/concurrent adapter leases cannot mutate. Replacing either lease
-first contains its old process/endpoint and already-forwarded requests. Direct-server versus
-TUI-front-door differential parity is a release gate; the TUI path never detours through the
-collaboration coordinator.
-
-The runtime owner signs both the measured runtime-isolation attestation and each installed native
-capability snapshot. The isolation attestation binds the exact four front-door process identities,
-raw-listener socket identity, installed attach-before-run policy, descendant/tool denial, provider
-façade rule, and network/mount namespaces. The capability attestation binds the exact callable route
-manifest and each family entry's common payload schema, native request schema, translator
-schema/implementation/build digest, injectivity proof, and positive read-back schema. A signature is
-not enough by itself: the last-hop front door revalidates the current process/socket identities,
-lease, snapshot bytes, translation, and one-time dispatch record immediately before it may write to
-the private listener.
-
-Stock OpenCode 1.17.5 is not yet an A2 real-TUI tuple. Its TUI needs a broad exact set of
-config/provider/session/global-event reads, its legacy SSE surface has no proved snapshot
-linearization point, and the current spike retains neither the full generated front-door manifest nor
-an exact-process non-inheritable TUI channel. A2 stays non-writable until a separate retained release
-fixture proves those seams; the narrow marker/message-ID fixture is not that proof.
+In that optional design, the mediated TUI remains a native collaborator and does not enter the remote collaboration order. A1
+proves only this one owned TUI/private-listener topology. Generic front-door parity, arbitrary native
+routes, shared daemons, remote session creation, and additional mutation families remain further
+optional scope.
 
 ## 2. Launch and attachment
 
@@ -162,49 +120,19 @@ become visible. Recent-activity ordering is never identity evidence.
 This A0.2 empty-list check is not yet serialized with direct-TUI creation. A person can create a
 session after the list response but before the driver's `POST /session`, leaving two native sessions;
 the driver still confirms only the ID returned by its own create and never guesses between them.
-The selected A2 workspace transition barrier below closes that race.
+The optional owner must avoid this A0 race by either attaching an exact existing session or reconciling
+one write-ahead local creation while it controls the private listener. TUI mediation and advertisement
+start only after the exact binding is durable.
 
-The selected runtime never infers identity from “most recent.” An existing logical-chat binding
-reattaches only its exact stored `ses_*`; if that session is absent or has the wrong lineage, the
-binding quarantines and never auto-creates a replacement. First import requires the user or trusted
-onboarding flow to select one exact discovered session and records that adoption in the identity
-transition log before it becomes writable. Automatic bootstrap requires explicit first-bootstrap
-intent, no pre-existing logical binding, and a positive empty snapshot. An explicit user **New chat**
-operation may create while other sessions exist, but it is a distinct typed operation and never a
-fallback from failed discovery or ambiguous import. A session created directly by the native TUI is
-imported through the same exact-selection transition, not silently adopted.
+The optional remote path never infers identity from “most recent” and never accepts `new_chat`.
+Onboarding must either attach an explicitly selected exact `ses_*` with matching workspace identity, or
+write ahead one local creation intent, send at most once, and reconcile a lost response from exact
+native state before binding. Ambiguous creation never authorizes retry or advertisement. If the bound
+session is later absent, changed, or unproved, the binding is not writable and never silently repoints.
 
-The selected runtime serializes direct-TUI create/import/switch/clear/fork/archive/unarchive and server-control creation
-through one runtime-owned workspace transition barrier. First-bootstrap rechecks the empty discovery
-snapshot while holding that barrier immediately before the one creation dispatch and atomically marks
-the bootstrap claim. A TUI-created session that wins the race makes bootstrap inapplicable; it cannot
-produce two “first” sessions. Explicit **New chat** uses the same short dispatch serialization without
-an empty-workspace precondition. Any TUI operation that can change top-level session identity, active
-selection, or discovery availability but lacks a classified transition kind is rejected at the TUI
-front door.
-
-`POST /session` returns a new native `ses_*` and exposes no proved idempotency seam, so the target treats
-it as non-idempotent. The retained OpenCode `1.17.5` fixture proves that its exact
-`metadata.remoteClawCreationId` marker is preserved in the response and `GET /session`; it does not
-prove arbitrary metadata behavior. For either automatic empty-server bootstrap or explicit **New
-chat**, the target writes ahead a unique creation-attempt ID plus typed creation intent. The supported
-tuple must first prove that the exact two-field metadata shape is preserved. Lost-response
-reconciliation may use only the complete discovery snapshot for the one current successor attachment,
-workspace, and observer epoch. Crossing a native incarnation additionally requires the original
-pre-dispatch snapshot to pin a runtime-owner-signed open/read store coordinate and a typed continuity
-handoff proving definitive predecessor stop/fencing, exclusive successor open of the same store, and
-no intervening reset or fork. Otherwise lineage is unproved and no binding is installed. The
-successor snapshot must be linearly proved and exhaustive at its proved boundary; a
-gap, stale pointer, or omitted candidate cannot reconcile or bind. It enumerates every session with
-the expected marker before filtering by intent and retains each candidate's full native metadata
-ref/digest, including extra or malformed fields. Zero matches stays uncertain while the proof window
-remains open. Exactly one binds that exact `ses_*` only when its full evidence and canonical two-field
-metadata ref/digest recompute and its
-`remoteClawCreationIntentDigest` equals the reservation's expected `nativeCreationIntentDigest`.
-A same-marker wrong/missing/malformed intent or noncanonical/extra metadata candidate, and multiple
-marker matches, quarantine.
-It never accepts a marker-only match, blindly retries, adopts “most recent,” or matches a title.
-Typed-intent preservation and marker durability across server restart remain pinned proof gates.
+Remote **New chat**, generalized import/create/switch, and cross-incarnation session creation remain
+separate optional work. The retained creation-marker fixture is protocol evidence only; a durable
+creation path would still need exact intent, send-once, and reconciliation state.
 
 The current startup order is:
 
@@ -238,9 +166,9 @@ Fail-closed visibility cannot undo native work that already happened. If `POST /
 session before its response was lost or later confirmation/setup failed, that native session may
 remain without a broker conversation; the driver neither blindly retries nor deletes it. Likewise, a
 permission append can land before cancellation, response loss, or failed read-back and then persist.
-A later registration detects the exact installed catch-all and skips another append. A2's write-ahead
-creation marker, reconciliation, and fenced transition barrier are required to recover these cases
-without guessing.
+A later registration detects the exact installed catch-all and skips another append. The optional
+design cannot reuse this A0 create path: it needs a write-ahead creation identity and exact
+reconciliation, and ambiguity prevents advertisement.
 
 On normal driver teardown, the driver first aborts its local capture/injection pumps and closes the
 relay session. It then best-effort aborts the attached OpenCode run, closes the registration lease,
@@ -249,7 +177,7 @@ deadline, so an unresponsive native server, child setup, or broker cannot hold e
 timeout windows. Teardown aborts the run signal first; each child task receives that signal and checks
 it after its initial read and before PATCH, so even an injected client that ignores abort cannot begin
 a late PATCH after its read resolves. A native request already accepted before cancellation cannot be
-undone. The driver does not stop the external `opencode serve` process. A future runtime owner must
+undone. The driver does not stop the external `opencode serve` process. A future A1 runtime owner would have to
 distinguish “close this bridge” from “stop this supervised native runtime.” A broker/relay failure alone
 does not enter this teardown path. Wrapper or parent-signal teardown does; its best-effort abort can
 cancel the active turn and disrupt a person using the native TUI even though the server, session, and
@@ -264,11 +192,11 @@ clears open relay permission gates, and sends no `end_session` or native OpenCod
 
 | Operation | Current route and behavior |
 | --- | --- |
-| Create session | `POST /session` with optional `{title}` → one validated canonical native `ses_*`; no A2 creation marker yet |
+| Create session | `POST /session` with optional `{title}` → one validated canonical native `ses_*`; compatibility-only, not optional A1 authority |
 | List sessions | `GET /session`; registration validates the complete ID vector and ignores recency for identity |
 | Confirm session | `GET /session/{id}` must return that exact ID and a completely valid permission vector |
 | Read history | `GET /session/{id}/message`, chronological messages with parts |
-| Send prompt | The compatibility client sends `POST /session/{id}/prompt_async` with `{model, parts}` and no caller `messageID`; pinned `1.17.5` separately accepts caller `messageID`; neither request is the selected A2 request, and an empty `204` is transport receipt, not proof of native application |
+| Send prompt | The compatibility client sends `POST /session/{id}/prompt_async` with `{model, parts}` and no caller `messageID`; pinned `1.17.5` separately accepts caller `messageID`; this is not the optional A1 request, and an empty `204` is transport receipt, not proof of native application |
 | Interrupt | `POST /session/{id}/abort` |
 | Compact | `POST /session/{id}/summarize` with `{providerID, modelID, auto:false}` |
 | Read permission rules | `GET /session/{id}`, using its `permission` field |
@@ -303,7 +231,7 @@ The SSE generator handles one connection. The driver owns reconnect with capped 
 
 For each SSE connection, capture subscribes first. After the first event proves the subscription is
 live, it pauses generator consumption while it reads native history and then processes queued live
-bytes. That narrows the obvious snapshot-then-subscribe gap but is not the selected runtime's actively
+bytes. That narrows the obvious snapshot-then-subscribe gap but is not the optional design's actively
 drained durable overlap: OpenCode SSE supplies no replay token, process loss can discard the queued
 tail, and transport buffering is not a committed boundary. Re-running history after reconnect is
 deduplicated by OpenCode message ID within the driver's bounded 4,096-ID recent window. A history
@@ -355,10 +283,11 @@ session's internal user prompt is always suppressed because its Task anchor alre
 input.
 
 That current local path is post-hoc: OpenCode receives the TUI request before remote-claw observes its
-resulting user message. The selected runtime preserves that direct native path and gives remote-claw
-one peer adapter lease. remote-claw orders the web/official/nested collaborators behind its own lease;
-OpenCode determines their final interleaving with the TUI. A client-facing proxy, if present, must be
-behavior-transparent and does not replace the OpenCode TUI.
+resulting user message. A1 preserves the TUI as a native collaborator but mediates its access to the
+owned private listener for containment; it does not put the TUI into the remote collaboration order.
+remote-claw orders remote collaborators behind its typed adapter, while OpenCode determines the final
+interleaving with the TUI. The optional design must prove this narrow topology; generic front-door
+parity remains later optional work.
 
 Child sessions are followed while live. The parent subtask part does not carry the child session ID,
 so correlation uses `(parent session, agent, FIFO)`. Concurrent same-agent children can therefore be
@@ -380,11 +309,36 @@ The injection pump serially drains `Session.followDownstream(...)`.
 | directly queued `set_permission_mode`, `end`, unknown control | Safe no-op, then acknowledge; viewer `end` never reaches this pump |
 | permission response | For a valid request ID, map explicit allow to `once` and other behavior to `reject`; an invalid ID is a no-op |
 
-That table is current behavior, not the A2 admission contract. In A2, every
-web/official-client/automation/nested input first crosses the common machine/server scope,
-source/digest/order, command, and signed-result adjudicator. OpenCode has no adapter-specific shortcut.
-A native attempt or creation reservation is legal only when it composite-foreign-keys this exact
-immutable admitted-result tuple:
+That table is A0 behavior, not A1 authority. A failed A0 `prompt_async` withholds the relay-session
+acknowledgement and can become eligible for replay even when OpenCode applied the first request. Its
+text-only echo suppression can then misattribute the native message. That is one reason the
+compatibility pump is not promoted into A1.
+
+### Optional A1 `user_text` contract
+
+The implemented schema-v6 terminal-root certificate remains the authority that makes the terminal chat
+and edge current. An optional OpenCode activation must supplement that root and recheck its current,
+unexpired owner/coordinator/binding/attachment graph; it cannot bypass or replace it. Current schema
+v10/v11 can finalize only rejected results, and v11's `pending_seal` row is an unclaimable plaintext
+intent. Admitted execution and output publication described below do not exist today.
+
+Every optional A1 proposal first crosses the common authenticated source, ordering, command, decision, and
+result path. OpenCode has no adapter-specific admission shortcut. The only writable family is
+binding-scoped `user_text`:
+
+- empty text is non-writable; nonempty whitespace-only text is not silently reclassified as empty;
+- any text whose first Unicode code point is U+002F (`/`) is non-writable, regardless of the
+  remaining bytes; there is no slash-command allowlist and no raw-text fallback;
+- steer, interrupt, permissions, questions, attachments, session creation, and every non-text family
+  are non-writable; and
+- classification does not depend on native busy state, timing, or model state.
+
+Unsupported input receives one stored signed rejection and creates no execution row or native call.
+Exact replay redelivers that result; changed bytes collide. Whitespace is not trimmed before the
+leading-slash check: U+002F is leading only when it is the first code point in the submitted text.
+
+An admitted command requires a fully signed `CollaborationCommandResultRecord` with
+`disposition:"admitted"` and this immutable authorization tuple:
 
 ```text
 collaborationServerId
@@ -394,50 +348,39 @@ canonicalCommandRecordDigest
 admittingCommandResultSignedRecordDigest
 ```
 
-The result must be a fully signed `CollaborationCommandResultRecord` with
-`disposition:"admitted"`. Its decision-evidence digest, selected native executor evidence, and
-runtime-owner-signed capability-snapshot attestation must also equal the command and target binding or
-server attachment. An unsigned, signature-reserved, queued, rejected, different-command,
-different-result, or transplanted-executor record cannot create an effect gate, native attempt, or
-dispatch authorization.
+One finalization transaction verifies the signature and atomically stores the admitted result, signer
+acceptance, OpenCode sidecar, and prepared execution row. The signed result pins the stable server/chat/binding/session/workspace target and the fixed adapter
+contract. It does not pin a runtime incarnation or depend on a local capability/evidence snapshot.
+Unsigned, queued, rejected, different-command, different-result, or transplanted records cannot create
+execution.
 
-A chat mutation pins the current immutable OpenCode binding/incarnation/leases and capability family.
-A server-control `new_chat` resolves its project selector and pins either the terminal OpenCode server
-capability or a nested-server management capability before allocating the target logical chat. A
-missing, stale, downgraded, family-incomplete, unsigned, or content-substituted snapshot rejects before
-projection or native work. The signed binding snapshot also pins the common payload schema, exact
-request and read-back schemas, translator schema/implementation/build digest and injectivity proof,
-and exact slash-command table.
+Admission inserts exactly one execution row whose primary key is `commandId`; that row is the attempt,
+effect gate, and dispatch state. While `prepared`, it pins the admitted-result tuple, exact `ses_*`,
+workspace, adapter-contract digest, generated caller `msg_*`, canonical request bytes and digest, and
+expected read-back fingerprint. Its activation is null. Immediately before the first possible native
+byte, one transaction rechecks the durable target and current live handles, stores one compatible
+binding activation, and changes `prepared → started`. Unknown commit outcome sends nothing and
+quarantines. Once `started`, no restart, replay, takeover, or apparently absent read-back authorizes a
+second send.
 
-Semantic normalization happens before the common decision and is committed even when the result is a
-rejection:
+Legacy `nat_*` native-delivery-attempt IDs and `NativeDeliveryAttemptRecord` designs remain dormant
+historical schema/test material. They are not active A1 identity or authority and are not layered beside
+the command-keyed execution row.
 
-- an explicit new submit is `user_text`; a source-native steer is the distinct `steer_text` family,
-  and busy state or timing never converts one into the other;
-- blank generic input becomes `blank_submit`;
-- exact `/compact`, `/clear`, `/model`, and `/context` become `compact`, `clear`, `set_model`, and
-  `session_command`, respectively, with no prefix or argument parsing; and
-- every other nonblank generic submit remains `user_text`.
+The typed port accepts only:
 
-That reserved normalization table is not the advertised-writable command set. The viewer advertises a
-table item only when its normalized family also has a current writable family-capability entry.
+```text
+OpenCodeUserTextV1 {
+  activationId
+  commandId
+  nativeConversationId
+  nativeActionId
+  canonicalDirectory
+  text
+}
+```
 
-The only first-A2 vectors eligible to become writable after their release proof passes are
-server-scoped `{new_chat}` and binding-scoped `{user_text}`. Therefore steer, blank submit, the four
-reserved slash families, interrupt,
-permission/question answers, attachments, and every other unproved family receive a stored signed
-rejection with no user projection, native attempt, or raw-slash fallback. Exact replay only redelivers
-that result; changed bytes collide.
-
-An admitted binding-scoped action creates one command-wide effect gate and one exact native delivery
-attempt. The attempt pins the admitted-result tuple, selected executor and capability attestation,
-`ses_*` target, exact request and translation records, runtime/front-door leases, generated caller
-`msg_*`, and expected part fingerprint. The translator receives only the immutable common payload and
-the persisted generated coordinates; it cannot read adapter defaults, environment, current model, or
-later chat state. The runtime front door recomputes those records and performs a final one-time
-dispatch compare-and-swap immediately before the socket write.
-
-### Selected A2 native requests
+### Optional exact A1 `user_text` native request
 
 For admitted `user_text`, the selected request is exactly:
 
@@ -452,77 +395,18 @@ body:
   {"messageID":"<nativeActionId>","parts":[{"type":"text","text":"<text>"}]}
 ```
 
-The runtime owner allocates and persists `nativeActionId` as `msg_` plus unpadded base64url of 16
-random bytes before translation. The body keys and one-part array have exactly the order shown.
+The runtime owner allocates and persists a unique `nativeActionId` as `msg_` plus unpadded base64url of
+16 random bytes before request construction. The body keys and one-part array have exactly the order shown.
 The quoted placeholders denote the generated string contents after the selected strict JSON encoder.
 `model`, `noReply`, agent/system fields, extra or reordered parts, extra keys, query aliases, and
-alternate directory headers are forbidden. The front-door credential is outside the
-semantics-relevant header vector. The canonical directory is the exact pinned absolute POSIX path
-under the selected narrow safe-byte grammar; it is not trimmed, percent-encoded, or base64-encoded.
+alternate directory headers are forbidden. Any typed-port channel credential is outside the
+semantics-relevant header vector. The canonical directory is the exact pinned absolute POSIX workspace
+path from the binding; it is not trimmed, percent-encoded, or base64-encoded.
 
 JSON strings use the selected strict encoder: quote and backslash are escaped, U+0000–U+001F use
 lowercase `\u00xx`, and other Unicode scalar values are emitted as UTF-8 without normalization or
 optional escapes. Lone surrogates and invalid UTF-8 reject before request construction. A generic map
 serializer cannot choose another equivalent spelling.
-
-For admitted terminal `new_chat`, the selected request is exactly `POST /session`, empty query, the
-same two-header vector, and this compact body:
-
-```json
-{"metadata":{"remoteClawCreationId":"<nativeCreationMarker>","remoteClawCreationIntentDigest":"<nativeCreationIntentDigest>"}}
-```
-
-The runtime owner allocates the marker once and derives the intent digest from the exact admitted
-result, common command and decision, signed server capability, translator, target mapping, workspace,
-and typed creation intent. No title, model, provider, parent, native session ID, directory alias, or
-extra metadata is allowed. The target logical chat exists in `recovering` state before dispatch, but
-no native `ses_*` is invented until OpenCode returns one. The discovery record retains the exact
-complete native metadata JSON under `remote-claw/opencode-full-native-metadata-evidence/v1` with its
-digest, including extra or malformed fields. Only an exact two-field object also carries a non-null
-canonical ref/digest under `remote-claw/opencode-native-creation-metadata/v1`; noncanonical/extra
-objects retain null canonical fields instead of a lossy projection. A lost-response reconciliation
-record pins both the expected marker and expected intent digest; the full same-marker vector is
-retained before the exact-intent comparison.
-
-When the project selector instead chooses nested management, the outer server creates no OpenCode
-binding, reservation, or front-door call. It creates one nested creation attempt/effect gate and waits
-for the inner server's signed result/readiness before installing the chat edge. Terminal OpenCode
-creation/bootstrap has no successor or continuation. After a crash, only the exact original
-reservation may resume, and only while it remains `reserved`, its dispatch remains `not_started`, and
-its original authorization remains unconsumed. Explicit pre-send abandonment atomically quarantines
-that reservation, invalidates the old authorization, and, for bootstrap, makes the claim inapplicable;
-it creates no replacement. A nested-management transport alone may install a continuation before
-send, after the original authorization is atomically revoked under the signed
-positive-never-started contract; the continuation receives a fresh authorization and must pass its own
-final compare-and-swap. Once either kind of one-time authorization is consumed, its dispatch is
-`started`, or its outcome is uncertain, neither a retry nor a successor may ever send, regardless of
-any later apparent no-effect proof.
-
-If an awaited injection fails, the current pump withholds the relay-session acknowledgement, logs the
-failure, and keeps draining. The event remains eligible for replay only if that same `Session` later
-gets a new downstream claimant; an ordinary OpenCode SSE reconnect does not reclaim the downstream
-stream. Any such replay is not safe enough for durable remote delivery: if `prompt_async` reached
-OpenCode and only its response was lost, retry can execute the prompt twice. The current failure path
-also removes the text-origin suppression token; an eventual native user record can then be mislabeled
-`local_prompt` even though remote-claw sent it. The new coordinator must write-ahead `started`, retain
-the unresolved source/correlation record, treat that result as `outcome_unknown`, and quarantine later
-remote-claw-origin deliveries. Terminal native prompt delivery has no revocation attestation,
-continuation, or successor. A crash with no committed abandonment record may resume only the same
-immutable attempt while its dispatch is still `not_started`, its command gate is still
-`never_started`, and its original authorization and signed executor remain current. Explicit
-operator cancellation or a configured shutdown policy deliberately committed before that CAS is
-different: one atomic runtime-owner transaction writes the typed pre-send abandonment record, moves
-the attempt, dispatch, and command gate to `quarantined`, and revokes the old protected dispatch
-authorization.
-A disconnect, process death, signal, ordinary restart, or missing record never implies this
-abandonment. It sends no
-`prompt_async`, creates no replacement, and cannot later be treated as crash-stranded work. A crash
-around this transaction exposes either the complete quarantine or none of it, and exact replay
-returns the same record. Selected A2 sets the terminal `user_text` family's
-`positiveNeverStartedSchemaId` to null; only a nested transport has the separately signed
-positive-never-started continuation described above. Once terminal dispatch is `started` or its
-authorization is consumed, it never sends again, and OpenCode cannot retroactively prove that state
-away. This does not pretend to fence or stop direct native-TUI actions.
 
 Even a received `204` advances only transport receipt. Pinned OpenCode `1.17.5` accepts a valid
 caller-supplied native `msg_*`; the current client omits it. The target writes a unique `msg_*` ahead of
@@ -530,40 +414,81 @@ delivery, sends it once, and correlates history/SSE by that exact ID. The retain
 [OpenCode native proof](opencode-native-proof.md) shows that
 with `noReply:true`, one server incarnation, and no requested provider reply, reusing the same ID is
 not idempotent: the second POST adds another part to the same native message. That proof request is not
-the selected A2 request because A2 forbids `noReply`; the compatibility driver is also not A2 because
-it supplies `model` and omits the caller ID. The missing positive release fixture must exercise the
-exact body and headers above through the private provider façade, with the real common admission,
-runtime front door, and direct TUI present.
+the optional A1 request because that design forbids `noReply`; the compatibility driver also differs because
+it supplies `model` and omits the caller ID.
 
-The ID enables positive read-back, never blind retry. Selected A2 requires one complete, linearly
-proved `OpenCodeConversationHistorySnapshotRecord` for the same runtime, incarnation, binding,
-session, workspace, and observer epoch. It must contain exactly one joined user message whose
-`nativeMessageId` equals the stored `msg_*` and exactly one index-zero text part whose typed canonical
-payload reproduces the admitted text and expected fingerprint. Its retained native-order evidence
-must use the snapshot's proved sequence watermark, barrier observation, or atomic-store boundary.
-Legacy SSE alone, an ID-only match, a text-only match, a `204`, an incomplete snapshot, or an
-unlinearized history read cannot mark the attempt applied. Missing, extra, reordered, changed,
-cross-session, or cross-incarnation evidence moves a possibly started attempt to `outcome_unknown`,
-quarantines later remote writes, and never triggers another `prompt_async`.
+The OpenCode prompt and provider request are separate irreversible effects. Before the provider facade
+permits the connector's first possible inference byte, the optional host must write ahead the exact
+provider-request identity and digest and consume a one-use start fence. A lost or ambiguous connector
+response never authorizes another provider request. A deterministic local connector must exercise the
+same boundary; it is not a shortcut around it.
 
-OpenCode's native IDs/order override remote-claw's proposed order. The current text multiset used for
-echo suppression is not native read-back evidence.
+The caller ID enables positive read-back, never blind retry. Before dispatch, the strict observer
+establishes the selected session's SSE stream. After the transport receipt it waits for the selected
+terminal barrier, then performs two strict reads: the exact session read must pin the `ses_*`, canonical
+directory, and expected OpenCode version; the unfiltered top-level history vector for that session must
+be wholly valid, retain native vector order, and contain
+exactly one user message with the stored `msg_*` and exactly one index-zero text part whose bytes and
+fingerprint reproduce the admitted text. The current compatibility client's permissive filtering is
+not this observer. A `204`, SSE timing alone, text-only or ID-only matching, absence from one read, or a
+partial/malformed read is not proof. Missing, extra, changed, or cross-session evidence after start
+becomes `outcome_unknown`, quarantines later remote writes, and never triggers another `prompt_async`.
 
-Future interrupt, summarize, permission, and question capabilities must follow the same native-outcome rule, but
-outcome and source are different facts. Native status, history, or a terminal gate event can establish
-what happened. Unless the pinned native surface also carries a durable action ID or another
-unambiguous causal link, a TUI-versus-remote race cannot establish which client caused an abort or
-compaction. The current client also ignores any abort/summarize response body, so its semantics are not
-yet evidence. The projection records the native outcome with source `unknown` and leaves the
-remote-claw proposal `outcome_unknown`; it must not infer causality from timing, an HTTP 2xx, or an
-unproven boolean body.
+Assistant output belongs to this command only when its `assistant.parentID` equals the exact stored user
+`msg_*`. A concurrent TUI turn can interleave adjacent user and assistant messages, so timing, text,
+position, and nearest-neighbor matching are not causal evidence. Missing, changed, or multiply claimed
+`parentID` leaves the output unowned/ambiguous.
 
-In the **current compatibility driver**, `/compact` is dispatched without awaiting the long-running summarize request so an interrupt can
-overtake the HTTP response wait. A dispatch error emits an OpenCode warning result and restores idle.
-That behavior is not selected A2 writability. A future compact capability must journal the
-remote-claw-origin compaction as its own proposal and apply the same delivery-uncertainty rule. A
-compaction invoked directly through the native TUI remains a native observation rather than a
-coordinator-admitted mutation.
+Successful observation produces the signed admitted command outcome and exact native output
+projection. Every `accepted`, `assistant`, `action_result`, and `session_announce` output is signed and
+sealed before publication. A durable host-output ledger stores its semantic identity, route,
+plaintext-artifact digest, exact encoded-frame artifact/digest/length, and outbox state. Outbound ingress recognizes host-produced
+frames only by that exact ledger record; an unknown or changed outbound frame quarantines instead of
+being mistaken for foreign input. Source acknowledgement waits for durable broker acceptance, or exact
+replay of the already accepted frame. The viewer rebuilds only from the signed result, native
+observation, output ledger, and sealed outbox.
+
+The observation finalizer must be one transaction: it consumes the exact observation and either moves
+the execution to completed while inserting every corresponding output intent, or moves it to
+`outcome_unknown`, quarantines the binding, and inserts the signed unknown-result intent. A terminal
+execution without its output intent, or an output intent for a nonterminal execution, is forbidden.
+
+### Optional proof gates and deferred scope
+
+These gates are preserved for a future explicit multi-engine product decision. They are not an active
+sequence and do not block Claude 1.0.
+
+A parked alpha entrypoint candidate is:
+
+```text
+remote-claw --rc-app <origin> --rc-driver=opencode \
+  --rc-a1-local-alpha --rc-oc-workspace <absolute-path>
+```
+
+`--rc-a1-local-alpha`, `--rc-oc-workspace`, and the local `--rc-a1-pass` onboarding action are parked
+interface candidates, not current parser claims or roadmap commitments. The current flags in section 2
+still select only A0.
+
+**A parked safe local-provider alpha** would be user-runnable and exercise `rcp2.` onboarding and
+discovery, the real browser and zero-knowledge A1 broker, persistent secure host repositories, signed
+admission, command-keyed execution, the mediated TUI/private listener, real OpenCode, a deterministic
+credentialless local connector, strict read-back, the durable output ledger, sealing/publication, and
+viewer. It requires a disposable selected workspace, the production containment topology, no real
+provider credential or external provider route, and only an explicit alpha advertisement while live
+health is green. Ambiguity fails closed rather than guessing or resending.
+
+**A parked credentialed production gate** must preserve those exact topology, onboarding, command, request,
+read-back, result, ledger, isolation, and viewer semantics. It adds an explicitly selected persistent
+workspace, exhaustive durable recovery and replay, owner/runtime/OpenCode/facade/connector takeover, a
+credential-holding external connector outside the OpenCode/tool boundary, normal health withdrawal,
+and optional OpenCode `user_text` advertisement.
+
+Further optional scope includes remote `new_chat` and generalized `POST /session` control, generic HTTP
+or TUI front doors, shared OpenCode daemons,
+slash commands, steer, interrupt, permissions/questions, attachments, and broader adapter/capability
+generalization. Retained creation markers, generated route manifests, and local evidence codecs may
+inform that later design but authorize nothing. Native-attempt IDs remain historical/dormant; any
+resumed design must choose its identity model rather than inherit them as authority.
 
 ## 6. Permissions
 
@@ -591,8 +516,8 @@ so it cannot issue a new policy append after the driver has torn down.
 The live OpenCode `PATCH` behavior is append-only: rules concatenate and an empty/null patch does not
 clear them. The driver therefore cannot safely restore a borrowed session's original rules on
 teardown. Once its catch-all ask rule is installed, it persists until the user clears the native
-session policy. The future structured runtime should use an owned session/server or prove a reversible
-permission-policy seam before advertising clean detach.
+session policy. Any optional permission capability must use an owned session/server or prove a
+reversible permission-policy seam before advertising remote control or clean detach.
 
 `permission.asked` becomes the relay's existing `permission_request`. Only an explicit viewer allow
 maps to OpenCode `once`; a deny or malformed behavior with a valid request ID maps to `reject`. An
@@ -613,16 +538,10 @@ list and the `permission.replied` event come only from current unretained OpenAP
 Those are promising native recovery seams, but their list/reply/event behavior and terminal semantics
 must be runtime-proved before use.
 
-The future coordinator must journal permission answers before delivery. On ambiguous delivery it must
-not send a contradictory second answer; it records `outcome_unknown` and waits for positive native
-terminal/cancellation evidence, or definitively stops/freezes the old process before proceeding.
-It chooses one response among remote-claw's many remote collaborators and forwards that through the
-single current adapter lease. OpenCode remains the arbiter between that response and a direct native
-TUI answer. If the supported tuple proves `permission.replied` terminal, remote-claw may use that
-event; otherwise it requires another proved terminal native gate record. Only that record closes every
-outward copy and makes a later remote response stale. Until terminal semantics, observation, and
-restart recovery are implemented, structured permission adjudication remains unsupported in the
-selected runtime.
+Remote permission answers are outside this optional `user_text` design and reject before execution. Any
+later permission capability must journal an answer before delivery, prove its terminal native outcome
+without sending a contradictory second answer, and resolve TUI-versus-remote races. The current A0
+permission behavior is not evidence for that later capability.
 
 ## 7. Capability truth
 
@@ -640,16 +559,9 @@ the initial announcement contains:
 | End | `false` | No native mapping |
 | Attachments | `false` | The relay's Claude-style local-file prompt is not proved native OpenCode file-part fidelity |
 
-OpenCode attachment proposals remain unsupported and non-writable until a retained fixture proves
-exact native file-part fidelity. Any future admitted attachment must first be the exact common
-`remote-claw/command-payload/attachment/v1` manifest with its ordered item-vector and decoded-content
-digest chain; OpenCode's native JSON/file-part request is only a later proved translation. Before that
-proof, the common A1 actor may authenticate and parse the proposal, but the adapter-capability decision deterministically rejects it as unsupported and
-stores an `action_result`; it emits no `accepted`, projection sequence/intent, file write, or native
-attempt. Its rejected command uses the common `unsupported_recognized` payload, not an admitted
-attachment payload. Exact replay only redelivers that rejection, while changed bytes collide. Only
-after the proof gate may OpenCode use the exact common-schema admitted-attachment
-accepted/result/replay path. A feature is writable only after its setup and proof gate succeed.
+The optional A1 actor must deterministically reject attachments before an execution row or file write. Exact replay
+redelivers that rejection; changed bytes collide. Native OpenCode attachment translation and read-back
+remain optional and require their own retained proof before advertisement.
 
 The current compatibility relay does not enforce capability bits as an admission boundary. A stale or
 custom sender can still submit an attachment frame, causing the relay to write the image and inject its
@@ -666,7 +578,7 @@ that channel, and the future logical-chat ID remain separate. It does not yet pr
 
 - a durable remote-claw logical-chat ↔ OpenCode-session binding;
 - a durable remote-collaborator proposal journal or correlated native applied order;
-- native delivery attempt IDs;
+- command-keyed A1 execution or exact native application evidence;
 - permission/question gates across restart;
 - a durable SSE cursor;
 - complete historical child-session lineage; or
@@ -681,45 +593,32 @@ indefinitely and the fabricated running status may never clear. Recovery must co
 incarnation, native status, and history to classify it as active, interrupted, or an explicit gap; it
 must never silently flush a partial as complete or wait forever for an event from a dead incarnation.
 
-In the selected host runtime, authority is divided cleanly:
+In the optional host-runtime design, authority is divided cleanly:
 
 | Fact | Authority |
 | --- | --- |
 | Which remote-claw collaborator proposal is forwarded next | remote-claw coordinator journal |
 | Final interleaving of the native TUI and remote-claw connection | OpenCode server/session |
-| Whether a native OpenCode action actually happened | OpenCode native history/status and action-specific correlated native records; generic HTTP receipts are insufficient |
+| Whether the A1 user text actually applied | Strict exact-session plus complete message-history observation; generic HTTP receipts and SSE timing are insufficient |
 | OpenCode conversation content after wrapper loss | OpenCode native store, with explicit gaps where evidence is absent |
 | What the local person sees | The native OpenCode TUI rendering the native session directly |
-| Viewer/official-client representation | rebuildable remote-claw projection |
+| Viewer/official-client representation | signed result plus durable host-output ledger and rebuildable sealed projection |
 | Model/provider access | isolated inference connector, never the OpenCode process directly |
 
-OpenCode uses the same common adjudication as Claude and Codex before the adapter: full
-machine/server/chat-or-server-control/source scope, stable semantic IDs, delivery-attempt binding,
-multipart digest checks, one server-wide proposal order across web/official/automation/nested sources,
-durable signed command results, and fail-closed collision/ambiguity.
-An admitted result authorizes exactly one write-ahead OpenCode attempt; it does not mark that attempt
-applied. Only correlated OpenCode history/events/status may do that. Direct TUI work bypasses
-remote-claw proposal order, is observed afterward in OpenCode's native order, and is never invented as
-a remote proposal. This rule does not make unsupported kinds writable: attachment parsing/ingress
-support ends in a deterministic unsupported `action_result` until the adapter proves OpenCode-native
-file-part semantics and their read-back.
+The optional OpenCode design uses the common binding-scoped command order, signed result, and collision rules before the
+typed adapter. The signed admitted result authorizes creation of exactly one command-keyed execution
+row; it does not prove native application. Only the strict session-plus-history observation can do
+that. Direct TUI work remains native work, not an invented remote proposal.
 
-Recovery must reattach the exact `runtimeId`/session/incarnation, subscribe before history backfill,
-reconcile journaled attempts against native evidence, and leave ambiguous attempts quarantined. It may
-start a different native session only as a separate, explicitly authorized recovery operation with an
-explicit gap and explicit handling of proposals that were forwarded toward the old session. That is
-never a successor delivery for an existing native attempt or creation reservation. Reattaching a
-proven same semantic session is the future condition for retaining a logical-chat ID; a missing,
-reused, or unproven `ses_*` cannot silently repoint that chat.
+An optional alpha must prove focused crash points by failing stopped: uncertainty quarantines and never resends.
+Any later credentialed gate adds exhaustive recovery of that same execution row, native observation,
+host-output ledger, and sealed outbox across owner/runtime/OpenCode/facade/connector/broker restart. A
+missing, reused, or unproved `ses_*` cannot silently repoint the logical chat. A stale activation cannot
+start new work, and revocation never pretends to undo a native byte already sent.
 
-The private endpoint also fences adapter epochs, but checking the epoch when an HTTP request arrives
-cannot retract work already forwarded to OpenCode. Takeover first rejects new old-lease requests, keeps
-the replacement non-writable, and accounts for every old admitted request: wait for correlated terminal
-native evidence, or mark it `outcome_unknown`, quarantine the binding, and contain the old execution
-path. Only after that barrier may the new lease write. A stale wrapper then cannot start new work after
-takeover; the design does not falsely claim that revocation undoes an already accepted native action.
-Outside collaborator disconnects only update coordinator state; they do not abort the native run, tear
-down the shared SSE observer, or detach the TUI.
+Dormant `nat_*` IDs and old native-attempt/effect-gate tables document earlier decomposition only. The
+optional A1 recovery identity is `commandId`; transport-level broker delivery-attempt IDs remain a
+separate ciphertext-delivery concern.
 
 ## 9. Tests
 
@@ -727,94 +626,28 @@ The checked-in unit tests cover HTTP/SSE parsing, translation, coalescing, dedup
 mid-turn, reconnect/backfill, injected-echo rollback, compact routing, visible errors, permissions, and
 child-session nesting/isolation.
 
-Selected-runtime release tests must additionally prove one epoch-fenced adapter lease against two
-concurrent wrappers, including takeover while an old request is paused before native forwarding and
-after OpenCode may have accepted it. Creation tests cover discovery failure, positive-empty automatic
-bootstrap, explicit **New chat** while sessions already exist, exact first-import selection, lost
-create responses, and marker-plus-intent metadata durability across a real server restart. They retain
-all same-marker candidates from a current, complete, linearly proved and exhaustive successor
-discovery snapshot. Each candidate retains a recomputable full native metadata ref/digest; canonical
-two-field ref/digest fields are present only for the exact two-field shape. Tests bind exactly one only
-after both evidence pairs and the expected intent digest verify, and quarantine wrong/missing/malformed
-intent, noncanonical/extra metadata, and multiple matches; zero remains uncertain, while a gap, stale
-pointer, omitted candidate, or marker-only match never binds. Recovery tests actively drain
-subscribe-before-snapshot overlap under slow history, high event
-rate, stream drop, overflow, and pre-merge crash. Direct-TUI/remote input races resolve by native
-IDs/order. Caller-supplied native message-ID correlation proves `prompt_async` `204` versus native
-application, retained origin after an ambiguous POST, and non-idempotent same-ID retry behavior.
-Cross-incarnation creation tests additionally pin the original signed store-open evidence before
-dispatch and require an exact predecessor-stop/fence plus exclusive-successor-open continuity
-handoff. A cloned store, copied embedded identity, live predecessor handle, parallel writer,
-reset/fork, or missing handoff stays `lineage_unproved` and cannot bind.
+If resumed, the optional alpha gate must be runnable by a user and retain one complete
+browser-to-viewer turn through real `rcp2.` onboarding/discovery, the A1 broker and host repositories, a
+current schema-v6 terminal root, a signed admitted result, one command-keyed execution row, the exact
+request bytes, the mediated real TUI/private listener, real OpenCode 1.17.5, a credentialless local
+connector, strict session-plus-history read-back, the atomic observation-to-terminal/output-intent
+transition, durable host-output ledger, sealing/outbox publication, and viewer rendering. It must cover
+exact-existing-session attachment and write-ahead local-creation reconciliation, provider-request
+write-ahead with no resend, and concurrent TUI turns whose assistant output is accepted only by exact
+`parentID`. Negative cases reject empty text, every U+002F-leading string (including unknown slash
+strings), changed replay, unsupported families, plaintext broker storage, raw-listener/owner/facade
+access from a hostile child, external egress, and ambient connector credentials.
 
-Front-door tests compare the pinned TUI directly against OpenCode and through its TUI front door, then
-reject raw private-listener access, including from an OpenCode-spawned tool, an unclassified third client, a second TUI, a stale/concurrent
-wrapper, and a valid adapter credential aimed at the wrong `ses_*`, child, or permission. They crash
-around the last-hop dispatch CAS/socket write and require the attempt, dispatch, and command gate to
-start in one commit with no partial state or second forward. A separate explicit
-pre-send cancellation vector requires one atomic abandonment record and one transition of the
-attempt, front-door dispatch, and command gate to `quarantined`, with null dispatch-start time,
-receipt, started-attempt ID, and native read-back and with the exact same abandonment
-schema/ref/digest triple on all three rows. It proves zero native call, a revoked old protected
-authorization, no
-replacement/continuation/successor, all-or-nothing crash recovery on both sides of the transaction,
-byte-identical exact replay, and collision on a changed reason, sequence, coordinate, or digest. The
-crash-stranded no-record case still resumes only the original immutable attempt. Tests race
-abandonment against dispatch in both orders and reject any downgrade from a started/receipted/read-back
-attempt, started dispatch, started gate, stale executor, or changed protected reference/digest. A process exit
-without the record never implies cancellation; a later distinct authenticated source event may still
-use the otherwise-current binding. A nested continuation rejects the local abandonment record.
-Capability tests race
-signed-snapshot withdrawal, same-ID content substitution, translator
-schema/implementation/build/injectivity-proof drift, upgrade, and revocation at decision, claim,
-restart, and replay. Slash tests require pre-decision typed normalization followed by deterministic
-stored rejection for `/compact`, `/clear`, `/model`, `/context`, blank input, and every other unproved
-reserved command in selected A2, zero generic user projection or native call, raw-as-user bypass
-rejection, stored result redelivery on exact replay, and collision on changed bytes. Start/steer tests
-prove that explicit new submit remains `user_text`, explicit steer remains unsupported `steer_text`,
-and busy state or timing changes neither classification.
+The optional credentialed gate reruns that exact topology through the ordinary daemon, persistent
+selected workspace, and real connector, then faults every admission/native-start/provider-start/
+read-back/finalization/ledger/seal/publish boundary plus every
+owner/runtime/OpenCode/facade/connector/broker transition. It proves one execution
+row per command, at most one native send, exact redelivery after accepted publication,
+`outcome_unknown` quarantine after ambiguity, stale-activation withdrawal, provider credentials and
+external sockets outside the OpenCode/tool boundary, and advertisement only while health is current.
 
-One retained A2 vertical slice must enter through the real common A1 ingress actor, not call the
-OpenCode adapter directly. It sends one semantic prompt, crashes at the decision/outbox/native-attempt
-boundaries, rolls the broker generation, and replays the complete exact A1 input through a fresh
-broker delivery while native recovery keeps the one original `NativeDeliveryAttemptRecord`. A crash
-before `delivery.started` eventually permits exactly one `prompt_async`. Once
-`delivery.started` is durable, including a crash before the HTTP write, the fixture permits at most one
-send. The pre-start recovery resumes the same stored attempt and original authorization, never a
-successor or continuation. In the explicit-cancellation branch, the fixture commits the pre-send
-abandonment transaction instead and requires all three rows to remain terminally quarantined with no
-send or later resume. After start, recovery must either read back one native user message under
-the caller `msg_*` with the exact
-expected part count and per-part fingerprints, or record `outcome_unknown` and quarantine the binding.
-The fresh A1 replay only redelivers the stored coordinator result and never adds a native send. Reusing
-the native message ID must not be the recovery mechanism: an extra or changed native part is a native
-collision/gap, not evidence of one accepted attempt.
-
-That retained slice must also capture the selected request byte-for-byte: `POST` to the exact
-`/session/{ses_*}/prompt_async` path, empty query, only the selected content-type and canonical
-directory semantic headers, and strict compact
-`{"messageID":...,"parts":[{"type":"text","text":...}]}` with no `model` or `noReply`. It must prove
-the exact signed admitted-result tuple and executor evidence authorize the one attempt, the signed
-capability snapshot selects the measured translator, the private provider façade supplies the normal
-configured model path, and a complete linearly proved history snapshot supplies the exact native
-application and order. A companion creation vector must retain the exact `POST /session` metadata
-body, mandatory full native metadata ref/digest for every same-marker candidate, nullable
-classification-gated canonical two-field ref/digest, the full reconciliation vector, and expected
-intent digest. It must prove marker/intent survival across response, discovery, and native restart;
-current, complete, linearly proved and exhaustive snapshot enforcement; and fail-closed wrong or
-malformed intent, noncanonical/extra metadata, zero-match, and multiple-match behavior.
-
-Future-capability interrupt/compact tests pin response-body semantics and separately prove native
-outcome and causal attribution under direct-TUI-versus-remote races and lost responses before either
-family is added to an A2 vector; when the pinned surface has no causal seam, source must remain
-`unknown`. Permission tests cover child creation/first-tool policy races, cancellation-fenced child
-setup, literal-true reply acknowledgement, and TUI/remote races closed by a native terminal gate event.
-Detach/crash tests keep a direct-TUI turn alive, distinguish explicit interrupt from collaborator
-disconnect, exercise owned versus external server termination, and prove that a
-persistent/non-reversible permission policy cannot be advertised as clean detach. A real server
-kill/restart fixture classifies an orphaned incomplete message and status without waiting for a dead
-incarnation. The event suite compares legacy `/event` with v2 `/api/event` and pins event-ID/sequence
-scope and reset behavior before choosing the stronger surface.
+`new_chat`, creation-marker recovery, generic front-door parity, broader native routes, TUI
+generalization, and all other mutation families remain further optional tests.
 
 The live suite is:
 
@@ -828,6 +661,6 @@ model credentials in the `opencode serve` process. The live cases cover ordered 
 translation, local and injected prompts, history/restart, interrupt, visible errors, native compact,
 permission round-trip, and two-session isolation. The “local prompt” case uses a second
 `OpencodeClient.promptAsync` call as a stand-in; it does not spawn the real TUI. The suite is neither
-pinned nor retained. A supported tuple needs a PTY fixture with the real pinned TUI and adapter on one
-`ses_*`, both directions, simultaneous submit/busy behavior, permission first-winner, adapter/front-door
-restart, hard server restart, and native visible-state comparison.
+pinned nor retained, does not use the common A1 actor, and proves no optional durable capability. Any
+resumed alpha gate must add the retained narrow mediated-TUI fixture; generic front-door and
+broader-route fixtures remain later optional scope.

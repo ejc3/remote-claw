@@ -7,7 +7,15 @@
 > baseline superseded the localhost MITM-relay of Phase 0 for the *transport/UX* layer and reused its
 > Claude-interception core.
 
-> **Architecture evolution (selected 2026-07-26):**
+> **Active finish line (2026-08-23):** [Claude 1.0](release-finish-line.md) is the only active product
+> endpoint and release gate. A1/OpenCode and the broader client-driven platform are parked optional
+> expansions; none of their dormant schemas, generalized evidence, native adapters, or future proof
+> matrices is a Claude 1.0 prerequisite. If OpenCode/A1 is deliberately resumed later, its proposed
+> safety boundary remains the [A1 OpenCode vertical slice](a1-opencode-vertical-slice.md). Every later
+> use of “selected A1” is retained historical terminology for that parked design, not a current product
+> selection or release requirement.
+
+> **Optional architecture evolution (parked; selected as research 2026-07-26):**
 > [Client-driven host runtime](client-driven-host-runtime.md) adds a host-wide adapter and coordinator
 > above this document's one-wrapper-per-Claude-chat implementation. It preserves one paired Codex host
 > with many projects/chats and lets official clients participate. At the innermost boundary, one person
@@ -256,83 +264,11 @@
 > same-millisecond wall-clock tie. `pending_seal` retains only
 > semantic payload refs/digests and immutable broker-route linkage. A1.8a0 implements no ciphertext,
 > output parts/signatures, claim/seal/publish, broker call, cursor movement, native attempt/effect,
-> viewer projection, driver operation, production wiring, or capability advertisement.
->
-> A1.8a1-E0 implements the six E-side canonical ID contracts and four deterministic
-> attestation/snapshot ID derivations. E1a now implements the four pure strict ref-free parent
-> envelopes, closed role/schema/bound/scope registry, and bounded raw digest helper. E1b1 now adds
-> strict role-correlated native/front-door executable-content manifest codecs plus a direct-only
-> Linux collector that performs two stable complete reads of one descriptor. Its retained real
-> OpenCode 1.17.5 Linux arm64 vector closes only the native role. Generic collection has front-door
-> temporary-file coverage, but no retained or provenance-bound actual front-door observation exists.
-> Future recipe
-> bytes commit to those parents by schema/digest/length, so neither parents nor recipe contain an
-> `rcph_*`; refs remain repository-local links. E1a parses no
-> child semantics and adds no artifact write, schema, repository, signer, pointer, port, runtime
-> operation, protocol packet, or production capability. E1b1 proves no pathname, process, front door,
-> currentness, complete parent, or authority. E1b2 now implements the strict full-u64 `M → P → F → A`
-> leaf codecs, a bounded verifier that snapshots/reparses/re-encodes the four raw leaf views plus
-> separately built E1a parent bytes, and synchronous direct-only independent no-follow Linux
-> observation. Its non-skipping local-direct/hosted-CI-demoted gate proves real namespace and bind-mount
-> behavior. The collector returns only four leaf artifacts, and the result remains historical-only
-> with no currentness, process, authority, stateful acceptance, production wiring, or capability.
-> E1b3's design is frozen but unimplemented: E1b3a owns pure codecs plus one deterministic dormant
-> LF-normalized Node ESM bundle for OpenCode 1.17.5 Linux arm64, and E1b3b owns direct-only capture
-> plus the retained raw-seven-view `N/X/B/S/R/D/L` proof. The only positive front-door inventory is
-> prompt binding at `POST /session/{sessionID}/prompt_async`, observer reads at `GET /session`,
-> `GET /session/{sessionID}`, `GET /session/{sessionID}/message`, and `GET /session/status`, and the
-> legacy observer stream at `GET /event`; session/TUI/server creation and every unlisted route remain
-> closed. The bundle contains only digest-independent declarations and symbol IDs, while finalized
-> executable/build/OpenAPI/registry/measurement/parent digests remain post-build sidecars, avoiding a
-> binary self-hash or build/registry cycle. No E1b3 package, listener, capture, retained fixture, or
-> production import exists yet. E1b3a has an exact prerequisite gate but no partial case-ID manifest
-> and no successful socket-backed serve. Parameterized release cases span both PRs; E1b3b owns the
-> first demoted private-namespace inherited-listener serve, complete 106-ID manifest, retained actual
-> fixture, and only final E1b3 release claim. The caller-to-host handoff is immutable argv-bound
-> program source on stdin, four bound argv coordinates, and redundant read-only program/request
-> capsules at FD 3/FD 4; the fresh fixed host snapshots path inputs or bundle bytes into internal
-> target/data/gate/manifest capsules, and no host path, FD, PID, destination, helper or timeout crosses
-> the inner operation seam. Node owns no runtime-source capsule: two closed modes of the same pinned
-> static gate run as demoted UID/GID 60000 with zero capabilities, NNP, fresh keyrings, canonical
-> seccomp, private-null stdin, bounded empty-output captures and exact manifest/facts/copy FDs. Install alone fills setup-precreated runtime
-> temp inodes; verify freshly repeats the Linux openat2/dirfd route, identity and byte proof after target
-> reap and before response validation, with no request/response access. Fixed outer unshare makes
-> setup PID 1 in a private outer PID namespace and
-> contains every synchronous helper and nested descendant while creating the private mount/net/IPC
-> environment. Setup creates and validates the sparse root/work/dev/input state, seals immutable
-> root/input and dev, and retains only bounded noexec writable work; inner unshare creates the child
-> user/PID/mount namespace and mounts proc
-> while preserving the 60000-to-60000 map. One reproducibly built static gate-init starts as inner PID 1 and
-> UID/GID 60000 with empty groups, recursively self-binds and verifies the locked inherited root/work/
-> dev/proc subtree, pivots that child-created clone away from the host root, detaches the old tree,
-> remounts/verifies proc and the inventory, drops capabilities, replaces its keyring, and installs NNP plus a socket/key/
-> namespace/cross-process seccomp filter before execing the copied Node/program as PID 1. The 13-item
-> `B` toolchain binds both gate binaries and both recursive loader/DSO platform manifests; `S` selects
-> the arm manifest. Every direct target also receives ABI-3 Landlock access only to its exact executable
-> and runtime files, noexec work subtree, null/urandom, and exact own `/proc/self`; PID 1's request/
-> response, host paths/sockets/FIFOs/devices/executables, AF_VSOCK and inherited keyrings are unreachable.
-> PID 1 writes one HMAC frame to a private response inode after reaping. After inner exit and mandatory
-> resolver/control/response/process checks, setup relays the opaque file and then tears down; the host
-> accepts only after wrapper exit, relay EOF, authentication and postobservations. Checked
-> parent-death/deadline chains accept nothing on loss. This closes the
-> proof gate's same-isolate ABA and host-route/credential
-> hazards but deliberately leaves hostile external peers, live mappings and currentness to E1b4.
-> E1b4 isolation and E1b5 capability/full-parent closure remain planned.
-> E1c then retains exact signed OpenCode
-> `user_text` binding evidence through dependency-ordered listener/isolation/capability phases, with
-> key rotation blocked while an E-owned phase is nonterminal and neither transport pointer changed.
-> Its workspace/new-lineage, exhaustive legacy-signer quarantine, unsigned-snapshot/accepted-inert
-> staging, and caller-retained request plus immutable-receipt reconciliation rules are frozen, but no
-> stateful schema or migration number exists. A1.8a1-I
-> later installs one accepted capability snapshot and one credentialless authenticated callable-port
-> ingress lease as a matched pair in one transaction; a snapshot-only pointer is forbidden. The
-> volatile port remains useful only on its exact authenticated runtime-owner channel and must be
-> withdrawn and replaced after process loss. Pair withdrawal never unregisters the A1.4-owned shared
-> physical port; only exact parent-lease closure/replacement may do that. Neither E1c nor I creates an admitted command, native
-> attempt, dispatch, effect, native call, production operation, or advertised capability. The
-> implemented E0/E1a/E1b1/E1b2 boundary, frozen E1b3 design, and planned E1b4–E1b5/E1c/I design are in
-> the [host-runtime reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
-> A1.8a2 still owns the admitted atomic arm and A1.8b owns sealing/publishing.
+> viewer projection, driver operation, production wiring, or capability advertisement. If this parked
+> expansion is resumed, A1-V1 would own the first complete user-runnable local-provider alpha, including real TUI/private-listener mediation,
+> `rcp2.` onboarding, signed admission, start-before-byte effect, exact output self-recognition, sealed
+> publication, browser rendering, and fail-stop ambiguity. A1-V2 would bind the real connector, add
+> exhaustive recovery/isolation proof, and enable normal advertisement without redesigning that path.
 >
 > Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
 > plain and help paths, trace mode, and the local `--rc-identity` action do not. A1.4 registration is
@@ -345,16 +281,9 @@
 > adapter; it signs the protected payload, obtains a fresh nonce-bound callable-port proof, and then
 > synchronously enters the closed transaction-local finalizer. No real driver performs durable owner registration, A1 binding activation, or root
 > activation, and no A1 remote mutation, inference, or live broker capability is enabled. The
-> A1.7b0 signer, A1.7b1 command adjudicator, and A1.8a0 rejected finalizer remain direct-only
-> dormant host state. E0 identities, E1a parent envelopes, and E1b1 executable-manifest codecs are
-> host-state exports with no authority operation; E1b2's workspace codecs/verifier are likewise a
-> host-state export. The E1b1 and E1b2 Linux collectors are direct-only and absent from all production
-> paths. A1.8a1-E1b3–E1b5/E1c/I remain unimplemented; E1b3 is documentation-only at this boundary.
-> E1b3 through E1b5 must close actual
-> front-door/listener, isolation, capability, and all four parents; then E1c
-> and I must land before A1.8a2 admitted atomic arming.
-> A1.8b owns sealing/publishing,
-> one-time dispatch, and evidence-only recovery.
+> A1.7b0 signer, A1.7b1 command adjudicator, and A1.8a0 rejected finalizer remain direct-only dormant
+> host state. A1-V1 and A1-V2 are parked optional outcomes, not the next Claude 1.0 tranche and not
+> active release gates.
 
 ## 1. What changes and why
 
@@ -954,7 +883,8 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   certificate byte-for-byte, immutable key-ID-to-public-key bindings within the supplied chain, and
   every successor subject public key to differ from every earlier supplied subject key rather than
   permitting reuse under a renamed ID. It retains no trust history, so older omitted key-ID and
-  public-key bindings remain the caller trust store's policy. A1.10's installation transaction will
+  public-key bindings remain the caller trust store's policy. If the parked expansion is resumed,
+  A1-V1's viewer trust-store installation transaction must
   compare-and-swap from the locally current `(certificate ID, key generation, identity key ID)` to the
   chain tip; the stored current key generation always equals the current certificate's
   `keyGeneration`. Stale, rollback, skipped-generation, concurrent-fork, revoked-signer, or
@@ -971,7 +901,7 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   `ViewerOnboardingKeyAttestationV1`, which binds domain-separated commitments to the decoded
   `authToken`, `contentRoot`, `controlKey`, and `metaKey`; substituting any operational key fails before
   a route or KDF is used. The pure verifier returns an immutable verified bundle and performs no state
-  transition. Under A1.10's future trust-store policy, an exact locally current tip and attestation
+  transition. Under the proposed A1-V1 trust-store policy, an exact locally current tip and attestation
   replay is an idempotent no-op, while only a non-empty successor suffix retires the prior certificate.
   A mismatch is a local splice error, not a broker-auth fallback.
 
@@ -984,7 +914,7 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   retired-key record needs current-key historical reattestation; exact records accepted before the
   cutoff may replay. The exact custody, canonical certificate/attestation bytes, reattestation, fork
   boundary, and recovery rules are in
-  [Client-driven Host Runtime — Reference §4](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+  [frozen Client-driven Host Runtime archive §4](client-driven-host-runtime-generalized-design-archive.md#4-host-wide-native-client-adapters).
 - **Selected A1 routing uses the complete server/chat-or-control scope and injective addresses.** No A1 address
   uses `logicalChatId` alone or raw delimiter concatenation. Define
   `scopeAddress = base64url(SHA256(canonical-encode("remote-claw/a1/scope", identity_id, collaborationServerId)))`
@@ -1046,13 +976,13 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   - random 16-byte bodies: `rcs_` collaboration server, `rcpj_` project, `rcl_` logical chat, `rcie_`
     inward collaboration edge, `rcnb_` native binding, `rccl_` coordinator lease, `rcra_` registration
     attempt, `rcncl_` native conversation lease, `rcph_` protected handle, `rbsi_` broker route store
-    instance, `nwb_` native workspace binding, `nbao_` native-binding evidence operation, `nbai_`
-    native-binding install operation, and `nbaw_` native-binding withdrawal operation;
+    instance, and the dormant audit-only `nwb_` native workspace binding and `nbao_` authority-evidence
+    operation;
   - SHA-256-derived 32-byte bodies: `rcrt_` native runtime, `ptm_` project-target-selector mapping,
-    `nat_` native delivery attempt, `rcr_` broker route, `rbcp_` backend capability pin, `nlra_`
-    listener-registration attestation, `nria_` runtime-isolation attestation, `nbcs_` binding capability
-    snapshot, `ncsa_` capability-snapshot attestation, and `ncil_` native-client ingress lease. A1.3 now locks the exact domain-separated `rcrt_*` derivation
-    and vector documented in the [host-runtime reference](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+    `nat_` native delivery attempt, `rcr_` broker route, `rbcp_` backend capability pin, and the
+    dormant audit-only `nlra_` listener-registration attestation, `nria_` runtime-isolation
+    attestation, `nbcs_` binding-capability snapshot, and `ncsa_` capability-snapshot attestation. A1.3 now locks the exact domain-separated `rcrt_*` derivation
+    and vector documented in the [frozen host-runtime archive](client-driven-host-runtime-generalized-design-archive.md#4-host-wide-native-client-adapters).
 
   Every body is canonical unpadded base64url. Other selected A1 safe IDs are 1–128 ASCII bytes, must
   match `[A-Za-z0-9._:-]+`, and are never raw provider/native IDs; adapters map unsafe external
@@ -1196,7 +1126,7 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   it never means “start at the broker's latest generation.” Mutating chat recovery requires the retained
   contiguous cursor or the complete immutable manifest chain from genesis. The mutating
   server-control route has the same requirement. Missing genesis or a broker
-  that starts at `N > 0` is non-writable. A future A1.10 viewer may let the scope bus alone use a fresh, separately
+  that starts at `N > 0` is non-writable. The parked A1-V2 proposal may let the scope bus alone use a fresh, separately
   host-signed checkpoint for discovery-only cold start: the broker first seals an exact generation and
   opens its successor, then the host signs separate metadata over that sealed tip. It is not a frame,
   cannot seed a chat cursor, and cannot acknowledge a mutation. Open/empty/rollover, freshness, and
@@ -1219,7 +1149,7 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   three non-null. The first accepted tuple is immutable. Exact duplicate manifests are idempotent; a changed count/state/successor or a position
   at or beyond sealed `frameCount` records durable manifest equivocation and quarantines the route
   without rewriting order. The complete schema and recovery transition are in
-  [Client-driven Host Runtime — Reference §4](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+  [frozen Client-driven Host Runtime archive §4](client-driven-host-runtime-generalized-design-archive.md#4-host-wide-native-client-adapters).
 
   A1 retains chat and server-control ciphertext frame bodies from genesis so newly paired clients can
   traverse their mutating history. Only a sealed scope-bus generation covered by a fresh host-signed
@@ -1624,14 +1554,14 @@ call). See §14.)
   signed-but-unaccepted result preparation. A1.8a0 now atomically closes that rejected-only arm into
   an immutable common result, dense signer acceptance, logical ingress terminal overlay, exact
   semantic artifact, and inert `pending_seal` delivery intent without advancing the ingress cursor or
-  requiring later route health. It neither seals nor publishes that intent. A1.8a1-E1c/I first retains
-  and later installs the dormant matched capability-snapshot/credentialless-ingress authority pair;
-  A1.8a2 must add any admitted attempt/front-door-dispatch/effect arm atomically, and A1.8b must seal/publish before any
-  forward or result delivery; viewer-projection `seq` remains explicitly separate.
+  requiring later route health. It neither seals nor publishes that intent. If the parked expansion is
+  resumed, A1-V1 must add the first
+  complete admitted attempt, start-before-byte execution, sealed publication, and browser rendering;
+  viewer-projection `seq` remains explicitly separate.
   A1.6 retains ciphertext frame bodies on every route from
   genesis. A1.7a also retains decrypted plaintext part evidence for chat and
   server-control routes; future checkpointed discovery-only scope-bus ciphertext may be compacted only
-  after A1.10 supplies that signed checkpoint and recovery proof. The
+  after the proposed A1-V2 supplies that signed checkpoint and recovery proof. The
   expected part count and complete part-digest vector remain with every result indefinitely. A single
   old part never returns success: after completion, every
   expected part of a replay candidate must match before the stored result is eligible. Changed
@@ -1678,7 +1608,7 @@ call). See §14.)
   `delivery_attempt_id`; all parts of that candidate share it. New, pending-duplicate,
   terminal-replay, collision, incomplete-expiry, and restart behavior use the
   atomic state machine in
-  [Client-driven Host Runtime — Reference §4](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+  [frozen Client-driven Host Runtime archive §4](client-driven-host-runtime-generalized-design-archive.md#4-host-wide-native-client-adapters).
   Partial groups are size/count/deadline bounded; terminal incomplete tombstones let the contiguous
   cursor advance and cannot later resurrect. A terminal exact replay creates no echo, log entry,
   projection sequence, command, or inward delivery. Instead it enqueues the same stored semantic
@@ -1713,7 +1643,7 @@ call). See §14.)
   string, so adapters cannot silently conflate them.
   The retained item vector contains the exact ordered filename, media type, byte length, and decoded
   content digest for every item under the canonical item/vector schemas in the
-  [runtime reference](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters);
+  [frozen runtime archive](client-driven-host-runtime-generalized-design-archive.md#4-host-wide-native-client-adapters);
   its count, every item digest, and every content ref/digest must recompute. Adapter JSON, a
   source-base64 spelling, and an `unsupported_recognized` payload cannot substitute for that chain.
   The selected target family must name the same common attachment schema plus its proved native
@@ -2451,7 +2381,7 @@ After plane selection, A1 enforces this closed header-validity matrix before sem
 An unknown kind or any other direction/sequence/client-ID combination is an invalid physical channel
 position: it produces no semantic ingress record, no acknowledgement, and follows the explicit
 invalid-frame quarantine/cursor transition in
-[Client-driven Host Runtime — Reference §4](client-driven-host-runtime-reference.md#4-host-wide-native-client-adapters).
+[frozen Client-driven Host Runtime archive §4](client-driven-host-runtime-generalized-design-archive.md#4-host-wide-native-client-adapters).
 Shared encryption keys do not make an inbound `accepted`, sequenced control, or outbound interrupt
 valid.
 
@@ -2742,7 +2672,9 @@ phase0/            unchanged — the Python reference + protocol findings
   create race is not an HTTP `409`.
 - **Workflow per-run caps** (25k events / 10k steps / 2 GB; replay degrades past
   ~2k events): every Workflow-profile publish in either direction creates hook/step events. Current code does not
-  roll before the cap, so production availability at that boundary is an open release blocker. Keeping
+  roll before the cap, so production availability at that boundary blocks advertising Workflow as a
+  production profile. Claude 1.0 instead selects the durable SQLite/libSQL profile; Workflow remains
+  experimental and its cap does not block that release. Keeping
   high-volume turn frames on separate per-session runs isolates the identity-bus budget but does not
   make session traffic event-free. Implement and prove the pre-cap handoff, and quantify Events versus
   Data Written per active identity before scaling.
@@ -2911,8 +2843,8 @@ the RC backend, so it sees and logs **every** frame; it then E2E-encrypts to
 Vercel. The bridge is recorded as a **rejected alternative** (keeps the protocol
 shapes it validated; we serve the same shapes ourselves).
 
-**Selected future direction (2026-07-26; not implemented).** The
-[client-driven host runtime](client-driven-host-runtime.md) supersedes the earlier Anthropic-canonical
+**Parked optional direction (researched 2026-07-26; not implemented).** The
+[client-driven host runtime](client-driven-host-runtime.md) records the generalized alternative to the earlier Anthropic-canonical
 proposal whose evidence is retained in the
 [Native Claude Remote investigation](native-rc-passthrough-scoping.md). A distinct experimental Claude
 mode will keep inner Claude on a private synthetic RC/API façade while remote-claw separately owns a
@@ -3317,6 +3249,12 @@ reorder/**replay**, no keys)
     omit `expiry`; a withheld answer may act only while the corresponding native gate remains open.
     Selected A1 makes exact retry safe by returning the stored action-specific result.
 
+    The active Claude 1.0 release does not implement that broader control reconciliation: it disables
+    slash text, interrupt, model/mode changes, and end-session; adds authenticated expiry to exact open
+    permission/question answers; and removes automatic ambiguous Retry. One live relay deduplicates the
+    source ID, while a session-wide pre-write fence prevents mutating worker-SSE redelivery. Same-session
+    takeover remains parked, so no broker dispatch CAS or durable command journal is required.
+
 Also covered by the same mechanisms (not numbered): **machine reset** (after stopping the old relays,
 new `S` → new `identity_id` = a new identity for that machine with a fresh, empty set of spaces;
 legitimate future service abandons the old identity, but copied old credentials remain live on
@@ -3324,9 +3262,10 @@ retained old routes; other machines are untouched — §4.4), and a **broker
 (Vercel) outage**. The local TUI and Claude's native transcript can keep working while remote control
 is unavailable, but that does not prove the missing native interval can be reconstructed into the
 viewer projection: the relay may fail closed after a publish error, and Claude does not backfill RC.
-On recovery, clients re-subscribe and receive only frames retained by host `#log`, the durable broker
-log, or a still-mounted client's memory; any unobserved interval remains an explicit reconciliation
-gap.
+For Claude 1.0 that failure ends the old remote session; the local TUI may continue, but a new launch is
+an explicit successor and receives no old command. Clients can read only frames retained by host
+`#log`, the durable broker log, or a still-mounted client's memory; any unobserved tail remains an
+explicit reconciliation gap.
 
 ## 16. Message sequences (per use case)
 
@@ -3338,7 +3277,7 @@ Anthropic-origin control surface. All C↔V↔W payloads are
 ciphertext (`{…}` = decrypted view); every C/W→V call carries
 `Bearer auth_token` (§4.5; Vercel Deployment Protection may additionally gate the deployed
 origin). Frame kinds per §6A. `→` one
-message; steps are ordered. The concrete steps below show the live-default **Workflow profile**:
+message; steps are ordered. The concrete steps below preserve the as-built **Workflow profile**:
 `POST /api/relay` maps to `resumeHook`, while `GET /api/stream` maps to
 `getHookByToken→getRun→getReadable` over SSE. In the shipped SQLite/libSQL profile those same
 data-plane calls map to an idempotent frame insert and indexed log subscription; the host additionally

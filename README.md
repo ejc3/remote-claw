@@ -3,17 +3,11 @@
 A custom client + relay for driving a **real `claude --remote-control` session**
 — your own frontend in place of Anthropic's web/mobile app.
 
-> **Selected next architecture:** evolve the per-session Claude wrapper into a
-> [client-driven host runtime](docs/client-driven-host-runtime.md) for Claude Code, Codex, OpenCode,
-> and tmux. Native clients keep their real conversation/context; a small local coordinator orders only
-> proposals from remote-claw's direct collaborators and correlates delivery across official Anthropic
-> Remote, ChatGPT Remote connections, and remote-claw web. Direct TUI input stays on the native path,
-> and the native harness decides the final local/remote interleaving and mutation. Wrapped inner Claude,
-> Codex, and OpenCode processes never contact their providers directly.
-> This is under implementation. A0.1 and A0.2 now route Claude MITM, OpenCode, and tmux compatibility
-> sessions through the same process-local registration seam with fail-closed readiness and truthful
-> post-setup capabilities. Durable coordination and recovery, complete inner-provider isolation,
-> Codex, and the official-client connectors remain later phases.
+> **Current product status:** the Claude own-relay is a working developer beta. The sole active finish
+> line is an installable, failure-safe, truthfully presented
+> [remote-claw Claude 1.0](docs/release-finish-line.md). The broader client-driven host runtime,
+> OpenCode, Codex, tmux durability, provider façades, and nested collaboration are parked future work;
+> they do not block this release.
 
 ## What this is
 
@@ -33,21 +27,20 @@ remote-claw web ⇄ ciphertext broker ⇄ host relay ⇄ local RC façade ⇄ re
 
 It does **not** depend on redirecting `--sdk-url`; that route was patched out. The current default
 still passes non-RC traffic, including inference/OAuth, to Anthropic, while the Bedrock/accountless mode
-terminates the Anthropic control plane locally. The selected next runtime makes that boundary strict
-for Claude Code, Codex, and OpenCode: every inner provider-shaped call terminates locally, and
-separate remote-claw-owned connectors handle model inference and official Remote clients.
+terminates the Anthropic control plane locally. This is an intentional boundary of the current Claude
+product, not a claim that Anthropic inference is zero knowledge.
 
 ## Status
 
-✅ **Phase 0 done — working own-relay (Claude Code v2.1.168).** The original
+✅ **Phase 0 done — working own-relay (proved with Claude Code v2.1.168).** The original
 `--sdk-url` trick is **patched** (hardcoded 5-host allowlist + wss/https-only,
 rejected before any socket opens). But the real Remote Control transport turned
 out to be a plain HTTPS API on `api.anthropic.com` (`/v1/code/sessions/…`), so
 `remote-claw` instead **MITMs that host per-process**: it intercepts the RC
 endpoints to become your own relay, while passing `/v1/messages` through to real
-inference. A local `claude --remote-control` TUI and our own web client now drive
-**one synced session** — empirically verified end-to-end and covered by an
-automated test.
+inference. A local `claude --remote-control` TUI and our own web client drive the
+same live Claude session for browser-originated turns and observed outputs. Local-TUI prompt text is
+not currently projected to viewers; remote-claw does not promise a lossless mirror of local-only input.
 
 ```bash
 cd phase0
@@ -77,9 +70,10 @@ ciphertext. It is built, reviewed, merged, and **proven end-to-end with a real `
 - **`packages/cli`** — the `remote-claw` wrapper: identity/pass management (`--rc-identity`,
   `--rc-pass`), the broker transport (`BrokerClient`), and the **RC MITM backend** (`@remote-claw/cli/rc`:
   `MitmProxy` + `RelayCore`/`Session` + `HostRcRelay`) — the Phase-0 interception core ported to TS.
-  Its new `host/native` contract is independent of `Session`; the process-local legacy registrar now
+  Its `host/native` compatibility contract is independent of `Session`; the process-local registrar
   assigns a distinct lease to each intercepted Claude conversation and starts its bridge only after
-  validated setup reaches `ready`.
+  validated setup reaches `ready`. The MITM use of that seam is active; expanding it into a durable
+  multi-engine host is not.
 
 **The RC backend (the real one, §14/§17.5):** you run `remote-claw` like `claude` (`--rc-app <broker>`
 arms it); inside, `/remote-control` lands on **our local TLS MITM of `api.anthropic.com`** (set via
@@ -103,10 +97,14 @@ and claude routes inference via the AWS SDK while remote-claw relays it, never t
 📐 **Design:** [`docs/v2-architecture.md`](docs/v2-architecture.md) — the full v2 design,
 threat model, key hierarchy, broker, and phased plan.
 
-🧭 **Next host runtime:** [`docs/client-driven-host-runtime.md`](docs/client-driven-host-runtime.md) —
-the selected design for Claude Code, Codex, OpenCode, tmux, official Remote clients, and remote-claw
-web. A person at the native TUI talks directly to the native harness; remote collaborators enter
-through an adapter and local coordinator, and the native harness decides what actually applies.
+🎯 **Active release finish line:** [`docs/release-finish-line.md`](docs/release-finish-line.md) — the
+smallest honest path from the working Claude developer beta to an installable 1.0: one-incarnation
+command safety, fail-stop delivery/output, truthful UI states, supported-version and deployment boundaries,
+and one required two-leg crash-matrix/real-topology release suite.
+
+🧭 **Parked future platform:** [`docs/client-driven-host-runtime.md`](docs/client-driven-host-runtime.md)
+and [`docs/a1-opencode-vertical-slice.md`](docs/a1-opencode-vertical-slice.md) preserve the optional
+multi-engine design and its safety requirements. They are not the current delivery sequence.
 
 🔑 **Credential handoff:** [`docs/ephemeral-handoff.md`](docs/ephemeral-handoff.md) — the one-time-key
 (OTK) ephemeral handoff that replaces the forever pass-in-QR with a single-use, short-TTL bootstrap
@@ -124,10 +122,12 @@ history; the verified current protocol is in `protocol.md` and `phase0-findings.
 
 For the current implementation, read:
 
+- [`docs/release-finish-line.md`](docs/release-finish-line.md) — the sole active Claude 1.0 outcome,
+  safety invariants, scope boundary, and executable release gate.
 - [`docs/protocol.md`](docs/protocol.md) — as-built protocol and runtime.
-- [`docs/client-driven-host-runtime.md`](docs/client-driven-host-runtime.md) — selected next
-  architecture and delivery order.
 - [`docs/phase0-findings.md`](docs/phase0-findings.md) — reverse-engineered Claude RC evidence.
+- [`docs/client-driven-host-runtime.md`](docs/client-driven-host-runtime.md) — parked future-platform
+  design, not a Claude 1.0 dependency.
 - [`docs/remote-control-research.md`](docs/remote-control-research.md) — historical research that led
   to Phase 0.
 
@@ -168,22 +168,30 @@ Anthropic Remote session.
 
 ## Next implementation
 
-The active sequence is A1 runtime owner/control journal → A2 OpenCode vertical slice → wrapped Claude
-→ wrapped Codex/ChatGPT Remote → durable tmux recovery. A0.1 and A0.2 are implemented as
-process-local compatibility infrastructure; they do not yet preserve a logical-chat/native binding
-across wrapper restart. The proof gates and per-PR boundaries are in
-[Client-driven Host Runtime delivery plan](docs/client-driven-host-runtime.md#delivery-plan).
+There is one required outcome: **remote-claw Claude 1.0**. Keep one live relay owner per random session,
+attempt each supported browser mutation at most once across broker and worker reconnects, remove
+ambiguous automatic Retry, and report host receipt without claiming native application. Validate and
+deduplicate native event identity, serialize projection publication so a failed sequence has no later
+successor, and end the remote session on fatal bridge failure with an honestly incomplete tail. Package
+the CLI, freeze the supported Claude/deployment profile, and pass both the deterministic fail-stop
+matrix and installed real-topology smoke. The exact scope and stop condition are in the
+[Claude 1.0 finish line](docs/release-finish-line.md). Multi-engine work resumes only after a separate
+product decision.
 
 ## ⚠️ Security
 
 The v2 broker authenticates identity-scoped data and recovery requests and sees only sealed frames plus
-routing metadata. The one-time handoff bootstrap is a separate, unauthenticated high-entropy capability:
-its proof, short TTL, body cap, single-read store, and required edge rate limit are its gate. The host's
+routing metadata. The optional one-time handoff bootstrap is a separate, unauthenticated high-entropy
+capability: if it ships enabled, its proof, short TTL, body cap, single-read store, and edge rate limit
+are its gate. The host's
 TLS proxy binds to `127.0.0.1`. Keep the machine secret/pass, provider credentials, generated CA key,
 and Vercel bypass secret private. The current default Anthropic inference path intentionally forwards
-non-RC traffic and is not yet the selected runtime's process-isolation boundary. The release target
-requires synthetic inner credentials, separate connector credentials, and a network fence that
-prevents direct provider fallback.
+non-RC traffic; the zero-knowledge claim applies to the remote-claw broker, not to the model provider.
+The Claude 1.0 target does not require a new multi-provider credential or connector architecture. A
+viewer pass grants read and control for every session on that machine identity; pass holders are
+mutually trusted and can construct valid sealed frames. There is no per-viewer role or individual
+revocation in v1: resetting the machine identity moves future service but does not revoke copied old
+credentials on retained routes.
 
 ## License
 

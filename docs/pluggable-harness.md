@@ -1,21 +1,33 @@
 # Pluggable harness drivers — the `Session` seam
 
+> **Project status:** the active finish line is [Claude 1.0](release-finish-line.md). The as-built
+> `Session` compatibility seam remains relevant to that product. The durable A1/OpenCode neutral-host
+> material in this document is preserved optional multi-engine platform work; it is not the next
+> tranche or a Claude 1.0 release blocker. Only the MITM lane is a supported stable runtime for 1.0;
+> the implemented tmux/OpenCode flags are experimental/internal compatibility paths. Parser support,
+> tests, and live proofs for those flags do not promote them into the release surface.
+
 `remote-claw` bridges a coding agent (today: the real `claude --remote-control`) to an
 E2E-encrypted broker, so a phone or laptop can watch and drive that agent. This document records the
-legacy **per-conversation compatibility port** shared by the current harness paths
+legacy **per-conversation compatibility port** shared by the implemented harness paths
 (claude-behind-MITM, a plain `claude` in tmux, and OpenCode).
 
 > **Scope:** each `Session` is one Claude-shaped compatibility chat, but the abstraction proposed in
 > this document was only partially realized. `run.ts` dispatches directly to three launch functions;
 > MITM can lazily create several `Session`s and has no `Driver` wrapper; OpenCode has its own driver
 > class; tmux exports a `Driver` façade but dispatch calls `runTmuxDriver` directly. `DriverFactory` is
-> exported but unused. The selected
-> [client-driven host runtime](client-driven-host-runtime.md) now provides a neutral host-wide
+> exported but unused. The parked
+> [client-driven host runtime](client-driven-host-runtime.md) describes an optional neutral host-wide
 > native-engine contract above it. A0.1 routes Claude MITM through one process-local registrar and one
 > lease per intercepted conversation; A0.2 now routes both OpenCode and tmux through the same
 > registration seam. `Session` remains a legacy RC port during migration; it does not
 > become the neutral schema. In particular, Codex is one
 > persistent multi-project app-server host, not another one-`Session` `DriverName`.
+
+The optional durable OpenCode design does not extend `Session` or introduce a generated HTTP front door.
+The runtime owner exposes one protected typed `user_text` port and one read-back observer under the
+single binding activation defined by the [A1 OpenCode vertical slice](a1-opencode-vertical-slice.md).
+`Session` remains the A0 compatibility seam only.
 
 A1.0 through dormant A1.8a0 have landed. A1.0 supplies the shared canonical writer and
 host-state contracts; A1.1 supplies the Linux secure-SQLite kernel and verified protected artifacts;
@@ -43,7 +55,9 @@ stays inert. It reconciles an unknown commit and renews only from the latest ret
 Registration recover, drain, close, and reattach demote a root without deleting history and require
 re-ready plus renewal. The callable-port proof is ephemeral; snapshot validation does not store or
 replay it. Expiry alone does not auto-demote the persisted chat/edge, so future effective
-route/dispatch admission must recheck certificate time and the live lease.
+route/dispatch admission must recheck certificate time and the live lease. This schema-v6 terminal
+root remains actual authority: a later OpenCode activation may supplement it but must not bypass,
+replace, or relabel it as audit-only history.
 A1.6 adds pure selected-backend capability, route/store, generation/manifest, publish/collision, and
 one-generation/64-frame read-page contracts; a separate bearer-authenticated SQLite/libSQL `/api/a1/*` broker with
 immutable `rbsi_*` store identity, route-wide retry/collision tombstones, retained ciphertext and
@@ -114,39 +128,6 @@ depend on post-sign route health. A narrow current-successor rule closes a valid
 signature without granting generic superseded-lease, rotation, retired-certificate, or historical
 acceptance. Any later successor signing lease must be durably acquired strictly after the predecessor
 acceptance, including across a same-millisecond wall-clock tie.
-A1.8a1-E0 implements the six E-side canonical ID contracts and four deterministic
-attestation/snapshot ID derivations. E1a now implements the four strict ref-free parent-envelope
-codecs, closed role/schema/bound/scope registry, and bounded raw digest helper. E1b1 now implements
-strict native/front-door executable-content manifest codecs and a direct-only two-pass stable-FD
-Linux collector. Its retained real OpenCode 1.17.5 Linux arm64 proof closes only the native role; the
-generic collector has front-door temporary-file coverage, but no retained or provenance-bound actual
-front-door observation exists. It proves no pathname, process, currentness, complete parent,
-authority, or production capability. E1b2 now implements four strict full-u64 `M → P → F → A` leaf
-codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only Linux observation.
-The collector returns only four leaf artifacts; the verifier consumes their raw views plus separately
-built E1a parent bytes. A non-skipping local-direct/hosted-CI-demoted test proves real namespace and
-bind-mount behavior. E1b2 remains historical-only and proves no currentness, process, authority,
-stateful acceptance, production wiring, or capability. E1b3's design is frozen but unimplemented:
-E1b3a owns pure codecs plus one deterministic dormant Node ESM bundle, and E1b3b owns direct-only
-capture plus the retained raw-seven-view `N/X/B/S/R/D/L` proof. Its positive inventory is closed to
-one prompt-binding route, four observer reads, and the legacy `/event` observer stream; session/TUI/server
-creation and every unlisted route remain deny-only. Final executable/build/OpenAPI/registry/measurement/parent
-digests stay in post-build sidecars, so the bundle contains no self-hash cycle. No E1b3 package,
-listener, capture, fixture, authority, or production import exists yet. E1b4 isolation and E1b5
-capability/full-parent closure remain planned. E1c then retains exact signed OpenCode `user_text` native-binding evidence through
-dependency-ordered listener/isolation/capability phases, with key rotation blocked while an E-owned
-phase is nonterminal and neither existing transport authority pointer changed. Its workspace/new-
-lineage, exhaustive legacy-signer quarantine, unsigned-snapshot/accepted-inert staging, and
-receipt-backed exact-reconciliation rules are frozen, but no stateful schema exists. A1.8a1-I
-later installs one accepted capability snapshot plus one credentialless authenticated callable-port
-ingress lease as an atomic matched pair. The port is usable only on its exact live authenticated
-runtime-owner channel; no URL, socket, bearer, provider credential, or readable secret is stored.
-Authority withdrawal changes only the exact durable pair; the A1.4 parent alone owns physical-port
-unregistration, so late predecessor cleanup cannot disable a successor generation.
-Neither E1c nor I adds a `Session` consumer, admitted command, attempt, dispatch, effect, native call,
-production operation, or capability claim. The implemented E0/E1a/E1b1/E1b2 boundary, frozen E1b3
-design, and planned E1b4–E1b5/E1c/I design are
-[in the technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
 best-effort autostart that daemon after identity load. For the ordinary CLI, authenticated health is
 the only successful production operation; its operation registry is empty, and health reports
@@ -165,13 +146,13 @@ launches, all three drivers, runtime-owner RPC, and the viewer make zero `/api/a
 no production A1 ingress actor, command adjudicator, server signer, or result finalizer, and no native
 effect, checkpoint, inference, or projection. A1.8a0's `pending_seal` row is unclaimable and has no
 ciphertext, output part/signature, seal/publish, broker call, effect/attempt, projection, native
-dispatch, or production wiring. E1b1's collector is also absent from every driver/runtime-owner/relay/viewer path. A1.8a1-E1c/I first supplies only the dormant matched native-authority
-foundation; A1.8a2 must add the admitted attempt/front-door dispatch/effect arm atomically, and A1.8b
-must seal and publish delivery. A1.7b1 plus A1.8a0 advertise nothing.
+dispatch, or production wiring. If optional OpenCode work resumes, it still needs a complete
+user-runnable admission, start-before-byte execution, exact read-back, durable host-output
+self-recognition, sealed publication, and viewer loop. A1.7b1 plus A1.8a0 advertise nothing.
 
 **Identity scope.** A compatibility `Session.id` is a synthetic `cse_*` broker channel address, and
 the A0 registrar's `rcb_*` is only a process-local lease. Neither is the stable logical-chat ID
-targeted by A1, and neither may stand in for an engine's semantic conversation ID. The dormant A1.2
+targeted by optional A1, and neither may stand in for an engine's semantic conversation ID. The dormant A1.2
 repository keys the canonical chat by `(collaborationServerId, logicalChatId)` and records its exact
 terminal selector generation, native binding, and `rcie_*` inward edge. Later slices add outward
 bindings. Machine-facing route, row, alias, and cache addresses add
@@ -254,8 +235,9 @@ Each current harness can coexist with a person using a native surface: the real 
 mode, the attached Claude pane in tmux mode, or a native OpenCode TUI sharing the server. That direct
 local input does not pass through `Session` before native execution today. Tmux and OpenCode can mark
 the resulting unmatched user record `local_prompt:true` after the fact; the MITM path does not add that
-marker, so the relay drops its ordinary user echo. The selected host runtime keeps that direct TUI path
-and makes remote-claw the one remote collaborator for structured Claude, Codex, and OpenCode adapters.
+marker, so the relay drops its ordinary user echo. The optional neutral-host design keeps that direct
+TUI path and makes remote-claw the one remote collaborator for structured Claude, Codex, and OpenCode
+adapters.
 Its server may multiplex many remote users behind that one adapter connection; the native harness
 remains the final arbiter. Tmux does not expose two native collaborators: the person and injector share
 one editor keystream and require an exclusive/quiescent input boundary to avoid merged drafts.
@@ -586,11 +568,11 @@ one.
 Native-TUI input is not downstream injection in the current harness contract. The native client
 accepts it directly; OpenCode/tmux may project it post-hoc and MITM omits its user text from the viewer.
 Consequently `Session` cannot establish the final native order across TUI and viewer writes. The
-selected design retains the TUI as one native participant and represents remote-claw as the other.
-The future control journal orders remote-claw's server-side collaborators, then records the native
+optional design retains the TUI as one native participant and represents remote-claw as the other.
+Its control journal would order remote-claw's server-side collaborators, then record the native
 harness's observed interleaving as the applied order.
 
-The selected neutral host contract does not let a driver decide whether remote work is admissible.
+The parked neutral host contract does not let a driver decide whether remote work is admissible.
 Every web, official-client, automation, or nested proposal first enters the same server-wide command
 order and receives one signed final result. Only a signed admission may create one adapter attempt;
 queued and rejected results create none. A new submission and a steer of a running turn remain
@@ -598,15 +580,18 @@ different commands even when the harness is busy. The person's direct TUI action
 decision path, and the native harness—not `Session`—decides the final local/remote order and what was
 actually applied.
 
-For OpenCode, the selected path does not promote this compatibility pump's `/compact`, interrupt, or
-permission behavior. Its first writable A2 vectors are exactly server-scoped `{new_chat}` and
-binding-scoped `{user_text}`. After common admission, the adapter must build the one exact native
-request, use only the current fenced front door, and match the native message and order through
-a complete, ordered history snapshot plus the matching live event only when that snapshot method
-requires one. A 204, an ACK, missing read-back, or a different request shape is not success. Compact,
-interrupt, steer, blank submit, permission, and every other unproved family is stored as rejected
-before native work. Stock `1.17.5` remains unsupported for writable A2 until the real-TUI front door,
-complete route manifest, raw-listener/tool fence, and observer linearization are proved.
+For OpenCode, the optional path does not promote this compatibility pump's `/compact`, interrupt, or
+permission behavior. Its only proposed writable vector is binding-scoped `{user_text}`. Onboarding must
+either prove one exact existing native session or durably write ahead, send once, and reconcile one
+local creation before binding. The implemented schema-v6 terminal root remains upstream authority.
+After signed admission, one command-keyed execution builds the exact native request. The provider
+request has its own write-ahead/start fence and is never resent after ambiguous delivery. Strict
+session/history observation proves the caller `msg_*`; assistant output is causal only when
+`assistant.parentID` names that exact message, including under a concurrent TUI turn. One transaction
+then records completion or quarantine together with the matching output intent. A 204, ACK, timing,
+text equality, missing read-back, or nearest-message inference is not success. Every unproved mutation
+is rejected before native work. These requirements are preserved in the
+[optional A1 OpenCode design](a1-opencode-vertical-slice.md); none blocks Claude 1.0.
 
 ---
 
@@ -649,7 +634,9 @@ the harness-facing protocol; they meet only at the `Session`.**
 
 ## 6. `--rc-driver` wiring
 
-The shipped value flag selects a launch path; default `mitm` preserves the original behavior.
+The implemented value flag selects a launch path; default `mitm` preserves the original behavior.
+Only `mitm` belongs to the supported Claude 1.0 surface. `tmux` and `opencode` remain explicit
+experimental/internal selections, and their presence below does not make them release alternatives.
 
 - **`args.ts`** contains `"rc-driver": "value"` in `RC_FLAGS`.
 - **`run.ts`** reads `--rc-driver`, then `RC_DRIVER`, then defaults to `"mitm"` and branches directly:
@@ -659,7 +646,7 @@ The shipped value flag selects a launch path; default `mitm` preserves the origi
   Only the non-MITM branches build the common `DriverContext`; none dispatches through
   `DriverFactory`.
 
-All three still need `--rc-app` for the broker. The current guard warns when RC flags appear without
+All three implemented paths still need `--rc-app` for the broker. The current guard warns when RC flags appear without
 it, and an unknown `--rc-driver=<x>` returns exit 2 with the valid names.
 
 ```
@@ -707,23 +694,24 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   capability, route/store, cursor/generation/manifest, retry/collision, and read-page contracts. The
   A1.8a0 result module freezes exact rejected action/chat payload bytes, stored semantic-result and
   delivery digests, stable result identity, and completion-observation selection. The same
-  authority-free module now also freezes the exact `accepted` projection/admitted chat-creation
-  payload bytes reserved for later A1.8a. Those codecs do not persist or authorize a result,
+  authority-free module now also freezes the exact `accepted` projection bytes considered by the
+  optional `user_text` design and admitted chat-creation payload bytes reserved for possible future
+  session creation. Those codecs do not persist or authorize a result,
   projection, attempt, effect, or dispatch.
 - `packages/cli/src/broker/a1-client.ts` and `apps/web/{lib/broker/a1-*,app/api/a1/**/route.ts}` — the
   dormant negotiation-first client and the separate selected SQLite/libSQL A1 provider. They are not
   invoked by any current driver, `HostRcRelay`, runtime-owner operation, or viewer path.
-- `packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence,native-binding-authority-workspace-evidence,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
+- `packages/cli/src/host/state/{ids,path,validation,records,runtime,digests,protected,dispatch,backend}.ts`
   — A1.0's exact-shape parsers, canonical ID and digest contracts, pure database-path resolver,
   record/runtime shapes, protected-operation interfaces, separated first-dispatch and evidence-only
-  reconciliation capabilities, and digest builders; plus A1.8a1-E0's six E-side canonical ID
-  contracts and four deterministic builders, E1a's four strict ref-free parent codecs/commitment
-  registry/raw digest helper, E1b1's strict executable-manifest codecs, and E1b2's strict workspace
-  leaf codecs/raw-five-view verifier. The direct-only collectors live in
-  `packages/cli/src/host/native/{linux-executable-collector,linux-workspace-collector}.ts`; E1b1's
-  retained real native OpenCode proof/probe/verifier live under `spikes/opencode-native/`, without raw
-  executable or chunk bytes. The E0/E1a/E1b1/E1b2 modules and tests contain no authority operation or
-  runtime wiring.
+  reconciliation capabilities, and digest builders.
+- Merged audit-only native-authority utilities remain exported from
+  `packages/cli/src/host/state/index.ts`:
+  `{native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence,native-binding-authority-workspace-evidence}.ts`
+  implement six canonical IDs/four derivations plus bounded parent, executable-manifest, and workspace
+  codecs. Direct-only Linux executable/workspace collectors and dormancy tests remain as regression
+  tools. They are never activation, admission, or dispatch authority and never a prerequisite for an
+  optional capability.
 - `packages/cli/src/host/state/{secure-filesystem,migrations,migration-v5,migration-v6,migration-v7,migration-v8,migration-v9,migration-v10,migration-v11,artifacts,repository,runtime-repository,registration-repository,native-root,terminal-root-repository,broker-route,broker-route-repository,broker-route-orchestrator,ingress,ingress-repository,ingress-actor,server-signing,server-signing-repository,command-adjudication,command-result-finalization,command-adjudication-repository,command-adjudication-validator,sqlite}.ts`,
   `packages/cli/src/host/native/evidence.ts`, and `packages/cli/src/host/runtime-owner/**` — A1.1–A1.8a0's
   Linux-only, descriptor-anchored SQLite kernel and protected-artifact operations. The supported Node
@@ -794,17 +782,6 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   production operation invokes adjudication, signing, or finalization. Its `pending_seal` intent has
   no claim/seal/publish surface, ciphertext/output signature, broker call, effect, or native
   attempt/dispatch.
-- No E1c/I migration, repository, signer boundary, validator, or operation exists yet. E1b1 closes
-  only executable-manifest vocabulary plus the native role's retained stable-content observation.
-  E1b2 closes the workspace leaf codecs, raw-byte DAG/parent verifier, synchronous direct-only
-  collector, and non-skipping dual-path least-privilege namespace/bind-mount proof, but remains historical-only and
-  non-authoritative. E1b3's pure-codec/deterministic-bundle and direct-capture/raw-seven-view design is
-  frozen in documentation, but no package, listener, capture, or retained fixture exists. E1b3–E1b5
-  actual front-door/listener, isolation, capability, and full-parent evidence remain unimplemented,
-  and
-  A1.8a1-I's atomic
-  snapshot/credentialless-callable-port pair repository remains planned after E1c. They may reuse the protected artifact/signature ledgers and callable-port registry,
-  but must remain outside every production run path until their own dormant proof gate passes.
 - `packages/cli/src/host/runtime-owner/{auth,protocol,server,client,service,daemon,bootstrap,key-custody,production}.ts`
   plus `packages/cli/src/runtime-owner-cli.ts` — the machine-scoped Linux owner. It mutually
   authenticates over an abstract Unix socket, caps the server at 64 live connections and each
@@ -920,7 +897,7 @@ auto-approve opt-out).
 
 A person can also use the harness's native TUI directly. That local path is outside the current
 `Session` relay seam: tmux/OpenCode surface unmatched prompts post-hoc, while MITM drops ordinary
-native user echoes. The selected runtime retains one logical remote-claw collaborator attachment per
+native user echoes. The optional neutral-host design retains one logical remote-claw collaborator attachment per
 structured session. Claude may realize that as a session-scoped physical connection. OpenCode instead
 needs one epoch-fenced adapter lease enforced at its private HTTP endpoint because its server-wide SSE
 plus independent HTTP requests expose no persistent writer connection identity. Replacing that lease
@@ -935,8 +912,8 @@ behaviorally indistinguishable from the pinned product's normal service. The cur
 only a Claude-shaped compatibility projection; it is not that common adjudicator and cannot authorize
 native work.
 Native TUI traffic is never translated into the Claude-shaped `Session` schema on its way to the
-native harness. Tmux cannot meet that structured drop-in contract and remains the explicit
-lower-fidelity fallback.
+native harness. Tmux cannot meet that structured drop-in contract and remains an explicit
+experimental, lower-fidelity compatibility path.
 
 A nested remote-claw server uses the same common decision path as any other collaborator. Before
 sending inward, it jointly finalizes the signed result and signed lineage for that command. It calls
@@ -946,7 +923,7 @@ Each edge carries commands inward and observations outward without converting on
 other, so recursion cannot feed an echo back as a command. Nesting adds server boundaries only;
 Claude, Codex, or OpenCode appears once, at the innermost end.
 
-A1.0 freezes the selected host → project → logical-chat identity and record contracts above this seam.
+A1.0 freezes the implemented host → project → logical-chat identity and record contracts above this seam.
 A1.1 supplies local persistence/migration machinery and verified artifacts. A1.2 persists the narrow
 server/project/mapping/chat/binding/intent/edge/coordinator graph, including each chat's exact mapping
 generation. A1.3's owner opens the shared schema and persists its independent service lease. A1.4 can
@@ -956,11 +933,9 @@ driver into that graph. A1.7a now uses A1.2 actor scopes for dormant route-local
 `awaiting_order`; A1.7b0 supplies the dormant server signer and current-server route-install
 compatibility; and A1.7b1 supplies rejected-only common command order through a signed-but-unaccepted
 preparation. A1.8a0 atomically closes only that rejected arm into a final result, acceptance, terminal
-overlay, and inert `pending_seal` intent. E1b1's implemented direct-only content collector does not
-unblock E1c. A1.8a1-E1c/I first owns the inert evidence and
-matched credentialless native-authority pair; A1.8a2 owns admitted attempt/dispatch/effect arming,
-while A1.8b owns sealing/publishing, one-time dispatch, and evidence-only recovery. Nested targets/edges remain
-rejected until N1. A1.3's schema and repository can persist runtime
+overlay, and inert `pending_seal` intent. If optional OpenCode work resumes, it still needs the complete
+user-runnable admission-through-viewer loop and a separately gated credentialed connector/isolation
+path before any advertisement. Nested targets/edges remain dormant optional scope. A1.3's schema and repository can persist runtime
 roots/incarnations, append-only owner
 assignments, positive containment, wrapped keys/signature state, already-project-scoped local
 transitions, and binding/attachment/gate foundations. A1.4 adds process leases, publications,

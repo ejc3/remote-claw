@@ -3,13 +3,11 @@
 Forward-looking notes for remote-claw, captured 2026-06-11. Three findings that bear on where the
 project goes next, and how they connect:
 
-> **Decision update (2026-07-26):** the roadmap question in this historical exploration is now answered
-> by [Client-driven Host Runtime](client-driven-host-runtime.md). Native Claude Code, Codex, and
-> OpenCode sessions keep their conversation/execution state; a small local coordinator owns proposal
-> order, forwarding decisions, correlation, and delivery only for its direct remote collaborators.
-> Direct TUI input stays on the native path, and the native harness owns the final local/remote
-> interleaving and execution.
-> Candidate language later in this document is retained as design history.
+> **Status update (2026-08-23):** this is historical exploration, not the active roadmap. The sole
+> product finish line is [Claude 1.0](release-finish-line.md). The
+> [Client-driven Host Runtime](client-driven-host-runtime.md) preserves an optional multi-engine
+> architecture, but it is parked and cannot add a Claude 1.0 prerequisite. Candidate language later
+> in this document is retained only as design history.
 
 1. **How the popular remote-Claude clients actually work** (Happy / Happier) and what they cost you in
    Claude Code **TUI fidelity**.
@@ -283,7 +281,7 @@ Current own-relay `--rc-app` is a distinct path: its local MITM supplies the RC 
 `--rc-inference=bedrock` synthesizes the first-party control plane while routing inference to Bedrock
 (`packages/cli/src/host/rc/launch.ts:176-207`). That mode works without Anthropic RC, including
 accountless operation, but the official Claude app cannot attach because no real Anthropic session
-exists. In the selected host-runtime design, official Claude participation therefore requires the
+exists. In the parked host-runtime design, official Claude participation would therefore require the
 separate outward Anthropic connector; the provider-isolated inner runtime can still use another
 inference backend.
 
@@ -336,6 +334,7 @@ The three findings converge on one decision:
    of the gap (no per-run cap, no rolling) but not the gap itself (it still accrues at-rest ciphertext
    until retention reclaims the channel).
 
-The original candidates above are retained as design history. The
-[client-driven host runtime](client-driven-host-runtime.md) is now the selected next architecture; its
-phased gates determine what ships.
+The original candidates above are retained as design history. They do not determine what ships. The
+active scope and executable stop condition are in the
+[Claude 1.0 finish line](release-finish-line.md); the
+[client-driven host runtime](client-driven-host-runtime.md) is an optional parked expansion.

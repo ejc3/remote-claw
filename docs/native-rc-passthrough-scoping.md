@@ -4,8 +4,13 @@
 `AnthropicRcClient` foundation. The transparent passthrough design is rejected. There is no
 `--rc-native-passthrough` flag or launch path.
 
-The selected implementation is [Client-driven Host Runtime](client-driven-host-runtime.md). Its Claude
-topology has two independent sides:
+> **Roadmap authority:** [Claude 1.0](release-finish-line.md) is the sole active release finish line.
+> The outward Anthropic connector and generalized client-driven host described below are parked optional
+> platform research. They are neither selected implementation work nor a Claude 1.0 release gate.
+
+If that optional work is resumed, the parked
+[client-driven host design](client-driven-host-runtime.md) would use a Claude topology with two
+independent sides:
 
 - the real inner Claude Code process sees only remote-claw's private synthetic RC/API façades and
   synthetic or no credentials;
@@ -53,7 +58,7 @@ remains the final arbiter.
 
 Three existing pieces have different purposes:
 
-| Piece | Current behavior | Role in selected design |
+| Piece | Current behavior | Possible role in the parked design |
 |---|---|---|
 | `--rc-app` / `runRcLaunch` | Intercepts `/v1/code/sessions/**` and serves a synthetic RC backend; default Anthropic inference tunnels other traffic onward, while Bedrock mode serves/synthesizes it locally | Reuse the synthetic RC half, then terminate the remaining inner API surface locally |
 | `--rc-trace` / `runRcTrace` | Transparently forwards real Anthropic traffic and records redacted diagnostics | Research and compatibility capture only; never the runtime topology |
@@ -67,12 +72,12 @@ Relevant implementation is in:
   `packages/cli/src/trace.test.ts`.
 
 The current `ClaudeOAuthFileCredentialSource` assumes a separate native Claude owns OAuth refresh and
-remote-claw only rereads a securely validated Linux file. That assumption does not hold when the inner
-Claude has no real credential. The selected runtime needs a connector-owned credential service, or an
-isolated official credential agent outside the inner runtime, for login, refresh, rotation, revocation,
-and OS-specific secure storage.
+remote-claw only rereads a securely validated Linux file. That assumption would not hold if an optional
+inner-Claude topology removed its real credential. Such a runtime would need a connector-owned
+credential service, or an isolated official credential agent outside the inner runtime, for login,
+refresh, rotation, revocation, and OS-specific secure storage.
 
-The current synthetic private-RC path also has narrower delivery semantics than the selected runtime:
+The current synthetic private-RC path also has narrower delivery semantics than the parked design:
 
 - `POST .../worker/events/delivery` only adds the named downstream event to the in-memory replay
   suppression set. It proves that the worker acknowledged RC delivery, not that Claude accepted the
@@ -87,8 +92,8 @@ The current synthetic private-RC path also has narrower delivery semantics than 
   history backfill. The current path therefore cannot reconstruct or prove the complete native
   local/remote order after restart.
 
-These distinctions are current code truth. The selected runtime must add correlation and native
-adjudication rather than rename any of those transport receipts as native acceptance.
+These distinctions are current code truth. Any resumed connector work would have to add correlation and
+native adjudication rather than rename any of those transport receipts as native acceptance.
 
 ## 3. Observed protocol facts
 
@@ -121,11 +126,13 @@ The evidence supports these constraints:
    deduplication, or busy-turn behavior across multiple writers.
 7. The manual captures do not prove the stable join among a submitted UUID, provider acknowledgement,
    private worker delivery/echo, transcript row, inner `/v1/messages` request, and resulting native
-   turn. That join is a release blocker, not an implementation detail to infer from matching text.
+   turn. That join would block a future writable outward-connector release; it is not a Claude 1.0
+   blocker or an implementation detail to infer from matching text.
 
-## 4. Selected outward-connector requirements
+## 4. Parked outward-connector requirements
 
-The real outward Claude connector is a remote-claw component, not a mode of inner Claude. It must:
+If this optional path is resumed, the real outward Claude connector would be a remote-claw component,
+not a mode of inner Claude, and would have to:
 
 - create or explicitly adopt the real outward `cse_*`;
 - request bridge credentials and own worker epoch renewal/rebridge;
@@ -198,7 +205,7 @@ native/provider reconciliation supplies positive evidence that resolves the resu
 5. Each provider copy includes only facts its protocol can represent. Returning native/provider echoes
    correlate to existing proposals or native observations and never become new executions.
 
-The target experience is Claude's normal keyboard-plus-Remote collaboration, with remote-claw
+The optional target experience is Claude's normal keyboard-plus-Remote collaboration, with remote-claw
 occupying the one remote role and multiplexing its server-side collaborators behind it. Draft editing,
 cursor movement, rendering, busy/steer behavior, permissions, questions, controls, and reconnect remain
 native. A second unclassified native writer cannot join until its semantics and source identity are
@@ -273,9 +280,9 @@ Tracing must retain the current fail-closed redaction and file-safety posture. E
 uses a session created specifically for the test, scans all retained artifacts for tokens, and commits
 only sanitized fixtures/results.
 
-## 6. Required proof sequence
+## 6. Proof sequence required only if this work resumes
 
-These are proof gates, not CLI phases:
+These would be proof gates for the optional outward connector, not CLI phases or Claude 1.0 gates:
 
 1. **Retained pinned evidence.** Record the exact Claude Code version and binary hash, protocol epoch,
    sanitized request/response/SSE fixtures, and the probe that produced them. The existing 2026-07-26
@@ -316,8 +323,9 @@ These are proof gates, not CLI phases:
     alive; that old in-flight work is terminal, quarantined, or contained before a replacement epoch
     writes; and that keep-alive versus terminate is an explicit runtime-owner decision.
 
-No real inner/provider-writable release occurs before gates 1–7. Passing the prompt matrix permits an
-explicitly experimental release, not a general-availability claim.
+If this work resumes, no real inner/provider-writable outward-connector release may occur before gates
+1–7. Passing the prompt matrix would permit an explicitly experimental connector release, not a
+general-availability claim.
 
 ## 7. Open questions
 
@@ -327,8 +335,8 @@ explicitly experimental release, not a general-availability claim.
    event? If none is faithfully visible in the official client, that binding cannot accept a hidden
    queue/reject policy.
 3. What is the stable correlation among a submitted UUID, POST result, worker delivery/echo, transcript
-   row, inner `/v1/messages` request, native turn, client history, and client SSE? This blocks writable
-   prompt release rather than being deferred follow-up.
+   row, inner `/v1/messages` request, native turn, client history, and client SSE? This would block any
+   future writable outward-connector release rather than being a deferred follow-up.
 4. What are the reliable reconnect cursor and bounded-history-overlap rules?
 5. How do worker JWT renewal, bridge replay, `worker_epoch`, archive, and successor-session lineage
    behave?
@@ -340,5 +348,6 @@ explicitly experimental release, not a general-availability claim.
    inward?
 10. What compatibility policy is acceptable for an undocumented, version-sensitive protocol?
 
-The actionable delivery order is in the
-[Client-driven Host Runtime delivery plan](client-driven-host-runtime.md#delivery-plan).
+The active delivery order is the [Claude 1.0 finish line](release-finish-line.md). This document retains
+the optional connector's proof inventory only; the generalized runtime remains parked in the
+[client-driven host design](client-driven-host-runtime.md).
