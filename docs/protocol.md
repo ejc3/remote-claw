@@ -105,9 +105,12 @@ role-correlated native/front-door executable-content manifest codecs and one dir
 stable-FD collector. Its retained real OpenCode 1.17.5 Linux arm64 proof closes only the native role;
 generic collection has front-door temporary-file coverage, but no retained or provenance-bound
 actual front-door observation exists. E1b1 proves no pathname, process, front door, currentness, complete
-parent, authority, or wire operation. E1b2's exact four-leaf digest DAG, synchronous independent
-no-follow root/target observation, and historical-only proof gate are design-frozen, but its codecs
-and collector remain unimplemented. E1b3 front-door/listener, E1b4 isolation, and E1b5
+parent, authority, or wire operation. E1b2 now implements the exact full-u64 `M → P → F → A` leaf
+codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only independent no-follow
+root/target collection. The collector returns four leaves; the verifier consumes their raw views plus
+separately built E1a parent bytes. Its non-skipping direct unprivileged `unshare -Ur -m` proof exercises a real
+mount namespace and bind-mount policy. E1b2 remains historical-only and proves no currentness,
+process, authority, stateful acceptance, production wiring, capability, or wire operation. E1b3 front-door/listener, E1b4 isolation, and E1b5
 capability/full-parent closure remain planned. E1c then owns stateful
 accepted evidence and must never change either native-transport authority pointer. A1.8a1-I later
 installs one accepted capability snapshot plus one credentialless authenticated callable-port ingress
@@ -767,21 +770,22 @@ native-binding authority foundation; A1.8a2 still owns the admitted attempt/fron
 arm, and A1.8b owns sealing and publication. A1.7b1 plus A1.8a0
 therefore still advertise no capability.
 
-A1.8a1-E0/E1a/E1b1 live in
-`packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence}.ts`,
+A1.8a1-E0/E1a/E1b1/E1b2 live in
+`packages/cli/src/host/state/{ids,native-binding-authority,native-binding-authority-evidence,native-binding-authority-executable-evidence,native-binding-authority-workspace-evidence}.ts`,
 their tests, the host-state barrel, and direct-only
-`packages/cli/src/host/native/linux-executable-collector.ts`. E0 exports the six E-side ID contracts
+`packages/cli/src/host/native/{linux-executable-collector,linux-workspace-collector}.ts`. E0 exports the six E-side ID contracts
 and four deterministic builders. E1a exports four strict parent parsers/writers/decoders, a ref-free
 commitment registry, and a bounded raw digest helper. E1b1 exports both executable-manifest codecs
-and directly collects stable content only when called; no driver, runtime-owner operation, relay,
-viewer, or broker path calls it. The retained native proof/probe/verifier live under
+and directly collects stable content only when called. E1b2 exports the four workspace leaf codecs and
+raw-five-view verifier, while its Linux collector runs only when called; no driver, runtime-owner
+operation, relay, viewer, or broker path calls either collector. The retained native proof/probe/verifier live under
 `spikes/opencode-native/` and retain no raw executable or chunk bytes.
 
 ---
 
-## 3f. A1.8a1 native-binding authority (E0/E1a/E1b1 implemented; E1b2 design frozen; E1b2–E1b5/E1c/I implementation planned)
+## 3f. A1.8a1 native-binding authority (E0/E1a/E1b1/E1b2 implemented; E1b3–E1b5/E1c/I implementation planned)
 
-A1.8a1-E0, E1a, and E1b1 introduce no protocol packet or live operation. E0 freezes the six E-side ID
+A1.8a1-E0, E1a, E1b1, and E1b2 introduce no protocol packet or live operation. E0 freezes the six E-side ID
 namespaces/parsers and four deterministic derivations. E1a freezes the four canonical parent DTOs and
 their strict canonical bytes. Each parent commitment is exactly
 `role + artifactSchemaId + decoded artifactDigest + byteLength` in its fixed role order and excludes
@@ -796,11 +800,14 @@ boundaries are:
    generic collector is tested for the front-door role, but no actual front-door observation or
    provenance is retained; no pathname, process, front door, currentness, complete parent, or
    authority is proved.
-2. **A1.8a1-E1b2 (design frozen; implementation planned):** close strict runtime-scoped
-   mount-namespace → canonical-directory → filesystem-identity → allowed-root-ancestry bytes and the
-   exact workspace parent. The Linux observation synchronously resolves allowed root and target as
-   independent no-follow chains from one root, rejects a mount crossing below the allowed root, and
-   returns only historical evidence. Exact DTOs/formulas and the executable gate are in the
+2. **A1.8a1-E1b2 (implemented; proof gate passed):** strict runtime-scoped mount-namespace →
+   canonical-directory → filesystem-identity → allowed-root-ancestry codecs close the exact digest
+   DAG. The raw-byte verifier snapshots, reparses, canonically re-encodes, and hashes four leaf views
+   plus separately supplied E1a workspace-parent bytes. The direct-only Linux collector synchronously
+   resolves allowed root and target as independent no-follow chains from one root, rejects a mount
+   crossing below the allowed root, and returns only the four historical leaf artifacts. A direct unprivileged
+   `unshare -Ur -m` test exercises real namespace and bind-mount behavior without silently skipping.
+   Exact DTOs/formulas and the executable gate are in the
    [technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 3. **A1.8a1-E1b3:** collect the actual front-door executable and close build, generated-surface,
    route-registry, measured-dispatch, and listener-parent evidence.
@@ -1306,9 +1313,10 @@ guarantees.
    launches, drivers, runtime-owner RPC, `HostRcRelay`, and the viewer do not invoke them. A dormant
    `pending_seal` intent is neither a sealed/published result nor delivery, authorization, effect, or
    viewer projection. A1.8a1-E0 supplies identity vocabulary, E1a supplies ref-free parent
-   envelopes, and E1b1 supplies direct-only executable-content manifests/collector without path,
-   process, front-door, currentness, complete-parent, or authority proof. Planned E1b2–E1b5 closure,
-   E1c stateful evidence, I install, A1.8a2 admitted
+   envelopes, E1b1 supplies direct-only executable-content manifests/collector without path,
+   process, front-door, currentness, complete-parent, or authority proof, and E1b2 supplies
+   historical-only workspace codecs/verifier/collector without currentness, process, authority, or
+   production proof. Planned E1b3–E1b5 closure, E1c stateful evidence, I install, A1.8a2 admitted
    arming, A1.8b sealing/publishing, and later milestones must
    land before A1 can replace the A0 relay described above.
 

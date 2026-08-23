@@ -7,6 +7,7 @@ export * from "./ingress.js";
 export * from "./native-binding-authority.js";
 export * from "./native-binding-authority-evidence.js";
 export * from "./native-binding-authority-executable-evidence.js";
+export * from "./native-binding-authority-workspace-evidence.js";
 export * from "./native-root.js";
 export * from "./path.js";
 export * from "./protected.js";
