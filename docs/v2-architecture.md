@@ -3636,6 +3636,17 @@ the **KIWI**/**PLUM** bidirectional TUI↔client tests).
 > `phase0/` (the capture tooling + `mitm/capture-proxy.py`) to re-verify, and have the wrapper **fail
 > loudly** on an unrecognized RC-API shape rather than guessing (§12).
 
+The Phase-0 endpoint map remains historical evidence pinned to 2.1.168. Separately, the Claude 1.0
+native-output identity boundary is now pinned to Linux arm64 Claude Code 2.1.237 by the
+[`spikes/claude-native-output` package](https://github.com/ejc3/remote-claw/tree/main/spikes/claude-native-output):
+all eight observed worker-event types had unique UUIDv4 `payload.uuid` coordinates, and one deliberately
+withheld HTTP-200 response was followed by an exact same-session retry. Sanitized per-attempt witnesses
+match the request length/hash, ordered types, UUID aliases, payload hashes, and worker-epoch alias. The
+four retried event types are incidental to that one request-level observation. This narrower proof does
+not establish deterministic/per-type retry, revalidate every endpoint-map detail, or make a
+cross-version, cross-platform, question/permission-family, native-process-identity, or
+server-application claim.
+
 ## 18. Appendix — Happy's Claude/Codex relay (not official Codex Remote)
 
 **Happy** (`happy.engineering`, open-source `slopus/happy`) is the closest existing system to

@@ -1228,20 +1228,32 @@ guarantees.
 
 ### Capture-grounded protocol surfaces (observed via `--rc-trace`)
 
-These worker↔client shapes were captured from a real `claude --remote-control` (2.1.x) through the
-tracing MITM (`--rc-trace`, #46). They are useful current observations, but the repository does not yet
-retain sanitized exact-version traces with binary/schema/probe hashes. They are therefore not a
-compatibility release proof; every target family remains gated until that fixture exists.
+The original worker↔client shapes were captured from a real `claude --remote-control` 2.1.x through
+the tracing MITM (`--rc-trace`, #46). Claude 1.0 now also retains a sanitized exact-version
+native-output proof in the
+[`spikes/claude-native-output` package](https://github.com/ejc3/remote-claw/tree/main/spikes/claude-native-output):
 
-Claude 1.0 also needs a stable retry coordinate for every admitted worker event. Current
-`Session.pushUpstream` uses `payload.uuid` when present but invents a process-local `e_*` otherwise;
-that fallback cannot distinguish an HTTP retry from two legitimate identical events. The pinned
-compatibility fixture must prove the identity field for every admitted event type, and the stable path
-must fail its probe rather than acknowledge an identity-less type. Body equality alone is not a dedup
-identity. The stable fail-stop contract may acknowledge a validated, in-memory-deduplicated observation
-before broker publication: output is not a native mutation, and bridge failure ends the remote session
-with an explicit possibly-incomplete-tail disclosure. Complete acknowledged-output recovery across
-wrapper death is not a 1.0 promise.
+- Linux arm64 Claude Code 2.1.237 and its package/binary bytes are pinned by hash;
+- 30 first-arrival events across the eight observed types (`assistant`, `control_cancel_request`,
+  `control_request`, `control_response`, `rate_limit_event`, `result`, `system`, and `user`) carried 30
+  distinct RFC 4122 UUIDv4 `payload.uuid` values; and
+- after the probe fully buffered an upstream HTTP 200 for one four-event
+  `system`/`assistant`/`assistant`/`result` batch and reset the matching local response before emitting
+  headers or body bytes, Claude retried the same request in the same trace-wrapper run and exact RC
+  session path. The retained witnesses independently match request length/SHA-256, ordered types,
+  aliased UUID coordinates, payload hashes, and a present worker-epoch alias.
+
+The proof is intentionally narrow: it does not claim cross-version compatibility, native application,
+Claude process identity, a specific question/permission subtype, or Anthropic-side application/dedup.
+`Session.pushUpstream` still uses `payload.uuid` when present but invents a
+process-local `e_*` otherwise; that fallback must be removed from the stable path because it cannot
+distinguish an HTTP retry from two legitimate identical events. For Claude 1.0, the stable path must
+fail closed on an identity-less admitted event, reserve UUID plus exact payload bytes before appending,
+return the original event identity/sequence on exact replay, and reject changed bytes as a collision.
+Body equality alone is not the identity. The fail-stop contract may acknowledge a validated,
+in-memory-deduplicated observation before broker publication: output is not a native mutation, and
+bridge failure ends the remote session with an explicit possibly-incomplete-tail disclosure. Complete
+acknowledged-output recovery across wrapper death is not a 1.0 promise.
 
 - **`control_cancel_request`** (worker→relay, `POST …/worker/events`) — payload
   `{type:"control_cancel_request", request_id, session_id, uuid}`. The worker cancels a pending gate

@@ -25,7 +25,7 @@ repository's TypeScript toolchain, and passes one deployed real-topology proof.
 | Browser publish | A failed POST can mean “stored, response lost,” but the current Retry mints a new source ID and can create a second command. |
 | Host intake | One live relay deduplicates broker replay by `msgId` in its process-long `#seen` set. A new launch gets a random new `cse_*`; it does not resume the old relay. |
 | Native delivery | Worker SSE reconnect creates a fresh `sent` set. If Claude received a mutation but its delivery acknowledgement was lost, reconnect can emit it again. |
-| Native output | `/worker/events` is acknowledged after only an in-memory append, always reports `duplicate:false`, and has no proved retry identity. The two relay pumps can allocate `N` and `N+1` concurrently, allowing `N+1` to persist while `N` fails. |
+| Native output | The retained Linux arm64 Claude 2.1.237 proof establishes `payload.uuid` coverage and one observed batch-level byte-identical retry, but `/worker/events` still always appends and reports `duplicate:false`. The two relay pumps can allocate `N` and `N+1` concurrently, allowing `N+1` to persist while `N` fails. |
 | Relay failure | A fatal publisher currently stops only the bridge; the MITM and Claude can continue while output is no longer relayed. |
 | Distribution | `@remote-claw/cli` is private `0.0.0`, exports TypeScript source, and has no `bin` or build/package script. |
 | End-to-end proof | Real-browser tests use scripted sessions; RC-spine uses a fake worker; the real-Claude proof uses the Viewer library. No installed-artifact smoke covers a real browser, real Claude PTY, and deployed broker together. |
@@ -70,11 +70,10 @@ durable host coordinator; they are not silently added to this release.
 
 ## Supported mutation boundary
 
-The stable browser emits exactly two mutation families:
-
-1. non-empty, non-slash-prefixed text; and
-2. a permission or question answer bound to one exact currently open native `request_id` and an
-   authenticated expiry.
+The stable browser emits one mutation family: non-empty, non-slash-prefixed text. Permission and
+question answers are disabled for Claude 1.0 because the current retained native-output proof
+establishes control event types but deliberately retains no question/tool subtype. A later release may
+enable an answer family only after a supported compatibility proof advertises that exact family.
 
 Attachments, slash-prefixed text, interrupt, model changes, permission-mode changes, and end-session
 are disabled in the stable UI. Compatibility code may remain internal, but it is not a shipped stable
@@ -98,15 +97,13 @@ dispatch CAS:
    the event before its first worker SSE write and never emits that event on a later worker stream,
    even if the delivery acknowledgement was lost. The non-mutating initialize handshake may retain its
    separately proved reconnect behavior.
-5. A permission/question answer is consumed only while its exact request remains open and unexpired.
-   First valid answer wins; duplicate, unknown, stale, expired, or malformed answers cause no native
-   event. `allow` remains fail-closed: only the exact value `allow` grants.
+5. Permission/question answers are absent or disabled in the Claude 1.0 stable surface. Compatibility
+   code may remain internal but cannot emit a stable native mutation.
 6. The existing `accepted` compatibility frame means only **Received by host**. The browser may show
    local **Sending** followed by **Received by host**, but never “delivered,” “applied,” or “executed.” A
    worker receipt is diagnostic only. On session loss, the browser says **Delivery unknown**.
-7. A replayable `permission_resolved` frame means only **Response queued by host** because it precedes
-   the worker side effect. The UI must not optimistically render it as native “Allowed” or “Denied.” An
-   ambiguous answer publish locks the card as unknown rather than inviting a second answer.
+7. Existing `permission_resolved` compatibility frames are not presented as a stable native answer or
+   as native “Allowed” or “Denied.”
 
 For one source identity, remote-claw therefore attempts at most one mutating RC emission. It does not
 claim exactly-once native execution. Durable per-command status rows and broker-before-dispatch
@@ -115,9 +112,21 @@ reintroduced.
 
 ## Native output contract
 
-1. Before implementation, a retained exact-version lost-response probe must establish the stable
-   identity/retry coordinate for every admitted `/worker/events` type. Current captures show a nonempty
-   `payload.uuid` on every observed real event, but do not prove that Claude preserves it on HTTP retry.
+1. The retained Linux arm64 Claude 2.1.237 proof establishes the observed compatibility boundary. In
+   one current-version coverage run, all 30 first-arrival events across `assistant`,
+   `control_cancel_request`, `control_request`, `control_response`, `rate_limit_event`, `result`,
+   `system`, and `user` carried distinct RFC 4122 UUIDv4 `payload.uuid` values. In a separate
+   lost-response run, the probe fully buffered an upstream HTTP 200 for a four-event
+   `system`/`assistant`/`assistant`/`result` batch, reset the matching local response with no headers or
+   writable bytes started, and observed an exact retry in the same trace-wrapper run and RC session
+   path. The retained witnesses independently match request length/SHA-256, ordered types, aliased UUID
+   coordinates, payload hashes, and a present worker-epoch alias. The sanitized artifacts, exact probe,
+   pinned runtime-source/binary/package hashes, and offline verifier live in the
+   [`spikes/claude-native-output` package](https://github.com/ejc3/remote-claw/tree/main/spikes/claude-native-output).
+   Any supported Claude-version or platform change must rerun this gate. This is one request-level
+   observation; the four included event types are incidental, and the proof does not establish
+   deterministic or per-type retry, Claude process identity, a specific question/permission subtype,
+   or server-side application/dedup.
 2. Within one live incarnation, exact identity plus exact payload bytes returns the original event ID
    and sequence on retry. Changed bytes under one identity are rejected as a collision. An event without
    the proved coordinate fails the compatibility probe rather than receiving a synthetic identity.
@@ -135,9 +144,9 @@ reintroduced.
   plaintext; no content keys, pass/master secret, or provider credentials; and the broker cannot
   decrypt protected content. The broker necessarily receives its bearer admission capability, so a raw
   request capture is not claimed to contain no secret at all.
-- The CLI is compiled and installable, secrets remain off argv and logs, and the release pins one
-  proved Claude version or narrow version family behind a fail-closed protocol probe. Unsupported
-  behavior requires an explicit experimental opt-in.
+- The CLI is compiled and installable, secrets remain off argv and logs, and the release enforces one
+  proved Claude version/platform tuple behind a fail-closed protocol probe. Unsupported behavior
+  requires an explicit experimental opt-in.
 - Production deployment prerequisites and broker integration tests fail rather than silently skip in
   the release workflow.
 
@@ -154,7 +163,7 @@ worker. Prove:
 - broker stream reconnect handles one source `msgId` once;
 - worker SSE disconnect after the first user/control write but before its acknowledgement never emits
   that mutation again;
-- duplicate, unknown, stale, expired, and competing permission answers cause at most one native event;
+- permission/question answer controls are absent or disabled;
 - exact native-event retry returns one event/projection and a UUID collision fails closed;
 - a stalled or failed projection `N` prevents `N+1` from reaching the broker across both pumps;
 - fatal publication closes the remote session, stops further intake/emission, and leaves the local TUI
@@ -167,22 +176,29 @@ worker. Prove:
 Use the compiled installed CLI, a pinned/probed real Claude binary under a PTY, the actual browser UI,
 and a deployed SQLite/libSQL production broker. Cover onboarding, discovery, a text turn, streamed
 output, browser/broker reconnect, truthful local-input and incomplete-tail disclosure, and broker
-storage/log inspection for protected-content absence. Exercise a permission or question answer only
-when the pinned probe advertises that request family; otherwise prove the control is disabled.
+storage/log inspection for protected-content absence, and prove permission/question answer controls
+are disabled.
 
 ## Implementation order
 
-These are internal merge boundaries, not separate product tranches:
+These are internal merge boundaries, not separate product tranches. Each implementation boundary must
+close one runnable causal path; there is no additional design-only “freeze” change:
 
-1. Retain the current-version lost-response UUID proof, freeze the stable Claude/broker/deployment
-   profile, and freeze the package/runtime surface.
-2. Build the installable CLI shell, expose only the stable MITM path, remove dormant-runtime
-   initialization from it, disable unsupported UI controls, and make SQLite exact-retry versus
-   changed-byte collision behavior explicit.
-3. Remove ambiguous automatic Retry, make status wording truthful, add expiry to exact permission
-   answers, add the session-wide no-redelivery fence, serialize projection allocation/publication, dedup
-   native retries, and make fatal bridge failure end the remote session.
-4. Pass both release-suite legs, the repository's full checks, independent review, and CI.
+1. Retain and gate the Linux arm64 Claude 2.1.237 lost-HTTP-200 UUID proof. This evidence boundary is
+   complete; further native retry research is out of scope unless implementation finds a concrete
+   contradiction.
+2. Build one host/native fail-stop vertical: the stable MITM entrypoint skips dormant A1 runtime-owner
+   initialization and enforces the supported Claude tuple; strict `/worker/events` intake atomically
+   reserves UUID plus exact bytes; exact retry reuses its result and collision fails closed; a
+   session-wide fence prevents mutating SSE redelivery; one head-of-line queue owns projection
+   sequencing/publication across both pumps; and any fatal publisher failure closes that `cse_*` before
+   later intake or publication. One deterministic fake-worker matrix proves the whole path, including a
+   fresh successor receiving no old mutation.
+3. Close the browser/broker stable-surface vertical: SQLite exact replay versus collision, no automatic
+   new-ID retry after ambiguous publish, disabled permission/question answers, truthful status/tail
+   wording, and absent or disabled unsupported controls.
+4. Build and install the stable CLI without repository tooling, then pass both release-suite legs, the
+   repository's full checks, independent review, and CI.
 
 Then release Claude 1.0 and stop. Any multi-engine platform work requires a new explicit product
 decision; it is not an automatic “next tranche.”
