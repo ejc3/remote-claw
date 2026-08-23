@@ -1,0 +1,678 @@
+{
+  "proofSchemaId": "remote-claw/retained-claude-native-output-proof/v2",
+  "capturedAt": "2026-08-23T17:27:54.225Z",
+  "proofScope": "Claude native worker-event UUID presence, uniqueness, and exact request-body retry after a lost accepted response",
+  "scopeLimits": {
+    "claudeProcessIdentityObserved": false,
+    "crossVersionClaim": false,
+    "nativeApplicationClaim": false,
+    "scenarioBound": true,
+    "serverDedupClaim": false,
+    "singleTraceWrapperRun": true
+  },
+  "probe": {
+    "file": "probe.mjs",
+    "nodeVersion": "v22.23.2",
+    "sha256": "a0c9fa97ea7f70a0dbfd2aaf18c1f25a40992380c603840ede94d24c9c2d9375",
+    "sourceCommit": "32256f4413ce35cb3a06c0db4dba1f41507dfecd"
+  },
+  "remoteClaw": {
+    "claudeCommandOverrideAbsent": true,
+    "runtimeSourceSha256": {
+      "packages/cli/src/host/rc/mitm.ts": "ed86b0a4538d54ade11202018b7d54314da3f03e964222dc249541aadcb23db0",
+      "packages/cli/src/host/rc/trace-run.ts": "13dac7375c67933ed19b2086f656d6e638e358b66e2e3f2586fc8d282b2757eb",
+      "packages/cli/src/run.ts": "7254c8d1774d782c76133fbbc509b6943f13b123066a328ce99f342974769926"
+    }
+  },
+  "claude": {
+    "architecture": "arm64",
+    "binaryBytes": 331864296,
+    "executableSha256": "a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177",
+    "launcherPath": "<claude-launcher>",
+    "packageManifestPath": "<claude-package-manifest>",
+    "packageManifestSha256": "8aa26c770a5bd5cf9ba8d0a815e291d9b12c278ad3a60ab96f7d71b5bd33508f",
+    "packageVersion": "2.1.237",
+    "platform": "linux",
+    "resolvedBinaryPath": "<claude-binary>",
+    "version": "2.1.237 (Claude Code)"
+  },
+  "protocol": {
+    "anthropicVersions": [
+      "2023-06-01"
+    ],
+    "endpoint": "/v1/code/sessions/{id}/worker/events",
+    "requestBodyCapBytes": 1048576
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "bodyBytes": 326,
+      "bodySha256": "9c6bb7935ed012c868e56e5b241a919ad8f0f61c772aa72089c4a3181b0a070e",
+      "downstreamHeadersSentBeforeReset": null,
+      "downstreamRequestMatched": null,
+      "downstreamWritableBytesBeforeReset": null,
+      "events": [
+        {
+          "coordinate": "uuid-1",
+          "payloadBytes": 284,
+          "payloadSha256": "2da08a133517d9d093693b8679b85087182842658129789c08e093c820a302ca",
+          "topLevelKeys": [
+            "rate_limit_info",
+            "session_id",
+            "type",
+            "uuid"
+          ],
+          "type": "rate_limit_event",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "forwarded",
+      "session": "session-1",
+      "upstreamResponseBytes": 102,
+      "upstreamResponseSha256": "11a59a8ee2de82b94a78958fdd27b603b6525734823f90f92df3c04f649fa1b9",
+      "upstreamStatus": 200,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    },
+    {
+      "attempt": 2,
+      "bodyBytes": 3218,
+      "bodySha256": "980686e684d74af5998be8f4295726a78be1a2c2a1538f350377278c61b9b74a",
+      "downstreamHeadersSentBeforeReset": null,
+      "downstreamRequestMatched": null,
+      "downstreamWritableBytesBeforeReset": null,
+      "events": [
+        {
+          "coordinate": "uuid-2",
+          "payloadBytes": 155,
+          "payloadSha256": "c33f12f0514c081a104ca25032b9e2ba16b4f340050da4d1d2c311b86ea996f9",
+          "topLevelKeys": [
+            "session_id",
+            "subtype",
+            "tasks",
+            "type",
+            "uuid"
+          ],
+          "type": "system",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-3",
+          "payloadBytes": 3008,
+          "payloadSha256": "e660eb227d36e35da2d69a6086110ba2d76e3faf210a469eb08578642a2e3fad",
+          "topLevelKeys": [
+            "agents",
+            "analytics_disabled",
+            "apiKeySource",
+            "claude_code_version",
+            "cwd",
+            "effort",
+            "fast_mode_state",
+            "mcp_servers",
+            "model",
+            "output_style",
+            "permissionMode",
+            "plugins",
+            "product_feedback_disabled",
+            "session_id",
+            "skills",
+            "slash_commands",
+            "subtype",
+            "terminal_slash_commands",
+            "tools",
+            "type",
+            "uuid"
+          ],
+          "type": "system",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "forwarded",
+      "session": "session-1",
+      "upstreamResponseBytes": 191,
+      "upstreamResponseSha256": "c95ad125f094748619596c14fcd12c8e9b3523091e71754c35388b80767a8eb8",
+      "upstreamStatus": 200,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    },
+    {
+      "attempt": 3,
+      "bodyBytes": 6071,
+      "bodySha256": "a6f7cfe070adabd9efa4e6967baa62b7e2f07819f5de299b14209510c0eae640",
+      "downstreamHeadersSentBeforeReset": null,
+      "downstreamRequestMatched": null,
+      "downstreamWritableBytesBeforeReset": null,
+      "events": [
+        {
+          "coordinate": "uuid-4",
+          "payloadBytes": 3008,
+          "payloadSha256": "c6b51482c020a2016765caed451b37f2529413f79fb0e608d3a757e1c2ac08c8",
+          "topLevelKeys": [
+            "agents",
+            "analytics_disabled",
+            "apiKeySource",
+            "claude_code_version",
+            "cwd",
+            "effort",
+            "fast_mode_state",
+            "mcp_servers",
+            "model",
+            "output_style",
+            "permissionMode",
+            "plugins",
+            "product_feedback_disabled",
+            "session_id",
+            "skills",
+            "slash_commands",
+            "subtype",
+            "terminal_slash_commands",
+            "tools",
+            "type",
+            "uuid"
+          ],
+          "type": "system",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-5",
+          "payloadBytes": 3008,
+          "payloadSha256": "f63896f11a4e5014e18d64cd2b2c63653549d235d39b8dc82e14004d7211b981",
+          "topLevelKeys": [
+            "agents",
+            "analytics_disabled",
+            "apiKeySource",
+            "claude_code_version",
+            "cwd",
+            "effort",
+            "fast_mode_state",
+            "mcp_servers",
+            "model",
+            "output_style",
+            "permissionMode",
+            "plugins",
+            "product_feedback_disabled",
+            "session_id",
+            "skills",
+            "slash_commands",
+            "subtype",
+            "terminal_slash_commands",
+            "tools",
+            "type",
+            "uuid"
+          ],
+          "type": "system",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "forwarded",
+      "session": "session-1",
+      "upstreamResponseBytes": 191,
+      "upstreamResponseSha256": "22a1064ddba98cae690e7d1bb39722443df4c5c4f570849bdc67faaf7cf862ad",
+      "upstreamStatus": 200,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    },
+    {
+      "attempt": 4,
+      "bodyBytes": 326,
+      "bodySha256": "8928c553f548ab4a8ac899ead2cca341b1114e5031072872286fc0a4c05e9790",
+      "downstreamHeadersSentBeforeReset": null,
+      "downstreamRequestMatched": null,
+      "downstreamWritableBytesBeforeReset": null,
+      "events": [
+        {
+          "coordinate": "uuid-6",
+          "payloadBytes": 284,
+          "payloadSha256": "f8e3f9b57d50b1a411b346368d9e9b359d74d8cfffe9552db78202775e2b39e3",
+          "topLevelKeys": [
+            "message",
+            "origin",
+            "parent_tool_use_id",
+            "session_id",
+            "timestamp",
+            "type",
+            "uuid"
+          ],
+          "type": "user",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "forwarded",
+      "session": "session-1",
+      "upstreamResponseBytes": 102,
+      "upstreamResponseSha256": "9a53a18968feb87e629ae0cc4aad11c4fe4971fcdedb2e825672e4f486a5948c",
+      "upstreamStatus": 200,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    },
+    {
+      "attempt": 5,
+      "bodyBytes": 244,
+      "bodySha256": "e33caacb5cd5a4dd5ff24a8ce4097e615bcade7f3a36fdc11bdaab2af55f3ad0",
+      "downstreamHeadersSentBeforeReset": null,
+      "downstreamRequestMatched": null,
+      "downstreamWritableBytesBeforeReset": null,
+      "events": [
+        {
+          "coordinate": "uuid-7",
+          "payloadBytes": 185,
+          "payloadSha256": "1009526dfc6b34bf48bde9a0b153d23ef282977f86449027c8a8660d657abcb2",
+          "topLevelKeys": [
+            "estimated_tokens",
+            "estimated_tokens_delta",
+            "session_id",
+            "subtype",
+            "type",
+            "uuid"
+          ],
+          "type": "system",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "forwarded",
+      "session": "session-1",
+      "upstreamResponseBytes": 102,
+      "upstreamResponseSha256": "691323053c64ec86f940f975e773673fcdb795401d57506f2157aeb0edf72737",
+      "upstreamStatus": 200,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    },
+    {
+      "attempt": 6,
+      "bodyBytes": 2976,
+      "bodySha256": "a7bdd3859b69683419696bf010767f47cd5184685a6431dfc51b186d64945dc9",
+      "downstreamHeadersSentBeforeReset": false,
+      "downstreamRequestMatched": true,
+      "downstreamWritableBytesBeforeReset": 0,
+      "events": [
+        {
+          "coordinate": "uuid-8",
+          "payloadBytes": 186,
+          "payloadSha256": "6e7813b3b8cef05aa497242f01db8275697ab4b6ef991c1ef9e59fcca2966e74",
+          "topLevelKeys": [
+            "estimated_tokens",
+            "estimated_tokens_delta",
+            "session_id",
+            "subtype",
+            "type",
+            "uuid"
+          ],
+          "type": "system",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-9",
+          "payloadBytes": 1310,
+          "payloadSha256": "ec7cafebb1e4adbfb2efd50f0082fe0fba50597a6194747103f2eb7313f46b86",
+          "topLevelKeys": [
+            "message",
+            "parent_tool_use_id",
+            "request_id",
+            "session_id",
+            "timestamp",
+            "type",
+            "uuid"
+          ],
+          "type": "assistant",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-10",
+          "payloadBytes": 721,
+          "payloadSha256": "21a3312b0948e894b15d5661e9b4fdea37c04abdcdacf429448dc832bb43b553",
+          "topLevelKeys": [
+            "message",
+            "parent_tool_use_id",
+            "request_id",
+            "session_id",
+            "timestamp",
+            "type",
+            "uuid"
+          ],
+          "type": "assistant",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-11",
+          "payloadBytes": 661,
+          "payloadSha256": "07f2079ee1be4719805b17b4226b9a4935b8d958d3b76ef421bb65bf02f26432",
+          "topLevelKeys": [
+            "duration_api_ms",
+            "duration_ms",
+            "is_error",
+            "modelUsage",
+            "num_turns",
+            "permission_denials",
+            "result",
+            "session_id",
+            "stop_reason",
+            "subtype",
+            "total_cost_usd",
+            "type",
+            "usage",
+            "uuid"
+          ],
+          "type": "result",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "reset-before-headers",
+      "session": "session-1",
+      "upstreamResponseBytes": 369,
+      "upstreamResponseSha256": "31782307cea667e957b1eafe648821b90445418908627b56102e42b8214cd78b",
+      "upstreamStatus": 200,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    },
+    {
+      "attempt": 7,
+      "bodyBytes": 2976,
+      "bodySha256": "a7bdd3859b69683419696bf010767f47cd5184685a6431dfc51b186d64945dc9",
+      "downstreamHeadersSentBeforeReset": null,
+      "downstreamRequestMatched": null,
+      "downstreamWritableBytesBeforeReset": null,
+      "events": [
+        {
+          "coordinate": "uuid-8",
+          "payloadBytes": 186,
+          "payloadSha256": "6e7813b3b8cef05aa497242f01db8275697ab4b6ef991c1ef9e59fcca2966e74",
+          "topLevelKeys": [
+            "estimated_tokens",
+            "estimated_tokens_delta",
+            "session_id",
+            "subtype",
+            "type",
+            "uuid"
+          ],
+          "type": "system",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-9",
+          "payloadBytes": 1310,
+          "payloadSha256": "ec7cafebb1e4adbfb2efd50f0082fe0fba50597a6194747103f2eb7313f46b86",
+          "topLevelKeys": [
+            "message",
+            "parent_tool_use_id",
+            "request_id",
+            "session_id",
+            "timestamp",
+            "type",
+            "uuid"
+          ],
+          "type": "assistant",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-10",
+          "payloadBytes": 721,
+          "payloadSha256": "21a3312b0948e894b15d5661e9b4fdea37c04abdcdacf429448dc832bb43b553",
+          "topLevelKeys": [
+            "message",
+            "parent_tool_use_id",
+            "request_id",
+            "session_id",
+            "timestamp",
+            "type",
+            "uuid"
+          ],
+          "type": "assistant",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-11",
+          "payloadBytes": 661,
+          "payloadSha256": "07f2079ee1be4719805b17b4226b9a4935b8d958d3b76ef421bb65bf02f26432",
+          "topLevelKeys": [
+            "duration_api_ms",
+            "duration_ms",
+            "is_error",
+            "modelUsage",
+            "num_turns",
+            "permission_denials",
+            "result",
+            "session_id",
+            "stop_reason",
+            "subtype",
+            "total_cost_usd",
+            "type",
+            "usage",
+            "uuid"
+          ],
+          "type": "result",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "forwarded",
+      "session": "session-1",
+      "upstreamResponseBytes": 366,
+      "upstreamResponseSha256": "31a724eda7fe0cc0573c3be652f1345516eb3ba88f492ae9ccda3ffff45be997",
+      "upstreamStatus": 200,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    },
+    {
+      "attempt": 8,
+      "bodyBytes": 203,
+      "bodySha256": "c226907c3d5f114cf9d95a07658b2a22783b74c89975132039bd5e96fe9dcb3c",
+      "downstreamHeadersSentBeforeReset": null,
+      "downstreamRequestMatched": null,
+      "downstreamWritableBytesBeforeReset": null,
+      "events": [
+        {
+          "coordinate": "uuid-12",
+          "payloadBytes": 161,
+          "payloadSha256": "7548272aa300bdbcd89ef62a16af8cd08205a0a5b68c602c91acda50106f6fa3",
+          "topLevelKeys": [
+            "reason",
+            "session_id",
+            "subtype",
+            "type",
+            "uuid"
+          ],
+          "type": "system",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "forwarded",
+      "session": "session-1",
+      "upstreamResponseBytes": 103,
+      "upstreamResponseSha256": "23ef32069710a37beaa7db514ba4660cbf7fa1c8f91ffdedaf829dff1bd135b9",
+      "upstreamStatus": 200,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    },
+    {
+      "attempt": 9,
+      "bodyBytes": 2490,
+      "bodySha256": "51f60cd75f649856162a4a4983c627cf8549e72cf857e07af66ded71dbcd17f0",
+      "downstreamHeadersSentBeforeReset": null,
+      "downstreamRequestMatched": null,
+      "downstreamWritableBytesBeforeReset": null,
+      "events": [
+        {
+          "coordinate": "uuid-13",
+          "payloadBytes": 661,
+          "payloadSha256": "613691682a5b5f07831593a5debfba8e8a9df299dd26caab1c5a9b9980769c23",
+          "topLevelKeys": [
+            "duration_api_ms",
+            "duration_ms",
+            "is_error",
+            "modelUsage",
+            "num_turns",
+            "permission_denials",
+            "result",
+            "session_id",
+            "stop_reason",
+            "subtype",
+            "total_cost_usd",
+            "type",
+            "usage",
+            "uuid"
+          ],
+          "type": "result",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-14",
+          "payloadBytes": 661,
+          "payloadSha256": "ed54e2ff606eaa765c952476435d0497ec08a3aa04601c1bf5db583bf2722031",
+          "topLevelKeys": [
+            "duration_api_ms",
+            "duration_ms",
+            "is_error",
+            "modelUsage",
+            "num_turns",
+            "permission_denials",
+            "result",
+            "session_id",
+            "stop_reason",
+            "subtype",
+            "total_cost_usd",
+            "type",
+            "usage",
+            "uuid"
+          ],
+          "type": "result",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-15",
+          "payloadBytes": 473,
+          "payloadSha256": "b08f4258ccde2715c2f85ccfdc051b595e8e710a70106ebed6ec0ac134b43e60",
+          "topLevelKeys": [
+            "isSynthetic",
+            "message",
+            "parent_tool_use_id",
+            "session_id",
+            "timestamp",
+            "type",
+            "uuid"
+          ],
+          "type": "user",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-16",
+          "payloadBytes": 339,
+          "payloadSha256": "4297b4e0a1a387a44b72fe4bb9eb2dda06782a14992ace04773856d83f57d57d",
+          "topLevelKeys": [
+            "message",
+            "parent_tool_use_id",
+            "session_id",
+            "timestamp",
+            "type",
+            "uuid"
+          ],
+          "type": "user",
+          "uuidSyntax": "uuid-v4"
+        },
+        {
+          "coordinate": "uuid-17",
+          "payloadBytes": 262,
+          "payloadSha256": "39bf81b8bbe22672c866aa007c3ed534ca96393802f1953668294dd0e3301b6e",
+          "topLevelKeys": [
+            "message",
+            "parent_tool_use_id",
+            "session_id",
+            "timestamp",
+            "type",
+            "uuid"
+          ],
+          "type": "user",
+          "uuidSyntax": "uuid-v4"
+        }
+      ],
+      "localResponseDisposition": "forwarded",
+      "session": "session-1",
+      "upstreamResponseBytes": 161,
+      "upstreamResponseSha256": "e4778ff49fc7cd6643df1735cc593e21ca63c26b7570133cdbb1279b82ba78a5",
+      "upstreamStatus": 409,
+      "workerEpoch": {
+        "alias": "worker-epoch-1",
+        "present": true,
+        "type": "number"
+      }
+    }
+  ],
+  "payloadTypes": {
+    "assistant": 2,
+    "rate_limit_event": 1,
+    "result": 3,
+    "system": 7,
+    "user": 4
+  },
+  "firstArrivals": {
+    "allPayloadUuidsRfc4122V4": true,
+    "coordinateCollisionCount": 0,
+    "distinctPayloadUuidCount": 17,
+    "eventCount": 17,
+    "malformedWorkerBodies": 0
+  },
+  "lostResponseRetry": {
+    "completeRequestBodyByteEqual": true,
+    "downstreamHeadersSentBeforeReset": false,
+    "downstreamRequestMatched": true,
+    "downstreamWritableBytesBeforeReset": 0,
+    "firstUpstreamResponseFullyBuffered": true,
+    "firstUpstreamResponseBytes": 369,
+    "firstUpstreamResponseSha256": "31782307cea667e957b1eafe648821b90445418908627b56102e42b8214cd78b",
+    "firstUpstreamStatus": 200,
+    "exactRetryCount": 1,
+    "orderedPayloadTypesEqual": true,
+    "orderedPayloadUuidsEqual": true,
+    "noRetryObservationWindowMs": 11346,
+    "noRetryRequiredWindowMs": 120000,
+    "noRetryWindowReached": false,
+    "postDropAttemptCount": 3,
+    "postDropNewEventCount": 4,
+    "postDropSameCoordinateCount": 4,
+    "postDropSameSemanticPayloadCount": 6,
+    "retryObserved": true,
+    "retryForwardedUpstream": true,
+    "retrySameRemoteSession": true,
+    "retryUpstreamStatus": 200,
+    "workerEpochEqual": true,
+    "writeHeadIntercepted": true
+  },
+  "sanitization": {
+    "conversationContentRetained": false,
+    "credentialValuesRetained": false,
+    "hostPathsRetained": false,
+    "nativeIdentifiersRetained": false,
+    "rawRequestBodiesWritten": false,
+    "rawResponseBodiesWritten": false
+  },
+  "diagnostics": {
+    "attemptCount": 9,
+    "bodyCapExceeded": false,
+    "dropCompleted": true,
+    "matchedType": "assistant",
+    "mode": "lost-response-retry"
+  },
+  "verdict": "retry-coordinate-preserved"
+}

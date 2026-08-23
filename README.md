@@ -53,6 +53,13 @@ Hardened: stdlib-only `remote_claw` package, token-gated client face, secret-red
 logs, 0600 cert keys, graceful shutdown, unit + integration tests, and CI
 (`.github/workflows/ci.yml`). See [`phase0/README.md`](phase0/README.md).
 
+The current Claude 1.0 native-output compatibility proof is separately pinned to Linux arm64 Claude
+Code 2.1.237. Its sanitized retained artifacts cover all eight observed worker-event types and prove
+that one fully buffered HTTP-200 `/worker/events` response withheld before downstream headers was
+followed by a byte-identical same-session retry with the same ordered UUID coordinates. This is one
+request-level observation, not a deterministic or per-event-type retry claim. See
+[`spikes/claude-native-output`](spikes/claude-native-output).
+
 ## v2 — cloud-brokered, zero-knowledge, E2E-encrypted (BUILT & PROVEN 2026-06-09)
 
 Phase 0 proved the interception. **v2** is the product: drive your machine's claude
@@ -86,8 +93,9 @@ and bridges the session E2E-encrypted to the broker. **Proven end to end** by
 protocol** (register → triggers → bridge → SSE → delivery-ack → events → heartbeat) through the real
 MITM, and the browser viewer drives a turn, history replay (catch_up), sub-agents (`Task` + nested
 replies), tool-permission grants, and multi-client — all through the real broker on the real Workflow
-runtime. The real binary's leg is covered by the in-repo Phase-0 capture + the gated
-`real-rc.prove.test.ts` (needs a login + PTY).
+runtime. The real binary's leg is covered by the in-repo Phase-0 capture, the retained Linux arm64
+Claude 2.1.237 native-output compatibility proof, and the gated `real-rc.prove.test.ts` (needs a login
+and a PTY).
 
 Separately, the native **`stream-json` SDK transport** (`HostRelay` + `ClaudeStreamSession`,
 `--print --input-format stream-json`) remains as the **documented cousin** for cross-checking the protocol and

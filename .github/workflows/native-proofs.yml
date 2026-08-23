@@ -4,7 +4,13 @@ on:
   pull_request:
     paths:
       - "spikes/codex-multiclient/**"
+      - "spikes/claude-native-output/**"
       - "spikes/opencode-native/**"
+      - "packages/cli/src/args.ts"
+      - "packages/cli/src/cli.ts"
+      - "packages/cli/src/host/rc/mitm.ts"
+      - "packages/cli/src/host/rc/trace-run.ts"
+      - "packages/cli/src/run.ts"
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - "package.json"
@@ -12,7 +18,13 @@ on:
   push:
     paths:
       - "spikes/codex-multiclient/**"
+      - "spikes/claude-native-output/**"
       - "spikes/opencode-native/**"
+      - "packages/cli/src/args.ts"
+      - "packages/cli/src/cli.ts"
+      - "packages/cli/src/host/rc/mitm.ts"
+      - "packages/cli/src/host/rc/trace-run.ts"
+      - "packages/cli/src/run.ts"
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - "package.json"
@@ -41,6 +53,10 @@ jobs:
         run: pnpm --filter @remote-claw/codex-multiclient-proof run check
       - name: Verify retained evidence
         run: pnpm --filter @remote-claw/codex-multiclient-proof run test:run
+      - name: Check Claude native-output proof sources
+        run: pnpm --filter @remote-claw/claude-native-output-proof run check
+      - name: Verify Claude native-output retained evidence
+        run: pnpm --filter @remote-claw/claude-native-output-proof run test:run
       - name: Check OpenCode proof sources
         run: pnpm --filter @remote-claw/opencode-native-proof run check
       - name: Verify OpenCode retained evidence
