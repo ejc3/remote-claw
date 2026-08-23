@@ -124,7 +124,7 @@ front-door observation exists. It proves no pathname, process, currentness, comp
 authority, or production capability. E1b2 now implements four strict full-u64 `M → P → F → A` leaf
 codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only Linux observation.
 The collector returns only four leaf artifacts; the verifier consumes their raw views plus separately
-built E1a parent bytes. A non-skipping direct unprivileged `unshare -Ur -m` test proves real namespace and
+built E1a parent bytes. A non-skipping local-direct/hosted-CI-demoted test proves real namespace and
 bind-mount behavior. E1b2 remains historical-only and proves no currentness, process, authority,
 stateful acceptance, production wiring, or capability; E1b3 front-door/listener, E1b4 isolation,
 and E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode `user_text` native-binding evidence through
@@ -791,7 +791,7 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 - No E1c/I migration, repository, signer boundary, validator, or operation exists yet. E1b1 closes
   only executable-manifest vocabulary plus the native role's retained stable-content observation.
   E1b2 closes the workspace leaf codecs, raw-byte DAG/parent verifier, synchronous direct-only
-  collector, and non-skipping direct unprivileged namespace/bind-mount proof, but remains historical-only and
+  collector, and non-skipping dual-path least-privilege namespace/bind-mount proof, but remains historical-only and
   non-authoritative; E1b3–E1b5 actual front-door/listener, isolation, capability, and full-parent
   evidence remain planned, and
   A1.8a1-I's atomic

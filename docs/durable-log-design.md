@@ -103,7 +103,7 @@ local transcript completeness or replay.
 > currentness, complete parent, or authority is proved. E1b2 now implements four strict full-u64
 > `M → P → F → A` leaf codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only
 > Linux observation. The collector returns only four leaves; the verifier consumes their raw views plus
-> separately built E1a parent bytes. A non-skipping direct unprivileged `unshare -Ur -m` test proves real
+> separately built E1a parent bytes. A non-skipping local-direct/hosted-CI-demoted test proves real
 > namespace and bind-mount behavior. E1b2 remains historical-only and proves no currentness, process,
 > authority, stateful acceptance, production wiring, or capability; E1b3 front-door/listener,
 > E1b4 isolation, and E1b5 capability/full-parent closure remain planned. E1c then owns stateful accepted evidence under the frozen
@@ -163,8 +163,8 @@ local transcript completeness or replay.
 - No E1c/I migration, repository, signer boundary, validator, or operation exists. E1a has closed the
   four parent inputs and their ref-free content commitments. E1b1 has closed both executable-manifest
   codecs and only the native role's real retained collector proof. E1b2 has closed the workspace leaf
-  codecs, raw-byte DAG/parent verifier, synchronous direct-only collector, and non-skipping direct unprivileged
-  namespace/bind-mount gate, but remains historical-only and non-authoritative; E1b3–E1b5 still own
+  codecs, raw-byte DAG/parent verifier, synchronous direct-only collector, and non-skipping dual-path
+  least-privilege namespace/bind-mount gate, but remains historical-only and non-authoritative; E1b3–E1b5 still own
   actual front-door/listener, isolation, capability, and complete four-parent proof. E1c's prospective workspace/new-lineage
   rule, exhaustive legacy E-purpose quarantine, unsigned-snapshot/accepted-inert staging, and
   caller-retained request plus immutable transition-receipt reconciliation are frozen. There is no

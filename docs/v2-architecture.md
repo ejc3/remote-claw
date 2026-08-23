@@ -273,7 +273,7 @@
 > currentness, complete parent, or authority. E1b2 now implements the strict full-u64 `M → P → F → A`
 > leaf codecs, a bounded verifier that snapshots/reparses/re-encodes the four raw leaf views plus
 > separately built E1a parent bytes, and synchronous direct-only independent no-follow Linux
-> observation. Its non-skipping direct unprivileged `unshare -Ur -m` gate proves real namespace and bind-mount
+> observation. Its non-skipping local-direct/hosted-CI-demoted gate proves real namespace and bind-mount
 > behavior. The collector returns only four leaf artifacts, and the result remains historical-only
 > with no currentness, process, authority, stateful acceptance, production wiring, or capability;
 > E1b3 front-door/listener, E1b4 isolation, and E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode

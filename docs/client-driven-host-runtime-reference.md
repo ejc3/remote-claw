@@ -28,8 +28,8 @@ front-door, currentness, complete-parent, or authority proof; SQLite schema or m
 signer mutation; key-rotation barrier; transport-pointer write; callable-port access; owner
 operation; protocol packet; or production capability. A1.8a1-E1b2's four exact full-u64 leaf codecs,
 raw-five-view digest-DAG/parent verifier, synchronous direct-only Linux collector, and proof gate are
-implemented in §4.1. The non-skipping direct unprivileged test exercises a real unshared mount namespace and
-bind-mount policy. The collector returns four leaf artifacts, not a context-bearing E1a parent; the
+implemented in §4.1. Its non-skipping real namespace/bind-mount gate has a direct-unprivileged local
+path and a preprovisioned, capability-free non-root hosted-CI path. The collector returns four leaf artifacts, not a context-bearing E1a parent; the
 verifier consumes its four raw leaf views plus separately built parent bytes. E1b2 remains
 historical-only and proves no currentness, process, authority, stateful acceptance, production wiring,
 or capability. E1b3 front-door/listener evidence, E1b4 isolation evidence, and E1b5
@@ -3596,8 +3596,10 @@ durable accepted evidence, and installation:
    commitments. The synchronous direct-only Linux collector independently no-follow walks allowed
    root and target, performs two fact sweeps and fresh full rewalks, and returns only the four leaf
    artifacts. V1 rejects symlinks in every selector and allowed-root path component and mount
-   crossings below the configured allowed root. A non-skipping direct unprivileged `unshare -Ur -m` test proves
-   real namespace and bind-mount behavior. The result remains historical-only and non-authoritative.
+   crossings below the configured allowed root. A non-skipping dual-path test proves real namespace
+   and bind-mount behavior: capable hosts use direct unprivileged `unshare -Ur -m`; hosted CI uses
+   fixed privileged setup followed by an asserted irreversible demotion before repository code. The
+   result remains historical-only and non-authoritative.
 5. **A1.8a1-E1b3 — front-door and listener evidence (planned).** This slice owns the actual
    front-door executable and collector capture, build closure, generated surface, build-route
    registry, measured dispatch table, and listener-parent closure.
@@ -4175,10 +4177,14 @@ magic/link/inode and pre/post namespace/boot mismatch; close ordering, primary-e
 full `/proc/self/fd` leak enumeration on success and every injected failure; exact verification of
 separately built workspace-parent bytes in E1a order; live ephemeral Linux procfs/nsfs/fdinfo collection; no promise-fs call in the
 observation phase, no filesystem call after that phase, and no misleading mid-call `AbortSignal`
-surface; and no production importer. Its direct unprivileged `unshare -Ur -m` test exercises real namespace
-and bind-mount behavior and fails rather than silently skipping when that release-gate prerequisite is
-unavailable. The focused codec, collector, and dormancy gate passed before the frozen-tree full local
-gate, doc sync, independent review, and CI.
+surface; and no production importer. On capable hosts the test uses direct unprivileged
+`unshare -Ur -m`. GitHub-hosted Ubuntu rejects that UID-map operation, so CI creates only the private
+PID/mount namespace and two bind mounts with fixed root-run system commands, then uses `setpriv` to
+restore the nonzero runner UID/GID, clear supplementary groups and every capability set, and install
+`no_new_privs` before a fixed preflight and any package/repository code. The full collector test file
+asserts that process state and the real topology. Neither path silently skips. The focused codec,
+collector, and dormancy gate passed before the frozen-tree full local gate, doc sync, independent
+review, and CI.
 
 The four fixed child orders are the workspace, listener, isolation, and capability subsequences shown
 above. E1a reserves each child role/schema/bound and verifies its content commitment; it does not
@@ -13909,7 +13915,7 @@ official-client compatibility; B and C add those records on the generic A1 seams
 - **A1.8a1-E1b2 — Workspace evidence (implemented; proof gate passed):** close the exact four-leaf
   full-u64 `M → P → F → A` digest DAG, bounded raw-five-view verifier against separately supplied E1a
   parent bytes, synchronous direct-only two-chain Linux observation, historical-only boundary, and
-  non-skipping direct unprivileged namespace/bind-mount proof in §4.1.
+  non-skipping dual-path least-privilege namespace/bind-mount proof in §4.1.
 - **A1.8a1-E1b3 — Front-door and listener evidence (planned):** collect the actual front-door
   executable and close build, generated-surface, route-registry, measured-dispatch, and listener-parent evidence.
 - **A1.8a1-E1b4 — Runtime-isolation evidence (planned):** close every registered process, socket,
@@ -14412,7 +14418,7 @@ A1.8a1-E1b2's implementation and passed gate close the exact four-leaf digest DA
 values, bounded raw snapshots/reparse/re-encoding of four leaf views plus separately built parent
 bytes, synchronous independent no-follow walks, race/namespace/mount rejection, exact E1a parent
 verification, historical-only boundary, and no production importer. The collector itself returns only
-the four leaf artifacts. The non-skipping direct unprivileged `unshare -Ur -m` proof exercises a real mount
+the four leaf artifacts. The non-skipping local-direct/hosted-CI-demoted proof exercises a real mount
 namespace, an inclusive bind root, and nested-mount refusal. E1b3 must prove the actual front-door and listener evidence; E1b4 must
 prove runtime isolation; and E1b5 must prove capability evidence and recreate all four E1a parents.
 Synthetic commitments and schema-name assertions cannot pass those gates.

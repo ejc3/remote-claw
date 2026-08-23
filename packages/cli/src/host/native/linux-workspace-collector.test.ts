@@ -937,8 +937,78 @@ describe.sequential("Linux workspace evidence collector", () => {
     expect(callsAtFirstAwait).toBeGreaterThan(0);
   });
 
-  it("hard-proves a real unshared mount namespace, inclusive bind root, and nested-mount refusal", () => {
+  it("hard-proves a real unshared mount namespace, inclusive bind root, and nested-mount refusal", async () => {
     if (process.platform !== "linux") throw new Error("E1b2 mount proof requires Linux");
+    const provisioned = Object.freeze({
+      mode: process.env.REMOTE_CLAW_E1B2_PROOF_MODE,
+      parentNamespace: process.env.REMOTE_CLAW_E1B2_PROOF_PARENT_MNT_NS,
+      root: process.env.REMOTE_CLAW_E1B2_PROOF_ROOT,
+      uid: process.env.REMOTE_CLAW_E1B2_PROOF_UID,
+      gid: process.env.REMOTE_CLAW_E1B2_PROOF_GID,
+    });
+    const provisionedCount = Object.values(provisioned).filter(
+      (value) => value !== undefined,
+    ).length;
+    if (provisionedCount !== 0 && provisionedCount !== Object.keys(provisioned).length) {
+      throw new Error("E1b2 pre-provisioned mount proof environment is incomplete");
+    }
+    if (provisionedCount > 0) {
+      if (
+        process.env.GITHUB_ACTIONS !== "true" ||
+        provisioned.mode !== "github-actions-least-privilege-v1" ||
+        provisioned.parentNamespace === undefined ||
+        !/^mnt:\[[1-9][0-9]*\]$/.test(provisioned.parentNamespace) ||
+        provisioned.root === undefined ||
+        !/^\/tmp\/remote-claw-e1b2-ci\.[A-Za-z0-9]{6}$/.test(provisioned.root) ||
+        provisioned.uid === undefined ||
+        !/^[1-9][0-9]*$/.test(provisioned.uid) ||
+        provisioned.gid === undefined ||
+        !/^[1-9][0-9]*$/.test(provisioned.gid)
+      ) {
+        throw new Error("E1b2 pre-provisioned mount proof environment is invalid");
+      }
+      const expectedUid = Number(provisioned.uid);
+      const expectedGid = Number(provisioned.gid);
+      if (!Number.isSafeInteger(expectedUid) || !Number.isSafeInteger(expectedGid)) {
+        throw new Error("E1b2 pre-provisioned runner identity is invalid");
+      }
+      expect(process.getuid?.()).toBe(expectedUid);
+      expect(process.geteuid?.()).toBe(expectedUid);
+      expect(process.getgid?.()).toBe(expectedGid);
+      expect(process.getegid?.()).toBe(expectedGid);
+
+      const status = realFs.readFileSync("/proc/self/status", "utf8");
+      const statusField = (name: string): string => {
+        const prefix = `${name}:`;
+        const line = status.split("\n").find((candidate) => candidate.startsWith(prefix));
+        if (line === undefined) throw new Error(`Linux process status omitted ${name}`);
+        return line.slice(prefix.length).trim();
+      };
+      expect(statusField("Uid").split(/\s+/)).toEqual(Array(4).fill(provisioned.uid));
+      expect(statusField("Gid").split(/\s+/)).toEqual(Array(4).fill(provisioned.gid));
+      expect(statusField("Groups")).toBe("");
+      for (const field of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) {
+        expect(statusField(field)).toBe("0000000000000000");
+      }
+      expect(statusField("NoNewPrivs")).toBe("1");
+
+      const childNamespace = realFs.readlinkSync("/proc/thread-self/ns/mnt");
+      expect(childNamespace).toMatch(/^mnt:\[[1-9][0-9]*\]$/);
+      expect(childNamespace).not.toBe(provisioned.parentNamespace);
+      const workspace = join(provisioned.root, "workspace");
+      const acceptedTarget = join(workspace, "sub");
+      const nestedTarget = join(acceptedTarget, "nested");
+      const accepted = await collectLinuxWorkspaceEvidence(input(workspace, acceptedTarget));
+      const allowedMount = accepted.allowedRoot.evidence.allowedRootEntries.at(-1)?.mountId;
+      const targetMount = accepted.allowedRoot.evidence.targetEntries.at(-1)?.mountId;
+      expect(allowedMount).toBeDefined();
+      expect(targetMount).toBe(allowedMount);
+      await expect(
+        collectLinuxWorkspaceEvidence(input(workspace, nestedTarget)),
+      ).rejects.toMatchObject({ code: "MOUNT_CROSSING" });
+      return;
+    }
+
     const packageRoot = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
     const repositoryRoot = dirname(dirname(packageRoot));
     const tsx = resolve(packageRoot, "node_modules/.bin/tsx");

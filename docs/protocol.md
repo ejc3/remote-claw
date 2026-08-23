@@ -108,7 +108,7 @@ actual front-door observation exists. E1b1 proves no pathname, process, front do
 parent, authority, or wire operation. E1b2 now implements the exact full-u64 `M → P → F → A` leaf
 codecs, a bounded raw-five-view DAG/parent verifier, and synchronous direct-only independent no-follow
 root/target collection. The collector returns four leaves; the verifier consumes their raw views plus
-separately built E1a parent bytes. Its non-skipping direct unprivileged `unshare -Ur -m` proof exercises a real
+separately built E1a parent bytes. Its non-skipping local-direct/hosted-CI-demoted proof exercises a real
 mount namespace and bind-mount policy. E1b2 remains historical-only and proves no currentness,
 process, authority, stateful acceptance, production wiring, capability, or wire operation. E1b3 front-door/listener, E1b4 isolation, and E1b5
 capability/full-parent closure remain planned. E1c then owns stateful
@@ -805,8 +805,10 @@ boundaries are:
    DAG. The raw-byte verifier snapshots, reparses, canonically re-encodes, and hashes four leaf views
    plus separately supplied E1a workspace-parent bytes. The direct-only Linux collector synchronously
    resolves allowed root and target as independent no-follow chains from one root, rejects a mount
-   crossing below the allowed root, and returns only the four historical leaf artifacts. A direct unprivileged
-   `unshare -Ur -m` test exercises real namespace and bind-mount behavior without silently skipping.
+   crossing below the allowed root, and returns only the four historical leaf artifacts. The
+   non-skipping gate uses direct unprivileged `unshare -Ur -m` on capable hosts; hosted CI performs
+   only fixed privileged namespace/mount setup, then asserts capability-free non-root execution before
+   package code while exercising the same real namespace and bind-mount behavior.
    Exact DTOs/formulas and the executable gate are in the
    [technical reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 3. **A1.8a1-E1b3:** collect the actual front-door executable and close build, generated-surface,
