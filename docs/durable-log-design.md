@@ -105,8 +105,14 @@ local transcript completeness or replay.
 > Linux observation. The collector returns only four leaves; the verifier consumes their raw views plus
 > separately built E1a parent bytes. A non-skipping local-direct/hosted-CI-demoted test proves real
 > namespace and bind-mount behavior. E1b2 remains historical-only and proves no currentness, process,
-> authority, stateful acceptance, production wiring, or capability; E1b3 front-door/listener,
-> E1b4 isolation, and E1b5 capability/full-parent closure remain planned. E1c then owns stateful accepted evidence under the frozen
+> authority, stateful acceptance, production wiring, or capability. E1b3's design is frozen but
+> unimplemented: E1b3a owns pure codecs plus one deterministic dormant Node ESM bundle, and E1b3b
+> owns direct-only capture plus the retained raw-seven-view `N/X/B/S/R/D/L` proof. Its positive route
+> inventory is closed to one prompt-binding route, four observer reads, and the legacy `/event`
+> observer stream; session/TUI/server creation and all unlisted routes remain deny-only. Final
+> executable/build/OpenAPI/registry/measurement/parent digests are post-build sidecars rather than
+> self-referential bundle content. No E1b3 package, listener, capture, fixture, authority, or production
+> import exists yet. E1b4 isolation and E1b5 capability/full-parent closure remain planned. E1c then owns stateful accepted evidence under the frozen
 > workspace, legacy-signer, staging, and receipt-backed reconciliation rules. I later installs an accepted capability snapshot and a credentialless
 > authenticated callable-port ingress lease as one matched pair. Neither creates an admitted command,
 > dispatch, effect, native call, production operation, or capability claim. A1.8a2 admitted arming and
@@ -164,8 +170,11 @@ local transcript completeness or replay.
   four parent inputs and their ref-free content commitments. E1b1 has closed both executable-manifest
   codecs and only the native role's real retained collector proof. E1b2 has closed the workspace leaf
   codecs, raw-byte DAG/parent verifier, synchronous direct-only collector, and non-skipping dual-path
-  least-privilege namespace/bind-mount gate, but remains historical-only and non-authoritative; E1b3–E1b5 still own
-  actual front-door/listener, isolation, capability, and complete four-parent proof. E1c's prospective workspace/new-lineage
+  least-privilege namespace/bind-mount gate, but remains historical-only and non-authoritative.
+  E1b3's pure-codec/deterministic-bundle plus direct-capture/raw-seven-view design is frozen in the
+  technical reference and test plan, but no E1b3 package, listener, collector, or retained fixture
+  exists. E1b3–E1b5 still own actual front-door/listener, isolation, capability, and complete
+  four-parent proof. E1c's prospective workspace/new-lineage
   rule, exhaustive legacy E-purpose quarantine, unsigned-snapshot/accepted-inert staging, and
   caller-retained request plus immutable transition-receipt reconciliation are frozen. There is no
   migration number or pin. Planned evidence and pair-install constraints are tracked in the
@@ -653,8 +662,10 @@ codecs/verifier/collector have landed. E1b1 is
 direct-only and proves one stable native-executable content observation, not a pathname, process,
 front door, currentness, complete parent, or authority. E1b2's collector returns four historical leaf
 artifacts after synchronous independent no-follow observation, while its raw-byte verifier consumes
-those four views plus separately built E1a parent bytes; neither creates current authority. E1b3 through
-E1b5 next close front-door/listener, isolation, capability, and all four parent byte sets. E1c is intended to add immutable
+those four views plus separately built E1a parent bytes; neither creates current authority. E1b3's
+design is now frozen into E1b3a pure codecs/deterministic dormant bundle and E1b3b direct-only
+capture/raw-seven-view retained proof, but it has no implementation. E1b3 through E1b5 next close
+front-door/listener, isolation, capability, and all four parent byte sets. E1c is intended to add immutable
 workspace/listener/isolation/operation-family/capability-snapshot evidence and exact runtime-owner
 signature acceptance in dependency-ordered listener → isolation → capability phases, with key
 rotation blocked while an E-owned phase is nonterminal. E1c uses caller-retained ref-free semantic
@@ -1611,7 +1622,7 @@ demonstrates every property below:
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.
-- **A1.8a1 — native-binding authority: E0/E1a/E1b1/E1b2 IMPLEMENTED; E1b3–E1b5/E1c/I IMPLEMENTATION PLANNED; NO STATEFUL SCHEMA OR OPERATION.** E0 supplies
+- **A1.8a1 — native-binding authority: E0/E1a/E1b1/E1b2 IMPLEMENTED; E1b3 DESIGN FROZEN, IMPLEMENTATION ABSENT; E1b4–E1b5/E1c/I IMPLEMENTATION PLANNED; NO STATEFUL SCHEMA OR OPERATION.** E0 supplies
   the six E-side namespace/parser contracts and four deterministic ID builders. E1a supplies four
   strict bounded parent codecs and a closed ref-free commitment registry. E1b1 supplies both strict
   executable-manifest codecs, the direct-only stable-FD collector, and retained native OpenCode proof;
@@ -1620,8 +1631,10 @@ demonstrates every property below:
   proved. E1b2 supplies four strict full-u64 workspace leaf codecs, a bounded raw-five-view verifier,
   synchronous direct-only collection, and a non-skipping real namespace/bind-mount proof. Its
   collector returns no context-bearing E1a parent, and its output remains historical-only and
-  non-authoritative. E1b3–E1b5 own actual front-door/listener, isolation, capability, and full-parent
-  closure.
+  non-authoritative. E1b3a is frozen as pure codecs plus a deterministic dormant Node ESM bundle;
+  E1b3b is frozen as direct-only capture plus a retained raw-seven-view proof with a closed six-route
+  positive inventory and deny-only fallback. Neither is implemented. E1b3–E1b5 own actual
+  front-door/listener, isolation, capability, and full-parent closure.
   E1c then retains accepted-but-inert evidence without changing either transport pointer, under the
   frozen new-lineage workspace rule, exhaustive legacy-signer quarantine, exact snapshot staging,
   local artifact-link graph, and dense receipt-backed reconciliation. I later owns the one-transaction

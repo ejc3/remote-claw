@@ -275,8 +275,18 @@
 > separately built E1a parent bytes, and synchronous direct-only independent no-follow Linux
 > observation. Its non-skipping local-direct/hosted-CI-demoted gate proves real namespace and bind-mount
 > behavior. The collector returns only four leaf artifacts, and the result remains historical-only
-> with no currentness, process, authority, stateful acceptance, production wiring, or capability;
-> E1b3 front-door/listener, E1b4 isolation, and E1b5 capability/full-parent closure remain planned. E1c then retains exact signed OpenCode
+> with no currentness, process, authority, stateful acceptance, production wiring, or capability.
+> E1b3's design is frozen but unimplemented: E1b3a owns pure codecs plus one deterministic dormant
+> LF-normalized Node ESM bundle for OpenCode 1.17.5 Linux arm64, and E1b3b owns direct-only capture
+> plus the retained raw-seven-view `N/X/B/S/R/D/L` proof. The only positive front-door inventory is
+> prompt binding at `POST /session/{sessionID}/prompt_async`, observer reads at `GET /session`,
+> `GET /session/{sessionID}`, `GET /session/{sessionID}/message`, and `GET /session/status`, and the
+> legacy observer stream at `GET /event`; session/TUI/server creation and every unlisted route remain
+> closed. The bundle contains only digest-independent declarations and symbol IDs, while finalized
+> executable/build/OpenAPI/registry/measurement/parent digests remain post-build sidecars, avoiding a
+> binary self-hash or build/registry cycle. No E1b3 package, listener, capture, retained fixture, or
+> production import exists yet. E1b4 isolation and E1b5 capability/full-parent closure remain planned.
+> E1c then retains exact signed OpenCode
 > `user_text` binding evidence through dependency-ordered listener/isolation/capability phases, with
 > key rotation blocked while an E-owned phase is nonterminal and neither transport pointer changed.
 > Its workspace/new-lineage, exhaustive legacy-signer quarantine, unsigned-snapshot/accepted-inert
@@ -288,8 +298,8 @@
 > withdrawn and replaced after process loss. Pair withdrawal never unregisters the A1.4-owned shared
 > physical port; only exact parent-lease closure/replacement may do that. Neither E1c nor I creates an admitted command, native
 > attempt, dispatch, effect, native call, production operation, or advertised capability. The
-> implemented E0/E1a/E1b1/E1b2 boundary and planned
-> E1b3–E1b5/E1c/I design are in the [host-runtime reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
+> implemented E0/E1a/E1b1/E1b2 boundary, frozen E1b3 design, and planned E1b4–E1b5/E1c/I design are in
+> the [host-runtime reference](client-driven-host-runtime-reference.md#41-a18a1-native-binding-authority-freeze-planned-dormant).
 > A1.8a2 still owns the admitted atomic arm and A1.8b owns sealing/publishing.
 >
 > Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
@@ -307,7 +317,8 @@
 > dormant host state. E0 identities, E1a parent envelopes, and E1b1 executable-manifest codecs are
 > host-state exports with no authority operation; E1b2's workspace codecs/verifier are likewise a
 > host-state export. The E1b1 and E1b2 Linux collectors are direct-only and absent from all production
-> paths. A1.8a1-E1b3–E1b5/E1c/I remain unimplemented. E1b3 through E1b5 must close actual
+> paths. A1.8a1-E1b3–E1b5/E1c/I remain unimplemented; E1b3 is documentation-only at this boundary.
+> E1b3 through E1b5 must close actual
 > front-door/listener, isolation, capability, and all four parents; then E1c
 > and I must land before A1.8a2 admitted atomic arming.
 > A1.8b owns sealing/publishing,
