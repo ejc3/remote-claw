@@ -285,7 +285,32 @@
 > closed. The bundle contains only digest-independent declarations and symbol IDs, while finalized
 > executable/build/OpenAPI/registry/measurement/parent digests remain post-build sidecars, avoiding a
 > binary self-hash or build/registry cycle. No E1b3 package, listener, capture, retained fixture, or
-> production import exists yet. E1b4 isolation and E1b5 capability/full-parent closure remain planned.
+> production import exists yet. E1b3a has an exact prerequisite gate but no partial case-ID manifest
+> and no successful socket-backed serve. Parameterized release cases span both PRs; E1b3b owns the
+> first demoted private-namespace inherited-listener serve, complete 106-ID manifest, retained actual
+> fixture, and only final E1b3 release claim. The caller-to-host handoff is immutable argv-bound
+> program source on stdin, four bound argv coordinates, and redundant read-only program/request
+> capsules at FD 3/FD 4; the fresh fixed host snapshots path inputs or bundle bytes into internal
+> target/data/runtime capsules, and no host path, FD, PID, destination, helper or timeout crosses the
+> inner operation seam. Fixed outer unshare makes setup PID 1 in a private outer PID namespace and
+> contains every synchronous helper and nested descendant while creating the private mount/net/IPC
+> environment. Setup creates and validates the sparse root/work/dev/input state, seals immutable
+> root/input and dev, and retains only bounded noexec writable work; inner unshare creates the child
+> user/PID/mount namespace and mounts proc
+> while preserving the 60000-to-60000 map. One reproducibly built static gate-init starts as inner PID 1 and
+> UID/GID 60000 with empty groups, recursively self-binds and verifies the locked inherited root/work/
+> dev/proc subtree, pivots that child-created clone away from the host root, detaches the old tree,
+> remounts/verifies proc and the inventory, drops capabilities, replaces its keyring, and installs NNP plus a socket/key/
+> namespace/cross-process seccomp filter before execing the copied Node/program as PID 1. The 13-item
+> `B` toolchain binds both gate binaries and both recursive loader/DSO platform manifests; `S` selects
+> the arm manifest. Every direct target also receives ABI-3 Landlock access only to its exact executable
+> and runtime files, noexec work subtree, null/urandom, and exact own `/proc/self`; PID 1's request/
+> response, host paths/sockets/FIFOs/devices/executables, AF_VSOCK and inherited keyrings are unreachable.
+> PID 1 writes one HMAC frame to a private response inode after reaping; setup relays it only after
+> namespace exit and validates full process/mount/namespace teardown. Checked parent-death/deadline
+> chains accept nothing on loss. This closes the proof gate's same-isolate ABA and host-route/credential
+> hazards but deliberately leaves hostile external peers, live mappings and currentness to E1b4.
+> E1b4 isolation and E1b5 capability/full-parent closure remain planned.
 > E1c then retains exact signed OpenCode
 > `user_text` binding evidence through dependency-ordered listener/isolation/capability phases, with
 > key rotation blocked while an E-owned phase is nonterminal and neither transport pointer changed.
