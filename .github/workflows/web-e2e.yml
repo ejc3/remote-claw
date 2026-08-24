@@ -36,22 +36,69 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       # The trusted release modules deliberately require the operator tools at fixed /usr/bin paths.
-      # The setup actions install immutable runner bytes elsewhere, so bind those exact executables at
-      # the production coordinates for portable pure-JS gate tests. The arm64 BusyBox wrapper
-      # integration remains platform-gated and runs in the local release gate on the pinned host.
-      - name: Bind setup tools at the trusted test coordinates
+      # GitHub's setup-tool cache is runner-writable, so snapshot the complete tool closures beneath a
+      # root-owned, non-writable parent before binding the production coordinates for pure-JS tests.
+      # The arm64 BusyBox wrapper integration remains platform-gated and runs on the pinned host.
+      - name: Snapshot setup tools at the trusted test coordinates
         shell: bash
         run: |
           set -euo pipefail
-          setup_node="$(command -v node)"
-          setup_npm="$(command -v npm)"
-          setup_pnpm="$(command -v pnpm)"
-          sudo -n ln -sfn -- "${setup_node}" /usr/bin/node
-          sudo -n ln -sfn -- "${setup_npm}" /usr/bin/npm
-          sudo -n ln -sfn -- "${setup_pnpm}" /usr/bin/pnpm
-          [ "$(realpath /usr/bin/node)" = "$(realpath "${setup_node}")" ]
-          [ "$(realpath /usr/bin/npm)" = "$(realpath "${setup_npm}")" ]
-          [ "$(realpath /usr/bin/pnpm)" = "$(realpath "${setup_pnpm}")" ]
+          setup_node="$(realpath "$(command -v node)")"
+          setup_npm="$(realpath "$(command -v npm)")"
+          node_root="$(realpath "$(dirname "$(dirname "${setup_node}")")")"
+          pnpm_action_root=/home/runner/setup-pnpm
+          [[ "${node_root}" =~ ^/opt/hostedtoolcache/node/[0-9]+\.[0-9]+\.[0-9]+/x64$ ]]
+          [ "${setup_node}" = "${node_root}/bin/node" ]
+          [ "${setup_npm}" = "${node_root}/lib/node_modules/npm/bin/npm-cli.js" ]
+          [ "${PNPM_HOME}" = "${pnpm_action_root}/node_modules/.bin" ]
+          [ "$(command -v pnpm)" = "${PNPM_HOME}/pnpm" ]
+          [ "$(realpath "${pnpm_action_root}")" = "${pnpm_action_root}" ]
+          [ -d "${pnpm_action_root}" ]
+          [ ! -L "${pnpm_action_root}" ]
+          pnpm_root="$(realpath "${pnpm_action_root}/node_modules/pnpm")"
+          case "${pnpm_root}" in "${pnpm_action_root}/"*) ;; *) exit 1 ;; esac
+          [ -d "${pnpm_root}" ]
+          [ ! -L "${pnpm_root}" ]
+          setup_pnpm="$(realpath "${pnpm_root}/bin/pnpm.cjs")"
+          case "${setup_pnpm}" in "${pnpm_root}/"*) ;; *) exit 1 ;; esac
+          [ -f "${setup_pnpm}" ]
+          [ ! -L "${setup_pnpm}" ]
+
+          trusted_root=/usr/lib/remote-claw-ci-tools
+          sudo -n mkdir -m 0755 -- "${trusted_root}"
+          sudo -n mkdir -m 0755 -- "${trusted_root}/node" "${trusted_root}/pnpm"
+          sudo -n cp -a -- "${node_root}/." "${trusted_root}/node/"
+          sudo -n cp -a -- "${pnpm_root}/." "${trusted_root}/pnpm/"
+          sudo -n chown -R root:root -- "${trusted_root}"
+          sudo -n chmod -R go-w -- "${trusted_root}"
+
+          trusted_node="${trusted_root}/node/${setup_node#"${node_root}/"}"
+          trusted_npm="${trusted_root}/node/${setup_npm#"${node_root}/"}"
+          trusted_pnpm="${trusted_root}/pnpm/${setup_pnpm#"${pnpm_root}/"}"
+          sudo -n chmod 0755 -- "${trusted_node}" "${trusted_npm}" "${trusted_pnpm}"
+          if find "${trusted_root}" -xdev ! -type l \( ! -user root -o ! -group root -o -perm /022 \) -print -quit | grep -q .; then
+            exit 1
+          fi
+          while IFS= read -r -d '' link; do
+            resolved_link="$(realpath "${link}")"
+            case "${resolved_link}" in "${trusted_root}/"*) ;; *) exit 1 ;; esac
+          done < <(find "${trusted_root}" -xdev -type l -print0)
+
+          tools=(node npm pnpm)
+          sources=("${setup_node}" "${setup_npm}" "${setup_pnpm}")
+          targets=("${trusted_node}" "${trusted_npm}" "${trusted_pnpm}")
+          for index in "${!tools[@]}"; do
+            tool="${tools[${index}]}"
+            source="${sources[${index}]}"
+            target="${targets[${index}]}"
+            [ -f "${target}" ]
+            [ ! -L "${target}" ]
+            cmp -s -- "${source}" "${target}"
+            sudo -n ln -sfn -- "${target}" "/usr/bin/${tool}"
+            [ "$(realpath "/usr/bin/${tool}")" = "${target}" ]
+            [ "$(stat -c '%u:%g:%a' "${target}")" = "0:0:755" ]
+            env PATH=/usr/bin:/bin "/usr/bin/${tool}" --version >/dev/null
+          done
       - run: pnpm install --frozen-lockfile
 
       # Typecheck the e2e harness (configs + specs + the tsx host-runner) under the same strict TS the rest
@@ -59,7 +106,16 @@ jobs:
       - name: Typecheck the e2e harness
         run: pnpm --filter remote-claw-web-tests run typecheck
       - name: Trusted deployment/topology gate tests
-        run: pnpm --filter remote-claw-web-tests run test:real-topology-runner
+        working-directory: tests/web
+        env:
+          PATH: /usr/bin:/bin
+        run: |
+          /usr/bin/node --test \
+            ../../scripts/resolve-trusted-vercel-deployment.test.mjs \
+            ../../scripts/run-trusted-real-topology.test.mjs \
+            ../../scripts/run-trusted-final-inspection.test.mjs \
+            ../../scripts/verify-production-release.test.mjs \
+            ../../scripts/web-preview-runtime-gate.test.mjs
 
       # Playwright Chromium + WebKit + their OS libraries (cached by the lockfile, which pins
       # @playwright/test). WebKit is required by the app-e2e "ios-safari" project — the faithful iOS-Safari
