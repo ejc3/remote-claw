@@ -251,6 +251,10 @@ sequencing the proof work, never by weakening the proof:
   the exact 240 s `: rotate` marker at a measured 235–270 s and a later successful session subscription, re-attests the same
   pinned Claude descendant, then requires a second received/replied turn on the same `cse_*`. Its
   Playwright timeout is 780 s; shortening the proof below the rotation boundary invalidates the gate.
+- After the executable-path check, descendant discovery must boundedly match the exact nonsecret
+  release-payload argument tail before size/hash/environment attestation. The installed CLI first runs
+  the same pinned Claude inode with `--version`; that compatibility probe is a noncandidate, not the
+  long-lived release process.
 - The release proof is one chain: private Preview topology
   `remote-claw-real-topology-browser-leg/v4` → private bounded
   `remote-claw-real-topology-inspection/v1` → post-merge

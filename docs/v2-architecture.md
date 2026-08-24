@@ -2762,7 +2762,10 @@ phase0/            unchanged — the Python reference + protocol findings
   `./scripts/run-trusted-real-topology-clean.sh` from the repository root is the only trusted entry;
   direct Node refuses. Its pinned static BusyBox shell self-attests through `/proc/$$/exe`, then
   NUL-pipes only seven allowlisted inputs into a clean `env -i` Node runner with no secret in argv. It
-  archives the exact clean HEAD, builds/packs only in isolated source, attests exact Claude bytes and the running `/proc` descendant, supplies minimal child
+  archives the exact clean HEAD and builds/packs only in isolated source. For a running descendant it
+  first requires the resolved Claude executable path, then selects the exact nonsecret release-payload
+  argument tail rather than the same-inode `--version` probe, and finally attests size, hash, and a
+  release-clean environment through `/proc`. It supplies minimal child
   environments, verifies the exact live handoff WAF rule,
   and exercises the deployed broker default without `--rc-backend` or `?backend=`. That installed
   exact-SHA deployed Turso/browser proof produces the first release-chain receipt,

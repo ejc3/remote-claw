@@ -28,6 +28,7 @@ import {
 	createProofCoordinates,
 	emitProofLogCanary,
 	finalizeReceipt,
+	matchesReleaseClaudeProcessArguments,
 	preparePinnedHeadArtifact,
 	preparePrivateReceiptDirectory,
 	readProofBootstrapInput,
@@ -994,6 +995,78 @@ test("real Claude descendant environment attestation is bounded and value-blind"
 	}
 	const oversized = attest(Buffer.alloc(64 * 1_024 + 1, 0x61));
 	assert.match(oversized.message, /not release-clean/);
+});
+
+test("real Claude descendant selection ignores probes and matches only the exact release payload", () => {
+	const releaseArguments = [
+		"--safe-mode",
+		"--tools",
+		"",
+		"--remote-control",
+		"remote-claw-release-proof",
+	];
+	const matches = (payload, { closeFails = false } = {}) => {
+		let sourceOffset = 0;
+		let selectionBuffer;
+		let closed = false;
+		const result = matchesReleaseClaudeProcessArguments(
+			4321,
+			releaseArguments,
+			{
+				openFile(path, flags) {
+					assert.equal(path, "/proc/4321/cmdline");
+					assert.equal(flags, constants.O_RDONLY | constants.O_NOFOLLOW);
+					return 99;
+				},
+				readFromFd(fd, buffer, offset, length) {
+					assert.equal(fd, 99);
+					selectionBuffer = buffer;
+					const copied = Math.min(length, payload.length - sourceOffset);
+					if (copied === 0) return 0;
+					payload.copy(buffer, offset, sourceOffset, sourceOffset + copied);
+					sourceOffset += copied;
+					return copied;
+				},
+				closeFile(fd) {
+					assert.equal(fd, 99);
+					closed = true;
+					if (closeFails) throw new Error("close failed");
+				},
+			},
+		);
+		assert.equal(closed, true);
+		assert.ok(selectionBuffer);
+		assert.equal(
+			selectionBuffer.every((byte) => byte === 0),
+			true,
+		);
+		return result;
+	};
+	const payload = (arguments_) =>
+		Buffer.from(`/proc/9876/fd/19\0${arguments_.join("\0")}\0`);
+	assert.equal(matches(payload(releaseArguments)), true);
+	assert.equal(matches(payload(["--version"])), false);
+	assert.equal(matches(payload(releaseArguments.slice(0, -1))), false);
+	assert.equal(matches(payload([...releaseArguments, "extra"])), false);
+	assert.equal(
+		matches(
+			payload([
+				releaseArguments[1],
+				releaseArguments[0],
+				...releaseArguments.slice(2),
+			]),
+		),
+		false,
+	);
+	assert.equal(matches(Buffer.from("\0--safe-mode\0")), false);
+	assert.equal(matches(Buffer.from("claude\0--safe-mode")), false);
+	assert.equal(matches(Buffer.alloc(4 * 1_024 + 1, 0x61)), false);
+	assert.equal(matches(payload(releaseArguments), { closeFails: true }), false);
+	assert.equal(
+		matchesReleaseClaudeProcessArguments(0, releaseArguments),
+		false,
+	);
+	assert.equal(matchesReleaseClaudeProcessArguments(4321, []), false);
 });
 
 test("package scripts cannot masquerade as the trusted real-topology entrypoint", () => {

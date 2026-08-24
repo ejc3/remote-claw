@@ -27,6 +27,7 @@ import { primeVercelBypass } from "./protection-bypass";
 
 const {
   attestReleaseCleanProcessEnvironment,
+  matchesReleaseClaudeProcessArguments,
   preparePrivateReceiptDirectory,
   writeDurableReceiptFile,
 } = trustedTopologyRunner;
@@ -51,6 +52,13 @@ const VERCEL_TEAM_ID = "team_fYexi4KRmIrq9wtYsiXs9e9H";
 const WAF_RULE_NAME = "handoff-per-ip-rate-limit";
 const PLANNED_STREAM_ROTATION_MS = 240_000;
 const ROTATION_PROOF_TIMEOUT_MS = 285_000;
+const RELEASE_CLAUDE_ARGUMENTS = [
+  "--safe-mode",
+  "--tools",
+  "",
+  "--remote-control",
+  "remote-claw-release-proof",
+] as const;
 
 function requiredProofEnv(name: string, pattern: RegExp): string {
   const value = process.env[name];
@@ -307,11 +315,7 @@ function launchInstalled(
     secretFile,
     // The installed proof needs native RC + inference only. Disabling customizations and tools keeps
     // the already-trusted Claude cwd read-only while still exercising the exact remote text path.
-    "--safe-mode",
-    "--tools",
-    "",
-    "--remote-control",
-    "remote-claw-release-proof",
+    ...RELEASE_CLAUDE_ARGUMENTS,
   ];
   const home = process.env.HOME;
   const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
@@ -387,6 +391,10 @@ function attestPinnedClaudeProcess(pid: number, claude: PinnedClaude): boolean {
     return false;
   }
   if (resolvedPath !== claude.resolvedExecutablePath) return false;
+  // The installed CLI first executes this same pinned inode with `--version`. Select only the exact
+  // long-lived release payload before hashing 332 MB, so a vanished compatibility probe is a
+  // noncandidate while every byte/environment failure on the real payload remains fatal.
+  if (!matchesReleaseClaudeProcessArguments(pid, RELEASE_CLAUDE_ARGUMENTS)) return false;
   const stat = statSync(processExecutable);
   if (
     stat.size !== claude.binaryBytes ||

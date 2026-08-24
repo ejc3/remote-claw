@@ -84,6 +84,7 @@ const PROOF_INPUT_FIELDS = [
 	"RC_PROVE_CLAUDE_CWD",
 ];
 const MAX_BOOTSTRAP_INPUT_BYTES = 64 * 1_024;
+const MAX_RELEASE_PROCESS_COMMAND_LINE_BYTES = 4 * 1_024;
 const MAX_RELEASE_PROCESS_ENVIRONMENT_BYTES = 64 * 1_024;
 const FORBIDDEN_RELEASE_PROCESS_ENVIRONMENT_KEYS = new Set([
 	"BASH_ENV",
@@ -354,6 +355,81 @@ function releaseProcessEnvironmentRefusal() {
 	return new Error(
 		"running Claude descendant environment is not release-clean",
 	);
+}
+
+export function matchesReleaseClaudeProcessArguments(
+	pid,
+	expectedArguments,
+	{ openFile = openSync, readFromFd = readSync, closeFile = closeSync } = {},
+) {
+	if (
+		!Number.isSafeInteger(pid) ||
+		pid < 1 ||
+		!Array.isArray(expectedArguments) ||
+		expectedArguments.length < 1 ||
+		expectedArguments.some(
+			(argument) => typeof argument !== "string" || argument.includes("\0"),
+		)
+	) {
+		return false;
+	}
+	const expected = Buffer.from(`${expectedArguments.join("\0")}\0`, "utf8");
+	const raw = Buffer.alloc(MAX_RELEASE_PROCESS_COMMAND_LINE_BYTES + 1);
+	let descriptor;
+	let matches = false;
+	try {
+		if (expected.length > MAX_RELEASE_PROCESS_COMMAND_LINE_BYTES - 2) {
+			return false;
+		}
+		descriptor = openFile(
+			`/proc/${pid}/cmdline`,
+			constants.O_RDONLY | constants.O_NOFOLLOW,
+		);
+		let byteLength = 0;
+		while (byteLength < raw.length) {
+			const bytesRead = readFromFd(
+				descriptor,
+				raw,
+				byteLength,
+				raw.length - byteLength,
+				null,
+			);
+			if (
+				!Number.isInteger(bytesRead) ||
+				bytesRead < 0 ||
+				bytesRead > raw.length - byteLength
+			) {
+				return false;
+			}
+			if (bytesRead === 0) break;
+			byteLength += bytesRead;
+		}
+		const argvZeroEnd = raw.indexOf(0);
+		if (
+			byteLength < 3 ||
+			byteLength > MAX_RELEASE_PROCESS_COMMAND_LINE_BYTES ||
+			raw[byteLength - 1] !== 0 ||
+			argvZeroEnd < 1 ||
+			argvZeroEnd >= byteLength - 1
+		) {
+			return false;
+		}
+		const actual = raw.subarray(argvZeroEnd + 1, byteLength);
+		matches = actual.length === expected.length && actual.equals(expected);
+	} catch {
+		matches = false;
+	} finally {
+		raw.fill(0);
+		expected.fill(0);
+		if (descriptor !== undefined) {
+			try {
+				closeFile(descriptor);
+			} catch {
+				matches = false;
+			}
+		}
+	}
+	return matches;
 }
 
 function validateReleaseProcessEnvironmentBytes(raw, byteLength) {

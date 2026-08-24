@@ -141,8 +141,10 @@ across stream reconnects or cold reloads. The release evidence is one three-rece
 candidate tree. First, `remote-claw-real-topology-browser-leg/v4` records the exact-HEAD archived and
 packed CLI, deployed-default Turso/browser leg, runner-owned log window/canaries, and a measured
 235–270 s rotation plus reconnect and second same-session turn. Its pinned static clean-environment launcher self-attests
-the exact `/usr/bin/busybox` bytes through `/proc/$$/exe`, then the trusted runner re-verifies the pinned
-Claude executable and running descendant, uses minimal child environments, and requires a non-cacheable
+the exact `/usr/bin/busybox` bytes through `/proc/$$/exe`, then the trusted runner pins the exact Claude
+tuple. After launch it verifies the descendant's resolved executable path, selects only the exact
+nonsecret release-payload argument tail (not the same-binary `--version` probe), and re-verifies its
+size, hash, and release-clean environment. It uses minimal child environments and requires a non-cacheable
 runtime attestation binding the full Preview SHA plus canonical `sqlite`/Turso organization, group, and
 `pr-<7sha>` scope; any explicit scope override fails the proof. It also requires live evidence
 for the exact `/api/handoff` WAF rule before the credential-bearing browser leg. That leg must observe

@@ -233,6 +233,12 @@ reintroduced.
   `RC_TURSO_DB_SCOPE` fails the attestation before Playwright. The browser and installed host use the deployment default—neither
   `--rc-backend` nor `?backend=` is present—so the stable relay's durable-cursor preflight proves the
   configured default is SQLite/Turso.
+- Descendant discovery first requires `/proc/<pid>/exe` to resolve to the pinned Claude executable, then
+  boundedly reads `/proc/<pid>/cmdline` with `O_NOFOLLOW` and accepts only the exact nonsecret
+  release-payload argument tail before size/hash/environment attestation. The expected tail ends in
+  `--remote-control remote-claw-release-proof`; the installed CLI's same-inode `--version`
+  compatibility probe is a noncandidate; after the release payload matches, every byte or environment
+  failure remains fatal.
 - Before any credential-bearing browser leg, a bounded redirect-forbidden Management API read using a
   parent-only Vercel token verifies the exact enabled live active Firewall config, no
   draft/change/version ambiguity, pinned owner/team, canonical update time, the pinned project ID plus
@@ -360,7 +366,8 @@ Invoke the trusted proof only through
 its isolated exact HEAD archive, use the exact byte-pinned `/usr/bin/claude` under a PTY, drive the
 actual browser UI, and use a deployed production-code Vercel Preview whose **default** backend is
 SQLite/Turso. Cover live WAF
-verification, the launched Claude descendant's `/proc` executable bytes, onboarding, discovery, a first
+verification, the launched Claude descendant's resolved path, exact argument-tail selection, `/proc`
+executable bytes, and release-clean environment, plus onboarding, discovery, a first
 text turn and assistant output, durable browser reload, the actual 240 s `: rotate` marker and later
 successful subscription, re-attestation of the same Claude descendant, a second received/replied turn
 on the same `cse_*`, truthful local-input and incomplete-tail disclosure,
