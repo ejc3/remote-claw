@@ -11,10 +11,7 @@ import { defineConfig, devices } from "@playwright/test";
 // handoff.spec.ts (the ephemeral one-time-handoff PAIRING flow against the real /api/handoff route +
 // store), viewer-ux.spec.ts (the design-pass UX regression guards), revive.spec.ts (the iOS-Safari
 // background→foreground stream re-subscribe), liveness.spec.ts (the bus-unreachable banner +
-// auto-recovery), and send-guard.spec.ts (the double-send re-entry guard). The sqlite variant
-// (app-e2e.sqlite.config.ts) only re-runs
-// transcript.spec.ts — the handoff store is backend-independent (it always uses its own locator) and the
-// UX/revive guards are layout/transport, both backend-agnostic, so there's nothing to re-prove there.
+// auto-recovery), and send-guard.spec.ts (the double-send re-entry guard).
 //
 // Two projects: "mobile" (Pixel 5 / Chromium) runs every spec; "ios-safari" (iPhone 15 / WebKit) runs the
 // revive spec — WebKit is the only faithful iOS-Safari engine for the background→foreground stream
@@ -37,6 +34,7 @@ export default defineConfig({
   expect: { timeout: 20_000 }, // absorb cold-start latency of a freshly-built prod server
   outputDir: "./test-results",
   fullyParallel: false,
+  forbidOnly: true,
   workers: 1, // each test spawns its own host; keep them sequential and deterministic
   // No retries: the in-process host makes this deterministic, and the old retries:2 is exactly what masked
   // the seed-route publish race as "flaky→green". A flake here now is a real bug — surface it, don't absorb.
@@ -51,6 +49,9 @@ export default defineConfig({
     port: 3100,
     env: {
       BROKER_BACKEND: "sqlite",
+      // Test-only opt-in for the handoff spec. Production may set this public build flag only after its
+      // external per-IP WAF rule is verified; localhost has no public abuse surface.
+      NEXT_PUBLIC_RC_HANDOFF_ENABLED: "1",
       RC_SQLITE_DIR: process.env.RC_SQLITE_DIR ?? "/tmp/rc-sqlite-app-e2e",
     },
     // NEVER reuse a server already on the port (was `!CI`). Our command does a `next build` — i.e. it is a

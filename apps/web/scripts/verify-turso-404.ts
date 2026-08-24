@@ -3,7 +3,7 @@
 //
 // Run:  TURSO_API_TOKEN=… TURSO_ORG=… TURSO_GROUP=… TURSO_GROUP_AUTH_TOKEN=… \
 //         pnpm --filter @remote-claw/web exec tsx scripts/verify-turso-404.ts [N]
-//   (no creds → it SKIPS with exit 0, so it's safe to wire into CI that lacks a Turso account.)
+//   (missing credentials are INCONCLUSIVE with exit 2; a declared live gate never skips green.)
 //
 // The bug (seen live on a Vercel preview, default backend = per-session Turso Cloud): the Platform-API
 // `POST /databases` returns 200, and a control-plane `GET /databases/{name}` reports the db within ~100ms —
@@ -24,10 +24,11 @@
 //         AND whether the create→serve window was actually OPEN at connect time, so a "served" result can't
 //         pass off a no-op (already-serving) connect as the gate having absorbed anything.
 //
-// Exit codes: 0 = healthy (repro + fix, or window simply didn't open this run); 1 = REGRESSION (a query
-// still 404'd AFTER awaitReady); 2 = INCONCLUSIVE (never reached the data plane — auth/network/creation).
+// Exit codes: 0 = healthy (awaitReady absorbed at least one observed open window); 1 = REGRESSION (a
+// query still 404'd or readiness timed out AFTER awaitReady); 2 = INCONCLUSIVE (missing credentials,
+// no exercised Phase-2 window, or never reached the data plane).
 import { type Client, createClient } from "@libsql/client";
-import { TursoCloudDbLocator } from "../lib/broker/turso-cloud-locator";
+import { TursoCloudDbLocator, TursoReadinessTimeoutError } from "../lib/broker/turso-cloud-locator";
 
 function parseN(arg: string | undefined): number {
   const p = Number.parseInt(arg ?? "8", 10);
@@ -59,7 +60,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const fmtMs = (n: number): string => (n < 0 ? "never" : `${n}ms`);
 
 type RaceResult<T> = {
-  result: "served" | "SERVE_GAP_404" | "other" | "exists_timeout";
+  result: "served" | "SERVE_GAP_404" | "READINESS_TIMEOUT" | "other" | "exists_timeout";
   value?: T;
   connectAtMs: number;
   detail?: string;
@@ -88,7 +89,9 @@ async function raceSubscribe<T>(
         } catch (e) {
           out = isServeGap404(e)
             ? { result: "SERVE_GAP_404", connectAtMs }
-            : { result: "other", connectAtMs, detail: errMsg(e) };
+            : e instanceof TursoReadinessTimeoutError
+              ? { result: "READINESS_TIMEOUT", connectAtMs, detail: errMsg(e) }
+              : { result: "other", connectAtMs, detail: errMsg(e) };
         } finally {
           client.close();
         }
@@ -113,13 +116,14 @@ async function main(): Promise<void> {
   const group = process.env.TURSO_GROUP;
   const authToken = process.env.TURSO_GROUP_AUTH_TOKEN;
   if (!apiToken || !org || !group || !authToken) {
-    console.log(
-      "SKIP: set TURSO_API_TOKEN / TURSO_ORG / TURSO_GROUP / TURSO_GROUP_AUTH_TOKEN to run the live repro.",
+    console.error(
+      "INCONCLUSIVE: set TURSO_API_TOKEN / TURSO_ORG / TURSO_GROUP / TURSO_GROUP_AUTH_TOKEN to run the required live gate.",
     );
-    process.exit(0);
+    process.exit(2);
   }
 
-  // A throwaway, isolated scope so cleanup (dropScope) only ever touches THIS run's databases.
+  // A throwaway scope makes every generated database easy to identify in the output. It is not
+  // deletion authority: prefix ownership cannot be proved from a name, so this script never sweeps it.
   const scope = `v404-${Math.random().toString(16).slice(2, 8)}`;
   const opts = { apiToken, org, group, authToken, scope };
   // Two SEPARATE instances → two SEPARATE #known caches, i.e. a publishing instance and a cold subscribing
@@ -141,76 +145,74 @@ async function main(): Promise<void> {
   let fixRegressed = 0; // Phase 2: query STILL 404'd after awaitReady (genuine regression)
   let fixInfra = 0; // Phase 2: never reached the data plane (other/exists_timeout)
 
-  try {
-    // ---- Phase 1: reproduce (cold subscribe races the create, connects raw, no gate) -------------------
+  // ---- Phase 1: reproduce (cold subscribe races the create, connects raw, no gate) -------------------
+  console.log(
+    "[Phase 1 — reproduce]  a COLD subscriber races publisher.ensure() and connects WITHOUT the gate:",
+  );
+  for (let i = 0; i < N; i++) {
+    const token = tokenFor(i);
+    const r = await raceSubscribe(publisher, subscriber, token, (c) => c.execute("SELECT 1"));
+    if (r.result === "SERVE_GAP_404") reproduced++;
+    else if (r.result === "served") servedRaw++;
+    else infra1++;
     console.log(
-      "[Phase 1 — reproduce]  a COLD subscriber races publisher.ensure() and connects WITHOUT the gate:",
+      `  #${String(i + 1).padStart(2)} ${subscriber.idFor(token)}  connect@${fmtMs(r.connectAtMs)} → ${r.result}${r.detail ? ` (${r.detail})` : ""}`,
     );
-    for (let i = 0; i < N; i++) {
-      const token = tokenFor(i);
-      const r = await raceSubscribe(publisher, subscriber, token, (c) => c.execute("SELECT 1"));
-      if (r.result === "SERVE_GAP_404") reproduced++;
-      else if (r.result === "served") servedRaw++;
-      else infra1++;
+  }
+
+  // ---- Phase 2: verify the fix (race the create, probe whether the window is OPEN, then gate) ---------
+  console.log(
+    "\n[Phase 2 — verify fix]  same race; probe if the window is OPEN, then gate the connect on awaitReady():",
+  );
+  for (let i = 0; i < N; i++) {
+    const token = tokenFor(1000 + i);
+    const r = await raceSubscribe(publisher, subscriber, token, async (c) => {
+      // Is the create→serve window OPEN right now? (a raw query would 404). This makes a "served" result
+      // honest: it distinguishes "the gate absorbed a real window" from "the db was already serving".
+      let windowOpen = false;
+      try {
+        await c.execute("SELECT 1");
+      } catch (e) {
+        if (isServeGap404(e)) windowOpen = true;
+        else throw e; // a non-404 error (auth/network) is infra, not the window
+      }
+      // The SHIPPED fix — time ONLY its wait (not the trailing query), then confirm the query now serves.
+      const w0 = Date.now();
+      await subscriber.awaitReady(c, token);
+      const awaitReadyMs = Date.now() - w0;
+      await c.execute("SELECT 1"); // must succeed once the gate has waited the window out
+      return { windowOpen, awaitReadyMs };
+    });
+    const name = subscriber.idFor(token);
+    if (r.result === "served" && r.value) {
+      fixServed++;
+      if (r.value.windowOpen) {
+        fixExercised++;
+        fixWaitTotalMs += r.value.awaitReadyMs;
+      }
       console.log(
-        `  #${String(i + 1).padStart(2)} ${subscriber.idFor(token)}  connect@${fmtMs(r.connectAtMs)} → ${r.result}${r.detail ? ` (${r.detail})` : ""}`,
+        `  #${String(i + 1).padStart(2)} ${name}  connect@${fmtMs(r.connectAtMs)} window=${r.value.windowOpen ? "OPEN" : "closed"} awaitReady=${r.value.awaitReadyMs}ms → served`,
+      );
+    } else if (r.result === "SERVE_GAP_404" || r.result === "READINESS_TIMEOUT") {
+      fixRegressed++;
+      console.log(
+        `  #${String(i + 1).padStart(2)} ${name}  REGRESSION: ${
+          r.result === "READINESS_TIMEOUT"
+            ? "awaitReady exhausted its bounded readiness budget"
+            : "query still 404'd AFTER awaitReady"
+        }${r.detail ? ` (${r.detail})` : ""}`,
+      );
+    } else {
+      fixInfra++;
+      console.log(
+        `  #${String(i + 1).padStart(2)} ${name}  infra (${r.result}${r.detail ? `: ${r.detail}` : ""}) — not a fix signal`,
       );
     }
-
-    // ---- Phase 2: verify the fix (race the create, probe whether the window is OPEN, then gate) ---------
-    console.log(
-      "\n[Phase 2 — verify fix]  same race; probe if the window is OPEN, then gate the connect on awaitReady():",
-    );
-    for (let i = 0; i < N; i++) {
-      const token = tokenFor(1000 + i);
-      const r = await raceSubscribe(publisher, subscriber, token, async (c) => {
-        // Is the create→serve window OPEN right now? (a raw query would 404). This makes a "served" result
-        // honest: it distinguishes "the gate absorbed a real window" from "the db was already serving".
-        let windowOpen = false;
-        try {
-          await c.execute("SELECT 1");
-        } catch (e) {
-          if (isServeGap404(e)) windowOpen = true;
-          else throw e; // a non-404 error (auth/network) is infra, not the window
-        }
-        // The SHIPPED fix — time ONLY its wait (not the trailing query), then confirm the query now serves.
-        const w0 = Date.now();
-        await subscriber.awaitReady(c, token);
-        const awaitReadyMs = Date.now() - w0;
-        await c.execute("SELECT 1"); // must succeed once the gate has waited the window out
-        return { windowOpen, awaitReadyMs };
-      });
-      if (r.result === "served" && r.value) {
-        fixServed++;
-        if (r.value.windowOpen) {
-          fixExercised++;
-          fixWaitTotalMs += r.value.awaitReadyMs;
-        }
-        console.log(
-          `  #${String(i + 1).padStart(2)} connect@${fmtMs(r.connectAtMs)} window=${r.value.windowOpen ? "OPEN" : "closed"} awaitReady=${r.value.awaitReadyMs}ms → served`,
-        );
-      } else if (r.result === "SERVE_GAP_404") {
-        fixRegressed++;
-        console.log(
-          `  #${String(i + 1).padStart(2)} REGRESSION: query still 404'd AFTER awaitReady`,
-        );
-      } else {
-        fixInfra++;
-        console.log(
-          `  #${String(i + 1).padStart(2)} infra (${r.result}${r.detail ? `: ${r.detail}` : ""}) — not a fix signal`,
-        );
-      }
-    }
-  } finally {
-    // Delete every db this run created (rc-<scope>-*), regardless of how the phases went.
-    const swept = await subscriber.dropScope().catch((e) => {
-      console.error("cleanup (dropScope) error:", errMsg(e));
-      return { deleted: 0, remaining: -1 };
-    });
-    console.log(`\ncleanup: dropScope() deleted ${swept.deleted}, remaining ${swept.remaining}`);
-    if (swept.remaining !== 0)
-      console.error(`⚠️  cleanup left ${swept.remaining} db(s) — sweep manually.`);
   }
+
+  console.log(
+    "\ncleanup: no automatic deletion; review the exact database names above before removing them.",
+  );
 
   // ---- Verdict -------------------------------------------------------------------------------------------
   console.log(
@@ -229,27 +231,25 @@ async function main(): Promise<void> {
     );
     process.exit(2);
   }
-  // REGRESSION: the gate ran and a query STILL 404'd — the fix is broken. This is the only hard failure.
+  // REGRESSION: the gate ran but readiness still failed — the fix is broken or its bound is inadequate.
   if (fixRegressed > 0) {
     console.log(
-      `\n❌ REGRESSION: ${fixRegressed} db(s) still 404'd AFTER awaitReady — the fix is broken.`,
+      `\n❌ REGRESSION: ${fixRegressed} db(s) remained unready after awaitReady — the fix is broken or its bound is inadequate.`,
     );
     process.exit(1);
   }
-  if (reproduced > 0 && fixExercised > 0) {
+  if (fixExercised > 0) {
     console.log(
-      `\n✅ Reproduced the create→serve 404 (${reproduced}/${N}) AND awaitReady absorbed it (${fixExercised} open window(s), avg ${Math.round(fixWaitTotalMs / fixExercised)}ms).`,
+      `\n✅ awaitReady absorbed ${fixExercised} observed open create→serve window(s) (Phase-1 repro ${reproduced}/${N}, avg wait ${Math.round(fixWaitTotalMs / fixExercised)}ms).`,
     );
-  } else if (reproduced > 0) {
-    console.log(
-      `\n✅ Reproduced the 404 (${reproduced}/${N}); awaitReady held, but the window didn't reopen in Phase 2 so the gate wasn't stress-exercised — re-run for a stronger check.`,
-    );
-  } else {
-    console.log(
-      "\n⚠️  Window didn't open this run (Turso serve latency varies); awaitReady path is healthy but NOT exercised. Re-run / more iterations / a colder region to stress it.",
-    );
+    process.exit(0);
   }
-  process.exit(0);
+  console.log(
+    `\n⚠️  INCONCLUSIVE: awaitReady never encountered an open Phase-2 window${
+      reproduced > 0 ? ` (Phase 1 reproduced ${reproduced}/${N})` : ""
+    }. Re-run with more iterations or a colder region; this is not a passing live gate.`,
+  );
+  process.exit(2);
 }
 
 main().catch((e) => {

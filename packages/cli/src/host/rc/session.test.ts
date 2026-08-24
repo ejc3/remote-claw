@@ -1,4 +1,4 @@
-// Unit tests for the RC session event bus — a faithful port of phase0/tests/test_unit.py's TestCore +
+// Unit tests for the RC session event bus, ported from the retired Phase 0 TestCore plus
 // TestClientEvent, plus async-generator-specific coverage (heartbeat ticks, supersede, close).
 
 import { describe, expect, it } from "vitest";

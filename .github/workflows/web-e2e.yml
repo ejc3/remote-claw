@@ -1,21 +1,25 @@
 name: web-e2e
 
-# Self-contained end-to-end + stress tests for the broker, covering the Local and per-session SQLite
-# (local libSQL file) backends. The Vercel Workflow runtime only exists on a Vercel deployment, so its
-# optional authenticated post-main repository-dispatch smoke lives in web-preview.yml; the sqlite
-# backend's Turso Cloud storage mode is likewise exercised on a real deploy.
 on:
   push:
     branches: [main]
     paths:
-      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "scripts/attest-trusted-vercel-runtime.mjs", "scripts/resolve-trusted-vercel-deployment.mjs", "scripts/resolve-trusted-vercel-deployment.test.mjs", "scripts/run-trusted-real-topology-clean.sh", "scripts/run-trusted-real-topology.mjs", "scripts/run-trusted-real-topology.test.mjs", "scripts/run-trusted-final-inspection-clean.sh", "scripts/run-trusted-final-inspection.mjs", "scripts/inspection-receipt-schema.mjs", "scripts/run-trusted-final-inspection.test.mjs", "scripts/verify-production-release-clean.sh", "scripts/verify-production-release.mjs", "scripts/verify-production-release.test.mjs", "scripts/web-preview-runtime-gate.test.mjs", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml", ".github/workflows/web-preview.yml"]
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "vendor/**", "biome.json", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
   pull_request:
     paths:
-      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "scripts/attest-trusted-vercel-runtime.mjs", "scripts/resolve-trusted-vercel-deployment.mjs", "scripts/resolve-trusted-vercel-deployment.test.mjs", "scripts/run-trusted-real-topology-clean.sh", "scripts/run-trusted-real-topology.mjs", "scripts/run-trusted-real-topology.test.mjs", "scripts/run-trusted-final-inspection-clean.sh", "scripts/run-trusted-final-inspection.mjs", "scripts/inspection-receipt-schema.mjs", "scripts/run-trusted-final-inspection.test.mjs", "scripts/verify-production-release-clean.sh", "scripts/verify-production-release.mjs", "scripts/verify-production-release.test.mjs", "scripts/web-preview-runtime-gate.test.mjs", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml", ".github/workflows/web-preview.yml"]
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "vendor/**", "biome.json", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       CI: "true"
     steps:
@@ -35,91 +39,13 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      # The trusted release modules deliberately require the operator tools at fixed /usr/bin paths.
-      # GitHub's setup-tool cache is runner-writable, so snapshot the complete tool closures beneath a
-      # root-owned, non-writable parent before binding the production coordinates for pure-JS tests.
-      # The arm64 BusyBox wrapper integration remains platform-gated and runs on the pinned host.
-      - name: Snapshot setup tools at the trusted test coordinates
-        shell: bash
-        run: |
-          set -euo pipefail
-          setup_node="$(realpath "$(command -v node)")"
-          setup_npm="$(realpath "$(command -v npm)")"
-          node_root="$(realpath "$(dirname "$(dirname "${setup_node}")")")"
-          pnpm_action_root=/home/runner/setup-pnpm
-          [[ "${node_root}" =~ ^/opt/hostedtoolcache/node/[0-9]+\.[0-9]+\.[0-9]+/x64$ ]]
-          [ "${setup_node}" = "${node_root}/bin/node" ]
-          [ "${setup_npm}" = "${node_root}/lib/node_modules/npm/bin/npm-cli.js" ]
-          [ "${PNPM_HOME}" = "${pnpm_action_root}/node_modules/.bin" ]
-          [ "$(command -v pnpm)" = "${PNPM_HOME}/pnpm" ]
-          [ "$(realpath "${pnpm_action_root}")" = "${pnpm_action_root}" ]
-          [ -d "${pnpm_action_root}" ]
-          [ ! -L "${pnpm_action_root}" ]
-          pnpm_root="$(realpath "${pnpm_action_root}/node_modules/pnpm")"
-          case "${pnpm_root}" in "${pnpm_action_root}/"*) ;; *) exit 1 ;; esac
-          [ -d "${pnpm_root}" ]
-          [ ! -L "${pnpm_root}" ]
-          setup_pnpm="$(realpath "${pnpm_root}/bin/pnpm.cjs")"
-          case "${setup_pnpm}" in "${pnpm_root}/"*) ;; *) exit 1 ;; esac
-          [ -f "${setup_pnpm}" ]
-          [ ! -L "${setup_pnpm}" ]
-
-          trusted_root=/usr/lib/remote-claw-ci-tools
-          sudo -n mkdir -m 0755 -- "${trusted_root}"
-          sudo -n mkdir -m 0755 -- "${trusted_root}/node" "${trusted_root}/pnpm"
-          sudo -n cp -a -- "${node_root}/." "${trusted_root}/node/"
-          sudo -n cp -a -- "${pnpm_root}/." "${trusted_root}/pnpm/"
-          sudo -n chown -R root:root -- "${trusted_root}"
-          sudo -n chmod -R go-w -- "${trusted_root}"
-
-          trusted_node="${trusted_root}/node/${setup_node#"${node_root}/"}"
-          trusted_npm="${trusted_root}/node/${setup_npm#"${node_root}/"}"
-          trusted_pnpm="${trusted_root}/pnpm/${setup_pnpm#"${pnpm_root}/"}"
-          sudo -n chmod 0755 -- "${trusted_node}" "${trusted_npm}" "${trusted_pnpm}"
-          if find "${trusted_root}" -xdev ! -type l \( ! -user root -o ! -group root -o -perm /022 \) -print -quit | grep -q .; then
-            exit 1
-          fi
-          while IFS= read -r -d '' link; do
-            resolved_link="$(realpath "${link}")"
-            case "${resolved_link}" in "${trusted_root}/"*) ;; *) exit 1 ;; esac
-          done < <(find "${trusted_root}" -xdev -type l -print0)
-
-          tools=(node npm pnpm)
-          sources=("${setup_node}" "${setup_npm}" "${setup_pnpm}")
-          targets=("${trusted_node}" "${trusted_npm}" "${trusted_pnpm}")
-          for index in "${!tools[@]}"; do
-            tool="${tools[${index}]}"
-            source="${sources[${index}]}"
-            target="${targets[${index}]}"
-            [ -f "${target}" ]
-            [ ! -L "${target}" ]
-            cmp -s -- "${source}" "${target}"
-            sudo -n ln -sfn -- "${target}" "/usr/bin/${tool}"
-            [ "$(realpath "/usr/bin/${tool}")" = "${target}" ]
-            [ "$(stat -c '%u:%g:%a' "${target}")" = "0:0:755" ]
-            env PATH=/usr/bin:/bin "/usr/bin/${tool}" --version >/dev/null
-          done
       - run: pnpm install --frozen-lockfile
-
-      # Typecheck the e2e harness (configs + specs + the tsx host-runner) under the same strict TS the rest
-      # of the workspace uses — fail fast here, before the slow Chromium install below.
-      - name: Typecheck the e2e harness
+      - name: Check web product and browser-test sources
+        run: pnpm exec biome ci apps/web tests/web
+      - name: Typecheck the browser harness
         run: pnpm --filter remote-claw-web-tests run typecheck
-      - name: Trusted deployment/topology gate tests
-        working-directory: tests/web
-        env:
-          PATH: /usr/bin:/bin
-        run: |
-          /usr/bin/node --test \
-            ../../scripts/resolve-trusted-vercel-deployment.test.mjs \
-            ../../scripts/run-trusted-real-topology.test.mjs \
-            ../../scripts/run-trusted-final-inspection.test.mjs \
-            ../../scripts/verify-production-release.test.mjs \
-            ../../scripts/web-preview-runtime-gate.test.mjs
-
-      # Playwright Chromium + WebKit + their OS libraries (cached by the lockfile, which pins
-      # @playwright/test). WebKit is required by the app-e2e "ios-safari" project — the faithful iOS-Safari
-      # engine for the transport/revive specs; without --with-deps webkit that project would fail to launch.
+      - name: Collect the one deployed smoke without running it
+        run: pnpm --filter remote-claw-web-tests exec playwright test --list -c app-e2e.preview.config.ts
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -127,24 +53,12 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Install Chromium + WebKit
         run: pnpm --filter remote-claw-web-tests exec playwright install --with-deps chromium webkit
-
-      - name: App e2e — stable durable SQLite profile
+      - name: Product browser test
         run: pnpm --filter remote-claw-web-tests run test:app
-      - name: App e2e — Sqlite (per-session libSQL file, flipped via ?backend=)
-        run: pnpm --filter remote-claw-web-tests run test:app:sqlite
-      - name: Unit tests
-        run: pnpm --filter @remote-claw/web run test:run
-      - name: Encryption stress — local + vercel (in-process)
-        run: pnpm --filter @remote-claw/web run test:stress
-      - name: Encryption stress — HEAVY local (thousands of sealed round-trips)
-        run: pnpm --filter @remote-claw/web run test:stress:heavy
-
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-results
-          path: |
-            tests/web/test-results/
-            tests/web/test-results-sqlite/
+          path: tests/web/test-results/
           retention-days: 7

@@ -2,6 +2,8 @@ import { parsePass, toHex } from "@remote-claw/clawsec";
 import { uploadHandoff } from "@remote-claw/cli";
 import { expect, test } from "./fixtures";
 
+const HANDOFF_TEST_ENV = { NEXT_PUBLIC_RC_HANDOFF_ENABLED: "1" } as NodeJS.ProcessEnv;
+
 // End-to-end proof of the ephemeral one-time-handoff PAIRING flow (docs/ephemeral-handoff.md) across the
 // WHOLE real spine — no mocking on the handoff path:
 //   host: uploadHandoff() (@remote-claw/cli) mints an OTK, seals the forever viewer-pass under it, and PUTs
@@ -27,7 +29,7 @@ test("host upload → scan deep link → pair recovers the pass → connects to 
 
   // REAL host upload: the box is sealed under the OTK and PUT to the running server's /api/handoff. The
   // broker only ever stores one-way hashes + an opaque blob; the OTK rides the returned URL #fragment.
-  const link = await uploadHandoff(baseURL, pass);
+  const link = await uploadHandoff(baseURL, pass, { env: HANDOFF_TEST_ENV });
   expect(link.startsWith(`${baseURL}/#otk1_`)).toBe(true);
 
   // Open the deep link as a phone would. page.tsx classifies #otk1_… as a one-time handoff and DEFERS the
@@ -55,7 +57,7 @@ test("the one-time link burns: a second claim shows already-used", async ({
 }) => {
   if (!baseURL) throw new Error("baseURL is required");
   const { pass } = await seedHost();
-  const link = await uploadHandoff(baseURL, pass);
+  const link = await uploadHandoff(baseURL, pass, { env: HANDOFF_TEST_ENV });
 
   // First claim succeeds: the row is returned-and-burned and the pass is recovered (the confirm/Connect
   // step appears only after a successful claim).

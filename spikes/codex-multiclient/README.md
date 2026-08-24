@@ -1,40 +1,21 @@
-# Codex app-server multi-client probe
+# Codex app-server multi-client observations
 
-The evidence, source audit, limitations, and interpretation live in
-[Codex app-server multi-client proof](../../docs/codex-app-server-multiclient-proof.md).
+The three sanitized Codex 0.146.0 JSON records are historical protocol research. They are not a
+current-version gate or acceptance test. The source audit, interpretation, and limitations live in
+[Codex app-server multi-client observations](../../docs/codex-app-server-multiclient-proof.md).
 
-Validate the checked-in probe hashes and retained evidence invariants with:
+They preserve these forward-useful facts:
 
-```bash
-pnpm --filter @remote-claw/codex-multiclient-proof test:run
-```
+- Two initialized clients shared one materialized thread and received matching selected command-event
+  projections after the second client resumed the exact thread ID.
+- A late, unsubscribed client could mutate a live thread but received no correlated detailed events:
+  subscription was not write authority.
+- A real Codex TUI and a raw client coexisted bidirectionally on one app-server thread.
+- A host observer resumed two independently created threads and observed both while each non-owner
+  remained unsubscribed.
+- An empty thread could not be resumed until materialized, and Codex 0.146.0 exposed no server-issued
+  connection ID in the observed app-server messages.
 
-Run the safe model-free raw-client probe with:
-
-```bash
-node spikes/codex-multiclient/probe.mjs
-```
-
-The pinned output is `evidence-0.146.0.json`.
-
-Run the contained real-TUI coexistence probe with:
-
-```bash
-node spikes/codex-multiclient/real-tui-probe.mjs
-```
-
-This second probe launches one real app-server, attaches one raw protocol client and one real `codex resume --remote` TUI to the same native thread, and exchanges only user-shell commands. It requires Linux user and network namespaces, `ip`, and `tmux`. It creates a fixed synthetic ChatGPT-shaped authentication record only inside the temporary contained server home so the TUI can pass local onboarding; it never reads or copies ambient Codex credentials, and verified cleanup removes the synthetic record.
-
-The real-TUI probe has no external route. Connection attempts that reach its local deny proxy are recorded and closed; their targets and protocols are not retained. The probe sends no model prompt or `turn/start`. Its pinned output is `evidence-real-tui-0.146.0.json`.
-
-Run the contained top-level multi-chat attachment probe with:
-
-```bash
-node spikes/codex-multiclient/multi-chat-attachment-probe.mjs
-```
-
-This third probe uses two direct-client stand-ins, one host observer, and two distinct persistent top-level threads on one app-server. It proves requester-scoped top-level subscriptions before the host joins, then proves that the host can resume and observe both exact native thread IDs without subscribing either non-owning direct client. It is model-free and does not exercise core-created child-agent threads. Its pinned output is `evidence-multi-chat-attachment-0.146.0.json`.
-
-## Residual identity limitation
-
-Codex 0.146.0 does not expose a server-issued connection ID through the app-server messages retained by these fixtures. The evidence therefore pins distinct fixture labels and client names, independent request-ID counters, separately opened WebSocket connections, and the recorder's physical downstream/upstream connection counts. It does not claim to compare native connection IDs that were never observable or retained.
+No probe executable, binary/source hash verifier, or offline proof command is maintained. A future
+Codex adapter should receive a thin acceptance test against its supported version; Git history remains
+the archive for the deleted one-off probes.

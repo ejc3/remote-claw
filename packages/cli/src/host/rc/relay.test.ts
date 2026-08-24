@@ -1600,39 +1600,7 @@ describe("HostRcRelay capabilities on session_announce", () => {
     expect(client.announces.at(-1)?.capabilities).toEqual(caps);
   });
 
-  it("refreshes metadata and capabilities in one announce without changing the harness", async () => {
-    const session = new Session("s", "t", {});
-    const client = new FakeClient();
-    const relay = new HostRcRelay({
-      client: client as unknown as BrokerClient,
-      identityId: ID,
-      sessionId: session.id,
-      session,
-      capabilities: MITM_CAPABILITIES,
-      harness: OPENCODE_HARNESS,
-    });
-    const caps: DriverCapabilities = {
-      structuredPermissions: false,
-      status: false,
-      controls: { interrupt: true, setModel: false, setMode: false, end: false },
-      attachments: false,
-    };
-    const git = { branch: "feature", sha: "1234abcd", dirty: true, ahead: 2, behind: 1 };
-
-    await relay.announce("starting", "/old", null);
-    await relay.refreshAnnouncement("ready", "/new", git, caps);
-
-    expect(client.announces).toHaveLength(2);
-    expect(client.announces.at(-1)).toMatchObject({
-      title: "ready",
-      cwd: "/new",
-      git,
-      capabilities: caps,
-      harness: OPENCODE_HARNESS,
-    });
-  });
-
-  it("strictly sequences same-millisecond announces when an older publish arrives last", async () => {
+  it("strictly sequences same-millisecond presence updates when an older publish arrives last", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const session = new Session("s", "t", {});
@@ -1641,14 +1609,24 @@ describe("HostRcRelay capabilities on session_announce", () => {
 
       const initial = relay.announce("starting", "/old", null);
       await client.firstAnnounceStarted;
-      const refreshed = relay.refreshAnnouncement("ready", "/new", null, MITM_CAPABILITIES);
-      await refreshed;
+      const abort = new AbortController();
+      const served = relay.serve(abort.signal);
+      await waitFor(() => client.streamStarts.length === 1);
+      session.workerStatus = "running";
+      session.wake();
+      await waitFor(() => client.announces.length === 1);
       client.releaseFirstAnnounce();
       await initial;
+      abort.abort();
+      await served;
 
       // Broker arrival is deliberately reversed. announce_seq, not the equal liveness timestamp,
-      // identifies "ready" as newer; both frames also carry the same explicit incarnation epoch.
-      expect(client.announces.map((a) => a.title)).toEqual(["ready", "starting"]);
+      // identifies the running snapshot as newer; metadata remains frozen at readiness.
+      expect(client.announces.map((a) => a.title)).toEqual(["starting", "starting"]);
+      expect(client.announces.map((a) => a.status)).toEqual([
+        "running",
+        "WORKER_STATUS_UNSPECIFIED",
+      ]);
       expect(client.announces.map((a) => a.sent_at)).toEqual([1_000, 1_000]);
       expect(client.announces.map((a) => a.announce_seq)).toEqual([1, 0]);
       expect(client.announces[0]?.incarnation_started_at).toBe(
@@ -1676,15 +1654,19 @@ describe("HostRcRelay absorbing presence terminal", () => {
     expect(client.content).toEqual([]);
   });
 
-  it("latches permanent loss on a later announce, closes native routes with 410, and preserves the first cause", async () => {
+  it("latches permanent loss on a later presence update, closes native routes with 410, and preserves the first cause", async () => {
     const session = new Session("s", "t", {});
     const client = new PermanentLossAnnounceClient(2);
     const relay = relayOf(session, client);
     await relay.announce("box");
-
-    const failure = await relay
-      .refreshAnnouncement("updated", null, null, MITM_CAPABILITIES)
-      .catch((error: unknown) => error);
+    const abort = new AbortController();
+    const served = relay.serve(abort.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+    session.workerStatus = "running";
+    session.wake();
+    await waitFor(() => session.closed);
+    await served;
+    const failure = await relay.prepare().catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(BrokerPermanentStorageLossError);
     expect(session.closed).toBe(true);
@@ -1707,20 +1689,6 @@ describe("HostRcRelay absorbing presence terminal", () => {
     await expect(relay.prepare()).rejects.toBe(failure);
   });
 
-  it("keeps ordinary announce 5xx advisory and leaves the native session open", async () => {
-    const session = new Session("s", "t", {});
-    const client = new FailOnceAdvisoryAnnounceClient();
-    const relay = relayOf(session, client);
-    await relay.announce("box");
-
-    await expect(
-      relay.refreshAnnouncement("updated", null, null, MITM_CAPABILITIES),
-    ).rejects.toMatchObject({ status: 500 });
-    expect(session.closed).toBe(false);
-    expect(session.closeReason).toBeNull();
-    await expect(relay.prepare()).resolves.toBeUndefined();
-  });
-
   it("publishes the canonical terminal exactly once and rejects every later live snapshot", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
@@ -1741,9 +1709,6 @@ describe("HostRcRelay absorbing presence terminal", () => {
       },
     ]);
     await expect(relay.announce("resurrected")).rejects.toThrow("session closed");
-    await expect(
-      relay.refreshAnnouncement("resurrected", null, null, MITM_CAPABILITIES),
-    ).rejects.toThrow("session closed");
     expect(client.announces.map(({ title }) => title)).toEqual(["box"]);
   });
 
@@ -1827,6 +1792,9 @@ describe("HostRcRelay absorbing presence terminal", () => {
       await waitFor(() => client.announceAttempts === 3);
       await new Promise((resolve) => setImmediate(resolve));
       expect(unhandled).toEqual([]);
+      expect(session.closed).toBe(false);
+      expect(session.closeReason).toBeNull();
+      await expect(relay.prepare()).resolves.toBeUndefined();
     } finally {
       process.removeListener("unhandledRejection", onUnhandled);
       abort.abort();

@@ -9,7 +9,7 @@ runtime behind it is **pluggable** via the `BrokerBackend` port (`backend.ts`):
 | ---------- | -------------- | ---------- | ---------- |
 | **Vercel** | `vercel` (unset code fallback) | Capped Vercel Workflows compatibility/experimental profile — one `relayWorkflow` run per channel token; stable Claude rejects it | Vercel |
 | **Local**  | `local` | In-process `Map<token, Channel>` — an append-only frame log + live subscribers | `next start` / tests (single process) |
-| **Sqlite** | `sqlite` | Per-channel libSQL — one database per channel token; physical isolation and indefinite ordinary ciphertext retention. The supported Claude 1.0 production and `pnpm dev` default | Local file **or** Turso Cloud — the only variable |
+| **Sqlite** | `sqlite` | Per-channel libSQL — one database per channel token; physical isolation and indefinite ordinary ciphertext retention. The supported production and `pnpm dev` default | Local file **or** Turso Cloud — the only variable |
 
 The backend is the only thing that changes; every client speaks the same HTTP/SSE, and the wire
 protocol, auth, and crypto are identical across backends. The **`sqlite`** backend uses one libSQL
@@ -66,32 +66,25 @@ BROKER_BACKEND=local pnpm --filter @remote-claw/web dev      # or `next start` a
 ## Tests
 
 ```bash
-cd tests/web && pnpm test:app                     # the full stable app e2e on per-channel SQLite (file)
-cd tests/web && pnpm test:app:sqlite              # focused transcript e2e with explicit ?backend=sqlite
+cd tests/web && pnpm test:app                     # built app e2e on durable per-channel SQLite
 ```
 
 `test:app` hard-pins the durable SQLite profile because stable Claude rejects a non-durable broker.
-`test:app:sqlite` is the narrower transcript variant that also proves explicit per-request selection.
 
 ### CI
 
-- **`web-e2e.yml`** (every PR, self-contained): installs Chromium/WebKit and runs the full durable
-  **sqlite** app e2e plus its focused explicit-selector transcript variant, unit tests, encryption stress (`test:stress`), and a
-  **heavy local stress** (`test:stress:heavy` — thousands of sealed round-trips). No Docker, no account.
-  The sqlite backend additionally has unit coverage in `test/broker/sqlite-multi.test.ts` +
-  `test/broker/turso-cloud-locator.test.ts`.
+- **`web-e2e.yml`** (path-relevant PRs): runs the primary durable SQLite browser path. Ordinary web
+  Vitest includes bounded in-process stress for the local and experimental Vercel backends;
+  **`web-stress.yml`** schedules only the opt-in heavy local profile. The supported SQLite backend has
+  focused durable-store coverage in `test/broker/sqlite-multi.test.ts` and
+  `test/broker/turso-cloud-locator.test.ts`; the deployed Preview smoke owns the configured Turso path.
 - **`web-preview.yml`** (authenticated typed repository dispatch with a Vercel deployment ID): runs the
-  deployment-targeted broker e2e and, when the protected `release-proof` environment supplies
-  `VERCEL_AUTOMATION_BYPASS_SECRET`, two explicit Playwright UI legs: `E2E_BACKEND=vercel` exercises
-  the Workflow compatibility backend, while `E2E_BACKEND=sqlite` exercises the deployment's real
-  Turso-backed durable backend. Neither leg relies on the unset deployment default. It has no
-  `deployment_status` or ref-selectable `workflow_dispatch` trigger because those can select candidate
-  workflow bytes; `repository_dispatch` selects the default branch. The Vercel runtime
-  (and the sqlite backend's Turso Cloud storage) only exist on a real deployment, which is why their e2e
-  lives here. The sqlite/Turso-Cloud leg provisions real per-channel dbs. Those opaque proof dbs remain
-  retained: `/api/dev/sweep` returns 501 and never constructs a locator because the truncated preview
-  scope cannot prove exact deployment ownership. Any infrastructure cleanup must operate on a manually
-  reviewed exact database list outside the app.
+  deployment-targeted broker smoke when the protected environment supplies
+  `VERCEL_AUTOMATION_BYPASS_SECRET`. A no-secret resolver binds the immutable deployment to the expected
+  full SHA before the secret-bearing job runs. The smoke exercises the deployment's durable
+  Turso-backed default rather than duplicating every backend in the release path. Turso databases remain
+  retained: `/api/dev/sweep` returns 501 because the truncated preview scope cannot prove exact
+  deployment ownership. Infrastructure cleanup must use a manually reviewed exact database list.
 
 ## Production — per-channel SQLite on Turso Cloud
 
@@ -118,36 +111,12 @@ channel token, created on first publish via the Platform API, connected with the
 otherwise it uses local files. **File storage is not durable on Vercel** (ephemeral, per-instance fs) —
 the file locator fails closed there, so configure Turso Cloud for a Vercel deployment.
 
-The no-store `/api/prove/deployment-attestation` release seam accepts only an exact Vercel Preview or
-Production runtime, full `VERCEL_GIT_COMMIT_SHA`, `BROKER_BACKEND=sqlite`, all four fleet variables, and
-no explicit `RC_TURSO_DB_SCOPE`. It returns only nonsecret coordinates: Preview derives
-`pr-<7sha>`, while Production derives `prod`. The topology runner requires Preview; the post-merge
-release verifier requires Production and the same organization/group inspected in Preview.
-
-The post-merge verifier does more than read that configuration seam. Its zero-argv wrapper byte-pins
-BusyBox, Git, and Node; derives the inspected candidate from the canonical private receipt filename;
-requires the clean candidate-ancestor/equal-tree merge; materializes and byte-compares committed
-wrapper/verifier/schema blobs before piping credentials; and rechecks the repository afterward. The
-credential-bearing verifier writes only a private durable noncanonical stage. The wrapper binds its
-SHA-256/device/inode/size, rechecks the exact initial merged HEAD/tree, and materializes a fresh committed
-publisher closure; only that exact credential-free publisher may strict-validate/recheck the stage and
-exclusively, atomically, and durably publish the canonical Production receipt. The verifier checks the
-inspection completion both initially and finally, accepting at most 71 hours of age or five minutes of
-future skew.
-It re-attests the exact enabled active Firewall config: its sole custom rule is the valid
-`/api/handoff` token bucket; owner/team is pinned; update time is canonical; its project key is the
-pinned project ID plus `#active`; active `ips` and `changes` are empty; and the exact managed-rule matrix
-keeps `gen`, `rce`, `sqli`, and `xss` active/log while `java`, `lfi`, `ma`, `php`, `rfi`, `sd`, and `sf`
-are inactive/log. Draft/version state is
-unambiguous, and the separate **Firewall** bypass list is empty. It then requests
-the immutable origin without an automation bypass to prove that Vercel Deployment Protection is active.
-The automation bypass is confined to runtime-attestation, frame-count, and relay requests at that
-immutable origin; it is never sent to GitHub or Vercel Management APIs. Through the deployment's
-unselected default backend, a random fresh session must return a null durable `/api/frame-count`, publish
-one opaque frame through `/api/relay` with `created:true`, and then return a durable frame count of one.
-The relay response's physical `rc-prod-s-<16 hex>` identifier is retained as the Production receipt's
-`databaseId`; the challenge, bearer, and frame bytes are not retained. The canonical terminal artifact
-is exact-schema mode 0600 and appears only after its complete bytes and parent directory are synced.
+The no-store `/api/health/deployment` deployment-binding seam accepts only an exact Vercel
+Preview or Production runtime, a full `VERCEL_GIT_COMMIT_SHA`, `BROKER_BACKEND=sqlite`, all four
+fleet variables, and no explicit `RC_TURSO_DB_SCOPE`. It returns only nonsecret coordinates: Preview
+derives `pr-<7sha>`, while Production derives `prod`. The deployment smoke requires the returned SHA
+and storage profile to match the candidate before exercising the data plane. It does not attest host
+tools, scan a provider fleet, or publish a durable receipt.
 
 Every newly opened channel, continuity-index, and handoff Turso client crosses a hard create→serve
 readiness barrier before schema or data operations. The default wall is 30 seconds and
@@ -171,8 +140,8 @@ derived automatically from `VERCEL_ENV`/`VERCEL_GIT_COMMIT_SHA` (override with `
 separates ordinary routing names, but it is **not deletion authority**: two commits can share a seven-
 character prefix, and an override can select another deployment's scope. Ordinary production and
 preview retention is indefinite; `sweep()` deletes nothing and `/api/dev/sweep` returns 501 without
-calling the low-level diagnostic `dropScope()` primitive. `<kind>` is `s` (session), `b` (bus), `c`
-(selected-A1 control), or `x` (other).
+calling the low-level diagnostic `dropScope()` primitive. `<kind>` is `s` (session), `b` (bus), or
+`x` (other).
 (Turso db names are capped at 36 chars, which this scheme respects.)
 
 ### Notes / limits

@@ -6,8 +6,8 @@
 //   web Viewer (phone/laptop)
 //
 // The worker register→triggers→bridge→worker→SSE→delivery-ack→events→heartbeat sequence matches the
-// captured real-claude flow (phase0/mitm/captures, §17.2). So every leg is production code except the
-// model itself; the real binary is additionally proven by real-rc.prove.test.ts. Covers: a turn
+// captured real-Claude flow documented in the Phase 0 findings (§17.2). Every leg is production code except the
+// model itself; the real binary has a separate opt-in smoke. Covers: a turn
 // round-trip, session discovery on the bus, history replay (catch_up), and multi-client.
 
 import { execFileSync } from "node:child_process";

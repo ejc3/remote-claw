@@ -3,7 +3,7 @@
 // via our CA). It registers a session, mints a bridge, opens the worker SSE downstream, and for each
 // `user` event the relay pushes, POSTs an assistant turn + result back upstream. The ONLY thing this
 // fakes is the model; the transport it drives is the genuine `/v1/code/sessions*` worker API, so the
-// MITM↔worker leg is exercised end to end (the real binary is covered by real-rc.prove.test.ts).
+// MITM↔worker leg is exercised end to end (the real binary has an opt-in real-Claude smoke).
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";

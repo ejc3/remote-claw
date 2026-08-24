@@ -21,6 +21,15 @@ import { TmuxCtl, type TmuxExec, type TmuxExecOptions, type TmuxExecResult } fro
 
 const noSleep = (): Promise<void> => Promise.resolve();
 
+class TrackingSession extends Session {
+  readonly acknowledgements: string[] = [];
+
+  override ack(eventId: string): void {
+    this.acknowledgements.push(eventId);
+    super.ack(eventId);
+  }
+}
+
 /** A spy exec recording each tmux subcommand and its process-local options (including stdin). */
 function spyTmux(): {
   tmux: TmuxCtl;
@@ -357,17 +366,22 @@ describe("runInjectPump", () => {
     expect(await replayedEventIds(s, ev.eventId)).toBe(false); // landed → acked
   });
 
-  it("retries ONLY Enter after a post-paste failure — never re-pastes (codex #4 / wf #1)", async () => {
+  it("retries only an Enter that tmux proves was not applied — never re-pastes", async () => {
     const s = new Session("cse_1", "t", null);
-    // The paste SUCCEEDS; the first Enter fails transiently, then succeeds. The text must NOT be pasted
-    // a second time (that would submit the prompt DOUBLED) — only Enter retries.
+    // The paste succeeds; tmux authoritatively rejects the first Enter before application, then accepts
+    // the retry. The text must not be pasted a second time (that would submit the prompt doubled).
     const verbs: string[] = [];
     let enterFailed = false;
     const exec: TmuxExec = (args) => {
       verbs.push(args[0] ?? "");
       if (args[0] === "send-keys" && !enterFailed) {
         enterFailed = true;
-        return Promise.resolve({ code: 1, stdout: "", stderr: "busy" });
+        return Promise.resolve({
+          code: 1,
+          stdout: "",
+          stderr: "busy",
+          application: "not-applied",
+        });
       }
       return Promise.resolve({ code: 0, stdout: "", stderr: "" });
     };
@@ -394,6 +408,53 @@ describe("runInjectPump", () => {
     expect(verbs.filter((v) => v === "send-keys").length).toBe(2);
     expect(errors).toEqual([{ attempt: 1, phase: "submit" }]);
     expect(await replayedEventIds(s, ev.eventId)).toBe(false); // landed → acked
+  });
+
+  it.each([
+    "paste",
+    "submit",
+    "interrupt",
+  ] as const)("fails closed after one unknown %s mutation attempt", async (phase) => {
+    const s = new TrackingSession("cse_1", "t", null);
+    const event =
+      phase === "interrupt" ? s.pushControlRequest("interrupt") : s.pushUserInput("once only");
+    let mutationAttempts = 0;
+    const exec: TmuxExec = (args) => {
+      const isAmbiguousMutation =
+        (phase === "paste" && args[0] === "paste-buffer") ||
+        (phase === "submit" && args[0] === "send-keys" && args.includes("Enter")) ||
+        (phase === "interrupt" && args[0] === "send-keys" && args.includes("Escape"));
+      if (isAmbiguousMutation) {
+        // Model the dangerous order: the server applies the mutation, then its completion is lost.
+        mutationAttempts += 1;
+        return Promise.resolve({
+          code: 127,
+          stdout: "",
+          stderr: "",
+          application: "unknown",
+        });
+      }
+      return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    };
+    const errors: Array<{ attempt: number; phase: string }> = [];
+
+    const pump = runInjectPump({
+      session: s,
+      tmux: new TmuxCtl(exec),
+      target: "rc-cse_1",
+      signal: new AbortController().signal,
+      sleep: noSleep,
+      onError: (_event, _error, info) => {
+        if (info) errors.push(info);
+      },
+    });
+
+    await expect(pump).resolves.toBeUndefined();
+    expect(mutationAttempts).toBe(1);
+    expect(errors).toEqual([{ attempt: 1, phase }]);
+    expect(s.acknowledgements).not.toContain(event.eventId);
+    expect(s.closed).toBe(true);
+    expect(s.closeReason).toBe(`tmux ${phase} application outcome unknown`);
   });
 
   it("retries the paste until abort with NO silent give-up (prompt not dropped)", async () => {

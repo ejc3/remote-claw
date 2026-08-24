@@ -9,8 +9,8 @@ Everything except the reserved --rc-* flags is forwarded verbatim to claude (use
 literal --rc-* through). To start a session already remote-controlled, pass claude's own
 \`--remote-control\`.
 
-Identity & passes (local; never launches claude — the ONLY network touch is --rc-pass --rc-qr with an
-app origin, which uploads a one-time handoff, noted below):
+Identity & passes (local; never launches claude — the ONLY possible network touch is --rc-pass --rc-qr
+with an app origin, through the default-off one-time handoff noted below):
   --rc-identity      ensure this host's secret exists and print it once (create-once, idempotent).
                      Re-run with --rc-confirm <identity_id> to REPLACE it: mint a new, unrelated
                      identity and abandon the old one (DESTRUCTIVE; not a true rotation and NOT a
@@ -29,9 +29,12 @@ app origin, which uploads a one-time handoff, noted below):
   --rc-json          machine-readable output for an rc action (never prints the master secret)
   --rc-quiet         minimal output for an rc action (never prints the master secret)
   --rc-qr            with --rc-pass: also render the pass as a scannable terminal QR. With --rc-app
-                     (or RC_APP) it uploads a one-time handoff and encodes <origin>/#otk1_<OTK> (scan →
-                     opens the viewer; single-use, expires shortly); otherwise the bare pass for manual
-                     entry. --rc-json adds it as a "qr" field instead.
+                     (or RC_APP), and only when NEXT_PUBLIC_RC_HANDOFF_ENABLED=1, it uploads a one-time
+                     handoff and encodes <origin>/#otk1_<OTK> (scan → opens the viewer; single-use,
+                     expires shortly). Set that deployment flag only after externally verifying the
+                     per-IP WAF rate limit on /api/handoff. Otherwise no handoff QR is rendered; without
+                     an app origin, the bare pass is rendered for manual entry. --rc-json adds the QR
+                     payload as a "qr" field instead.
 
 Remote control (relay sessions to the broker so a phone/laptop can watch + steer):
   --rc-app <origin>  the app origin whose /api is the broker (or set RC_APP). With it, remote-claw runs
@@ -44,14 +47,16 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      durable profile and fails closed before discovery on vercel/local; production
                      should default the deployment to sqlite/Turso so host and viewer agree.
   --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | tmux | opencode (default mitm).
-                     mitm is the only supported Claude 1.0 driver and runs the real claude behind our
-                     MITM. tmux and opencode are retained experimental/internal compatibility drivers;
-                     they do not satisfy the Claude 1.0 release contract.
+                     mitm is the only supported private-relay driver and runs the real claude behind
+                     our MITM. tmux and opencode are retained experimental/internal compatibility
+                     drivers. tmux leaves Claude's own --remote-control untouched; one bounded run
+                     passed through the Anthropic Remote API and two browsers, but official-app UI and
+                     supported-version acceptance remain pending.
 
 Inference (mitm driver; the supported default is anthropic):
   --rc-inference <t> anthropic | bedrock (or set RC_INFERENCE; default anthropic = pass through).
-                     bedrock is an experimental/internal connector outside the Claude 1.0 release
-                     surface; it routes /v1/messages to Bedrock and synthesizes the rest.
+                     bedrock is an experimental/internal connector outside the primary coexistence
+                     path; it routes /v1/messages to Bedrock and synthesizes the rest.
   --rc-bedrock-region <r>  AWS region for Bedrock (bedrock only; default: AWS_REGION / AWS_DEFAULT_REGION,
                      else us-east-1).
   --rc-bedrock-model <m>   override the Bedrock model id (bedrock only; default: map claude's own model).

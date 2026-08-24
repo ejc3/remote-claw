@@ -23,6 +23,8 @@ export interface SeedResult {
   terminalize: () => Promise<void>;
 }
 export type SeedHost = (opts?: {
+  /** Use the two-frame seed owned by the deployed outcome smoke. */
+  profile?: "smoke";
   perm?: boolean;
   /** Inject an AskUserQuestion gate (#42): true = a single-select question; "multi" = a multiSelect
    *  question (exercises the picked-labels + appended-freeform array branch). */
@@ -45,6 +47,7 @@ function spawnHost(opts: {
   askq?: boolean | "multi";
   caps?: string;
   harness?: string;
+  profile?: "smoke";
 }): { child: ChildProcess; ready: Promise<SeedResult> } {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -55,6 +58,7 @@ function spawnHost(opts: {
     RC_E2E_ASKQ: opts.askq === "multi" ? "multi" : opts.askq ? "1" : "",
     RC_E2E_CAPS: opts.caps ?? "",
     RC_E2E_HARNESS: opts.harness ?? "",
+    RC_E2E_PROFILE: opts.profile ?? "",
     // A credential-bearing deployed run must not inherit a developer's content-level wire trace or
     // file sink. Warnings still go to inherited stderr, which Playwright does not retain here.
     RC_LOG: "warn",

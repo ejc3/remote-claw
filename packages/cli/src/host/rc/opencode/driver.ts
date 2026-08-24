@@ -1,8 +1,8 @@
 // The OpenCode driver: bridges an `opencode serve` session to our broker via the SAME Session/relay
 // contract the MITM uses (driver.ts seam). It does NOT stand up the MITM — it talks straight to the
 // OpenCode HTTP+SSE server. Startup creates a private compatibility Session, proves one exact native
-// session and (unless explicitly skipped) its permission policy, then moves one registration lease to
-// ready. Only that ready transition starts the broker bridge and the concurrent CAPTURE + INJECT pumps.
+// session and (unless explicitly skipped) its permission policy. Only then does one readiness latch
+// start the broker bridge and the concurrent CAPTURE + INJECT pumps.
 //
 // The three driver obligations from the adversarial review (driver.ts "DRIVER OBLIGATIONS") are the
 // load-bearing logic here:
@@ -29,32 +29,24 @@
 //     message (an unmatched child just stays top-level). Revisit if opencode exposes a part→child id link.
 //
 // OTHER V1 LIMITATIONS (documented, intentional — not bugs):
-//   • RELAY DEATH DOES NOT END OPENCODE (review #8, intentional). The ready lease's bridge can end (the
-//     broker dropped / the remote viewer went away); the driver KEEPS opencode running. The wrapper is
-//     thin: the local TUI stays usable and the remote view reconnects when the broker recovers. run()
-//     ends only on the PARENT signal abort — we deliberately do NOT race `served` to abort opencode (that
-//     would kill the user's live local session on a transient broker blip).
+//   • RELAY DEATH closes the compatibility Session/projection and its injection pump. It does not abort
+//     the attached native turn or stop the external server; those remain owned until parent cancellation
+//     or a native-pump failure. The projection itself has no durable restart/reconciliation policy.
 //   • IDENTICAL-PROMPT COLLISION (review #9). Echo suppression correlates a flushed OpenCode user message
 //     to a driver-injected prompt by TEXT (the #injectedTexts multiset). If a web prompt "X" and a TUI
 //     prompt "X" race before the first echo flushes, the driver can mis-attribute one for the other
 //     (suppress the local one / surface the injected one). Rare and self-limited to identical text;
 //     revisit with message-id correlation if OpenCode exposes the prompt's resulting message id.
 
-import { randomUUID } from "node:crypto";
 import type { BrokerClient } from "../../../broker/client.js";
 import { type Tracer, tracerFromEnv } from "../../../trace.js";
-import type { NativeConversationCapabilities } from "../../native/adapter.js";
 import {
   type Driver,
   type DriverCapabilities,
   type DriverContext,
   OPENCODE_HARNESS,
 } from "../driver.js";
-import {
-  type LegacyRcConversationMetadata,
-  LegacyRcConversationRegistrar,
-} from "../drivers/legacy-registrar.js";
-import type { GitInfo } from "../gitinfo.js";
+import { ReadyBridge } from "../drivers/ready-bridge.js";
 import { RelayCore, type Session } from "../session.js";
 import {
   DEFAULT_OPENCODE_URL,
@@ -87,20 +79,10 @@ export const DEFAULT_OPENCODE_MODEL: OpencodeModel = {
   modelID: "global.anthropic.claude-sonnet-4-6",
 };
 
-/** Honest A0 evidence: OpenCode mixes coordinator-injected and direct-TUI mutations, exposes partial
- * native history and HTTP receipts, and has no restart-fenced live reattachment yet. */
-export const OPENCODE_NATIVE_CAPABILITIES: NativeConversationCapabilities = {
-  version: 1,
-  mutationAdmission: "mixed",
-  history: "partial",
-  deliveryEvidence: "structured_receipt",
-  liveReattach: false,
-};
-
 function opencodeViewerCapabilities(structuredPermissions: boolean): DriverCapabilities {
   return {
     structuredPermissions,
-    // A0.2 has no proven initial GET /session/status snapshot; later SSE status events do not make the
+    // There is no proven initial GET /session/status snapshot; later SSE status events do not make the
     // initial announcement truthful.
     status: false,
     controls: { interrupt: true, setModel: false, setMode: false, end: false },
@@ -416,7 +398,7 @@ export class OpencodeDriver implements Driver {
    *  doesn't enqueue the same anchor twice. Bounded (review #6). */
   readonly #notedSubtasks = new BoundedSet(DEFAULT_EMITTED_CAP);
   /** Best-effort child permission preparations that are still running. They share the driver's abort
-   *  fence and are joined under the same bounded teardown deadline as native abort + lease closure. */
+   *  fence and are joined under the same bounded teardown deadline as native abort + bridge closure. */
   readonly #childPermissionTasks = new Set<Promise<void>>();
 
   constructor(ctx: DriverContext) {
@@ -435,8 +417,8 @@ export class OpencodeDriver implements Driver {
       } satisfies OpencodeClientOptions);
   }
 
-  /** Run until `signal` aborts. Registration is fail-closed: the compatibility Session exists privately
-   *  while native identity and policy are proved, and its broker bridge starts only at lease `ready`. */
+  /** Run until `signal` aborts. The compatibility Session stays private while native identity and policy
+   *  are proved, and its broker bridge starts only at the explicit readiness edge. */
   async run(signal: AbortSignal): Promise<number> {
     // A dead-on-arrival wrapper owns no OpenCode session. Do not create a relay Session, inspect/select
     // a native session, or issue a later abort against whatever happens to be active on the server.
@@ -449,78 +431,43 @@ export class OpencodeDriver implements Driver {
 
     const relays = new Set<Promise<void>>();
     const terminalTasks = new Set<Promise<void>>();
-    const registrar = new LegacyRcConversationRegistrar({
+    const bridge = new ReadyBridge({
+      session,
       newClient: this.#ctx.newClient,
       identityId: this.#ctx.identity.identityId,
       relays,
       terminalTasks,
       tracer: this.#ctx.tracer ?? tracerFromEnv("rc.relay"),
+      parentSignal: signal,
     });
-    const startingMetadata: LegacyRcConversationMetadata = {
-      title: this.#ctx.title,
-      cwd: this.#ctx.cwd,
-      git: this.#ctx.git as GitInfo | null,
-      capabilities: opencodeViewerCapabilities(false),
-      harness: OPENCODE_HARNESS,
-    };
-    let lease: Awaited<ReturnType<LegacyRcConversationRegistrar["open"]>> | undefined;
-
-    // The parent cancellation handler both aborts in-flight native setup and synchronously requests
-    // lease drain. LegacyRcConversationRegistrar marks stopRequested before returning its Promise, so a
-    // queued ready transition cannot overtake cancellation and publish a ghost conversation.
-    const ac = new AbortController();
-    const onAbort = () => {
-      ac.abort();
-      if (lease !== undefined) {
-        void lease.close("parent cancelled").catch((error: unknown) => {
-          this.#tracer.error("opencode starting lease close failed", { error: String(error) });
-        });
-      }
-    };
-    if (signal.aborted) ac.abort();
-    else signal.addEventListener("abort", onAbort, { once: true });
+    const stop = bridge.signal;
 
     let ocSessionId: string;
     try {
-      lease = await registrar.open({
-        bindingId: null,
-        registrationAttemptId: randomUUID(),
-        descriptor: { product: "opencode", access: "server" },
-        project: null,
-        nativeRef: null,
-        phase: "starting",
-        capabilities: null,
-        port: session,
-        metadata: startingMetadata,
-      });
-      throwIfAborted(ac.signal);
+      throwIfAborted(stop);
 
-      ocSessionId = await this.#attach(ac.signal);
-      throwIfAborted(ac.signal);
+      ocSessionId = await this.#attach(stop);
+      throwIfAborted(stop);
 
-      if (this.#mirror) await this.#requireAskMirroring(ocSessionId, ac.signal);
-      throwIfAborted(ac.signal);
+      if (this.#mirror) await this.#requireAskMirroring(ocSessionId, stop);
+      throwIfAborted(stop);
 
       const readyCapabilities = opencodeViewerCapabilities(this.#mirror);
-      await lease.update(
-        { ...startingMetadata, capabilities: readyCapabilities },
-        OPENCODE_NATIVE_CAPABILITIES,
-      );
-      throwIfAborted(ac.signal);
-      await lease.setPhase("ready");
-      throwIfAborted(ac.signal);
+      bridge.start({
+        title: this.#ctx.title,
+        cwd: this.#ctx.cwd,
+        git: this.#ctx.git,
+        capabilities: readyCapabilities,
+        harness: OPENCODE_HARNESS,
+      });
+      throwIfAborted(stop);
       Object.assign(this.capabilities, readyCapabilities);
     } catch (e) {
-      const cancelled = ac.signal.aborted;
+      const cancelled = stop.aborted;
       if (cancelled) this.#tracer.debug("opencode startup cancelled");
       else this.#tracer.error("opencode registration failed", { error: String(e) });
-      signal.removeEventListener("abort", onAbort);
-      ac.abort();
-      session.close();
       await boundedTeardownWait(
-        () =>
-          lease?.close(cancelled ? "startup cancelled" : "registration failed") ??
-          Promise.resolve(),
+        () => bridge.close(cancelled ? "startup cancelled" : "registration failed"),
         OPENCODE_TEARDOWN_FLUSH_MS,
       );
       return cancelled ? 0 : 1;
@@ -534,26 +481,26 @@ export class OpencodeDriver implements Driver {
 
     try {
       await Promise.race([
-        this.#capturePump(session, ocSessionId, ac.signal),
-        this.#injectPump(session, ocSessionId, ac.signal),
-        waitAbort(ac.signal),
+        projectionPumpLifetime(this.#capturePump(session, ocSessionId, stop), session, stop),
+        projectionPumpLifetime(this.#injectPump(session, ocSessionId, stop), session, stop),
+        waitAbort(stop),
       ]);
       return 0;
     } finally {
-      signal.removeEventListener("abort", onAbort);
       // Fence local work before touching the native run: no capture/inject pump may race a teardown
-      // abort. Native abort and relay settlement then share ONE deadline, so neither an unresponsive
-      // OpenCode server nor an unresponsive broker can serially consume another two-second window.
-      ac.abort();
+      // abort. A broker-owned Session failure ends only the remote projection; it must not cancel an
+      // otherwise healthy native turn. Explicit owner teardown or a native-pump failure still aborts
+      // the selected turn. Native abort and relay settlement share one deadline.
+      const abortNative = signal.aborted || !session.closed;
+      const bridgeTeardown = bridge.close("driver teardown");
       session.workerStatus = "idle";
-      session.close();
       const childPermissionTasks = [...this.#childPermissionTasks];
       await boundedTeardownWait(
         (deadlineSignal) =>
           Promise.allSettled([
             ...childPermissionTasks,
-            this.#client.abort(ocSessionId, deadlineSignal),
-            lease?.close("driver teardown") ?? Promise.resolve(),
+            ...(abortNative ? [this.#client.abort(ocSessionId, deadlineSignal)] : []),
+            bridgeTeardown,
           ]),
         OPENCODE_TEARDOWN_FLUSH_MS,
       );
@@ -1237,6 +1184,22 @@ function waitAbort(signal: AbortSignal): Promise<void> {
   return new Promise((resolve) =>
     signal.addEventListener("abort", () => resolve(), { once: true }),
   );
+}
+
+/** A broker fail-stop closes the compatibility Session. Let that end the remote pump, but keep the
+ * native OpenCode session and wrapper alive until its real owner cancels. A pump that ends while the
+ * Session is still open remains an adapter failure and propagates normally. */
+async function projectionPumpLifetime(
+  pump: Promise<void>,
+  session: Session,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    await pump;
+  } catch (error) {
+    if (!session.closed) throw error;
+  }
+  if (session.closed && !signal.aborted) await waitAbort(signal);
 }
 
 /** Sleep `ms`, but resolve EARLY if `signal` aborts (the reconnect-backoff wait — review #2). Never

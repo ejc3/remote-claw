@@ -15,7 +15,8 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-json": "boolean",
   "rc-quiet": "boolean",
   // `--rc-pass --rc-qr`: also render the pass as a terminal QR (scan it with a phone). With `--rc-app`
-  // (or RC_APP) it uploads a one-time handoff and encodes `<origin>/#otk1_<OTK>`; otherwise the bare pass.
+  // (or RC_APP) it can upload a one-time handoff when NEXT_PUBLIC_RC_HANDOFF_ENABLED=1 and encode
+  // `<origin>/#otk1_<OTK>`; otherwise no handoff QR is emitted. Without an origin it encodes the bare pass.
   "rc-qr": "boolean",
   "rc-yes": "boolean",
   "rc-force-noninteractive": "boolean",

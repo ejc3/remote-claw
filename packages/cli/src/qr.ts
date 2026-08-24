@@ -4,7 +4,8 @@
 //
 // NOTE: there is no `<origin>/#<pass>` deep-link builder here anymore. That forever-credential-in-URL
 // shape was replaced by the one-time OTK handoff (docs/ephemeral-handoff.md): with `--rc-app`, pass.ts
-// uploads a one-time box and the QR carries `<origin>/#otk1_<OTK>`; without it, the QR is the bare pass
+// can upload a one-time box only when NEXT_PUBLIC_RC_HANDOFF_ENABLED=1 and the QR then carries
+// `<origin>/#otk1_<OTK>`; without an origin, the QR is the bare pass
 // for manual entry. Re-introducing a `#<pass>` deep link would resurrect the dropped anti-pattern.
 import qrcodeTerminal from "qrcode-terminal";
 

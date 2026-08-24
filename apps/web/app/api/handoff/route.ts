@@ -1,10 +1,15 @@
 import { fromHex, sha256, toHex } from "@remote-claw/clawsec";
 import { getHandoffStore, resetHandoffStore } from "../../../lib/broker/handoff-store";
+import { handoffEnabled } from "../../lib/handoff-feature";
 
 // Ephemeral one-time-handoff endpoint (docs/ephemeral-handoff.md). An UNAUTHENTICATED high-entropy
 // CAPABILITY endpoint — the 256-bit OTK (and the claim proof derived from it) are the gate, not a Bearer.
 // PUT stores a sealed blob keyed by id=SHA256(OTK); POST atomically returns-and-burns it iff the caller
 // proves knowledge of the OTK. The server only ever sees one-way hashes + a blob it cannot read.
+//
+// DEFAULT OFF: PUT and POST return an opaque 404 unless NEXT_PUBLIC_RC_HANDOFF_ENABLED=1 was embedded in
+// the deployment. Setting that flag is an operator attestation that the MANDATORY external control below
+// was verified; the flag does not itself prove or implement rate limiting.
 //
 // Abuse is bounded by: a streaming pre-buffer body cap, single-read + short TTL, and a MANDATORY platform
 // rate-limit. ⚠️ DEPLOY GATE (infra, NOT in repo): a Vercel WAF rate-limit rule on path `/api/handoff`
@@ -33,6 +38,10 @@ function ttlMaxS(): number {
 // Every response is no-store (a handoff blob must never be cached by a proxy/CDN).
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: { "cache-control": "no-store" } });
+}
+
+function disabled(): Response {
+  return json({ error: "not found" }, 404);
 }
 
 /** Read the body with a hard byte cap enforced WHILE streaming (before fully buffering), so a chunked /
@@ -74,6 +83,7 @@ function parse(text: string): Record<string, unknown> | null {
 // PUT: the host uploads a sealed handoff. 200 (stored), 409 (id taken → host re-mints), 400 (malformed),
 // 413 (over-cap), 500 (backend). No auth — the id is the capability.
 export async function PUT(req: Request): Promise<Response> {
+  if (!handoffEnabled()) return disabled();
   const text = await cappedBody(req);
   if (text === null) return json({ error: "too large" }, 413);
   const body = parse(text);
@@ -117,6 +127,7 @@ export async function PUT(req: Request): Promise<Response> {
 // the stored proof_hash and atomically burns the row. 200 {box} on success; a UNIFORM 404 for
 // absent/expired/already-claimed/bad-proof (no oracle); 400 malformed; 413 over-cap; 500 backend.
 export async function POST(req: Request): Promise<Response> {
+  if (!handoffEnabled()) return disabled();
   const text = await cappedBody(req);
   if (text === null) return json({ error: "too large" }, 413);
   const body = parse(text);

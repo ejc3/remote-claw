@@ -32,13 +32,14 @@ beforeAll(() => {
   // Clear two more the route reads, so an ambient env can't break the suite: VERCEL=1 makes the file:
   // handoff store fail closed (every PUT → 500), and RC_HANDOFF_TTL_MAX_S would lower the ceiling the
   // top-level TTL tests assert. (The nested RC_HANDOFF_TTL_MAX_S describe re-manages it per-test.)
-  for (const k of ["VERCEL", "RC_HANDOFF_TTL_MAX_S"] as const) {
+  for (const k of ["VERCEL", "RC_HANDOFF_TTL_MAX_S", "NEXT_PUBLIC_RC_HANDOFF_ENABLED"] as const) {
     saved[k] = process.env[k];
     delete process.env[k];
   }
   saved.RC_SQLITE_DIR = process.env.RC_SQLITE_DIR;
   dir = mkdtempSync(join(tmpdir(), "rc-handoff-route-"));
   process.env.RC_SQLITE_DIR = dir;
+  process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED = "1";
 });
 afterAll(() => {
   for (const [k, v] of Object.entries(saved)) {

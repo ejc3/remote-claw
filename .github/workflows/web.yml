@@ -5,10 +5,10 @@ on:
     branches: [main]
     # web depends on cli + clawsec (workspace), so a change to either must re-run web CI.
     paths:
-      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web.yml"]
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "vendor/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web.yml"]
   pull_request:
     paths:
-      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web.yml"]
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "vendor/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web.yml"]
 
 jobs:
   test:

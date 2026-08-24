@@ -1,0 +1,60 @@
+name: deployment-tools
+
+on:
+  pull_request:
+    paths:
+      - scripts/attest-trusted-vercel-runtime.mjs
+      - scripts/attest-trusted-vercel-runtime.test.mjs
+      - scripts/resolve-trusted-vercel-deployment.mjs
+      - scripts/resolve-trusted-vercel-deployment.test.mjs
+      - scripts/web-preview-runtime-gate.test.mjs
+      - biome.json
+      - .github/workflows/web-preview.yml
+      - .github/workflows/deployment-tools.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/attest-trusted-vercel-runtime.mjs
+      - scripts/attest-trusted-vercel-runtime.test.mjs
+      - scripts/resolve-trusted-vercel-deployment.mjs
+      - scripts/resolve-trusted-vercel-deployment.test.mjs
+      - scripts/web-preview-runtime-gate.test.mjs
+      - biome.json
+      - .github/workflows/web-preview.yml
+      - .github/workflows/deployment-tools.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact workflow revision
+        env:
+          RC_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "${RC_EXPECTED_SHA}"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check deployment scripts and tests
+        run: >-
+          npx --yes @biomejs/biome@2.4.16 ci
+          scripts/attest-trusted-vercel-runtime.mjs
+          scripts/attest-trusted-vercel-runtime.test.mjs
+          scripts/resolve-trusted-vercel-deployment.mjs
+          scripts/resolve-trusted-vercel-deployment.test.mjs
+          scripts/web-preview-runtime-gate.test.mjs
+      - run: >-
+          node --test
+          scripts/resolve-trusted-vercel-deployment.test.mjs
+          scripts/attest-trusted-vercel-runtime.test.mjs
+          scripts/web-preview-runtime-gate.test.mjs

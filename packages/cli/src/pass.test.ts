@@ -18,18 +18,23 @@ function capture() {
 let dir: string;
 let secretPath: string;
 let prevRcApp: string | undefined;
+let prevHandoffEnabled: string | undefined;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "rc-pass-"));
   secretPath = join(dir, "secret");
   // The --rc-qr origin falls back to process.env.RC_APP in production; null it so the no-origin tests
   // are deterministic regardless of the ambient environment.
   prevRcApp = process.env.RC_APP;
+  prevHandoffEnabled = process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED;
   delete process.env.RC_APP;
+  delete process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED;
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
   if (prevRcApp === undefined) delete process.env.RC_APP;
   else process.env.RC_APP = prevRcApp;
+  if (prevHandoffEnabled === undefined) delete process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED;
+  else process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED = prevHandoffEnabled;
 });
 
 function rc(extra: Record<string, RcValue> = {}): Record<string, RcValue> {
@@ -109,6 +114,7 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
   });
 
   it("--rc-qr --rc-app: stderr QR + one-time pairing note; stdout still just the pass", async () => {
+    process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED = "1";
     await seed();
     const out = capture();
     const e = capture();
@@ -126,6 +132,7 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
   });
 
   it("--rc-qr --rc-app FAILS CLOSED on upload error — no QR, no forever-pass deep link", async () => {
+    process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED = "1";
     await seed();
     const out = capture();
     const e = capture();
@@ -143,6 +150,7 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
   });
 
   it("--rc-json --rc-qr --rc-app: JSON `qr` is the one-time otk1_ deep link; no terminal art", async () => {
+    process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED = "1";
     await seed();
     const out = capture();
     const okFetch = (async () =>
@@ -171,6 +179,27 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
     expect(j.qr).toBe(j.pass);
   });
 
+  it("--rc-qr --rc-app is default-off and never calls the handoff route", async () => {
+    await seed();
+    const out = capture();
+    const e = capture();
+    let called = false;
+    const fetchFn = (async () => {
+      called = true;
+      return Response.json({ ok: true });
+    }) as unknown as typeof fetch;
+    const code = await runPass(rc({ "rc-qr": true, "rc-app": "https://app.example.com" }), [], {
+      stdout: out.write,
+      stderr: e.write,
+      fetchFn,
+    });
+    expect(code).toBe(0);
+    expect(called).toBe(false);
+    expect(out.text().trim()).toMatch(PASS_RE); // manual paste remains available
+    expect(e.text()).not.toMatch(/[▀▄█]/u);
+    expect(e.text()).toMatch(/disabled.*WAF rate limit/i);
+  });
+
   it("--rc-quiet --rc-qr: quiet wins — ONLY the pass on stdout, nothing on stderr", async () => {
     await seed();
     const out = capture();
@@ -192,7 +221,13 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
     const code = await runPass(rc({ "rc-json": true, "rc-qr": true }), [], {
       stdout: out.write,
       stderr: () => {},
-      env: { env: { RC_APP: "https://env.example.com" } as NodeJS.ProcessEnv, homedir: () => dir },
+      env: {
+        env: {
+          RC_APP: "https://env.example.com",
+          NEXT_PUBLIC_RC_HANDOFF_ENABLED: "1",
+        } as NodeJS.ProcessEnv,
+        homedir: () => dir,
+      },
       fetchFn: okFetch,
     });
     expect(code).toBe(0);

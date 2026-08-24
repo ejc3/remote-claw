@@ -1,9 +1,17 @@
 # remote-claw — project notes for Claude
 
-A cloud-brokered, zero-knowledge, E2E-encrypted system that relays `claude --remote-control`
-through a Vercel Workflows broker. Design lives in `docs/v2-architecture.md`; the crypto core is
-`packages/clawsec`, the CLI is `packages/cli`. Phase-0 reverse-engineering of Claude's RC protocol
-is in `docs/phase0-findings.md` (and consolidated in `docs/v2-architecture.md` §17).
+**Final target:** a cloud-brokered, zero-knowledge, E2E-encrypted multiplayer layer for Claude Code,
+Codex, OpenCode, and an honest lower-fidelity tmux fallback. Each target keeps its local TUI plus
+multiple remote-claw browsers and preserves official provider collaboration where available.
+Inference routing (Anthropic/OpenAI/Bedrock) is an orthogonal axis. “Accountless” means no Anthropic
+account, not no AWS/provider or remote-claw credentials.
+
+**Current truth:** the private Claude replacement relay and narrower OpenCode/tmux adapters work;
+simultaneous official-Claude-client coexistence and the production Codex adapter are not implemented.
+The supported durable broker is SQLite/libSQL (Turso in deployment); Vercel Workflows remains
+experimental. Design lives in `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI
+is `packages/cli`. Historical Claude RC observations are in `docs/phase0-findings.md` and
+`docs/v2-architecture.md` §17.
 
 ## Driving a real claude through the wrapper (RC modes + the stub gotcha)
 
@@ -12,8 +20,10 @@ is in `docs/phase0-findings.md` (and consolidated in `docs/v2-architecture.md` �
 
 - **`--rc-app <origin> [--rc-backend <b>]`** (`runRcLaunch`, `launch.ts`) — intercepts claude's RC
   endpoints (`/v1/code/sessions/**`) and bridges the session **to our broker**, E2E-encrypted.
-  Everything else (`/v1/messages`, OAuth) tunnels straight through to Anthropic. View it in **our** web
-  viewer (`apps/web`) with a `--rc-show-secret` pass. Anthropic never sees this session, so the
+  By default, `/v1/messages`, OAuth, telemetry, and unrelated traffic tunnel to Anthropic. With
+  `--rc-inference=bedrock`, remote-claw translates inference to Bedrock and synthesizes the required
+  Anthropic control plane, so no request reaches Anthropic.
+  View the session in **our** web viewer (`apps/web`) with a `--rc-pass` credential. Anthropic never sees this session, so the
   **official Claude app cannot** — by design.
 - **`--rc-trace`** (`runRcTrace`, `trace-run.ts`) — a transparent inspector: passes **everything
   through to real `api.anthropic.com`** and just traces RC both ways (nothing hits our broker). The
@@ -43,19 +53,16 @@ spawning it — e.g. this harness), the launcher's session identity leaks into t
   credential-keyed and token-shaped values recursively redacted; larger/malformed/truncated bodies are
   omitted). On POSIX, `RC_LOG_FILE=…` writes only to an owned `0600` regular non-symlink file separate
   from the pty's TUI output; unsafe/insecure targets warn and drop records. File capture is disabled on
-  Windows because Node cannot enforce the same owner/mode/no-follow contract.
+  Windows because Node cannot enforce the same owner/mode/no-follow contract. Trace bodies can contain
+  conversation text despite credential redaction, so treat the file as sensitive.
 - **Verify it's real, not a stub:** the child claude env has **no** `CLAUDE_CODE_CHILD_SESSION`; and —
   broker mode: a fresh `cse_<hex>` is "session created" + announces every ~20s; trace mode:
   `POST …/bridge` returns a `worker_jwt`.
-- **Stable Claude 1.0 is byte-pinned, not version-string-only.** The production compatibility probe
-  resolves the requested Claude launcher (`RC_CLAUDE_BIN` or `claude` on `PATH`), opens its resolved target with
-  `O_RDONLY|O_NOFOLLOW`, and requires that target to be a root:root regular mode-`0755` file on Linux
-  arm64 with exact version
-  `2.1.237 (Claude Code)`, 331,864,296 bytes, and SHA-256
-  `a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177`, then keeps that inode open and
-  launches it through `/proc` until child exit. A pathname replacement after the probe cannot swap the
-  executable. The trusted installed release proof alone refuses `RC_CLAUDE_BIN` and hard-pins the
-  requested launcher to `/usr/bin/claude`.
+- **Stable Claude currently requires the exact tested version** `2.1.237 (Claude Code)`. The
+  compatibility probe resolves `RC_CLAUDE_BIN` or `claude` on `PATH`, runs its scrubbed `--version`
+  check, and fails closed before creating an identity when the version differs. The local OS,
+  executable path, and same-user installation are part of the host trust boundary; do not add
+  platform-, owner-, inode-, size-, or hash-attestation machinery to this application gate.
 
 ### The Vercel bypass (`VERCEL_AUTOMATION_BYPASS_SECRET`)
 
@@ -111,14 +118,13 @@ across a line wrap (some renderers mishandle it).
 
 ## Mandatory doc-sync pass
 
-Whenever a `docs/*.md` (or `CLAUDE.md`/`README.md`) lands, **or** you change the surface those docs
+Whenever a `docs/*.md` (or `AGENTS.md`/`CLAUDE.md`/`README.md`) lands, **or** you change the surface those docs
 describe (an `--rc-*` flag, an RC control verb, a broker endpoint, or a driver's
 permission/capability model), run a doc-sync pass before the work is "done" — no exceptions. The docs
 are the *source of truth* (rendered live by marked.js) and they describe a moving target, so they drift
 from the code and from each other; this is the doc analogue of the per-commit `/code-review` + codex
-loop. A **Stop hook** (`.claude/hooks/doc-sync-check.sh`) reminds you when any Markdown changed in a
-session — it asks once per change-state and never nags. The four lenses, each verified and root-cause
-fixed (not papered over):
+loop. Perform it once on the settled tree; do not use a blocking stop hook or change-state sentinel.
+The four lenses, each verified and root-cause fixed (not papered over):
 
 1. **Render.** Run every changed `docs/*.md` through marked (`gfm:true, breaks:false`) and assert **no
    list markers stranded inside `<p>` tags** (the jumble signature) and balanced fences — the snippet in
@@ -196,114 +202,77 @@ and after and actually open them.
 
 ## Tranche scope and gate discipline
 
-Safety invariants and atomic boundaries remain non-negotiable. Save time by controlling scope and
-sequencing the proof work, never by weakening the proof:
+Start from one observable user outcome and the safety boundaries it crosses. Do not create schemas,
+receipt formats, coordinators, or attestations for hypothetical later work.
 
-- **Freeze the tranche before implementation.** Write down its durable endpoint, forbidden surfaces,
-  file/owner map, release-blocking invariants, and executable gate. If an ID formula, schema shape,
-  atomic boundary, or takeover rule is still open, resolve it in a design-only pass before coding.
-- **Use one integration owner.** One agent owns cross-cutting schema/API integration. Parallel work must
-  be read-only or use non-overlapping files against a frozen interface; consumers do not guess an
-  unfinished producer's types or table layout.
-- **Keep the release cutoff concrete.** A new finding blocks the tranche only when it demonstrates a
-  reachable P0/P1 safety failure or durable liveness loss with a causal path or executable regression.
-  Record lower-severity hardening separately instead of silently expanding the tranche. Recheck every
-  claimed blocker against the latest tree before routing work.
-- **Do not repeatedly full-gate a moving tree.** During implementation, run the smallest relevant tests.
-  After the code and schema freeze, update migration pins and docs once, run one combined focused gate,
-  then one full local gate, independent review, and CI. Repeat the full gate only when a later code or
-  schema change invalidates it.
-- **Pin and document only settled bytes.** Migration counts/digests and the mandatory cross-doc sync come
-  after schema freeze. Do not make documentation agents chase provisional pins or changing semantics.
-- **Bound reviews and report scope growth.** Timebox independent review loops, preserve every concrete
-  finding they surface, and stop unproductive rereading. If the tranche grows materially beyond the
-  forecast, report it immediately and split only at a genuinely closed, crash-safe boundary.
+The required product surfaces are Claude Code, Codex, OpenCode, and an honest tmux fallback, with
+native local UI, multiple remote-claw browsers, and provider-native collaboration preserved where
+available. Inference routing is a separate axis. A required surface may be sequenced after the current
+milestone, but must not be deleted merely to simplify the next tranche.
+
+- During implementation, run the smallest relevant tests. Run the full gate once after code and docs
+  settle, and repeat it only when a later code change invalidates the result.
+- Parallelize only independent files or read-only investigation. Use one owner when a change genuinely
+  crosses an API or storage boundary.
+- A new finding blocks the tranche only when it shows a reachable high-impact safety failure or loss of
+  the required user outcome with a concrete causal path. Track unrelated hardening separately.
+- Prefer deletion and a thin vertical over preserving unused foundations. Git history is the archive.
+- Add a durable coordinator, migration, or recovery protocol only for a named state-loss case with an
+  executable crash test.
+- Keep reviews bounded and evidence-led. Preserve concrete findings; stop rereading when it produces no
+  new causal issue.
+
+For every retained module and gate, name the product surface or safety invariant it owns. Delete
+machinery with no such owner and record why Git history is sufficient. Every status claim must say
+**current**, **this milestone**, or **final target**; never let a milestone silently redefine the final
+target. Expensive gates are opt-in or path-owned. An experimental surface graduates only after its
+executable real-user acceptance passes. No new coordinator, schema, signing hierarchy, or proof layer
+is allowed without a demonstrated causal failure and the focused fault test it is meant to fix.
+
+Use E2E as a discovery and outcome layer, not a regression dumping ground. First decide whether a
+failure is a reproducible product defect, a test-harness defect, an external outage, or an unsupported
+claim; fix it at that owner. For a product defect likely to recur, root-cause it to the earliest
+trustworthy, cheapest deterministic boundary and put the detailed regression there. Do not memorialize
+incidental timing or fixture data, and do not create a new abstraction solely to make a test cheaper.
+Retain only the thinnest E2E sentinel when cross-layer wiring or the user outcome is causal. Never copy
+the same scenario into every layer. If a test cannot shift left because it depends on cross-process,
+provider, browser-engine, durability, or deployment semantics, record that reason beside the owning
+gate. Security edge cases with a reachable trust-boundary failure keep a causal boundary regression
+plus the smallest wiring sentinel. Lower-risk bugs get coverage proportional to recurrence and blast
+radius. Remove or merge proof machinery when a cheaper test supersedes it; do not build hypothetical
+exhaustive state graphs. “Cheapest” is subordinate to fidelity: never replace the behavior that caused
+the failure with a mock that cannot reproduce it. Before retaining an expensive regression, name the
+observed failure, its causal boundary, the cheaper tests considered, and why this is the smallest
+faithful sentinel.
 
 ## CLI / clawsec workflow
 
-- Each change lands as its own reviewed PR (stacked when dependent). Per-PR gate: `pnpm exec biome
-  check .` + `pnpm exec tsc --noEmit` + `pnpm exec vitest run` (all green), then `/code-review` +
-  codex. This repository currently has no enforced branch protection, so “CI green” is a manual
-  exact-SHA release gate, not a check-name glance: query GitHub Actions for the immutable 40-character
-  candidate SHA and require a repository-owned `pull_request` run with conclusion `success` for exactly
-  `.github/workflows/cli.yml` job `test`, `web.yml`/`test`, `clawsec.yml`/`test`,
-  `web-e2e.yml`/`e2e`, `native-proofs.yml`/`retained-evidence`, `workspace.yml`/`lockfile`, and
-  `docs.yml`/`web-tests` when, as in the release tranche, all are path-relevant. Missing, skipped,
-  neutral, wrong-SHA, or duplicate same-name results from an untrusted app fail the gate. Recheck the
-  resulting merge SHA after merge.
-- The installed/deployed release proof is invoked only as
-  `./scripts/run-trusted-real-topology-clean.sh` from the repository root. Do not route it through
-  direct Node, `pnpm`, or an npm lifecycle: dynamic-runtime and inherited hook variables are
-  executable-injection surfaces before JavaScript can validate them. The executable script's
-  `#!/bin/busybox ash` shell self-attests `/proc/$$/exe` as resolved `/usr/bin/busybox`, root:root mode
-  `0755`, exactly 1,914,704 bytes, and SHA-256
-  `52151e7f322f926b64049cdaa1410dc3ea6485525e0624b05813791c219ae933`. It NUL-pipes exactly the seven
-  allowlisted proof inputs into an `env -i` Node runner; secrets never enter argv. The proof then
-  creates the isolated exact-HEAD archive/package and minimal child environments. BusyBox bootstrap
-  metadata is gate-attested and is not a durable receipt field.
-- The non-cacheable deployed runtime-attestation route accepts only exact Vercel Preview or Production
-  plus a full SHA and canonical nonsecret storage profile: deployment default `sqlite`, Turso locator,
-  organization/group, and derived scope (`pr-<7sha>` for Preview, `prod` for Production). It fails unless
-  the four Turso fleet variables are complete and `RC_TURSO_DB_SCOPE` is unset/blank. Topology v4
-  requires Preview; the post-merge verifier requires Production. The bounded sentinel inspection uses
-  the Preview coordinates verbatim; never infer or substitute a scope.
-- The installed/deployed proof deliberately lasts beyond one production stream lifetime: it observes
-  the exact 240 s `: rotate` marker at a measured 235–270 s and a later successful session subscription, re-attests the same
-  pinned Claude descendant, then requires a second received/replied turn on the same `cse_*`. Its
-  Playwright timeout is 780 s; shortening the proof below the rotation boundary invalidates the gate.
-- After the executable-path check, descendant discovery must boundedly match the exact nonsecret
-  release-payload argument tail before size/hash/environment attestation. The installed CLI first runs
-  the same pinned Claude inode with `--version`; that compatibility probe is a noncandidate, not the
-  long-lived release process.
-- The release proof is one chain: private Preview topology
-  `remote-claw-real-topology-browser-leg/v4` → private bounded
-  `remote-claw-real-topology-inspection/v1` → post-merge
-  `remote-claw-production-release-attestation/v1`. Invoke only the executable BusyBox wrappers
-  `run-trusted-final-inspection-clean.sh` and `verify-production-release-clean.sh`; direct Node and argv
-  credentials are invalid. The final-inspection bootstrap byte-pins BusyBox, Git, and Node; materializes
-  and compares its committed wrapper/runner/schema closure from the candidate's Git blobs; requires the
-  clean exact topology HEAD before and after scanning; and executes from an independently byte-pinned
-  `@libsql/client` dependency snapshot. The inspection uses a newly minted short-lived read-only Turso
-  group token and proves zero occurrences only for the run-bound sentinel across the stable exact-prefix
-  Preview fleet and queryable retained immutable-deployment Runtime Logs. A fleet hostname is accepted
-  only as exact legacy `<database>-<organization>.turso.io` or as one region-qualified host whose sole
-  inserted DNS label exactly equals the validated `primaryRegion`; never replace this with a suffix-only
-  check. It does not claim inaccessible or expired provider telemetry. The credential-bearing runner
-  writes only a private durable noncanonical stage. The wrapper binds its SHA-256/device/inode/size,
-  independently rechecks the exact candidate, and materializes a fresh committed publisher closure;
-  only that exact credential-free
-  publisher may strict-validate and exclusively publish the canonical exact-schema 0600 receipt with
-  complete bytes plus file and parent-directory sync.
-- Merge only after topology v4, inspection v1, and exact-candidate CI pass. The merge SHA may differ,
-  but candidate ancestry and Git tree equality must hold through raw local Git and GitHub's independent
-  compare/commit objects. Local verification rejects replacement refs and graft metadata. Then require
-  exact-merge CI and the newest successful `vercel[bot]` Production deployment at merge HEAD. The
-  zero-argv Production wrapper independently byte-pins BusyBox, Git, and Node; derives the inspected
-  candidate from the canonical private receipt filename; requires a clean merged HEAD with that
-  candidate as ancestor and an equal tree; materializes and byte-compares the committed wrapper,
-  verifier, and schema blobs before piping its six credentials; and rechecks the repository afterward.
-  The credential-bearing verifier writes only a private durable noncanonical stage. The wrapper binds
-  its SHA-256/device/inode/size, rechecks the exact initial merged HEAD/tree, and materializes a fresh
-  committed publisher closure; only that exact credential-free publisher may strict-validate/recheck it
-  and atomically/durably publish the canonical Production receipt. The Production verifier checks the
-  inspection both initially and finally: completion may be at most 71 hours old or five minutes in the
-  future. It re-attests the exact
-  live enabled active Firewall config: the sole custom rule is the valid `/api/handoff` token bucket;
-  owner/team is pinned; update time is canonical; its project key is the pinned project ID plus
-  `#active`; active `ips` and `changes` are empty; the exact managed-rule matrix keeps `gen`, `rce`,
-  `sqli`, and `xss` active/log and `java`, `lfi`, `ma`,
-  `php`, `rfi`, `sd`, and `sf` inactive/log; draft/version state is unambiguous; and the separate
-  Firewall-bypass list is empty. It probes the immutable origin without a bypass to
-  prove Deployment Protection and sends the automation bypass only to that origin's runtime-attestation,
-  frame-count, and relay requests, never to GitHub or Vercel Management APIs. The no-store runtime
-  attestation must be
-  `sqlite`/Turso/`prod` with the same inspected org/group. A random fresh default-backend session must
-  progress from absent durable cursor to `created:true` relay write to a durable count of one; the
-  terminal atomic 0600 receipt retains its physical `rc-prod-s-*` database ID and frame digest/counts,
-  not the challenge, bearer, or frame bytes. Its complete bytes and parent directory are synced before
-  success. Exact-merge Actions CI remains separate release-record evidence rather than a receipt claim.
-  Record actual SHA/receipt evidence outside the candidate tree so documentation changes do not
-  invalidate the proof.
-- TypeScript is strict: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
-  `verbatimModuleSyntax`. Secrets never go on argv, never get logged, and never appear in
-  `--rc-json`/`--rc-quiet` output (only `--rc-identity` create and `--rc-show-secret` print `S`).
+- Each change lands as a reviewed PR. During implementation run the smallest relevant tests. Once the
+  code is frozen, run `pnpm check`, `pnpm typecheck`, `pnpm test`, and `pnpm test:install`, plus only
+  the path-relevant browser or native integration test. Run the full local gate once, followed by
+  independent review and CI; repeat it only after a code change invalidates the result.
+- Ordinary tests are deterministic and must not discover or probe ambient native services. OpenCode
+  live E2E runs only through `pnpm --filter @remote-claw/cli run test:opencode-live`, which sets
+  `RC_OPENCODE_E2E_RUN=1`; an explicitly requested unavailable target fails. Retained provider
+  fixtures are manual historical evidence, not root-Biome or ordinary-CI inputs.
+- “CI green” means the repository-owned, path-relevant checks succeeded for the candidate commit. Keep
+  the cheap immutable-SHA deployment binding, but do not recreate private receipt chains, host-tool
+  attestations, fleet/log scans, or managed-firewall matrices. A failed or incomplete smoke is simply a
+  failed gate to diagnose or rerun.
+- Release validation is outcome-focused: the tested Claude version launches, the deployed broker uses
+  the intended durable backend, the browser can discover and drive a real session, reconnect preserves
+  the transcript, and fail-stop cases remain truthful. Security-sensitive crypto, auth, ambiguous-send,
+  durability, and permission boundaries keep deterministic regression tests.
+- The full multi-agent product is **not implemented yet**. A bounded 2026-08-24 M0 run proved that the
+  existing lower-fidelity tmux driver can keep plain `claude --remote-control`, one local pane, the
+  Anthropic Remote API, and two remote-claw viewers live together; it did not exercise the official
+  Claude app UI. The next milestone is the structured path and official-app acceptance. Keep Anthropic
+  RC normal and use the existing host-side native client behind a small readiness-gated bridge: no
+  presence or mutation before one exact session and all prerequisites are ready; cancellation prevents
+  late publication. OAuth stays host-only, ambiguous sends fail closed, and Anthropic necessarily
+  receives plaintext. This milestone does not remove OpenCode, Codex, tmux, Bedrock, or accountless
+  from the product goal.
+- TypeScript is strict: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and
+  `verbatimModuleSyntax`. Root secrets and known credential material never go on argv or normal output,
+  and credential-shaped trace values are redacted. `--rc-json`/`--rc-quiet` never print `S`; only
+  `--rc-identity` create and `--rc-show-secret` do. Explicit trace bodies may contain conversation text.

@@ -2,20 +2,6 @@
 // --remote-control` is pointed at MitmProxy via HTTPS_PROXY; the proxy serves the RC worker
 // endpoints from RelayCore/Session; HostRcRelay bridges that session to the E2E-encrypted broker.
 
-export type {
-  EngineAccess,
-  EngineProduct,
-  NativeConversationBinding,
-  NativeConversationCapabilities,
-  NativeConversationLease,
-  NativeConversationPhase,
-  NativeConversationRef,
-  NativeConversationRegistrar,
-  NativeEngineAdapter,
-  NativeEngineDescriptor,
-  NativeMutationFence,
-  NativeProjectRef,
-} from "../native/index.js";
 export {
   AnthropicRcClient,
   type AnthropicRcClientOptions,
@@ -60,18 +46,6 @@ export {
   TMUX_HARNESS,
   type UpstreamPayload,
 } from "./driver.js";
-export {
-  type BridgeAnnouncement,
-  type BridgeArgs,
-  type BridgeSessionHandle,
-  bridgeSession,
-  startBridgeSession,
-} from "./drivers/bridge.js";
-export {
-  type LegacyRcConversationMetadata,
-  LegacyRcConversationRegistrar,
-  type LegacyRcRegistrarOptions,
-} from "./drivers/legacy-registrar.js";
 export { type GitInfo, gitInfo, parseGitStatusV2 } from "./gitinfo.js";
 export { type RcLaunchOptions, runRcLaunch, type SpawnClaudeEnv } from "./launch.js";
 export { type MitmOptions, MitmProxy, splitAuthority } from "./mitm.js";
@@ -90,8 +64,8 @@ export {
   buildChildEnv,
   runTmuxDriver,
   shellQuoteCommand,
-  TMUX_CAPABILITIES,
   type TmuxDriverDeps,
+  tmuxCapabilities,
   tmuxDriver,
 } from "./tmux/driver.js";
 export {

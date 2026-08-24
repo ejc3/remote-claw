@@ -7,9 +7,10 @@
 // emitted in every mode (default / --rc-json / --rc-quiet), so you can get it WHENEVER. Reads the
 // stored identity; never launches claude.
 //
-// `--rc-qr` WITH `--rc-app`/RC_APP uploads the pass as a ONE-TIME, TTL-bounded handoff and the QR carries
-// only `<origin>/#otk1_<OTK>` — a single-use bootstrap token, not a forever credential (the only mode that
-// touches the network; see docs/ephemeral-handoff.md). Without an origin the QR holds the bare pass.
+// `--rc-qr` WITH `--rc-app`/RC_APP can upload the pass as a ONE-TIME, TTL-bounded handoff and put only
+// `<origin>/#otk1_<OTK>` in the QR. That network path is default-off and requires
+// NEXT_PUBLIC_RC_HANDOFF_ENABLED=1 after the deployment's per-IP WAF rate limit has been verified. Without
+// an origin the QR holds the bare pass for manual entry.
 
 import { deriveIdentity, formatPass, toHex } from "@remote-claw/clawsec";
 import { type RcValue, rcActionArgError, strFlag } from "./args.js";
@@ -17,8 +18,8 @@ import { uploadHandoff } from "./handoff-upload.js";
 import { renderQr } from "./qr.js";
 import { loadSecret, resolveSecretPath, type StoreEnv, StoreError } from "./store.js";
 
-/** The reserved flags --rc-pass understands. `--rc-qr` also renders the pass as a terminal QR; `--rc-app`
- *  (or RC_APP) supplies the viewer origin so the QR carries the one-time link `<origin>/#otk1_<OTK>`. */
+/** The reserved flags --rc-pass understands. `--rc-qr` also renders the pass as a terminal QR; when the
+ *  handoff feature is enabled, `--rc-app` (or RC_APP) supplies the viewer origin for its one-time link. */
 const PASS_FLAGS = new Set(["rc-pass", "rc-file", "rc-json", "rc-quiet", "rc-qr", "rc-app"]);
 
 export interface PassOptions {
@@ -79,9 +80,9 @@ export async function runPass(
     appFlag !== undefined && appFlag !== ""
       ? appFlag
       : (opts.env?.env?.RC_APP ?? process.env.RC_APP);
-  // The QR payload (skipped in quiet — quiet emits only the bare pass on stdout). With an app origin, upload
-  // a ONE-TIME handoff and carry `<origin>/#otk1_<OTK>`; on upload failure fall back to the bare pass (never
-  // the old forever `#rcp1_` deep link). Without an origin, the QR is the bare pass.
+  // The QR payload (skipped in quiet — quiet emits only the bare pass on stdout). With an app origin, the
+  // default-off uploader either returns a one-time link or fails closed with no QR (never the old forever
+  // `#rcp1_` deep link). Without an origin, the QR is the bare pass.
   let qrPayload: string | undefined;
   if (wantQr && !quiet) {
     if (appOrigin) {
@@ -95,6 +96,7 @@ export async function runPass(
         qrPayload = await uploadHandoff(appOrigin, pass, {
           ...(bypass ? { bypass } : {}),
           ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
+          ...(opts.env?.env ? { env: opts.env.env } : {}),
         });
       } catch (e) {
         // FAIL CLOSED: never fall back to a forever-pass QR (the whole point of the handoff). The pass is

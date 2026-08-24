@@ -1,16 +1,13 @@
 # Ephemeral one-time credential handoff (OTK)
 
-**Status:** **IMPLEMENTED (code)** — PR1 (clawsec `handoff.ts`), PR2 (zero-knowledge `HandoffStore` +
-`/api/handoff`), PR3 (QR `otk1_` + web client + §3.6 non-extractable storage). Research-grounded (8-angle
-workflow) **and adversarially reviewed** (codex + 7-dimension red-team on the design; codex + `/code-review`
-per PR; all resolutions in §8). The §1 invariant was honestly scoped after review.
+**Status:** implemented but default-off. The crypto, zero-knowledge handoff store, route, CLI producer,
+and browser consumer exist. Enabling them is conditional on the external rate-limit boundary below.
 
-> **Claude 1.0 release scope:** manual pass onboarding is sufficient. QR/OTK handoff may be enabled only
-> when every §5 control ships together, including the externally provisioned WAF rate limit verified
-> live by the trusted release proof. If that rule is not verified, the handoff route and QR/OTK UI/CLI
-> path stay disabled; the missing WAF rule then does not
-> block the core [Claude 1.0 finish line](release-finish-line.md). Safety is conditional on feature
-> enablement, never optional within an enabled handoff flow.
+> **Release scope:** The route, CLI upload, and browser claim path deny handoff by default. Set
+> `NEXT_PUBLIC_RC_HANDOFF_ENABLED=1` only after the deployment's per-IP WAF rate limit on `/api/handoff`
+> has been verified from outside the application (§5). The public flag is an operator attestation, not a
+> rate limiter and not proof that the WAF remains installed. If the rule is absent or its status is
+> uncertain, unset the flag and redeploy. Manual pass onboarding remains available.
 
 **Goal:** replace the *forever pass embedded in the QR* with a **one-time, short-TTL bootstrap token**, so the
 handoff store is — to an *honest-but-curious* broker, a DB dump, or a passive log/edge observer — a store it
@@ -48,8 +45,8 @@ is a **forever, symmetric capability** (read **and** steer **and** forge) with n
 Resetting `S` moves future legitimate host service to a new identity but does not invalidate copied
 passes on retained old routes. A pass in a URL fragment is not sent as an HTTP request, but the fragment
 shields only Referer/server logs—not a screenshot/photo, shoulder-surf, browser history, or third-party
-scripts that can read it. The shipped `--rc-qr` path with an app origin therefore uses the
-OAuth-auth-code shape below: a single-use, at-most-10-minute handoff token, never a pass deep link.
+scripts that can read it. When explicitly enabled, the `--rc-qr` path with an app origin therefore uses
+the OAuth-auth-code shape below: a single-use, at-most-10-minute handoff token, never a pass deep link.
 
 ## 3. Design
 
@@ -116,6 +113,11 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
 
 ### 3.3 Endpoints — `apps/web/app/api/handoff/route.ts` (an unauthenticated high-entropy *capability* endpoint)
 
+Both methods return an opaque, `no-store` **404 before reading the request body** unless the deployment
+was built with `NEXT_PUBLIC_RC_HANDOFF_ENABLED=1`. The same exact flag gates the CLI producer and browser
+consumer. This is intentionally default-off: enabling the code path is permitted only after the external
+per-IP WAF rule described below has been verified.
+
 - **`PUT`** (host upload): a **route-level body cap before JSON parse** — `MAX_BODY = 8192` bytes, enforced
   *while streaming* so a chunked / missing-`content-length` body can't force an unbounded buffer; an over-cap
   body → **`413`**. Body `{id: 64-hex, proof_hash: 64-hex, ct: hex, ttl?: int}` (all wire values are hex — the
@@ -141,32 +143,20 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
 - **The proof closes the edge-pre-burn (review CONFIRMED):** the claim presents `claimProof`; the server stores
   only `SHA256(claimProof)`. A TLS-terminating edge/log that sees only `id = SHA256(OTK)` **cannot** burn or
   claim (it lacks `claimProof`, which needs OTK). This is **mandatory whenever OTK handoff is enabled**.
-- **No Bearer auth** (it would re-introduce handoff↔identity correlation); the **256-bit `id` + proof** are the
-  gate. Abuse bounded by: the pre-parse size cap, a **release-gated, live-verified Vercel WAF
-  rate-limit rule** on
-  `/api/handoff` (matched by `path` prefix) keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a token bucket;
-  excess is denied), the *primary* abuse control. The expected live rule is
-  `rule_handoff_per_ip_rate_limit_UWaS5F` (`handoff-per-ip-rate-limit`) in enabled WAF configuration
-  `waf_TG8xDULMuMuR` v3 for project `prj_qUeYYc7P87JmsQUipJG0m0kqmYbM` and team
-  `team_fYexi4KRmIrq9wtYsiXs9e9H`, with no pending changes, draft, versions, or bypass entries. The trusted
-  release runner must verify those exact live coordinates and normalized semantics through the Vercel API
-  before handoff is release-enabled. The **global volumetric backstop is Vercel's platform-described
-  always-on System Mitigations** (platform-managed automatic DDoS protection) — not a custom rule, so there is no custom
-  global counter an attacker could deliberately trip to deny pairings. The honest residual tradeoff runs the
-  other way: a coarse per-IP key can throttle legitimate clients behind one shared egress IP (carrier-grade
-  NAT), so the per-IP limit is set generously — 20 / 60 s ≫ the ~2 requests a real pairing needs. This
-  rate-limit is an **externally provisioned infra deploy gate for any deployment that enables handoff**
-  (provisioned in the Vercel Firewall, not in `vercel.json`; live state is checked by the trusted proof —
-  §5 #5), atop the short TTL, single-read, and
-  the dedicated Turso DB so PUT write-contention can't touch relay frames. **Abuse telemetry lives at the edge, not the app:** the WAF
-  dashboard (claim-rate, per-IP throttle hits, brute-force volume) is where §4's online-attack guarantees are
-  observed. The serverless route deliberately does **not** log per-claim outcomes (the `id` is public and a
-  per-instance function has no actionable signal); a backend fault returns an opaque `500` and self-heals the
-  cached client, and store-build failures are logged server-side (`handoff-store.ts`).
+- **No Bearer auth** (it would re-introduce handoff↔identity correlation); the **256-bit `id` +
+  proof** are the gate. Abuse is bounded by the pre-parse size cap and an externally provisioned per-IP
+  rate limit on `/api/handoff`; 20 requests per 60 seconds is the current operational target and leaves
+  room for the roughly two requests in a normal pairing. The exact provider rule IDs and unrelated
+  managed-firewall settings are deployment configuration, not application release evidence. Verify the
+  route limit with a bounded smoke and review provider telemetry during operations. The dedicated Turso
+  DB also prevents handoff PUT contention from blocking relay frames. The route deliberately does not
+  log per-claim outcomes; backend faults remain opaque and store-build failures are logged server-side
+  by `handoff-store.ts`.
 
 ### 3.4 QR + web client (with a user gesture and binding)
 
-- `qr.ts`/`pass.ts`: with `--rc-app <origin>`, `runPass` mints OTK, seals the **bare pass** (no separate
+- `qr.ts`/`pass.ts`: with `--rc-app <origin>` and `NEXT_PUBLIC_RC_HANDOFF_ENABLED=1` in the host
+  environment, `runPass` mints OTK, seals the **bare pass** (no separate
   fingerprint field — the pass *determines* the host's `identity_id`, recomputed from its `authToken` on
   parse, which **is** the binding value; see the web client below), `PUT`s `{id, proof_hash, ct}`, and the QR
   carries `<origin>/#otk1_<OTK>`.
@@ -179,8 +169,10 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   alarm + re-mint if the row vanishes before the phone confirms) is a **deferred follow-up**, not in the
   enabled baseline: the route exposes no lookup verb. In that baseline, §4's "detectable" is delivered
   **viewer-side** (next bullet).
-- Web client (`app/page.tsx`): on an `otk1_` fragment, **strip it immediately** (`history.replaceState`), then
-  **require an explicit user gesture** ("Pair this device") **before** the destructive POST claim — so a
+- Web client (`app/page.tsx`): only an enabled build accepts an `otk1_` fragment. A disabled build strips
+  it, makes no claim request, and sends the user to manual pass entry. When enabled, it **strips the
+  fragment immediately** (`history.replaceState`), then
+  **requires an explicit user gesture** ("Pair this device") **before** the destructive POST claim — so a
   webview/prefetch/unfurler that runs JS can't auto-burn it. After the claim, **reveal the resolved pass's
   `identity_id`** for the user to confirm against the host's `--rc-pass` output **before the credential is
   trusted/used** (the binding — anti-QR-swap; RFC 8628/CIBA `binding_message`). The confirm is necessarily
@@ -198,8 +190,8 @@ The implemented OTK flow wraps the **existing `rcp1_` pass** (simplest; trivial 
 credential's authority**: a claimed pass still grants full read+steer and shared-key inbound authority.
 Machine reset moves future host service to a new identity but does not revoke copied passes against
 retained old routes. A future asymmetric server-output-signature design could prevent a pass holder
-from forging projections or announcements; the shipped A0 envelope does not, and Claude 1.0 explicitly
-retains that mutually trusted pass-holder model.
+from forging projections or announcements; the shipped symmetric envelope does not, and the current
+product scope explicitly retains that mutually trusted pass-holder model.
 
 > **Deferred follow-ups (higher value, tracked):** (a) deliver a *scoped / expiring / per-viewer-revocable*
 > grant so a compromised **viewer** is recoverable without resetting `S`; (b) a **pinned/native client** to
@@ -249,22 +241,21 @@ guarantees move from *structural* (secret never sent) to *operational* (atomicit
 these):** (1) atomic burn-on-touch on the
 **cloud primary** (fail closed on Vercel/file); (2) **256-bit OTK**, distinct-PRF `id`/`wrapKey`/`claimProof`;
 (3) **mandatory claim proof-of-OTK**; (4) **dedicated frequent sweep** + read-time expiry; (5) **mandatory
-WAF rate-limit** (uniform fail-closed responses + pre-parse size cap are in-repo, but the **rate-limit rule
-itself is an out-of-band infra deploy-gate** — see below); (6) **user gesture before claim** +
+edge rate limit** (uniform fail-closed responses + pre-parse size cap are in-repo, while the rate-limit
+rule is an out-of-band deployment dependency); (6) **user gesture before claim** +
 **`identity_id` binding** confirmation (the host's identity, recomputed from the pass's `authToken`); (7)
 **non-extractable AES device key in IndexedDB + wrapped pass ciphertext in sessionStorage**; (8) PUT
 `409`-on-conflict with host
 re-mint.
 
-> **#5 is the one enabled-feature must-have provisioned outside the repo.** The per-IP rate-limit rule
-> cannot live in `vercel.json`, but the trusted real-topology release proof queries the Vercel API directly
-> and fails closed unless the exact project/team, enabled WAF v3 configuration, sole active valid rule,
-> `/api/handoff` path-prefix match, 20-per-60-second per-IP token bucket, deny action, and empty bypass list
-> match the coordinates above. A passing topology-v4 receipt is the run-specific evidence; its digest and
-> execution status live in the PR release record rather than this candidate-bound document. The API does
-> not expose System Mitigations, and the proof deliberately does not attest them. When handoff is disabled,
-> this conditional gate does not block
-> manual-pass Claude 1.0.
+> **#5 is the one enabled-feature must-have provisioned outside the repo.** Keep
+> `NEXT_PUBLIC_RC_HANDOFF_ENABLED` unset while provisioning the route-specific per-IP WAF rule. From one
+> external source IP, send a bounded burst and confirm that the named provider rule denies requests at
+> the configured threshold; retain the rule identifier and provider telemetry in deployment evidence.
+> Only then set the flag to exactly `1` for the web build/runtime and for CLI hosts that produce handoff
+> links, and redeploy. A value such as `true` does not enable it. If the rule is removed or cannot be
+> re-verified, unset the flag and redeploy immediately. Do not couple handoff release to unrelated
+> firewall settings or build an in-app shadow limiter. Disabled handoff never blocks manual-pass use.
 
 - **No PAKE** (high-entropy OTK ⇒ SPAKE2 adds EC-correctness surface for zero gain; NIST SP 800-63B).
 - **TTL = 10 min, configurable**, hard-capped; shorter is safer (it's the leaked-QR window).
@@ -282,61 +273,3 @@ URLs (expire + one-time) · OWASP (Secrets / Crypto-Storage / Session / tokens-i
 · HashiCorp Vault response-wrapping + cubbyhole + AppRole (single-use reference, isolation, interception
 detection) · WebCrypto non-extractable `CryptoKey` + WebAuthn `prf` (§3.6). Prior art: Yopass, Bitwarden Send,
 PrivateBin (#174), Snappass; anti-patterns: OneTimeSecret/Password Pusher (server-readable), Firefox Send (abuse).
-
-## 7. Implementation plan (stacked PRs; gate: biome + tsc + vitest → /code-review + codex → exact-SHA CI gate)
-
-1. **PR1 — clawsec `handoff.ts` + tests** (no behavior change): `generateOtk`, `handoffId`, `claimProof`,
-   `sealHandoff`/`openHandoff` (versioned box, AAD), `formatOtk`/`parseOtk`; round-trip / wrong-OTK / tamper /
-   wrong-version tests.
-2. **PR2 — store + locator + route** (dormant): cloud-primary `HandoffStore` (fail-closed on Vercel/file) +
-   `DbLocator.handoffConfig()` (the dedicated, non-per-session `rc-<scope>-hx` name) + `PUT`/`POST /api/handoff`
-   (proof-gated atomic burn, uniform fail-closed contract, pre-parse cap, 409); dedicated handoff sweep cron
-   (`vercel.json`) + PUT-time opportunistic reaper; two-client concurrent atomic test; contract tests. (The
-   **WAF rate-limit rule is out-of-band infra**, provisioned in the Vercel Firewall — not code in this PR.)
-3. **PR3 — QR + web client** (flips default): `--rc-app` emits `#otk1_…` (re-mint on 409); the forever
-   `#rcp1_` **deep-link** QR is dropped (fail-closed; a bare-pass QR for manual entry still renders when no
-   `--rc-app` origin is given, and the legacy `#rcp1_` fragment is accepted for one release); web client =
-   strip-fragment → user-gesture → binding-confirm → claim → **non-extractable AES device key in
-   IndexedDB + wrapped pass ciphertext in sessionStorage**;
-   `no-referrer` + CSP. Live e2e: scan → confirm → claim → viewer loads; second scan → "already used";
-   edge-only `id` can't burn.
-
-## 8. Adversarial review (recorded)
-
-**Reviewers:** codex (read-only) + a 7-dimension red-team workflow (42 candidate attacks → 24 refuted → **18
-survived**, several invariant-breaking). **Verdict:** *the first draft was "not sound to implement as
-written" — it overclaimed.* This revision applies the survivors. Key resolutions:
-
-- **[CRITICAL] ZK vs compromised code/edge** → §1 re-scoped to honest-but-curious + passive observers; the
-  malicious-app-delivery-server case is an explicit limit (→ pinned/native client follow-up §3.5(b)).
-- **[HIGH] "forget/cannot re-serve" vs WAL/PITR/backups** → §1 downgraded to confidentiality + API-enforced
-  one-time; backups documented as non-erasing.
-- **[HIGH/CONFIRMED] edge sees `SHA256(OTK)` ⇒ pre-burn/substitute** → claim proof-of-OTK **mandatory when enabled**
-  (§3.1/§3.3).
-- **[HIGH/CONFIRMED] TTL not physically enforced (daily cron)** → burn-on-touch `DELETE…RETURNING` + discard
-  expired + **dedicated frequent sweep** + a **PUT-time opportunistic reaper** (the floor when the `*/5` cron
-  is unavailable, e.g. Vercel Hobby) (§3.2).
-- **[HIGH/CONFIRMED] handoff↔identity correlation via IP/timing** → §1/§4 scoped honestly (row has no
-  identity; traffic does).
-- **[MEDIUM] atomic burn only on cloud primary** → fail-closed on Vercel/file + a two-client concurrent test
-  (§3.2); **the handoff DB shares the truncated scope prefix** → naming is not deletion authority, so
-  `/api/dev/sweep` is disabled (501) and the database container remains retained. Row expiry is enforced
-  by the dedicated sweep, burn-on-touch, and PUT-time reaper; `dropScope()` is diagnostic-only.
-- **[MEDIUM] unauth PUT dead-drop / clobber** → pre-parse cap + WAF + 409-on-conflict + re-mint (§3.3/§3.4).
-- **[MEDIUM] prefetch/unfurler auto-burn; QR-swap** → user gesture before claim + `identity_id` binding
-  confirmation (§3.4).
-- **[MEDIUM] back-compat keeps the anti-pattern** → drop the forever `#rcp1_` **deep-link** QR; raw pass =
-  legacy export (a bare-pass QR for manual entry still renders without `--rc-app`) (§3.4).
-- **[LOW] id↔key "independence" / "gated like identity_id" wording** → corrected to distinct-PRFs +
-  "unauthenticated capability endpoint" (§3.1/§5).
-
-Residual (accepted, documented): malicious-app-delivery-server (needs native client), backup non-erasure,
-post-claim credential authority (mitigated-not-removed by §3.6), and a QR photographed at scan time (bounded
-by TTL + one-time).
-
-**Implementation review (PR1–PR3), all applied:** codex + `/code-review` per PR. PR2 — `file:` handoff
-hard-fails on Vercel (cloud-primary); streaming pre-buffer body cap; absolute code-baked `TTL_MAX_S`;
-dead-client self-heal; opaque sweep error; `no-store` on every response; full cause-chain 404 detect.
-PR3 — `--rc-qr --rc-app` **fails closed** (never a forever-pass QR); https-only bypass; origin
-validate/normalize; **full** identity_id binding; claim re-entry guard + JSON-parse hardening; §3.6
-non-extractable post-claim storage. **Signed off.**

@@ -2,11 +2,11 @@
 //
 // 1. Load `.env.local` (gitignored) so the LIVE opencode e2e (driver.e2e.test.ts) is reproducible on
 //    another machine: drop OPENCODE_URL / RC_OPENCODE_E2E_MODEL there once instead of exporting them
-//    each run. Precedence is shell-WINS (we only set keys not already in process.env), so an explicit
-//    `RC_OPENCODE_E2E_MODEL=… pnpm test` still overrides the file. See .env.example for the keys.
+//    each run. Precedence is shell-WINS. The dedicated package script owns the exact RUN opt-in; ordinary
+//    Vitest excludes the live file even if that variable is present.
 // 2. Scrub ambient RC_* vars (whether from the shell OR .env.local) so tests never take the real
 //    RC-launch path: with RC_APP set, runWrapper would bypass injected spawn mocks and launch a REAL
-//    claude against a live broker. The one carve-out (RC_OPENCODE_E2E_*) and WHY it matters live in
+//    claude against a live broker. The two exact live-e2e carve-outs and WHY they matter live in
 //    src/vitest-env-scrub.ts, so the predicate stays pure + unit-testable (vitest-env-scrub.test.ts
 //    guards the silent regression that scrubbing the e2e's own config knobs would cause).
 import { readFileSync } from "node:fs";

@@ -16,5 +16,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "vitest.config.ts", "vitest.setup.ts"]
+  "include": ["src/**/*.ts", "vitest.config.ts", "vitest.opencode-live.config.ts", "vitest.setup.ts"]
 }

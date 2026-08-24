@@ -11,7 +11,7 @@
 // `session.ack(eventId)` after each SUCCESSFUL inject — including the leading `initialize`.
 
 import type { RcEvent, Session } from "../session.js";
-import type { TmuxCtl } from "./tmuxctl.js";
+import { type TmuxCtl, TmuxError } from "./tmuxctl.js";
 
 /** The DEFAULT tmux paste-buffer name. The driver passes a PER-SESSION name (`rcin-<session.id>`) so
  *  two concurrent tmux drivers can't overwrite each other's buffer between `set-buffer` and
@@ -35,10 +35,10 @@ export function settleMs(text: string): number {
   );
 }
 
-/** Initial backoff between inject retries (a transient set-buffer/paste-buffer error clears fast). */
+/** Initial backoff between safe inject retries (idempotent load or proved non-application). */
 export const INJECT_RETRY_MS = 100;
-/** Cap on the exponential retry backoff — bounds the cost when a pane is alive but persistently
- *  rejecting input (the pane-liveness watcher tears down a genuinely DEAD pane, ending the retry). */
+/** Cap on the exponential retry backoff — bounds the cost when a pane is alive but persistently and
+ * authoritatively rejecting input (the pane-liveness watcher ends retries for a dead pane). */
 export const INJECT_RETRY_MAX_MS = 2000;
 
 const sleepReal = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -97,11 +97,10 @@ export function downstreamControlResponse(
 
 /**
  * PHASE 1 of injection — get the text into the pane's input box: load it into a named buffer, then
- * BRACKETED-paste it (so multiline / backticks / special chars don't submit early). Split out from the
- * Enter so the pump can retry it AS A UNIT: a `paste-buffer` is a single tmux command that either
- * pastes the whole buffer or fails to start, so a FAILED paste leaves the box empty and re-running is
- * safe — but a SUCCEEDED paste must never be re-run (it would double the text). `buffer` is the
- * per-session paste-buffer name (codex review #5).
+ * BRACKETED-paste it (so multiline / backticks / special chars don't submit early). `load-buffer` is
+ * idempotent and can be repeated after an unknown outcome. `paste-buffer` mutates the pane and can be
+ * repeated only when tmux authoritatively reports that it was not applied. `buffer` is the per-session
+ * paste-buffer name (codex review #5).
  */
 export async function loadAndPaste(
   tmux: TmuxCtl,
@@ -122,8 +121,8 @@ export async function loadAndPaste(
  *  TUI is unreliable (a ❯ inside the prompt text, the prompt head scrolled out of the captured region, or
  *  a failed capture) and every ambiguous read defaults to "looks submitted" → the prompt is ACKed and
  *  SILENTLY DROPPED (codex review found three such paths). A scaled settle + a single Enter has no such
- *  false-negative; a genuine tmux error on the send-keys throws and is retried by the pump (which never
- *  re-pastes), and a truly dead pane is caught by the driver's pane-liveness watcher. */
+ *  false-negative. Enter is retried only after a proved non-application; an unknown completion could
+ *  already have submitted the prompt, so it fail-stops the compatibility Session instead. */
 export async function submitPrompt(
   tmux: TmuxCtl,
   target: string,
@@ -136,7 +135,7 @@ export async function submitPrompt(
 
 /**
  * Inject one prompt end-to-end (phase 1 then phase 2). Kept for the order test + external callers; the
- * pump drives the two phases separately so it can retry them with the right idempotency (see runInjectPump).
+ * pump drives the two phases separately so it can apply their distinct retry rules (see runInjectPump).
  */
 export async function injectUserText(
   tmux: TmuxCtl,
@@ -150,25 +149,41 @@ export async function injectUserText(
 }
 
 /**
- * Retry `action` until it succeeds or `signal` aborts, with capped exponential backoff. Returns true on
- * success, false if it aborted before landing. Reports each failure via `onError` so a stuck pane is
- * visible. There is NO max-attempts give-up (that would silently drop a prompt — review wf#7): a
- * genuinely DEAD pane is caught by the driver's pane-liveness watcher, which aborts `signal`.
+ * Retry one mutating inject step until it succeeds or `signal` aborts, with capped exponential backoff.
+ * `load-buffer` may always repeat because it replaces the same named buffer without touching the pane;
+ * paste/Enter/Escape may repeat only after an authoritative `not-applied` result. Anything else closes
+ * the remote Session and ends this pump without crashing the native driver: the local pane may have
+ * applied the command and remains alive under its existing owner. There is no max-attempts give-up for
+ * safe retries.
  */
-async function retryUntil(
+async function retryInjectStep(
   action: () => Promise<void>,
+  session: Session,
   signal: AbortSignal,
   sleep: (ms: number) => Promise<void>,
   report: (attempt: number, error: unknown) => void,
+  unknownReason: string,
 ): Promise<boolean> {
   let delay = INJECT_RETRY_MS;
-  for (let attempt = 1; !signal.aborted; attempt++) {
+  for (let attempt = 1; !signal.aborted && !session.closed; attempt++) {
     try {
       await action();
       return true;
     } catch (e) {
+      const retryable =
+        e instanceof TmuxError &&
+        (e.operation === "load-buffer" || e.application === "not-applied");
+      if (!retryable) {
+        session.close(unknownReason);
+        try {
+          report(attempt, e);
+        } catch {
+          // Diagnostics cannot turn remote ambiguity into a crash that kills the healthy local pane.
+        }
+        return false;
+      }
       report(attempt, e);
-      if (signal.aborted) return false;
+      if (signal.aborted || session.closed) return false;
       await sleep(delay);
       delay = Math.min(delay * 2, INJECT_RETRY_MAX_MS);
     }
@@ -190,7 +205,8 @@ export interface InjectPumpOptions {
   /** Injectable settle delay (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
   /** Optional diagnostics callback (driver wires its tracer). `phase` is which retried step failed
-   *  ("paste" = setBuffer+pasteBuffer unit; "submit" = Enter; "interrupt" = Escape). */
+   *  ("paste" = setBuffer+pasteBuffer unit; "submit" = Enter; "interrupt" = Escape). Unknown
+   *  mutation outcomes are reported once and then close the remote Session; only safe failures retry. */
   onError?: (
     event: string,
     error: unknown,
@@ -226,18 +242,15 @@ export interface InjectPumpOptions {
  *   • `control_request` `initialize`, `control_response` → no pane action, but ACK (review #5) so the
  *      leading initialize isn't replayed on reconnect.
  *
- * RETRY DISCIPLINE (codex #4 + review wf#1/#4/#7 — STEP-AWARE so it stays idempotent):
+ * RETRY DISCIPLINE (step-aware and application-aware):
  * `followDownstream` adds an event to its per-generator `sent` set the instant it yields, so a single
  * pump will NOT redeliver a failed inject. We therefore retry IN PLACE (serially — the for-await is
  * strictly sequential, so a burst can't interleave). Crucially the phases retry DIFFERENTLY:
- *   - PHASE 1 (setBuffer+pasteBuffer) retries as a UNIT — a failed paste-buffer left the box empty, so
- *     re-running is safe; this never double-pastes because we stop the instant paste succeeds.
- *   - PHASE 2 (Enter) retries ALONE — once the text is in the box we must NEVER re-paste (that would
- *     submit the prompt DOUBLED). A transient Enter failure just re-sends Enter.
- * Retry continues until success OR `signal` aborts — there is no silent max-attempts give-up (that
- * dropped the prompt while the session looked healthy). A genuinely dead pane is caught by the driver's
- * pane-liveness watcher (aborts `signal`); a live-but-stuck pane keeps retrying with capped backoff and
- * is surfaced via `onError`. Heartbeat ticks (`null`) are ignored.
+ *   - `load-buffer` may retry after any failure because replacing the same named buffer is idempotent.
+ *   - `paste-buffer`, Enter, and Escape retry only after tmux proves `not-applied`.
+ *   - An unknown mutation outcome is never retried or ACKed. It closes this Session and ends the inject
+ *     pump normally, retiring the remote projection without turning broker ambiguity into pane failure.
+ * Safe retries continue until success or abort; heartbeat ticks (`null`) are ignored.
  */
 export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
   const { session, tmux, target, signal } = opts;
@@ -257,18 +270,22 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
         continue;
       }
       // Phase 1: get the text into the box (retry as a unit). Phase 2: submit it (retry Enter alone).
-      const pasted = await retryUntil(
+      const pasted = await retryInjectStep(
         () => loadAndPaste(tmux, target, text, buffer),
+        session,
         signal,
         sleep,
         (attempt, error) => opts.onError?.(ev.eventType, error, { attempt, phase: "paste" }),
+        "tmux paste application outcome unknown",
       );
       if (!pasted) continue; // aborted before the text landed — leave un-acked
-      const submitted = await retryUntil(
+      const submitted = await retryInjectStep(
         () => submitPrompt(tmux, target, text, sleep),
+        session,
         signal,
         sleep,
         (attempt, error) => opts.onError?.(ev.eventType, error, { attempt, phase: "submit" }),
+        "tmux submit application outcome unknown",
       );
       if (submitted) {
         // ACK FIRST — the ack is what stops a reclaimed stream from REPLAYING (double-injecting) this
@@ -280,11 +297,13 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
         opts.onInjected?.(text);
       }
     } else if (isInterrupt(ev)) {
-      const sent = await retryUntil(
+      const sent = await retryInjectStep(
         () => tmux.sendKeys(target, "Escape"),
+        session,
         signal,
         sleep,
         (attempt, error) => opts.onError?.(ev.eventType, error, { attempt, phase: "interrupt" }),
+        "tmux interrupt application outcome unknown",
       );
       if (sent) session.ack(ev.eventId);
     } else if (downstreamSetModel(ev) !== null) {
@@ -293,18 +312,22 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
       // local-prompt ledger so claude's transcript echo of the slash command is suppressed (the viewer
       // drove it from the ⋯ sheet, not as a typed message).
       const text = `/model ${downstreamSetModel(ev)}`;
-      const pasted = await retryUntil(
+      const pasted = await retryInjectStep(
         () => loadAndPaste(tmux, target, text, buffer),
+        session,
         signal,
         sleep,
         (attempt, error) => opts.onError?.("set_model", error, { attempt, phase: "paste" }),
+        "tmux model paste application outcome unknown",
       );
       if (!pasted) continue;
-      const submitted = await retryUntil(
+      const submitted = await retryInjectStep(
         () => submitPrompt(tmux, target, text, sleep),
+        session,
         signal,
         sleep,
         (attempt, error) => opts.onError?.("set_model", error, { attempt, phase: "submit" }),
+        "tmux model submit application outcome unknown",
       );
       if (submitted) {
         session.ack(ev.eventId);

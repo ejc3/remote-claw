@@ -2,10 +2,11 @@
 // local MITM and spawns the REAL `claude` with `HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS` pointed at it —
 // so the moment you hit `/remote-control` inside claude, its RC connection lands on OUR relay (not
 // Anthropic's), and we bridge that session E2E-encrypted to the broker. Until then the MITM is
-// transparent (it passes `/v1/messages` + OAuth through), so a session that never enables RC sends
+// transparent in the default Anthropic profile (it passes `/v1/messages` + OAuth through). With
+// `--rc-inference=bedrock`, remote-claw translates inference to Bedrock and synthesizes the required
+// Anthropic control plane, so no request reaches Anthropic. A session that never enables RC sends
 // nothing to the broker (lazy registration). One RelayCore owns every RC session the child opens.
 
-import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,16 +14,12 @@ import type { Identity } from "@remote-claw/clawsec";
 import { BrokerClient } from "../../broker/client.js";
 import { securityProvider } from "../../security/provider.js";
 import { tracerFromEnv } from "../../trace.js";
-import type { NativeConversationCapabilities } from "../native/index.js";
 import { PRETEND_API_KEY, seedAccountlessConfigDir } from "./accountless.js";
 import type { BedrockConfig } from "./bedrock/inference.js";
 import { ensureCerts } from "./certs.js";
-import { acquireStableClaudeExecutable } from "./compatibility.js";
+import { assertStableClaudeCompatibility } from "./compatibility.js";
 import { MITM_HARNESS, STABLE_MITM_CAPABILITIES } from "./driver.js";
-import {
-  type LegacyRcConversationMetadata,
-  LegacyRcConversationRegistrar,
-} from "./drivers/legacy-registrar.js";
+import { ReadyBridge } from "./drivers/ready-bridge.js";
 import { type GitInfo, gitInfo } from "./gitinfo.js";
 import { MitmProxy } from "./mitm.js";
 import { RelayCore, type Session } from "./session.js";
@@ -31,14 +28,6 @@ import { RelayCore, type Session } from "./session.js";
 // tracked and awaited separately: JS timers are minimum delays, so no wall-clock cutoff may overtake its
 // remaining retries after an OS suspend or event-loop stall.
 const RELAY_TEARDOWN_WAIT_MS = 2_000;
-const CLAUDE_NATIVE_CAPABILITIES: NativeConversationCapabilities = {
-  version: 1,
-  mutationAdmission: "mixed",
-  history: "none",
-  deliveryEvidence: "structured_receipt",
-  liveReattach: false,
-};
-
 /** How the child claude is launched with the proxy env (injectable for tests). */
 export type SpawnClaudeEnv = (
   bin: string,
@@ -61,8 +50,8 @@ export interface RcLaunchOptions {
   certsDir: string;
   /** The claude binary (default "claude"). */
   claudeBin?: string;
-  /** Injectable only for deterministic boundary tests. Direct production callers instead open and
-   * retain one executable inode, then probe it before certificates, listeners, git probes, or spawn. */
+  /** Injectable only for deterministic boundary tests. Production checks the supported Claude version
+   * before certificates, listeners, git probes, or spawn. */
   claudeCompatibilityCheck?: (claudeBin: string) => Promise<void>;
   /** Launch the child (default: real child process with inherited stdio + the proxy env). */
   spawnClaude: SpawnClaudeEnv;
@@ -91,21 +80,9 @@ export interface RcLaunchOptions {
  * broker. Resolves with claude's exit code; tears the MITM + relays down on exit.
  */
 export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
-  const requestedClaudeBin = opts.claudeBin ?? "claude";
-  // The production boundary retains the exact executable inode from compatibility probe through child
-  // exit. Deterministic tests may inject the documented check seam and keep their synthetic command.
-  const executable =
-    opts.claudeCompatibilityCheck === undefined
-      ? await acquireStableClaudeExecutable(requestedClaudeBin)
-      : await opts.claudeCompatibilityCheck(requestedClaudeBin).then(() => ({
-          claudeBin: requestedClaudeBin,
-          release() {},
-        }));
-  try {
-    return await runRcLaunchWithExecutable(opts, executable.claudeBin);
-  } finally {
-    executable.release();
-  }
+  const claudeBin = opts.claudeBin ?? "claude";
+  await (opts.claudeCompatibilityCheck ?? assertStableClaudeCompatibility)(claudeBin);
+  return runRcLaunchWithExecutable(opts, claudeBin);
 }
 
 async function runRcLaunchWithExecutable(
@@ -136,7 +113,8 @@ async function runRcLaunchWithExecutable(
   const relayTracer = tracerFromEnv("rc.relay");
   const relays = new Set<Promise<void>>();
   const terminalTasks = new Set<Promise<void>>();
-  const registrations = new Set<Promise<void>>();
+  const bridges = new Set<ReadyBridge>();
+  const bridgeOwner = new AbortController();
   let tearingDown = false;
 
   // If the broker is deployed behind Vercel Deployment Protection (SSO), the host's requests need the
@@ -152,68 +130,50 @@ async function runRcLaunchWithExecutable(
       ...(opts.backend !== undefined ? { backend: opts.backend } : {}),
     });
 
-  // One host-scoped registrar owns the lifecycle of every intercepted conversation. A Session remains
-  // the native port used by today's relay, but neither its synthetic cse_* id nor any other RC transport
-  // value is promoted into the host binding/native identity.
-  const registrar = new LegacyRcConversationRegistrar({
-    newClient,
-    identityId: opts.identity.identityId,
-    relays,
-    terminalTasks,
-    tracer: relayTracer,
-  });
-  const registerSession = async (session: Session): Promise<void> => {
-    const metadata: LegacyRcConversationMetadata = {
-      title,
-      cwd,
-      git,
-      capabilities: STABLE_MITM_CAPABILITIES,
-      harness: MITM_HARNESS,
-    };
-    let lease: Awaited<ReturnType<LegacyRcConversationRegistrar["open"]>> | undefined;
+  // A successful native session registration is this harness's readiness edge. Start its bridge
+  // immediately; the ReadyBridge owner still fences a registration racing host teardown.
+  const registerSession = (session: Session): void => {
+    const bridge = new ReadyBridge({
+      session,
+      newClient,
+      identityId: opts.identity.identityId,
+      relays,
+      terminalTasks,
+      tracer: relayTracer,
+      parentSignal: bridgeOwner.signal,
+    });
+    bridges.add(bridge);
     try {
-      lease = await registrar.open({
-        bindingId: null,
-        registrationAttemptId: randomUUID(),
-        descriptor: { product: "claude-code", access: "native-rc" },
-        project: null,
-        nativeRef: null,
-        phase: "starting",
-        capabilities: null,
-        port: session,
-        metadata,
+      const handle = bridge.start({
+        title,
+        cwd,
+        git,
+        capabilities: STABLE_MITM_CAPABILITIES,
+        harness: MITM_HARNESS,
       });
-      if (tearingDown) {
-        await lease.close("host teardown");
-        return;
-      }
-      await lease.update(metadata, CLAUDE_NATIVE_CAPABILITIES);
-      if (tearingDown) {
-        await lease.close("host teardown");
-        return;
-      }
-      await lease.setPhase("ready");
+      const retire = (reason: string): void => {
+        void bridge.close(reason).then(
+          () => bridges.delete(bridge),
+          () => bridges.delete(bridge),
+        );
+      };
+      void handle.served.then(
+        () => retire("bridge settled"),
+        () => retire("bridge failed"),
+      );
     } catch (error) {
-      if (lease !== undefined) {
-        await lease.close("registration failed").catch((closeError: unknown) => {
-          relayTracer.error("native conversation lease close failed", {
-            error: String(closeError),
-          });
+      bridges.delete(bridge);
+      if (!tearingDown) {
+        relayTracer.error("native conversation registration failed", {
+          error: String(error),
         });
       }
-      throw error;
-    }
-  };
-  const closeRegistrarLeases = async (deadlineMs: number): Promise<void> => {
-    const closing = registrar.closeAll("host teardown").catch((error: unknown) => {
-      relayTracer.error("native conversation registrar teardown failed", {
-        error: String(error),
+      void bridge.close("registration failed").catch((closeError: unknown) => {
+        relayTracer.error("native conversation bridge close failed", {
+          error: String(closeError),
+        });
       });
-    });
-    // An unresponsive broker post must not keep the wrapper alive forever after the child exits. Every
-    // teardown stage shares one deadline so the same stalled announce cannot consume a fresh grace
-    // period in closeAll(), registration cleanup, and the final relay wait.
-    await waitForTasks([closing], deadlineMs);
+    }
   };
 
   const proxy = new MitmProxy({
@@ -228,16 +188,7 @@ async function runRcLaunchWithExecutable(
       // Preserve the existing observability timing: callers see the Session synchronously at MITM
       // registration, before the asynchronous host registration begins.
       opts.onSession?.(s);
-      const registration = registerSession(s).catch((error: unknown) => {
-        // A half-registered Session must not keep accepting native or viewer work. Closing the legacy
-        // Session is the fail-closed error path only; ordinary lease teardown never owns the native port.
-        relayTracer.error("native conversation registration failed", {
-          error: String(error),
-        });
-        s.close();
-      });
-      registrations.add(registration);
-      void registration.finally(() => registrations.delete(registration));
+      registerSession(s);
     },
   });
   await proxy.listen();
@@ -250,8 +201,9 @@ async function runRcLaunchWithExecutable(
     NODE_EXTRA_CA_CERTS: certs.caPem,
   };
   // A pre-existing NO_PROXY (e.g. "api.anthropic.com" or "*") would make a proxy-aware HTTP stack
-  // BYPASS our MITM despite HTTPS_PROXY — so `/remote-control` would never reach the local backend.
-  // Clear both forms for the child; our proxy itself passes inference/OAuth straight through anyway.
+  // bypass our MITM despite HTTPS_PROXY, skipping the local RC facade and any selected inference
+  // translation. Clear both forms for the child; the proxy passes ordinary Anthropic traffic through
+  // in the default inference mode and owns the explicit Bedrock path when selected.
   delete env.NO_PROXY;
   delete env.no_proxy;
   // Defense-in-depth: the child claude is our payload, not our confidant. Strip host-only secrets it
@@ -323,12 +275,17 @@ async function runRcLaunchWithExecutable(
   } finally {
     tearingDown = true;
     const teardownDeadlineMs = Date.now() + RELAY_TEARDOWN_WAIT_MS;
-    await closeRegistrarLeases(teardownDeadlineMs);
-    await waitForTasks(registrations, teardownDeadlineMs);
-    // Catch a lease whose open raced the first closeAll snapshot. The registration path also observes
-    // tearingDown and closes it, so this second pass is idempotent. Always initiate the second close
-    // even if the shared wait budget is already exhausted.
-    await closeRegistrarLeases(teardownDeadlineMs);
+    // Fence every existing and future session registration synchronously. A late MITM callback receives
+    // the already-aborted owner and therefore cannot create a BrokerClient or advertise a ghost session.
+    bridgeOwner.abort();
+    const closing = [...bridges].map((bridge) =>
+      bridge.close("host teardown").catch((error: unknown) => {
+        relayTracer.error("native conversation bridge teardown failed", {
+          error: String(error),
+        });
+      }),
+    );
+    await waitForTasks(closing, teardownDeadlineMs);
     await waitForTasks(relays, teardownDeadlineMs);
     // Do not apply the unrelated-work wall-clock cutoff here. Each terminal task has its own per-attempt
     // Promise.race bound, but a suspended event loop cannot schedule retries until it resumes. Await the

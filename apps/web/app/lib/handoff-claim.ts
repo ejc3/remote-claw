@@ -7,15 +7,18 @@ import {
   parseOtk,
   toHex,
 } from "@remote-claw/clawsec";
+import { handoffEnabled } from "./handoff-feature";
 
-// Claim a one-time handoff (docs/ephemeral-handoff.md): POST id + proof to the same-origin /api/handoff
-// claim endpoint, then open the returned sealed box LOCALLY with the OTK. The OTK never leaves the browser;
-// the server only ever sees the hashes + the opaque box. Returns the resolved `rcp1_` pass. Throws a
-// user-facing message on a used/expired/failed link (the row is one-time + TTL-bounded).
+// Default-off one-time handoff consumer (docs/ephemeral-handoff.md). When enabled, POST id + proof to the
+// same-origin endpoint, then open the returned box LOCALLY with the OTK. The OTK never leaves the browser;
+// the server sees only hashes + ciphertext. Returns the resolved `rcp1_` pass.
 export async function claimHandoff(
   otkToken: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<string> {
+  if (!handoffEnabled()) {
+    throw new Error("One-time pairing is not enabled on this deployment. Enter a pass manually.");
+  }
   const otk = await parseOtk(otkToken); // throws HandoffError on a malformed otk1_
   const id = toHex(await handoffId(otk));
   const proof = toHex(await handoffClaimProof(otk));

@@ -20,7 +20,7 @@ import {
   OpencodeDriver,
 } from "./driver.js";
 
-// Driver-level CAPTURE test. We drive the REAL OpencodeDriver + a REAL HostRcRelay (via bridgeSession),
+// Driver-level CAPTURE test. We drive the real OpencodeDriver and HostRcRelay through ReadyBridge,
 // replacing only the two transports with controllable fakes:
 //   • a FakeOpencodeClient (extends OpencodeClient so the driver's `instanceof` guard accepts it) that
 //     yields a CANNED SSE sequence — the exact (model-agnostic) shapes captured from the live
@@ -37,6 +37,8 @@ class FakeBroker {
   posts: Array<{ recordKind: string; seq: number | null; text: string }> = [];
   /** Park session-announcement writes forever to model a broker transport that ignores abort. */
   stallAnnouncements = false;
+  /** Reject transcript publication to model a fatal remote projection without touching OpenCode. */
+  failContent = false;
   announcementAttempts = 0;
   get content() {
     return this.posts.filter((p) => p.seq !== null);
@@ -54,6 +56,7 @@ class FakeBroker {
     return null;
   }
   async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
+    if (this.failContent) throw new Error("injected broker publication failure");
     this.posts.push({
       recordKind: header.recordKind,
       seq: header.seq,
@@ -762,9 +765,8 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
     expect(client.replies).toEqual([{ permissionId: "per_1", response: "once" }]);
   });
 
-  // Scenario (g): the live e2e drives the permission round-trip against a real model (driver.e2e.test.ts
-  // (k)); this is the DETERMINISTIC twin — proving the gate path against the driver's own translation with
-  // no model in the loop, so it runs in CI without a server:
+  // Scenario (g): deterministic permission coverage against the driver's own translation, with no
+  // model or native server in the loop so it runs in ordinary CI:
   //   • permission.asked → the EXACT can_use_tool control_request shape mapUpstreamItems renders, and
   //   • a viewer DENY → POST /permission/{id}/reply { reply: "reject" }
   //     (allow → "once" is proven above).
@@ -887,7 +889,7 @@ describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
   });
 });
 
-describe("OpencodeDriver fail-closed registration (A0.2)", () => {
+describe("OpencodeDriver fail-closed registration", () => {
   let ac: AbortController | null = null;
   afterEach(() => ac?.abort());
 
@@ -1406,6 +1408,31 @@ describe("OpencodeDriver hardening", () => {
     const code = await run;
     expect(code).toBe(0);
     expect(resolved).toBe(true); // NOW it resolves — only on the parent abort
+  });
+
+  it("keeps the native OpenCode session alive when only the broker projection fails", async () => {
+    const client = new FakeOpencodeClient(OK_SCRIPT);
+    const broker = new FakeBroker();
+    broker.failContent = true;
+    let captured: Session | null = null;
+    const ctx = await makeCtx(client, broker, (session) => {
+      captured = session;
+    });
+    ac = new AbortController();
+    let resolved = false;
+    const run = new OpencodeDriver(ctx).run(ac.signal).then((code) => {
+      resolved = true;
+      return code;
+    });
+
+    await waitFor(() => (captured as unknown as Session | null)?.closed === true);
+    await sleep(25);
+    expect(resolved).toBe(false);
+    expect(client.aborts).toBe(0);
+
+    ac.abort();
+    await expect(run).resolves.toBe(0);
+    expect(client.aborts).toBe(1);
   });
 
   // FIX #3 — a FAILED promptAsync must roll back the suppression token so a later identical LOCAL prompt

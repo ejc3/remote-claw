@@ -1,4 +1,4 @@
-// MITM certificate authority + leaf — a faithful port of phase0/remote_claw/certs.py.
+// MITM certificate authority + leaf, ported from the retired Phase 0 prototype.
 //
 // Generates a throwaway CA and a leaf for `api.anthropic.com` via the system `openssl`. The CA is
 // trusted by the spawned `claude` process ONLY, via `NODE_EXTRA_CA_CERTS` — never installed
@@ -6,8 +6,9 @@
 //
 // The wrapper points `claude` at our local proxy with `HTTPS_PROXY`; when claude opens a TLS
 // connection to api.anthropic.com THROUGH that proxy, the proxy presents this leaf, and claude
-// accepts it because the CA is in its NODE_EXTRA_CA_CERTS bundle. Inference (`/v1/messages`) and
-// OAuth still flow to the real upstream — we only *serve* the RC endpoints (§14, §17.5).
+// accepts it because the CA is in its NODE_EXTRA_CA_CERTS bundle. In the default Anthropic profile,
+// inference (`/v1/messages`) and OAuth flow upstream while we serve RC endpoints. The explicit Bedrock
+// profile instead translates inference and synthesizes its control plane (§14, §17.5).
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";

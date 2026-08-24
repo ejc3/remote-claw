@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>remote-claw — protocol &amp; plan</title>
-<meta name="description" content="Drive a real Claude Code TUI from your own zero-knowledge relay; Claude 1.0 is the active finish line and multi-engine designs are parked research.">
+<meta name="description" content="Add zero-knowledge browser clients to a native Claude Remote Control session; coexistence is the active unfinished goal.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css">
 <style>
   :root{
@@ -128,16 +128,16 @@
 </header>
 
 <section class="hero">
-  <h1>Drive a real Claude Code TUI from your own relay + client</h1>
-  <p>The working developer beta wraps the real <code>claude --remote-control</code> TUI and connects it to an owned browser through a <b>zero-knowledge</b>, <b>end-to-end encrypted</b> broker. The sole active finish line is to make that Claude path installable, failure-safe, operationally supportable, and proven as one deployed product. The broader multi-engine runtime is parked future work.</p>
+  <h1>Encrypted multiplayer for the coding agents you already use</h1>
+  <p>remote-claw's target is to add multiple browser collaborators to Claude Code, Codex, OpenCode, and an honest lower-fidelity tmux fallback through a <b>zero-knowledge</b>, <b>end-to-end encrypted</b> broker while keeping the local TUI and provider-native collaboration where available. The shared core is a developer beta; the full surface matrix is not implemented yet, and model routing—including Anthropic, OpenAI, and Bedrock—remains a separate choice.</p>
   <div class="badges">
-    <span class="badge ok">Phase 0 · <b>working + verified</b></span>
-    <span class="badge ok">Claude core · <b>developer beta</b></span>
-    <span class="badge">1.0 · <b>release hardening</b></span>
+    <span class="badge ok">shared core · <b>developer beta</b></span>
+    <span class="badge">structured Claude coexistence · <b>next</b></span>
+    <span class="badge">OpenCode · Codex · tmux · <b>product surfaces</b></span>
     <span class="badge">end-to-end encrypted</span>
     <span class="badge">zero-knowledge broker</span>
   </div>
-  <p style="font-size:14px;color:var(--muted);margin-top:6px">This page is generated live from the design docs in <code>/docs</code> — it is the single source of truth.</p>
+  <p style="font-size:14px;color:var(--muted);margin-top:6px">The selected tab is rendered live from its Markdown source in <code>/docs</code>; the page chrome is maintained here.</p>
 </section>
 
 <div class="wrap">
@@ -146,7 +146,7 @@
 </div>
 
 <footer>
-  Generated from <code>docs/*.md</code> at <a href="https://github.com/ejc3/remote-claw">ejc3/remote-claw</a>.
+  Article content loaded from <code>docs/*.md</code> at <a href="https://github.com/ejc3/remote-claw">ejc3/remote-claw</a>.
   Research/design notes — undocumented Claude Code internals are reverse-engineered &amp; version-sensitive.
 </footer>
 
@@ -154,20 +154,20 @@
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
 const DOCS = [
-  {id:"release",  file:"release-finish-line.md",    label:"Claude 1.0 Finish Line"},
+  {id:"release",  file:"release-finish-line.md",    label:"Product Goal & Gates"},
   {id:"protocol", file:"protocol.md",               label:"Protocol & Runtime"},
   {id:"v2",       file:"v2-architecture.md",        label:"v2 Architecture"},
   {id:"phase0",   file:"phase0-findings.md",        label:"Phase 0 Findings"},
   {id:"research", file:"remote-control-research.md",label:"RC Research"},
   {id:"astryx",   file:"astryx-migration.md",       label:"Astryx Migration"},
-  {id:"future",   file:"future-directions.md",      label:"Future Directions"},
-  {id:"host",     file:"client-driven-host-runtime.md",label:"Parked: Multi-engine Runtime"},
-  {id:"a1-vertical",file:"a1-opencode-vertical-slice.md",label:"Parked: OpenCode A1"},
-  {id:"harness",  file:"pluggable-harness.md",      label:"Experimental Harness"},
-  {id:"tmux",     file:"tmux-driver.md",            label:"Experimental tmux"},
-  {id:"opencode", file:"opencode-driver.md",        label:"Experimental OpenCode"},
-  {id:"codex-proof",file:"codex-app-server-multiclient-proof.md",label:"Codex Research Proof"},
-  {id:"opencode-proof",file:"opencode-native-proof.md",label:"OpenCode Research Proof"},
+  {id:"future",   file:"future-directions.md",      label:"Product Roadmap"},
+  {id:"native",   file:"native-rc-passthrough-scoping.md",label:"Next: Structured Claude"},
+  {id:"harness",  file:"pluggable-harness.md",      label:"Adapter Harness"},
+  {id:"tmux",     file:"tmux-driver.md",            label:"tmux Fallback"},
+  {id:"opencode", file:"opencode-driver.md",        label:"OpenCode Adapter"},
+  {id:"bedrock",  file:"bedrock-rc.md",             label:"Bedrock & Accountless"},
+  {id:"codex-proof",file:"codex-app-server-multiclient-proof.md",label:"Codex Evidence"},
+  {id:"opencode-proof",file:"opencode-native-proof.md",label:"OpenCode Evidence"},
 ];
 const tabsEl = document.getElementById("tabs");
 const tocEl  = document.getElementById("toc");

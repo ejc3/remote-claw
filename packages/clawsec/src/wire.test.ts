@@ -262,6 +262,21 @@ describe("wire frame codec (§8)", () => {
     expect(() => decodeFrame(Object.create(w))).toThrow(/v must be an own data property/);
   });
 
+  it("ignores unknown extension fields without invoking their accessors", async () => {
+    const w = await goodWire();
+    let reads = 0;
+    Object.defineProperty(w, "future_extension", {
+      enumerable: true,
+      get() {
+        reads++;
+        throw new Error("unknown fields must not be inspected");
+      },
+    });
+
+    expect(decodeFrame(w).sessionId).toBe("sess-1");
+    expect(reads).toBe(0);
+  });
+
   it("snapshots each selected proxy field once without ordinary property reads", async () => {
     const w = encodeFrame(await seal(KEY, header({ clientMsgId: "client-1" }), utf8("hi")));
     let propertyReads = 0;
