@@ -1056,8 +1056,12 @@ snapshot, revalidates it after use, and removes it. Inspection may start at most
 topology proof window began, while that window may complete at most five minutes in the future. The
 runner has a 10-minute overall wall plus 30-second operation walls. Turso inspection enumerates the
 exact `rc-pr-<7sha>-` fleet before and after, binds physical `DbId`, uses read snapshots, and scans
-`sqlite_schema`, `table_xinfo`, and every table value. Caps are 256 databases, 4,096 tables, 65,536
-columns, 250,000 rows per table, 5,000,000 rows total, 100,000,000 values, and 4 GiB of value bytes.
+`sqlite_schema`, `table_xinfo`, and every table value. An enumerated hostname must be exact legacy
+`<database>-<organization>.turso.io` or have one extra DNS label that exactly equals its validated
+`primaryRegion`; a malformed `primaryRegion`, a regional hostname without that exact matching label,
+or any additional hostname label fails closed. Caps are 256 databases,
+4,096 tables, 65,536 columns, 250,000 rows per table, 5,000,000 rows total, 100,000,000 values, and 4
+GiB of value bytes.
 
 Vercel inspection resolves the immutable Preview deployment, then queries the CLI-compatible historical
 Runtime Log endpoint only for its exact deployment and proof window. It recursively bisects page zero

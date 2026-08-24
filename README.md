@@ -152,7 +152,9 @@ the real 240 s rotation, reconnect, re-attest the same Claude process, and compl
 same `cse_*` before its receipt can pass. Second, `remote-claw-real-topology-inspection/v1` binds that
 receipt to zero occurrences of its run-bound plaintext sentinel across every value in the stable
 exact-prefix Preview Turso fleet and the queryable retained Runtime Logs for the immutable deployment/window;
-the bounded scanner does not claim provider-internal or expired telemetry. Its bootstrap byte-pins
+each fleet entry must use either the exact legacy `<database>-<organization>.turso.io` host or one
+region-qualified host whose sole inserted DNS label exactly equals the API's validated `primaryRegion`.
+The bounded scanner does not claim provider-internal or expired telemetry. Its bootstrap byte-pins
 BusyBox, Git, and Node, executes a committed candidate snapshot of the inspection modules, independently
 requires the clean exact candidate HEAD before and after provider access, and snapshots the exact pinned
 libSQL dependency bytes. Its credential-bearing runner writes only a private durable noncanonical stage.

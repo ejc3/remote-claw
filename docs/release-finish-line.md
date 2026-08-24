@@ -270,6 +270,8 @@ reintroduced.
 - `remote-claw-real-topology-inspection/v1` is a bounded, content-free candidate receipt, not the final
   release attestation. It requires two stable physical-`DbId` enumerations of the exact attested
   `rc-pr-<7sha>-` fleet and scans `sqlite_schema`, `table_xinfo`, and every value under read snapshots.
+  Each database hostname must be exact legacy `<database>-<organization>.turso.io` or contain exactly
+  one additional DNS label equal to that API row's validated `primaryRegion`; all other shapes fail.
   It also resolves the immutable Preview deployment and recursively bisects page-zero Runtime Log
   queries until every leaf says `hasMoreRows:false`; a saturated 1 ms leaf, truncation, malformed or
   wrong-deployment row, missing canary, unsettled second snapshot, cap/deadline, or sentinel occurrence

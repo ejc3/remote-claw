@@ -2784,7 +2784,9 @@ phase0/            unchanged — the Python reference + protocol findings
   blobs. The runner independently rechecks the clean candidate before and after provider access and uses
   only a private snapshot of the exact byte-pinned `@libsql/client` dependency closure. Its bounded
   scanner requires a physically stable exact-prefix Turso fleet and scans every table value under read
-  snapshots; it also recursively exhausts the immutable deployment's queryable retained Runtime Logs
+  snapshots. Each fleet hostname is either exact legacy `<database>-<organization>.turso.io` or has one
+  extra DNS label exactly equal to the API row's validated `primaryRegion`; any other host shape fails.
+  The scanner also recursively exhausts the immutable deployment's queryable retained Runtime Logs
   for the canary-bounded window twice. Inspection may start at most 71 hours after that window began,
   with at most five minutes of future skew at its completed edge. It records only
   coordinates/hashes/counts/times and zero run-sentinel matches, and does not claim inaccessible or

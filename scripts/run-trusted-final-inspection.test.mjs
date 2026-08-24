@@ -852,7 +852,7 @@ test("libSQL is loaded only from a private byte-pinned snapshot and revalidated"
 	}
 });
 
-test("Turso enumeration uses the exact org/group API, rejects pagination, and binds hostnames", async () => {
+test("Turso enumeration uses the exact org/group API, rejects pagination, and binds legacy or primary-region hostnames", async () => {
 	let requested;
 	const databases = await listTursoDatabases({
 		organization: "proof-org",
@@ -865,23 +865,33 @@ test("Turso enumeration uses the exact org/group API, rejects pagination, and bi
 					{
 						Name: "rc-pr-aaaaaaa-two",
 						DbId: DB_ID_TWO,
-						Hostname: "rc-pr-aaaaaaa-two-proof-org.turso.io",
+						Hostname: "rc-pr-aaaaaaa-two-proof-org.aws-us-east-1.turso.io",
 						group: "proof-group",
+						primaryRegion: "aws-us-east-1",
 					},
 					{
 						Name: "rc-pr-aaaaaaa-one",
 						DbId: DB_ID_ONE,
 						Hostname: "rc-pr-aaaaaaa-one-proof-org.turso.io",
 						group: "proof-group",
+						primaryRegion: "aws-us-east-1",
 					},
 				],
 			});
 		},
 	});
-	assert.deepEqual(
-		databases.map((database) => database.name),
-		["rc-pr-aaaaaaa-one", "rc-pr-aaaaaaa-two"],
-	);
+	assert.deepEqual(databases, [
+		{
+			id: DB_ID_ONE,
+			name: "rc-pr-aaaaaaa-one",
+			hostname: "rc-pr-aaaaaaa-one-proof-org.turso.io",
+		},
+		{
+			id: DB_ID_TWO,
+			name: "rc-pr-aaaaaaa-two",
+			hostname: "rc-pr-aaaaaaa-two-proof-org.aws-us-east-1.turso.io",
+		},
+	]);
 	const url = new URL(requested.url);
 	assert.equal(url.origin, "https://api.turso.tech");
 	assert.equal(url.pathname, "/v1/organizations/proof-org/databases");
@@ -899,25 +909,70 @@ test("Turso enumeration uses the exact org/group API, rejects pagination, and bi
 		}),
 		/unexpected fields/,
 	);
-	await assert.rejects(
+	const enumerateOne = (database) =>
 		listTursoDatabases({
 			organization: "proof-org",
 			group: "proof-group",
 			token: "token",
-			fetchImpl: async () =>
-				jsonResponse({
-					databases: [
-						{
-							Name: "db",
-							DbId: DB_ID_ONE,
-							Hostname: "other-proof-org.turso.io",
-							group: "proof-group",
-						},
-					],
-				}),
-		}),
-		/not bound/,
-	);
+			fetchImpl: async () => jsonResponse({ databases: [database] }),
+		});
+	for (const database of [
+		{
+			Name: "db",
+			DbId: DB_ID_ONE,
+			Hostname: "other-proof-org.turso.io",
+			group: "proof-group",
+		},
+		{
+			Name: "db",
+			DbId: DB_ID_ONE,
+			Hostname: "db-proof-org.aws-us-east-1.turso.io",
+			group: "proof-group",
+		},
+		{
+			Name: "db",
+			DbId: DB_ID_ONE,
+			Hostname: "db-proof-org.aws-us-east-1.turso.io",
+			group: "proof-group",
+			primaryRegion: "gcp-us-east1",
+		},
+		{
+			Name: "db",
+			DbId: DB_ID_ONE,
+			Hostname: "db-proof-org.aws-us-east-1.extra.turso.io",
+			group: "proof-group",
+			primaryRegion: "aws-us-east-1",
+		},
+		{
+			Name: "db",
+			DbId: DB_ID_ONE,
+			Hostname: "db-proof-org.turso.io",
+			group: "other-group",
+		},
+	]) {
+		await assert.rejects(enumerateOne(database), /not bound/);
+	}
+	for (const primaryRegion of [
+		null,
+		"",
+		"-aws-us-east-1",
+		"AWS-US-EAST-1",
+		"aws us east 1",
+		"aws.us-east-1",
+		"aws-us-east-1-",
+		"a".repeat(64),
+	]) {
+		await assert.rejects(
+			enumerateOne({
+				Name: "db",
+				DbId: DB_ID_ONE,
+				Hostname: "db-proof-org.turso.io",
+				group: "proof-group",
+				primaryRegion,
+			}),
+			/primary region is invalid/,
+		);
+	}
 });
 
 test("Turso response bodies have a hard read deadline and are cancelled", async () => {
@@ -963,6 +1018,16 @@ test("Turso fleet stability binds physical DbId, not only reusable name and host
 		() => validateStableTursoFleet(before, [{ ...before[0], id: DB_ID_TWO }]),
 		/fleet changed/,
 	);
+	assert.throws(
+		() =>
+			validateStableTursoFleet(before, [
+				{
+					...before[0],
+					hostname: "rc-pr-aaaaaaa-one-proof-org.aws-us-east-1.turso.io",
+				},
+			]),
+		/fleet changed/,
+	);
 });
 
 function result(columns, rows) {
@@ -971,6 +1036,7 @@ function result(columns, rows) {
 
 function tursoClientFixture({ plaintext = false, rejectExecute = false } = {}) {
 	const statements = [];
+	const connections = [];
 	const tables = {
 		messages: {
 			pragma: [
@@ -1119,8 +1185,10 @@ function tursoClientFixture({ plaintext = false, rejectExecute = false } = {}) {
 		async close() {},
 	};
 	return {
+		connections,
 		statements,
-		createClientImpl() {
+		createClientImpl(configuration) {
+			connections.push(configuration);
 			return {
 				async transaction(mode) {
 					assert.equal(mode, "read");
@@ -1138,7 +1206,7 @@ test("Turso scan covers schema, metadata, all cells, composite-key ties, and sha
 		databases: [
 			{
 				name: "rc-pr-aaaaaaa-one",
-				hostname: "rc-pr-aaaaaaa-one-proof-org.turso.io",
+				hostname: "rc-pr-aaaaaaa-one-proof-org.aws-us-east-1.turso.io",
 			},
 		],
 		authToken: "group-token",
@@ -1149,6 +1217,10 @@ test("Turso scan covers schema, metadata, all cells, composite-key ties, and sha
 	assert.equal(counters.columnCount, 8);
 	assert.equal(counters.rowCount, 6);
 	assert.equal(counters.plaintextMatchCount, 0);
+	assert.equal(
+		fixture.connections[0].url,
+		"libsql://rc-pr-aaaaaaa-one-proof-org.aws-us-east-1.turso.io",
+	);
 	assert.ok(
 		fixture.statements.some((statement) =>
 			statement.includes('FROM "messages" ORDER BY "_rowid_"'),

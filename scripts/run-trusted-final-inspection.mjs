@@ -104,6 +104,7 @@ const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const UUID_V4_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STORAGE_COORDINATE_PATTERN = /^[A-Za-z0-9._-]+$/;
+const TURSO_REGION_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const IMMUTABLE_PREVIEW_ORIGIN_PATTERN =
 	/^https:\/\/remote-claw-[a-z0-9]{9}-ejc3-7031s-projects\.vercel\.app$/;
 
@@ -1269,9 +1270,22 @@ export async function listTursoDatabases({
 			/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
 			"Turso database id",
 		);
+		const primaryRegion =
+			database.primaryRegion === undefined
+				? undefined
+				: exactString(
+						database.primaryRegion,
+						TURSO_REGION_PATTERN,
+						"Turso database primary region",
+					);
+		const legacyHostname = `${name}-${org}.turso.io`;
+		const regionalHostname =
+			primaryRegion === undefined
+				? undefined
+				: `${name}-${org}.${primaryRegion}.turso.io`;
 		if (
 			database.group !== groupName ||
-			hostname !== `${name}-${org}.turso.io` ||
+			(hostname !== legacyHostname && hostname !== regionalHostname) ||
 			seen.has(name)
 		) {
 			throw new Error(

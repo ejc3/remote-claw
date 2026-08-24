@@ -265,10 +265,13 @@ sequencing the proof work, never by weakening the proof:
   clean exact topology HEAD before and after scanning; and executes from an independently byte-pinned
   `@libsql/client` dependency snapshot. The inspection uses a newly minted short-lived read-only Turso
   group token and proves zero occurrences only for the run-bound sentinel across the stable exact-prefix
-  Preview fleet and queryable retained immutable-deployment Runtime Logs. It does not claim inaccessible
-  or expired provider telemetry. The credential-bearing runner writes only a private durable
-  noncanonical stage. The wrapper binds its SHA-256/device/inode/size, independently rechecks the exact
-  candidate, and materializes a fresh committed publisher closure; only that exact credential-free
+  Preview fleet and queryable retained immutable-deployment Runtime Logs. A fleet hostname is accepted
+  only as exact legacy `<database>-<organization>.turso.io` or as one region-qualified host whose sole
+  inserted DNS label exactly equals the validated `primaryRegion`; never replace this with a suffix-only
+  check. It does not claim inaccessible or expired provider telemetry. The credential-bearing runner
+  writes only a private durable noncanonical stage. The wrapper binds its SHA-256/device/inode/size,
+  independently rechecks the exact candidate, and materializes a fresh committed publisher closure;
+  only that exact credential-free
   publisher may strict-validate and exclusively publish the canonical exact-schema 0600 receipt with
   complete bytes plus file and parent-directory sync.
 - Merge only after topology v4, inspection v1, and exact-candidate CI pass. The merge SHA may differ,
