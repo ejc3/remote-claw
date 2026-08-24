@@ -127,6 +127,7 @@ function registrar(
       newClient: () => ({}) as BrokerClient,
       identityId: new Uint8Array(16).fill(7),
       relays: new Set(),
+      terminalTasks: new Set(),
       tracer: NOOP_TRACER,
       coordinatorEpoch: 19,
       newBindingId: () => ids.shift() ?? "rcb_exhausted",

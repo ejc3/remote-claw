@@ -1,7 +1,7 @@
 import { busToken, sessionToken } from "@remote-claw/clawsec";
 
 // The channel token derivation (§6A) — pure, backend-independent, shared by both broker routes. The
-// 16-byte identity + an optional session id selects the channel: the per-identity BUS, or a
+// 16-byte identity + an optional session id selects the versioned per-identity presence BUS, or a
 // per-session stream. The resume-or-start handshake and stream resolution that used to live here are
 // now the backend's job (lib/broker/*), so a token can address a Vercel run, a LocalBackend channel,
 // or a per-channel SQLite database without the routes caring which.

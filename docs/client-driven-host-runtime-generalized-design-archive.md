@@ -1,7 +1,8 @@
 # Client-driven host runtime: frozen generalized-design archive
 
-> **Frozen, non-authoritative archive (2026-08-23).** Except for this banner and title, this file is the
-> complete byte-preserving content of the former technical reference at the project-goal reset. It
+> **Frozen, non-authoritative archive (2026-08-23).** Except for this banner, title, and explicitly
+> labeled current-truth safety annotations, this file is the complete byte-preserving content of the
+> former technical reference at the project-goal reset. It
 > preserves implemented-foundation inventory, superseded decompositions, generalized record shapes,
 > recovery algorithms, and threat analysis for audit. Prescriptive language below is historical: it
 > cannot add a Claude 1.0 prerequisite or reactivate A1/OpenCode. The sole active product authority is
@@ -231,9 +232,10 @@ stateful accepted evidence.
 A1.8a1-I later installs the exact snapshot and credentialless callable-port ingress pair, A1.8a2 then
 owns the admitted arm, and A1.8b owns sealing/publishing.
 
-The canonical writer is already used by shipped A0 AAD with its locked bytes unchanged. Production
-now connects to or best-effort starts the owner only for wrapped `--rc-app` MITM, OpenCode, and tmux
-driver paths after identity load. `startProductionRuntimeOwnerDaemon` installs A1.4 registration and
+The canonical writer is already used by shipped A0 AAD with its locked bytes unchanged. **Current-truth
+safety annotation (2026-08-23):** the stable wrapped `--rc-app` MITM deliberately skips the dormant
+runtime owner; only the experimental OpenCode and tmux paths best-effort connect to or start it after
+identity load. `startProductionRuntimeOwnerDaemon` installs A1.4 registration and
 A1.5 `native.root.activate` only when a trusted `registrationAdapter` is supplied. The ordinary CLI supplies none, so its operation
 registry remains empty, its authenticated RPC surface remains health-only, and health reports
 `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. A0 driver behavior remains unchanged, and no real driver performs
@@ -11464,9 +11466,12 @@ tombstone and the generation manifest. Selected A1 has no safe collection transi
 closure and machine reset do not revoke copied bearer/key material, and the broker has no permanent
 route-revocation protocol. A future bounded-retention version must add and prove that protocol rather
 than infer safety from time or local deletion. Checkpointing and scope-bus compaction are not A1.6
-features. The existing explicitly dev/CI-gated locator `dropScope()` remains destructive whole-scope
-test cleanup, not a production retention or revocation transition. A late exact retry returns the old
-cursor; changed bytes still collide, and neither can insert a new position.
+features. **Current-truth safety annotation (2026-08-23):** the low-level locator `dropScope()` remains
+a destructive diagnostic primitive, not a production retention or revocation transition; no HTTP or
+CI path calls it, and `/api/dev/sweep`
+returns 501 without constructing a locator because a truncated scope is not deletion authority. A
+late exact retry returns the old cursor; changed bytes still collide, and neither can insert a new
+position.
 
 **A1.7a implementation boundary:** the paragraphs through classification step 3 below describe the
 implemented dormant ingress slice. It retains each state-changing page and its exact frame-evidence
@@ -13889,12 +13894,14 @@ close, and reattach—plus A1.5 `native.root.activate`, and makes health report 
 only authenticated health succeeds and reports
 `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`.
 
-Wrapped `--rc-app` drivers connect first and may start one detached owner daemon if none answers. The
-daemon receives only the absolute secret-file path and derived machine ID, not secret bytes. Its
+**Current-truth safety annotation (2026-08-23):** only the experimental OpenCode/tmux drivers connect
+first and may start one detached owner daemon; the stable MITM skips it. The daemon receives only the
+absolute secret-file path and derived machine ID, not secret bytes. Its
 environment and Node loader arguments are allowlisted, and its working directory is pinned to the
 trusted CLI entry directory so a project-controlled cwd or `tsconfig` cannot influence the retained
 tsx loader. It loads the secret itself, verifies the
-derived identity, opens and migrates the current host-state schema (currently v9), acquires the exact process-start-identity-bound service lease,
+derived identity, opens and migrates the current host-state schema (v11; this archived passage said v9
+when frozen), acquires the exact process-start-identity-bound service lease,
 self-tests current wrapped keys, binds RPC, and renews the lease. An unknown SQLite commit closes the
 poisoned handle, reopens the same identity database, and reconciles the exact operation before any
 retry. Lease loss, clock failure, key-custody failure, or listener loss poisons and stops the service;
@@ -16851,8 +16858,9 @@ official-client compatibility; B and C add those records on the generic A1 seams
   signing discipline; multi-runtime/multi-conversation inventory; append-only owner assignments;
   positive replacement/termination containment; runtime and binding incarnations; transport
   attachments/leases; per-binding lifecycle gates; shared-daemon resource isolation; and detach versus
-  terminate. Production wrapped `--rc-app` drivers connect/autostart best-effort and close only their
-  owner RPC collaborator without changing A0 native teardown. Health reports
+  terminate. **Current-truth safety annotation (2026-08-23):** only experimental OpenCode/tmux
+  connect/autostart best-effort and close their owner RPC collaborator; the stable wrapped MITM skips
+  the dormant owner. Health reports
   `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`; no durable real-driver
   registration, A1 binding activation, terminal root, remote mutation, or broker capability is
   enabled by the ordinary CLI.

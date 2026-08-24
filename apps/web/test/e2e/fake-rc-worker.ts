@@ -5,6 +5,7 @@
 // fakes is the model; the transport it drives is the genuine `/v1/code/sessions*` worker API, so the
 // MITM↔worker leg is exercised end to end (the real binary is covered by real-rc.prove.test.ts).
 
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Agent, request as httpsRequest, type RequestOptions } from "node:https";
 import { connect as netConnect } from "node:net";
@@ -41,6 +42,7 @@ function proxyAgent(proxyPort: number, ca: Buffer): Agent {
 
 export class FakeRcWorker {
   readonly #agent: Agent;
+  readonly #workerTokens = new Map<string, string>();
   #sse: ReturnType<typeof httpsRequest> | null = null;
   #heartbeat: ReturnType<typeof setInterval> | null = null;
   #onControlResponse:
@@ -66,7 +68,12 @@ export class FakeRcWorker {
     this.#onControlRequest = cb;
   }
 
-  #rpc(method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
+  #rpc(
+    method: string,
+    path: string,
+    body?: unknown,
+    workerToken?: string,
+  ): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
       const opts: RequestOptions = {
@@ -77,6 +84,7 @@ export class FakeRcWorker {
         agent: this.#agent,
         headers: {
           "content-type": "application/json",
+          ...(workerToken !== undefined ? { authorization: `Bearer ${workerToken}` } : {}),
           ...(payload ? { "content-length": payload.length } : {}),
         },
       };
@@ -85,6 +93,11 @@ export class FakeRcWorker {
         res.on("data", (c: Buffer) => chunks.push(c));
         res.on("end", () => {
           const text = Buffer.concat(chunks).toString("utf8");
+          const status = res.statusCode ?? 500;
+          if (status < 200 || status >= 300) {
+            reject(new Error(`worker RPC ${method} ${path} failed with HTTP ${status}`));
+            return;
+          }
           try {
             resolve(text ? JSON.parse(text) : {});
           } catch (e) {
@@ -98,6 +111,17 @@ export class FakeRcWorker {
     });
   }
 
+  #workerRpc(
+    method: string,
+    sessionId: string,
+    suffix: string,
+    body?: unknown,
+  ): Promise<Record<string, unknown>> {
+    const token = this.#workerTokens.get(sessionId);
+    if (token === undefined) throw new Error("worker session has no bridge bearer");
+    return this.#rpc(method, `/v1/code/sessions/${sessionId}${suffix}`, body, token);
+  }
+
   /** The exact worker startup the real claude does (MANGO capture, §17.2): register → triggers →
    *  bridge → get worker → status idle. Returns the session id. */
   async register(title: string): Promise<string> {
@@ -105,9 +129,14 @@ export class FakeRcWorker {
     const id = (reg.session as { id?: string })?.id;
     if (!id) throw new Error("worker: session register returned no id");
     await this.#rpc("GET", "/v1/code/triggers");
-    await this.#rpc("POST", `/v1/code/sessions/${id}/bridge`);
-    await this.#rpc("GET", `/v1/code/sessions/${id}/worker`);
-    await this.#rpc("PUT", `/v1/code/sessions/${id}/worker`, {
+    const bridge = await this.#rpc("POST", `/v1/code/sessions/${id}/bridge`);
+    const workerToken = bridge.worker_jwt;
+    if (typeof workerToken !== "string" || workerToken === "") {
+      throw new Error("worker: bridge returned no worker_jwt");
+    }
+    this.#workerTokens.set(id, workerToken);
+    await this.#workerRpc("GET", id, "/worker");
+    await this.#workerRpc("PUT", id, "/worker", {
       worker_epoch: 1,
       worker_status: "idle",
     });
@@ -131,7 +160,7 @@ export class FakeRcWorker {
       // rejects with `socket hang up`/ECONNRESET — an uncaught reject surfaces as a vitest
       // unhandled-rejection and fails the run (the #76 flaky-teardown class; this heartbeat path was
       // the one fire-and-forget #rpc still missing its catch).
-      void this.#rpc("POST", `/v1/code/sessions/${sessionId}/worker/heartbeat`, {
+      void this.#workerRpc("POST", sessionId, "/worker/heartbeat", {
         session_id: sessionId,
         worker_epoch: 1,
       }).catch(() => {});
@@ -144,7 +173,10 @@ export class FakeRcWorker {
       method: "GET",
       path: `/v1/code/sessions/${sessionId}/worker/events/stream`,
       agent: this.#agent,
-      headers: { accept: "text/event-stream" },
+      headers: {
+        accept: "text/event-stream",
+        authorization: `Bearer ${this.#workerTokens.get(sessionId) ?? ""}`,
+      },
     };
     this.#sse = httpsRequest(opts, (res: IncomingMessage) => {
       let buf = "";
@@ -189,7 +221,7 @@ export class FakeRcWorker {
       // Fire-and-forget, but CATCH: on test teardown the proxy closes mid-flight and `#rpc` rejects with
       // `socket hang up`/ECONNRESET — an uncaught reject here surfaces as a vitest unhandled-rejection
       // error (a flaky CI failure even though every assertion passed).
-      void this.#rpc("POST", `/v1/code/sessions/${sessionId}/worker/events/delivery`, {
+      void this.#workerRpc("POST", sessionId, "/worker/events/delivery", {
         worker_epoch: 1,
         updates: [{ event_id: ev.event_id, status: "received" }],
       }).catch(() => {});
@@ -212,15 +244,17 @@ export class FakeRcWorker {
     // Flip busy, post the turn's upstream events (worker→relay), flip idle — the real turn lifecycle.
     // The body matches the captured shape: {worker_epoch, events:[{payload}]}.
     void (async () => {
-      await this.#rpc("PUT", `/v1/code/sessions/${sessionId}/worker`, {
+      await this.#workerRpc("PUT", sessionId, "/worker", {
         worker_epoch: 1,
         worker_status: "busy",
       });
-      await this.#rpc("POST", `/v1/code/sessions/${sessionId}/worker/events`, {
+      await this.#workerRpc("POST", sessionId, "/worker/events", {
         worker_epoch: 1,
-        events: respond(text).map((payload) => ({ payload })),
+        events: respond(text).map((payload) => ({
+          payload: { ...payload, uuid: randomUUID(), session_id: sessionId },
+        })),
       });
-      await this.#rpc("PUT", `/v1/code/sessions/${sessionId}/worker`, {
+      await this.#workerRpc("PUT", sessionId, "/worker", {
         worker_epoch: 1,
         worker_status: "idle",
       });

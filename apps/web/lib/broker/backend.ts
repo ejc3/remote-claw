@@ -1,14 +1,15 @@
 import type { WireFrame } from "@remote-claw/clawsec";
 
 // The pluggable pub/sub port behind the two broker data-plane routes (§3.2/§6A/§6B). A *channel* is
-// addressed by a derived token — the per-identity BUS (`bus:<id>`, session_announce broadcasts) or a
+// addressed by a derived token — the versioned per-identity BUS (presence lifecycle records) or a
 // PER-SESSION stream (`sess:<id>:<sid>`, turn/control frames) — and is an ORDERED, RESUMABLE stream
 // of ciphertext frames. Optional maxSeq/frameCount methods feed the shared durability/sequence cursor
 // and host-only inbound-fence cursor. The broker is a dumb relay: it validates the §8 envelope shape
 // but never decrypts, so every adapter moves opaque WireFrames and forges nothing.
 //
-// This interface is the seam that lets the broker run on different runtimes — Vercel Workflows in
-// production, durable per-channel libSQL (local file or Turso Cloud), or an in-process
+// This interface is the seam that lets the broker run on different runtimes — durable per-channel
+// libSQL (the supported production profile: local file or Turso Cloud), compatibility/experimental
+// Vercel Workflows, or an in-process
 // LocalBackend for `next dev` / tests — without the routes (or any client, which only ever speaks
 // plain HTTP/SSE) knowing which is underneath.
 
@@ -39,6 +40,20 @@ export class PublishConflictError extends Error {
   }
 }
 
+/** A durable coordinate already exists with different transport bytes. This is not a channel-turnover
+ * race and must never be mapped to retryable 409: accepting it as an idempotent replay would let changed
+ * ciphertext hide behind the first `(generation,msg_id,part)` writer. */
+export class PublishCollisionError extends Error {
+  constructor() {
+    super("publish coordinate already contains different frame bytes");
+    this.name = "PublishCollisionError";
+  }
+
+  static is(error: unknown): error is PublishCollisionError {
+    return error instanceof PublishCollisionError;
+  }
+}
+
 /** The result of a publish: whether this call brought the channel into existence, and the adapter's
  *  id for it (a Vercel run id, a LocalBackend channel id, a per-channel SQLite db id). Both are surfaced
  *  on the relay route's JSON reply (`created`, `runId`) — preserving the client's RelayResult shape. */
@@ -52,9 +67,13 @@ export interface BrokerBackend {
    * Resume-or-start the token's channel and deliver one payload (a frame, or the close sentinel).
    * The FIRST publisher to a token brings the channel into existence; later publishes resume it.
    * Throws PublishConflictError only if the channel completed/disposed between resolve and deliver
-   * (the route maps that typed race to 409 so the client retries). Other publish failures preserve
-   * their hard-failure type. A delivery must never be silently dropped because that would strand a
-   * subscriber's ordered stream on a permanent gap.
+   * (the route maps that typed race to 409 so the client retries). A changed transport replay at an
+   * occupied durable coordinate throws PublishCollisionError (hard 422), never retryable 409. Other
+   * publish failures preserve their hard-failure type. A delivery must never be silently dropped
+   * because that would strand a subscriber's ordered stream on a permanent gap. The only intentional
+   * suppressions on the presence bus are a freshly sealed retry of an already-fenced session_terminal
+   * and an outbound session_announce for that fenced session: publish succeeds, but neither changes the
+   * first stored terminal bytes nor appends/exposes the dead session again.
    */
   publish(token: string, payload: RelayPayload): Promise<PublishResult>;
 
@@ -95,8 +114,8 @@ export interface BrokerBackend {
   /** Optional retention hook for durable backends that store sealed frames at rest. */
   sweep?(retainMs: number): Promise<number>;
 
-  /** Optional: drop the retention index/catalog itself, after a short-lived scope's channels are swept
-   *  (per-channel SQLite on a preview deployment). Lets the dev/CI cleanup leave nothing behind. */
+  /** Optional low-level diagnostic: drop the retention index/catalog itself after its channels are gone.
+   *  Ordinary retention and HTTP routes never call this destructive primitive. */
   dropIndex?(): Promise<void>;
 }
 

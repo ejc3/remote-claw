@@ -24,11 +24,10 @@ const TURSO_API_BASE = "https://api.turso.tech";
 //   rc-<scope>-index               the per-scope cold-index catalog db (rc-prod-index / rc-pr-a1b2c3d-index)
 //
 //   • `rc`      — the app marker (these are remote-claw's dbs).
-//   • `<scope>` — the deployment ENVIRONMENT (see scopeFromEnv): `prod`, `pr-<7-char commit sha>` for a
-//                 preview, or `dev`. This is an isolation boundary, not cosmetics: each scope catalogs
-//                 into and sweeps ONLY its own `rc-<scope>-index`, so a preview deployment can never
-//                 enumerate — let alone drop — a production channel db, and two concurrent preview
-//                 deployments (different commits ⇒ different scopes) can't reclaim each other's dbs.
+//   • `<scope>` — the deployment ENVIRONMENT (see tursoScopeFromEnv): `prod`, `pr-<7-char commit sha>` for a
+//                 preview, or `dev`. It separates ordinary routing/catalog names, but it is not deletion
+//                 authority: seven-character commit prefixes can collide and an explicit override can
+//                 select another deployment's scope.
 //   • `<kind>`  — `s` (session), `b` (bus), `c` (selected-A1 control), or `x` (other).
 //   • `<hash>`  — sha256(channel token) truncated; the uniqueness/addressing component.
 //
@@ -40,14 +39,31 @@ const HASH_LEN = 16;
 
 // awaitReady backoff: a brand-new Turso db's libSQL endpoint can briefly 404 (or its host not resolve)
 // after the Platform-API create returns, until it propagates. Probe with jittered exponential backoff
-// up to a deadline (bounded well under the routes' maxDuration). Deadline is env-tunable for the e2e.
+// up to a deadline (bounded well under the routes' maxDuration). The e2e override may only tighten it.
 const READY_BASE_MS = 100;
 const READY_CEIL_MS = 1500;
-const READY_DEADLINE_MS = 15_000;
+export const TURSO_READY_DEADLINE_MS = 30_000;
+
+/** Caller-visible readiness exhaustion. Deliberately carries neither a database token/name nor a libSQL
+ * error code: catalog reconnect logic must not mistake a fully-spent readiness budget for an early
+ * connection failure and start a second full wait inside the same server request. */
+export class TursoReadinessTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`TursoCloud: database endpoint readiness timed out after ${timeoutMs}ms`);
+    this.name = "TursoReadinessTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 function readyDeadlineMs(): number {
-  const n = Number.parseInt(process.env.RC_TURSO_READY_DEADLINE_MS ?? "", 10);
-  return Number.isFinite(n) && n >= 0 ? n : READY_DEADLINE_MS;
+  const raw = process.env.RC_TURSO_READY_DEADLINE_MS?.trim();
+  if (!raw) return TURSO_READY_DEADLINE_MS;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 0
+    ? Math.min(n, TURSO_READY_DEADLINE_MS)
+    : TURSO_READY_DEADLINE_MS;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -115,16 +131,13 @@ export class TursoCloudDbLocator implements DbLocator {
     apiBase: string;
   };
   readonly #fetch: typeof fetch;
-  // Databases we've confirmed/created — avoids a Platform API round-trip per call. TTL-BOUNDED (name →
-  // expiry): the cache is per-process, but db create/delete is cluster-wide, so a positive entry can go
-  // stale when ANOTHER instance (or the retention cron) drops the db. The TTL bounds that staleness and
-  // makes it self-heal — after expiry the next call re-validates via the Platform API instead of opening
-  // a connection to a deleted db.
+  // Databases we've confirmed/created — avoids repeated create-if-absent round trips. TTL-BOUNDED (name →
+  // expiry), but never used by exists(): cold-open continuity classification must make a fresh Platform
+  // GET because a cross-instance/operator delete can invalidate a positive immediately.
   readonly #known = new Map<string, number>();
   readonly #knownTtlMs: number;
   // The deployment scope embedded in every db name (`rc-<scope>-…`) and the per-scope cold-index name.
-  // Isolates a preview/dev deployment's dbs (and its sweep) from production's — see scopeFromEnv and the
-  // db-naming comment above.
+  // It separates normal routing/catalog names; it is not an ownership proof for deletion.
   readonly #scope: string;
   readonly #indexName: string;
   readonly #handoffName: string;
@@ -152,10 +165,8 @@ export class TursoCloudDbLocator implements DbLocator {
     }
     this.#scope = scope;
     this.#indexName = `${APP}-${scope}-index`;
-    // `-hx` (handoff) is a fixed suffix distinct from the relay-channel kinds (s/b/x), parallel to
-    // `-index`.
-    // It shares the `rc-<scope>-` prefix, so the dev/CI dropScope() sweep reclaims it too (desirable —
-    // dropScope is dev-gated and never runs against prod).
+    // `-hx` (handoff) is a fixed suffix distinct from the relay-channel kinds (s/b/c/x), parallel to
+    // `-index`. It shares the ordinary routing prefix, which must not be treated as deletion authority.
     this.#handoffName = `${APP}-${scope}-hx`;
   }
 
@@ -225,39 +236,74 @@ export class TursoCloudDbLocator implements DbLocator {
    *  not-ready transients (HTTP 404 / unresolved host) and failing fast on anything else (auth, real 5xx).
    *  Each libSQL query is a stateless HTTP request, so the same client re-probes the endpoint each time. */
   async awaitReady(client: Client, _token: string): Promise<void> {
-    const deadline = Date.now() + readyDeadlineMs();
+    const timeoutMs = readyDeadlineMs();
+    const deadline = Date.now() + timeoutMs;
     let delay = READY_BASE_MS;
     let attempts = 0;
-    for (;;) {
-      try {
-        await client.execute("SELECT 1");
-        if (attempts > 0) console.warn(`[turso] db endpoint ready after ${attempts} probe(s)`);
-        return;
-      } catch (e) {
-        attempts++;
-        const retryable = isEndpointNotReady(e);
-        if (!retryable || Date.now() + delay >= deadline) {
-          if (retryable) {
-            console.error(
-              `[turso] db endpoint not serving after ${attempts} probe(s) / ${readyDeadlineMs()}ms`,
-            );
-          }
-          throw e;
-        }
-        await sleep(jittered(delay));
-        delay = Math.min(delay * 2, READY_CEIL_MS);
+    let expired = false;
+    let timeoutLogged = false;
+    const timeoutError = new TursoReadinessTimeoutError(timeoutMs);
+    const failTimeout = (): TursoReadinessTimeoutError => {
+      if (!timeoutLogged) {
+        timeoutLogged = true;
+        console.error(
+          `[turso] db endpoint not serving after ${attempts} completed probe(s) / ${timeoutMs}ms`,
+        );
       }
+      return timeoutError;
+    };
+
+    if (timeoutMs === 0) throw failTimeout();
+
+    let rejectBoundary: (reason: unknown) => void = () => {};
+    const boundary = new Promise<never>((_resolve, reject) => {
+      rejectBoundary = reject;
+    });
+    const timer = setTimeout(() => {
+      expired = true;
+      rejectBoundary(failTimeout());
+    }, timeoutMs);
+    const probes = (async () => {
+      for (;;) {
+        if (expired || Date.now() >= deadline) throw failTimeout();
+        try {
+          await client.execute("SELECT 1");
+          if (expired || Date.now() >= deadline) throw failTimeout();
+          if (attempts > 0) console.warn(`[turso] db endpoint ready after ${attempts} probe(s)`);
+          return;
+        } catch (e) {
+          if (e === timeoutError) throw e;
+          attempts++;
+          if (!isEndpointNotReady(e)) throw e;
+          const remaining = deadline - Date.now();
+          if (expired || remaining <= 0) throw failTimeout();
+          await sleep(Math.min(jittered(delay), remaining));
+          delay = Math.min(delay * 2, READY_CEIL_MS);
+        }
+      }
+    })();
+    // A libSQL request has no AbortSignal surface and may settle after the caller-visible wall. Observe
+    // that late settlement so closing its half-open client cannot create an unhandled rejection.
+    void probes.catch(() => undefined);
+    try {
+      await Promise.race([probes, boundary]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  /** The catalog db connection for the cold channel catalog (retention strategy B). Per-SCOPE, so a
-   *  preview/dev deployment's sweep walks ONLY its own scope's index — never production's. */
+  /** The per-scope channel catalog connection. Ordinary retention is disabled; this catalog remains
+   *  useful for lookup. */
   indexConfig(): { url: string; authToken: string } {
     return this.#connect(this.#indexName);
   }
 
   /** Provision the catalog db (idempotent), so a fresh deployment's first index write can connect. */
   async ensureIndex(): Promise<void> {
+    // This runs only when a backend instance builds/rebuilds its catalog client. Never trust a positive
+    // memo here: a cached catalog namespace may have been deleted by another instance/operator, and the
+    // reconnect path must force create-or-409 confirmation before opening its replacement client.
+    this.#known.delete(this.#indexName);
     await this.#createIfAbsent(this.#indexName);
   }
 
@@ -292,33 +338,34 @@ export class TursoCloudDbLocator implements DbLocator {
   }
 
   async exists(token: string): Promise<boolean> {
-    return this.#existsName(this.#dbName(token));
+    return this.#existsName(this.#dbName(token), false);
   }
 
-  /** Drop the positive existence memo for the token, so the next ensure()/exists() re-checks the Platform
-   *  API. The backend calls this when a cached client hit a deleted-db (channel-gone) error: a delete by
-   *  ANOTHER instance (or this one between cache writes) leaves our #known entry stale until its TTL, which
-   *  would make the recreating ensure() no-op and the new client re-point at the deleted db (issue #111). */
+  /** Drop the positive existence memo for the token so the next exists() re-checks the Platform API.
+   *  The backend calls this after a cached-client channel-gone error; its durable catalog then turns a
+   *  confirmed missing previously-known database into a hard storage-loss failure, never an ensure(). */
   forget(token: string): void {
     this.#known.delete(this.#dbName(token));
   }
 
-  async #existsName(name: string): Promise<boolean> {
-    if (this.#isKnown(name)) return true;
+  async #existsName(name: string, allowKnown = true): Promise<boolean> {
+    if (allowKnown && this.#isKnown(name)) return true;
     const res = await this.#fetch(this.#api(`/databases/${name}`), { headers: this.#authHeader() });
     if (res.status === 200) {
       this.#rememberKnown(name);
       return true;
     }
-    if (res.status === 404) return false;
+    if (res.status === 404) {
+      this.#known.delete(name);
+      return false;
+    }
     throw new Error(
       `TursoCloud: get database "${name}" failed: ${res.status} ${await safeText(res)}`,
     );
   }
 
-  // Retention uses the COLD channel catalog (indexConfig/ensureIndex above), NOT a fleet list: Turso's
-  // list-databases is un-paginated and exposes no last-activity, so it can't scale. The sweep reads the
-  // index, probes each candidate's own MAX(created_at), and drops the idle ones via dropStored.
+  // Low-level destructive diagnostic primitive. No HTTP or production path calls it. Ordinary channel
+  // retention is a deliberate no-op: neither this catalog nor last activity authenticates collection.
   async dropStored(name: string): Promise<void> {
     const res = await this.#fetch(this.#api(`/databases/${encodeURIComponent(name)}`), {
       method: "DELETE",
@@ -329,11 +376,10 @@ export class TursoCloudDbLocator implements DbLocator {
         `TursoCloud: delete database "${name}" failed: ${res.status} ${await safeText(res)}`,
       );
     }
-    this.#known.delete(name); // forget it so a later publish re-provisions a fresh db
+    this.#known.delete(name); // force the next operation to re-check physical existence
   }
 
-  /** Drop this scope's cold-index catalog db itself (after a scope's channels are all reclaimed), so a
-   *  short-lived preview/dev scope doesn't leave an empty `rc-<scope>-index` behind every deployment. */
+  /** Low-level diagnostic primitive that drops this scope's empty catalog db. */
   async dropIndex(): Promise<void> {
     await this.dropStored(this.#indexName);
   }
@@ -353,13 +399,13 @@ export class TursoCloudDbLocator implements DbLocator {
   }
 
   /**
-   * Delete EVERY db in this scope (`rc-<scope>-*`) via the Platform API — cataloged or NOT. This is the
-   * dev/CI cleanup primitive: unlike the cold-index sweep, it also reclaims dbs a crashed/early-frozen
-   * relay created (via ensure()) but never published/catalogued (0-frame orphans the index never lists).
+   * Delete EVERY db matching this scope (`rc-<scope>-*`) via the Platform API — cataloged or NOT. This
+   * dangerous low-level diagnostic primitive can also reclaim dbs a crashed/early-frozen relay created
+   * (via ensure()) but never published/catalogued (0-frame orphans the index never lists).
    * Returns {deleted} for this pass and {remaining} re-listed AFTER the deletes — a nonzero `remaining`
    * means a still-live seed relay recreated a db mid-pass, so the caller should loop until it's 0 (i.e.
-   * until the relays have aged out). SCOPE-BOUNDED: it only ever names `rc-<scope>-…`, never another
-   * scope's (and the dev-seed gate keeps `scope` off `prod`).
+   * until the relays have aged out). The prefix is not proof of exact deployment ownership; callers must
+   * independently review the exact target list. No HTTP or production path calls this method.
    */
   async dropScope(): Promise<{ deleted: number; remaining: number }> {
     const names = await this.#listScopeNames();
@@ -372,7 +418,10 @@ export class TursoCloudDbLocator implements DbLocator {
 /**
  * The per-channel storage locator chosen from the environment — this is the single switch between
  * cloud and local-file storage. If the Turso Cloud credentials are all present we use Turso Cloud
- * (one database per channel token); otherwise we use local files (one db per channel under RC_SQLITE_DIR).
+ * (one database per channel token). Off Vercel, an incomplete/absent tuple falls back to local files
+ * (one db per channel under RC_SQLITE_DIR). On Vercel, that fallback is forbidden: even an explicitly
+ * configured RC_SQLITE_DIR is per-instance/ephemeral and cannot truthfully satisfy the durable-recovery
+ * capability this backend advertises.
  *
  * The connect credential is read from `TURSO_GROUP_AUTH_TOKEN`, NOT the conventional `TURSO_AUTH_TOKEN`,
  * ON PURPOSE: the Vercel↔Turso integration OWNS `TURSO_AUTH_TOKEN` (+ `TURSO_DATABASE_URL`) and sets it
@@ -386,8 +435,15 @@ export function selectLocatorFromEnv(): DbLocator {
   const org = process.env.TURSO_ORG?.trim();
   const group = process.env.TURSO_GROUP?.trim();
   const authToken = process.env.TURSO_GROUP_AUTH_TOKEN?.trim();
+  const complete = Boolean(apiToken && org && group && authToken);
+  if (process.env.VERCEL === "1" && !complete) {
+    throw new Error(
+      "sqlite on Vercel requires the complete Turso Cloud fleet configuration " +
+        "(TURSO_API_TOKEN, TURSO_ORG, TURSO_GROUP, TURSO_GROUP_AUTH_TOKEN)",
+    );
+  }
   if (apiToken && org && group && authToken) {
-    return new TursoCloudDbLocator({ apiToken, org, group, authToken, scope: scopeFromEnv() });
+    return new TursoCloudDbLocator({ apiToken, org, group, authToken, scope: tursoScopeFromEnv() });
   }
   return new FileDbLocator();
 }
@@ -399,13 +455,12 @@ export function selectLocatorFromEnv(): DbLocator {
  * reclaim each other's dbs); anything else — development, an UNSET env (local / self-host / CI), or an
  * unknown value — → `dev`. Unset deliberately resolves to `dev`, NOT `prod`: the `prod` scope is the
  * precious one, so it must be opted into explicitly (Vercel always sets VERCEL_ENV=production on the
- * production deployment; a self-host sets RC_TURSO_DB_SCOPE=prod). This keeps the dev-only cleanup sweep
- * SAFE — it can never resolve to `prod` off-Vercel where the dev-seed gate's `VERCEL_ENV!=="production"`
- * check would otherwise leave it open. Each scope catalogs into and sweeps ONLY its own `rc-<scope>-index`,
- * so a preview/dev deployment can never enumerate or drop a production channel db. Overridable with
- * RC_TURSO_DB_SCOPE; bounded to SCOPE_MAX.
+ * production deployment; a self-host sets RC_TURSO_DB_SCOPE=prod). Ordinary storage scope is
+ * overridable with RC_TURSO_DB_SCOPE and bounded to SCOPE_MAX. The HTTP dev-sweep route is disabled:
+ * this truncated name prefix is routing metadata, not exact deployment-deletion authority. Ordinary
+ * indexed retention is a no-op.
  */
-function scopeFromEnv(): string {
+export function tursoScopeFromEnv(): string {
   const explicit = process.env.RC_TURSO_DB_SCOPE?.trim();
   if (explicit) return explicit;
   const env = process.env.VERCEL_ENV?.trim().toLowerCase();

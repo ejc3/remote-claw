@@ -495,7 +495,7 @@ real tmux and no real claude** — the same discipline as `relay.test.ts` (mock 
   path, `tmux` without `--rc-app` still warns and runs plain claude.
 
 Per-PR gate: `pnpm exec biome check . && pnpm exec tsc --noEmit && pnpm exec vitest run`, then
-`/code-review` + codex, then CI green.
+`/code-review` + codex, then the repository-owned exact-SHA Actions gate in `AGENTS.md`.
 
 ---
 

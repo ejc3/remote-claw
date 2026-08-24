@@ -36,9 +36,9 @@ export interface ControlCapabilities {
 /** A driver declares which broker-side features it can faithfully service. The relay surfaces this on
  *  `session_announce` and the viewer disables+labels controls a driver can't honor (no false "✓"). */
 export interface DriverCapabilities {
-  /** Can surface + round-trip structured can_use_tool permission gates (else auto-approve/ignore). When
-   *  false the session runs WITHOUT gating (--dangerously-skip-permissions / no per-tool ask) — the
-   *  viewer shows a "permissions bypassed" posture so the human knows edits aren't gated. */
+  /** Can surface + round-trip structured can_use_tool permission gates remotely. False says only that
+   * the browser cannot answer: an experimental harness may bypass native gating, while stable Claude
+   * keeps any such gate local to its TUI. */
   structuredPermissions: boolean;
   /** Reports real workerStatus transitions (else presence is a best-effort heuristic). */
   status: boolean;
@@ -59,6 +59,15 @@ export const MITM_CAPABILITIES: DriverCapabilities = {
   status: true,
   controls: { interrupt: true, setModel: true, setMode: true, end: false },
   attachments: true,
+};
+
+/** Stable Claude 1.0 exposes only plain text. Compatibility plumbing remains available internally,
+ * but old/current viewers cannot drive a mutation family that is absent from the supported proof. */
+export const STABLE_MITM_CAPABILITIES: DriverCapabilities = {
+  structuredPermissions: false,
+  status: true,
+  controls: { interrupt: false, setModel: false, setMode: false, end: false },
+  attachments: false,
 };
 
 /** Which harness a session runs, so the viewer's session list can show WHICH agent + mode it is (the

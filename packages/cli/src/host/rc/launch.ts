@@ -17,7 +17,8 @@ import type { NativeConversationCapabilities } from "../native/index.js";
 import { PRETEND_API_KEY, seedAccountlessConfigDir } from "./accountless.js";
 import type { BedrockConfig } from "./bedrock/inference.js";
 import { ensureCerts } from "./certs.js";
-import { MITM_CAPABILITIES, MITM_HARNESS } from "./driver.js";
+import { acquireStableClaudeExecutable } from "./compatibility.js";
+import { MITM_HARNESS, STABLE_MITM_CAPABILITIES } from "./driver.js";
 import {
   type LegacyRcConversationMetadata,
   LegacyRcConversationRegistrar,
@@ -26,7 +27,10 @@ import { type GitInfo, gitInfo } from "./gitinfo.js";
 import { MitmProxy } from "./mitm.js";
 import { RelayCore, type Session } from "./session.js";
 
-const RELAY_TEARDOWN_WAIT_MS = 2000;
+// Unrelated stuck registration/live-announce cleanup is time-boxed. The terminal safety policy is
+// tracked and awaited separately: JS timers are minimum delays, so no wall-clock cutoff may overtake its
+// remaining retries after an OS suspend or event-loop stall.
+const RELAY_TEARDOWN_WAIT_MS = 2_000;
 const CLAUDE_NATIVE_CAPABILITIES: NativeConversationCapabilities = {
   version: 1,
   mutationAdmission: "mixed",
@@ -57,6 +61,9 @@ export interface RcLaunchOptions {
   certsDir: string;
   /** The claude binary (default "claude"). */
   claudeBin?: string;
+  /** Injectable only for deterministic boundary tests. Direct production callers instead open and
+   * retain one executable inode, then probe it before certificates, listeners, git probes, or spawn. */
+  claudeCompatibilityCheck?: (claudeBin: string) => Promise<void>;
   /** Launch the child (default: real child process with inherited stdio + the proxy env). */
   spawnClaude: SpawnClaudeEnv;
   /** A short title for the session announce (default: hostname-ish label). */
@@ -84,6 +91,27 @@ export interface RcLaunchOptions {
  * broker. Resolves with claude's exit code; tears the MITM + relays down on exit.
  */
 export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
+  const requestedClaudeBin = opts.claudeBin ?? "claude";
+  // The production boundary retains the exact executable inode from compatibility probe through child
+  // exit. Deterministic tests may inject the documented check seam and keep their synthetic command.
+  const executable =
+    opts.claudeCompatibilityCheck === undefined
+      ? await acquireStableClaudeExecutable(requestedClaudeBin)
+      : await opts.claudeCompatibilityCheck(requestedClaudeBin).then(() => ({
+          claudeBin: requestedClaudeBin,
+          release() {},
+        }));
+  try {
+    return await runRcLaunchWithExecutable(opts, executable.claudeBin);
+  } finally {
+    executable.release();
+  }
+}
+
+async function runRcLaunchWithExecutable(
+  opts: RcLaunchOptions,
+  claudeBin: string,
+): Promise<number> {
   // Enforce the accountless⇒bedrock invariant at the library boundary, not just in the CLI arg layer:
   // runRcLaunch is exported, so a programmatic caller could otherwise seed a fabricated claude.ai login
   // while the MITM stays in Anthropic passthrough — leaking that fake account state toward real
@@ -107,6 +135,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
   const mitmTracer = tracerFromEnv("rc.mitm");
   const relayTracer = tracerFromEnv("rc.relay");
   const relays = new Set<Promise<void>>();
+  const terminalTasks = new Set<Promise<void>>();
   const registrations = new Set<Promise<void>>();
   let tearingDown = false;
 
@@ -130,6 +159,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     newClient,
     identityId: opts.identity.identityId,
     relays,
+    terminalTasks,
     tracer: relayTracer,
   });
   const registerSession = async (session: Session): Promise<void> => {
@@ -137,7 +167,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
       title,
       cwd,
       git,
-      capabilities: MITM_CAPABILITIES,
+      capabilities: STABLE_MITM_CAPABILITIES,
       harness: MITM_HARNESS,
     };
     let lease: Awaited<ReturnType<LegacyRcConversationRegistrar["open"]>> | undefined;
@@ -289,7 +319,7 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
       seedAccountlessConfigDir(accountlessDir, Date.now(), cwd);
       env.CLAUDE_CONFIG_DIR = accountlessDir;
     }
-    return await opts.spawnClaude(opts.claudeBin ?? "claude", opts.claudeArgs, env);
+    return await opts.spawnClaude(claudeBin, opts.claudeArgs, env);
   } finally {
     tearingDown = true;
     const teardownDeadlineMs = Date.now() + RELAY_TEARDOWN_WAIT_MS;
@@ -300,6 +330,10 @@ export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
     // even if the shared wait budget is already exhausted.
     await closeRegistrarLeases(teardownDeadlineMs);
     await waitForTasks(relays, teardownDeadlineMs);
+    // Do not apply the unrelated-work wall-clock cutoff here. Each terminal task has its own per-attempt
+    // Promise.race bound, but a suspended event loop cannot schedule retries until it resumes. Await the
+    // policy itself so process.exit never wins merely because both timers became due during suspension.
+    await settleTasks(terminalTasks);
     await proxy.close();
     // force:true already swallows ENOENT; guard the rest so a cleanup error can't mask the real result.
     if (accountlessDir !== undefined) {
@@ -326,5 +360,13 @@ async function waitForTasks(tasks: Iterable<Promise<void>>, deadlineMs: number):
     await Promise.race([Promise.allSettled(pending), timeout]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function settleTasks(tasks: Set<Promise<void>>): Promise<void> {
+  for (;;) {
+    const pending = [...tasks];
+    if (pending.length === 0) return;
+    await Promise.allSettled(pending);
   }
 }

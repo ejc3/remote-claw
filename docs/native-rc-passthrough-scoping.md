@@ -64,6 +64,44 @@ Three existing pieces have different purposes:
 | `--rc-trace` / `runRcTrace` | Transparently forwards real Anthropic traffic and records redacted diagnostics | Research and compatibility capture only; never the runtime topology |
 | `AnthropicRcClient` | Implements app-side list, history, SSE, and provider-native user-event POST with a bounded credential source | Reuse inside the outward connector after replacing its final credential lifecycle |
 
+The current stable `--rc-app` baseline is narrower and fail-stop: before identity creation it resolves
+the requested Claude launcher (`RC_CLAUDE_BIN` or `claude` on `PATH`) and requires its resolved target to be the exact
+root:root regular mode-`0755` Claude Code
+2.1.237/Linux arm64 executable,
+331,864,296 bytes with SHA-256
+`a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177`, and holds that exact inode
+through `/proc` from the compatibility probe until child exit so an atomic path replacement cannot
+substitute it. The trusted installed proof separately refuses `RC_CLAUDE_BIN` and requests
+`/usr/bin/claude`. Stable launch skips the dormant runtime owner; atomically
+admits only current-epoch UUIDv4 events from the retained eight native types, terminally closing the
+session on any invalid/colliding batch; returns `410` for every route under a closed `cse_*`; fences
+every downstream mutation immediately before its first SSE write; and uses one cross-pump head-of-line
+publisher that also orders native control side effects and whose first failure closes only that
+session. Each durable-cursor request has a 70-second wall, each initial stream-header wait has a
+20-second wall, an established SSE stream fails after 40 seconds without an actual byte, and the
+server marks a healthy planned rotation with exact standalone `: rotate` 240 seconds after the response
+body starts. That marker
+is circuit-neutral while raw/unmarked EOF counts as failure. The entire logical post has a 65-second wall
+covering chunks, sealing, fetch, backoff, and authoritative `409` retries, without replay after an
+ambiguous timeout. The third consecutive inbound failure closes the `cse_*`. Only a clean absent-channel
+completion or a newly admitted authenticated frame resets the count; misroutes, replays, authentication
+failures, and other non-admissions do not, and owner-requested abort is exempt. These
+facts prove bounded host delivery and projection behavior, not opaque application inside Claude.
+
+The stable browser/host surface is selected only by exact harness
+`{agent:"claude-code",mode:"rc"}` plus exact capabilities
+`{structuredPermissions:false,status:true,controls:{interrupt:false,setModel:false,setMode:false,end:false},attachments:false}`.
+Both sides admit only non-empty, non-slash text; permission/questions stay local, attachments and every
+control are rejected/suppressed, and the stable relay refuses a non-durable broker. After live presence
+begins, session close publishes canonical `session_terminal` on
+`bus:presence-v2:<identity_id>` outside transcript HOL. Local and SQLite brokers make that session
+fence absorbing; Workflow does so only within its current run/generation (and the stable Claude profile
+rejects Workflow). The viewer permanently removes the old row, refuses later writes/announces, and
+discloses that the final delivery/output tail may be incomplete. Ordinary announce 5xx remains
+advisory; the fixed coordinate-free HTTP 410 JSON response carrying
+`code:"channel_storage_lost"` from the identity bus proves permanent storage loss and synchronously
+closes the Session. A bare 410 or that code on any other status is an ordinary broker error.
+
 Relevant implementation is in:
 
 - `packages/cli/src/host/rc/{launch,trace-run,mitm,session,relay}.ts`;
@@ -79,15 +117,18 @@ refresh, rotation, revocation, and OS-specific secure storage.
 
 The current synthetic private-RC path also has narrower delivery semantics than the parked design:
 
-- `POST .../worker/events/delivery` only adds the named downstream event to the in-memory replay
-  suppression set. It proves that the worker acknowledged RC delivery, not that Claude accepted the
-  input into its native conversation, preserved the proposed source, or applied it in that order.
-- The web `accepted` frame is emitted before private-RC injection. It means that the current host
-  assigned a projection sequence and published its acknowledgement, not that Claude accepted the
-  prompt.
-- A viewer permission choice is recorded as `permission_resolved` and removed from the relay's open
-  set before its `control_response` is delivered to Claude. A direct TUI answer or native cancellation
-  may already have won, so that record is the server's choice, not a native terminal result.
+- `POST .../worker/events/delivery` adds the named downstream event to the in-memory ACK set. The
+  Claude MITM separately marks every mutation immediately before its first SSE write attempt and never
+  offers it to a later worker generation; only the genuine initialize handshake is reconnectable.
+  Neither mechanism proves that Claude accepted the input into its native conversation, preserved the
+  proposed source, or applied it in that order.
+- The web `accepted` frame and user echo are published in one head-of-line unit before private-RC
+  injection. It means that the current host assigned a projection sequence and published its receipt,
+  not that Claude accepted the prompt.
+- On an internal compatibility surface, a viewer permission choice is recorded as
+  `permission_resolved` and removed from the relay's open set before its `control_response` is delivered
+  to Claude. A direct TUI answer or native cancellation may already have won, so that record is the
+  server's choice, not a native terminal result. Stable Claude 1.0 does not expose that answer path.
 - The current MITM projection drops ordinary native-TUI user text, and the worker stream provides no
   history backfill. The current path therefore cannot reconstruct or prove the complete native
   local/remote order after restart.

@@ -12,7 +12,7 @@ import {
   request as httpRequest,
   type IncomingMessage,
   Server,
-  type ServerResponse,
+  ServerResponse,
 } from "node:http";
 import { Agent, request as httpsRequest, type RequestOptions } from "node:https";
 import {
@@ -160,6 +160,15 @@ interface RawResponse {
   body: Buffer;
 }
 
+interface BufferedResetObservation {
+  bufferedBody: Buffer;
+  headersSent: boolean;
+  method: string | undefined;
+  path: string | undefined;
+  status: number;
+  writableBytes: number;
+}
+
 function requestThroughProxy(
   agent: Agent,
   method: string,
@@ -233,6 +242,10 @@ function readRequest(req: IncomingMessage): Promise<Buffer> {
 function loopbackRequest(
   port: number,
   onResponse?: (response: IncomingMessage) => void,
+  dispatchResponse: (
+    response: IncomingMessage,
+    callback: Parameters<UpstreamRequest>[1],
+  ) => void = (response, callback) => callback(response),
 ): UpstreamRequest {
   return (options, callback): ClientRequest => {
     const { servername: _servername, ...rest } = options;
@@ -244,7 +257,7 @@ function loopbackRequest(
     };
     return httpRequest(local, (response) => {
       onResponse?.(response);
-      callback(response);
+      dispatchResponse(response, callback);
     });
   };
 }
@@ -261,6 +274,10 @@ interface Harness {
 async function startHarness(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
   options: {
+    dispatchUpstreamResponse?: (
+      response: IncomingMessage,
+      callback: Parameters<UpstreamRequest>[1],
+    ) => void;
     log?: "warn" | "trace";
     onUpstreamResponse?: (response: IncomingMessage) => void;
   } = {},
@@ -280,7 +297,11 @@ async function startHarness(
     leafKey: certs.leafKey,
     mode: "trace",
     tracer,
-    upstreamRequest: loopbackRequest(upstreamPort, options.onUpstreamResponse),
+    upstreamRequest: loopbackRequest(
+      upstreamPort,
+      options.onUpstreamResponse,
+      options.dispatchUpstreamResponse,
+    ),
   });
   await proxy.listen();
   const ca = readFileSync(certs.caPem);
@@ -304,6 +325,127 @@ function rendered(records: TraceRecord[]): string {
 }
 
 describe.skipIf(!RUN)("MITM trace passthrough", () => {
+  it("preserves the fully-buffered HTTP-200 reset boundary and an explicit identical retry", async () => {
+    const path = "/v1/code/sessions/cse_trace/worker/events";
+    const requestBody = Buffer.from(
+      JSON.stringify({
+        worker_epoch: 1,
+        events: [
+          {
+            payload: {
+              uuid: "11111111-1111-4111-8111-111111111111",
+              type: "assistant",
+            },
+          },
+        ],
+      }),
+    );
+    const responseBody = Buffer.from(
+      JSON.stringify({
+        results: [
+          {
+            event_id: "11111111-1111-4111-8111-111111111111",
+            sequence_num: "1",
+            duplicate: false,
+          },
+        ],
+      }),
+    );
+    const upstreamBodies: Buffer[] = [];
+    const upstreamTargets: Array<{ method: string | undefined; path: string | undefined }> = [];
+    let firstResponse = true;
+    let resetObservation: BufferedResetObservation | undefined;
+    let restoreWriteHead: (() => void) | undefined;
+
+    const harness = await startHarness(
+      (req, res) => {
+        void readRequest(req).then((body) => {
+          upstreamBodies.push(body);
+          upstreamTargets.push({ method: req.method, path: req.url });
+          res.writeHead(200, {
+            "content-type": "application/json",
+            "content-length": String(responseBody.length),
+          });
+          res.end(responseBody);
+        });
+      },
+      {
+        dispatchUpstreamResponse: (response, callback) => {
+          if (!firstResponse) {
+            callback(response);
+            return;
+          }
+          firstResponse = false;
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.once("end", () => {
+            const bufferedBody = Buffer.concat(chunks);
+            const originalWriteHead = ServerResponse.prototype.writeHead;
+            let intercepted = false;
+            const restore = () => {
+              ServerResponse.prototype.writeHead = originalWriteHead;
+              if (restoreWriteHead === restore) restoreWriteHead = undefined;
+            };
+            restoreWriteHead = restore;
+            ServerResponse.prototype.writeHead = function patchedWriteHead() {
+              intercepted = true;
+              resetObservation = {
+                bufferedBody,
+                headersSent: this.headersSent,
+                method: this.req?.method,
+                path: this.req?.url,
+                status: response.statusCode ?? 0,
+                writableBytes: this.writableLength,
+              };
+              restore();
+              this.destroy();
+              return this;
+            };
+            try {
+              callback(response);
+            } finally {
+              restore();
+            }
+            if (!intercepted) response.destroy(new Error("downstream response did not start"));
+          });
+        },
+      },
+    );
+
+    try {
+      await expect(
+        requestThroughProxy(harness.agent, "POST", path, requestBody, {
+          "content-type": "application/json",
+        }),
+      ).rejects.toBeDefined();
+      const fault = resetObservation;
+      if (fault === undefined) throw new Error("trace reset boundary was not observed");
+      expect(fault.status).toBe(200);
+      expect(fault.bufferedBody.equals(responseBody)).toBe(true);
+      expect(fault.method).toBe("POST");
+      expect(fault.path).toBe(path);
+      expect(fault.headersSent).toBe(false);
+      expect(fault.writableBytes).toBe(0);
+
+      const retry = await requestThroughProxy(harness.agent, "POST", path, requestBody, {
+        "content-type": "application/json",
+      });
+      expect(retry.status).toBe(200);
+      expect(retry.body.equals(responseBody)).toBe(true);
+      expect(retry.headers["content-type"]).toBe("application/json");
+      expect(retry.headers["content-length"]).toBe(String(responseBody.length));
+      expect(upstreamBodies).toHaveLength(2);
+      expect(upstreamBodies.every((body) => body.equals(requestBody))).toBe(true);
+      expect(upstreamTargets).toEqual([
+        { method: "POST", path },
+        { method: "POST", path },
+      ]);
+    } finally {
+      restoreWriteHead?.();
+      await harness.close();
+    }
+  });
+
   it("preserves RC request/response bytes and credential headers while redacting every trace sink", async () => {
     const requestAccess = "oauth-access-request-canary";
     const requestRefresh = "oauth-refresh-request-canary";

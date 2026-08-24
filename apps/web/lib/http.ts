@@ -25,7 +25,11 @@ const encoder = new TextEncoder();
  *  `BrokerClient`, sized well above this) can tell "alive but idle" from "dead/suspended" and only
  *  reconnect on a genuine stall. Also keeps proxies/load-balancers from reaping an idle connection. */
 export const SSE_KEEPALIVE_MS = 15_000;
+/** Rotate a healthy subscription before Vercel's 300s function ceiling can terminate it without an
+ * application-level disposition. Clients reconnect from their durable cursor on the exact marker. */
+export const SSE_ROTATE_MS = 240_000;
 const SSE_PING = Symbol("sse-ping");
+const SSE_ROTATE = Symbol("sse-rotate");
 
 /**
  * Wrap a broker frame source as a `text/event-stream`. Each frame becomes one `data: <json>\n\n`
@@ -36,6 +40,7 @@ const SSE_PING = Symbol("sse-ping");
 export function sseResponse(
   source: ReadableStream<unknown>,
   keepaliveMs = SSE_KEEPALIVE_MS,
+  rotateMs = SSE_ROTATE_MS,
 ): Response {
   // Hoisted so the body's cancel() (fired when the HTTP client disconnects) can interrupt the start()
   // loop's pending read(): cancelling the reader cancels `source`, which lets a fan-out backend (the
@@ -54,23 +59,35 @@ export function sseResponse(
       };
       try {
         emit(": open\n\n");
+        let rotateTimer: ReturnType<typeof setTimeout> | undefined;
+        const rotate = new Promise<typeof SSE_ROTATE>((resolve) => {
+          rotateTimer = setTimeout(() => resolve(SSE_ROTATE), rotateMs);
+        });
         // Race each read against a keepalive timer, holding the SAME read promise across pings so a
         // ping never drops a frame. An idle stream still emits `: ping` every SSE_KEEPALIVE_MS.
         let readPromise = reader.read();
-        for (;;) {
-          let pingTimer: ReturnType<typeof setTimeout> | undefined;
-          const ping = new Promise<typeof SSE_PING>((resolve) => {
-            pingTimer = setTimeout(() => resolve(SSE_PING), keepaliveMs);
-          });
-          const winner = await Promise.race([readPromise, ping]);
-          clearTimeout(pingTimer);
-          if (winner === SSE_PING) {
-            emit(": ping\n\n"); // readPromise is still pending
-            continue;
+        try {
+          for (;;) {
+            let pingTimer: ReturnType<typeof setTimeout> | undefined;
+            const ping = new Promise<typeof SSE_PING>((resolve) => {
+              pingTimer = setTimeout(() => resolve(SSE_PING), keepaliveMs);
+            });
+            const winner = await Promise.race([readPromise, ping, rotate]);
+            clearTimeout(pingTimer);
+            if (winner === SSE_ROTATE) {
+              emit(": rotate\n\n");
+              break;
+            }
+            if (winner === SSE_PING) {
+              emit(": ping\n\n"); // readPromise is still pending
+              continue;
+            }
+            if (winner.done) break;
+            emit(`data: ${JSON.stringify(winner.value)}\n\n`);
+            readPromise = reader.read();
           }
-          if (winner.done) break;
-          emit(`data: ${JSON.stringify(winner.value)}\n\n`);
-          readPromise = reader.read();
+        } finally {
+          clearTimeout(rotateTimer);
         }
       } catch (e) {
         const msg = String((e as Error)?.message ?? e);

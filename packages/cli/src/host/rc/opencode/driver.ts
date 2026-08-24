@@ -448,10 +448,12 @@ export class OpencodeDriver implements Driver {
     this.#ctx.onSession?.(session);
 
     const relays = new Set<Promise<void>>();
+    const terminalTasks = new Set<Promise<void>>();
     const registrar = new LegacyRcConversationRegistrar({
       newClient: this.#ctx.newClient,
       identityId: this.#ctx.identity.identityId,
       relays,
+      terminalTasks,
       tracer: this.#ctx.tracer ?? tracerFromEnv("rc.relay"),
     });
     const startingMetadata: LegacyRcConversationMetadata = {

@@ -16,8 +16,8 @@ describe("channel tokens (§6A/§6B)", () => {
     expect(() => busToken(new Uint8Array(17))).toThrow(/16 bytes/);
   });
 
-  it("busToken is bus:<identity_id> and is purely derivable (no lookup)", () => {
-    expect(busToken(ID)).toBe(`bus:${"ab".repeat(16)}`);
+  it("busToken is the versioned presence bus and is purely derivable (no lookup)", () => {
+    expect(busToken(ID)).toBe(`bus:presence-v2:${"ab".repeat(16)}`);
     // Same input -> same token, on every caller (host, broker, web client).
     expect(busToken(ID)).toBe(busToken(ID.slice()));
   });

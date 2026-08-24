@@ -48,6 +48,7 @@ import {
 } from "./lib/transcript";
 import {
   type Announce,
+  type Capabilities,
   CONNECTED_WINDOW_MS,
   type ConnState,
   connState,
@@ -140,6 +141,43 @@ export async function sendComposer(
   }
 }
 
+/** The one browser mutation surface shipped by Claude 1.0. Compatibility hosts may still advertise
+ * individual mutation capabilities, but the stable native-RC tuple is deliberately exact: Claude RC,
+ * truthful status, and every browser mutation family except plain text disabled. */
+export function isStableClaudeSurface(
+  harness: Harness | undefined,
+  capabilities: Capabilities | undefined,
+): boolean {
+  return (
+    harness?.agent === "claude-code" &&
+    harness.mode === "rc" &&
+    capabilities?.status === true &&
+    capabilities.structuredPermissions === false &&
+    capabilities.attachments === false &&
+    capabilities.controls.interrupt === false &&
+    capabilities.controls.setModel === false &&
+    capabilities.controls.setMode === false &&
+    capabilities.controls.end === false
+  );
+}
+
+/** Every remote mutation requires both fresh host presence and an advertised capability. */
+export function remoteMutationEnabled(connected: boolean, supported = true): boolean {
+  return connected && supported;
+}
+
+/** Classify text which the stable Claude composer must not publish. The caller separately accounts for
+ * compatibility attachments; stable Claude has none, so an empty trimmed string is never a mutation. */
+export function stableTextBlockReason(
+  text: string,
+  stableClaude: boolean,
+): "empty" | "slash" | null {
+  const trimmed = text.trim();
+  if (trimmed === "") return "empty";
+  if (stableClaude && trimmed.startsWith("/")) return "slash";
+  return null;
+}
+
 /** The OPTIMISTIC echo (#113) of a just-sent message — rendered instantly so the user's image/text
  *  appears without waiting for the host's round-trip echo (which on a suspended iOS stream is delayed).
  *  Mirrors the host's echo text (📎 chips + caption, or the prompt) and carries `clientMsgId` so the
@@ -176,17 +214,6 @@ export function enterShouldSend(
   return e.key === "Enter" && !e.shiftKey && !e.isComposing && !coarsePointer;
 }
 
-/** Re-stage the images of a FAILED send (#150) back into the composer. The send path revokes the
- *  original object URLs when it optimistically clears the composer, so a recovered preview needs a FRESH
- *  URL minted from the (still-valid) `File`. Pure + injectable `makeUrl` so it's testable without a DOM.
- *  Ids are preserved so React keys stay stable across the restore. */
-export function restageImages(
-  images: readonly StagedImage[],
-  makeUrl: (file: File) => string,
-): StagedImage[] {
-  return images.map((s) => ({ id: s.id, name: s.name, file: s.file, url: makeUrl(s.file) }));
-}
-
 /** How many newly-picked images fit under the staged-count cap, and how many are dropped. A bound so a
  *  runaway pick (hundreds of files) can't balloon the staged array + its object URLs. Pure → testable. */
 export function fitStaged(
@@ -206,16 +233,45 @@ export function fitStaged(
  *  IDEMPOTENT under a re-delivered ack (at-least-once; a #seen eviction on a long session, or a fresh
  *  orderer on revive, re-yields the seq-null `accepted`): the optimistic twin is identified ONLY by its
  *  `pending-<clientMsgId>` msgId, never by clientMsgId — once re-keyed to `user-<seq>` it no longer
- *  matches, so a second ack is a no-op instead of DELETING the already-reconciled message (whose echo,
- *  being below the orderer's seq cursor, would never be re-yielded to re-add it). Pure for testing. */
+ *  matches, so a second ack only reasserts the same receipt fields instead of DELETING the already-
+ *  reconciled message (whose echo, being below the orderer's seq cursor, would never be re-yielded to
+ *  re-add it). Pure for testing. */
 export function reconcileAccepted(prev: Message[], clientMsgId: string, seq: number): Message[] {
   const realMsgId = `user-${seq}`;
   const pendingId = `pending-${clientMsgId}`;
   if (prev.some((m) => m.msgId === realMsgId)) {
-    return prev.filter((m) => m.msgId !== pendingId);
+    return prev
+      .filter((m) => m.msgId !== pendingId)
+      .map((m) =>
+        m.msgId === realMsgId
+          ? { ...m, clientMsgId, optimistic: false, deliveryUnknown: false }
+          : m,
+      );
   }
   return prev.map((m) =>
-    m.msgId === pendingId ? { ...m, msgId: realMsgId, optimistic: false } : m,
+    m.msgId === pendingId
+      ? { ...m, msgId: realMsgId, optimistic: false, deliveryUnknown: false }
+      : m,
+  );
+}
+
+/** A rejected browser publish has an ambiguous outcome: the broker may have stored the frame while its
+ * response was lost. Keep the exact optimistic message (and source id) absorbingly unknown; only the
+ * matching `accepted` frame may move it to Received by host. Already-accepted messages never regress. */
+export function markDeliveryUnknown(prev: Message[], clientMsgId: string): Message[] {
+  return prev.map((m) =>
+    m.clientMsgId === clientMsgId && m.optimistic === true && m.deliveryUnknown !== true
+      ? { ...m, deliveryUnknown: true }
+      : m,
+  );
+}
+
+/** Once the host session is known lost, every still-unaccepted local mutation has an unknown outcome. */
+export function markPendingDeliveryUnknown(prev: Message[]): Message[] {
+  return prev.map((m) =>
+    m.optimistic === true && m.clientMsgId !== undefined && m.deliveryUnknown !== true
+      ? { ...m, deliveryUnknown: true }
+      : m,
   );
 }
 
@@ -578,8 +634,8 @@ function relativeTime(ms: number, now: number): string {
 /** The session row's sub-line word, combining connection state + activity (#48/#58): a connected
  *  session reads its phase/needs; a lapsing one reads its link state; a gone one reads "N ago". */
 function presenceWord(s: Announce, now: number, reconnectingSince: number): string {
-  const cs = connState(s.sentAt, now, reconnectingSince);
-  if (cs === "disconnected") return relativeTime(s.sentAt, now);
+  const cs = connState(s.freshnessAt, now, reconnectingSince);
+  if (cs === "disconnected") return relativeTime(s.freshnessAt, now);
   if (cs === "reconnecting") return "reconnecting…";
   // NOT "needs you" here: the amber .needs-badge on the row-top already carries that (#design-pass) —
   // emitting it again in the sub-line read as a duplication bug and wasted the line before cwd.
@@ -727,6 +783,10 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   // this the announce stream stays dead on return and the session would read as disconnected forever.
   const [announceRevive, setAnnounceRevive] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
+  // An authenticated session_terminal is a permanent lifecycle fact, not an ordinary absence from the
+  // live list. Keep a visible disclosure after removing/deselecting the dead row so disappearance cannot
+  // be mistaken for a harmless refresh and the user knows the last delivery/output tail may be partial.
+  const [terminalNotice, setTerminalNotice] = useState(false);
   // The bus-transport banner: shown only when reaching the broker FAILS persistently (a wrong/stale pass
   // or a broker outage), so the user isn't left staring at an empty session list with no idea why. null =
   // healthy. Discovery itself never stops retrying (see Viewer.announces) — this is purely the signal.
@@ -744,16 +804,34 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
     const ac = new AbortController();
     busFailures.current = 0;
     void (async () => {
-      for await (const a of viewer.announces(ac.signal, (err) => {
-        if (ac.signal.aborted) return;
-        if (err === null) {
-          busFailures.current = 0;
-          setBusError(null);
-          return;
-        }
-        busFailures.current += 1;
-        if (busFailures.current >= BUS_ERROR_THRESHOLD) setBusError(BUS_UNREACHABLE_MSG);
-      })) {
+      for await (const a of viewer.announces(
+        ac.signal,
+        (err) => {
+          if (ac.signal.aborted) return;
+          if (err === null) {
+            busFailures.current = 0;
+            setBusError(null);
+            return;
+          }
+          busFailures.current += 1;
+          if (busFailures.current >= BUS_ERROR_THRESHOLD) setBusError(BUS_UNREACHABLE_MSG);
+        },
+        (sessionId) => {
+          // Do not suppress this edge just because this subscription was aborted while openFrame awaited:
+          // Viewer has already latched its permanent tombstone, so a replacement subscription will skip
+          // the replayed terminal and cannot notify us again. Applying the idempotent removal here is what
+          // keeps a visibility/revive race from leaving a dead row stranded forever.
+          reconnectAnchors.current.delete(sessionId);
+          setTerminalNotice(true);
+          setSessions((prev) => {
+            if (!prev.has(sessionId)) return prev;
+            const next = new Map(prev);
+            next.delete(sessionId);
+            return next;
+          });
+          setSelected((current) => (current === sessionId ? null : current));
+        },
+      )) {
         setSessions((prev) => {
           const next = new Map(prev);
           const existing = next.get(a.sessionId);
@@ -790,10 +868,10 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   const current = selected !== null ? sessions.get(selected) : undefined;
 
   // The reconnect-attempt anchor for a session at the current `now` (set-once-while-stale, cleared when
-  // connected). Mutates the ref cache in place — idempotent for a given (sentAt, now), and prunes the
+  // connected). Mutates the ref cache in place — idempotent for a given (freshnessAt, now), and prunes the
   // anchor once reconnected so the map can't grow unbounded.
   const anchorFor = (s: Announce): number => {
-    const stale = now - s.sentAt >= CONNECTED_WINDOW_MS;
+    const stale = now - s.freshnessAt >= CONNECTED_WINDOW_MS;
     const next = nextReconnectAnchor(reconnectAnchors.current.get(s.sessionId), stale, now);
     if (next === undefined) reconnectAnchors.current.delete(s.sessionId);
     else reconnectAnchors.current.set(s.sessionId, next);
@@ -839,6 +917,15 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
           {/* A persistent bus-transport failure (broker outage / wrong-or-stale pass). role=alert so AT
               announces it; shown ABOVE the list since an outage usually leaves the list empty. */}
           {busError !== null && <Banner className="bus-error" status="warning" title={busError} />}
+          {terminalNotice && (
+            <Banner
+              className="bus-error terminal-notice"
+              status="warning"
+              title="Session ended — its most recent delivery and output tail may be incomplete."
+              isDismissable
+              onDismiss={() => setTerminalNotice(false)}
+            />
+          )}
           {/* Only claim "no sessions" when the bus is actually reachable — otherwise the real reason is the
               outage above, and "no live sessions yet" would mislead (it reads as "all good, just waiting"). */}
           {list.length === 0 && busError === null && (
@@ -849,7 +936,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
           )}
           {list.map((s) => {
             const since = anchorFor(s);
-            const cs = connState(s.sentAt, now, since);
+            const cs = connState(s.freshnessAt, now, since);
             const connected = cs === "connected";
             return (
               <button
@@ -943,8 +1030,8 @@ function Transcript(props: {
   // Synchronous re-entry guard for send() — the `sending` STATE can't block a same-tick double-fire (a
   // double-tap / Enter-mash before React commits setSending), so the ref is the actual gate; state drives UI.
   const sendingRef = useRef(false);
-  // A non-error notice for the composer (e.g. the staged-image cap) — distinct from sendError, which is a
-  // send FAILURE (it renders a "Couldn't send" + Retry).
+  // A non-error notice for the composer (e.g. the staged-image cap) — distinct from failures of
+  // compatibility controls/history recovery, which use the dismissable action-error banner.
   const [stagedNotice, setStagedNotice] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   // On a COARSE pointer (phone/tablet) the on-screen keyboard's Return should insert a NEWLINE, not send —
@@ -957,7 +1044,7 @@ function Transcript(props: {
 
   // Live connection state from the freshest announce (null until one arrives — then never scary).
   // Thinking/needs are only meaningful while connected; a stale announce's phase says nothing.
-  const cs = announce ? connState(announce.sentAt, now, reconnectingSince) : null;
+  const cs = announce ? connState(announce.freshnessAt, now, reconnectingSince) : null;
   const connected = cs === "connected";
   const phase = connected ? (announce?.phase ?? "idle") : "idle";
   const needs = connected ? (announce?.needs ?? false) : false;
@@ -1012,12 +1099,27 @@ function Transcript(props: {
   // honor a verb (tmux/opencode set_mode; opencode set_model) declares it false → the viewer disables
   // that control so it never shows a "✓" the worker never applied.
   const caps = announce?.capabilities;
-  const canSetMode = caps?.controls.setMode ?? true;
-  const canSetModel = caps?.controls.setModel ?? true;
-  const canInterrupt = caps?.controls.interrupt ?? true;
-  // Permissions are BYPASSED when the driver can't surface structured gates (--skip-permissions): tools
-  // run without a per-tool ask. Surface the posture so the human knows edits aren't gated.
-  const permsBypassed = caps?.structuredPermissions === false;
+  const stableClaude = isStableClaudeSurface(announce?.harness, caps);
+  const supportsSetMode = caps?.controls.setMode ?? true;
+  const supportsSetModel = caps?.controls.setModel ?? true;
+  const supportsInterrupt = caps?.controls.interrupt ?? true;
+  const supportsAttachments = caps?.attachments ?? true;
+  const supportsRemotePermissions = caps?.structuredPermissions ?? true;
+  const canSetMode = remoteMutationEnabled(connected, supportsSetMode);
+  const canSetModel = remoteMutationEnabled(connected, supportsSetModel);
+  const canInterrupt = remoteMutationEnabled(connected, supportsInterrupt);
+  const canAttach = remoteMutationEnabled(connected, supportsAttachments);
+  const canGrantPermissions = remoteMutationEnabled(connected, supportsRemotePermissions);
+  // `structuredPermissions:false` means only that the BROWSER cannot answer. Stable Claude keeps its
+  // gates in the local TUI; an explicit compatibility bypass posture is a different claim.
+  const permissionsLocal = stableClaude;
+  const permsBypassed = caps?.structuredPermissions === false && !permissionsLocal;
+  const textBlockReason = stableTextBlockReason(input, stableClaude);
+  const slashBlocked = textBlockReason === "slash";
+  const composerHasPayload =
+    textBlockReason === null ||
+    (textBlockReason === "empty" && supportsAttachments && staged.length > 0);
+  const canSend = remoteMutationEnabled(connected, composerHasPayload && !slashBlocked);
 
   // Reconcile a fresh announce against the optimistic pick: clear it once the announce CONFIRMS the pick or
   // shows a genuine remote change, but KEEP it while the announce still echoes the pre-pick mode (a
@@ -1059,6 +1161,12 @@ function Transcript(props: {
     }
   }, [canSetMode]);
 
+  // A terminally stale host can no longer confirm any in-flight local send. Preserve each source id and
+  // content, but disclose the only truthful outcome until an exact late accepted ack arrives.
+  useEffect(() => {
+    if (cs === "disconnected") setMessages((prev) => markPendingDeliveryUnknown(prev));
+  }, [cs]);
+
   // `reviveKey` bumps to force a transcript RE-SUBSCRIBE without losing what's shown — the recovery for
   // iOS Safari SUSPENDING a fetch stream when the page is backgrounded (the photo picker opening, an app
   // switch): the suspended stream never delivers `done`/error, so transcript()'s own re-subscribe loop
@@ -1092,12 +1200,6 @@ function Transcript(props: {
             // Reconcile the optimistic echo (#113) — don't render the ack itself.
             const ack = parseAccepted(m.text);
             if (ack !== null) {
-              // A FALSE failure: this send was restored as failed, but its ack just arrived → it actually
-              // landed. Clear the error banner (+ Retry) so the user can't one-tap a duplicate (#150).
-              if (ack.clientMsgId === failedSendRef.current) {
-                failedSendRef.current = null;
-                setSendError(null);
-              }
               setMessages((prev) => reconcileAccepted(prev, ack.clientMsgId, ack.seq));
             }
           } else {
@@ -1183,27 +1285,38 @@ function Transcript(props: {
   // value (their closures otherwise see only the render-time copy).
   const stagedRef = useRef(staged);
   stagedRef.current = staged;
-  const addStaged = useCallback((files: FileList | null) => {
-    if (files === null) return;
-    const picked = Array.from(files).filter((f) => f.type.startsWith("image/"));
-    // Bound the staged count (each image holds a File + an object URL); drop the overflow with a notice
-    // rather than silently, and don't mint URLs for files we won't keep.
-    const { accept, dropped } = fitStaged(
-      stagedRef.current.length,
-      picked.length,
-      MAX_STAGED_IMAGES,
-    );
-    const items = picked.slice(0, accept).map((f) => ({
-      id: crypto.randomUUID(),
-      name: f.name,
-      file: f,
-      url: URL.createObjectURL(f),
-    }));
-    setStagedNotice(
-      dropped > 0 ? `You can attach up to ${MAX_STAGED_IMAGES} images per message.` : null,
-    );
-    if (items.length > 0) setStaged((prev) => [...prev, ...items]);
-  }, []);
+  const addStaged = useCallback(
+    (files: FileList | null) => {
+      if (files === null) return;
+      if (!canAttach) {
+        setStagedNotice(
+          connected
+            ? "Attachments aren’t available for this session."
+            : "Reconnect to the host before attaching a photo.",
+        );
+        return;
+      }
+      const picked = Array.from(files).filter((f) => f.type.startsWith("image/"));
+      // Bound the staged count (each image holds a File + an object URL); drop the overflow with a notice
+      // rather than silently, and don't mint URLs for files we won't keep.
+      const { accept, dropped } = fitStaged(
+        stagedRef.current.length,
+        picked.length,
+        MAX_STAGED_IMAGES,
+      );
+      const items = picked.slice(0, accept).map((f) => ({
+        id: crypto.randomUUID(),
+        name: f.name,
+        file: f,
+        url: URL.createObjectURL(f),
+      }));
+      setStagedNotice(
+        dropped > 0 ? `You can attach up to ${MAX_STAGED_IMAGES} images per message.` : null,
+      );
+      if (items.length > 0) setStaged((prev) => [...prev, ...items]);
+    },
+    [canAttach, connected],
+  );
   const removeStaged = useCallback((id: string) => {
     setStagedNotice(null); // back under the cap → drop any "max images" notice
     setStaged((prev) => {
@@ -1219,15 +1332,12 @@ function Transcript(props: {
       return [];
     });
   }, []);
-  // Mirror the live input so the send-failure recovery (#150) can tell whether the user has begun a NEW
-  // draft during the in-flight send (don't clobber it) — the send closure only sees the pre-send values.
-  const inputRef = useRef(input);
-  inputRef.current = input;
-  // The clientMsgId of a send we restored as FAILED. A `fetch` rejection can be a FALSE failure — the POST
-  // reached the broker and published, but the response was lost — in which case the host still emits the
-  // `accepted` ack. If that ack arrives for a "failed" send, the send actually landed: clear the error
-  // banner so the user isn't tempted to one-tap Retry into a duplicate (#150 review).
-  const failedSendRef = useRef<string | null>(null);
+  // A stable-capability refresh can remove attachment support after files were staged. Revoke and clear
+  // them immediately so no stale UI path can later smuggle an unsupported mutation into send(). A mere
+  // presence blip only disables mutation; it does not discard a compatibility host's local draft.
+  useEffect(() => {
+    if (!supportsAttachments) clearStaged();
+  }, [supportsAttachments, clearStaged]);
   // Revoke any still-staged object URLs if the transcript unmounts (session switch / back) with a draft.
   useEffect(
     () => () => {
@@ -1238,6 +1348,13 @@ function Transcript(props: {
 
   const send = useCallback(async () => {
     const text = input.trim();
+    // Mutation gates are repeated at the action boundary: disabled controls are presentation, not proof.
+    if (!connected) return;
+    if (!supportsAttachments && staged.length > 0) {
+      clearStaged();
+      return;
+    }
+    if (stableTextBlockReason(text, stableClaude) === "slash") return;
     if (text === "" && staged.length === 0) return;
     // Synchronous re-entry guard (#H): a double-tap Send / Enter-mash fires send() twice in the same tick,
     // before React commits setSending — so the async `sending` state can't block the second call, but this
@@ -1246,10 +1363,8 @@ function Transcript(props: {
     sendingRef.current = true;
     const clientMsgId = `cm-${crypto.randomUUID()}`;
     const toSend = staged; // capture before clearStaged resets it (downscale reads item.file, not the URL)
-    const original = input; // restore the EXACT draft (untrimmed) on failure, not the trimmed send text
     setSending(true);
     setSendError(null);
-    failedSendRef.current = null; // a new attempt supersedes any prior failed-send tracking
     // Optimistic echo (#113): render the message INSTANTLY and clear the composer, so the image/text is
     // never in neither place during the host round-trip (or an iOS-suspended stream). The host's `accepted`
     // ack reconciles it; the transport watchdog (#125) recovers the stream — so no post-send reviveKey bump.
@@ -1260,37 +1375,16 @@ function Transcript(props: {
     setInput("");
     try {
       await sendComposer(viewer, sessionId, text, toSend, downscaleToBase64, clientMsgId);
-    } catch (e) {
-      // The send's POST rejected. USUALLY that means it never landed (no `accepted` will come) — but it can
-      // also be a FALSE failure (the POST published, only the response was lost), in which case the ack DOES
-      // arrive and the accepted-handler clears this banner (failedSendRef) so Retry can't duplicate it.
-      // Don't strand the content in a dead "failed to send" bubble (the previous behavior, which also LOST
-      // the staged images — their previews were revoked): RESTORE the draft to the composer so the user can
-      // edit + Send again (#150). Only restore into an EMPTY composer — if a new draft was typed during the
-      // in-flight send, keep it and leave the failed bubble in place instead of clobbering their work.
-      setSendError(friendlySendError(e));
-      const composerDirty = inputRef.current.trim() !== "" || stagedRef.current.length > 0;
-      if (composerDirty) {
-        // Can't restore without clobbering — mark the optimistic bubble failed so the text isn't a silent loss.
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.clientMsgId === clientMsgId
-              ? { ...m, optimistic: false, text: `${m.text}\n⚠️ failed to send` }
-              : m,
-          ),
-        );
-      } else {
-        // Composer is free → drop the optimistic bubble and put the draft back exactly as it was.
-        failedSendRef.current = clientMsgId; // a late ack for this id ⇒ false failure ⇒ clear the banner
-        setMessages((prev) => prev.filter((m) => m.clientMsgId !== clientMsgId));
-        setInput(original);
-        if (toSend.length > 0) setStaged(restageImages(toSend, (f) => URL.createObjectURL(f)));
-      }
+    } catch {
+      // A rejected fetch does not prove rejection: the broker may have committed the exact source frame
+      // and lost only the response. Preserve the bubble and source id in an absorbing unknown state. There
+      // is intentionally no restore/Retry path that could mint a second id for the same semantic message.
+      setMessages((prev) => markDeliveryUnknown(prev, clientMsgId));
     } finally {
       setSending(false);
       sendingRef.current = false;
     }
-  }, [input, staged, sessionId, viewer, clearStaged]);
+  }, [input, staged, sessionId, viewer, clearStaged, connected, supportsAttachments, stableClaude]);
 
   // Auto-grow the composer textarea up to a cap; recompute whenever the text changes (incl. on clear).
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1329,6 +1423,7 @@ function Transcript(props: {
   const chooseModel = useCallback(
     async (id: string) => {
       setSessionSheet(false);
+      if (!canSetModel) return;
       setSendError(null);
       setOptimisticModel(id); // optimistic — set_model isn't self-reported, so the tick is our own record
       try {
@@ -1341,13 +1436,14 @@ function Transcript(props: {
         setSendError(friendlySendError(e));
       }
     },
-    [sessionId, viewer],
+    [sessionId, viewer, canSetModel],
   );
   // Interrupt has no instant UI (the sheet just closes), so show a transient "Interrupting…" status until
   // the worker actually goes idle. Cleared by the phase→idle announce, or a timeout fallback so it can't stick.
   const [interrupting, setInterrupting] = useState(false);
   const interruptSession = useCallback(async () => {
     setSessionSheet(false);
+    if (!canInterrupt) return;
     setSendError(null);
     setInterrupting(true);
     try {
@@ -1356,7 +1452,7 @@ function Transcript(props: {
       setInterrupting(false);
       setSendError(friendlySendError(e));
     }
-  }, [sessionId, viewer]);
+  }, [sessionId, viewer, canInterrupt]);
   useEffect(() => {
     if (!interrupting) return;
     if (phase === "idle") {
@@ -1376,8 +1472,11 @@ function Transcript(props: {
   // control_response. Bound to this session; PermissionRow owns the per-request pending/resolved state.
   // `extra` carries an AskUserQuestion's {answers, toolUseId} (#42); absent for a plain allow/deny.
   const grant = useCallback<GrantFn>(
-    (requestId, behavior, extra) => viewer.grantPermission(sessionId, requestId, behavior, extra),
-    [sessionId, viewer],
+    async (requestId, behavior, extra) => {
+      if (!canGrantPermissions) return;
+      await viewer.grantPermission(sessionId, requestId, behavior, extra);
+    },
+    [sessionId, viewer, canGrantPermissions],
   );
 
   return (
@@ -1397,6 +1496,14 @@ function Transcript(props: {
           {harnessLabel(announce?.harness)}
         </span>
         {announce?.git && <GitChip git={announce.git} />}
+        {permissionsLocal && (
+          <span
+            className="perms-local"
+            title="Permission prompts stay in the local Claude terminal and cannot be answered here."
+          >
+            permissions local
+          </span>
+        )}
         {permsBypassed && (
           <span
             className="perms-bypassed"
@@ -1416,6 +1523,14 @@ function Transcript(props: {
           onClick={() => setSessionSheet(true)}
         />
       </div>
+
+      {stableClaude && (
+        <Banner
+          className="local-input-disclosure"
+          status="info"
+          title="Prompts entered in the local Claude terminal may not appear here."
+        />
+      )}
 
       {/* role=log + aria-live so a screen reader announces assistant turns / tool rows as they stream in
           (additions only — presence ticks don't re-read the whole log). Without this the transcript was
@@ -1439,6 +1554,9 @@ function Transcript(props: {
             key={`${m.msgId}:${m.seq}`}
             message={m}
             onGrant={grant}
+            canGrant={canGrantPermissions}
+            permissionsLocal={permissionsLocal}
+            hostConnected={connected}
             resolved={resolved}
             resolvedAnswers={resolvedAnswers}
           />
@@ -1456,7 +1574,13 @@ function Transcript(props: {
           onClick={jumpToLatest}
         />
       )}
-      <StatusStrip conn={cs} phase={phase} needs={needs} interrupting={interrupting} />
+      <StatusStrip
+        conn={cs}
+        phase={phase}
+        needs={needs}
+        interrupting={interrupting}
+        permissionsLocal={permissionsLocal}
+      />
       {/* Both this and .bus-error render CONDITIONALLY (on !== null), so Banner's internal isDismissed
           state can't leak across a re-open — a fresh error mounts a fresh Banner. If either is ever made
           unconditional, dismiss would hide it permanently: keep the conditional mount. */}
@@ -1464,19 +1588,9 @@ function Transcript(props: {
         <Banner
           className="send-err"
           status="error"
-          title={`Couldn’t send: ${sendError}`}
+          title={`Action failed: ${sendError}`}
           isDismissable
           onDismiss={() => setSendError(null)}
-          endContent={
-            <Button
-              className="send-err-retry"
-              variant="secondary"
-              size="sm"
-              label="Retry"
-              isDisabled={sending || (input.trim() === "" && staged.length === 0)}
-              onClick={() => void send()}
-            />
-          }
         />
       )}
 
@@ -1510,6 +1624,11 @@ function Transcript(props: {
             {stagedNotice}
           </p>
         )}
+        {slashBlocked && (
+          <p className="staged-notice" role="status">
+            Slash commands aren’t available remotely. Use the local Claude terminal.
+          </p>
+        )}
         {/* Prompt field on top, controls below (mirrors the native app composer). */}
         <textarea
           ref={taRef}
@@ -1532,10 +1651,10 @@ function Transcript(props: {
               void send();
             }
           }}
-          // Surface that slash commands work here (they ride the same input → command chip, #41); also the
-          // accessible name, since a placeholder isn't a reliable one (it vanishes on input).
+          // The accessible name stays stable when the placeholder disappears on input. Compatibility
+          // harnesses retain slash commands; the exact stable Claude surface advertises plain text only.
           aria-label="Message"
-          placeholder="Send a prompt — or /compact, /clear…"
+          placeholder={stableClaude ? "Send a text prompt" : "Send a prompt — or /compact, /clear…"}
           // Match the actual Enter behavior: a "send" return key on desktop, a newline key on touch.
           enterKeyHint={coarsePointer ? "enter" : "send"}
         />
@@ -1560,7 +1679,9 @@ function Transcript(props: {
             tooltip={
               canSetMode
                 ? "Permission mode"
-                : "This harness can't switch permission mode — showing the worker's current mode (read-only)"
+                : connected
+                  ? "This harness can't switch permission mode — showing the worker's current mode (read-only)"
+                  : "Reconnect to the host before changing permission mode"
             }
             onClick={() => canSetMode && setModeSheet(true)}
           />
@@ -1568,9 +1689,15 @@ function Transcript(props: {
             variant="secondary"
             icon={<span aria-hidden>📎</span>}
             label="Attach photos"
-            tooltip="Attach photos"
-            isDisabled={sending}
-            onClick={() => fileRef.current?.click()}
+            tooltip={
+              canAttach
+                ? "Attach photos"
+                : connected
+                  ? "Attachments aren’t available for this session"
+                  : "Reconnect to the host before attaching photos"
+            }
+            isDisabled={sending || !canAttach}
+            onClick={() => canAttach && fileRef.current?.click()}
           />
           <input
             ref={fileRef}
@@ -1578,6 +1705,7 @@ function Transcript(props: {
             accept="image/*"
             multiple
             hidden
+            disabled={!canAttach}
             onChange={(e) => {
               addStaged(e.target.files);
               e.target.value = ""; // allow re-picking the same file(s)
@@ -1593,7 +1721,7 @@ function Transcript(props: {
             className="composer-send"
             label="Send"
             isLoading={sending}
-            isDisabled={sending || (input.trim() === "" && staged.length === 0)}
+            isDisabled={sending || !canSend}
           />
         </div>
       </form>
@@ -1611,6 +1739,7 @@ function Transcript(props: {
           currentModel={optimisticModel}
           canModel={canSetModel}
           canInterrupt={canInterrupt}
+          hostConnected={connected}
           onModel={(id) => void chooseModel(id)}
           onInterrupt={() => void interruptSession()}
           onCopyBranch={copyBranch}
@@ -1656,18 +1785,21 @@ function StatusStrip({
   phase,
   needs,
   interrupting,
+  permissionsLocal,
 }: {
   conn: ConnState | null;
   phase: "idle" | "thinking";
   needs: boolean;
   interrupting: boolean;
+  permissionsLocal: boolean;
 }) {
   // role="alert" (assertive) for states that need attention now; role="status" (polite) for ambient
   // activity — so a screen reader announces the flip to disconnected / needs-you / working (#58 a11y).
   if (conn === "disconnected")
     return (
       <div className="chat-status" data-state="disconnected" role="alert">
-        Host disconnected — the session may have ended.
+        Host disconnected — its most recent delivery and output tail may be incomplete; the session
+        may have ended.
       </div>
     );
   if (conn === "reconnecting")
@@ -1685,7 +1817,9 @@ function StatusStrip({
   if (conn === "connected" && needs)
     return (
       <div className="chat-status" data-state="needs" role="alert">
-        🔔 Claude needs your input
+        {permissionsLocal
+          ? "🔔 Claude needs input in the local terminal"
+          : "🔔 Claude needs your input"}
       </div>
     );
   if (conn === "connected" && phase === "thinking")
@@ -1922,6 +2056,7 @@ export function SessionSheet({
   currentModel,
   canModel,
   canInterrupt,
+  hostConnected,
   onModel,
   onInterrupt,
   onCopyBranch,
@@ -1934,6 +2069,8 @@ export function SessionSheet({
   canModel: boolean;
   /** The driver can interrupt the current turn (true for every current driver; gated defensively). */
   canInterrupt: boolean;
+  /** Fresh host presence is required before any remote mutation, even when the driver supports it. */
+  hostConnected: boolean;
   onModel: (id: string) => void;
   onInterrupt: () => void;
   onCopyBranch: () => void;
@@ -1965,7 +2102,11 @@ export function SessionSheet({
           </button>
         ))
       ) : (
-        <p className="sheet-note">This harness can’t switch model from the viewer.</p>
+        <p className="sheet-note">
+          {hostConnected
+            ? "This harness can’t switch model from the viewer."
+            : "Reconnect to the host before changing model."}
+        </p>
       )}
       <div className="sheet-title">Session</div>
       <button
@@ -1978,7 +2119,11 @@ export function SessionSheet({
         <span className="mode-row-main">
           <span className="mode-row-label">Interrupt</span>
           <span className="mode-row-desc">
-            {canInterrupt ? "Stop the current turn" : "Not supported by this harness"}
+            {canInterrupt
+              ? "Stop the current turn"
+              : hostConnected
+                ? "Not supported by this harness"
+                : "Reconnect to the host before interrupting"}
           </span>
         </span>
       </button>
@@ -2005,11 +2150,17 @@ type GrantFn = (requestId: string, behavior: "allow" | "deny", extra?: GrantExtr
 export function Bubble({
   message,
   onGrant,
+  canGrant,
+  permissionsLocal,
+  hostConnected,
   resolved,
   resolvedAnswers,
 }: {
   message: Message;
   onGrant: GrantFn;
+  canGrant: boolean;
+  permissionsLocal: boolean;
+  hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
@@ -2031,6 +2182,21 @@ export function Bubble({
           {/* Dim the pill while it's an unconfirmed optimistic echo (#113); solid once the `accepted`
               ack reconciles it (optimistic→false). */}
           <div className={message.optimistic ? "pill pill-pending" : "pill"}>{message.text}</div>
+          {message.clientMsgId !== undefined && (
+            <div
+              className="delivery-status"
+              data-state={
+                message.deliveryUnknown ? "unknown" : message.optimistic ? "sending" : "received"
+              }
+              role={message.deliveryUnknown ? "alert" : "status"}
+            >
+              {message.deliveryUnknown
+                ? "Delivery unknown — it may have reached the host. It was not retried."
+                : message.optimistic
+                  ? "Sending"
+                  : "Received by host"}
+            </div>
+          )}
         </div>
       );
     case "assistant":
@@ -2055,6 +2221,9 @@ export function Bubble({
         <PermissionRow
           text={message.text}
           onGrant={onGrant}
+          canGrant={canGrant}
+          permissionsLocal={permissionsLocal}
+          hostConnected={hostConnected}
           resolved={resolved}
           resolvedAnswers={resolvedAnswers}
         />
@@ -2089,11 +2258,17 @@ function ThinkingRow({ text, sub }: { text: string; sub: boolean }) {
 function PermissionRow({
   text,
   onGrant,
+  canGrant,
+  permissionsLocal,
+  hostConnected,
   resolved,
   resolvedAnswers,
 }: {
   text: string;
   onGrant: GrantFn;
+  canGrant: boolean;
+  permissionsLocal: boolean;
+  hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
@@ -2114,7 +2289,7 @@ function PermissionRow({
 
   const decide = useCallback(
     async (behavior: "allow" | "deny") => {
-      if (req.requestId === "" || deciding.current) return;
+      if (!canGrant || req.requestId === "" || deciding.current) return;
       deciding.current = true;
       setBusy(true);
       setErr(null);
@@ -2128,8 +2303,30 @@ function PermissionRow({
         setBusy(false);
       }
     },
-    [req.requestId, onGrant],
+    [req.requestId, onGrant, canGrant],
   );
+
+  // Stable Claude keeps permission/question interaction in its local TUI. A replayed compatibility
+  // frame must never resurrect remote Allow/Deny controls or present permission_resolved as a stable
+  // native answer.
+  if (permissionsLocal) {
+    return (
+      <div className="perm perm-local-only">
+        <div className="perm-head">
+          <span className="tool-glyph">🔐</span>
+          <span className="perm-label">
+            {req.questions.length > 0
+              ? "Claude has a local question"
+              : `${req.tool} needs local input`}
+          </span>
+        </div>
+        {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
+        <div className="perm-local-note">
+          Permission prompts are local to Claude. Answer in the local Claude terminal.
+        </div>
+      </div>
+    );
+  }
 
   // An AskUserQuestion is a can_use_tool whose input is multiple-choice questions — render the question
   // UI + answer with updatedInput.answers, not a bare Allow/Deny (#42). (Branch AFTER the hooks above
@@ -2139,6 +2336,8 @@ function PermissionRow({
       <QuestionCard
         req={req}
         onGrant={onGrant}
+        canGrant={canGrant}
+        hostConnected={hostConnected}
         resolved={resolved}
         resolvedAnswers={resolvedAnswers}
       />
@@ -2165,14 +2364,14 @@ function PermissionRow({
             variant="secondary"
             className="perm-allow"
             label="Allow"
-            isDisabled={busy || req.requestId === ""}
+            isDisabled={busy || req.requestId === "" || !canGrant}
             onClick={() => void decide("allow")}
           />
           <Button
             variant="secondary"
             className="perm-deny"
             label="Deny"
-            isDisabled={busy || req.requestId === ""}
+            isDisabled={busy || req.requestId === "" || !canGrant}
             onClick={() => void decide("deny")}
           />
         </div>
@@ -2183,6 +2382,9 @@ function PermissionRow({
       )}
       {req.requestId === "" && effective === null && (
         <div className="perm-hint">No request id — this prompt can’t be answered from here.</div>
+      )}
+      {!hostConnected && effective === null && req.requestId !== "" && (
+        <div className="perm-hint">Reconnect to the host before answering.</div>
       )}
       {err !== null && <div className="perm-err">Couldn’t send: {err}</div>}
     </div>
@@ -2206,11 +2408,15 @@ interface ParsedPermission {
 function QuestionCard({
   req,
   onGrant,
+  canGrant,
+  hostConnected,
   resolved,
   resolvedAnswers,
 }: {
   req: ParsedPermission;
   onGrant: GrantFn;
+  canGrant: boolean;
+  hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
@@ -2284,7 +2490,7 @@ function QuestionCard({
   const allAnswered = req.questions.every(answered);
 
   const submit = useCallback(async () => {
-    if (req.requestId === "" || deciding.current || !allAnswered) return;
+    if (!canGrant || req.requestId === "" || deciding.current || !allAnswered) return;
     deciding.current = true;
     setBusy(true);
     setErr(null);
@@ -2305,11 +2511,11 @@ function QuestionCard({
     } finally {
       setBusy(false);
     }
-  }, [req.requestId, req.toolUseId, req.questions, finalAnswer, allAnswered, onGrant]);
+  }, [req.requestId, req.toolUseId, req.questions, finalAnswer, allAnswered, onGrant, canGrant]);
 
   // Decline a question you don't want to answer — rides the same path as a permission Deny (#42 review).
   const dismiss = useCallback(async () => {
-    if (req.requestId === "" || deciding.current) return;
+    if (!canGrant || req.requestId === "" || deciding.current) return;
     deciding.current = true;
     setBusy(true);
     setErr(null);
@@ -2322,7 +2528,7 @@ function QuestionCard({
     } finally {
       setBusy(false);
     }
-  }, [req.requestId, req.toolUseId, onGrant]);
+  }, [req.requestId, req.toolUseId, onGrant, canGrant]);
 
   if (done) {
     const denied = resolvedBehavior === "deny";
@@ -2364,6 +2570,7 @@ function QuestionCard({
                 className="q-option"
                 data-selected={isPicked(q, o.label)}
                 aria-pressed={isPicked(q, o.label)}
+                disabled={!canGrant}
                 onClick={() => pick(q, o.label)}
               >
                 <span className="q-option-label">{o.label}</span>
@@ -2376,6 +2583,7 @@ function QuestionCard({
             rows={1}
             placeholder={q.multiSelect ? "Add your own answer…" : "Or type your own answer…"}
             value={freeform[q.question] ?? ""}
+            disabled={!canGrant}
             onChange={(e) => onFreeform(q, e.target.value)}
             onKeyDown={(e) => {
               // Cmd/Ctrl+Enter submits when every question is answered (parity with the composer).
@@ -2394,19 +2602,22 @@ function QuestionCard({
           className="perm-allow q-submit"
           label="Submit answers"
           isLoading={busy}
-          isDisabled={busy || !allAnswered || req.requestId === ""}
+          isDisabled={busy || !allAnswered || req.requestId === "" || !canGrant}
           onClick={() => void submit()}
         />
         <Button
           variant="secondary"
           className="perm-deny"
           label="Skip / answer in chat"
-          isDisabled={busy || req.requestId === ""}
+          isDisabled={busy || req.requestId === "" || !canGrant}
           onClick={() => void dismiss()}
         />
       </div>
       {req.requestId === "" && (
         <div className="perm-hint">No request id — this prompt can’t be answered from here.</div>
+      )}
+      {!hostConnected && req.requestId !== "" && (
+        <div className="perm-hint">Reconnect to the host before answering.</div>
       )}
       {err !== null && <div className="perm-err">Couldn’t send: {err}</div>}
     </div>

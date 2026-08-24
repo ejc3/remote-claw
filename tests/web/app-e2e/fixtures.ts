@@ -6,10 +6,11 @@
 // preview e2e is reliable AND full-featured. (This replaced the old /api/dev/seed serverless route,
 // whose serve()-under-after() publish could freeze before landing; that route has now been removed.)
 import { type ChildProcess, spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
+import { bypassForTarget, primeVercelBypass } from "./protection-bypass";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNNER = join(HERE, "host-runner.ts");
@@ -18,15 +19,17 @@ const TSX = join(HERE, "..", "node_modules", ".bin", "tsx"); // tests/web's own 
 export interface SeedResult {
   pass: string;
   sessionId: string;
+  /** Close the real Session and publish its production session_terminal marker. */
+  terminalize: () => Promise<void>;
 }
 export type SeedHost = (opts?: {
   perm?: boolean;
   /** Inject an AskUserQuestion gate (#42): true = a single-select question; "multi" = a multiSelect
    *  question (exercises the picked-labels + appended-freeform array branch). */
   askq?: boolean | "multi";
-  /** Driver capability preset (RC_E2E_CAPS) for the capability-gated viewer (#149): "tmux" |
-   *  "opencode-skip" | undefined (full MITM caps). */
-  caps?: string;
+  /** Driver capability preset (RC_E2E_CAPS) for the capability-gated viewer (#149). Unset is the exact
+   * stable Claude tuple; maximal native-RC plumbing is explicit compatibility coverage. */
+  caps?: "compat-mitm" | "tmux" | "opencode-skip";
   /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164): "tmux" | "opencode" | undefined
    *  (MITM native-RC). Controls only the announced label, independent of `caps`. */
   harness?: string;
@@ -43,19 +46,74 @@ function spawnHost(opts: {
   caps?: string;
   harness?: string;
 }): { child: ChildProcess; ready: Promise<SeedResult> } {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    RC_E2E_BASE: opts.baseURL,
+    RC_E2E_BACKEND: opts.backend ?? "",
+    RC_E2E_BYPASS: opts.bypass ?? "",
+    RC_E2E_PERM: opts.perm ? "1" : "",
+    RC_E2E_ASKQ: opts.askq === "multi" ? "multi" : opts.askq ? "1" : "",
+    RC_E2E_CAPS: opts.caps ?? "",
+    RC_E2E_HARNESS: opts.harness ?? "",
+    // A credential-bearing deployed run must not inherit a developer's content-level wire trace or
+    // file sink. Warnings still go to inherited stderr, which Playwright does not retain here.
+    RC_LOG: "warn",
+  };
+  delete env.RC_LOG_FILE;
+  delete env.RC_LOG_FORMAT;
   const child = spawn(TSX, [RUNNER], {
-    stdio: ["ignore", "pipe", "inherit"], // stdout = the readiness line; stderr inherited for host logs
-    env: {
-      ...process.env,
-      RC_E2E_BASE: opts.baseURL,
-      RC_E2E_BACKEND: opts.backend ?? "",
-      RC_E2E_BYPASS: opts.bypass ?? "",
-      RC_E2E_PERM: opts.perm ? "1" : "",
-      RC_E2E_ASKQ: opts.askq === "multi" ? "multi" : opts.askq ? "1" : "",
-      RC_E2E_CAPS: opts.caps ?? "",
-      RC_E2E_HARNESS: opts.harness ?? "",
-    },
+    // stdin is a tiny test control plane (`terminal\n` closes the real Session); stdout is readiness only.
+    stdio: ["pipe", "pipe", "inherit"],
+    env,
   });
+  const terminalize = (sessionId: string): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      if (
+        child.stdin === null ||
+        child.stdout === null ||
+        child.exitCode !== null ||
+        child.signalCode !== null
+      ) {
+        reject(new Error("host-runner exited before terminalize"));
+        return;
+      }
+      const rl = createInterface({ input: child.stdout });
+      const cleanup = () => {
+        clearTimeout(timer);
+        rl.removeAllListeners();
+        rl.close();
+        child.removeListener("exit", onExit);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("host-runner did not acknowledge terminal publication within 10s"));
+      }, 10_000);
+      const onExit = () => {
+        cleanup();
+        reject(new Error("host-runner exited before acknowledging terminal publication"));
+      };
+      rl.on("line", (line) => {
+        try {
+          const message = JSON.parse(line) as {
+            terminal?: unknown;
+            sessionId?: unknown;
+          };
+          if (message.sessionId !== sessionId || typeof message.terminal !== "boolean") return;
+          cleanup();
+          if (message.terminal) resolve();
+          else reject(new Error("host-runner exhausted terminal publication retries"));
+        } catch {
+          // Ignore unrelated stdout; the runner's protocol is line-delimited JSON.
+        }
+      });
+      child.once("exit", onExit);
+      child.stdin.write("terminal\n", (error) => {
+        if (error) {
+          cleanup();
+          reject(error);
+        }
+      });
+    });
   const ready = new Promise<SeedResult>((resolve, reject) => {
     const rl = createInterface({ input: child.stdout! });
     // Tear down ALL listeners + the timer on EVERY settle path (resolve/timeout/exit/error) so a failed or
@@ -86,7 +144,11 @@ function spawnHost(opts: {
         const o = JSON.parse(line) as Partial<SeedResult>;
         if (typeof o.pass === "string" && typeof o.sessionId === "string") {
           cleanup();
-          resolve({ pass: o.pass, sessionId: o.sessionId });
+          resolve({
+            pass: o.pass,
+            sessionId: o.sessionId,
+            terminalize: () => terminalize(o.sessionId as string),
+          });
         }
       } catch {
         // not the readiness line — ignore (the host shouldn't emit other stdout, but be tolerant)
@@ -134,7 +196,10 @@ export const test = base.extend<{ seedHost: SeedHost }>({
   // test in transcript.spec.ts). The app/prod policy is untouched (this lives entirely in the harness).
   // Documents only: API/SSE responses (resourceType fetch/xhr) pass through untouched so the live
   // transcript stream is never buffered by route.fetch().
-  page: async ({ page, browserName }, use) => {
+  page: async ({ page, browserName, baseURL }, use) => {
+    if (baseURL) {
+      await primeVercelBypass(page.context(), baseURL, process.env.VERCEL_AUTOMATION_BYPASS_SECRET);
+    }
     if (browserName === "webkit") {
       await page.route("**/*", async (route, req) => {
         if (req.resourceType() !== "document") return route.continue();
@@ -154,7 +219,9 @@ export const test = base.extend<{ seedHost: SeedHost }>({
       const { child, ready } = spawnHost({
         baseURL: baseURL ?? "",
         backend: process.env.E2E_BACKEND,
-        bypass: process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+        bypass: baseURL
+          ? bypassForTarget(baseURL, process.env.VERCEL_AUTOMATION_BYPASS_SECRET)
+          : undefined,
         ...(opts ?? {}),
       });
       children.push(child);

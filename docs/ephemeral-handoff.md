@@ -6,8 +6,9 @@ workflow) **and adversarially reviewed** (codex + 7-dimension red-team on the de
 per PR; all resolutions in §8). The §1 invariant was honestly scoped after review.
 
 > **Claude 1.0 release scope:** manual pass onboarding is sufficient. QR/OTK handoff may be enabled only
-> when every §5 control ships together, including the out-of-band WAF rate limit. If that rule is not
-> verified, the handoff route and QR/OTK UI/CLI path stay disabled; the missing WAF rule then does not
+> when every §5 control ships together, including the externally provisioned WAF rate limit verified
+> live by the trusted release proof. If that rule is not verified, the handoff route and QR/OTK UI/CLI
+> path stay disabled; the missing WAF rule then does not
 > block the core [Claude 1.0 finish line](release-finish-line.md). Safety is conditional on feature
 > enablement, never optional within an enabled handoff flow.
 
@@ -84,13 +85,14 @@ expires_at INTEGER NOT NULL)` + index on `expires_at` (`id`/`proof_hash`/`ct` ar
 OTK never reaches the server, so the bytes it does store are hex-encoded one-way hashes + an opaque box).
 
 - **Cloud primary only.** Selected by the broker's env switch via `DbLocator.handoffConfig()` → a dedicated
-  Turso DB **`rc-<scope>-hx`**. The `-hx` suffix is distinct from the per-session *kinds* (`s`/`b`/`x`), so it
-  is **not** a channel db — but it deliberately **shares the `rc-<scope>-` prefix**, so the dev/CI
-  `dropScope` sweep reclaims it alongside the scope's channel dbs. That is desirable and **prod-safe**:
-  `dropScope` runs only behind the dev gate (`api/dev/sweep`, which refuses to run on a production deploy) and
-  only ever names dbs in the deploy's **own** scope — and a preview/dev/CI deploy's scope is `pr-<sha>`/`dev`,
-  never `prod` (which takes an explicit `RC_TURSO_DB_SCOPE=prod` opt-in), so it doesn't touch the prod handoff
-  db. No separate handoff cleanup is needed. The atomic
+  Turso DB **`rc-<scope>-hx`**. The `-hx` suffix is distinct from the relay-channel kinds
+  (`s`/`b`/`c`/`x`), so it
+  is **not** a channel db. It shares the `rc-<scope>-` prefix for naming only; that truncated prefix is
+  not exact deployment ownership and never authorizes deletion. The HTTP `/api/dev/sweep` route returns
+  501 without constructing a locator. Expired handoff rows are still removed by the dedicated frequent
+  sweep and PUT-time opportunistic reaper, while the database container remains retained. The low-level
+  `dropScope()` method is available only to explicit diagnostic tooling over a manually reviewed scope.
+  The atomic
   guarantee holds only on a single remote primary write path, so **fail closed on Vercel / file mode** (no
   `file:` handoff store on serverless — it's per-instance ephemeral). A two-client concurrent test (file
   libSQL — the same atomic `DELETE…RETURNING` engine as Turso) proves exactly-one-winner.
@@ -105,8 +107,8 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   (libSQL `"write"` opens a `BEGIN IMMEDIATE` transaction), and the dedicated handoff DB has its own client, so
   libSQL serializes the writes on the single primary.
 - **Frequent dedicated sweep** (review fix): a **separate cron** (`*/5 * * * *` in `apps/web/vercel.json`)
-  running `DELETE FROM handoff WHERE expires_at<=now` — NOT the once-daily, sqlite-gated channel-retention
-  cron — plus an **opportunistic delete batched into every PUT** (`HandoffStore.put` runs the expiry-delete in
+  running `DELETE FROM handoff WHERE expires_at<=now` — independent of the ordinary channel `sweep()`,
+  which is deliberately a no-op — plus an **opportunistic delete batched into every PUT** (`HandoffStore.put` runs the expiry-delete in
   the same write transaction as the insert), so writes reap expired rows even if the cron is degraded. ⚠️ the
   `*/5` cron needs Vercel **Pro** — Hobby silently downgrades sub-daily crons to daily, which is exactly the
   "vercel-default" 24h-persistence failure this guards against, so the PUT-time reaper is the floor on Hobby.
@@ -133,22 +135,29 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
   (a 256-bit hash key, so the equality is not a usable timing oracle) → `{box}` or a **uniform `404`**. Claim is **POST, never GET**. The
   **full non-success contract is fail-closed and uniform**: absent / expired / already-claimed / **bad proof**
   → identical opaque `404`; malformed `{id}` → `400`; **over-cap body → `413`** (PUT and POST alike); backend
-  fault (SQLITE_BUSY, create→serve race #346, etc.) → `500` with **no body detail**. `Cache-Control:
+  fault (SQLITE_BUSY, exhausted bounded create→serve readiness #346, etc.) → `500` with **no body detail**. `Cache-Control:
   no-store`. The id+proof match is the in-`DELETE` SQL equality from §3.2 (no JS `timingSafeEqual`, and none
   is needed — it compares 256-bit SHA-256 values, not a usable timing oracle).
 - **The proof closes the edge-pre-burn (review CONFIRMED):** the claim presents `claimProof`; the server stores
   only `SHA256(claimProof)`. A TLS-terminating edge/log that sees only `id = SHA256(OTK)` **cannot** burn or
   claim (it lacks `claimProof`, which needs OTK). This is **mandatory whenever OTK handoff is enabled**.
 - **No Bearer auth** (it would re-introduce handoff↔identity correlation); the **256-bit `id` + proof** are the
-  gate. Abuse bounded by: the pre-parse size cap, a **deployed Vercel WAF rate-limit rule** on
+  gate. Abuse bounded by: the pre-parse size cap, a **release-gated, live-verified Vercel WAF
+  rate-limit rule** on
   `/api/handoff` (matched by `path` prefix) keyed on the platform-trusted client IP — **20 requests / 60 s per IP** (a token bucket;
-  excess is denied), the *primary* abuse control. The **global volumetric backstop is Vercel's always-on
-  System Mitigations** (platform-managed automatic DDoS protection) — not a custom rule, so there is no custom
+  excess is denied), the *primary* abuse control. The expected live rule is
+  `rule_handoff_per_ip_rate_limit_UWaS5F` (`handoff-per-ip-rate-limit`) in enabled WAF configuration
+  `waf_TG8xDULMuMuR` v3 for project `prj_qUeYYc7P87JmsQUipJG0m0kqmYbM` and team
+  `team_fYexi4KRmIrq9wtYsiXs9e9H`, with no pending changes, draft, versions, or bypass entries. The trusted
+  release runner must verify those exact live coordinates and normalized semantics through the Vercel API
+  before handoff is release-enabled. The **global volumetric backstop is Vercel's platform-described
+  always-on System Mitigations** (platform-managed automatic DDoS protection) — not a custom rule, so there is no custom
   global counter an attacker could deliberately trip to deny pairings. The honest residual tradeoff runs the
   other way: a coarse per-IP key can throttle legitimate clients behind one shared egress IP (carrier-grade
   NAT), so the per-IP limit is set generously — 20 / 60 s ≫ the ~2 requests a real pairing needs. This
-  rate-limit is an **out-of-band infra deploy gate for any deployment that enables handoff**
-  (provisioned in the Vercel Firewall, not in `vercel.json`/CI — §5 #5), atop the short TTL, single-read, and
+  rate-limit is an **externally provisioned infra deploy gate for any deployment that enables handoff**
+  (provisioned in the Vercel Firewall, not in `vercel.json`; live state is checked by the trusted proof —
+  §5 #5), atop the short TTL, single-read, and
   the dedicated Turso DB so PUT write-contention can't touch relay frames. **Abuse telemetry lives at the edge, not the app:** the WAF
   dashboard (claim-rate, per-IP throttle hits, brute-force volume) is where §4's online-attack guarantees are
   observed. The serverless route deliberately does **not** log per-claim outcomes (the `id` is public and a
@@ -247,13 +256,14 @@ itself is an out-of-band infra deploy-gate** — see below); (6) **user gesture 
 `409`-on-conflict with host
 re-mint.
 
-> **#5 is the one enabled-feature must-have that lives outside the repo.** The per-IP rate-limit rule can't live in `vercel.json`
-> and no test/CI can assert it exists; it is provisioned via the Vercel Firewall (dashboard/API) — now **deployed**
-> as `handoff-per-ip-rate-limit` (20 req / 60 s per IP, token bucket; excess denied), with Vercel's always-on
-> System Mitigations as the global volumetric backstop (no custom global rule). So "the net-security claim is
-> conditional on ALL must-haves" includes a control the codebase cannot self-check: when handoff is
-> enabled, treat the WAF rule as an infra release gate verified out-of-band, not a shipped artifact
-> (mirrors `route.ts`'s deploy-gate note). When handoff is disabled, this conditional gate does not block
+> **#5 is the one enabled-feature must-have provisioned outside the repo.** The per-IP rate-limit rule
+> cannot live in `vercel.json`, but the trusted real-topology release proof queries the Vercel API directly
+> and fails closed unless the exact project/team, enabled WAF v3 configuration, sole active valid rule,
+> `/api/handoff` path-prefix match, 20-per-60-second per-IP token bucket, deny action, and empty bypass list
+> match the coordinates above. A passing topology-v4 receipt is the run-specific evidence; its digest and
+> execution status live in the PR release record rather than this candidate-bound document. The API does
+> not expose System Mitigations, and the proof deliberately does not attest them. When handoff is disabled,
+> this conditional gate does not block
 > manual-pass Claude 1.0.
 
 - **No PAKE** (high-entropy OTK ⇒ SPAKE2 adds EC-correctness surface for zero gain; NIST SP 800-63B).
@@ -273,7 +283,7 @@ URLs (expire + one-time) · OWASP (Secrets / Crypto-Storage / Session / tokens-i
 detection) · WebCrypto non-extractable `CryptoKey` + WebAuthn `prf` (§3.6). Prior art: Yopass, Bitwarden Send,
 PrivateBin (#174), Snappass; anti-patterns: OneTimeSecret/Password Pusher (server-readable), Firefox Send (abuse).
 
-## 7. Implementation plan (stacked PRs; gate: biome + tsc + vitest → /code-review + codex → CI green)
+## 7. Implementation plan (stacked PRs; gate: biome + tsc + vitest → /code-review + codex → exact-SHA CI gate)
 
 1. **PR1 — clawsec `handoff.ts` + tests** (no behavior change): `generateOtk`, `handoffId`, `claimProof`,
    `sealHandoff`/`openHandoff` (versioned box, AAD), `formatOtk`/`parseOtk`; round-trip / wrong-OTK / tamper /
@@ -309,10 +319,9 @@ written" — it overclaimed.* This revision applies the survivors. Key resolutio
 - **[HIGH/CONFIRMED] handoff↔identity correlation via IP/timing** → §1/§4 scoped honestly (row has no
   identity; traffic does).
 - **[MEDIUM] atomic burn only on cloud primary** → fail-closed on Vercel/file + a two-client concurrent test
-  (§3.2); **dropScope prefix-matches the handoff DB** → kept under the `rc-<scope>-` prefix on purpose (named
-  `rc-<scope>-hx`, distinct from the relay-channel kinds) so the dev/CI sweep reclaims it; prod-safe because
-  `dropScope` is dev-gated (refuses production deploys) and bounded to the deploy's own scope (`pr-<sha>`/`dev`,
-  never `prod` without an explicit opt-in), so no separate handoff cleanup is needed.
+  (§3.2); **the handoff DB shares the truncated scope prefix** → naming is not deletion authority, so
+  `/api/dev/sweep` is disabled (501) and the database container remains retained. Row expiry is enforced
+  by the dedicated sweep, burn-on-touch, and PUT-time reaper; `dropScope()` is diagnostic-only.
 - **[MEDIUM] unauth PUT dead-drop / clobber** → pre-parse cap + WAF + 409-on-conflict + re-mint (§3.3/§3.4).
 - **[MEDIUM] prefetch/unfurler auto-burn; QR-swap** → user gesture before claim + `identity_id` binding
   confirmation (§3.4).

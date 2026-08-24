@@ -372,10 +372,12 @@ export async function runTmuxDriver(
   const stop = ac.signal;
 
   const relays = new Set<Promise<void>>();
+  const terminalTasks = new Set<Promise<void>>();
   const registrar = new LegacyRcConversationRegistrar({
     newClient: ctx.newClient,
     identityId: ctx.identity.identityId,
     relays,
+    terminalTasks,
     tracer,
   });
   const startingMetadata: LegacyRcConversationMetadata = {

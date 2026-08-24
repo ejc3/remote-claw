@@ -10,8 +10,8 @@ import { expect, test } from "./fixtures";
 //
 // Each capture is a REGION (a specific element) rather than the whole viewport wherever a region exists,
 // so a shot doesn't churn on unrelated layout above/below it.
-// Keyed by PROJECT: both projects run the same test titles, and a bare "shots/03-transcript.png"
-// would have the desktop run silently overwrite the phone run's file.
+// Keyed by PROJECT: all four width/theme projects run the same test titles, and a bare
+// "shots/03-transcript.png" would let later projects silently overwrite earlier files.
 const OUT = () => `shots/${test.info().project.name}`;
 
 /** Wait for the bottom-sheet's slide-up + scrim-fade animations to finish before capturing — otherwise
@@ -23,8 +23,10 @@ async function settleSheet(page: import("@playwright/test").Page) {
     const scrim = document.querySelector(".sheet-scrim") as HTMLElement | null;
     const sheet = document.querySelector(".sheet") as HTMLElement | null;
     if (!scrim || !sheet) return false;
-    return scrim.getAnimations().every((a) => a.playState !== "running")
-      && sheet.getAnimations().every((a) => a.playState !== "running");
+    return (
+      scrim.getAnimations().every((a) => a.playState !== "running") &&
+      sheet.getAnimations().every((a) => a.playState !== "running")
+    );
   });
 }
 
@@ -41,7 +43,7 @@ test("connect + pass screen", async ({ page, seedHost }) => {
 });
 
 test("session list", async ({ page, seedHost }) => {
-  const { pass } = await seedHost({ harness: "tmux" });
+  const { pass } = await seedHost({ harness: "tmux", caps: "tmux" });
   await connect(page, pass);
   await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
   await page.screenshot({ path: `${OUT()}/02-session-list.png` });
@@ -61,8 +63,21 @@ test("transcript: prose, tool rows, diff, task nesting", async ({ page, seedHost
   await page.screenshot({ path: `${OUT()}/04-tool-output-expanded.png`, fullPage: true });
 });
 
-test("permission prompt", async ({ page, seedHost }) => {
-  const { pass } = await seedHost({ perm: true });
+test("stable Claude: permissions-local header and text-only composer", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost();
+  await connect(page, pass);
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(page.locator(".perms-local")).toBeVisible();
+  await expect(page.getByTestId("composer-mode")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
+  await page.locator("section.chat").screenshot({ path: `${OUT()}/04a-stable-claude.png` });
+});
+
+test("compatibility permission prompt", async ({ page, seedHost }) => {
+  const { pass } = await seedHost({ perm: true, caps: "compat-mitm" });
   await connect(page, pass);
   await page.locator("button.row", { hasText: "rc box" }).click();
   const perm = page.locator(".perm").first();
@@ -70,8 +85,11 @@ test("permission prompt", async ({ page, seedHost }) => {
   await perm.screenshot({ path: `${OUT()}/05-permission.png` });
 });
 
-test("AskUserQuestion card (single-select + freeform)", async ({ page, seedHost }) => {
-  const { pass } = await seedHost({ askq: true });
+test("compatibility AskUserQuestion card (single-select + freeform)", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ askq: true, caps: "compat-mitm" });
   await connect(page, pass);
   await page.locator("button.row", { hasText: "rc box" }).click();
   const card = page.locator(".perm.perm-q").first();
@@ -86,12 +104,14 @@ test("AskUserQuestion card (single-select + freeform)", async ({ page, seedHost 
   await card.screenshot({ path: `${OUT()}/07-question-answered.png` });
 });
 
-test("composer: staged state + mode sheet + session sheet", async ({ page, seedHost }) => {
-  const { pass } = await seedHost();
+test("compatibility composer: mode sheet + session sheet", async ({ page, seedHost }) => {
+  const { pass } = await seedHost({ caps: "compat-mitm" });
   await connect(page, pass);
   await page.locator("button.row", { hasText: "rc box" }).click();
 
-  await page.getByPlaceholder(/Send a prompt/).fill("a drafted prompt that wraps onto a second line");
+  await page
+    .getByRole("textbox", { name: "Message" })
+    .fill("a drafted prompt that wraps onto a second line");
   await page.locator("form.composer").screenshot({ path: `${OUT()}/08-composer.png` });
 
   await page.getByTestId("composer-mode").click();
@@ -104,15 +124,21 @@ test("composer: staged state + mode sheet + session sheet", async ({ page, seedH
   await page.screenshot({ path: `${OUT()}/10-session-sheet.png` });
 });
 
-test("status strip: disconnected + bus error", async ({ page, seedHost }) => {
+test("status strip: disconnected with incomplete-tail disclosure", async ({ page, seedHost }) => {
+  // Install before Console creates its presence timer so fastForward advances the real state machine.
+  await page.clock.install({ time: Date.now() });
   const { pass } = await seedHost();
   await connect(page, pass);
   await page.locator("button.row", { hasText: "rc box" }).click();
   await expect(page.locator(".transcript")).toBeVisible();
   // The strip only shows for a non-quiet state; drive it by aging the announce past the connected window
   // rather than faking DOM, so what's captured is what a real lapsed host looks like.
-  await page.clock.install();
-  await page.clock.fastForward(120_000);
-  await expect(page.locator(".chat-status")).toBeVisible();
-  await page.locator(".chat-status").screenshot({ path: `${OUT()}/11-status-strip.png` });
+  await page.clock.fastForward(60_000);
+  await expect(page.locator('.chat-status[data-state="reconnecting"]')).toBeVisible();
+  await page.clock.fastForward(40_000);
+  const disconnected = page.locator('.chat-status[data-state="disconnected"]');
+  await expect(disconnected).toContainText(
+    "most recent delivery and output tail may be incomplete",
+  );
+  await disconnected.screenshot({ path: `${OUT()}/11-status-strip.png` });
 });

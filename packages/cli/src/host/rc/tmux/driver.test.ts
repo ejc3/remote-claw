@@ -45,12 +45,23 @@ class FakeClient {
   announces: Array<Record<string, unknown>> = [];
   #inbound: Frame[] = [];
   #wakes = new Set<() => void>();
+  #sessionId: string | null = null;
 
   get content(): Posted[] {
     return this.posts.filter((p) => p.seq !== null);
   }
 
-  async seqCursor(): Promise<{ maxSeq: number | null; durable: boolean }> {
+  get sessionId(): string {
+    if (this.#sessionId === null) throw new Error("fake broker session is not bound yet");
+    return this.#sessionId;
+  }
+
+  get sessionBound(): boolean {
+    return this.#sessionId !== null;
+  }
+
+  async seqCursor(session: string): Promise<{ maxSeq: number | null; durable: boolean }> {
+    this.#sessionId = session;
     return { maxSeq: null, durable: false };
   }
   async frameCountCursor(): Promise<{ frameCount: number | null; durable: boolean }> {
@@ -110,12 +121,18 @@ class FakeClient {
   }
 }
 
-/** A `dir:"in"` client frame the relay's inbound pump processes (plaintext stashed in `ct`). */
-function inFrame(id: Identity, recordKind: string, msgId: string, text: string): Frame {
+/** A channel-bound `dir:"in"` client frame the relay's inbound pump processes (plaintext in `ct`). */
+function inFrame(
+  id: Identity,
+  client: FakeClient,
+  recordKind: string,
+  msgId: string,
+  text: string,
+): Frame {
   return {
     v: 1,
     identityId: id.identityId,
-    sessionId: "s",
+    sessionId: client.sessionId,
     dir: "in",
     recordKind,
     seq: null,
@@ -701,7 +718,7 @@ describe("runTmuxDriver wiring", () => {
     expect(asst?.text).toBe("PINEAPPLE");
 
     // INJECT: a viewer `user` inbound frame drives the pane (stdin load-buffer → paste → send Enter).
-    client.pushInbound(inFrame(identity, "user", "msg-user-1", "say hi"));
+    client.pushInbound(inFrame(identity, client, "user", "msg-user-1", "say hi"));
     await waitFor(() => spy.calls.some((c) => c[0] === "send-keys" && c.includes("Enter")));
     const verbs = spy.calls.map((c) => c[0]);
     const sb = verbs.indexOf("load-buffer");
@@ -779,8 +796,8 @@ describe("runTmuxDriver wiring", () => {
 
     try {
       await waitFor(() => clients.every((client) => client.announces.length === 1));
-      clients[0].pushInbound(inFrame(identity, "user", "many-a", "prompt for A"));
-      clients[1].pushInbound(inFrame(identity, "user", "many-b", "prompt for B"));
+      clients[0].pushInbound(inFrame(identity, clients[0], "user", "many-a", "prompt for A"));
+      clients[1].pushInbound(inFrame(identity, clients[1], "user", "many-b", "prompt for B"));
       await waitFor(() =>
         spies.every((spy) =>
           spy.calls.some((call) => call[0] === "send-keys" && call.includes("Enter")),
@@ -1454,6 +1471,7 @@ describe("runTmuxDriver wiring", () => {
       client.pushInbound(
         inFrame(
           identity,
+          client,
           "permission",
           "msg-perm-1",
           JSON.stringify({ request_id: "tu_gate", behavior: "allow" }),
@@ -1551,6 +1569,7 @@ describe("runTmuxDriver wiring", () => {
     client.pushInbound(
       inFrame(
         identity,
+        client,
         "permission",
         "msg-perm-write-fail",
         JSON.stringify({ request_id: "tu_write_fail", behavior: "allow" }),
@@ -1633,6 +1652,7 @@ describe("runTmuxDriver wiring", () => {
       client.pushInbound(
         inFrame(
           identity,
+          client,
           "permission",
           "msg-perm-askq",
           JSON.stringify({
@@ -1721,6 +1741,7 @@ describe("runTmuxDriver wiring", () => {
       client.pushInbound(
         inFrame(
           identity,
+          client,
           "permission",
           "msg-perm-bash",
           JSON.stringify({ request_id: "tu_bash", behavior: "allow", answers: { hijack: "x" } }),
@@ -1777,9 +1798,10 @@ describe("runTmuxDriver wiring", () => {
     );
     try {
       await waitFor(spy.started);
+      await waitFor(() => client.sessionBound);
       await writeFile(transcript, ""); // create the pinned file so capture attaches
       // 1) A VIEWER prompt drives the pane → the inject pump records "say hi" in the ledger (onInjected).
-      client.pushInbound(inFrame(identity, "user", "msg-1", "say hi"));
+      client.pushInbound(inFrame(identity, client, "user", "msg-1", "say hi"));
       await waitFor(() => spy.calls.some((c) => c[0] === "send-keys" && c.includes("Enter")));
       // The relay echoes the viewer prompt ONCE (its own inbound echo) so every device sees it.
       await waitFor(
@@ -1806,7 +1828,7 @@ describe("runTmuxDriver wiring", () => {
 
       // 4) TRIM robustness: an injected prompt whose transcript echo has trailing whitespace still matches
       // (ledger keys are trimmed) → suppressed, not double-shown.
-      client.pushInbound(inFrame(identity, "user", "msg-2", "trim me"));
+      client.pushInbound(inFrame(identity, client, "user", "msg-2", "trim me"));
       await waitFor(
         () => spy.calls.filter((c) => c[0] === "send-keys" && c.includes("Enter")).length >= 2,
       );

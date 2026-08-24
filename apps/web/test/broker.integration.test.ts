@@ -1,13 +1,23 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeFrame, deriveSessionKey, open, utf8, type WireFrame } from "@remote-claw/clawsec";
+import {
+  busToken,
+  decodeFrame,
+  deriveSessionKey,
+  open,
+  sessionToken,
+  utf8,
+  type WireFrame,
+} from "@remote-claw/clawsec";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
+import { resumeHook } from "workflow/api";
 import { GET as frameCountRoute } from "../app/api/frame-count/route";
 import { MAX_RELAY_CIPHERTEXT_BYTES, POST as relay } from "../app/api/relay/route";
 import { GET as seqRoute } from "../app/api/seq/route";
 import { GET as stream } from "../app/api/stream/route";
+import { dbFileName } from "../lib/broker/sqlite-multi";
 import { announceFrame, bearer, header, readSseData, uniqueIdentity, wireFrame } from "./helpers";
 
 afterAll(async () => {
@@ -50,6 +60,26 @@ function frameCountReq(auth: string | undefined, query = ""): Promise<Response> 
   const headers: Record<string, string> = {};
   if (auth !== undefined) headers.authorization = auth;
   return frameCountRoute(new Request(`${BASE}/api/frame-count${query}`, { headers }));
+}
+
+async function terminalFrame(
+  id: Awaited<ReturnType<typeof uniqueIdentity>>,
+  sessionId: string,
+): Promise<WireFrame> {
+  return wireFrame(
+    id.kMeta,
+    header(id, {
+      sessionId,
+      recordKind: "session_terminal",
+      seq: null,
+      msgId: `terminal-${sessionId}`,
+      dir: "out",
+      keyEpoch: 0,
+      part: 0,
+      parts: 1,
+    }),
+    utf8('{"v":1}'),
+  );
 }
 
 type BrokerGlobals = typeof globalThis & {
@@ -99,7 +129,12 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
           }),
           utf8(`message ${seq}`),
         );
-        expect((await post(frame, auth, sid)).status).toBe(200);
+        const published = await post(frame, auth, sid);
+        expect(published.status).toBe(200);
+        expect(await published.json()).toMatchObject({
+          created: seq === 2,
+          runId: join(dir, dbFileName(sessionToken(id.identityId, sid))),
+        });
       }
 
       const res = await seqReq(auth, `?session=${encodeURIComponent(sid)}`);
@@ -111,6 +146,42 @@ describe("broker: GET /api/seq (durable maxSeq cursor, A2b/#36)", () => {
       else process.env.RC_SQLITE_DIR = prevDir;
       if (prevBackend === undefined) delete process.env.BROKER_BACKEND;
       else process.env.BROKER_BACKEND = prevBackend;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advertise durable sqlite routes on Vercel without the complete Turso fleet", async () => {
+    const envKeys = [
+      "VERCEL",
+      "RC_SQLITE_DIR",
+      "TURSO_API_TOKEN",
+      "TURSO_ORG",
+      "TURSO_GROUP",
+      "TURSO_GROUP_AUTH_TOKEN",
+    ] as const;
+    const previous = envKeys.map((key) => [key, process.env[key]] as const);
+    const dir = await mkdtemp(join(tmpdir(), "rc-vercel-sqlite-route-"));
+    clearSqliteBackend();
+    process.env.VERCEL = "1";
+    process.env.RC_SQLITE_DIR = dir;
+    process.env.TURSO_API_TOKEN = "partial-config";
+    delete process.env.TURSO_ORG;
+    delete process.env.TURSO_GROUP;
+    delete process.env.TURSO_GROUP_AUTH_TOKEN;
+    try {
+      const id = await uniqueIdentity();
+      const auth = bearer(id.authToken);
+      const query = "?backend=sqlite&session=must-not-claim-durable";
+      await expect(seqReq(auth, query)).rejects.toThrow(/complete Turso Cloud fleet configuration/);
+      await expect(frameCountReq(auth, query)).rejects.toThrow(
+        /complete Turso Cloud fleet configuration/,
+      );
+    } finally {
+      clearSqliteBackend();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -243,6 +314,50 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
     expect(recent).toEqual([1, 2, 3].slice(3 - recent.length)); // an in-order suffix of [1,2,3]
   });
 
+  it("absorbs a terminal retry and a delayed live announce in the real Workflow run", async () => {
+    const id = await uniqueIdentity();
+    const auth = bearer(id.authToken);
+    const sid = "cse_terminal_race";
+    const live = (msgId: string) =>
+      announceFrame(
+        id,
+        { session_id: sid, title: "dead host", sent_at: Date.now() },
+        { sessionId: sid, msgId },
+      );
+
+    expect((await post(await terminalFrame(id, sid), auth)).status).toBe(200);
+    expect((await post(await terminalFrame(id, sid), auth)).status).toBe(200); // new AEAD, same op
+    expect((await post(await live("ann-after"), auth)).status).toBe(200); // successful suppression
+
+    // Subscribe while the hook is still resolvable, then close the internal test run so the reader can
+    // drain its exact finite output instead of using a timeout as an absence assertion.
+    const response = await sub(auth, "?startIndex=0");
+    await resumeHook(busToken(id.identityId), { __close: true });
+    const frames = (await readSseData(response, 4)) as WireFrame[];
+    expect(frames.map((frame) => frame.record_kind)).toEqual(["session_terminal"]);
+    expect(frames.map((frame) => frame.msg_id)).toEqual([`terminal-${sid}`]);
+    const terminal = frames[0];
+    if (terminal === undefined) throw new Error("terminal frame missing");
+    expect(td.decode(await open(id.kMeta, decodeFrame(terminal)))).toBe('{"v":1}');
+  });
+
+  it("rejects a noncanonical terminal header and presence lifecycle on a session channel", async () => {
+    const id = await uniqueIdentity();
+    const auth = bearer(id.authToken);
+    const sid = "cse_terminal_shape";
+    const valid = await terminalFrame(id, sid);
+
+    expect((await post({ ...valid, seq: 0 }, auth)).status).toBe(400);
+    expect((await post({ ...valid, msg_id: "terminal-wrong" }, auth)).status).toBe(400);
+    expect((await post({ ...valid, dir: "in" }, auth)).status).toBe(400);
+    expect((await post({ ...valid, parts: 2 }, auth)).status).toBe(400);
+    expect((await post(valid, auth, sid)).status).toBe(400);
+
+    const announce = await announceFrame(id, { session_id: sid, sent_at: 1 }, { sessionId: sid });
+    expect((await post(announce, auth, sid)).status).toBe(400);
+    expect((await post(valid, auth)).status).toBe(200);
+  });
+
   it("rejects an absent/malformed bearer with 401 (anti-scanning gate)", async () => {
     const id = await uniqueIdentity();
     const frame = await announceFrame(id, { session_id: "s", sent_at: 1 });
@@ -304,7 +419,7 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
     expect((await sub(bearer(id.authToken), "?startIndex=abc")).status).toBe(400);
   });
 
-  it("rejects a non-announce frame on the bus channel (§6A: bus carries only session_announce)", async () => {
+  it("rejects a non-presence frame on the bus channel (§6A)", async () => {
     const id = await uniqueIdentity();
     const auth = bearer(id.authToken);
     // A content frame with no ?session targets the bus — that must be refused (event-cap protection).
@@ -315,7 +430,7 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
     );
     const res = await post(content, auth);
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/only session_announce/);
+    expect((await res.json()).error).toMatch(/only session_announce or session_terminal/);
   });
 
   it("rejects a frame whose session_id disagrees with ?session (no cross-session smuggling)", async () => {
@@ -333,6 +448,38 @@ describe("broker: bus + per-session relay (P3, real Workflow runtime)", () => {
     expect((await res.json()).error).toMatch(/does not match \?session/);
     // Positive control: the same frame on its own channel is accepted.
     expect((await post(frame, auth, "A")).status).toBe(200);
+  });
+
+  it("maps changed SQLite transport bytes at one coordinate to hard 422, while exact replay succeeds", async () => {
+    const previousDir = process.env.RC_SQLITE_DIR;
+    const dir = await mkdtemp(join(tmpdir(), "rc-collision-route-"));
+    clearSqliteBackend();
+    process.env.RC_SQLITE_DIR = dir;
+    try {
+      const id = await uniqueIdentity();
+      const auth = bearer(id.authToken);
+      const sid = "sess-collision";
+      const key = await deriveSessionKey(id.contentRoot, sid);
+      const coordinate = header(id, {
+        sessionId: sid,
+        recordKind: "assistant",
+        seq: 0,
+        msgId: "assistant-collision",
+      });
+      const first = await wireFrame(key, coordinate, utf8("first bytes"));
+      const changed = await wireFrame(key, coordinate, utf8("changed bytes"));
+
+      expect((await post(first, auth, sid, "sqlite")).status).toBe(200);
+      expect((await post(first, auth, sid, "sqlite")).status).toBe(200); // exact transport retry
+      const collision = await post(changed, auth, sid, "sqlite");
+      expect(collision.status).toBe(422);
+      expect((await collision.json()).error).toMatch(/different frame bytes/);
+    } finally {
+      clearSqliteBackend();
+      if (previousDir === undefined) delete process.env.RC_SQLITE_DIR;
+      else process.env.RC_SQLITE_DIR = previousDir;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("isolates channels: A's content stays on A, B's on B, and neither leaks onto a (non-empty) bus", async () => {

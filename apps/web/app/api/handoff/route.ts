@@ -8,11 +8,13 @@ import { getHandoffStore, resetHandoffStore } from "../../../lib/broker/handoff-
 //
 // Abuse is bounded by: a streaming pre-buffer body cap, single-read + short TTL, and a MANDATORY platform
 // rate-limit. ⚠️ DEPLOY GATE (infra, NOT in repo): a Vercel WAF rate-limit rule on path `/api/handoff`
-// (per-IP token bucket + a low global ceiling). A serverless in-memory limiter is per-instance and
-// unreliable, so the limit MUST live at the edge (WAF). vercel.json cannot carry firewall rules — provision
-// it via the Vercel dashboard / Firewall API, and treat it as a release gate for this route.
+// (per-IP token bucket), backed by Vercel's always-on System Mitigations for global volumetric abuse.
+// A custom global counter is deliberately absent because an attacker could trip it to deny all pairings.
+// A serverless in-memory limiter is per-instance and unreliable, so the per-IP limit MUST live at the edge
+// (WAF). vercel.json cannot carry firewall rules — provision it via the Vercel dashboard / Firewall API,
+// and treat it as a release gate for this route.
 export const dynamic = "force-dynamic";
-export const maxDuration = 10;
+export const maxDuration = 60;
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX = /^[0-9a-f]+$/;

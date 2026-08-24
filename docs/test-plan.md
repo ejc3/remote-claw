@@ -12,7 +12,7 @@ that optional product is ever resumed; none is planned next or blocks Claude 1.0
 E0/E1a/E1b1/E1b2 codecs and retained fixtures remain implemented audit regressions only; they do not
 authorize or gate a live adapter, activation, attempt, or dispatch.
 
-## Active Claude 1.0 release suite — required, not yet implemented
+## Active Claude 1.0 release suite
 
 Claude 1.0 requires two non-skippable proof legs. The deterministic leg can control every crash
 boundary; the installed smoke proves the real topology. Neither substitutes for the other, and the
@@ -20,35 +20,81 @@ existing split proofs below do not satisfy the suite by themselves.
 
 | Required leg | Required proof |
 | --- | --- |
-| Deterministic fail-stop matrix | Use production MITM/relay/session/viewer-state code, the real SQLite/libSQL broker, and the faithful fake worker. Prove no automatic new-ID retry after ambiguous browser publish; one host handling across broker reconnect; no second user/control SSE emission after disconnect-before-ACK; disabled permission/question answers; exact native-event retry versus UUID collision; head-of-line projection publication across both pumps; fatal bridge closure with truthful incomplete-tail status; disabled unsupported controls; and a fresh successor with no old-command replay. No durable command journal or opaque native-application claim is part of this gate. |
-| Installed real-topology smoke | Install the compiled CLI without the repository TypeScript toolchain; launch one pinned/probed real Claude Code binary under a PTY; drive the actual browser UI; and use a deployed durable production broker. Cover onboarding, discovery, a turn, streamed output, reconnect, local-input and fail-stop-tail disclosure, broker storage/log inspection for absence of protected content, and disabled permission/question answer controls. Do not claim opaque native execution can be counted during injected crashes. |
-| Operations | Required deployment credentials, broker tests, and Claude compatibility checks fail rather than silently skip. `/api/handoff` edge rate limiting is mandatory only if QR/OTK handoff ships enabled; otherwise that surface is disabled and manual pass onboarding remains supported. |
+| Deterministic fail-stop matrix | Use production MITM/relay/session/viewer-state code, the real SQLite/libSQL broker, and the faithful fake worker. Prove stable selection requires exact harness `{agent:"claude-code",mode:"rc"}` plus exact vector `{structuredPermissions:false,status:true,controls:{interrupt:false,setModel:false,setMode:false,end:false},attachments:false}`; absent/non-object vectors and partial/malformed present vectors stay compatibility-only. Prove no automatic new-ID retry after ambiguous browser publish; one host handling across broker reconnect; no second user/control SSE emission after disconnect-before-ACK; disabled permission/question answers; exact native-event retry versus UUID collision; head-of-line projection publication across both pumps; a hard 30 s Turso readiness wall under 60 s cursor routes and a 70 s client cursor wall; a hard 15 s broker subscription-query maximum and shared three-transient poll budget; a separate 20 s stream-header wall even when fetch ignores abort; 40 s actual-byte SSE idle failure; exact 240 s planned rotation neutral to the failure budget while raw EOF charges it; one 65 s wall over an entire logical post with no ambiguous replay; closure on the third consecutive inbound failure, reset only by clean absence or newly admitted authenticated traffic, with owner abort exempt; fatal bridge closure with truthful incomplete-tail status; create-once channel continuity and permanent identity-bus-loss closure; five-second future-skew/cold-replay liveness bounds; disabled unsupported controls; and a fresh successor with no old-command replay. No durable command journal or opaque native-application claim is part of this gate. |
+| Installed real-topology smoke | From the repository root enter only through the executable pinned static BusyBox clean-environment launcher; archive the exact clean HEAD and build/pack/install only inside that isolated source; launch the exact byte-pinned `/usr/bin/claude` under a PTY and attest the running `/proc` descendant; drive the actual browser UI; verify the exact live handoff WAF rule; and use a deployed production-code Vercel Preview whose default backend is SQLite/Turso, without a host or browser backend selector. Cover onboarding, discovery, a first received/replied turn, durable reload, measured 235–270 s `: rotate`, later session subscription, re-attestation of the same Claude descendant, a second received/replied turn on the same `cse_*`, local-input and fail-stop-tail disclosure, and disabled permission/question answer controls. Then require zero run-bound sentinel occurrences on the exact bounded Preview surfaces. Post-merge, require independently proved candidate ancestry/equal trees, fresh inspection evidence, the exact live Production WAF and Deployment Protection, and a fresh default relay→Turso create/write/read before the terminal receipt. Do not claim opaque native execution can be counted during injected crashes. |
+| Operations | Direct Node and npm/pnpm lifecycle invocations are refused. The `#!/bin/busybox ash` process self-attests `/proc/$$/exe` as exact resolved `/usr/bin/busybox`, root:root mode `0755`, 1,914,704 bytes, SHA-256 `52151e7f322f926b64049cdaa1410dc3ea6485525e0624b05813791c219ae933`; accepts no arguments; and NUL-pipes the seven allowlisted proof inputs to an `env -i` Node runner, with no secret in argv. The runner requires a clean full HEAD, resolves a caller-supplied GitHub deployment ID, accepts only the newest successful `vercel[bot]` Preview status at the pinned project/team origin, requires its deployment SHA to equal HEAD, and fetches a non-cacheable, content-free runtime attestation from that exact origin with redirects forbidden. With trusted system binaries it archives that exact digest, frozen-installs/builds/packs in private isolated state, and binds the tarball digest. It resolves the intended `/usr/bin/claude` launcher symlink, opens and pins its resolved target, and requires that target to be a root:root regular mode-`0755` Linux arm64 file with version `2.1.237 (Claude Code)`, exactly 331,864,296 bytes, SHA-256 `a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177`, and the same executable for the live descendant. A parent-only Vercel management credential verifies the exact live enabled WAF config/rule and empty bypass list before Playwright. Separate minimal allowlists prevent management/Turso/cron credentials or ambient caller state from reaching Playwright, the wrapper, browser, or Claude. Missing Vercel system variables, real-Claude cwd, exact executable bytes, complete Turso fleet configuration, or default-backend durability fail closed. Ordinary preview CI may skip secret-dependent optional coverage and is not a release-proof receipt. |
 
-This suite is currently **missing** and therefore release-blocking. The precise fail-stop contract and
-security boundary are in [Claude 1.0](release-finish-line.md).
+The deterministic implementation has production-path tests for strict retry versus
+terminal collision/invalid intake, SSE disconnect-before-ACK fencing, both cross-pump head-of-line
+failure directions, control-side-effect serialization, 70 s durable-cursor and 20 s stream-header boundaries, 40 s
+actual-byte SSE idle failure, exact neutral 240 s rotation, the 65 s logical-post wall, third-consecutive-inbound-failure closure,
+exact executable inode retention, fatal per-session closure, local-TUI survival,
+a fresh successor with no old mutation, exact SQLite replay/collision and create-once loss detection,
+absorbing lifecycle presence, bounded viewer future skew/replay freshness,
+non-mutating ordinary retention, authenticated intake before dedup/order, ambiguous-send truth, and
+the stable text-only browser surface. A release record must bind the final frozen tree to its local
+gate, independent review, exact-SHA CI, and three receipts; mutable execution status is deliberately
+kept outside this candidate-bound document. The precise fail-stop contract and security boundary are in
+[Claude 1.0](release-finish-line.md).
 
 ## Strategy — the pyramid
 
 | Layer | Where | What it proves | Runtime |
 | --- | --- | --- | --- |
 | **Unit (crypto core)** | `packages/clawsec/src/*.test.ts` | HKDF hierarchy, AEAD per-message keys, the §8 wire envelope, channel tokens, the pass, chunking, the shared canonical field writer with strict-null optionals and defensive snapshots, the locked A0 AAD regression vector, A1.5's pure v2 wire/KDF/frame/digest/certificate/onboarding contracts, A1.6's exact selected capability/route/store/generation/manifest/retry/collision/read-page contracts, A1.7a's bounded ingress identifiers/digests/cursors plus strict `user`/`new_chat` payload codecs, A1.7b1's exact common payload/source/command/decision/result/signing bytes and deterministic IDs, A1.8a0's exact rejected action/chat payload bytes, stored-result/delivery digests, stable identity, and completion-observation selection, and authority-free exact `accepted` projection bytes retained for optional `user_text`/chat-creation research — pure functions, no network | Node + WebCrypto |
-| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), A0 BrokerClient (HTTP/SSE), viewer-side FrameOrderer (dedup/reorder), HostRelay (fake backend), ClaudeStreamSession env passthrough, A1.0 contracts, the A1.1 secure-filesystem/SQLite/protected-artifact kernel, A1.2 server/project repository, A1.3 runtime-owner/key-custody/daemon/RPC, A1.4 schema-v5 evidence/registration/reconciliation/duplex-port/trusted-adapter boundaries, A1.5 schema-v6 terminal-root repository/service boundaries, A1.6's negotiation-first client plus schema-v7 capability-pin/route/genesis repository and host-only installer, A1.7a's schema-v8 evidence-preserving ingress repository/dormant actor through `awaiting_order`, A1.7b0's schema-v9 wrapped server-key custody/self-anchor/fenced leases, A1.7b1's schema-v10 ready/order/rejected-decision/replaceable-preparation/signing boundary, A1.8a0's schema-v11 rejected-only atomic finalization and secure-reopen closure, and the merged E0/E1a/E1b1/E1b2 audit-only native-authority codecs plus direct-only Linux executable/workspace collectors and production-dormancy guards | Node, mock fetch / fixture + real temporary SQLite; CLI CI separately runs `linux-workspace-collector.test.ts` after capability-free non-root demotion |
+| **Unit (CLI seam + transport)** | `packages/cli/src/**/*.test.ts` | SecurityProvider (Open/Sealed, downgrade floor), A0 BrokerClient HTTP/SSE including hard cursor/connect/idle deadlines and ignored-abort behavior, HostRcRelay whole-logical-post timeout and three-failure terminal intake, viewer-side FrameOrderer (dedup/reorder), exact stable-Claude executable/inode pinning, HostRelay (fake backend), ClaudeStreamSession env passthrough, A1.0 contracts, the A1.1 secure-filesystem/SQLite/protected-artifact kernel, A1.2 server/project repository, A1.3 runtime-owner/key-custody/daemon/RPC, A1.4 schema-v5 evidence/registration/reconciliation/duplex-port/trusted-adapter boundaries, A1.5 schema-v6 terminal-root repository/service boundaries, A1.6's negotiation-first client plus schema-v7 capability-pin/route/genesis repository and host-only installer, A1.7a's schema-v8 evidence-preserving ingress repository/dormant actor through `awaiting_order`, A1.7b0's schema-v9 wrapped server-key custody/self-anchor/fenced leases, A1.7b1's schema-v10 ready/order/rejected-decision/replaceable-preparation/signing boundary, A1.8a0's schema-v11 rejected-only atomic finalization and secure-reopen closure, and the merged E0/E1a/E1b1/E1b2 audit-only native-authority codecs plus direct-only Linux executable/workspace collectors and production-dormancy guards | Node, mock fetch / fixture + real temporary SQLite; CLI CI separately runs `linux-workspace-collector.test.ts` after capability-free non-root demotion |
 | **Unit/integration (A1 broker)** | `apps/web/test/{api/a1-routes,broker/a1-sqlite}.test.ts` | Strict bearer/selector/capability admission, route recomputation, A1-only catalog/store provisioning and loss, bounded canonical relay/read, route-wide exact retry and first collision, rollover/manifests, quota/counter exhaustion, pagination, and isolation from A0 retention | Node + mock/local SQLite/libSQL |
 | **Retained native proof (Codex)** | `spikes/codex-multiclient/verify-*.mjs` | pinned probe/binary hashes, one real app-server, raw and real-TUI coexistence, top-level multi-chat subscription evidence, model/network isolation, native deletion, and cleanup | Node over checked JSON evidence; no provider/model |
-| **Retained native proof (Claude)** | [`spikes/claude-native-output`](https://github.com/ejc3/remote-claw/tree/main/spikes/claude-native-output) | pinned Linux arm64 Claude Code 2.1.237 binary/package/probe/runtime-source/evidence bytes; sanitized witnesses derive UUIDv4 coverage across all eight observed event types and one exact same-session request retry observed after a withheld HTTP 200; evidence only, not deterministic/per-type retry, runtime dedup, or question-family advertisement | Node over checked sanitized JSON evidence; live capture requires authenticated Claude + PTY |
+| **Retained native proof (Claude)** | [`spikes/claude-native-output`](https://github.com/ejc3/remote-claw/tree/main/spikes/claude-native-output) | pinned Linux arm64 Claude Code 2.1.237 binary/package/probe/evidence bytes plus historical captured-source blobs; sanitized witnesses derive UUIDv4 coverage across all eight observed event types and one exact same-session request retry observed after a withheld HTTP 200; executable current-tree tests guard trace pass-through and the fully-buffered-response/reset seam; evidence does not claim deterministic/per-type retry, runtime dedup, or a question family | Node over checked sanitized JSON + current trace contract; live capture requires authenticated Claude + PTY only when the supported tuple, proof claim, or fault model changes |
 | **Retained native proof (OpenCode)** | [`spikes/opencode-native/{verify-evidence,verify-executable-manifest}.mjs`](opencode-native-proof.md) | pinned binary/schema evidence, exact session-marker correlation, caller message-ID read-back, same-ID `noReply:true` append behavior within one incarnation, and independent reconstruction of the retained 150-chunk native executable manifest; raw executable/chunks are not retained | Node over checked JSON evidence; no provider/model |
 | **Optional parked OpenCode suite** | Safety matrix in [`a1-opencode-vertical-slice.md`](a1-opencode-vertical-slice.md) | if resumed: exact-existing or reconciled-created session; schema-v6 root authority; signed command-keyed execution; native and provider write-ahead/no-resend; strict read-back plus `assistant.parentID` under concurrent TUI; atomic observation-to-terminal/output intent; sealed-output self-recognition; isolation and crash recovery | not scheduled; real OpenCode required, never a Claude 1.0 gate |
 | **Integration (broker)** | `apps/web/test/*.integration.test.ts` | the **real** broker routes on the **real** Workflow runtime (`@workflow/vitest`): admission, routing, bus/session isolation, SSE, the full encrypted turn, control plane, the browser Viewer | in-process Vercel Workflows |
 | **App e2e (real browser)** | `tests/web/app-e2e/*.spec.ts` (Playwright) | a real **Chromium** drives the BUILT viewer against a real Next server + broker — the full RC turn, the one-time-handoff pairing, the three drivers' capability profiles (mitm/tmux/opencode, via capability presets — not real tmux/opencode hosts), and the bus-unreachable banner; **WebKit** runs the iOS-Safari foreground-revive spec; the RC turn re-runs on the per-channel SQLite backend | Playwright (Chromium + WebKit), built prod server |
-| **Proof (real claude)** | `apps/web/test/prove/*.prove.test.ts` (gated `RC_PROVE_REAL_CLAUDE=1`) | a **real, logged-in `claude`** driven end-to-end through the encrypted broker — single turn and stateful multi-turn | spawns real `claude`, network |
+| **Proof (source-tree real Claude)** | `apps/web/test/prove/*.prove.test.ts` (gated `RC_PROVE_REAL_CLAUDE=1`), including `real-launch.prove.test.ts` | a **real, logged-in `claude`** driven end to end through source `runRcLaunch`; the stable proof exercises one native-RC inference turn with the exact supported tuple and no installed-artifact substitution | spawns real `claude`, PTY/network |
+| **Release proof (installed deployed topology)** | trusted topology, inspection, and Production BusyBox wrappers under `scripts/` | topology v4: one real Chromium drives the deployed-default SQLite/Turso broker through an exact-HEAD archive-built tarball and byte-pinned real Claude PTY, with live WAF, running-process, 235–270 s rotation/reconnect, and second same-`cse_*` turn evidence; inspection v1: committed-scanner and pinned-libSQL provenance plus zero run-bound sentinel occurrences in every stable exact-prefix Preview Turso value and queryable retained immutable-deployment Runtime Log; Production v1: inspection completion at most 71 hours old or five minutes in the future, raw-local and GitHub candidate ancestry/equal trees, exact live WAF with empty Firewall bypass list, no-bypass Deployment Protection, exact live Production runtime, and fresh default relay→Turso null/create/write/read-to-one evidence with physical database ID. | explicit manual three-receipt release gate; topology has a 780 s Playwright wall and two Claude inference turns; provider inspection is bounded/fail-closed; finalized receipts are private durable artifacts; no trace/screenshot/video artifacts |
 | **Exploratory** | manual real-`claude` runs (`tests/web/cross-mode-verify.mjs`) | a LIVE session driven through the real viewer for any bridged driver: type a prompt, assert a real assistant reply (real LLM round-trip) carrying a needle, screenshot | real, on demand |
 
-CI keeps the unit + integration layers fast and network-free, verifies retained native evidence when
-its spike or verifier changes, and on every PR that touches the
-web/CLI/crypto paths also runs the **app-e2e** layer (Chromium + WebKit; the RC turn re-runs on
-per-channel SQLite) plus the encryption-stress suites (`.github/workflows/web-e2e.yml`, path-filtered);
-the real-claude proofs are env-gated so they never gate CI but are run on demand. Every PR must pass
-the relevant path-filtered checks plus the repository's `biome`, `tsc`, and `vitest` gate before merge.
+CI keeps the unit + integration layers fast and network-free. The Claude native-proof workflow runs
+for every `packages/cli/**` or proof-package change, checks the historical source blobs with full Git
+history, requires OpenSSL, and then executes the current run/trace/real-TLS contract tests. PRs that
+touch the web/CLI/crypto paths also run the **app-e2e** layer (Chromium + WebKit; the RC turn re-runs
+on per-channel SQLite) plus the encryption-stress suites (`.github/workflows/web-e2e.yml`,
+path-filtered). Source-tree real-Claude proofs are env-gated and run on demand. The deployment-preview
+workflow is an authenticated post-main smoke: it has no `deployment_status` or ref-selectable
+`workflow_dispatch` trigger because those can select candidate workflow bytes. A typed
+`repository_dispatch` fixes the workflow bytes/ref to the default branch and supplies an untrusted
+deployment ID to a no-secret resolver, which binds a successful Vercel-bot preview to its exact full
+SHA, approved project/team hostname, and a commit contained in `main`. The secret-bearing job uses the
+protected `release-proof` environment, whose
+credentials exist only at environment scope and whose branch policy admits `main` but not tags.
+Secrets remain step-scoped, and the workflow requires the exact pinned origin's non-cacheable runtime
+Preview/full-SHA attestation before any bypass-bearing broker, browser, or Turso leg can run. Its UI
+coverage passes `E2E_BACKEND=vercel` for the Workflow compatibility leg and
+`E2E_BACKEND=sqlite` for the Turso-backed durable leg; neither is an accidental unset-default run. Its
+optional secret-dependent legs may still skip, so green status is not the installed deployed release
+receipt.
+
+This repository currently has no enforced branch protection. Before merge, the release operator must
+query GitHub Actions by the immutable 40-character candidate SHA—not a branch, mutable check label, or
+latest run—and require a repository-owned `pull_request` run with conclusion `success` for each
+path-relevant workflow/job. For this cross-cutting release tranche those identities are exactly:
+
+- `.github/workflows/cli.yml` / `test`;
+- `.github/workflows/web.yml` / `test`;
+- `.github/workflows/clawsec.yml` / `test`;
+- `.github/workflows/web-e2e.yml` / `e2e`;
+- `.github/workflows/native-proofs.yml` / `retained-evidence`;
+- `.github/workflows/workspace.yml` / `lockfile`; and
+- `.github/workflows/docs.yml` / `web-tests`.
+
+An absent, skipped, neutral, wrong-SHA, or duplicate same-name result from an untrusted app fails the
+gate. After topology v4 and inspection v1 pass, merge only the inspected candidate, require exact-merge
+CI, and run the Production verifier. That verifier requires fresh inspection completion, proves
+candidate ancestry and equal candidate/merge trees through raw local Git and GitHub's independent
+compare/commit objects, and then binds the newest successful Production deployment, live runtime, exact
+WAF/empty Firewall-bypass list, Deployment Protection, and a fresh default relay→Turso write/read into
+the terminal receipt. Exact-SHA Actions CI remains separate release-record evidence: the verifier does
+not query it, and neither CI nor the three-receipt chain substitutes for the other.
 
 ## Coverage map — the 26 scenarios → proof
 
@@ -71,7 +117,8 @@ the relevant path-filtered checks plus the repository's `biome`, `tsc`, and `vit
 
 8. Admission: bad/absent bearer → 401 — ✅ `broker.integration.test.ts`
 9. Frame identity mismatch → 403; bad JSON → 400 — ✅ `broker.integration.test.ts`
-10. Bus carries only `session_announce` — ✅ `broker.integration.test.ts`
+10. Bus carries only `session_announce` / canonical `session_terminal` lifecycle — ✅
+    `broker.integration.test.ts`, `broker/{local-backend,sqlite-multi}.test.ts`
 11. Discovery announce round-trip (ciphertext only) — ✅ `broker.integration.test.ts`
 12. Session/bus channel isolation — ✅ `broker.integration.test.ts`
 13. Recent-window cold start — ✅ `broker.integration.test.ts`
@@ -93,25 +140,27 @@ the relevant path-filtered checks plus the repository's `biome`, `tsc`, and `vit
 20. REAL claude single turn through the broker — ✅(gated) `prove/real-claude.prove.test.ts`
 21. REAL claude multi-turn (stateful) — ✅(gated) `prove/real-session.prove.test.ts`
 22. Inference-agnostic (Bedrock env passthrough) — ✅ `host/claude.test.ts`
-23. Web client in a real browser — ✅ `tests/web/app-e2e/*.spec.ts` (RC turn, pairing, the 3 driver capability profiles, iOS revive, bus-unreachable banner) + 🔬 screenshots
+23. Web client in a real browser — ✅ `tests/web/app-e2e/*.spec.ts` (RC turn, pairing, the 3 driver capability profiles, iOS revive, bus-unreachable banner) + 🔬 screenshot matrix (12 surfaces × 4 phone/desktop/light/dark projects = 48 generated images; review artifacts are not committed)
 
 **Advanced**
 
 24. Interactive multi-turn — ✅/🔬 `prove/real-session.prove.test.ts` + browser
-25. Tool-use permission grant — ✅ `e2e/rc-spine.integration.test.ts` (a worker `can_use_tool` surfaces to the viewer, which grants it back to the worker) + ✅ `tests/web/app-e2e/transcript.spec.ts` (a granted permission survives a reload; an AskUserQuestion answer submits) + 🔬 real `claude` tool run
+25. Compatibility-only tool-use permission grant — ✅ `e2e/rc-spine.integration.test.ts` (a worker `can_use_tool` surfaces to a compatibility viewer, which grants it back to the worker) + ✅ `tests/web/app-e2e/transcript.spec.ts` (a compatibility permission survives reload; an AskUserQuestion answer submits). Stable Claude 1.0 suppresses permission/question interaction and does not advertise this family.
 26. Sub-agents (Task tool) — ✅ `e2e/rc-spine.integration.test.ts` (a Task `tool_use` + sub-agent output relay through as `tool_use` + `assistant_sub` frames) + ✅ `tests/web/app-e2e/transcript.spec.ts` (sub-agent Task nesting renders in a real browser) + 🔬 real `claude` sub-agent run
 
 ## Known gaps / honest limits
 
-- **Scenarios 25–26** are automated end-to-end: a viewer `permission` frame maps back to the worker's
+- **Scenarios 25–26** are automated end-to-end compatibility coverage: a viewer `permission` frame maps back to the worker's
   RC control-response (`HostRcRelay` → `session.pushControlResponse`), and a Task spawn relays its
   sub-agent frames — both covered by `e2e/rc-spine.integration.test.ts` and rendered in a real browser by
-  `tests/web/app-e2e/transcript.spec.ts`. What stays exploratory (🔬) is a *real* logged-in `claude`
-  driving a tool/sub-agent turn through that path — gated, like the real-claude scenarios 20–21.
+  `tests/web/app-e2e/transcript.spec.ts`. Stable Claude 1.0 suppresses the permission/answer family;
+  the sub-agent projection remains read-only output. A real logged-in Claude tool/sub-agent
+  compatibility run stays exploratory and is not a stable release claim.
 - The **native `--remote-control` HTTPS MITM** path (a real `claude --remote-control` through `MitmProxy`
-  + `HostRcRelay`, with a viewer turn round-tripping the real model's reply) has a gated proof —
-  `prove/real-rc.prove.test.ts` (`RC_PROVE_REAL_CLAUDE=1`); env-gated so it never gates CI but runs on
-  demand.
+  + `HostRcRelay`, with a viewer turn round-tripping the real model's reply) has gated compatibility
+  proof `prove/real-rc.prove.test.ts` and the current stable source-tree proof
+  `prove/real-launch.prove.test.ts` (`RC_PROVE_REAL_CLAUDE=1`). Neither substitutes for the
+  exact-candidate installed/deployed topology, bounded inspection, and equal-tree Production chain.
 - Negative-`startIndex` exact last-N semantics are real-Vercel-verified (spike §14A); the in-process
   harness only guarantees an in-order suffix incl. the latest — asserted accordingly.
 
@@ -130,7 +179,7 @@ claim about the current A0 implementation or the Claude 1.0 release gate.
 | A1.0 | Implemented contract foundation | Exact canonical primitive, ID namespace, path-resolution, record-shape, digest, fence, protected-operation, dispatch/reconciliation-separation, and backend-capability unit tests; no direct effect or A1 capability is advertised |
 | A1.1 | Implemented storage kernel | Linux descriptor-anchored secure create/open/reopen, read-only WAL-aware validation before writable SQLite open, exact schema-v2 migration/digest/manifest validation, FULL migration commits with non-blocking passive checkpoint and guardian fsync, typed commit and guardian-retaining cleanup outcomes, synchronous high-level transactions with generic multiwrite rollback, and immutable protected artifacts with verified scope, schema, reference, digest, and stored length; A1.3 now opens it, while no native effect or A1 broker capability is advertised |
 | A1.2 | Implemented host repository; operations inactive | Exact schema-v3 migration/manifest; default profile/server; atomic first project/mapping/chat/binding/intent/`rcie_*` edge; explicit later projects; terminal mapping-generation replacement; many-chat inventory; coordinator lease CAS, renewal, release, takeover and reconciliation; contiguous immutable journal; full semantic read-only snapshot validation; no live registration, command actor, native effect, or nested target/edge is advertised |
-| A1.3 | Implemented; production health only | Exact schema-v4 migration/manifest and full runtime-owner semantic graph; `rcrt_*` vector; service lease fencing/takeover/reconciliation; runtime/incarnation/assignment/containment and local-conversation registry; wrapped Ed25519 custody/signing discipline; binding/attachment/gate foundations; authenticated bounded RPC; daemon/bootstrap and failure cleanup; multi-runtime isolation; wrapped-driver connect/autostart/detach boundary; health reports `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`, with no installed production dispatch operation, durable owner registration, A1 binding activation, remote mutation, or broker capability |
+| A1.3 | Implemented; experimental-driver health only | Exact schema-v4 migration/manifest and full runtime-owner semantic graph; `rcrt_*` vector; service lease fencing/takeover/reconciliation; runtime/incarnation/assignment/containment and local-conversation registry; wrapped Ed25519 custody/signing discipline; binding/attachment/gate foundations; authenticated bounded RPC; daemon/bootstrap and failure cleanup; multi-runtime isolation; experimental OpenCode/tmux connect/autostart/detach boundary; stable MITM exact-tuple check and owner skip; health reports `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`, with no installed production dispatch operation, durable owner registration, A1 binding activation, remote mutation, or broker capability |
 | A1.4 | Implemented closed trusted-adapter seam; ordinary CLI has it disabled | Exact schema-v5 migration and 269-object manifest; five canonical evidence schemas; sequenced process leases/publications/operations; replay/collision and request-bound reconciliation; lifecycle/publication closure plus validator-enforced no-extra-row closure; duplex bounded callable ports; `liveReattach` admission; stale-open crash takeover and fresh-fenced same-binding process/port reattach with authority-change transport rotation; explicit-adapter production activation while ordinary health remains `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false` |
 | A1.5 | Implemented dormant foundation; ordinary CLI has it disabled | Pure browser-safe A1 v2 route/token/KDF/frame/digest, certificate, and onboarding codecs; exact schema-v6 304-object terminal-root ledger; activation/renewal replay, collision, fencing, expired-preparation refusal, rollback, lost-commit reconciliation, semantic reopen, lifecycle demotion, and re-ready renewal; closed v6 signature reservation, protected signing, fresh callable-port proof, and transaction-local store/accept/finalization through the opt-in trusted-adapter operation; no real driver or broker integration |
 | A1.6 | Implemented dormant foundation; ordinary CLI/drivers/viewer make zero A1 calls | Exact capability negotiation; selected SQLite/libSQL route provisioning; auth/route/store binding; raw and decoded bounds; retained route-wide exact retry/collision/manifests; automatic rollover and bounded one-generation pagination; outcome-unknown client behavior; exact 22-statement schema-v7/326-object capability-pin/route/pristine-genesis install and split-commit recovery; no ingress cursor, actor, native effect, checkpoint/signing, inference, or projection claim |
@@ -230,10 +279,14 @@ poisoning,
 normal and signal shutdown, and disconnect-as-detach. Bootstrap/production tests cover connect-first,
 one detached autostart attempt, machine-ID verification, allowlisted child environment/loader
 arguments, a cwd pinned to the trusted CLI entry directory, absence of secret bytes from
-argv/environment, owner-acquisition unknown-commit reconciliation, and health-only
-activation on exactly wrapped `--rc-app` MITM/OpenCode/tmux paths. Plain and help paths, trace mode,
-and the local `--rc-identity` action do not start the owner; unavailable/auth/start failure preserves
-the exact A0 path; wrapper exit closes only its owner RPC collaborator without replacing A0 native
+argv/environment, owner-acquisition unknown-commit reconciliation, and health-only activation on the
+experimental OpenCode/tmux paths. The stable `--rc-app` MITM path instead proves its exact Linux arm64
+Claude 2.1.237 tuple plus the resolved `/usr/bin/claude` target's root uid/gid, regular-file mode,
+byte length, and SHA-256 before identity,
+holds that executable inode through `/proc` until child exit, and never starts the owner. Plain and help
+paths, trace mode, and
+the local `--rc-identity` action also do not start it; unavailable/auth/start failure preserves the
+experimental A0 path; wrapper exit closes only its owner RPC collaborator without replacing A0 native
 teardown.
 
 A1.4's tests lock migration 5 to 38 statements and digest
@@ -268,10 +321,11 @@ reverse-request-ID bounds, exact tuple binding, timeout/replay/error handling, a
 invalidation. The production limits remain 64 ports, 32 reverse invocations in flight, and 4,096
 reverse request IDs per authenticated connection. Trusted-adapter service/production tests cover
 registration, ready-time before/after port authorization, teardown, and crash reattach. The seam is
-installed only when an explicit `registrationAdapter` is supplied. The ordinary CLI supplies none, so
-its operation registry is empty, its authenticated RPC surface is health-only, and health reports
+installed only when an explicit `registrationAdapter` is supplied. The experimental OpenCode/tmux
+production harness supplies none, so its operation registry is empty, its authenticated RPC surface is health-only, and health reports
 `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`; these tests do not claim a
-real-driver A1 registration, terminal root, inference connector, or remote A1 mutation.
+real-driver A1 registration, terminal root, inference connector, or remote A1 mutation. The stable
+Claude MITM skips the runtime owner and creates no owner/RPC surface.
 
 A1.5 pure tests cover exact route addresses/tokens and `rcr_*` IDs; three chat and two directional
 server-control KDFs; closed kind-to-plane, direction, sequence, client-ID, authentication-field, and
@@ -883,6 +937,7 @@ This gate belongs to live N1 and is not satisfied by A2's authenticated nested-s
 (cd packages/clawsec && pnpm test:run)
 (cd packages/cli && pnpm test:run)
 (cd apps/web && pnpm test:run)
+pnpm test:install
 
 # retained pinned native evidence — also runs in CI when its spike changes
 pnpm --filter @remote-claw/codex-multiclient-proof test:run
@@ -890,12 +945,180 @@ pnpm --filter @remote-claw/claude-native-output-proof test:run
 pnpm --filter @remote-claw/opencode-native-proof test:run
 
 # app e2e in a real browser (Chromium + WebKit) — also runs in CI
-pnpm --filter remote-claw-web-tests test:app          # LocalBackend
-pnpm --filter remote-claw-web-tests test:app:sqlite   # per-channel SQLite (?backend=sqlite)
+pnpm --filter remote-claw-web-tests test:app          # primary durable per-channel SQLite matrix
+pnpm --filter remote-claw-web-tests test:app:sqlite   # focused SQLite transcript config
 
 # the real-claude proofs (needs a logged-in claude)
 (cd apps/web && RC_PROVE_REAL_CLAUDE=1 pnpm exec vitest run test/prove)
 
 # manual live cross-driver verify — a real LLM round-trip through the real viewer (any driver)
 node tests/web/cross-mode-verify.mjs <base> <pass> <prompt> <needle> <shot.png> [label]
+
+# mandatory installed/deployed topology/browser leg (values supplied out of band; never print secrets)
+GITHUB_REPOSITORY=<owner/repository> \
+GITHUB_TOKEN=<github-token> \
+RC_DEPLOYMENT_ID=<github-deployment-id> \
+VERCEL_TOKEN=<vercel-management-token> \
+VERCEL_AUTOMATION_BYPASS_SECRET=<secret> \
+RC_PROVE_CLAUDE_CWD=<trusted-existing-directory> \
+./scripts/run-trusted-real-topology-clean.sh
+
+# immediately after topology v4; mint a separate short-lived read-only group token first
+RC_TOPOLOGY_RECEIPT_FILE=<absolute-private-browser-leg-v4-path> \
+TURSO_API_TOKEN=<turso-platform-api-token> \
+TURSO_GROUP_AUTH_TOKEN=<short-lived-read-only-group-token> \
+VERCEL_TOKEN=<vercel-management-token> \
+./scripts/run-trusted-final-inspection-clean.sh
+
+# after equal-tree merge, exact-merge CI, and the newest Production deployment
+GITHUB_REPOSITORY=<owner/repository> \
+GITHUB_TOKEN=<github-token> \
+RC_PRODUCTION_DEPLOYMENT_ID=<newest-github-production-deployment-id> \
+RC_INSPECTION_RECEIPT_FILE=<absolute-private-inspection-v1-path> \
+VERCEL_AUTOMATION_BYPASS_SECRET=<secret> \
+VERCEL_TOKEN=<vercel-management-token> \
+./scripts/verify-production-release-clean.sh
 ```
+
+The executable static BusyBox entry from the repository root is mandatory; direct Node refuses. Its
+`#!/bin/busybox ash` process self-attests `/proc/$$/exe` as resolved `/usr/bin/busybox`, root:root mode
+`0755`, exactly 1,914,704 bytes, and SHA-256
+`52151e7f322f926b64049cdaa1410dc3ea6485525e0624b05813791c219ae933`. It accepts no arguments and
+NUL-pipes the six explicitly assigned inputs shown above plus inherited `HOME`—seven total—to a Node
+process whose environment is exactly
+`PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, and `RC_PROOF_INPUT_FD=0`; no secret enters argv. The JavaScript
+runner refuses npm/pnpm lifecycle execution. It, not the caller, resolves `WEB_E2E_URL`. Before Playwright it fetches only the
+exact pinned origin's non-cacheable `/api/prove/deployment-attestation` response with the Vercel bypass,
+forbids redirects, and requires its runtime `environment:"preview"` plus full `sha` to equal the clean
+40-character HEAD. This prevents a mutable branch alias from satisfying metadata-only SHA checks;
+missing Vercel system variables fail closed.
+
+Using trusted `/usr/bin/git` and `/usr/bin/tar`, the runner archives that validated HEAD into private
+scratch, extracts it, frozen-installs the complete workspace under isolated home/store state, and builds
+and `npm pack`s only inside the archive. The resulting tarball is an owned regular `0400` file. Its
+absolute path and SHA-256 cross the Playwright boundary; the spec rehashes before and after install and
+never builds, packs, or imports the checkout. Scratch survives the browser leg and is exactly cleaned
+afterward. The receipt's packed-tarball digest must equal the runner's proof coordinate.
+
+The runner rejects an inherited `RC_CLAUDE_BIN`. It resolves the intended `/usr/bin/claude` launcher
+symlink and requires its resolved target to be a root:root regular mode-`0755` Linux arm64 file with
+exact version `2.1.237 (Claude Code)`, exactly 331,864,296 bytes, and
+SHA-256 `a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177`. After launch it verifies the
+real Claude descendant through `/proc` has that same resolved path, size, and hash before shutdown. The
+production launcher itself holds the proved executable inode from compatibility probe through child
+exit, so an atomic replacement of `/usr/bin/claude` cannot substitute different bytes.
+
+Before Playwright the parent-only `VERCEL_TOKEN` performs bounded, redirect-forbidden Management API
+reads for project `prj_qUeYYc7P87JmsQUipJG0m0kqmYbM` and team
+`team_fYexi4KRmIrq9wtYsiXs9e9H`. They require enabled live config `waf_TG8xDULMuMuR` version 3 with no
+draft, changes, or extra versions; exactly active and valid rule
+`rule_handoff_per_ip_rate_limit_UWaS5F` (`handoff-per-ip-rate-limit`) matching the `/api/handoff` path
+prefix, token bucket 20/60 keyed by IP, excess denied; and an empty firewall-bypass list. The Vercel API
+does not expose platform System Mitigations, so the proof does not claim to attest them.
+
+Playwright receives only its HOME/PATH/locale/XDG values, trusted cwd, the automation bypass, and
+nonsecret proof coordinates. The wrapper receives a separate minimum including TERM, the bypass,
+`RC_LOG=warn`, and the internally pinned Claude path. The browser process does not inherit the bypass.
+GitHub/Vercel-management/Turso/cron credentials and ambient source environment are excluded from every
+child. The private exact-schema topology/browser-leg receipt binds runtime/HEAD/deployment, installed
+tarball digest, pinned Claude tuple plus `binaryBytes` and `executableSha256`, normalized
+`edgeRateLimit`, runner-owned BEGIN/END log canaries and a proof window of at most 30 minutes,
+monotonically measured 235–270 s `streamRotation`, browser reconnect/post-rotation same-`cse_*` turn,
+Chromium result, and the nonsecret scan sentinel. The 780 s proof consumes two Claude inference
+turns and must cross the deployed 240 s rotation boundary.
+BusyBox bootstrap metadata is gate-attested and deliberately is not added to that durable receipt.
+
+The deployed origin must have the complete four-variable Turso fleet configuration and make its
+**deployment default** durable SQLite/Turso. Its non-cacheable runtime attestation and receipt bind the
+exact `sqlite`/Turso organization, group, and canonical `pr-<7sha>` scope; any explicit
+`RC_TURSO_DB_SCOPE` fails before Playwright, and final inspection must use those attested coordinates.
+The proof supplies neither `--rc-backend` nor
+`?backend=sqlite`; the stable host's `/api/seq` and `/api/frame-count` preflight must therefore prove the
+real default. The runner performs no broker data-plane warm-up before launching the installed host, but
+the topology receipt attests the exact Preview SHA/storage coordinates—not physical absence of its
+SHA-scoped Turso index. Preview CI or an earlier manual request may already have warmed
+that store. The deterministic never-settling/16.5-second first-index regressions own the hard cold-start
+behavior; if an operationally cold live observation is required, use and preserve evidence for a
+separately verified unused scope rather than inferring freshness from the receipt. The topology receipt
+remains explicitly inspection-pending.
+
+Immediately mint a separate short-lived read-only token for the attested Turso group and invoke only
+`run-trusted-final-inspection-clean.sh`. The scanner cannot prove the supplied token's expiry or
+authorization, so this is an operator requirement. Its wrapper accepts no argv; byte-pins BusyBox, Git,
+and Node; and NUL-pipes exactly four private inputs into an exact clean Node environment. Before those
+credentials reach Node, it requires the clean exact topology HEAD, materializes and byte-compares the
+committed wrapper/runner/schema closure from candidate Git blobs, and executes that snapshot. Wrapper
+and runner independently check the clean exact HEAD again after provider access. The runner validates
+the locked `@libsql/client` 0.17.3 dependency closure by package bytes/counts, copies it into a private
+snapshot, revalidates it after use, and removes it. Inspection may start at most 71 hours after the
+topology proof window began, while that window may complete at most five minutes in the future. The
+runner has a 10-minute overall wall plus 30-second operation walls. Turso inspection enumerates the
+exact `rc-pr-<7sha>-` fleet before and after, binds physical `DbId`, uses read snapshots, and scans
+`sqlite_schema`, `table_xinfo`, and every table value. Caps are 256 databases, 4,096 tables, 65,536
+columns, 250,000 rows per table, 5,000,000 rows total, 100,000,000 values, and 4 GiB of value bytes.
+
+Vercel inspection resolves the immutable Preview deployment, then queries the CLI-compatible historical
+Runtime Log endpoint only for its exact deployment and proof window. It recursively bisects page zero
+until each leaf returns `hasMoreRows:false`, with a one-millisecond overlap and request-row digest
+deduplication. A saturated one-millisecond leaf, wrong-deployment/malformed/truncated row, missing
+BEGIN/END canary, cap/deadline, or two non-identical settled snapshots fails. The log caps are 4,096
+queries and 1,000,000 retained requests. `remote-claw-real-topology-inspection/v1` contains only
+coordinates, hashes, bounded counts, times, and zero sentinel matches. Its claim covers every value in
+the stable exact-prefix Preview fleet and queryable retained Runtime Logs for the immutable deployment
+and window—not provider-internal, expired, or otherwise unqueryable telemetry. Its complete exact-schema
+receipt is first written only as a private durable noncanonical stage by the credential-bearing runner.
+The wrapper binds its SHA-256/device/inode/size, independently rechecks the exact candidate, and
+materializes a fresh committed publisher closure. Only that exact credential-free publisher may
+strict-validate the stage and publish the canonical mode-0600 artifact without overwrite after
+complete-byte and parent-directory sync.
+
+After that exact candidate merges without changing its Git tree and exact-merge CI passes, invoke only
+`verify-production-release-clean.sh`. Its wrapper accepts no argv and independently byte-pins BusyBox,
+Git, and Node. It derives the inspected candidate from the canonical private receipt filename, requires
+a clean merged HEAD with that candidate as ancestor and an equal tree, and materializes and byte-compares
+the committed wrapper/verifier/schema blobs before NUL-piping exactly the six inputs shown above. It
+rechecks the repository after the verifier exits. The credential-bearing verifier writes only a private
+durable noncanonical stage. The wrapper binds its SHA-256/device/inode/size, rechecks the exact initial
+merged HEAD/tree, and materializes a fresh committed publisher closure; only that exact credential-free
+publisher may strict-validate/recheck the stage and atomically/durably/exclusively publish the canonical
+Production receipt.
+The verifier reads the private inspection receipt safely and checks its `completedAt` both initially and
+immediately before staging: it may be at most 71 hours old or five minutes in the future. Raw local Git
+rejects replacement refs and graft metadata, requires a clean merge HEAD, proves candidate ancestry,
+and requires equal candidate/merge tree objects.
+GitHub independently requires its compare result to prove that ancestry and both commit-tree objects to
+match the local trees. The supplied numeric Production deployment must be first/newest in the filtered
+Production enumeration, successful, created by `vercel[bot]`, and exact merge HEAD; it and
+`refs/heads/main` are rechecked before receipt creation. The immutable Vercel deployment must be owned
+by the pinned team/project, READY, target Production, and exact `main`. Its no-store runtime attestation
+must bind the merge SHA,
+`sqlite`/Turso/`prod`, and the same organization and group inspected in Preview.
+
+Production verification also re-reads the exact enabled live active Firewall configuration and requires
+its owner/team to be pinned, update time to be canonical, project key to be the pinned project ID plus
+`#active`, active `ips`/`changes` to be empty, and the exact
+managed-rule matrix to be `gen`/`rce`/`sqli`/`xss` active/log plus
+`java`/`lfi`/`ma`/`php`/`rfi`/`sd`/`sf` inactive/log. Its sole custom rule must be the valid
+`/api/handoff` token bucket, draft/version state must be unambiguous, and the separate **Firewall**
+bypass list must be empty. Independently, an
+immutable-origin request without the automation bypass must return the exact Vercel Deployment
+Protection response. For either accepted 401 or 302 shape, its Secure+HttpOnly `_vercel_sso_nonce`
+cookie must contain exactly 48 lowercase hex characters, and the 64-lowercase-hex SSO callback nonce
+must equal SHA-256 of that cookie nonce's ASCII bytes. The automation bypass is sent only to that
+origin's application requests—the runtime attestation and the data-plane frame-count/relay calls—and
+never to GitHub or Vercel Management APIs. With no backend selector, a random fresh session must first return `{durable:true,frameCount:null}`;
+`POST /api/relay` must return `created:true`, a session channel, and its physical
+`rc-prod-s-<16 hex>` Turso database ID; and the final frame count must be one. The content-free
+data-plane evidence retains only that `databaseId`, the frame digest, counts, merge SHA, and
+durable/protected facts—not the random challenge, bearer, or frame bytes.
+
+The terminal `remote-claw-production-release-attestation/v1` binds the inspection file hash, local and
+GitHub tree coordinates, deployment/runtime, normalized WAF result, and data-plane evidence. Its
+canonical complete mode-0600 bytes cannot appear before the wrapper's outer Git recheck; publication is
+performed only by a fresh committed credential-free publisher, is exclusive and atomic, and includes
+complete-byte and parent-directory sync. Exact-merge Actions CI remains
+separate release-record evidence and is not queried by the verifier; the real Claude/browser turn is
+not rerun on Production.
+
+Do not copy request bodies, bearers, passes, tokens, model content, or the sentinel itself into either
+content-free downstream receipt. Any sentinel match or incomplete/untrusted coordinate fails the proof.

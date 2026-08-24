@@ -47,6 +47,15 @@ spawning it — e.g. this harness), the launcher's session identity leaks into t
 - **Verify it's real, not a stub:** the child claude env has **no** `CLAUDE_CODE_CHILD_SESSION`; and —
   broker mode: a fresh `cse_<hex>` is "session created" + announces every ~20s; trace mode:
   `POST …/bridge` returns a `worker_jwt`.
+- **Stable Claude 1.0 is byte-pinned, not version-string-only.** The production compatibility probe
+  resolves the requested Claude launcher (`RC_CLAUDE_BIN` or `claude` on `PATH`), opens its resolved target with
+  `O_RDONLY|O_NOFOLLOW`, and requires that target to be a root:root regular mode-`0755` file on Linux
+  arm64 with exact version
+  `2.1.237 (Claude Code)`, 331,864,296 bytes, and SHA-256
+  `a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177`, then keeps that inode open and
+  launches it through `/proc` until child exit. A pathname replacement after the probe cannot swap the
+  executable. The trusted installed release proof alone refuses `RC_CLAUDE_BIN` and hard-pins the
+  requested launcher to `/usr/bin/claude`.
 
 ### The Vercel bypass (`VERCEL_AUTOMATION_BYPASS_SECRET`)
 
@@ -181,7 +190,8 @@ new hardcoded colour to `viewer.css`, wrap it in `light-dark()` or the guard in
 
 Because the accent-inversion trap is invisible to the test suite, **look at a screenshot before merging
 any viewer change** — in BOTH modes: `cd tests/web && pnpm exec playwright test -c app-e2e.shots.config.ts`
-writes 11 surfaces × `{phone,desktop}`×`{light,dark}` to `tests/web/shots/<project>/`. Take a set before
+  writes 12 surfaces × `{phone,desktop}`×`{light,dark}` (48 images) to
+  `tests/web/shots/<project>/`. Take a set before
 and after and actually open them.
 
 ## Tranche scope and gate discipline
@@ -213,7 +223,80 @@ sequencing the proof work, never by weakening the proof:
 
 - Each change lands as its own reviewed PR (stacked when dependent). Per-PR gate: `pnpm exec biome
   check .` + `pnpm exec tsc --noEmit` + `pnpm exec vitest run` (all green), then `/code-review` +
-  codex, then CI green before merging.
+  codex. This repository currently has no enforced branch protection, so “CI green” is a manual
+  exact-SHA release gate, not a check-name glance: query GitHub Actions for the immutable 40-character
+  candidate SHA and require a repository-owned `pull_request` run with conclusion `success` for exactly
+  `.github/workflows/cli.yml` job `test`, `web.yml`/`test`, `clawsec.yml`/`test`,
+  `web-e2e.yml`/`e2e`, `native-proofs.yml`/`retained-evidence`, `workspace.yml`/`lockfile`, and
+  `docs.yml`/`web-tests` when, as in the release tranche, all are path-relevant. Missing, skipped,
+  neutral, wrong-SHA, or duplicate same-name results from an untrusted app fail the gate. Recheck the
+  resulting merge SHA after merge.
+- The installed/deployed release proof is invoked only as
+  `./scripts/run-trusted-real-topology-clean.sh` from the repository root. Do not route it through
+  direct Node, `pnpm`, or an npm lifecycle: dynamic-runtime and inherited hook variables are
+  executable-injection surfaces before JavaScript can validate them. The executable script's
+  `#!/bin/busybox ash` shell self-attests `/proc/$$/exe` as resolved `/usr/bin/busybox`, root:root mode
+  `0755`, exactly 1,914,704 bytes, and SHA-256
+  `52151e7f322f926b64049cdaa1410dc3ea6485525e0624b05813791c219ae933`. It NUL-pipes exactly the seven
+  allowlisted proof inputs into an `env -i` Node runner; secrets never enter argv. The proof then
+  creates the isolated exact-HEAD archive/package and minimal child environments. BusyBox bootstrap
+  metadata is gate-attested and is not a durable receipt field.
+- The non-cacheable deployed runtime-attestation route accepts only exact Vercel Preview or Production
+  plus a full SHA and canonical nonsecret storage profile: deployment default `sqlite`, Turso locator,
+  organization/group, and derived scope (`pr-<7sha>` for Preview, `prod` for Production). It fails unless
+  the four Turso fleet variables are complete and `RC_TURSO_DB_SCOPE` is unset/blank. Topology v4
+  requires Preview; the post-merge verifier requires Production. The bounded sentinel inspection uses
+  the Preview coordinates verbatim; never infer or substitute a scope.
+- The installed/deployed proof deliberately lasts beyond one production stream lifetime: it observes
+  the exact 240 s `: rotate` marker at a measured 235–270 s and a later successful session subscription, re-attests the same
+  pinned Claude descendant, then requires a second received/replied turn on the same `cse_*`. Its
+  Playwright timeout is 780 s; shortening the proof below the rotation boundary invalidates the gate.
+- The release proof is one chain: private Preview topology
+  `remote-claw-real-topology-browser-leg/v4` → private bounded
+  `remote-claw-real-topology-inspection/v1` → post-merge
+  `remote-claw-production-release-attestation/v1`. Invoke only the executable BusyBox wrappers
+  `run-trusted-final-inspection-clean.sh` and `verify-production-release-clean.sh`; direct Node and argv
+  credentials are invalid. The final-inspection bootstrap byte-pins BusyBox, Git, and Node; materializes
+  and compares its committed wrapper/runner/schema closure from the candidate's Git blobs; requires the
+  clean exact topology HEAD before and after scanning; and executes from an independently byte-pinned
+  `@libsql/client` dependency snapshot. The inspection uses a newly minted short-lived read-only Turso
+  group token and proves zero occurrences only for the run-bound sentinel across the stable exact-prefix
+  Preview fleet and queryable retained immutable-deployment Runtime Logs. It does not claim inaccessible
+  or expired provider telemetry. The credential-bearing runner writes only a private durable
+  noncanonical stage. The wrapper binds its SHA-256/device/inode/size, independently rechecks the exact
+  candidate, and materializes a fresh committed publisher closure; only that exact credential-free
+  publisher may strict-validate and exclusively publish the canonical exact-schema 0600 receipt with
+  complete bytes plus file and parent-directory sync.
+- Merge only after topology v4, inspection v1, and exact-candidate CI pass. The merge SHA may differ,
+  but candidate ancestry and Git tree equality must hold through raw local Git and GitHub's independent
+  compare/commit objects. Local verification rejects replacement refs and graft metadata. Then require
+  exact-merge CI and the newest successful `vercel[bot]` Production deployment at merge HEAD. The
+  zero-argv Production wrapper independently byte-pins BusyBox, Git, and Node; derives the inspected
+  candidate from the canonical private receipt filename; requires a clean merged HEAD with that
+  candidate as ancestor and an equal tree; materializes and byte-compares the committed wrapper,
+  verifier, and schema blobs before piping its six credentials; and rechecks the repository afterward.
+  The credential-bearing verifier writes only a private durable noncanonical stage. The wrapper binds
+  its SHA-256/device/inode/size, rechecks the exact initial merged HEAD/tree, and materializes a fresh
+  committed publisher closure; only that exact credential-free publisher may strict-validate/recheck it
+  and atomically/durably publish the canonical Production receipt. The Production verifier checks the
+  inspection both initially and finally: completion may be at most 71 hours old or five minutes in the
+  future. It re-attests the exact
+  live enabled active Firewall config: the sole custom rule is the valid `/api/handoff` token bucket;
+  owner/team is pinned; update time is canonical; its project key is the pinned project ID plus
+  `#active`; active `ips` and `changes` are empty; the exact managed-rule matrix keeps `gen`, `rce`,
+  `sqli`, and `xss` active/log and `java`, `lfi`, `ma`,
+  `php`, `rfi`, `sd`, and `sf` inactive/log; draft/version state is unambiguous; and the separate
+  Firewall-bypass list is empty. It probes the immutable origin without a bypass to
+  prove Deployment Protection and sends the automation bypass only to that origin's runtime-attestation,
+  frame-count, and relay requests, never to GitHub or Vercel Management APIs. The no-store runtime
+  attestation must be
+  `sqlite`/Turso/`prod` with the same inspected org/group. A random fresh default-backend session must
+  progress from absent durable cursor to `created:true` relay write to a durable count of one; the
+  terminal atomic 0600 receipt retains its physical `rc-prod-s-*` database ID and frame digest/counts,
+  not the challenge, bearer, or frame bytes. Its complete bytes and parent directory are synced before
+  success. Exact-merge Actions CI remains separate release-record evidence rather than a receipt claim.
+  Record actual SHA/receipt evidence outside the candidate tree so documentation changes do not
+  invalidate the proof.
 - TypeScript is strict: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
   `verbatimModuleSyntax`. Secrets never go on argv, never get logged, and never appear in
   `--rc-json`/`--rc-quiet` output (only `--rc-identity` create and `--rc-show-secret` print `S`).

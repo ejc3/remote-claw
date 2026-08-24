@@ -43,8 +43,9 @@ completeness or replay—would be its primary private RC protocol source of trut
 > sequenced process leases/publications/operations, bounded duplex callable ports, and exact
 > crash-reconciliation/reattach path. Migration 5 has 38 statements and digest
 > `l32ozsKKBm5ueLOk-_IeiasPgp_deE-tZHEbaZ6urOE`; the full v5 manifest has 269 objects. Wrapped
-> `--rc-app` drivers connect/autostart the owner best-effort, but the ordinary CLI supplies no trusted
-> registration adapter. Its only successful production owner operation is authenticated health with
+> The experimental OpenCode and tmux wrapped drivers connect/autostart the owner best-effort, but the
+> stable Claude MITM skips it and the ordinary CLI supplies no trusted registration adapter. The
+> experimental owner's only successful production operation is authenticated health with
 > `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`; its dispatch registry is
 > empty. It persists the owner service lease and can host durable runtime-owner records, while A0
 > drivers remain unchanged: no durable owner registration, A1 binding activation, private Claude RC
@@ -411,9 +412,9 @@ attempt/part→original-cursor/digest tombstone and generation manifest indefini
 expiry, local chat closure, and machine reset are insufficient:
 copied bearer/key material may remain valid, and A1 has neither an in-place key epoch nor a
 broker-enforced permanent route-revocation protocol. A future bounded-retention version must add and
-prove that protocol before it may collect these records. The existing explicitly dev/CI-gated
-locator `dropScope()` remains destructive whole-scope test cleanup; it is not production retention,
-checkpointing, revocation, or recovery.
+prove that protocol before it may collect these records. The low-level locator `dropScope()` remains
+available only to explicit diagnostic tooling; the HTTP dev-sweep route returns 501 and no production
+path calls it. It is not retention, checkpointing, revocation, or recovery authority.
 
 The implemented A1.1–A1.8a0 kernel supplies the secure transaction/storage boundary for the owner-only
 **LOCAL**
@@ -422,8 +423,9 @@ falling back under `~/.local/state` when `XDG_STATE_HOME` is absent or relative.
 must be absolute; a relative or empty value is rejected rather than resolved under the working
 directory. It is Linux-only, requires an exact stable Node.js `X.Y.Z` version in
 `^22.13.0 || >=23.5.0`, and opens `node:sqlite` through a held `/proc/self/fd` descriptor. A1.3's
-independently supervised daemon now opens this database on wrapped `--rc-app` driver paths; owner
-unavailability preserves the A0 path without claiming A1.
+independently supervised daemon opens this database only for the experimental OpenCode/tmux owner
+harness; the stable Claude MITM does not start it. Owner unavailability preserves those drivers' A0
+paths without claiming A1.
 Local-filesystem policy v1 allows ext, XFS, Btrfs, F2FS, and ZFS only. It requires exact `0700`
 application/identities/identity directories, a non-group/world-writable owner state home, and owned
 regular one-link `0600` database/WAL/SHM files; rollback journals, non-WAL databases, and all other
@@ -1402,7 +1404,10 @@ Phase A2b - Broker sequence continuity:
 
 Phase A2c - Broker retention:
 
-- Status: historical planning snapshot; selected retention ownership is assigned below.
+- Status: historical planning snapshot, superseded for shipped A0. Ordinary SQLite/libSQL `sweep()` is
+  deliberately a no-op and retains ciphertext indefinitely because inactivity is not an authenticated
+  collection transition. The HTTP dev/CI route now returns 501 without constructing a locator because a
+  truncated scope cannot prove exact deployment ownership; file/local cleanup also remains unavailable.
 - Files: `apps/web/lib/broker/turso.ts`,
   `apps/web/lib/broker/turso-connection.ts`, deployment cron or maintenance
   route if needed.
@@ -1575,8 +1580,8 @@ demonstrates every property below:
   shared ready journal, rejected command decision, compound result preparation, and result signing
   ledger; A1.8a0 adds schema v11 and its rejected-only common-result, terminal overlay, and inert
   `pending_seal` ledger. The ordinary CLI installs no adapter and invokes no A1 broker, ingress,
-  command, signer, or finalization operation, so the
-  production daemon remains health-only. A separate local adapter store may hold only raw transport payloads with immutable host-state
+  command, signer, or finalization operation. The experimental OpenCode/tmux owner remains health-only;
+  stable Claude MITM skips it. A separate local adapter store may hold only raw transport payloads with immutable host-state
   refs/digests and no cross-store atomic invariant. Nothing on the host needs encryption, and the RC
   event log is never sent to the broker, so there is no host-encryption question. The broker holds
   only sealed frames; RC plaintext stays on the host.

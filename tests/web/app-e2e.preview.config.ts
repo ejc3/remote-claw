@@ -5,17 +5,16 @@ import { defineConfig, devices } from "@playwright/test";
 // this is how the **vercel** and **sqlite/Turso-Cloud** backend UI e2e run.
 // No webServer: the app is already deployed; `baseURL` is the preview URL (WEB_E2E_URL). The HOST runs as
 // a persistent test process (the seedHost fixture spawns host-runner.ts), talking to the deployed broker
-// via identity auth + the SSO bypass. E2E_BACKEND selects the backend to flip to via ?backend=: unset ⇒
-// the deployment default (vercel); `sqlite` ⇒ the per-channel backend on real Turso Cloud. Driven by
-// .github/workflows/web-preview.yml on a successful preview.
+// via identity auth + the SSO bypass. E2E_BACKEND selects the backend via ?backend=: the workflow passes
+// `vercel` for its compatibility leg and `sqlite` for its real Turso Cloud leg. Unset exercises the
+// supported deployment default, which is also SQLite/Turso. Driven by .github/workflows/web-preview.yml
+// on a successful preview.
 
 const BASE = process.env.WEB_E2E_URL;
 
-// If the preview is behind Vercel Deployment Protection (SSO), send the automation-bypass secret on
-// EVERY browser request (page nav + relay polling) so they reach the app instead of the 401 wall. The
-// host-runner gets the same bypass via VERCEL_AUTOMATION_BYPASS_SECRET (see fixtures.ts).
-const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-const extraHTTPHeaders = bypassSecret ? { "x-vercel-protection-bypass": bypassSecret } : undefined;
+// fixtures.ts primes Vercel's origin-scoped bypass cookie with one exact-origin request. Never put the
+// bypass in context-wide request headers: Playwright sends those to page-controlled cross-origin
+// requests and persists them in traces. Credential-bearing deployed runs retain no browser artifacts.
 
 export default defineConfig({
   testDir: "./app-e2e",
@@ -26,6 +25,6 @@ export default defineConfig({
   // One retry — only to absorb a genuine one-off public-internet blip (TCP reset / edge hiccup) to the
   // deployed preview, NOT to mask app behavior: a systematic race fails the retry too and reds the run.
   retries: 1,
-  use: { baseURL: BASE, trace: "retain-on-failure", ...(extraHTTPHeaders ? { extraHTTPHeaders } : {}) },
+  use: { baseURL: BASE, trace: "off", screenshot: "off", video: "off" },
   projects: [{ name: "mobile", use: { ...devices["Pixel 5"] } }],
 });

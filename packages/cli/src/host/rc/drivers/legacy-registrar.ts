@@ -35,6 +35,7 @@ export interface LegacyRcRegistrarOptions {
   newClient: () => BrokerClient;
   identityId: Uint8Array;
   relays: Set<Promise<void>>;
+  terminalTasks: Set<Promise<void>>;
   tracer: Tracer;
   /**
    * A0 exposes this process-local value through the neutral lease contract. It
@@ -407,6 +408,7 @@ export class LegacyRcConversationRegistrar
   readonly #newClient: () => BrokerClient;
   readonly #identityId: Uint8Array;
   readonly #relays: Set<Promise<void>>;
+  readonly #terminalTasks: Set<Promise<void>>;
   readonly #tracer: Tracer;
   readonly #coordinatorEpoch: number;
   readonly #newBindingId: () => string;
@@ -425,6 +427,7 @@ export class LegacyRcConversationRegistrar
     this.#newClient = options.newClient;
     this.#identityId = options.identityId;
     this.#relays = options.relays;
+    this.#terminalTasks = options.terminalTasks;
     this.#tracer = options.tracer;
     this.#coordinatorEpoch = epoch;
     this.#newBindingId = options.newBindingId ?? (() => `rcb_${randomUUID().replaceAll("-", "")}`);
@@ -610,6 +613,7 @@ export class LegacyRcConversationRegistrar
                 git: state.metadata.git,
                 signal: state.controller.signal,
                 relays: this.#relays,
+                terminalTasks: this.#terminalTasks,
                 tracer: this.#tracer,
               });
             }

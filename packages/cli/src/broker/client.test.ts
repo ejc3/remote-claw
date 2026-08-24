@@ -9,7 +9,14 @@ import {
 } from "@remote-claw/clawsec";
 import { beforeEach, describe, expect, it } from "vitest";
 import { securityProvider } from "../security/provider.js";
-import { BrokerClient, BrokerError } from "./client.js";
+import {
+  BROKER_CURSOR_TIMEOUT_MS,
+  BROKER_STREAM_CONNECT_TIMEOUT_MS,
+  BrokerClient,
+  BrokerError,
+  BrokerPermanentStorageLossError,
+  type BrokerTimeoutError,
+} from "./client.js";
 import { MockBroker } from "./mockbroker.js";
 
 const td = new TextDecoder();
@@ -36,6 +43,29 @@ async function collect<T>(gen: AsyncGenerator<T>): Promise<T[]> {
   return out;
 }
 
+/** Consume an expected buffered prefix, then break so AsyncGenerator.return() cancels MockBroker's
+ * still-live `: open` stream exactly like a real client disconnect. */
+async function take<T>(gen: AsyncGenerator<T>, count: number): Promise<T[]> {
+  const out: T[] = [];
+  for await (const x of gen) {
+    out.push(x);
+    if (out.length === count) return out;
+  }
+  throw new Error(`broker stream ended before ${count} frame(s)`);
+}
+
+async function takeUntil<T>(
+  gen: AsyncGenerator<T>,
+  predicate: (value: T) => boolean,
+): Promise<T[]> {
+  const out: T[] = [];
+  for await (const x of gen) {
+    out.push(x);
+    if (predicate(x)) return out;
+  }
+  throw new Error("broker stream ended before the expected frame");
+}
+
 describe("BrokerClient transport", () => {
   let id: Identity;
   let broker: MockBroker;
@@ -51,6 +81,11 @@ describe("BrokerClient transport", () => {
     });
   });
 
+  it("keeps cursor recovery outside the 60s server wall without lengthening stream establishment", () => {
+    expect(BROKER_CURSOR_TIMEOUT_MS).toBe(70_000);
+    expect(BROKER_STREAM_CONNECT_TIMEOUT_MS).toBe(20_000);
+  });
+
   it("round-trips a sealed announce on the BUS: post → stream → open", async () => {
     const sent = { session_id: "sess-1", title: "laptop", sent_at: 1 };
     const res = await client.postFrame(header(id), utf8(JSON.stringify(sent)));
@@ -58,10 +93,188 @@ describe("BrokerClient transport", () => {
     expect(broker.posts[0]?.channel).toBe("bus"); // session_announce routed to the bus, no ?session
     expect(broker.posts[0]?.session).toBeNull();
 
-    const [frame] = await collect(client.streamFrames({}));
+    const [frame] = await take(client.streamFrames({}), 1);
     expect(frame).toBeDefined();
     if (frame === undefined) throw new Error("no frame");
     expect(JSON.parse(td.decode(await client.openFrame(frame)))).toMatchObject({ title: "laptop" });
+  });
+
+  it("maps only the exact content-free channel-loss disposition to the permanent-loss type", async () => {
+    const lost = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: (() =>
+        Promise.resolve(
+          Response.json(
+            {
+              ok: false,
+              code: "channel_storage_lost",
+              // Even a compromised/misconfigured route cannot smuggle provider coordinates through
+              // the typed error: its message is constructed locally from the stable disposition.
+              error: "provider namespace secret-name was deleted",
+            },
+            { status: 410 },
+          ),
+        )) as typeof fetch,
+    });
+
+    const failure = await lost.postFrame(header(id), utf8("{}")).catch((error) => error);
+    expect(failure).toBeInstanceOf(BrokerPermanentStorageLossError);
+    expect((failure as Error).message).toBe("broker 410: permanent channel storage loss");
+    expect((failure as Error).message).not.toContain("secret-name");
+
+    const ordinaryGone = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: (() =>
+        Promise.resolve(
+          Response.json({ error: "edge resource gone" }, { status: 410 }),
+        )) as typeof fetch,
+    });
+    const ordinary = await ordinaryGone.postFrame(header(id), utf8("{}")).catch((error) => error);
+    expect(ordinary).toBeInstanceOf(BrokerError);
+    expect(ordinary).not.toBeInstanceOf(BrokerPermanentStorageLossError);
+    expect((ordinary as BrokerError).status).toBe(410);
+  });
+
+  it("routes session_terminal on K_meta to the BUS and absorbs retry/live reordering", async () => {
+    const sid = "sess-terminal";
+    const terminalHeader = header(id, {
+      sessionId: sid,
+      recordKind: "session_terminal",
+      msgId: `terminal-${sid}`,
+    });
+    const first = await client.postFrame(terminalHeader, utf8('{"v":1}'));
+    const retry = await client.postFrame(terminalHeader, utf8('{"v":1}')); // fresh AEAD, same op
+    const late = await client.postFrame(
+      header(id, { sessionId: sid, recordKind: "session_announce", msgId: "ann-too-late" }),
+      utf8("{}"),
+    );
+
+    expect([first.created, retry.created, late.created]).toEqual([true, false, false]);
+    expect(broker.posts).toHaveLength(3); // every attempt reached the broker
+    expect(broker.posts.every((post) => post.channel === "bus" && post.session === null)).toBe(
+      true,
+    );
+    const frames = await take(client.streamFrames({}), 1);
+    expect(frames.map((frame) => frame.recordKind)).toEqual(["session_terminal"]);
+    expect(td.decode(await client.openFrame(frames[0] as Frame))).toBe('{"v":1}');
+  });
+
+  it("threads an optional AbortSignal to the publish fetch", async () => {
+    let resolveEntered!: (signal: AbortSignal) => void;
+    const entered = new Promise<AbortSignal>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const abortingFetch: typeof fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (signal === undefined || signal === null) {
+        return Promise.reject(new Error("publish fetch received no signal"));
+      }
+      resolveEntered(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }) as typeof fetch;
+    const abortable = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: abortingFetch,
+    });
+    const controller = new AbortController();
+
+    const pending = abortable.postFrame(header(id), utf8("{}"), controller.signal);
+    await expect(entered).resolves.toBe(controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("hard-times every cursor attempt even when fetch ignores abort, and observes late rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      for (const cursor of ["seq", "frame-count"] as const) {
+        let rejectLate: (reason: unknown) => void = () => {};
+        let seenSignal: AbortSignal | undefined;
+        const hostileFetch: typeof fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+          seenSignal = init?.signal ?? undefined;
+          return new Promise<Response>((_resolve, reject) => {
+            rejectLate = reject;
+          });
+        }) as typeof fetch;
+        const bounded = new BrokerClient({
+          baseUrl: "http://broker.test",
+          provider: securityProvider("sealed", id),
+          fetchFn: hostileFetch,
+          cursorTimeoutMs: 10,
+        });
+
+        const pending = cursor === "seq" ? bounded.seqCursor("s") : bounded.frameCountCursor("s");
+        await expect(pending).rejects.toMatchObject({
+          name: "BrokerTimeoutError",
+          operation: expect.stringContaining(cursor === "seq" ? "seq" : "frame-count"),
+        });
+        expect(seenSignal?.aborted).toBe(true);
+
+        // A non-cooperative fetch may reject after the wall. That settlement must remain observed.
+        rejectLate(new Error(`late ${cursor} rejection`));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    } finally {
+      process.removeListener("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+  });
+
+  it("hard-times initial stream headers when fetch never settles or honors AbortSignal", async () => {
+    let streamSignal: AbortSignal | undefined;
+    const hostileFetch: typeof fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      streamSignal = init?.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    }) as typeof fetch;
+    const bounded = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: hostileFetch,
+      streamConnectTimeoutMs: 10,
+    });
+
+    await expect(collect(bounded.streamFrames({ session: "s" }))).rejects.toEqual(
+      expect.objectContaining<Partial<BrokerTimeoutError>>({
+        name: "BrokerTimeoutError",
+        operation: "broker stream headers",
+      }),
+    );
+    expect(streamSignal?.aborted).toBe(true);
+  });
+
+  it("rejects a bodyless successful stream instead of reporting a clean absent channel", async () => {
+    const bodyless = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: (() =>
+        Promise.resolve(
+          new Response(null, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+        )) as typeof fetch,
+    });
+
+    await expect(collect(bodyless.streamFrames({ session: "s" }))).rejects.toMatchObject({
+      name: "BrokerError",
+      status: 502,
+      message: expect.stringContaining("broker stream ended unexpectedly"),
+    });
+  });
+
+  it("returns cleanly only for MockBroker's explicit absent-channel response", async () => {
+    await expect(collect(client.streamFrames({ session: "missing" }))).resolves.toEqual([]);
   });
 
   it("round-trips a content frame on the SESSION channel and tags ?session", async () => {
@@ -70,7 +283,7 @@ describe("BrokerClient transport", () => {
     expect(broker.posts[0]?.channel).toBe("session");
     expect(broker.posts[0]?.session).toBe("sX");
 
-    const [frame] = await collect(client.streamFrames({ session: "sX" }));
+    const [frame] = await take(client.streamFrames({ session: "sX" }), 1);
     if (frame === undefined) throw new Error("no frame");
     expect(td.decode(await client.openFrame(frame))).toBe("hello from claude");
   });
@@ -78,7 +291,10 @@ describe("BrokerClient transport", () => {
   it("rejects record_kind relabeling and same-plane session relabeling via derived AEAD/AAD", async () => {
     const postAndRead = async (h: FrameHeader, text: string): Promise<Frame> => {
       await client.postFrame(h, utf8(text));
-      const frames = await collect(client.streamFrames({ session: h.sessionId }));
+      const frames = await takeUntil(
+        client.streamFrames({ session: h.sessionId }),
+        (frame) => frame.msgId === h.msgId,
+      );
       const frame = frames.find((f) => f.msgId === h.msgId);
       if (frame === undefined) throw new Error(`missing frame ${h.msgId}`);
       return frame;
@@ -120,7 +336,7 @@ describe("BrokerClient transport", () => {
   it("sends Authorization: Bearer <hex(auth_token)> on every call", async () => {
     broker.requireAuth(id.authToken);
     await expect(client.postFrame(header(id), utf8("{}"))).resolves.toMatchObject({ ok: true });
-    await expect(collect(client.streamFrames({}))).resolves.toHaveLength(1);
+    await expect(take(client.streamFrames({}), 1)).resolves.toHaveLength(1);
   });
 
   it("sends x-vercel-protection-bypass on every call when configured, and omits it otherwise", async () => {
@@ -138,7 +354,7 @@ describe("BrokerClient transport", () => {
       protectionBypass: "byp-secret-123",
     });
     await withBypass.postFrame(header(id), utf8("{}")); // publish
-    await collect(withBypass.streamFrames({})); // subscribe
+    await take(withBypass.streamFrames({}), 1); // subscribe
     expect(withSeen.length).toBeGreaterThanOrEqual(2);
     for (const h of withSeen) expect(h["x-vercel-protection-bypass"]).toBe("byp-secret-123");
 
@@ -150,6 +366,36 @@ describe("BrokerClient transport", () => {
     });
     await noBypass.postFrame(header(id), utf8("{}"));
     expect(noSeen[0]?.["x-vercel-protection-bypass"]).toBeUndefined();
+  });
+
+  it("forbids redirects on every credential-bearing broker request", async () => {
+    const seen: Array<{ pathname: string; redirect: RequestRedirect | undefined }> = [];
+    const capture: typeof fetch = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      seen.push({
+        pathname: new URL(typeof input === "string" ? input : input.toString()).pathname,
+        redirect: init?.redirect,
+      });
+      return broker.fetch(input, init);
+    }) as typeof fetch;
+    const guarded = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: capture,
+      protectionBypass: "never-follow-me",
+    });
+
+    await guarded.postFrame(header(id), utf8("{}"));
+    await take(guarded.streamFrames({}), 1);
+    await guarded.seqCursor("sess-1");
+    await guarded.frameCountCursor("sess-1");
+
+    expect(seen.map(({ pathname }) => pathname)).toEqual([
+      "/api/relay",
+      "/api/stream",
+      "/api/seq",
+      "/api/frame-count",
+    ]);
+    expect(seen.every(({ redirect }) => redirect === "error")).toBe(true);
   });
 
   it("maxSeq/frameCount round-trip numbers/null and send auth + backend headers", async () => {
@@ -245,7 +491,7 @@ describe("BrokerClient transport", () => {
     for (const n of [1, 2, 3]) {
       await client.postFrame(header(id, { msgId: `a${n}` }), utf8(JSON.stringify({ n })));
     }
-    const frames = await collect(client.streamFrames({ startIndex: -2 }));
+    const frames = await take(client.streamFrames({ startIndex: -2 }), 2);
     const ns = await Promise.all(
       frames.map(async (f) => JSON.parse(td.decode(await client.openFrame(f))).n),
     );
@@ -259,7 +505,7 @@ describe("BrokerClient transport", () => {
       big,
       2000,
     );
-    const frames = await collect(client.streamFrames({ session: "s" }));
+    const frames = await take(client.streamFrames({ session: "s" }), 3);
     expect(frames).toHaveLength(3); // ceil(5000 / 2000)
     expect(await client.openMessage(frames)).toEqual(big);
   });
@@ -275,7 +521,7 @@ describe("BrokerClient transport", () => {
       utf8("bbbb"),
       2,
     );
-    const all = await collect(client.streamFrames({ session: "x" }));
+    const all = await take(client.streamFrames({ session: "x" }), 4);
     const a0 = all.find((f) => f.msgId === "A" && f.part === 0);
     const b1 = all.find((f) => f.msgId === "B" && f.part === 1);
     if (a0 === undefined || b1 === undefined) throw new Error("missing chunks");

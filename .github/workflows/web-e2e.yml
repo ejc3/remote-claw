@@ -1,17 +1,17 @@
 name: web-e2e
 
 # Self-contained end-to-end + stress tests for the broker, covering the Local and per-session SQLite
-# (local libSQL file) backends. The Vercel backend's durable runtime only exists on a Vercel deployment,
-# so its e2e lives in web-preview.yml; the sqlite backend's Turso Cloud storage mode is likewise
-# exercised on a real deploy.
+# (local libSQL file) backends. The Vercel Workflow runtime only exists on a Vercel deployment, so its
+# optional authenticated post-main repository-dispatch smoke lives in web-preview.yml; the sqlite
+# backend's Turso Cloud storage mode is likewise exercised on a real deploy.
 on:
   push:
     branches: [main]
     paths:
-      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "scripts/attest-trusted-vercel-runtime.mjs", "scripts/resolve-trusted-vercel-deployment.mjs", "scripts/resolve-trusted-vercel-deployment.test.mjs", "scripts/run-trusted-real-topology-clean.sh", "scripts/run-trusted-real-topology.mjs", "scripts/run-trusted-real-topology.test.mjs", "scripts/run-trusted-final-inspection-clean.sh", "scripts/run-trusted-final-inspection.mjs", "scripts/inspection-receipt-schema.mjs", "scripts/run-trusted-final-inspection.test.mjs", "scripts/verify-production-release-clean.sh", "scripts/verify-production-release.mjs", "scripts/verify-production-release.test.mjs", "scripts/web-preview-runtime-gate.test.mjs", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml", ".github/workflows/web-preview.yml"]
   pull_request:
     paths:
-      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml"]
+      ["apps/web/**", "packages/cli/**", "packages/clawsec/**", "tests/web/**", "scripts/attest-trusted-vercel-runtime.mjs", "scripts/resolve-trusted-vercel-deployment.mjs", "scripts/resolve-trusted-vercel-deployment.test.mjs", "scripts/run-trusted-real-topology-clean.sh", "scripts/run-trusted-real-topology.mjs", "scripts/run-trusted-real-topology.test.mjs", "scripts/run-trusted-final-inspection-clean.sh", "scripts/run-trusted-final-inspection.mjs", "scripts/inspection-receipt-schema.mjs", "scripts/run-trusted-final-inspection.test.mjs", "scripts/verify-production-release-clean.sh", "scripts/verify-production-release.mjs", "scripts/verify-production-release.test.mjs", "scripts/web-preview-runtime-gate.test.mjs", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/web-e2e.yml", ".github/workflows/web-preview.yml"]
 
 jobs:
   e2e:
@@ -34,6 +34,8 @@ jobs:
       # of the workspace uses — fail fast here, before the slow Chromium install below.
       - name: Typecheck the e2e harness
         run: pnpm --filter remote-claw-web-tests run typecheck
+      - name: Trusted deployment/topology gate tests
+        run: pnpm --filter remote-claw-web-tests run test:real-topology-runner
 
       # Playwright Chromium + WebKit + their OS libraries (cached by the lockfile, which pins
       # @playwright/test). WebKit is required by the app-e2e "ios-safari" project — the faithful iOS-Safari
@@ -46,7 +48,7 @@ jobs:
       - name: Install Chromium + WebKit
         run: pnpm --filter remote-claw-web-tests exec playwright install --with-deps chromium webkit
 
-      - name: App e2e — LocalBackend
+      - name: App e2e — stable durable SQLite profile
         run: pnpm --filter remote-claw-web-tests run test:app
       - name: App e2e — Sqlite (per-session libSQL file, flipped via ?backend=)
         run: pnpm --filter remote-claw-web-tests run test:app:sqlite

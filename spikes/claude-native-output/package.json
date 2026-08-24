@@ -4,7 +4,9 @@
 	"type": "module",
 	"scripts": {
 		"check": "biome check .",
-		"test:run": "node verify-evidence.mjs"
+		"test:evidence": "node verify-evidence.mjs",
+		"test:trace-contract": "openssl version && pnpm --dir ../../packages/cli exec vitest run src/host/rc/mitm-trace.test.ts src/host/rc/trace-run.test.ts src/run.test.ts",
+		"test:run": "pnpm run test:evidence && pnpm run test:trace-contract"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.16"

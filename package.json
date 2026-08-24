@@ -3,10 +3,28 @@
   "private": true,
   "version": "0.0.0",
   "description": "remote-claw — a cloud-brokered, zero-knowledge, E2E-encrypted relay for `claude --remote-control`. pnpm workspace root (packages/*, apps/*, tests/*, spikes/*).",
+  "bin": {
+    "remote-claw": "dist/remote-claw.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": "^22.13.0 || >=23.5.0"
+  },
   "scripts": {
-    "check": "pnpm -r run check",
+    "build:cli": "node scripts/build-cli.mjs",
+    "check": "biome check .",
+    "prepack": "pnpm run build:cli",
+    "test:install": "node scripts/test-installed-cli.mjs",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test:run"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.16",
+    "@libsql/client": "0.17.3",
+    "esbuild": "^0.28.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"],

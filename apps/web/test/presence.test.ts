@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parsePermissionResolved } from "../app/lib/transcript.js";
 import {
+  ANNOUNCE_FUTURE_SKEW_MS,
   type Announce,
+  announceFreshnessAt,
   CONNECTED_WINDOW_MS,
   connState,
   emptyTranscriptHint,
@@ -13,7 +15,12 @@ import {
   RECONNECTING_WINDOW_MS,
   shouldAcceptAnnounce,
 } from "../app/lib/viewer.js";
-import { displayedPermissionMode } from "../app/page.js";
+import {
+  displayedPermissionMode,
+  markPendingDeliveryUnknown,
+  optimisticMessage,
+  remoteMutationEnabled,
+} from "../app/page.js";
 
 // The connection-state ladder (#58): connected (fresh) → reconnecting (full grace window) →
 // disconnected (gone). The transition ALWAYS passes through reconnecting for RECONNECTING_WINDOW_MS. The
@@ -76,8 +83,45 @@ describe("connState", () => {
     expect(ladder[firstDisc - 1]).toBe("reconnecting"); // the state immediately before gone is reconnecting
   });
 
-  it("treats a future-stamped announce (clock skew) as connected, never negative", () => {
-    expect(connState(now + 10_000, now)).toBe("connected"); // age < 0 → still inside the window
+  it("disconnects after the bounded receipt window even when the host clock is in the future", () => {
+    const futureHostTimestamp = now + 24 * 60 * 60_000;
+    const freshnessAt = announceFreshnessAt(undefined, ann(futureHostTimestamp), now);
+    expect(freshnessAt).toBe(now - CONNECTED_WINDOW_MS);
+    expect(connState(freshnessAt, now)).toBe("reconnecting");
+    const state = connState(freshnessAt, now + RECONNECTING_WINDOW_MS);
+    expect(state).toBe("disconnected");
+    expect(remoteMutationEnabled(state === "connected")).toBe(false);
+    expect(
+      markPendingDeliveryUnknown([optimisticMessage("cm-future", "hello", [])])[0],
+    ).toMatchObject({ deliveryUnknown: true });
+    expect(emptyTranscriptHint(state)).toMatch(/offline|reconnect/i);
+
+    // A brand-new Viewer after a reload has no accepted-announcement cache. The same retained frame
+    // still starts non-writable instead of receiving a fresh 45-second lease from the new receipt.
+    const reloadAt = now + CONNECTED_WINDOW_MS + RECONNECTING_WINDOW_MS;
+    const reloadedFreshness = announceFreshnessAt(undefined, ann(futureHostTimestamp), reloadAt);
+    expect(connState(reloadedFreshness, reloadAt)).toBe("reconnecting");
+    expect(remoteMutationEnabled(connState(reloadedFreshness, reloadAt) === "connected")).toBe(
+      false,
+    );
+  });
+
+  it("allows bounded positive skew and a corrected new keepalive to recover liveness", () => {
+    const withinSkew = ann(now + ANNOUNCE_FUTURE_SKEW_MS);
+    expect(connState(announceFreshnessAt(undefined, withinSkew, now), now)).toBe("connected");
+
+    const invalid = {
+      ...ann(now + 86_400_000),
+      incarnation: "inc-clock",
+      incarnationStartedAt: now,
+      announceSeq: 1,
+    };
+    invalid.freshnessAt = announceFreshnessAt(undefined, invalid, now);
+    const correctedReceipt = now + 20_000;
+    const corrected = { ...invalid, sentAt: correctedReceipt, announceSeq: 2 };
+    expect(
+      connState(announceFreshnessAt(invalid, corrected, correctedReceipt), correctedReceipt),
+    ).toBe("connected");
   });
 
   it("decouples the disconnect threshold from FRESH_WINDOW_MS (the control-verb replay bound)", () => {
@@ -140,6 +184,7 @@ function ann(sentAt: number, mode?: string): Announce {
     title: "session",
     cwd: null,
     sentAt,
+    freshnessAt: sentAt,
     incarnation: null,
     incarnationStartedAt: null,
     announceSeq: null,
@@ -153,6 +198,26 @@ function ann(sentAt: number, mode?: string): Announce {
 }
 
 describe("announce freshness merge", () => {
+  it("refreshes on a proven new keepalive but not on an exact legacy replay", () => {
+    const receivedAt = 1_000;
+    const firstLegacy = ann(receivedAt + 86_400_000);
+    firstLegacy.freshnessAt = announceFreshnessAt(undefined, firstLegacy, receivedAt);
+    const replay = ann(firstLegacy.sentAt);
+    expect(announceFreshnessAt(firstLegacy, replay, receivedAt + 240_000)).toBe(
+      firstLegacy.freshnessAt,
+    );
+
+    const current = {
+      ...ann(receivedAt),
+      incarnation: "inc-1",
+      incarnationStartedAt: 1,
+      announceSeq: 1,
+    };
+    current.freshnessAt = announceFreshnessAt(undefined, current, receivedAt);
+    const keepalive = { ...current, sentAt: receivedAt + 20_000, announceSeq: 2 };
+    expect(announceFreshnessAt(current, keepalive, receivedAt + 20_000)).toBe(receivedAt + 20_000);
+  });
+
   it("keeps legacy timestamp behavior, including equal-timestamp replacement", () => {
     const newest = ann(200, "plan");
     expect(shouldAcceptAnnounce(newest, ann(199, "default"))).toBe(false);
@@ -316,8 +381,9 @@ describe("parseGit", () => {
 
 // parseCapabilities defensively coerces the announce's `capabilities` field (decrypted-but-untrusted)
 // into Capabilities|undefined. Absent/malformed → undefined so the viewer treats a legacy host as fully
-// capable (no false gating); a present-but-partial body fills missing booleans with the safe default
-// (enabled), so we only ever DISABLE a control a driver explicitly declares false. (#149)
+// capable (no false gating). A present vector's status defaults false so an absent/ill-typed status
+// cannot satisfy the exact stable-Claude tuple; missing mutation booleans stay enabled, so a partial
+// vector remains on the compatibility surface and only an explicit false disables a mutation. (#149)
 describe("parseCapabilities", () => {
   it("parses a well-formed reduced capability set verbatim", () => {
     expect(
@@ -341,13 +407,14 @@ describe("parseCapabilities", () => {
     expect(parseCapabilities("nope")).toBeUndefined();
   });
 
-  it("defaults every absent/ill-typed flag to enabled (never over-gates a present body)", () => {
+  it("fails missing/ill-typed status closed while mutation flags remain compatibility-enabled", () => {
     expect(parseCapabilities({})).toEqual({
       structuredPermissions: true,
-      status: true,
+      status: false,
       controls: { interrupt: true, setModel: true, setMode: true, end: true },
       attachments: true,
     });
+    expect(parseCapabilities({ status: "ready" })?.status).toBe(false);
     // a malformed controls object still yields all-enabled controls
     expect(parseCapabilities({ controls: "bad", setMode: 1 })?.controls).toEqual({
       interrupt: true,

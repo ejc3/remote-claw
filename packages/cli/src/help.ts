@@ -1,5 +1,6 @@
-// The `--help` banner for the reserved `--rc-*` surface. `remote-claw --help` prints this and
-// then falls through to `claude --help`, so the user sees both layers. Kept honest to what is
+// The `--help` banner for the reserved `--rc-*` surface. On the normal wrapper path,
+// `remote-claw --help` prints this and then falls through to `claude --help`, so the user sees both
+// layers; `--rc-trace --help` prints this only and exits without a child. Kept honest to what is
 // actually implemented today: every flag listed here is wired in run.ts; each value flag names its
 // env-var equivalent and default so the surface is discoverable without reading the source.
 
@@ -39,16 +40,18 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
   --rc-backend <n>   pick the broker backend this host targets (or set RC_BACKEND): vercel | local |
                      sqlite. Omitted ⇒ the broker's default. Must match what your viewers use.
                      When the server reports a durable log, the host serves history from it instead of
-                     keeping (and replaying) an in-memory transcript.
+                     keeping (and replaying) an in-memory transcript. Stable Claude requires that
+                     durable profile and fails closed before discovery on vercel/local; production
+                     should default the deployment to sqlite/Turso so host and viewer agree.
   --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | tmux | opencode (default mitm).
-                     mitm runs the real claude behind our MITM; tmux drives a PLAIN claude in a detached
-                     tmux pane and bridges via its transcript (provider-agnostic, Bedrock-capable, no
-                     MITM); opencode peer-attaches to an \`opencode serve\`. All bridge the SAME broker.
+                     mitm is the only supported Claude 1.0 driver and runs the real claude behind our
+                     MITM. tmux and opencode are retained experimental/internal compatibility drivers;
+                     they do not satisfy the Claude 1.0 release contract.
 
-Inference (mitm driver; route model traffic off api.anthropic.com):
+Inference (mitm driver; the supported default is anthropic):
   --rc-inference <t> anthropic | bedrock (or set RC_INFERENCE; default anthropic = pass through).
-                     bedrock routes /v1/messages to Amazon Bedrock and synthesizes the rest — zero
-                     api.anthropic.com.
+                     bedrock is an experimental/internal connector outside the Claude 1.0 release
+                     surface; it routes /v1/messages to Bedrock and synthesizes the rest.
   --rc-bedrock-region <r>  AWS region for Bedrock (bedrock only; default: AWS_REGION / AWS_DEFAULT_REGION,
                      else us-east-1).
   --rc-bedrock-model <m>   override the Bedrock model id (bedrock only; default: map claude's own model).
@@ -56,7 +59,7 @@ Inference (mitm driver; route model traffic off api.anthropic.com):
                      real account (or set RC_ACCOUNTLESS=1). Requires --rc-inference=bedrock (a fabricated
                      credential can't reach real Anthropic).
 
-tmux driver (--rc-driver=tmux):
+Experimental/internal tmux driver (--rc-driver=tmux):
   --rc-tmux-skip-permissions   auto-approve tools (\`claude --dangerously-skip-permissions\`) instead of
                      mirroring each tool gate to the viewer (or set RC_TMUX_SKIP_PERMISSIONS). Default is
                      mirroring ON (the viewer is the gate).
@@ -66,7 +69,7 @@ tmux driver (--rc-driver=tmux):
                      --bare/--safe-mode and truthy CLAUDE_CODE_SIMPLE or CLAUDE_CODE_SAFE_MODE are
                      rejected.
 
-opencode driver (--rc-driver=opencode):
+Experimental/internal opencode driver (--rc-driver=opencode):
   --rc-oc-url <origin>     the \`opencode serve\` origin (or set OPENCODE_URL; default
                      http://127.0.0.1:4096).
   --rc-oc-model <p/m>      provider/model for prompts (or set RC_OC_MODEL; default

@@ -12,6 +12,10 @@ import { classifyArgs } from "./args.js";
 import { BrokerClient } from "./broker/client.js";
 import { RC_HELP } from "./help.js";
 import { parseStripKeys } from "./host/rc/bedrock/translate.js";
+import {
+  acquireStableClaudeExecutable,
+  STABLE_CLAUDE_REQUIREMENT,
+} from "./host/rc/compatibility.js";
 import type { DriverContext } from "./host/rc/driver.js";
 import { gitInfo } from "./host/rc/gitinfo.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
@@ -116,9 +120,11 @@ export interface RunOptions {
   runOpencodeDriver?: typeof runOpencodeDriver;
   /** Injectable tmux driver boundary (tests). */
   runTmuxDriver?: typeof runTmuxDriver;
+  /** Injectable stable-Claude compatibility boundary (tests). Defaults to the fail-closed probe. */
+  claudeCompatibilityCheck?: (claudeBin: string) => Promise<void>;
   /**
-   * Production-only bridge to the independently supervised runtime owner. Library callers and tests
-   * may omit it; an unavailable owner preserves the existing A0 driver path without advertising A1.
+   * Production-only bridge used by experimental drivers. The stable Claude MITM path deliberately
+   * does not initialize the parked A1 owner graph.
    */
   runtimeOwnerBootstrap?: RuntimeOwnerBootstrap;
 }
@@ -417,36 +423,45 @@ async function runRcLaunchPath(
     );
     return 2;
   }
+  let executable: { readonly claudeBin: string; release(): void };
+  try {
+    // Production retains the checked executable inode before identity creation. The injected checker
+    // is a deterministic-test seam and preserves its synthetic command without touching the filesystem.
+    executable =
+      opts.claudeCompatibilityCheck === undefined
+        ? await acquireStableClaudeExecutable(bin)
+        : await opts.claudeCompatibilityCheck(bin).then(() => ({
+            claudeBin: bin,
+            release() {},
+          }));
+  } catch {
+    warn(`remote-claw: ${STABLE_CLAUDE_REQUIREMENT}\n`);
+    return 1;
+  }
   try {
     await ensureIdentity(secretPath); // local, idempotent — create on first run, no network
-    const { identity, runtimeOwner } = await withClearedRootSecret(secretPath, async (secret) => {
-      const identity = await deriveIdentity(secret);
-      const runtimeOwner = await bootstrapRuntimeOwnerForDriver(opts, {
-        machineIdentityId: toHex(identity.identityId),
-        identitySecret: secret,
-        secretPath,
-      });
-      return { identity, runtimeOwner };
+    const identity = await withClearedRootSecret(secretPath, (secret) => deriveIdentity(secret));
+    return await runRcLaunch({
+      claudeArgs,
+      identity,
+      brokerUrl,
+      certsDir: join(dirname(secretPath), "mitm-certs"),
+      claudeBin: executable.claudeBin,
+      // The descriptor path above is immutable while `executable` is held. The exported launch
+      // boundary independently pins ordinary direct callers; this internal handoff needs no second
+      // mutable-path lookup.
+      claudeCompatibilityCheck: async () => {},
+      spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
+      ...(backend !== undefined ? { backend } : {}),
+      inference,
+      ...(bedrock !== undefined ? { bedrock } : {}),
+      ...(accountless ? { accountless: true } : {}),
     });
-    try {
-      return await runRcLaunch({
-        claudeArgs,
-        identity,
-        brokerUrl,
-        certsDir: join(dirname(secretPath), "mitm-certs"),
-        claudeBin: bin,
-        spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
-        ...(backend !== undefined ? { backend } : {}),
-        inference,
-        ...(bedrock !== undefined ? { bedrock } : {}),
-        ...(accountless ? { accountless: true } : {}),
-      });
-    } finally {
-      await closeRuntimeOwnerCollaborator(runtimeOwner);
-    }
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);
     return 1;
+  } finally {
+    executable.release();
   }
 }
 

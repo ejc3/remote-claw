@@ -5,10 +5,10 @@ on:
     branches: [main]
     # cli depends on clawsec (workspace), so a clawsec change must re-run cli CI too.
     paths:
-      ["packages/cli/**", "packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/cli.yml"]
+      ["packages/cli/**", "packages/clawsec/**", "scripts/build-cli.mjs", "scripts/test-installed-cli.mjs", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/cli.yml"]
   pull_request:
     paths:
-      ["packages/cli/**", "packages/clawsec/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/cli.yml"]
+      ["packages/cli/**", "packages/clawsec/**", "scripts/build-cli.mjs", "scripts/test-installed-cli.mjs", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/cli.yml"]
 
 jobs:
   test:
@@ -33,6 +33,8 @@ jobs:
         run: >-
           pnpm --filter @remote-claw/cli exec vitest run
           --exclude src/host/native/linux-workspace-collector.test.ts
+      - name: Build, pack, install, and execute the standalone CLI artifact
+        run: pnpm run test:install
       - name: E1b2 workspace collector + real mount proof (least privilege)
         shell: bash
         run: |

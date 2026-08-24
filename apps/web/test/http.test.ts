@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { sseResponse } from "../lib/http.js";
+import { maxDuration as frameCountRouteMaxDurationSeconds } from "../app/api/frame-count/route.js";
+import { maxDuration as handoffRouteMaxDurationSeconds } from "../app/api/handoff/route.js";
+import { maxDuration as relayRouteMaxDurationSeconds } from "../app/api/relay/route.js";
+import { maxDuration as seqRouteMaxDurationSeconds } from "../app/api/seq/route.js";
+import { maxDuration as streamRouteMaxDurationSeconds } from "../app/api/stream/route.js";
+import { TURSO_READY_DEADLINE_MS } from "../lib/broker/turso-cloud-locator.js";
+import { SSE_ROTATE_MS, sseResponse } from "../lib/http.js";
 
 /** A source stream that enqueues each value at its cumulative delay, then closes after the last step
  *  (or after `closeAfter` ms of trailing idle if no value closes it). */
@@ -22,6 +28,22 @@ function source(
 }
 
 describe("sseResponse keepalive", () => {
+  it("gives every bounded first-store route a 60s server budget", () => {
+    expect(relayRouteMaxDurationSeconds).toBe(60);
+    expect(seqRouteMaxDurationSeconds).toBe(60);
+    expect(frameCountRouteMaxDurationSeconds).toBe(60);
+    expect(handoffRouteMaxDurationSeconds).toBe(60);
+    expect(streamRouteMaxDurationSeconds).toBe(300);
+    for (const routeSeconds of [
+      relayRouteMaxDurationSeconds,
+      seqRouteMaxDurationSeconds,
+      frameCountRouteMaxDurationSeconds,
+      handoffRouteMaxDurationSeconds,
+    ]) {
+      expect(TURSO_READY_DEADLINE_MS).toBeLessThan(routeSeconds * 1_000);
+    }
+  });
+
   it("opens with a comment and closes when the source ends", async () => {
     const text = await sseResponse(source([{ after: 5, value: { a: 1 } }]), 1000).text();
     expect(text).toContain(": open\n\n");
@@ -52,5 +74,21 @@ describe("sseResponse keepalive", () => {
     expect((text.match(/: ping/g) ?? []).length).toBe(0);
     expect(text).toContain('data: {"n":1}\n\n');
     expect(text).toContain('data: {"n":3}\n\n');
+  });
+
+  it("marks and closes a healthy idle stream before the route duration ceiling", async () => {
+    let cancelled = false;
+    const idle = new ReadableStream<unknown>({
+      start() {},
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    const text = await sseResponse(idle, 1_000, 20).text();
+
+    expect(text).toBe(": open\n\n: rotate\n\n");
+    expect(cancelled).toBe(true);
+    expect(streamRouteMaxDurationSeconds * 1_000 - SSE_ROTATE_MS).toBeGreaterThanOrEqual(30_000);
   });
 });

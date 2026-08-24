@@ -40,7 +40,9 @@ async function shot(page: import("@playwright/test").Page, name: string, sel: st
   if (b === null) throw new Error(`no box for ${sel}`);
   const vp = page.viewportSize() ?? { width: 393, height: 851 };
   if (b.y < 0 || b.y > vp.height) {
-    throw new Error(`${sel} is off-screen after scrollIntoView (y=${b.y}) — the crop would be wrong`);
+    throw new Error(
+      `${sel} is off-screen after scrollIntoView (y=${b.y}) — the crop would be wrong`,
+    );
   }
   await page.screenshot({
     path: `${OUT}/${name}.png`,
@@ -57,24 +59,27 @@ async function shot(page: import("@playwright/test").Page, name: string, sel: st
 /** Computed padding + the vertical gaps between a container's children — the numbers that decide
  *  whether spacing "looks reasonable", measured rather than judged from a picture. */
 async function geometry(page: import("@playwright/test").Page, sel: string) {
-  return page.locator(sel).first().evaluate((el) => {
-    const s = getComputedStyle(el);
-    const kids = [...el.children].map((c) => c.getBoundingClientRect());
-    const gaps: number[] = [];
-    for (let i = 1; i < kids.length; i++) {
-      const prev = kids[i - 1];
-      const cur = kids[i];
-      if (prev && cur) gaps.push(Math.round((cur.top - prev.bottom) * 10) / 10);
-    }
-    return {
-      padding: `${s.paddingTop} ${s.paddingRight} ${s.paddingBottom} ${s.paddingLeft}`,
-      gap: s.rowGap,
-      radius: s.borderRadius,
-      bg: s.backgroundColor,
-      border: `${s.borderTopWidth} ${s.borderTopColor}`,
-      gaps,
-    };
-  });
+  return page
+    .locator(sel)
+    .first()
+    .evaluate((el) => {
+      const s = getComputedStyle(el);
+      const kids = [...el.children].map((c) => c.getBoundingClientRect());
+      const gaps: number[] = [];
+      for (let i = 1; i < kids.length; i++) {
+        const prev = kids[i - 1];
+        const cur = kids[i];
+        if (prev && cur) gaps.push(Math.round((cur.top - prev.bottom) * 10) / 10);
+      }
+      return {
+        padding: `${s.paddingTop} ${s.paddingRight} ${s.paddingBottom} ${s.paddingLeft}`,
+        gap: s.rowGap,
+        radius: s.borderRadius,
+        bg: s.backgroundColor,
+        border: `${s.borderTopWidth} ${s.borderTopColor}`,
+        gaps,
+      };
+    });
 }
 
 /** Relative luminance contrast between two computed rgb() strings — for "is this surface actually
@@ -141,7 +146,7 @@ test("entry screen regions", async ({ page, seedHost }) => {
 });
 
 test("console regions", async ({ page, seedHost }) => {
-  const { pass } = await seedHost({ harness: "tmux" });
+  const { pass } = await seedHost({ harness: "tmux", caps: "tmux" });
   await page.goto(`/#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
@@ -151,7 +156,12 @@ test("console regions", async ({ page, seedHost }) => {
   await shot(page, "12-agent-badge", ".agent-badge");
   await shot(page, "13-git-chip", ".git-chip");
   const row = await geometry(page, "button.row");
-  metrics.push({ region: "session-row", padding: row.padding, gaps: row.gaps, notes: { bg: row.bg } });
+  metrics.push({
+    region: "session-row",
+    padding: row.padding,
+    gaps: row.gaps,
+    notes: { bg: row.bg },
+  });
 
   await page.locator("button.row").click();
   await expect(page.locator(".transcript")).toBeVisible();
@@ -166,7 +176,7 @@ test("console regions", async ({ page, seedHost }) => {
 });
 
 test("transcript cards", async ({ page, seedHost }) => {
-  const { pass } = await seedHost({ perm: true });
+  const { pass } = await seedHost({ perm: true, caps: "compat-mitm" });
   await page.goto(`/#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row").click();
@@ -176,7 +186,7 @@ test("transcript cards", async ({ page, seedHost }) => {
 });
 
 test("question card", async ({ page, seedHost }) => {
-  const { pass } = await seedHost({ askq: true });
+  const { pass } = await seedHost({ askq: true, caps: "compat-mitm" });
   await page.goto(`/#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row").click();
@@ -186,11 +196,15 @@ test("question card", async ({ page, seedHost }) => {
   const q = await geometry(page, ".perm.perm-q");
   const opt = await geometry(page, ".q-option");
   metrics.push({ region: "question-card", padding: q.padding, gaps: q.gaps });
-  metrics.push({ region: "question-option", padding: opt.padding, notes: { radius: opt.radius, bg: opt.bg } });
+  metrics.push({
+    region: "question-option",
+    padding: opt.padding,
+    notes: { radius: opt.radius, bg: opt.bg },
+  });
 });
 
 test("mode sheet", async ({ page, seedHost }) => {
-  const { pass } = await seedHost();
+  const { pass } = await seedHost({ caps: "compat-mitm" });
   await page.goto(`/#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row").click();
@@ -199,12 +213,19 @@ test("mode sheet", async ({ page, seedHost }) => {
   await expect(page.locator('[role="dialog"]')).toBeVisible();
   await page.waitForFunction(() => {
     const els = [document.querySelector(".sheet-scrim"), document.querySelector(".sheet")];
-    return els.every((el) => el && (el as HTMLElement).getAnimations().every((a) => a.playState !== "running"));
+    return els.every(
+      (el) => el && (el as HTMLElement).getAnimations().every((a) => a.playState !== "running"),
+    );
   });
   await shot(page, "30-mode-sheet", '[role="dialog"]');
   await shot(page, "31-mode-row", ".mode-row");
   const sheet = await geometry(page, '[role="dialog"]');
   const mrow = await geometry(page, ".mode-row");
-  metrics.push({ region: "mode-sheet", padding: sheet.padding, gaps: sheet.gaps, notes: { bg: sheet.bg } });
+  metrics.push({
+    region: "mode-sheet",
+    padding: sheet.padding,
+    gaps: sheet.gaps,
+    notes: { bg: sheet.bg },
+  });
   metrics.push({ region: "mode-row", padding: mrow.padding });
 });

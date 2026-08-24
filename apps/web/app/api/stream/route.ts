@@ -36,8 +36,8 @@ export async function GET(req: Request): Promise<Response> {
     return json({ error: String((e as Error)?.message ?? e) }, 400);
   }
 
-  // Per-request backend selection: the `x-broker-backend` header or `?backend=` (default vercel). The
-  // publish for this channel must name the SAME backend — the client sends the selector on both.
+  // Per-request backend selection: the `x-broker-backend` header or `?backend=`. Unset code fallback is
+  // vercel; supported production configures sqlite. Publish for this channel must name the SAME backend.
   const requested = backendSelector(req, url);
   if (requested !== null && !isRequestableBackend(requested)) {
     return json({ error: `backend "${requested}" is not selectable on this deployment` }, 400);

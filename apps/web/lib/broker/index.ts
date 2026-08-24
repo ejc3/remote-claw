@@ -4,15 +4,16 @@ import { LocalBackend } from "./local";
 import { VercelBackend } from "./vercel";
 
 // The broker backend is selected PER REQUEST: a `?backend=` query param (forwarded by the
-// client) wins, else the BROKER_BACKEND env default, else "vercel". So one deployment defaults to
-// Vercel Workflows but a client can opt a session into another backend with `?backend=sqlite`
+// client) wins, else the BROKER_BACKEND env default, else the legacy "vercel" code fallback. A client
+// can opt a session into another backend with `?backend=sqlite`
 // without a redeploy. The publish (relay) and subscribe (stream) for a given channel MUST name the
 // same backend — the client sends the param on both.
 //
-//   (unset) | "vercel"  → Vercel Workflows (production; the default)
+//   (unset) | "vercel"  → Vercel Workflows (compatibility/experimental; unset code fallback)
 //   "local"            → in-process fake broker (tests / Playwright e2e)
-//   "sqlite"           → per-channel libSQL: ONE database per channel token; storage = local file
-//                        (RC_SQLITE_DIR, the `pnpm dev` default) or Turso Cloud (one db per channel)
+//   "sqlite"           → supported stable production profile: per-channel libSQL, ONE database per
+//                        channel token; storage = local file (RC_SQLITE_DIR, the `pnpm dev` default)
+//                        or Turso Cloud (one db per channel)
 //
 // Each backend is cached per-name (process-wide), so the LocalBackend's in-memory channel map persists
 // across requests. getBackend() is async only so the sqlite adapter can be DYNAMICALLY imported —

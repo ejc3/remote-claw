@@ -10,7 +10,7 @@ test-results-evidence/
 playwright-report/
 
 # Visual-verification artifacts, all regenerated on demand and compared between commits locally:
-#   shots/  — app-e2e.shots.config.ts, 11 surfaces × phone + desktop
+#   shots/  — app-e2e.shots.config.ts, 12 surfaces × {phone,desktop} × {light,dark} = 48 PNGs
 #   zoom/   — app-e2e.zoom.config.ts, tight 3× crops + metrics.json (measured geometry)
 # The curated before/after PAIRS that back findings in the migration report are NOT here — they live in
 # git at docs/assets/astryx/, because docs/astryx-migration.md renders them inline.

@@ -4,6 +4,8 @@ import { hasDurableRecovery } from "../../../lib/broker/backend";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
+export const maxDuration = 60;
+
 // §6B GET /api/seq — the effective backend's durability plus the highest transcript `seq` its log
 // holds for this channel (per-session with ?session=<sid>, else the bus), or null. A host that
 // RESTARTS a durable session resumes `seq = max + 1` so its new frames don't collide with retained

@@ -563,11 +563,10 @@ The optional A1 actor must deterministically reject attachments before an execut
 redelivers that rejection; changed bytes collide. Native OpenCode attachment translation and read-back
 remain optional and require their own retained proof before advertisement.
 
-The current compatibility relay does not enforce capability bits as an admission boundary. A stale or
-custom sender can still submit an attachment frame, causing the relay to write the image and inject its
-Claude-style `@"<path>"` prompt into OpenCode. `attachments:false` prevents the normal viewer from
-offering that unsupported path; it does not turn the legacy relay into the future fail-closed command
-actor.
+The current compatibility relay enforces `attachments:false` before multipart reassembly, file writes,
+or native injection, so stale or custom senders cannot force the unsupported Claude-style attachment
+path into OpenCode. This is a fail-closed A0 admission boundary; the parked A1 command actor's durable
+decision/result semantics remain future work.
 
 ## 8. Recovery and authority
 

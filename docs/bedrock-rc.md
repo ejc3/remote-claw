@@ -17,17 +17,19 @@ mantle rejects (`metadata`, `context_management`, `diagnostics`, nested `cache_c
 > OpenCode rows below are experimental/internal compatibility evidence, not stable driver choices or
 > Claude 1.0 release gates. Their presence must not weaken the MITM lane's release proof.
 
-> **Native RC needs a claude.ai login (OAuth), NOT the pretend-API-key path.** This is the single most
-> important operational fact, found in the 2026-06-28 live run: native `/remote-control` is a claude.ai
-> account feature. With an `ANTHROPIC_API_KEY` set (the "accountless" pretend-key path, mode 1 below)
+> **Native RC needs login-shaped Claude state, not plain API-key mode.** This is the single most
+> important operational fact, found in the 2026-06-28 live run: native `/remote-control` is gated as a
+> claude.ai account feature. With only an `ANTHROPIC_API_KEY` set (the pretend-key path, mode 1 below)
 > claude runs in **API-key mode**, which **disables claude.ai features including remote-control** — it
 > never registers an RC session, so nothing bridges to the broker (claude prints `claude.ai connectors
 > are disabled because ANTHROPIC_API_KEY … takes precedence`). The full RC round-trip was proven only in
 > **OAuth mode** (a real claude.ai login present; the MITM still synthesizes the OAuth/bootstrap so the
-> token is never used against Anthropic and inference is 100% Bedrock — zero-Anthropic still holds).
-> **Takeaways:** for native RC + Bedrock, the host must be **logged into claude.ai** (`claude /login`);
-> if claude shows the "Detected a custom API key" dialog, answer **No (recommended)** so it uses the
-> claude.ai login — OR pass **`--rc-accountless`** (below) to run native RC with no login at all. An
+> token is never used against Anthropic and inference is 100% Bedrock — zero-Anthropic still holds),
+> and was subsequently proven with the isolated synthetic state from `--rc-accountless`.
+> **Takeaways:** for native RC + Bedrock, either log the host into claude.ai (`claude /login`) or pass
+> **`--rc-accountless`** (below) to create login-shaped state with no real login. With a real login, if
+> claude shows the "Detected a custom API key" dialog, answer **No (recommended)** so it uses that
+> claude.ai state. An
 > implemented experimental **`--rc-driver=tmux`** path can also exercise accountless Bedrock remote
 > control (it uses `CLAUDE_CODE_USE_BEDROCK` and needs no claude.ai account), but it is not a supported
 > Claude 1.0 product path.
@@ -135,16 +137,15 @@ claude only needs to *believe* it is authenticated; the MITM validates nothing.
    `.credentials.json` so claude never attempts an OAuth token refresh. *Proven (Trial A).*
 
 **Caveat (live-corrected 2026-06-28):** mode 1 was proven only with `--print` (no RC). For the **native
-RC TUI**, the pretend-API-key path **disables remote-control** (claude.ai features off in API-key mode) —
-see the Status banner. So mode 1 is the right default for `--print`/headless inference, but **native RC +
-Bedrock requires mode 2 (a claude.ai OAuth login present)**; inference still goes 100% to Bedrock either
-way. `launch.ts` injects the pretend key unconditionally in bedrock mode (defense-in-depth: the child
-holds no real Anthropic credential); when an OAuth login is also present, claude prompts "Detected a
-custom API key" and the **recommended No** keeps it on the claude.ai login (→ RC stays enabled). For an
-accountless shop that needs remote control, use `--rc-driver=tmux` (provider-agnostic, no claude.ai
-account) only for experimental compatibility testing. Note (tested 2026-06-28): the OAuth **token** may be fully fabricated once `.claude.json` has
-been seeded by one real login (the MITM never validates it); a *from-scratch* config does not enable
-native RC — see the Status banner's fabricated-credential finding.
+RC TUI**, a pretend key by itself selects API-key mode and **disables remote-control**. Native RC instead
+needs login-shaped state: either cached state from a real claude.ai login or the isolated synthetic
+login, credential, rejection choice, and exact bridge gates created by `--rc-accountless`; inference
+still goes 100% to Bedrock either way. `launch.ts` injects the pretend key unconditionally in Bedrock
+mode (defense-in-depth: the child holds no real Anthropic credential). With a real login, claude may
+prompt "Detected a custom API key" and the **recommended No** keeps it on claude.ai state. In
+accountless mode, the seeded rejection choice makes claude ignore that pretend key and use its
+synthetic state. The OAuth **token** may be fully fabricated because the MITM never validates it; a
+from-scratch config without the bridge gates does not enable native RC.
 
 ## Control-plane endpoints to synthesize (zero-Anthropic inventory)
 
@@ -256,19 +257,21 @@ See Appendix A for the cited request/response facts for both paths.
   set so a hostile child/MCP can reach neither api.anthropic.com nor the host's IMDS role. claude only
   ever talks to the local MITM.
 
-## Wiring into the CLI (proposed)
+## Wiring in the CLI (implemented; experimental)
 
-A new launch mode parallel to `runRcLaunch`, selected by a flag — e.g.
-`remote-claw --rc-app <origin> --rc-inference=bedrock [--rc-bedrock-region us-west-1]`
-(default `--rc-inference=anthropic` = today's passthrough). Concretely:
+`runRcLaunch` selects the inference route with
+`remote-claw --rc-app <origin> --rc-inference=bedrock [--rc-bedrock-region us-west-1]
+[--rc-bedrock-model anthropic.claude-opus-4-8]`. The default,
+`--rc-inference=anthropic`, preserves Anthropic passthrough. Concretely:
 
-1. `MitmOptions` gains an `inference: "anthropic" | "bedrock"` (default `anthropic`) and an optional
-   model-map/region. In `#passthrough`, when `inference==="bedrock"`: route `/v1/messages*` to the
-   Bedrock translator; serve the control-plane synthesizers; default-stub the rest. RC intercept
-   (`INTERCEPT_PREFIXES`) is unchanged.
-2. `launch.ts`: in bedrock mode, **do not** set `CLAUDE_CODE_USE_BEDROCK` (that would disable RC);
-   instead inject the pretend `ANTHROPIC_API_KEY` + isolated `CLAUDE_CONFIG_DIR` for the child (mode 1
-   above), and keep AWS creds in the *host* env only (never the child).
+1. `MitmOptions` carries `inference: "anthropic" | "bedrock"` (default `anthropic`) and optional
+   Bedrock region/model configuration. In `#passthrough`, `inference==="bedrock"` routes
+   `/v1/messages*` to the native Bedrock handler, serves the control-plane synthesizers, and
+   default-stubs the rest. RC interception (`INTERCEPT_PREFIXES`) is unchanged.
+2. In Bedrock mode, `launch.ts` **does not** set `CLAUDE_CODE_USE_BEDROCK` (that would disable native
+   RC). It prepares an isolated child config for the selected OAuth/accountless mode and keeps all AWS
+   credentials in the *host* environment, never the child. `--rc-accountless` seeds the fabricated
+   login and exact RC gates described above; it is valid only with `--rc-inference=bedrock`.
 3. Everything downstream — `RelayCore`, the host-scoped `LegacyRcConversationRegistrar`,
    `HostRcRelay`, the broker, and the viewer — is untouched by the inference choice. In the current
    Claude MITM path the registrar gives each intercepted session its own lease and abort controller,
@@ -302,18 +305,19 @@ A new launch mode parallel to `runRcLaunch`, selected by a flag — e.g.
 - **Body-size caps.** InvokeModel 25M chars; Bedrock guide cites 20 MB — reconcile before forwarding
   large attachments.
 
-## Next steps
+## Remaining experimental hardening
 
-1. **Native-path first** (covers `claude-opus-4-8`): a thin `/v1/messages` reverse-proxy to
-   `bedrock-mantle` — model rewrite + `AWS_BEARER_TOKEN_BEDROCK` auth swap + body scrub + SSE
-   passthrough. Smallest correct implementation; no AWS SDK.
-2. Binary-path fallback (`bedrock-translate.ts`: reshape + beta allowlist + event-stream→SSE) for
-   models without native SSE — the proven spike code promotes to a real module + vitest.
-3. Add `--rc-inference=bedrock` wiring (flag, MITM branch, child-env injection: pretend `sk-ant-` key +
-   isolated config) behind the per-PR gate (biome + tsc + vitest → /code-review + codex → CI green).
-4. Live validation with a real Bedrock key: a prompt, a tool-use turn, and extended thinking round-trip
-   through native RC to the viewer with **zero** `api.anthropic.com` traffic (assert via a connection
-   counter in the MITM).
+1. Keep the implemented native `bedrock-mantle` translator, auth paths, model mapping, and control-plane
+   synthesizers aligned with live per-model request fixtures as Claude and Bedrock evolve.
+2. Promote the offline binary Bedrock-runtime spike into a supported fallback only if a release-scoped
+   model lacks native mantle SSE. That work still needs a production module, AWS event-stream decoder,
+   inference-profile map, focused tests, and a separate live proof; it is not part of the current CLI.
+3. Treat any changes to the implemented `--rc-inference`, `--rc-bedrock-region`,
+   `--rc-bedrock-model`, or `--rc-accountless` surface as normal CLI changes behind the repository's
+   per-PR and exact-SHA gates.
+4. Expand the live matrix beyond the proven prompt round-trip: pin tool-use, extended-thinking,
+   supported-model, and regional-availability cases while retaining the zero-`api.anthropic.com`
+   connection assertion.
 
 ---
 
@@ -321,8 +325,10 @@ A new launch mode parallel to `runRcLaunch`, selected by a flag — e.g.
 
 Gathered from official AWS + Anthropic docs and the `@anthropic-ai/bedrock-sdk` source (research pass,
 2026-06-27). The binary-path transcode is additionally **validated by an offline synthetic round-trip**
-against real captured Anthropic events (`spikes/bedrock-rc/bedrock-translate.test.mjs`). Nothing here is
-yet validated against a **live** Bedrock response — that is the AWS-creds-gated step.
+against real captured Anthropic events (`spikes/bedrock-rc/bedrock-translate.test.mjs`). The native
+`bedrock-mantle` path is additionally live-validated as recorded in the status banner; the binary
+event-stream path and the individual model/region combinations described in this appendix are not all
+live-pinned.
 
 **Two endpoints, split by model generation:**
 

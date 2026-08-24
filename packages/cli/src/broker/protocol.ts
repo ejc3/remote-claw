@@ -39,6 +39,7 @@ export const CONTROL_KINDS = new Set([
 export const META_KINDS = new Set([
   "accepted",
   "session_announce",
+  "session_terminal",
   "permission_resolved", // a permission_request was answered; seq=null so gaps cannot stall it
 ]);
 

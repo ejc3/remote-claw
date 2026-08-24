@@ -1,12 +1,10 @@
 import type { Client } from "@libsql/client";
 
-// A COLD enumeration index for retention at unlimited scale. Turso's list-databases is a flat,
-// un-paginated response and exposes no last-activity timestamp, so a fleet-wide "list + probe each db"
-// sweep is O(fleet) and can't scale. This index is our own scalable, ordered, paginable catalog of the
-// per-channel databases — written ONCE when a channel db is created and deleted when it is dropped, so
-// it is NEVER on the hot publish path (no per-frame writes, no write hotspot). It stores ONLY public
-// routing metadata (the already-public db id + connection url + a creation timestamp) — no ciphertext,
-// no keys — so it preserves the zero-knowledge model.
+// A COLD, durable catalog for per-channel databases. Its row is also the create-once continuity witness:
+// once an id is present, a missing physical store is data loss and must never be recreated under the same
+// live token. It is written before the first frame, then stays off the per-frame hot path. The ordered,
+// paginable shape also supports retention diagnostics without Turso's flat fleet-wide list. It stores only
+// public routing metadata (db id + connection url + creation timestamp) — no ciphertext or keys.
 //
 // Retention walks this catalog in bounded, RESUMABLE batches (a persisted `sweep_cursor`), probing only
 // the current batch's own MAX(created_at) for the idle decision. Work happens at sweep time, spread
@@ -57,7 +55,7 @@ export class SessionIndex {
     return this.#migrated;
   }
 
-  /** Record a channel's db on create. Idempotent (a reopened gen re-adds harmlessly). */
+  /** Commit the create-once continuity witness. Idempotent (a reopened gen re-adds harmlessly). */
   async add(id: string, url: string, createdAt: number): Promise<void> {
     await this.#ensure();
     await this.#client.execute({
@@ -66,10 +64,16 @@ export class SessionIndex {
     });
   }
 
-  /** Forget a channel's db (on drop). */
-  async remove(id: string): Promise<void> {
+  /** Whether this channel database has ever crossed the create-once boundary. The row is durable
+   *  prior-existence evidence: a catalogued id whose physical database is missing must fail closed,
+   *  never be provisioned again under the same live token. */
+  async has(id: string): Promise<boolean> {
     await this.#ensure();
-    await this.#client.execute({ sql: "DELETE FROM sessions WHERE id = ?", args: [id] });
+    const r = await this.#client.execute({
+      sql: "SELECT 1 FROM sessions WHERE id = ? LIMIT 1",
+      args: [id],
+    });
+    return r.rows[0] !== undefined;
   }
 
   /** The next page of catalogued dbs after `cursor` (id-ordered, so the cursor is stable + resumable). */

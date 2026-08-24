@@ -42,7 +42,7 @@ async function setVisibility(page: Page, state: "hidden" | "visible"): Promise<v
 // observed on the ios-safari project). Real keystrokes always fire onChange. The toBeEnabled gate then
 // confirms the composer state propagated before we click.
 async function sendPrompt(page: Page, text: string): Promise<void> {
-  const ta = page.getByPlaceholder(/Send a prompt/);
+  const ta = page.getByRole("textbox", { name: "Message" });
   await ta.click();
   await ta.fill("");
   await ta.pressSequentially(text);

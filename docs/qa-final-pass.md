@@ -24,8 +24,8 @@ auditable, and tracks the fixes that close them.
   vs content vs control vs meta), auth-token compare is constant-time, and a Sealed client refuses Open
   frames (no silent downgrade). The master secret is suppressed from `--rc-json`/`--rc-quiet`; the web
   strips a fragment credential on entry, then stores one non-extractable AES device key in IndexedDB and
-  only wrapped pass ciphertext in tab-scoped sessionStorage. The dev-only `/api/dev/sweep` route is
-  prod-gated (404).
+  only wrapped pass ciphertext in tab-scoped sessionStorage. `/api/dev/sweep` is prod-gated (404) and
+  returns 501 elsewhere without constructing a storage locator or deleting anything.
 - **The real bugs are operational, not cryptographic** — session identity, host-restart / reconnect
   ordering, and retention / teardown / Turso-resilience edges. None of them weaken E2E encryption.
 - **Baseline: all green** — Playwright e2e across the backends (Local, **Turso**) and the unit suites
@@ -83,10 +83,16 @@ was then closed. Landed as a reviewed commit stack:
 5. **Durability discovered from the server, not the `--rc-backend` flag.** `/api/seq` reports `durable`,
    so a default-turso deployment is protected even when the host omits the flag. The gen-bump race is
    closed (a Turso `gen` only bumps on the internal `__close`+reopen; `/api/relay` rejects that sentinel).
-6. **Turso resilience.** Writes are serialized through a per-client mutex (no `SQLITE_BUSY`→500); the
-   subscribe poll retries transient libSQL errors without tearing the SSE stream; a dead cached client is
-   evicted. **Retention**: the sweep is wall-clock-bounded with a `frames(token, created_at)` index, gated
-   on the *active* backend, and reports channel databases swept.
+6. **Turso resilience.** Writes are serialized through a per-client mutex (no `SQLITE_BUSY`→500).
+   Subscription frame/state polls share a three-consecutive-transient-failure budget and every query has
+   a hard 15-second maximum (`RC_SQLITE_POLL_QUERY_TIMEOUT_MS` can only tighten it). A row-bearing frame
+   query, or a complete successful empty-frame plus state decision, resets the budget. The third
+   transient, a deadline, or a nontransient failure terminates with a coordinate-free SSE error and
+   evicts the cached client; channel disappearance remains immediate permanent storage loss. The older
+   inactivity sweep described by this historical pass is now superseded: ordinary
+   SQLite/libSQL `sweep()` is a no-op and retains ciphertext indefinitely because activity is not an
+   authenticated collection transition. The HTTP dev/CI sweep route also returns 501 without
+   constructing a locator because its truncated scope cannot prove exact deployment ownership.
 7. **Input validation + security proofs.** `decodeFrame` bounds the cleartext routing strings (length +
    control-char guard) at the trust boundary; `/api/relay` caps decoded ciphertext below 3.3 MB (`413`)
    so its base64url JSON body remains below Vercel's roughly 4.5 MB edge limit. New proof tests pin: the
@@ -125,8 +131,9 @@ pipe: it validates the §8 envelope shape and routes opaque ciphertext, and neve
   onto another channel/plane/seq; per-frame CSPRNG salt+nonce + per-message subkey ⇒ no nonce reuse;
   auth-token comparison is constant-time; a Sealed client refuses Open frames (no silent downgrade).
 - **AuthN/AuthZ.** Every identity-scoped data and recovery route requires a Bearer and scopes the channel
-  token to the authenticated identity (no cross-identity access); the retention cron requires
-  `CRON_SECRET`; the dev-only `/api/dev/sweep` route is 404 in production (gate-tested). Hex bearers are
+  token to the authenticated identity (no cross-identity access); `/api/dev/sweep` is 404 in production
+  and returns 501 elsewhere without constructing a locator, because a truncated scope cannot authorize
+  deletion. Hex bearers are
   decoded to bytes before hashing (canonical, case-insensitive). `/api/handoff` is intentionally
   unauthenticated: a 256-bit one-time capability and derived claim proof gate its single-read sealed
   blob, and a platform-edge rate limit is a release requirement.
@@ -153,18 +160,20 @@ pipe: it validates the §8 envelope shape and routes opaque ciphertext, and neve
 - **Rate limiting is platform-level.** There is no app-level rate limiter (serverless has no shared
   state). Unauthenticated calls to identity-scoped APIs are rejected cheaply, and an authenticated
   identity can only flood its **own** backend-bounded channels. `/api/handoff` is the deliberate
-  exception: an unauthenticated PUT can write one short-lived sealed row, so a per-IP token bucket plus
-  low global ceiling at Vercel's edge is a release gate, not an optional recommendation.
+  exception: an unauthenticated PUT can write one short-lived sealed row, so a per-IP token bucket at
+  Vercel's edge is a release gate, not an optional recommendation. Vercel's always-on System Mitigations
+  provide the global volumetric backstop; there is deliberately no custom global counter that an attacker
+  could trip to deny all pairings.
 - **No key rotation — rotation is replacement.** Containing a compromised secret requires stopping
   every relay that captured it, minting and restarting on a new identity, and reconnecting trusted
   viewers there. This moves future traffic but does not revoke copied old credentials or retained old
-  routes; in this historical flat-session baseline, the old channel's at-rest ciphertext is bounded by
-  its retention policy. There is no in-place re-key.
+  routes; the old channel's at-rest ciphertext is retained indefinitely. Any infrastructure deletion
+  is a manual operator action over a reviewed exact database list, not an app retention transition.
+  There is no in-place re-key.
 - **Long-lived durable at-rest ciphertext weakens forward secrecy** versus the process-memory-only
   local backend. Workflow also retains ciphertext for a run, but its fixed cap/no-rollover path is not
-  a safe retention policy. The SQLite/libSQL sweep bounds the historical durable backend's exposure
-  window. Selected A1 deliberately differs: chat and server-control ciphertext remains retained from
-  genesis because it has no safe collection or permanent route-revocation transition yet.
+  a safe retention policy. Shipped SQLite/libSQL likewise retains channel ciphertext indefinitely:
+  no authenticated collection or permanent route-revocation transition exists yet.
 
 ## Open design frontier (documented, not a regression)
 

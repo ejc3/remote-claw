@@ -23,6 +23,11 @@ import { planeForKind } from "./protocol.js";
 // inbound hook. Callers can override per message.
 const DEFAULT_MAX_CHUNK_BYTES = 3_000_000;
 
+/** Hard transport boundaries. AbortSignal alone is insufficient: an injected/hostile fetch may
+ * ignore it forever, so cursor discovery and stream establishment also race a wall-clock timer. */
+export const BROKER_CURSOR_TIMEOUT_MS = 70_000;
+export const BROKER_STREAM_CONNECT_TIMEOUT_MS = 20_000;
+
 /** A non-2xx broker reply. `status` lets callers branch (e.g. 409 = channel disposal race → retry). */
 export class BrokerError extends Error {
   readonly status: number;
@@ -33,6 +38,43 @@ export class BrokerError extends Error {
   }
   static is(e: unknown): e is BrokerError {
     return e instanceof BrokerError;
+  }
+}
+
+/** The broker proved that a previously-established channel's durable store is gone. This is distinct
+ *  from ordinary 5xx/transient transport failure and deliberately carries no provider coordinates. */
+export class BrokerPermanentStorageLossError extends BrokerError {
+  constructor() {
+    super(410, "permanent channel storage loss");
+    this.name = "BrokerPermanentStorageLossError";
+  }
+  static is(e: unknown): e is BrokerPermanentStorageLossError {
+    return e instanceof BrokerPermanentStorageLossError;
+  }
+}
+
+/** A broker operation that crossed its local wall-clock safety boundary. */
+export class BrokerTimeoutError extends Error {
+  readonly operation: string;
+  readonly timeoutMs: number;
+  constructor(operation: string, timeoutMs: number) {
+    super(`${operation} timed out after ${timeoutMs}ms`);
+    this.name = "BrokerTimeoutError";
+    this.operation = operation;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/** The broker deliberately rotated a healthy established SSE response nominally ahead of its hosting
+ * runtime's wall-clock ceiling. Callers must reconnect from their cursor/dedup policy without
+ * forgiving or charging the bounded transport-failure circuit. */
+export class BrokerStreamRotationError extends Error {
+  constructor() {
+    super("broker stream planned rotation");
+    this.name = "BrokerStreamRotationError";
+  }
+  static is(e: unknown): e is BrokerStreamRotationError {
+    return e instanceof BrokerStreamRotationError;
   }
 }
 
@@ -54,6 +96,12 @@ export interface BrokerClientOptions {
    *  Omitted ⇒ no header (an unprotected broker doesn't need it). Not a broker secret — it only
    *  satisfies Vercel's edge, never the broker's own auth. */
   protectionBypass?: string;
+  /** Test/embedding override for the 70s cursor-attempt wall. */
+  cursorTimeoutMs?: number;
+  /** Test/embedding override for the 20s initial SSE-response wall. */
+  streamConnectTimeoutMs?: number;
+  /** Test/embedding override for the established SSE byte-idle watchdog. */
+  streamIdleTimeoutMs?: number;
 }
 
 /** The JSON reply shape of POST /api/relay on success. */
@@ -89,6 +137,9 @@ export class BrokerClient {
   readonly #fetch: typeof fetch;
   readonly #backend: string | undefined;
   readonly #bypass: string | undefined;
+  readonly #cursorTimeoutMs: number;
+  readonly #streamConnectTimeoutMs: number;
+  readonly #streamIdleTimeoutMs: number;
   #serverDurable: boolean | undefined;
 
   constructor(opts: BrokerClientOptions) {
@@ -99,6 +150,21 @@ export class BrokerClient {
     // whitespace (the broker trims `?backend=` before matching, but its requestable gate does not).
     this.#backend = opts.backend?.trim() || undefined;
     this.#bypass = opts.protectionBypass;
+    this.#cursorTimeoutMs = checkedTimeout(
+      opts.cursorTimeoutMs,
+      BROKER_CURSOR_TIMEOUT_MS,
+      "cursorTimeoutMs",
+    );
+    this.#streamConnectTimeoutMs = checkedTimeout(
+      opts.streamConnectTimeoutMs,
+      BROKER_STREAM_CONNECT_TIMEOUT_MS,
+      "streamConnectTimeoutMs",
+    );
+    this.#streamIdleTimeoutMs = checkedTimeout(
+      opts.streamIdleTimeoutMs,
+      SSE_IDLE_MS,
+      "streamIdleTimeoutMs",
+    );
     // The browser's global fetch is a built-in that MUST be called with `this === window`; storing
     // it on the instance and calling `this.#fetch(...)` rebinds `this` to the BrokerClient and throws
     // "Illegal invocation" (Node's fetch is lenient, so this only bites in a real browser). Bind the
@@ -131,22 +197,31 @@ export class BrokerClient {
   }
 
   /**
-   * Seal `plaintext` for `header` and publish it. A session_announce rides the identity BUS; every
-   * other kind rides its session channel (`?session=header.sessionId`), matching the broker's
-   * routing + its bus-only-announce guard (§6A). Throws BrokerError on a non-2xx reply.
+   * Seal `plaintext` for `header` and publish it. Presence lifecycle records (`session_announce` and
+   * `session_terminal`) ride the identity BUS; every other kind rides its session channel
+   * (`?session=header.sessionId`), matching the broker's bus guard (§6A). Throws BrokerError on a
+   * non-2xx reply.
    */
-  async postFrame(header: FrameHeader, plaintext: Uint8Array): Promise<RelayResult> {
+  async postFrame(
+    header: FrameHeader,
+    plaintext: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<RelayResult> {
     const plane = planeForKind(header.recordKind);
     const frame = await this.#provider.sealFrame(plane, header, plaintext);
-    return this.#publish(frame);
+    return this.#publish(frame, signal);
   }
 
-  /** POST one sealed frame on its channel (bus for session_announce, else the session channel). */
-  async #publish(frame: Frame): Promise<RelayResult> {
-    const onBus = frame.recordKind === "session_announce";
+  /** POST one sealed frame on its channel (bus for presence lifecycle, else the session channel). */
+  async #publish(frame: Frame, signal?: AbortSignal): Promise<RelayResult> {
+    const onBus =
+      frame.recordKind === "session_announce" || frame.recordKind === "session_terminal";
     const qs = onBus ? "" : `?session=${encodeURIComponent(frame.sessionId)}`;
     const res = await this.#fetch(`${this.#baseUrl}/api/relay${qs}`, {
       method: "POST",
+      // Authorization and the optional Vercel bypass are origin credentials. Never let fetch carry
+      // either through a broker-controlled redirect; callers must select the final exact origin.
+      redirect: "error",
       headers: {
         authorization: this.#authHeader(),
         "content-type": "application/json",
@@ -154,8 +229,9 @@ export class BrokerClient {
         ...this.#bypassHeader(),
       },
       body: JSON.stringify(encodeFrame(frame)),
+      ...(signal !== undefined ? { signal } : {}),
     });
-    if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
+    if (!res.ok) throw await brokerResponseError(res);
     return (await res.json()) as RelayResult;
   }
 
@@ -170,18 +246,23 @@ export class BrokerClient {
     header: FrameHeader,
     plaintext: Uint8Array,
     maxChunkBytes = DEFAULT_MAX_CHUNK_BYTES,
+    signal?: AbortSignal,
   ): Promise<RelayResult[]> {
     const plane = planeForKind(header.recordKind);
     const pieces = splitPlaintext(plaintext, maxChunkBytes);
     const parts = pieces.length;
     const results: RelayResult[] = [];
     for (let part = 0; part < parts; part++) {
+      throwIfAborted(signal);
       const frame = await this.#provider.sealFrame(
         plane,
         { ...header, part, parts },
         pieces[part] as Uint8Array,
       );
-      results.push(await this.#publish(frame));
+      // Sealing may be asynchronous. Re-check before the irreversible POST so a logical-post timeout
+      // can never publish a late chunk after the relay has already failed closed.
+      throwIfAborted(signal);
+      results.push(await this.#publish(frame, signal));
     }
     return results;
   }
@@ -246,19 +327,32 @@ export class BrokerClient {
     if (opts.startIndex !== undefined) params.set("startIndex", String(opts.startIndex));
     const qs = params.toString();
     const url = `${this.#baseUrl}/api/stream${qs ? `?${qs}` : ""}`;
-    const init: RequestInit = {
-      headers: {
-        authorization: this.#authHeader(),
-        accept: "text/event-stream",
-        ...this.#backendHeader(),
-        ...this.#bypassHeader(),
+    const res = await withDeadline(
+      async (signal) => {
+        const response = await this.#fetch(url, {
+          redirect: "error",
+          headers: {
+            authorization: this.#authHeader(),
+            accept: "text/event-stream",
+            ...this.#backendHeader(),
+            ...this.#bypassHeader(),
+          },
+          signal,
+        });
+        // Include rejection-body parsing in the establishment wall. A hostile edge returning headers
+        // but never finishing its error body must not strand the retry budget either.
+        if (!response.ok) throw await brokerResponseError(response);
+        return response;
       },
-    };
-    if (opts.signal !== undefined) init.signal = opts.signal;
-    const res = await this.#fetch(url, init);
-    if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
-    if (res.body === null) return;
-    for await (const data of sseData(res.body)) {
+      this.#streamConnectTimeoutMs,
+      "broker stream headers",
+      opts.signal,
+    );
+    // The real broker always supplies either `: empty` or an opened SSE body. Treat a bodyless 2xx as
+    // a protocol failure; otherwise repeated bodyless replies could masquerade as the one clean
+    // absent-channel result that resets the host relay's inbound failure circuit.
+    if (res.body === null) throw new BrokerError(502, "broker stream ended unexpectedly");
+    for await (const data of sseData(res.body, this.#streamIdleTimeoutMs, opts.signal)) {
       yield decodeFrame(JSON.parse(data));
     }
   }
@@ -272,15 +366,23 @@ export class BrokerClient {
    */
   async seqCursor(sessionId?: string): Promise<SeqCursor> {
     const qs = sessionId !== undefined ? `?session=${encodeURIComponent(sessionId)}` : "";
-    const res = await this.#fetch(`${this.#baseUrl}/api/seq${qs}`, {
-      headers: {
-        authorization: this.#authHeader(),
-        ...this.#backendHeader(),
-        ...this.#bypassHeader(),
+    const body = await withDeadline(
+      async (signal) => {
+        const res = await this.#fetch(`${this.#baseUrl}/api/seq${qs}`, {
+          redirect: "error",
+          headers: {
+            authorization: this.#authHeader(),
+            ...this.#backendHeader(),
+            ...this.#bypassHeader(),
+          },
+          signal,
+        });
+        if (!res.ok) throw await brokerResponseError(res);
+        return (await res.json()) as { maxSeq?: unknown; durable?: unknown };
       },
-    });
-    if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
-    const body = (await res.json()) as { maxSeq?: unknown; durable?: unknown };
+      this.#cursorTimeoutMs,
+      "broker seq cursor",
+    );
     const durable = body.durable === true;
     this.#serverDurable = durable;
     return { maxSeq: typeof body.maxSeq === "number" ? body.maxSeq : null, durable };
@@ -298,15 +400,23 @@ export class BrokerClient {
    */
   async frameCountCursor(sessionId?: string): Promise<FrameCountCursor> {
     const qs = sessionId !== undefined ? `?session=${encodeURIComponent(sessionId)}` : "";
-    const res = await this.#fetch(`${this.#baseUrl}/api/frame-count${qs}`, {
-      headers: {
-        authorization: this.#authHeader(),
-        ...this.#backendHeader(),
-        ...this.#bypassHeader(),
+    const body = await withDeadline(
+      async (signal) => {
+        const res = await this.#fetch(`${this.#baseUrl}/api/frame-count${qs}`, {
+          redirect: "error",
+          headers: {
+            authorization: this.#authHeader(),
+            ...this.#backendHeader(),
+            ...this.#bypassHeader(),
+          },
+          signal,
+        });
+        if (!res.ok) throw await brokerResponseError(res);
+        return (await res.json()) as { frameCount?: unknown; durable?: unknown };
       },
-    });
-    if (!res.ok) throw new BrokerError(res.status, await safeErr(res));
-    const body = (await res.json()) as { frameCount?: unknown; durable?: unknown };
+      this.#cursorTimeoutMs,
+      "broker frame-count cursor",
+    );
     const durable = body.durable === true;
     this.#serverDurable = durable;
     return { frameCount: typeof body.frameCount === "number" ? body.frameCount : null, durable };
@@ -317,19 +427,80 @@ export class BrokerClient {
   }
 }
 
-/** Read an error reply body without throwing (best-effort message for BrokerError). */
-async function safeErr(res: Response): Promise<string> {
+function checkedTimeout(value: number | undefined, fallback: number, name: string): number {
+  const timeout = value ?? fallback;
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    throw new RangeError(`${name} must be a positive finite number`);
+  }
+  return timeout;
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw abortReason(signal);
+}
+
+/** Race an entire transport attempt against a hard deadline and an optional owner abort. The
+ * operation is explicitly observed after the race so a fetch that ignores AbortSignal and rejects
+ * late cannot create an unhandled rejection. */
+async function withDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label: string,
+  ownerSignal?: AbortSignal,
+): Promise<T> {
+  const controller = new AbortController();
+  let rejectBoundary: (reason: unknown) => void = () => {};
+  const boundary = new Promise<never>((_resolve, reject) => {
+    rejectBoundary = reject;
+  });
+  const timeout = setTimeout(() => {
+    const error = new BrokerTimeoutError(label, timeoutMs);
+    // Settle the caller-visible boundary first; abort is best-effort cancellation for cooperative fetch.
+    rejectBoundary(error);
+    controller.abort(error);
+  }, timeoutMs);
+  const onOwnerAbort = () => {
+    const reason = ownerSignal === undefined ? undefined : abortReason(ownerSignal);
+    rejectBoundary(reason);
+    controller.abort(reason);
+  };
+  if (ownerSignal?.aborted) onOwnerAbort();
+  else ownerSignal?.addEventListener("abort", onOwnerAbort, { once: true });
+
+  const pending = Promise.resolve().then(() => {
+    throwIfAborted(controller.signal);
+    return operation(controller.signal);
+  });
+  void pending.catch(() => undefined);
+  try {
+    return await Promise.race([pending, boundary]);
+  } finally {
+    clearTimeout(timeout);
+    ownerSignal?.removeEventListener("abort", onOwnerAbort);
+  }
+}
+
+/** Read a broker rejection once. Only the route's exact 410+code pair becomes permanent loss; a bare
+ *  edge/proxy 410 remains an ordinary BrokerError. The typed error never includes the response body. */
+async function brokerResponseError(res: Response): Promise<BrokerError> {
   try {
     const text = await res.text();
     try {
-      const j = JSON.parse(text) as { error?: unknown };
-      if (typeof j.error === "string") return j.error;
+      const j = JSON.parse(text) as { code?: unknown; error?: unknown };
+      if (res.status === 410 && j.code === "channel_storage_lost") {
+        return new BrokerPermanentStorageLossError();
+      }
+      if (typeof j.error === "string") return new BrokerError(res.status, j.error);
     } catch {
       /* not JSON */
     }
-    return text.slice(0, 200);
+    return new BrokerError(res.status, text.slice(0, 200));
   } catch {
-    return res.statusText;
+    return new BrokerError(res.status, res.statusText);
   }
 }
 
@@ -345,56 +516,130 @@ async function safeErr(res: Response): Promise<string> {
  *  absorb any re-read). Sized > 2× the server keepalive so a single lost ping can't trip a false stall. */
 export const SSE_IDLE_MS = 40_000;
 const SSE_IDLE = Symbol("sse-idle");
+const SSE_ABORTED = Symbol("sse-aborted");
 
 export async function* sseData(
   body: ReadableStream<Uint8Array>,
   idleMs = SSE_IDLE_MS,
+  signal?: AbortSignal,
 ): AsyncGenerator<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  let disposition: "unknown" | "open" | "empty" | "rotate" = "unknown";
+  let byteDeadline = performance.now() + idleMs;
+  let resolveAbort: (value: typeof SSE_ABORTED) => void = () => {};
+  const aborted = new Promise<typeof SSE_ABORTED>((resolve) => {
+    resolveAbort = resolve;
+  });
+  const onAbort = () => resolveAbort(SSE_ABORTED);
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   try {
     for (;;) {
+      const remainingIdleMs = byteDeadline - performance.now();
+      // Check synchronously as well as racing a timer: a hostile reader can resolve an endless chain
+      // of zero-length chunks in microtasks and otherwise starve the timer queue forever.
+      if (remainingIdleMs <= 0) throw new BrokerTimeoutError("broker stream idle", idleMs);
       let idleTimer: ReturnType<typeof setTimeout> | undefined;
       const idle = new Promise<typeof SSE_IDLE>((resolve) => {
-        idleTimer = setTimeout(() => resolve(SSE_IDLE), idleMs);
+        idleTimer = setTimeout(() => resolve(SSE_IDLE), remainingIdleMs);
         // Don't keep a Node process alive just for the watchdog (no-op in the browser).
         if (typeof idleTimer === "object" && typeof idleTimer.unref === "function")
           idleTimer.unref();
       });
-      const winner = await Promise.race([reader.read(), idle]);
+      const read = reader.read();
+      // Promise.race observes rejection too, but retain an explicit observer for hostile stream
+      // implementations whose read settles after timeout/cancel has already returned to the caller.
+      void read.catch(() => undefined);
+      const winner = await Promise.race([read, idle, aborted]);
       clearTimeout(idleTimer);
-      if (winner === SSE_IDLE) break; // stalled — end the stream so the caller re-subscribes
+      if (winner === SSE_ABORTED) return;
+      if (winner === SSE_IDLE) throw new BrokerTimeoutError("broker stream idle", idleMs);
       const { done, value } = winner;
-      if (done) break;
+      if (done) {
+        // Owner shutdown is an ordinary lifecycle edge even if it races the reader's EOF.
+        if (signal?.aborted) return;
+        // Only the broker's explicit absent-channel marker is a clean finite response. An established
+        // stream (or an unclassified/bodyless one) that reaches EOF lost liveness and must consume the
+        // relay's bounded failure budget rather than resetting it forever.
+        if (disposition === "empty" && buf === "") return;
+        if (disposition === "rotate" && buf === "") throw new BrokerStreamRotationError();
+        throw new BrokerError(502, "broker stream ended unexpectedly");
+      }
+      // Only bytes prove liveness. A zero-length read neither changes the decoder nor advances the
+      // watchdog; otherwise empty chunks could keep a dead transport nominally alive forever.
+      if (value.byteLength === 0) continue;
+      byteDeadline = performance.now() + idleMs;
       buf += decoder.decode(value, { stream: true });
       let idx = buf.indexOf("\n\n");
       while (idx !== -1) {
         const record = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
         const parsed = parseSseRecord(record);
+        if (disposition === "rotate") {
+          throw new BrokerError(502, "broker stream continued after rotation marker");
+        }
+        if (parsed.comments.includes("empty")) {
+          if (
+            disposition !== "unknown" ||
+            parsed.comments.length !== 1 ||
+            parsed.event !== "message" ||
+            parsed.data !== ""
+          ) {
+            throw new BrokerError(502, "invalid broker empty-stream marker");
+          }
+          disposition = "empty";
+        } else if (parsed.comments.includes("rotate")) {
+          if (
+            disposition !== "open" ||
+            parsed.comments.length !== 1 ||
+            parsed.event !== "message" ||
+            parsed.data !== ""
+          ) {
+            throw new BrokerError(502, "invalid broker stream-rotation marker");
+          }
+          disposition = "rotate";
+        } else if (parsed.comments.length > 0) {
+          if (disposition === "empty") {
+            throw new BrokerError(502, "broker stream continued after empty marker");
+          }
+          disposition = "open";
+        }
         if (parsed.event === "error") throw new BrokerError(502, `stream error: ${parsed.data}`);
-        if (parsed.data !== "") yield parsed.data;
+        if (parsed.data !== "") {
+          if (disposition === "empty") {
+            throw new BrokerError(502, "broker stream continued after empty marker");
+          }
+          disposition = "open";
+          yield parsed.data;
+        }
         idx = buf.indexOf("\n\n");
       }
     }
   } finally {
+    signal?.removeEventListener("abort", onAbort);
+    // Cancellation is best effort. Awaiting a hostile reader that ignores cancel would turn the
+    // watchdog itself into another permanent hang; observe any late rejection without blocking exit.
     try {
-      await reader.cancel();
+      const cancellation = reader.cancel();
+      void cancellation.catch(() => undefined);
     } catch {
-      /* already closed */
+      /* a non-conforming reader may throw synchronously during best-effort cancellation */
     }
   }
 }
 
-/** One SSE record → its `event` name and joined `data` (ignores comments + unknown fields). */
-function parseSseRecord(record: string): { event: string; data: string } {
+/** One SSE record → its `event`, joined `data`, and comment control tokens. */
+function parseSseRecord(record: string): { event: string; data: string; comments: string[] } {
   let event = "message";
   const dataLines: string[] = [];
+  const comments: string[] = [];
   for (const line of record.split("\n")) {
-    if (line.startsWith(":")) continue; // comment
-    if (line.startsWith("data:")) dataLines.push(line.slice(line.startsWith("data: ") ? 6 : 5));
+    if (line.startsWith(":")) comments.push(line.slice(line.startsWith(": ") ? 2 : 1));
+    else if (line.startsWith("data:"))
+      dataLines.push(line.slice(line.startsWith("data: ") ? 6 : 5));
     else if (line.startsWith("event:")) event = line.slice(line.startsWith("event: ") ? 7 : 6);
   }
-  return { event, data: dataLines.join("\n") };
+  return { event, data: dataLines.join("\n"), comments };
 }
