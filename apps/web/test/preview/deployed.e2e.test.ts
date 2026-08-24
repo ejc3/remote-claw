@@ -53,6 +53,7 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
 
     const pub = await fetch(`${BASE}/api/relay`, {
       method: "POST",
+      redirect: "error",
       headers: { authorization: auth, "content-type": "application/json", ...bypass },
       body: JSON.stringify(frame),
     });
@@ -60,6 +61,7 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
     expect(await pub.json()).toMatchObject({ ok: true, channel: "bus" });
 
     const res = await fetch(`${BASE}/api/stream?startIndex=0`, {
+      redirect: "error",
       headers: { authorization: auth, accept: "text/event-stream", ...bypass },
     });
     expect(res.headers.get("content-type")).toContain("text/event-stream");
@@ -82,6 +84,7 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
 
     const pub = await fetch(`${BASE}/api/relay?session=${encodeURIComponent(sid)}`, {
       method: "POST",
+      redirect: "error",
       headers: { authorization: auth, "content-type": "application/json", ...bypass },
       body: JSON.stringify(frame),
     });
@@ -90,6 +93,7 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
 
     const onSession = await readSseData(
       await fetch(`${BASE}/api/stream?session=${encodeURIComponent(sid)}&startIndex=0`, {
+        redirect: "error",
         headers: { authorization: auth, accept: "text/event-stream", ...bypass },
       }),
       1,
@@ -102,6 +106,7 @@ describe.skipIf(!BASE)("deployed broker e2e (WEB_E2E_URL)", () => {
     // text/event-stream) before asserting no frames — otherwise a 404/non-SSE error would also read
     // as `[]` and pass for the wrong reason.
     const busRes = await fetch(`${BASE}/api/stream?startIndex=0`, {
+      redirect: "error",
       headers: { authorization: auth, accept: "text/event-stream", ...bypass },
     });
     expect(busRes.status).toBe(200);

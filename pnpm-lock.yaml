@@ -10,7 +10,17 @@ overrides:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      '@biomejs/biome':
+        specifier: 2.4.16
+        version: 2.4.16
+      '@libsql/client':
+        specifier: 0.17.3
+        version: 0.17.3
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
 
   apps/web:
     dependencies:

@@ -47,7 +47,7 @@ async function take(stream: ReadableStream<WireFrame>, n: number): Promise<WireF
 // which is exactly why "use the index for local too" makes the cloud retention engine testable here.
 
 describe("SessionIndex", () => {
-  it("adds, lists in id order with a resumable cursor, and removes", async () => {
+  it("adds an absorbing continuity witness and lists in id order with a resumable cursor", async () => {
     const client = createClient({ url: `file:${join(tmp(), "idx.db")}` });
     const idx = new SessionIndex(client);
     try {
@@ -56,22 +56,25 @@ describe("SessionIndex", () => {
       await idx.add("rc-c", "libsql://rc-c", 3);
       await idx.add("rc-a", "libsql://rc-a", 99); // INSERT OR IGNORE — no duplicate, keeps created_at
 
+      expect(await idx.has("rc-a")).toBe(true);
+      expect(await idx.has("rc-missing")).toBe(false);
       expect((await idx.batchAfter("", 2)).map((s) => s.id)).toEqual(["rc-a", "rc-b"]); // id-ordered page
       expect((await idx.batchAfter("rc-b", 10)).map((s) => s.id)).toEqual(["rc-c"]); // resume after cursor
 
       await idx.setCursor("rc-b");
       expect(await idx.getCursor()).toBe("rc-b"); // cursor persists across runs
 
-      await idx.remove("rc-b");
-      expect((await idx.batchAfter("", 10)).map((s) => s.id)).toEqual(["rc-a", "rc-c"]);
+      // There is deliberately no removal API: losing the physical db must not erase prior-existence
+      // evidence and authorize a fresh empty store under the same token.
+      expect(await idx.has("rc-b")).toBe(true);
     } finally {
       client.close();
     }
   });
 });
 
-describe("SqliteMultiBackend cold-index retention", () => {
-  it("catalogs sessions on create and sweeps the idle ones via the index (not busy ones)", async () => {
+describe("SqliteMultiBackend fail-closed retention catalog", () => {
+  it("catalogs sessions on create but never treats idle time as collection authority", async () => {
     const dir = tmp();
     const be = new SqliteMultiBackend(new FileDbLocator(dir));
     await be.publish(A, frame(1)); // create → catalogued in the index
@@ -79,25 +82,12 @@ describe("SqliteMultiBackend cold-index retention", () => {
     expect(existsSync(join(dir, dbFileName(A)))).toBe(true);
     expect(existsSync(join(dir, dbFileName(B)))).toBe(true);
 
-    expect(await be.sweep(60_000)).toBe(0); // nothing older than a generous window
+    // Even an all-stale cutoff cannot prove either session ended, so the sweep is non-mutating.
+    expect(await be.sweep(-1)).toBe(0);
     expect(existsSync(join(dir, dbFileName(A)))).toBe(true);
-
-    // Hold a live subscriber on A; a negative retention makes all stale, but A is busy → only B drops.
-    const liveA = await be.subscribe(A, undefined);
-    expect(await be.sweep(-1)).toBe(1);
-    expect(existsSync(join(dir, dbFileName(A)))).toBe(true);
-    expect(existsSync(join(dir, dbFileName(B)))).toBe(false);
-    await (liveA as ReadableStream<WireFrame>).cancel();
-
-    // A is now idle → swept AND removed from the index, so a later subscribe sees no channel.
-    expect(await be.sweep(-1)).toBe(1);
-    expect(existsSync(join(dir, dbFileName(A)))).toBe(false);
-    expect(await be.subscribe(A, undefined)).toBeNull();
-
-    // A republish re-catalogs + recreates; the index sweep finds it again.
-    await be.publish(A, frame(7));
+    expect(existsSync(join(dir, dbFileName(B)))).toBe(true);
     const sub = await be.subscribe(A, undefined);
-    expect(seqs(await take(sub as ReadableStream<WireFrame>, 1))).toEqual([7]);
+    expect(seqs(await take(sub as ReadableStream<WireFrame>, 1))).toEqual([1]);
   });
 
   it("dropIndex removes the catalog ONLY when empty — a non-empty index is kept (no orphaning)", async () => {
@@ -112,48 +102,9 @@ describe("SqliteMultiBackend cold-index retention", () => {
     expect(existsSync(join(dir, "_index.db"))).toBe(true);
     expect(existsSync(join(dir, dbFileName(A)))).toBe(true);
 
-    // Once A is swept (index empty), dropIndex reclaims the now-empty catalog db itself.
-    expect(await be.sweep(-1)).toBe(1);
+    // A retention call cannot empty the catalog or make dropping it safe.
+    expect(await be.sweep(-1)).toBe(0);
     await be.dropIndex();
-    expect(existsSync(join(dir, "_index.db"))).toBe(false);
-  });
-
-  it("does NOT drop a session that gets a fresh frame between the two staleness probes (TOCTOU guard)", async () => {
-    const dir = tmp();
-    // A probe-intercepting factory: the 1st MAX(created_at) reads STALE (epoch 1), the 2nd reads FRESH
-    // (now) — simulating a publish that lands after the first probe. The backend must re-probe (after
-    // evicting the cached client) and, seeing it fresh, NOT drop the db.
-    let probeReads = 0;
-    const factory = ((config: { url: string; authToken?: string }) => {
-      const real = createClient(config);
-      return new Proxy(real, {
-        get(t, p) {
-          if (p === "execute") {
-            return async (...a: unknown[]) => {
-              const stmt = a[0];
-              const sql =
-                typeof stmt === "object" && stmt !== null && "sql" in stmt
-                  ? String((stmt as { sql: unknown }).sql)
-                  : String(stmt);
-              if (sql.includes("SELECT MAX(created_at) AS m FROM frames")) {
-                probeReads += 1;
-                return { rows: [{ m: probeReads >= 2 ? Date.now() : 1 }] };
-              }
-              const ex = (t as { execute: (...x: unknown[]) => Promise<unknown> }).execute.bind(t);
-              return ex(...a);
-            };
-          }
-          const v = Reflect.get(t, p, t);
-          return typeof v === "function" ? v.bind(t) : v;
-        },
-      });
-    }) as unknown as typeof createClient;
-
-    const be = new SqliteMultiBackend(new FileDbLocator(dir), factory);
-    await be.publish(A, frame(1));
-    // cutoff = now-1000: probe#1 m=1 (stale) → evict → probe#2 m=now (fresh, > cutoff) → keep.
-    expect(await be.sweep(1000)).toBe(0);
-    expect(probeReads).toBe(2); // proves it re-probed after eviction
-    expect(existsSync(join(dir, dbFileName(A)))).toBe(true); // the session (and its frame) survived
+    expect(existsSync(join(dir, "_index.db"))).toBe(true);
   });
 });

@@ -21,7 +21,7 @@ test("a double-tap on Send fires two submits but posts the draft once (sendingRe
   await expect(page.locator(".prose.assistant", { hasText: "Build is green" })).toBeVisible();
 
   const text = "double tap me";
-  await page.getByPlaceholder(/Send a prompt/).fill(text);
+  await page.getByRole("textbox", { name: "Message" }).fill(text);
 
   // Fire TWO clicks in the SAME task tick — before React commits setInput("")/setSending(true), so the Send
   // button isn't yet disabled and BOTH clicks reach the form's submit handler. We COUNT the submit events
@@ -47,8 +47,6 @@ test("a double-tap on Send fires two submits but posts the draft once (sendingRe
 
   // Settle the round-trip to a HOST-CONFIRMED solid pill (not the optimistic one). If two had been sent,
   // two would echo. Then assert exactly ONE user pill exists for this draft despite the two submits above.
-  await expect(
-    page.locator(".row-user .pill:not(.pill-pending)", { hasText: text }),
-  ).toBeVisible();
+  await expect(page.locator(".row-user .pill:not(.pill-pending)", { hasText: text })).toBeVisible();
   await expect(page.locator(".row-user .pill", { hasText: text })).toHaveCount(1);
 });

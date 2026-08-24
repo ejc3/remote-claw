@@ -324,6 +324,46 @@ describe("Viewer transcript restart and gap recovery", () => {
     }
   });
 
+  it("treats planned bus-stream rotations as healthy reconnects, not outages", async () => {
+    const id = await uniqueIdentity();
+    let streamAttempts = 0;
+    const fetchFn = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (url.pathname === "/api/stream") {
+        streamAttempts += 1;
+        if (streamAttempts <= 4) {
+          return new Response(": open\n\n: rotate\n\n", {
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return brokerFetch(input, init);
+    }) as typeof fetch;
+    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", fetchFn);
+    const ac = new AbortController();
+    const events: unknown[] = [];
+
+    try {
+      void (async () => {
+        for await (const _announce of viewer.announces(ac.signal, (error) => events.push(error))) {
+          // Only transport disposition is under test.
+        }
+      })().catch(() => {});
+
+      await waitFor(() => streamAttempts === 5);
+      expect(events).toHaveLength(4);
+      expect(events.every((event) => event === null)).toBe(true);
+    } finally {
+      ac.abort();
+    }
+  });
+
   it("delivers seq-null permission_resolved while a content gap is open", async () => {
     const id = await uniqueIdentity();
     const host = fakeHost(id);

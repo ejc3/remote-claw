@@ -25,7 +25,14 @@ import { MockBroker } from "../../broker/mockbroker.js";
 import { assertNoSecretLeak } from "../../secretleak.js";
 import { securityProvider } from "../../security/provider.js";
 import { MITM_HOST } from "./certs.js";
-import { runRcLaunch } from "./launch.js";
+import { type RcLaunchOptions, runRcLaunch as runRcLaunchBoundary } from "./launch.js";
+
+const runRcLaunch = (opts: RcLaunchOptions): Promise<number> =>
+  runRcLaunchBoundary({
+    ...opts,
+    backend: opts.backend ?? "sqlite",
+    claudeCompatibilityCheck: async () => {},
+  });
 
 function haveOpenssl(): boolean {
   try {
@@ -86,12 +93,13 @@ function proxyAgent(proxyPort: number, ca: Buffer) {
   return agent;
 }
 
-function rpc(
+function rpcResponse(
   agent: unknown,
   method: string,
   path: string,
   body?: unknown,
-): Promise<Record<string, unknown>> {
+  workerToken?: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
     const opts: RequestOptions = {
@@ -102,6 +110,7 @@ function rpc(
       agent: agent as RequestOptions["agent"],
       headers: {
         "content-type": "application/json",
+        ...(workerToken ? { authorization: `Bearer ${workerToken}` } : {}),
         ...(payload ? { "content-length": payload.length } : {}),
       },
     };
@@ -111,7 +120,7 @@ function rpc(
       res.on("end", () => {
         const text = Buffer.concat(chunks).toString("utf8");
         try {
-          resolve(text ? JSON.parse(text) : {});
+          resolve({ status: res.statusCode ?? 0, body: text ? JSON.parse(text) : {} });
         } catch (e) {
           reject(e);
         }
@@ -123,9 +132,27 @@ function rpc(
   });
 }
 
+async function rpc(
+  agent: unknown,
+  method: string,
+  path: string,
+  body?: unknown,
+  workerToken?: string,
+): Promise<Record<string, unknown>> {
+  return (await rpcResponse(agent, method, path, body, workerToken)).body;
+}
+
+async function bridgeWorker(agent: unknown, sessionId: string): Promise<string> {
+  const response = await rpc(agent, "POST", `/v1/code/sessions/${sessionId}/bridge`);
+  const workerToken = response.worker_jwt;
+  if (typeof workerToken !== "string") throw new Error("worker bridge failed");
+  return workerToken;
+}
+
 function openWorkerStream(
   agent: unknown,
   sessionId: string,
+  workerToken: string,
   onEvent: (ev: Record<string, unknown>) => void,
 ): () => void {
   const opts: RequestOptions = {
@@ -134,7 +161,7 @@ function openWorkerStream(
     method: "GET",
     path: `/v1/code/sessions/${sessionId}/worker/events/stream`,
     agent: agent as RequestOptions["agent"],
-    headers: { accept: "text/event-stream" },
+    headers: { accept: "text/event-stream", authorization: `Bearer ${workerToken}` },
   };
   const req = httpsRequest(opts, (res: IncomingMessage) => {
     let buf = "";
@@ -167,10 +194,22 @@ async function waitFor(pred: () => boolean, ms = 8000): Promise<void> {
   if (!pred()) throw new Error("timed out");
 }
 
-async function collect<T>(gen: AsyncGenerator<T>): Promise<T[]> {
+async function waitForAsync(pred: () => Promise<boolean>, ms = 8000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await pred()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("timed out");
+}
+
+async function take<T>(gen: AsyncGenerator<T>, count: number): Promise<T[]> {
   const out: T[] = [];
-  for await (const x of gen) out.push(x);
-  return out;
+  for await (const x of gen) {
+    out.push(x);
+    if (out.length === count) return out;
+  }
+  throw new Error(`broker stream ended before ${count} frame(s)`);
 }
 
 function clientHeader(
@@ -213,7 +252,63 @@ function assertNoSensitiveMaterial(
   }
 }
 
+describe("runRcLaunch public stable boundary", () => {
+  it("rejects an unsupported tuple before certificates, network setup, or child spawn", async () => {
+    const certsDir = tmp();
+    let spawned = false;
+
+    await expect(
+      runRcLaunchBoundary({
+        claudeArgs: [],
+        identity: {} as Identity,
+        brokerUrl: "http://broker.example",
+        certsDir,
+        claudeBin: "unsupported-claude",
+        claudeCompatibilityCheck: async (bin) => {
+          expect(bin).toBe("unsupported-claude");
+          throw new Error("unsupported stable tuple");
+        },
+        spawnClaude: async () => {
+          spawned = true;
+          return 0;
+        },
+      }),
+    ).rejects.toThrow("unsupported stable tuple");
+
+    expect(spawned).toBe(false);
+    expect(existsSync(join(certsDir, "ca.pem"))).toBe(false);
+  });
+});
+
 describe.skipIf(!RUN)("runRcLaunch wiring", () => {
+  it.skipIf(process.platform !== "linux" || process.arch !== "arm64")(
+    "spawns the exact checked executable inode and retains it through child exit",
+    async () => {
+      const root = tmp();
+      const id = await deriveIdentity(new Uint8Array(32).fill(69));
+      let spawnedPath = "";
+
+      const code = await runRcLaunchBoundary({
+        claudeArgs: ["--version"],
+        identity: id,
+        brokerUrl: "http://broker.example",
+        certsDir: join(root, "certs"),
+        claudeBin: "/usr/bin/claude",
+        spawnClaude: async (bin, args) => {
+          spawnedPath = bin;
+          expect(execFileSync(bin, [...args], { encoding: "utf8" }).trim()).toBe(
+            "2.1.237 (Claude Code)",
+          );
+          return 0;
+        },
+      });
+
+      expect(code).toBe(0);
+      expect(spawnedPath).toMatch(/^\/proc\/[0-9]+\/fd\/[0-9]+$/);
+      expect(existsSync(spawnedPath)).toBe(false);
+    },
+  );
+
   it("spawns claude with HTTPS_PROXY → a live MITM + NODE_EXTRA_CA_CERTS → our CA, then tears down", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(70));
     const certsDir = tmp();
@@ -485,17 +580,27 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
         const reg = await rpc(agent, "POST", "/v1/code/sessions", { title: "flush test" });
         const session = reg.session as { id?: unknown };
         if (typeof session.id !== "string") throw new Error("session registration failed");
+        const workerToken = await bridgeWorker(agent, session.id);
 
-        await rpc(agent, "POST", `/v1/code/sessions/${session.id}/worker/events`, {
-          events: [
-            {
-              payload: {
-                type: "assistant",
-                message: { content: [{ type: "text", text: "final frame" }] },
+        await rpc(
+          agent,
+          "POST",
+          `/v1/code/sessions/${session.id}/worker/events`,
+          {
+            worker_epoch: 1,
+            events: [
+              {
+                payload: {
+                  session_id: session.id,
+                  uuid: "11111111-1111-4111-8111-111111111111",
+                  type: "assistant",
+                  message: { content: [{ type: "text", text: "final frame" }] },
+                },
               },
-            },
-          ],
-        });
+            ],
+          },
+          workerToken,
+        );
         await assistantPostStarted;
         setTimeout(releaseAssistantPost, 50);
         return 0;
@@ -504,6 +609,227 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
 
     expect(code).toBe(0);
     expect(broker.posts.some((p) => p.frame.record_kind === "assistant")).toBe(true);
+  }, 20_000);
+
+  it("keeps teardown alive through every configured presence-terminal retry", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(72));
+    const certsDir = tmp();
+    const broker = new MockBroker();
+    broker.requireAuth(id.authToken);
+    let terminalAttempts = 0;
+
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      const frame = JSON.parse(String(init?.body ?? "{}")) as { record_kind?: unknown };
+      if (url.pathname === "/api/relay" && frame.record_kind === "session_terminal") {
+        terminalAttempts += 1;
+        if (terminalAttempts <= 3) {
+          return new Promise<Response>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              resolve(
+                new Response(JSON.stringify({ error: "late injected terminal failure" }), {
+                  status: 500,
+                  headers: { "content-type": "application/json" },
+                }),
+              );
+            }, 1_200);
+            const abort = () => {
+              clearTimeout(timer);
+              reject(new DOMException("aborted", "AbortError"));
+            };
+            if (init?.signal?.aborted) abort();
+            else init?.signal?.addEventListener("abort", abort, { once: true });
+          });
+        }
+      }
+      return broker.fetch(input, init);
+    }) as typeof fetch;
+
+    const code = await runRcLaunch({
+      claudeArgs: [],
+      identity: id,
+      brokerUrl: "http://broker.test",
+      certsDir,
+      fetchFn,
+      spawnClaude: async (_bin, _args, env) => {
+        const match = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(env.HTTPS_PROXY ?? "");
+        if (match === null) throw new Error("missing HTTPS_PROXY");
+        const caPath = env.NODE_EXTRA_CA_CERTS;
+        if (caPath === undefined) throw new Error("missing NODE_EXTRA_CA_CERTS");
+        const agent = proxyAgent(Number.parseInt(match[1] as string, 10), readFileSync(caPath));
+        const registration = await rpc(agent, "POST", "/v1/code/sessions", {
+          title: "terminal retry cutoff",
+        });
+        const session = registration.session as { id?: unknown };
+        if (typeof session.id !== "string") throw new Error("session registration failed");
+        await waitFor(() =>
+          broker.posts.some((post) => post.frame.record_kind === "session_announce"),
+        );
+        return 0;
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(terminalAttempts).toBe(4);
+    expect(
+      broker.posts.filter((post) => post.frame.record_kind === "session_terminal"),
+    ).toHaveLength(1);
+  }, 20_000);
+
+  it("does not let an elapsed teardown cutoff skip terminal retries after an event-loop stall", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(73));
+    const certsDir = tmp();
+    const broker = new MockBroker();
+    broker.requireAuth(id.authToken);
+    let terminalAttempts = 0;
+    let markTerminalStarted = () => {};
+    const terminalStarted = new Promise<void>((resolve) => {
+      markTerminalStarted = resolve;
+    });
+
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      const frame = JSON.parse(String(init?.body ?? "{}")) as { record_kind?: unknown };
+      if (url.pathname === "/api/relay" && frame.record_kind === "session_terminal") {
+        terminalAttempts += 1;
+        if (terminalAttempts === 1) {
+          markTerminalStarted();
+          // Intentionally ignore AbortSignal: the relay's local Promise.race owns the hard attempt bound.
+          return new Promise<Response>(() => {});
+        }
+        if (terminalAttempts <= 3) {
+          return new Response(JSON.stringify({ error: "injected terminal failure" }), {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          });
+        }
+      }
+      return broker.fetch(input, init);
+    }) as typeof fetch;
+
+    const launch = runRcLaunch({
+      claudeArgs: [],
+      identity: id,
+      brokerUrl: "http://broker.test",
+      certsDir,
+      fetchFn,
+      spawnClaude: async (_bin, _args, env) => {
+        const match = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(env.HTTPS_PROXY ?? "");
+        if (match === null) throw new Error("missing HTTPS_PROXY");
+        const caPath = env.NODE_EXTRA_CA_CERTS;
+        if (caPath === undefined) throw new Error("missing NODE_EXTRA_CA_CERTS");
+        const agent = proxyAgent(Number.parseInt(match[1] as string, 10), readFileSync(caPath));
+        const registration = await rpc(agent, "POST", "/v1/code/sessions", {
+          title: "terminal retry after scheduler stall",
+        });
+        const session = registration.session as { id?: unknown };
+        if (typeof session.id !== "string") throw new Error("session registration failed");
+        await waitFor(() =>
+          broker.posts.some((post) => post.frame.record_kind === "session_announce"),
+        );
+        return 0;
+      },
+    });
+
+    await terminalStarted;
+    // Simulate suspend/a long synchronous stall past the unrelated 2s teardown cutoff. Both the first
+    // attempt timer and launcher cutoff are overdue on resume; terminal-policy completion must win.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_500);
+
+    expect(await launch).toBe(0);
+    expect(terminalAttempts).toBe(4);
+    expect(
+      broker.posts.filter((post) => post.frame.record_kind === "session_terminal"),
+    ).toHaveLength(1);
+  }, 20_000);
+
+  it("fail-stops one remote cse after broker publication failure while the local Claude process remains alive", async () => {
+    const id = await deriveIdentity(new Uint8Array(32).fill(79));
+    const certsDir = tmp();
+    const broker = new MockBroker();
+    broker.requireAuth(id.authToken);
+    let assistantPublishFailed = false;
+    let localProcessContinued = false;
+
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (url.pathname === "/api/relay" && url.searchParams.has("session")) {
+        const frame = JSON.parse(String(init?.body ?? "{}")) as { record_kind?: unknown };
+        if (frame.record_kind === "assistant") {
+          assistantPublishFailed = true;
+          return new Response(JSON.stringify({ error: "injected publication failure" }), {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          });
+        }
+      }
+      return broker.fetch(input, init);
+    }) as typeof fetch;
+
+    const code = await runRcLaunch({
+      claudeArgs: [],
+      identity: id,
+      brokerUrl: "http://broker.test",
+      certsDir,
+      fetchFn,
+      spawnClaude: async (_bin, _args, env) => {
+        const match = /^http:\/\/127\.0\.0\.1:(\d+)$/.exec(env.HTTPS_PROXY ?? "");
+        if (match === null) throw new Error("missing HTTPS_PROXY");
+        const caPath = env.NODE_EXTRA_CA_CERTS;
+        if (caPath === undefined) throw new Error("missing NODE_EXTRA_CA_CERTS");
+        const agent = proxyAgent(Number.parseInt(match[1] as string, 10), readFileSync(caPath));
+        const registration = await rpc(agent, "POST", "/v1/code/sessions", {
+          title: "fail-stop test",
+        });
+        const session = registration.session as { id?: unknown };
+        if (typeof session.id !== "string") throw new Error("session registration failed");
+        const workerToken = await bridgeWorker(agent, session.id);
+
+        const admitted = await rpcResponse(
+          agent,
+          "POST",
+          `/v1/code/sessions/${session.id}/worker/events`,
+          {
+            worker_epoch: 1,
+            events: [
+              {
+                payload: {
+                  session_id: session.id,
+                  uuid: "44444444-4444-4444-8444-444444444444",
+                  type: "assistant",
+                  message: { content: [{ type: "text", text: "cannot publish" }] },
+                },
+              },
+            ],
+          },
+          workerToken,
+        );
+        expect(admitted.status).toBe(200); // in-memory admission precedes asynchronous projection
+        await waitFor(() => assistantPublishFailed);
+
+        let closedStatus = 0;
+        await waitForAsync(async () => {
+          closedStatus = (await rpcResponse(agent, "GET", `/v1/code/sessions/${session.id}`))
+            .status;
+          return closedStatus === 410;
+        });
+        expect(closedStatus).toBe(410);
+        const laterIntake = await rpcResponse(
+          agent,
+          "POST",
+          `/v1/code/sessions/${session.id}/worker/events`,
+          { worker_epoch: 1, events: [] },
+        );
+        expect(laterIntake.status).toBe(410);
+
+        // A bridge failure retires remote access only; it does not kill the real local TUI process.
+        localProcessContinued = true;
+        return 0;
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(localProcessContinued).toBe(true);
   }, 20_000);
 
   it("spends one shared teardown grace period when a session announce stalls", async () => {
@@ -562,10 +888,10 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       const teardownMs = performance.now() - childExitAt;
       expect(code).toBe(0);
       expect(stalled).toBe(true);
-      // One 2 s budget plus generous scheduler/CI headroom. The old per-stage waits took roughly
-      // three budgets (~6 s) for this same unresolved announce.
+      // Obsolete live-announce/registration cleanup gets one shared 2s deadline. The separately tracked
+      // terminal policy is already complete here and cannot be overtaken by this unrelated-work cutoff.
       expect(teardownMs).toBeGreaterThanOrEqual(1_500);
-      expect(teardownMs).toBeLessThan(4_500);
+      expect(teardownMs).toBeLessThan(3_500);
     } finally {
       releaseAnnounce();
     }
@@ -601,8 +927,11 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
             const session = registration.session as { id?: unknown };
             if (typeof session.id !== "string") throw new Error("session registration failed");
             sessionIds[index] = session.id;
+            const workerToken = await bridgeWorker(agent, session.id);
             abortWorkers.push(
-              openWorkerStream(agent, session.id, (event) => workerEvents[index]?.push(event)),
+              openWorkerStream(agent, session.id, workerToken, (event) =>
+                workerEvents[index]?.push(event),
+              ),
             );
           }
 
@@ -725,8 +1054,11 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
             const session = reg.session as { id?: unknown };
             if (typeof session.id !== "string") throw new Error("session registration failed");
             sessionId = session.id;
+            const workerToken = await bridgeWorker(agent, sessionId);
 
-            abortWorker = openWorkerStream(agent, sessionId, (ev) => workerEvents.push(ev));
+            abortWorker = openWorkerStream(agent, sessionId, workerToken, (ev) =>
+              workerEvents.push(ev),
+            );
             await waitFor(() => workerEvents.some((e) => e.event_type === "control_request"));
             await waitFor(() =>
               broker.posts.some((p) => p.frame.record_kind === "session_announce"),
@@ -750,37 +1082,72 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
               }),
             );
 
-            await rpc(agent, "POST", `/v1/code/sessions/${sessionId}/worker/events`, {
-              events: [
-                {
-                  payload: {
-                    type: "assistant",
-                    message: { content: [{ type: "text", text: "hello from worker" }] },
-                  },
-                },
-                {
-                  payload: {
-                    type: "control_request",
-                    request_id: "perm-launch-1",
-                    request: {
-                      subtype: "can_use_tool",
-                      tool_name: "Bash",
-                      tool_input: { command: "npm test" },
+            await rpc(
+              agent,
+              "POST",
+              `/v1/code/sessions/${sessionId}/worker/events`,
+              {
+                worker_epoch: 1,
+                events: [
+                  {
+                    payload: {
+                      session_id: sessionId,
+                      uuid: "22222222-2222-4222-8222-222222222222",
+                      type: "assistant",
+                      message: { content: [{ type: "text", text: "hello from worker" }] },
                     },
                   },
-                },
-              ],
-            });
-            await waitFor(() => broker.posts.some((p) => p.frame.record_kind === "assistant"));
-            await waitFor(() =>
-              broker.posts.some((p) => p.frame.record_kind === "permission_request"),
+                  {
+                    payload: {
+                      session_id: sessionId,
+                      uuid: "33333333-3333-4333-8333-333333333333",
+                      type: "control_request",
+                      request_id: "perm-launch-1",
+                      request: {
+                        subtype: "can_use_tool",
+                        tool_name: "Bash",
+                        tool_input: { command: "npm test" },
+                      },
+                    },
+                  },
+                ],
+              },
+              workerToken,
             );
+            await waitFor(() => broker.posts.some((p) => p.frame.record_kind === "assistant"));
 
+            // Stable Claude 1.0 never exposes or answers the internal permission compatibility path.
+            // An old/current authenticated viewer frame is still rejected at the host boundary.
             await viewer.postFrame(
               clientHeader(id, sessionId, "permission", "permission-in-1"),
               utf8(JSON.stringify({ request_id: "perm-launch-1", behavior: "allow" })),
             );
+
+            await viewer.postFrame(
+              clientHeader(id, sessionId, "interrupt", "interrupt-in-1"),
+              utf8(JSON.stringify({ expiry: Date.now() + 60_000 })),
+            );
+            await viewer.postFrame(
+              clientHeader(id, sessionId, "user", "user-barrier", {
+                clientMsgId: "client-barrier",
+              }),
+              utf8("stable barrier"),
+            );
             await waitFor(() =>
+              workerEvents.some((e) => {
+                const payload = e.payload as { message?: { content?: unknown } } | undefined;
+                return e.event_type === "user" && payload?.message?.content === "stable barrier";
+              }),
+            );
+            expect(
+              workerEvents.some((e) => {
+                const payload = e.payload as { request?: { subtype?: unknown } } | undefined;
+                return (
+                  e.event_type === "control_request" && payload?.request?.subtype === "interrupt"
+                );
+              }),
+            ).toBe(false);
+            expect(
               workerEvents.some((e) => {
                 const payload = e.payload as { response?: { request_id?: unknown } } | undefined;
                 return (
@@ -788,23 +1155,14 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
                   payload?.response?.request_id === "perm-launch-1"
                 );
               }),
-            );
-            await waitFor(() =>
-              broker.posts.some((p) => p.frame.record_kind === "permission_resolved"),
-            );
-
-            await viewer.postFrame(
-              clientHeader(id, sessionId, "interrupt", "interrupt-in-1"),
-              utf8(JSON.stringify({ expiry: Date.now() + 60_000 })),
-            );
-            await waitFor(() =>
-              workerEvents.some((e) => {
-                const payload = e.payload as { request?: { subtype?: unknown } } | undefined;
-                return (
-                  e.event_type === "control_request" && payload?.request?.subtype === "interrupt"
-                );
-              }),
-            );
+            ).toBe(false);
+            expect(
+              broker.posts.some(
+                (p) =>
+                  p.frame.record_kind === "permission_request" ||
+                  p.frame.record_kind === "permission_resolved",
+              ),
+            ).toBe(false);
             return 0;
           } finally {
             abortWorker();
@@ -828,18 +1186,34 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       provider: securityProvider("sealed", id),
       fetchFn: broker.fetch,
     });
+    const busFrameCount = await verifier.frameCount();
+    const sessionFrameCount = await verifier.frameCount(sessionId);
+    if (busFrameCount === null || busFrameCount < 1) throw new Error("missing bus proof frames");
+    if (sessionFrameCount === null || sessionFrameCount < 1)
+      throw new Error("missing session proof frames");
     const frames = [
-      ...(await collect(verifier.streamFrames({}))),
-      ...(await collect(verifier.streamFrames({ session: sessionId }))),
+      ...(await take(verifier.streamFrames({}), busFrameCount)),
+      ...(await take(verifier.streamFrames({ session: sessionId }), sessionFrameCount)),
     ];
-    const plaintext = (
-      await Promise.all(
-        frames.map(async (f) => new TextDecoder().decode(await verifier.openFrame(f))),
-      )
-    ).join("\n");
+    const openedFrames = await Promise.all(
+      frames.map(async (frame) => ({
+        frame,
+        text: new TextDecoder().decode(await verifier.openFrame(frame)),
+      })),
+    );
+    const plaintext = openedFrames.map(({ text }) => text).join("\n");
     expect(plaintext).toContain("hello from viewer");
     expect(plaintext).toContain("hello from worker");
-    expect(plaintext).toContain("perm-launch-1");
+    const announce = openedFrames.find(
+      ({ frame }) => frame.recordKind === "session_announce",
+    )?.text;
+    expect(announce).toBeDefined();
+    expect(JSON.parse(announce as string).capabilities).toEqual({
+      structuredPermissions: false,
+      status: true,
+      controls: { interrupt: false, setModel: false, setMode: false, end: false },
+      attachments: false,
+    });
 
     const traceText = existsSync(traceFile) ? readFileSync(traceFile, "utf8") : "";
     expect(traceText).toContain('"target":"rc.relay"');

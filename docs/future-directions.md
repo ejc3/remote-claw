@@ -331,8 +331,15 @@ The three findings converge on one decision:
    sealed rather than becoming a plaintext broker presence record, although a durable broker may retain
    it as opaque frame data. It must also stay advisory (a missed beat must fail safe — keep relaying,
    never silently drop). Orthogonal to the transport choice; the **Turso** backend sidesteps the *cost*
-   of the gap (no per-run cap, no rolling) but not the gap itself (it still accrues at-rest ciphertext
-   until retention reclaims the channel).
+   of the gap (no per-run cap, no rolling) but not the gap itself: it accrues at-rest ciphertext
+   indefinitely until a future authenticated collection/revocation transition exists. Automated
+   whole-scope dev/CI cleanup is disabled for the same reason.
+5. **Strengthen the physical Turso channel witness before any multi-tenant expansion.** The current
+   single-user profile names a cloud database with 16 hex characters of `SHA-256(channelToken)`. A
+   natural collision is negligible at its expected fleet size and an adversarial preimage remains a
+   64-bit search, so this is not a Claude 1.0 blocker. A shared multi-tenant service must lengthen that
+   digest and store/verify a full-token commitment in the channel singleton before treating the
+   physical database name as an isolation boundary.
 
 The original candidates above are retained as design history. They do not determine what ships. The
 active scope and executable stop condition are in the

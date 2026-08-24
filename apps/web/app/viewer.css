@@ -331,8 +331,10 @@ summary:focus-visible,
   color: var(--warn);
 }
 
-/* #149: permissions-bypassed posture — the driver runs without per-tool gating (tools auto-execute). */
-.perms-bypassed {
+/* Permission posture is explicit: stable Claude keeps gates local, while a compatibility harness may
+   explicitly bypass them. `structuredPermissions:false` alone is never rendered as auto-execution. */
+.perms-bypassed,
+.perms-local {
   display: inline-flex;
   align-items: center;
   flex: none;
@@ -345,6 +347,10 @@ summary:focus-visible,
   padding: 2px 8px;
   margin-right: 6px;
   white-space: nowrap;
+}
+.perms-local {
+  color: var(--text-dim);
+  border-color: var(--line);
 }
 
 /* #164: which agent + bridge mode a session runs — labels the list row's sub-line and the chat header so
@@ -442,6 +448,11 @@ summary:focus-visible,
   color: var(--text);
 }
 
+.local-input-disclosure {
+  margin: 8px 12px 0;
+  flex-shrink: 0;
+}
+
 /* transcript */
 .transcript {
   flex: 1;
@@ -489,6 +500,8 @@ summary:focus-visible,
 /* USER pill */
 .row-user {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   justify-content: flex-end;
   margin: 12px 0 4px;
 }
@@ -506,6 +519,17 @@ summary:focus-visible,
 /* An optimistic echo (#113): shown instantly on send, dimmed until the host's `accepted` ack confirms it. */
 .pill-pending {
   opacity: 0.55;
+}
+.delivery-status {
+  max-width: 78%;
+  margin: 4px 5px 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: right;
+}
+.delivery-status[data-state="unknown"] {
+  color: var(--warn);
 }
 
 /* Slash-command chip (#41): a centered, muted instruction marker — not a chat pill. */
@@ -866,6 +890,12 @@ summary:focus-visible,
   font-size: 12px;
   color: var(--danger);
 }
+.perm-local-note {
+  margin: 10px 0 0 24px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.4;
+}
 
 /* AskUserQuestion card (#42) — each question's header/prompt + selectable option buttons. */
 .perm-q .perm-label {
@@ -903,8 +933,13 @@ summary:focus-visible,
   color: var(--text);
   transition: border-color 0.12s, background 0.12s;
 }
-.q-option:hover {
+.q-option:hover:not(:disabled) {
   border-color: var(--text-faint);
+}
+.q-option:disabled,
+.q-freeform:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 .q-option[data-selected="true"] {
   border-color: var(--accent-text);
@@ -1142,10 +1177,9 @@ summary:focus-visible,
   min-height: 28px;
   border-radius: 50%;
 }
-/* Banner (status=error) owns the row + red tint. Keep the outer spacing, the Retry action's danger tint
-   (Astryx has no tinted-secondary variant — finding L), and floor Banner's own dismiss button to the
-   app's 44px touch minimum (it ships ~24px). The floor targets Banner's dismiss specifically — NOT the
-   Retry inside endContent, which is our Button and already floored. */
+/* Banner (status=error) owns the row + red tint. Floor Banner's own dismiss button to the app's 44px
+   touch minimum (it ships ~24px). Ambiguous message publication is represented on the exact message;
+   this action-error banner deliberately has no generic Retry which could mint a replacement source id. */
 .send-err {
   margin: 6px 14px 0;
 }
@@ -1154,25 +1188,6 @@ summary:focus-visible,
   min-width: 44px;
   min-height: 44px;
 }
-/* #150: the failed send is RESTORED to the composer; Retry re-sends it (a one-tap shortcut for Send). */
-.send-err-retry {
-  flex: none;
-  /* The danger tint inside the error banner — Astryx has no such variant for a secondary action
-     (see finding L); the rest of the chrome is the Button's. */
-  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
-  color: var(--danger);
-  min-height: 28px;
-}
-.send-err-retry:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-}
-.send-err-retry:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-
-
 /* ---------- bottom sheet (mode picker) ---------- */
 .sheet-layer {
   position: fixed;
@@ -1360,6 +1375,12 @@ summary:focus-visible,
      list row still shows it, and the ⋯ sheet offers "Copy branch". Same reasoning as hiding the back
      button on desktop — drop the redundant item, keep the identifying one. */
   .chat-head .git-chip {
+    display: none;
+  }
+  /* The harness is already explicit on the session row. In the narrower in-chat header, retaining it
+     alongside back-nav, title, permission posture, and the 44px action target forces horizontal overflow
+     at a real 393px viewport. Keep the safety posture and session title; drop this redundant label. */
+  .chat-head .agent-badge {
     display: none;
   }
   /* Give the title a real floor so it ellipsises instead of collapsing if the header is still tight. */

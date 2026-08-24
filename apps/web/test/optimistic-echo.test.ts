@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { parseAccepted } from "../app/lib/transcript.js";
 import type { Message } from "../app/lib/viewer.js";
-import { optimisticMessage, reconcileAccepted } from "../app/page.js";
+import {
+  markDeliveryUnknown,
+  markPendingDeliveryUnknown,
+  optimisticMessage,
+  reconcileAccepted,
+} from "../app/page.js";
 
 // Optimistic local echo (#113): a sent message renders INSTANTLY (msgId `pending-<clientMsgId>`), then the
 // host's `accepted` ack {client_msg_id, seq} reconciles it to the real `user-<seq>` so the content echo
@@ -42,7 +47,9 @@ describe("reconcileAccepted", () => {
   it("drops the optimistic twin if the real echo already landed (no duplicate)", () => {
     const echo: Message = { kind: "user", seq: 7, text: "msg cm-1", msgId: "user-7" };
     const out = reconcileAccepted([echo, opt("cm-1")], "cm-1", 7);
-    expect(out).toEqual([echo]); // only the real echo remains
+    expect(out).toEqual([
+      { ...echo, clientMsgId: "cm-1", optimistic: false, deliveryUnknown: false },
+    ]); // only the real echo remains, now carrying truthful host-receipt status
   });
 
   it("is a no-op for an ack with no matching optimistic bubble (e.g. another device)", () => {
@@ -71,6 +78,55 @@ describe("reconcileAccepted", () => {
     const hasDup = msgs.some((m) => m.msgId === echo.msgId);
     expect(hasDup).toBe(true); // appendUniqueMessage would dedup the echo → still one bubble
     expect(msgs).toHaveLength(1);
+  });
+});
+
+describe("ambiguous publish outcome", () => {
+  const opt = (cid: string): Message => optimisticMessage(cid, `msg ${cid}`, []);
+
+  it("keeps the exact optimistic bubble/source and marks only the rejected send unknown", () => {
+    const out = markDeliveryUnknown([opt("cm-1"), opt("cm-2")], "cm-1");
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({
+      msgId: "pending-cm-1",
+      clientMsgId: "cm-1",
+      optimistic: true,
+      deliveryUnknown: true,
+    });
+    expect(out[1]?.deliveryUnknown).toBeUndefined();
+  });
+
+  it("is absorbing until the exact accepted ack, which becomes Received by host", () => {
+    let msgs = markDeliveryUnknown([opt("cm-1"), opt("cm-2")], "cm-1");
+    msgs = markDeliveryUnknown(msgs, "cm-1");
+    expect(msgs[0]?.deliveryUnknown).toBe(true);
+
+    msgs = reconcileAccepted(msgs, "cm-2", 8);
+    expect(msgs.find((m) => m.clientMsgId === "cm-1")?.deliveryUnknown).toBe(true);
+    expect(msgs.find((m) => m.clientMsgId === "cm-2")).toMatchObject({
+      optimistic: false,
+      deliveryUnknown: false,
+    });
+
+    msgs = reconcileAccepted(msgs, "cm-1", 9);
+    expect(msgs.find((m) => m.clientMsgId === "cm-1")).toMatchObject({
+      msgId: "user-9",
+      optimistic: false,
+      deliveryUnknown: false,
+    });
+  });
+
+  it("cannot regress a send when accepted wins the response-loss race", () => {
+    let msgs = reconcileAccepted([opt("cm-1")], "cm-1", 4);
+    msgs = markDeliveryUnknown(msgs, "cm-1");
+    expect(msgs[0]).toMatchObject({ optimistic: false, deliveryUnknown: false });
+  });
+
+  it("marks every outstanding send unknown on known session loss without changing accepted messages", () => {
+    const accepted = reconcileAccepted([opt("cm-ok")], "cm-ok", 2)[0] as Message;
+    const out = markPendingDeliveryUnknown([opt("cm-1"), accepted]);
+    expect(out[0]?.deliveryUnknown).toBe(true);
+    expect(out[1]).toEqual(accepted);
   });
 });
 

@@ -1,8 +1,8 @@
 // An in-memory stand-in for the §3.2 routes, used to unit-test BrokerClient without the Workflow
 // runtime. It mimics the contract the real broker tests already verify: Bearer-gated, value-addressed
-// by channel (bus vs ?session), and SSE on subscribe. Each subscribe returns a FINITE event-stream of
-// the frames buffered so far (then closes), which is enough to drive the client's parse/decode path;
-// the real end-to-end liveness is covered by the apps/web integration tests.
+// by channel (bus vs ?session), and replay-then-live SSE on subscribe. An absent channel alone emits
+// `: empty` + EOF; an existing channel emits `: open`, its buffered prefix, and future appends until
+// the consumer cancels. That distinction is safety-relevant to the host's inbound failure circuit.
 
 import { toHex, type WireFrame } from "@remote-claw/clawsec";
 
@@ -16,6 +16,10 @@ interface PostRecord {
 export class MockBroker {
   /** channel token → frames published to it, in order. */
   readonly #channels = new Map<string, WireFrame[]>();
+  /** Absorbing presence state, keyed by this mock's channel token. Mirrors the real broker fence. */
+  readonly #presenceTerminals = new Map<string, Set<string>>();
+  /** Live stream listeners, keyed by channel token. */
+  readonly #subscribers = new Map<string, Set<(frame: WireFrame) => void>>();
   /** Every POST seen, for assertions about routing/auth. */
   readonly posts: PostRecord[] = [];
   /** Server-reported default durability when no backend selector is sent. */
@@ -62,18 +66,48 @@ export class MockBroker {
       this.posts.push({ channel, session, bearer, frame });
       const token = session === null ? "bus" : `sess:${session}`;
       const list = this.#channels.get(token) ?? [];
-      list.push(frame);
+      const terminals = this.#presenceTerminals.get(token) ?? new Set<string>();
+      let appended = false;
+      if (session === null && frame.record_kind === "session_terminal") {
+        if (!terminals.has(frame.session_id)) {
+          terminals.add(frame.session_id);
+          list.push(frame);
+          appended = true;
+        }
+        this.#presenceTerminals.set(token, terminals);
+      } else if (
+        session !== null ||
+        frame.record_kind !== "session_announce" ||
+        !terminals.has(frame.session_id)
+      ) {
+        list.push(frame);
+        appended = true;
+      }
       this.#channels.set(token, list);
-      return json({ ok: true, channel, runId: "mock-run", created: list.length === 1 });
+      if (appended) {
+        const subscribers = this.#subscribers.get(token);
+        if (subscribers !== undefined) {
+          for (const subscriber of [...subscribers]) {
+            try {
+              subscriber(frame);
+            } catch {
+              subscribers.delete(subscriber);
+            }
+          }
+          if (subscribers.size === 0) this.#subscribers.delete(token);
+        }
+      }
+      return json({ ok: true, channel, runId: "mock-run", created: appended && list.length === 1 });
     }
 
     if (url.pathname === "/api/stream") {
       const token = session === null ? "bus" : `sess:${session}`;
-      const all = this.#channels.get(token) ?? [];
+      const all = this.#channels.get(token);
+      if (all === undefined) return sseEmpty();
       const startIndex = url.searchParams.get("startIndex");
       const from =
         startIndex === null ? 0 : resolveStart(Number.parseInt(startIndex, 10), all.length);
-      return sse(all.slice(from));
+      return this.#sse(token, all.slice(from));
     }
 
     if (url.pathname === "/api/seq") {
@@ -96,6 +130,35 @@ export class MockBroker {
 
     return json({ error: "not found" }, 404);
   }
+
+  #sse(token: string, frames: WireFrame[]): Response {
+    const enc = new TextEncoder();
+    let listener: ((frame: WireFrame) => void) | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        controller.enqueue(enc.encode(": open\n\n"));
+        for (const frame of frames) {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(frame)}\n\n`));
+        }
+        listener = (frame) => {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(frame)}\n\n`));
+        };
+        const subscribers = this.#subscribers.get(token) ?? new Set();
+        subscribers.add(listener);
+        this.#subscribers.set(token, subscribers);
+      },
+      cancel: () => {
+        if (listener === undefined) return;
+        const subscribers = this.#subscribers.get(token);
+        subscribers?.delete(listener);
+        if (subscribers?.size === 0) this.#subscribers.delete(token);
+      },
+    });
+    return new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  }
 }
 
 /** Resolve a possibly-negative startIndex against the buffered length (like getReadable). */
@@ -111,17 +174,8 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** A finite event-stream of the given frames, then close (enough to drive the client's parser). */
-function sse(frames: WireFrame[]): Response {
-  const enc = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(enc.encode(": open\n\n"));
-      for (const f of frames) controller.enqueue(enc.encode(`data: ${JSON.stringify(f)}\n\n`));
-      controller.close();
-    },
-  });
-  return new Response(body, {
+function sseEmpty(): Response {
+  return new Response(": empty\n\n", {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });

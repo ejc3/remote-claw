@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 const EXPECTED_PROBE_SHA256 =
 	"a0c9fa97ea7f70a0dbfd2aaf18c1f25a40992380c603840ede94d24c9c2d9375";
@@ -15,6 +17,7 @@ const EXPECTED_BINARY_SHA256 =
 const EXPECTED_PACKAGE_MANIFEST_SHA256 =
 	"8aa26c770a5bd5cf9ba8d0a815e291d9b12c278ad3a60ab96f7d71b5bd33508f";
 const EXPECTED_SOURCE_COMMIT = "32256f4413ce35cb3a06c0db4dba1f41507dfecd";
+const REPOSITORY_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const EXPECTED_RUNTIME_SOURCE_SHA256 = {
 	"packages/cli/src/host/rc/mitm.ts":
 		"ed86b0a4538d54ade11202018b7d54314da3f03e964222dc249541aadcb23db0",
@@ -109,20 +112,33 @@ assert.equal(
 	EXPECTED_RETRY_SHA256,
 	"lost-response retry evidence bytes drifted",
 );
-await Promise.all(
-	Object.entries(EXPECTED_CAPTURE_ROUTE_SOURCE_SHA256).map(
-		async ([relativePath, expectedHash]) => {
-			const sourceBytes = await readFile(
-				new URL(`../../${relativePath}`, import.meta.url),
-			);
-			assert.equal(
-				sha256(sourceBytes),
-				expectedHash,
-				`captured trace route source drifted: ${relativePath}`,
-			);
-		},
-	),
-);
+for (const [relativePath, expectedHash] of Object.entries(
+	EXPECTED_CAPTURE_ROUTE_SOURCE_SHA256,
+)) {
+	let sourceBytes;
+	try {
+		sourceBytes = execFileSync(
+			"git",
+			[
+				"-C",
+				REPOSITORY_ROOT,
+				"cat-file",
+				"blob",
+				`${EXPECTED_SOURCE_COMMIT}:${relativePath}`,
+			],
+			{ maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] },
+		);
+	} catch {
+		assert.fail(
+			`captured source commit unavailable: ${EXPECTED_SOURCE_COMMIT}:${relativePath}`,
+		);
+	}
+	assert.equal(
+		sha256(sourceBytes),
+		expectedHash,
+		`captured source provenance mismatch: ${relativePath}`,
+	);
+}
 
 const coverageText = coverageBytes.toString("utf8");
 const retryText = retryBytes.toString("utf8");

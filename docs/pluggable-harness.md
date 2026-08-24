@@ -128,18 +128,27 @@ depend on post-sign route health. A narrow current-successor rule closes a valid
 signature without granting generic superseded-lease, rotation, retired-certificate, or historical
 acceptance. Any later successor signing lease must be durably acquired strictly after the predecessor
 acceptance, including across a same-millisecond wall-clock tie.
-Wrapped `--rc-app` MITM, OpenCode, and tmux CLI paths connect to or
-best-effort autostart that daemon after identity load. For the ordinary CLI, authenticated health is
-the only successful production operation; its operation registry is empty, and health reports
-`ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. The A1.4 operation seam is
-installed only when the daemon receives an explicit trusted `registrationAdapter`; the ordinary CLI
-passes none. No current launch path
+The stable `--rc-app` MITM path first resolves the requested Claude launcher (`RC_CLAUDE_BIN` or
+`claude` on `PATH`) and
+requires its resolved target to be a root:root regular mode-`0755` Linux arm64 Claude Code 2.1.237
+file of exactly 331,864,296 bytes with SHA-256
+`a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177`, before identity creation.
+It holds that exact executable inode through `/proc` from the compatibility probe until the child
+exits, so an atomic path replacement cannot substitute different bytes. It deliberately does not
+start the dormant runtime owner. The trusted installed proof separately refuses `RC_CLAUDE_BIN` and
+requests `/usr/bin/claude`. The experimental
+OpenCode and tmux CLI paths connect to or best-effort autostart that daemon after identity load. For
+those paths, authenticated health is the only successful production operation; the operation registry
+is empty, and health reports `ownerOperationsWritable:false` and
+`nativeRegistrationEnabled:false`. The A1.4 operation seam is installed only when the daemon receives
+an explicit trusted `registrationAdapter`; the ordinary CLI passes none. No current launch path
 registers a native runtime through the owner, activates an A1 binding/root, dispatches through the
-owner, or advertises an A1 broker capability. Owner failure preserves the exact A0 compatibility path.
-Wrapper exit closes only its owner RPC connection and leaves the owner service alive; existing A0
-native teardown remains unchanged. Plain and help paths, trace mode, and the local `--rc-identity`
-action do not start the owner. The A1.5 operation is installed only with that same explicit adapter;
-no real driver supplies one. A1.6 calls, A1.7a ingress execution, A1.7b0/A1.7b1 signing and
+owner, or advertises an A1 broker capability. Owner failure preserves the experimental A0
+compatibility paths. Wrapper exit closes only its owner RPC connection and leaves the owner service
+alive; existing A0 native teardown remains unchanged. Stable MITM, plain and help paths, trace mode,
+and the local `--rc-identity` action do not start the owner. The A1.5 operation is installed only with
+that same explicit adapter; no real driver supplies one. A1.6 calls, A1.7a ingress execution,
+A1.7b0/A1.7b1 signing and
 adjudication, and A1.8a0 finalization are confined to
 host-only direct modules and tests: ordinary
 launches, all three drivers, runtime-owner RPC, and the viewer make zero `/api/a1/*` requests. There is
@@ -185,21 +194,37 @@ new HostRcRelay({
 
 `relay.serve(signal)` then runs two coupled pumps that are the relay's whole job:
 
-- **OUTBOUND** — `for await (ev of session.followUpstream(...))` → `mapUpstreamItems(ev)` → seal →
-  `POST` to the broker session channel.
+- **OUTBOUND** — `for await (ev of session.followUpstream(...))` → `mapUpstreamItems(ev)` → admit
+  each projection to the shared publisher → seal → `POST` to the broker session channel.
 - **INBOUND** — tail the broker session channel → for each client frame call back **into the
   session**: a `user` frame → `session.pushUserInput(text)`; a `permission` frame →
   `session.pushControlResponse(...)`; `interrupt` / `set_model` / `set_mode` →
   `session.pushControlRequest(...)`. An `end` frame emits no session event; it only clears the relay's
   open permission gates.
 
+Both pumps share one head-of-line publication queue. Sequence allocation happens only when a complete
+must-succeed unit reaches the head, and its synchronous Session side effect stays inside that unit.
+The first failure closes only that Session and rejects queued successors before they publish or inject.
+
+The shared transport is bounded independently of any driver: each durable-cursor request has a
+70-second wall, each initial stream-header wait has a 20-second wall, an established SSE stream fails
+after 40 seconds without an actual byte, and exact planned `: rotate` 240 seconds after response-body
+start is circuit-neutral
+while raw/unmarked EOF is a failure. One logical post has a 65-second end-to-end wall covering every chunk, seal, fetch, backoff,
+and authoritative `409` retry. A timeout-ambiguous post is never replayed. Three consecutive inbound
+failures close that `cse_*`; only a clean absent-channel completion or admission of a newly authenticated
+frame resets the count. Misroutes, replays, authentication failures, and other non-admissions do not,
+while an owner-requested abort is exempt.
+
 So the relay is *already* a pure function of `(Session, BrokerClient)`. The MITM
-(`mitm.ts`) is the **reference harness path** (three modes ship today: `mitm` / `tmux` / `opencode`): it serves
+(`mitm.ts`) is the **reference harness path** (one of three implemented compatibility modes:
+`mitm` / `tmux` / `opencode`, with only `mitm` on the stable Claude 1.0 path): it serves
 claude's RC HTTP/SSE endpoints from a
-`RelayCore`, turning claude's `POST /worker/events` into `session.pushUpstream(payload)` and claude's
-`GET /worker/events/stream` into a `session.followDownstream(...)` SSE loop. The non-MITM paths
-replace *that HTTP wiring* with another capture/inject mechanism and reuse the relay verbatim. In the
-shipped code they are separate launch paths, not instances of one dispatcher interface.
+`RelayCore`. Claude's `POST /worker/events` goes through the MITM-only atomic
+`session.ingestNativeUpstreamBatch(...)` UUID/type/epoch gate; its worker SSE loop claims a
+session-wide write-attempt fence immediately before each mutation write. The non-MITM paths retain
+generic `pushUpstream` plus their driver-specific ACK/retry mechanics and reuse the relay verbatim. In
+the shipped code they are separate launch paths, not instances of one dispatcher interface.
 
 The decisive fact for non-MITM drivers: **claude's transcript JSONL
 (`~/.claude/projects/<slug(cwd)>/<sessionId>.jsonl`) `message.content` blocks are byte-identical to
@@ -301,8 +326,8 @@ export interface DriverContext {
  *  every session_announce, and the VIEWER disables + labels the controls a driver can't honor — so a
  *  permission-mode / model "✓" never lies (#149). */
 export interface DriverCapabilities {
-  /** Can surface + round-trip structured can_use_tool gates (else auto-approve/ignore). When false the
-   *  session runs WITHOUT per-tool gating and the viewer shows a "permissions off" posture. */
+  /** Can surface + round-trip structured can_use_tool gates in the viewer. When false the harness may
+   *  keep gates local or use an explicit bypass policy; the viewer cannot present or answer them. */
   structuredPermissions: boolean;
   /** Reports real workerStatus transitions (else presence is best-effort heuristic). */
   status: boolean;
@@ -412,14 +437,19 @@ live bridges inside one process; none is a persisted A1 inventory or restart att
 
 ## 3. The canonical content-block contract (every compatibility path must emit this)
 
-`mapUpstreamItems(ev)` (relay.ts) is the spec. A driver normalizes its harness output to the
-following shape and calls `session.pushUpstream(payload)`. **If the shape drifts, the relay silently
-drops the frame** — there is no driver-specific adaptation in the relay, by design. Strong typing on
-the driver is the only defense.
+`mapUpstreamItems(ev)` (relay.ts) is the shared rendering spec after native admission. OpenCode and
+tmux normalize their harness output to the following shape and call the generic
+`session.pushUpstream(payload)` compatibility seam; that seam may mint a missing event ID. Claude
+MITM never uses that permissive intake. It submits the whole `/worker/events` batch to
+`session.ingestNativeUpstreamBatch(workerEpoch, events)`, which atomically requires the current safe
+integer epoch, one of the retained eight native types, an RFC 4122 UUIDv4, and the same normalized
+`JSON.stringify(payload)` bytes for any repeated UUID. Invalid/colliding batches terminally close that
+`cse_*` without partial admission; exact retries reuse the original event and sequence. After either
+admission path, a payload that does not match the content-block shape can still map to no projection—
+there is no driver-specific repair in the relay.
 
 ```ts
-/** What session.pushUpstream(payload) accepts. Byte-identical to claude's worker /worker/events
- *  POST bodies AND to a transcript JSONL line's top-level object. */
+/** Shared post-admission payload shape consumed by mapUpstreamItems. */
 export interface UpstreamPayload {
   /** Event type. The relay routes on this exactly:
    *   "assistant" → text / thinking / tool_use blocks
@@ -431,8 +461,7 @@ export interface UpstreamPayload {
   type: "assistant" | "user" | "system" | "result"
       | "control_request" | "control_cancel_request" | string;
 
-  /** Event uuid (unique within the session). If absent, the session mints one; supply the
-   *  harness's own uuid where available so dedup/ordering is stable across reconnects. */
+  /** Generic OpenCode/tmux intake may mint this when absent. Claude MITM requires UUIDv4. */
   uuid?: string;
 
   /** Sub-agent nesting: an assistant/user event produced UNDER a parent Task tool_use carries the
@@ -595,14 +624,24 @@ is rejected before native work. These requirements are preserved in the
 
 ---
 
-## 5. Permissions and attachments are relay-owned — keep drivers transparent
+## 5. Compatibility permissions/attachments are relay-owned; stable Claude is text-only
+
+Claude 1.0 recognizes a stable session only for exact harness
+`{agent:"claude-code",mode:"rc"}` plus exact capabilities
+`{structuredPermissions:false,status:true,controls:{interrupt:false,setModel:false,setMode:false,end:false},attachments:false}`.
+The vector is an admission discriminator, not just viewer decoration: the browser exposes only
+non-empty, non-slash text, while `HostRcRelay` independently rejects blank/slash input and
+attachments, suppresses permission request/answer projection, and drops every disabled control. Any
+bit drift selects compatibility UI. The mechanics below are retained for experimental/internal
+compatibility paths and do not advertise stable Claude mutations.
 
 - **Permissions.** The broker side (a `permission_request` content frame out, a `permission` frame
   in, the `permission_resolved` log frame, AskUserQuestion's `questions` echo, the `q.map` fix) is
   **entirely in the relay**. A driver participates only at the harness boundary: to *raise* a gate it
   `pushUpstream`s a `can_use_tool` control_request; to *apply* an answer it observes the
-  `control_response` in `followDownstream`. All three paths are configured to mirror gates by default:
-  MITM via Claude's native RC, **tmux** via an injected **PreToolUse hook**, and **OpenCode** via the
+  `control_response` in `followDownstream`. Compatibility MITM can mirror Claude's native RC gates;
+  stable MITM deliberately keeps them local. The two experimental paths mirror by default:
+  **tmux** via an injected **PreToolUse hook**, and **OpenCode** via the
   session permission API (PATCH an ask-all rule ↔ SSE `permission.asked`). The opt-outs are not
   identical: `--rc-tmux-skip-permissions` restores hands-off auto-approve
   (`--dangerously-skip-permissions`), while `--rc-oc-skip-permissions` only skips the ask-PATCH and leaves
@@ -616,16 +655,16 @@ is rejected before native work. These requirements are preserved in the
   fence, and joins the shared bounded teardown. OpenCode answers a gate through retained
   `POST /permission/{requestID}/reply` with `{reply}` and requires successful JSON to be literal `true`.
   That is transport acknowledgement only: the global route does not prove selected-session ownership,
-  a win over a native-TUI answer, or terminal `permission.replied` semantics. Tmux can disable its hook
-  after an unparseable user settings file, after it has already announced
-  `structuredPermissions:true`; that remains a known capability-advertisement bug.
+  a win over a native-TUI answer, or terminal `permission.replied` semantics. Tmux withholds bridge
+  readiness until settings/trust, a live pane, and the mandatory startup marker are all proved;
+  unparseable/unmergeable settings fail before any `structuredPermissions:true` announcement.
 - **Attachments.** `relay.#handleAttachmentPayload` decrypts the viewer's bytes, writes them under
   `attachmentsDir`, and **injects a normal `user` prompt** containing `@"<path>"` references. The
   driver never sees an `attachment` frame — only the resulting downstream `user` event. This is
   proven for Claude MITM/tmux. Native OpenCode file-part handling is not implemented, so OpenCode now
-  advertises `attachments:false`. That bit disables the normal viewer surface; the compatibility relay
-  does not enforce capabilities as an admission boundary, so a stale/custom sender can still force the
-  unsupported Claude-style path until the future command actor rejects it before file/native work.
+  advertises `attachments:false`. That bit disables the viewer surface and the relay enforces it before
+  reassembly, file write, projection allocation, or native work, so a stale/custom sender cannot force
+  the unsupported Claude-style path.
 
 This is the central invariant: **the relay handles the broker-facing protocol; the driver handles
 the harness-facing protocol; they meet only at the `Session`.**
@@ -682,7 +721,8 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
   There is no `drivers/mitm-driver.ts` or `mitmDriver`.
 - `packages/cli/src/host/rc/relay.ts` — the shared relay; its announcement metadata and capabilities
   can now be replaced as one post-setup snapshot without restarting the pumps. That validated local
-  snapshot survives an advisory publish failure and is retried by later presence publication.
+  snapshot survives an ordinary advisory announcement failure and is retried later. Exact typed
+  permanent identity-bus storage loss is the sole exception and closes the Session.
 - `packages/clawsec/src/{canonical,aad}.ts` — the public cross-runtime canonical field writer and the
   A0 `canonicalAad` user of it. The extraction preserves the locked A0 byte vector. Canonical optional
   fields require explicit `null`; the older A0 DTO's omitted or `undefined` `clientMsgId` alone is
@@ -801,18 +841,20 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 
 - `packages/cli/src/args.ts` declares `"rc-driver": "value"`.
 - `packages/cli/src/run.ts` validates and directly dispatches each launch path; it builds
-  `DriverContext` only for OpenCode and tmux. The wrapped MITM/OpenCode/tmux paths invoke the injected
-  owner bootstrap after identity load and close only the returned RPC collaborator after driver exit.
-  Owner failure is fail-soft because these remain A0 drivers; other run modes never invoke it.
+  `DriverContext` only for OpenCode and tmux. Stable MITM requires the retained Linux arm64 Claude
+  version before identity creation and deliberately skips the parked A1 owner. Experimental
+  OpenCode/tmux invoke the injected health-only owner bootstrap after identity load and close only the
+  returned RPC collaborator after driver exit; owner failure remains fail-soft there. Other run modes
+  never invoke it.
 - `packages/cli/src/host/rc/index.ts` re-exports the neutral lifecycle, legacy registrar, bridge
   lifecycle, driver types, and tmux façade.
 
-### Compatibility surfaces left unchanged
+### Compatibility surfaces
 
-- `packages/cli/src/host/rc/session.ts` — **the seam itself.** Drivers only *use* its public methods
-  (`create`, `pushInitialize`, `pushUpstream`, `claimWorkerStream`, `followDownstream`,
-  `pushUserInput`/`pushControlResponse`/`pushControlRequest`, `workerStatus`, `wake`, `close`). No new
-  capability is required.
+- `packages/cli/src/host/rc/session.ts` — **the seam itself.** Generic drivers use `create`,
+  `pushInitialize`, `pushUpstream`, `claimWorkerStream`, `followDownstream`, downstream push methods,
+  status, wake, and close. Only the Claude MITM uses strict native batch admission and the synchronous
+  pre-write claim; those gates do not change tmux/OpenCode replay semantics.
 - `packages/cli/src/host/rc/mitm.ts` — only the MITM launch path uses it; other paths don't import it.
 - `packages/cli/src/host/rc/certs.ts`, `gitinfo.ts` — MITM/announce helpers, unaffected.
 - `packages/cli/src/broker/client.ts` — the transport contract is fixed; drivers go *through* the
@@ -861,11 +903,14 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
    infers `running`/`idle` from a transcript-append debounce, which lags a long "think". It advertises
    `status:false`; the internal heuristic is display/evidence only, not a promised native transition.
 6. **Durable-restart cursors.** The relay's `serve()` calls `prepare()` to sample broker cursors
-   before pumping; a driver must call `relay.serve(signal)` (not hand-roll the pumps). The sampled
+   before pumping; every cursor sampling attempt has a 70-second request wall, initial stream headers
+   have their separate 20-second wall, and a driver must call `relay.serve(signal)` (not hand-roll the
+   pumps). The sampled
    floor prevents replay of older inbound frames but can skip an unprocessed prompt that arrived
    before the sample; it is duplicate-prevention with a documented loss window, not fail-closed
-   command recovery. It also does not make the synthetic `cse_*` channel a durable logical chat or
-   recover its native/outward bindings.
+   command recovery. Repeated transport failure is nevertheless bounded: the third consecutive inbound
+   failure closes the synthetic `cse_*` under the reset rules above. This still does not make that channel
+   a durable logical chat or recover its native/outward bindings.
 7. **Launch cardinality.** Tmux and OpenCode launch one wrapper `Session`; one MITM launch can accept
    several intercepted Claude RC sessions. The dispatcher still selects one harness mode per wrapper
    process.
@@ -879,15 +924,18 @@ remote-claw --rc-app https://app.example --rc-driver=tmux -- --model opus
 
 ## 9. Summary
 
-`Session` is the current shared relay port, not a complete host abstraction. Each harness path
-**captures** output into the canonical content-block envelope (`pushUpstream`), **injects** downstream
-user/control events (`followDownstream` or the native RC server), reports status where possible, and
-lets the relay own broker-side permissions + attachments. `run.ts` directly selects
+`Session` is the current shared relay port, not a complete host abstraction. Tmux/OpenCode
+**capture** output into the canonical content-block envelope with generic `pushUpstream`; Claude MITM
+uses its stricter native intake. Each path **injects** downstream user/control events
+(`followDownstream` or the native RC server), reports status where possible, and lets the relay own
+broker-side permissions + attachments. `run.ts` directly selects
 `--rc-driver={mitm|tmux|opencode}`; the exported `Driver`/`DriverFactory` pair does not unify that
 dispatch. Above this compatibility port, the neutral host contract and process-local registrar now
 mediate Claude MITM, OpenCode, and tmux sessions. The
 capability-aware part is implemented: each path supplies `DriverCapabilities`, the relay rides them on
-`session_announce`, and the viewer disables/labels declared unsupported controls. Claude MITM and
+  `session_announce`, the viewer disables/labels declared unsupported controls, and the relay enforces
+  false mutation families. Stable Claude MITM supplies the exact text-only vector, requires a durable
+  broker, and suppresses permissions, attachments, slash/blank input, and every control. Claude MITM and
 both A0.2 drivers wait for validated readiness before they start the bridge. OpenCode publishes
 `status:false`, `attachments:false`, only interrupt control, and structured permissions only after
 proved parent setup; §8 retains the child/reply limitations. Tmux publishes `status:false`,

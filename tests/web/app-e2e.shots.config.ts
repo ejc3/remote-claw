@@ -5,8 +5,8 @@ import base from "./app-e2e.config";
 // verification. Deliberately NOT in app-e2e.config.ts's testMatch: it asserts almost nothing, it exists
 // to produce artifacts, and it would only slow the real gate down.
 //
-//   pnpm exec playwright test -c app-e2e.shots.config.ts                 # both widths
-//   pnpm exec playwright test -c app-e2e.shots.config.ts --project=phone # just the phone
+//   pnpm exec playwright test -c app-e2e.shots.config.ts                       # four projects
+//   pnpm exec playwright test -c app-e2e.shots.config.ts --project=phone-dark  # one project
 //
 // Shots land in tests/web/shots/<project>/. Take a set on the base commit and a set on the branch, then
 // compare them side by side — same server, same seeded host, same viewport, so any pixel difference is
@@ -27,11 +27,19 @@ export default defineConfig({
     { name: "phone-light", use: { ...devices["Pixel 5"], colorScheme: "light" } },
     {
       name: "desktop-dark",
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1280, height: 900 },
+        colorScheme: "dark",
+      },
     },
     {
       name: "desktop-light",
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 }, colorScheme: "light" },
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1280, height: 900 },
+        colorScheme: "light",
+      },
     },
   ],
 });

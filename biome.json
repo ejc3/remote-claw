@@ -1,0 +1,23 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+	"files": {
+		"includes": [
+			"scripts/**/*.mjs",
+			"tests/web/**/*.ts",
+			"packages/clawsec/**",
+			"packages/cli/**",
+			"apps/web/**",
+			"spikes/claude-native-output/**",
+			"spikes/codex-multiclient/**/*.mjs",
+			"spikes/codex-multiclient/**/*.json",
+			"spikes/opencode-native/**/*.mjs",
+			"spikes/opencode-native/**/*.json"
+		]
+	},
+	"formatter": { "enabled": true, "indentStyle": "tab", "lineWidth": 80 },
+	"linter": { "enabled": true, "rules": { "recommended": true } },
+	"assist": { "enabled": true },
+	"javascript": {
+		"formatter": { "quoteStyle": "double", "semicolons": "always" }
+	}
+}

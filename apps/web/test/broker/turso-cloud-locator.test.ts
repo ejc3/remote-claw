@@ -2,9 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Client } from "@libsql/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileDbLocator } from "../../lib/broker/sqlite-multi";
-import { selectLocatorFromEnv, TursoCloudDbLocator } from "../../lib/broker/turso-cloud-locator";
+import {
+  selectLocatorFromEnv,
+  TURSO_READY_DEADLINE_MS,
+  TursoCloudDbLocator,
+  TursoReadinessTimeoutError,
+} from "../../lib/broker/turso-cloud-locator";
 
 // The cloud locator is the "storage = Turso Cloud" half of the single per-channel backend (the file
 // locator is the other half). It can't be integration-tested without a real Turso account, so its
@@ -51,13 +56,17 @@ const ENV_KEYS = [
   "TURSO_GROUP",
   "TURSO_GROUP_AUTH_TOKEN",
   "RC_SQLITE_DIR",
+  "VERCEL",
   "VERCEL_ENV",
   "VERCEL_GIT_COMMIT_SHA",
   "RC_TURSO_DB_SCOPE",
+  "RC_TURSO_READY_DEADLINE_MS",
 ] as const;
 const saved: Record<string, string | undefined> = {};
 const dirs: string[] = [];
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const k of ENV_KEYS) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
@@ -128,6 +137,19 @@ describe("TursoCloudDbLocator", () => {
     await expect(broken.exists(TOKEN_A)).rejects.toThrow(/get database/);
   });
 
+  it("exists() bypasses a stale positive create memo for authoritative loss classification", async () => {
+    let present = true;
+    const { fetchImpl, calls } = makeFetch((_url, method) => {
+      if (method === "POST") return { status: 200, body: "{}" };
+      return present ? { status: 200, body: "{}" } : { status: 404 };
+    });
+    const loc = new TursoCloudDbLocator(opts(fetchImpl));
+    await loc.ensure(TOKEN_A); // remembers a positive without a GET
+    present = false; // another instance/operator deletes the database immediately
+    await expect(loc.exists(TOKEN_A)).resolves.toBe(false);
+    expect(calls.filter((call) => call.method === "GET")).toHaveLength(1);
+  });
+
   it("the #known cache is TTL-bounded — an expired positive re-validates (cross-instance drop self-heals)", async () => {
     const prev = process.env.RC_TURSO_KNOWN_TTL_MS;
     process.env.RC_TURSO_KNOWN_TTL_MS = "0"; // entries expire immediately → never trust a stale positive
@@ -166,6 +188,27 @@ describe("TursoCloudDbLocator", () => {
       cause: Object.assign(new Error("Server returned HTTP status 404"), { status: 404 }),
     });
 
+  it("uses a 30s production readiness budget and absorbs a propagation event beyond the old 15s wall", async () => {
+    delete process.env.RC_TURSO_READY_DEADLINE_MS;
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    vi.spyOn(Math, "random").mockReturnValue(0.5); // deterministic, unjittered backoff
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+    let n = 0;
+    const client = fakeClient(async () => {
+      n++;
+      if (Date.now() < 16_500) throw notReady404();
+      return { rows: [] };
+    });
+
+    expect(TURSO_READY_DEADLINE_MS).toBe(30_000);
+    const pending = loc.awaitReady(client, TOKEN_A);
+    await vi.advanceTimersByTimeAsync(16_500);
+    await expect(pending).resolves.toBeUndefined();
+    expect(n).toBeGreaterThan(1);
+  });
+
   it("awaitReady retries the create→serve 404 window, then resolves once the endpoint serves", async () => {
     const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
     let n = 0;
@@ -188,18 +231,65 @@ describe("TursoCloudDbLocator", () => {
     expect(n).toBe(1); // a 401 is not a readiness transient — no retry, fail immediately
   });
 
-  it("awaitReady gives up (throws the 404) once the deadline elapses without the endpoint serving", async () => {
-    const prev = process.env.RC_TURSO_READY_DEADLINE_MS;
+  it("awaitReady's env override can tighten the hard deadline", async () => {
     process.env.RC_TURSO_READY_DEADLINE_MS = "250"; // tiny budget so the test is fast
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+    const client = fakeClient(async () => {
+      throw notReady404(); // never becomes ready
+    });
+
+    const pending = loc.awaitReady(client, TOKEN_A).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(250);
+    const failure = await pending;
+    expect(failure).toBeInstanceOf(TursoReadinessTimeoutError);
+    expect(failure).toMatchObject({ timeoutMs: 250 });
+  });
+
+  it("caps a lengthening env override and hard-times a never-settling probe without a late rejection leak", async () => {
+    process.env.RC_TURSO_READY_DEADLINE_MS = "60000";
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
+    let rejectLate: (reason: unknown) => void = () => {};
+    const client = fakeClient(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectLate = reject;
+        }),
+    );
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
     try {
-      const loc = new TursoCloudDbLocator(opts(makeFetch(() => ({ status: 200 })).fetchImpl));
-      const client = fakeClient(async () => {
-        throw notReady404(); // never becomes ready
-      });
-      await expect(loc.awaitReady(client, TOKEN_A)).rejects.toThrow(/404/);
+      let settled = false;
+      const pending = loc.awaitReady(client, TOKEN_A);
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(TURSO_READY_DEADLINE_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const failure = await pending.catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(TursoReadinessTimeoutError);
+      expect(failure).toMatchObject({ timeoutMs: TURSO_READY_DEADLINE_MS });
+      expect((failure as Error).message).not.toContain(TOKEN_A);
+
+      rejectLate(new Error("late libSQL rejection"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(unhandled).toEqual([]);
     } finally {
-      if (prev === undefined) delete process.env.RC_TURSO_READY_DEADLINE_MS;
-      else process.env.RC_TURSO_READY_DEADLINE_MS = prev;
+      process.removeListener("unhandledRejection", onUnhandled);
     }
   });
 
@@ -318,7 +408,7 @@ describe("TursoCloudDbLocator", () => {
     expect(r).toEqual({ deleted: 4, remaining: 0 }); // re-list after deletes → scope empty
   });
 
-  it("ensureIndex creates the rc-<scope>-index db (idempotent: a 409 conflict is success)", async () => {
+  it("ensureIndex always re-confirms the rc-<scope>-index db (a 409 conflict is success)", async () => {
     const { fetchImpl, calls } = makeFetch((_url, method) =>
       method === "POST" ? { status: 409, body: "exists" } : { status: 404 },
     );
@@ -326,8 +416,8 @@ describe("TursoCloudDbLocator", () => {
     await expect(loc.ensureIndex()).resolves.toBeUndefined();
     const post = calls.find((c) => c.method === "POST");
     expect(post?.url).toContain("/databases");
-    await loc.ensureIndex(); // memoized — no second POST
-    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    await loc.ensureIndex(); // rebuilding a dead cached client must not trust its stale positive memo
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(2);
   });
 
   it("dropStored DELETEs the db and tolerates a 404 (already gone)", async () => {
@@ -352,8 +442,9 @@ describe("TursoCloudDbLocator", () => {
 });
 
 describe("selectLocatorFromEnv", () => {
-  it("returns the cloud locator only when ALL Turso Cloud creds are present", () => {
+  it("returns the cloud locator on Vercel only when ALL Turso Cloud creds are present", () => {
     snapshotEnv();
+    process.env.VERCEL = "1";
     process.env.TURSO_API_TOKEN = "t";
     process.env.TURSO_ORG = "org";
     process.env.TURSO_GROUP = "default";
@@ -361,8 +452,9 @@ describe("selectLocatorFromEnv", () => {
     expect(selectLocatorFromEnv()).toBeInstanceOf(TursoCloudDbLocator);
   });
 
-  it("falls back to the local-file locator when any cloud cred is missing", () => {
+  it("falls back to the local-file locator off Vercel when any cloud cred is missing", () => {
     snapshotEnv();
+    delete process.env.VERCEL;
     delete process.env.TURSO_API_TOKEN;
     process.env.TURSO_ORG = "org";
     process.env.TURSO_GROUP = "default";
@@ -371,6 +463,31 @@ describe("selectLocatorFromEnv", () => {
     dirs.push(dir);
     process.env.RC_SQLITE_DIR = dir;
     expect(selectLocatorFromEnv()).toBeInstanceOf(FileDbLocator);
+  });
+
+  it("fails closed on Vercel for absent or partial fleet config even with RC_SQLITE_DIR", () => {
+    snapshotEnv();
+    process.env.VERCEL = "1";
+    const dir = mkdtempSync(join(tmpdir(), "rc-sqlite-vercel-fail-closed-"));
+    dirs.push(dir);
+    process.env.RC_SQLITE_DIR = dir;
+    const fleetKeys = [
+      "TURSO_API_TOKEN",
+      "TURSO_ORG",
+      "TURSO_GROUP",
+      "TURSO_GROUP_AUTH_TOKEN",
+    ] as const;
+    for (const key of fleetKeys) delete process.env[key];
+    expect(() => selectLocatorFromEnv()).toThrow(/complete Turso Cloud fleet configuration/);
+
+    for (const key of fleetKeys) process.env[key] = "configured";
+    for (const omitted of fleetKeys) {
+      delete process.env[omitted];
+      expect(() => selectLocatorFromEnv()).toThrow(/complete Turso Cloud fleet configuration/);
+      process.env[omitted] = "configured";
+    }
+    process.env.TURSO_GROUP = "   ";
+    expect(() => selectLocatorFromEnv()).toThrow(/complete Turso Cloud fleet configuration/);
   });
 
   function cloudLocatorWith(opts2: {

@@ -1,5 +1,5 @@
 // §6A/§6B channel tokens. A channel is named by a CLIENT-DERIVABLE token — no stored pointer:
-// the per-identity bus is `bus:${identity_id}`; a per-session stream is
+// the per-identity bus is `bus:presence-v2:${identity_id}`; a per-session stream is
 // `sess:${identity_id}:${session_id}`. The host, the broker, and the web client all derive the
 // same string from the same public inputs, so a value-addressed `getHookByToken(token)` resolves
 // the run without any lookup table (§6B "It's value-addressed — no stored pointer").
@@ -27,9 +27,13 @@ export function identityHex(identityId: Uint8Array): string {
   return toHex(identityId);
 }
 
-/** The per-identity bus channel (discovery + presence): `bus:${identity_id}` (§6B). */
+/** The per-identity bus channel (discovery + absorbing presence lifecycle).
+ *
+ * `presence-v2` is a deployment fence as well as a namespace version: an already-running Workflow
+ * is pinned to the code that created it, so changing the token starts a fresh run whose relay knows
+ * how to absorb `session_terminal` before any v2 presence can be published. */
 export function busToken(identityId: Uint8Array): string {
-  return `bus:${identityHex(identityId)}`;
+  return `bus:presence-v2:${identityHex(identityId)}`;
 }
 
 /**

@@ -7,6 +7,7 @@
 //   • PASS THROUGH everything else (inference `/v1/messages`, OAuth, telemetry) to the real upstream.
 // Any other host is blind-tunnelled untouched. This is the §14/§17.5 mechanism, verified in Phase 0.
 
+import { timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { type ClientRequest, type IncomingMessage, Server, type ServerResponse } from "node:http";
@@ -18,7 +19,12 @@ import { NOOP_TRACER, redactJsonTraceBody, type Tracer } from "../../trace.js";
 import { type BedrockConfig, BedrockInference } from "./bedrock/inference.js";
 import { isInferencePath, synthControlPlane } from "./bedrock/synth.js";
 import { MITM_HOST } from "./certs.js";
-import { assistantText, type RelayCore, type Session } from "./session.js";
+import {
+  assistantText,
+  NativeUpstreamAdmissionError,
+  type RelayCore,
+  type Session,
+} from "./session.js";
 
 /** Endpoint prefixes we serve ourselves; everything else on the MITM host is passed through. */
 const INTERCEPT_PREFIXES = ["/v1/code/sessions", "/v1/code/triggers"];
@@ -28,6 +34,14 @@ const SSE_SEP = /\r?\n\r?\n/;
 /** Caps so a pathological stream can't grow the trace buffers without bound (it's a diagnostic). */
 const SSE_BUF_CAP = 256 * 1024;
 const JSON_TRACE_CAP = 256 * 1024;
+/** Relay control/native bodies are local and JSON. Bound them independently from passthrough inference
+ * so an unauthorized or malformed local request cannot exhaust the wrapper before fail-stop handling. */
+export const RC_INTERCEPT_BODY_CAP = 16 * 1024 * 1024;
+const PASSTHROUGH_BODY_CAP = 64 * 1024 * 1024;
+const REQUEST_BODY_TIMEOUT_MS = 30_000;
+const BODY_TOO_LARGE = Symbol("body too large");
+const BODY_TIMED_OUT = Symbol("body timed out");
+type BodyReadResult = Buffer | null | typeof BODY_TOO_LARGE | typeof BODY_TIMED_OUT;
 
 function omittedTraceBody(bytes: number): string {
   return `<RC_BODY_OMITTED bytes=${bytes} limit=${JSON_TRACE_CAP}>`;
@@ -95,7 +109,18 @@ export class MitmProxy {
         ? new BedrockInference({ ...opts.bedrock, tracer: opts.tracer ?? NOOP_TRACER })
         : null;
     this.#leaf = { cert: readFileSync(opts.leafCert), key: readFileSync(opts.leafKey) };
-    this.#inner = new Server((req, res) => this.#onRequest(req, res));
+    this.#inner = new Server((req, res) => {
+      void this.#onRequest(req, res).catch(() => {
+        // No request-shape bug may escape as an unhandled rejection and take down sibling sessions or
+        // the local Claude process. An unexpected failure under one known cse is terminal only there.
+        const path = (req.url ?? "").split("?", 1)[0] ?? "";
+        const matched = SESS_RE.exec(path);
+        if (matched) this.#opts.core?.get(matched[1] as string)?.close();
+        if (res.destroyed) return;
+        if (res.headersSent) res.destroy();
+        else sendJson(res, { error: "session request failed" }, 500);
+      });
+    });
     this.#server = new Server((_req, res) => {
       // A plain (non-CONNECT) request to the proxy: nothing to serve.
       res.writeHead(400).end("proxy expects CONNECT");
@@ -200,7 +225,50 @@ export class MitmProxy {
   async #onRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const rawUrl = req.url ?? "";
     const path = rawUrl.split("?", 1)[0] ?? ""; // the path WITHOUT query — only for intercept matching
-    const body = await readBody(req);
+    const relayIntercept =
+      (this.#opts.mode ?? "relay") === "relay" &&
+      INTERCEPT_PREFIXES.some((prefix) => path.startsWith(prefix));
+    // Reject unknown/closed/unauthorized worker routes from headers alone. Waiting for EOF first lets a
+    // missing bearer hold an unbounded chunked request open and consume memory before its inevitable 401.
+    if (relayIntercept) {
+      const match = SESS_RE.exec(path);
+      if (match !== null) {
+        const session = this.#opts.core?.get(match[1] as string);
+        if (session === undefined) {
+          rejectBeforeBody(req, res, { error: "no such session" }, 404);
+          return;
+        }
+        if (session.closed) {
+          rejectBeforeBody(req, res, { error: "session closed" }, 410);
+          return;
+        }
+        if (
+          isWorkerRoute(match[2]) &&
+          !matchesWorkerBearer(req.headers.authorization, session.workerToken)
+        ) {
+          rejectBeforeBody(req, res, { error: "unauthorized worker" }, 401);
+          return;
+        }
+      }
+    }
+    const body = await readBody(
+      req,
+      relayIntercept ? RC_INTERCEPT_BODY_CAP : PASSTHROUGH_BODY_CAP,
+      REQUEST_BODY_TIMEOUT_MS,
+    );
+    if (body === BODY_TOO_LARGE || body === BODY_TIMED_OUT) {
+      const match = SESS_RE.exec(path);
+      if (relayIntercept && match !== null && isWorkerRoute(match[2])) {
+        this.#opts.core?.get(match[1] as string)?.close();
+      }
+      rejectBeforeBody(
+        req,
+        res,
+        { error: body === BODY_TOO_LARGE ? "request body too large" : "request body timed out" },
+        body === BODY_TOO_LARGE ? 413 : 408,
+      );
+      return;
+    }
     // Never turn an aborted partial upload into a different, apparently complete upstream request.
     // close() can also run while readBody is parked; do not create a new outbound request after its
     // ownership sets have already been swept.
@@ -209,12 +277,9 @@ export class MitmProxy {
       return;
     }
     const rc = rcLabel(path); // an RC worker endpoint (session id masked), or null
-    if (
-      (this.#opts.mode ?? "relay") === "relay" &&
-      INTERCEPT_PREFIXES.some((p) => path.startsWith(p))
-    ) {
+    if (relayIntercept) {
       this.#trace.debug("intercept", { method: req.method ?? "GET", path });
-      this.#intercept(req.method ?? "GET", path, body, res);
+      this.#intercept(req.method ?? "GET", path, body, res, req.headers.authorization);
     } else if (this.#bedrock !== null) {
       // Bedrock inference mode: serve /v1/messages* from Bedrock; synthesize every other
       // api.anthropic.com path locally. NOTHING reaches the real upstream (zero Anthropic).
@@ -223,6 +288,14 @@ export class MitmProxy {
       // Pass the FULL request-target (query string included) upstream — stripping `?…` would drop
       // params the real API needs (e.g. /api/claude_cli/bootstrap?entrypoint=…&model=…, ?limit=…). In
       // trace mode, an RC endpoint is traced both ways as it flows to/from the real upstream.
+      if (isInferencePath(path)) {
+        this.#trace.debug("inference passthrough", {
+          dir: "→",
+          method: req.method ?? "GET",
+          path,
+          body_bytes: body.length,
+        });
+      }
       if (rc !== null) this.#traceRcRequest(req.method ?? "GET", rc, body);
       this.#passthrough(req, rawUrl, body, res, rc);
     }
@@ -278,15 +351,43 @@ export class MitmProxy {
   // Returns the ServerResponse it handled (Express-style: `sendJson` returns `res`, the SSE branch
   // returns `res` directly), so the `return sendJson(...)` early-exits are legal (biome forbids a
   // value-return from a `void` function — noVoidTypeReturn — and dislikes `void` in a union).
-  #intercept(method: string, path: string, body: Buffer, res: ServerResponse): ServerResponse {
+  #intercept(
+    method: string,
+    path: string,
+    body: Buffer,
+    res: ServerResponse,
+    authorization: string | undefined,
+  ): ServerResponse {
     const core = this.#opts.core;
     if (!core) return sendJson(res, { error: "no relay core" }, 500); // relay mode always has one
+
+    // Closed is terminal for every route under a known cse, even when the request body is malformed.
+    // Resolve this before JSON parsing so a closed session cannot be revived/probed through a route-
+    // specific error path.
+    const matchedSession = SESS_RE.exec(path);
+    const matched = matchedSession ? core.get(matchedSession[1] as string) : undefined;
+    if (matched?.closed) return sendJson(res, { error: "session closed" }, 410);
+    if (
+      matched !== undefined &&
+      isWorkerRoute(matchedSession?.[2]) &&
+      !matchesWorkerBearer(authorization, matched.workerToken)
+    ) {
+      return sendJson(res, { error: "unauthorized worker" }, 401);
+    }
+
     let data: Record<string, unknown> = {};
     if (body.length) {
       try {
         const parsed = JSON.parse(body.toString("utf8"));
         if (parsed && typeof parsed === "object") data = parsed as Record<string, unknown>;
       } catch {
+        if (
+          method === "POST" &&
+          (matchedSession?.[2] === "/worker/events" ||
+            matchedSession?.[2] === "/worker/events/delivery")
+        ) {
+          matched?.close();
+        }
         return sendJson(res, { error: "invalid json" }, 400);
       }
     }
@@ -300,7 +401,12 @@ export class MitmProxy {
       // receives initialize first (pushInitialize is idempotent, so #streamWorker's call is a no-op).
       s.pushInitialize();
       this.#trace.info("session created", { session: s.id, title: s.title });
-      this.#opts.onSession?.(s);
+      try {
+        this.#opts.onSession?.(s);
+      } catch (error) {
+        s.close("session registration callback failed");
+        throw error;
+      }
       return sendJson(res, { session: s.sessionObj() });
     }
 
@@ -312,14 +418,15 @@ export class MitmProxy {
     if (!s) return sendJson(res, { error: "no such session" }, 404);
 
     if (sub === "" && method === "GET") return sendJson(res, { session: s.sessionObj() });
-    if (sub === "/bridge") {
+    if (sub === "/bridge" && method === "POST") {
       return sendJson(res, {
         api_base_url: `https://${MITM_HOST}`,
         expires_in: 14400,
         worker_epoch: "1",
-        worker_jwt: `rcw-${s.id}`,
+        worker_jwt: s.workerToken,
       });
     }
+    if (sub === "/bridge") return sendJson(res, { error: "method not allowed" }, 405);
     if (sub === "/worker" && method === "GET") {
       return sendJson(res, {
         worker: {
@@ -330,29 +437,96 @@ export class MitmProxy {
       });
     }
     if (sub === "/worker" && method === "PUT") {
-      if (typeof data.worker_status === "string" && data.worker_status !== s.workerStatus) {
+      const rejectWorkerUpdate = (reason: string): ServerResponse => {
+        this.#trace.warn("invalid worker update — closing session", {
+          session: s.id,
+          reason,
+          fields: Object.keys(data).sort().join(","),
+          worker_status_type:
+            data.worker_status === null
+              ? "null"
+              : Array.isArray(data.worker_status)
+                ? "array"
+                : typeof data.worker_status,
+          worker_epoch_type:
+            data.worker_epoch === null
+              ? "null"
+              : Array.isArray(data.worker_epoch)
+                ? "array"
+                : typeof data.worker_epoch,
+          external_metadata_type:
+            data.external_metadata === null
+              ? "null"
+              : Array.isArray(data.external_metadata)
+                ? "array"
+                : typeof data.external_metadata,
+        });
+        s.close(`invalid worker update: ${reason}`);
+        return sendJson(res, { error: "invalid worker update" }, 400);
+      };
+      // Claude 2.1.237 sends an authenticated metadata-only registration PUT before its first status
+      // transition. It is not a status contradiction: accept the exact required coordinates and leave
+      // the prior status unchanged. A missing/mismatched epoch or malformed metadata still fails closed.
+      if (data.worker_status === undefined) {
+        if (data.worker_epoch !== s.workerEpoch)
+          return rejectWorkerUpdate("metadata-only update has the wrong worker epoch");
+        if (!isRecord(data.external_metadata))
+          return rejectWorkerUpdate("metadata-only update lacks object external_metadata");
+        return sendJson(res, {});
+      }
+      if (typeof data.worker_status !== "string")
+        return rejectWorkerUpdate("worker_status is not a string");
+      if (data.worker_epoch !== undefined && data.worker_epoch !== s.workerEpoch)
+        return rejectWorkerUpdate("status update has the wrong worker epoch");
+      if (data.worker_status !== s.workerStatus) {
         s.workerStatus = data.worker_status;
         s.wake(); // nudge the relay's idle null-tick so it re-announces presence promptly (#48/#58)
       }
       return sendJson(res, {});
     }
-    if (sub === "/worker/heartbeat") return sendJson(res, {});
-    if (sub === "/worker/events/delivery") {
-      for (const upd of (data.updates as Array<{ event_id?: string }>) ?? []) {
-        if (upd.event_id) s.ack(upd.event_id);
+    if (sub === "/worker/heartbeat" && method === "POST") return sendJson(res, {});
+    if (sub === "/worker/events/delivery" && method === "POST") {
+      const updates = data.updates;
+      if (
+        !Array.isArray(updates) ||
+        updates.some(
+          (update) =>
+            !isRecord(update) || typeof update.event_id !== "string" || update.event_id === "",
+        )
+      ) {
+        s.close();
+        return sendJson(res, { error: "invalid delivery batch" }, 400);
+      }
+      const eventIds = updates.map(
+        (update) => (update as Record<string, unknown>).event_id as string,
+      );
+      if (!s.acknowledgeNativeDeliveryBatch(eventIds)) {
+        s.close();
+        return sendJson(res, { error: "invalid delivery batch" }, 400);
       }
       return sendJson(res, {});
     }
     if (sub === "/worker/events" && method === "POST") {
-      const results: Array<{ event_id: string; sequence_num: string; duplicate: boolean }> = [];
-      for (const ev of (data.events as Array<{ payload?: Record<string, unknown> }>) ?? []) {
-        const payload = ev.payload ?? {};
-        const up = s.pushUpstream(payload);
-        results.push({
-          event_id: up.eventId,
-          sequence_num: String(up.sequenceNum),
-          duplicate: false,
-        });
+      let admissions: ReturnType<Session["ingestNativeUpstreamBatch"]>;
+      try {
+        admissions = s.ingestNativeUpstreamBatch(data.worker_epoch, data.events);
+      } catch (error) {
+        if (error instanceof NativeUpstreamAdmissionError) {
+          return sendJson(res, { error: error.message }, error.status);
+        }
+        s.close();
+        return sendJson(res, { error: "native event admission failed" }, 500);
+      }
+      const results = admissions.map(({ event, duplicate }) => ({
+        event_id: event.eventId,
+        sequence_num: String(event.sequenceNum),
+        duplicate,
+      }));
+      for (const { event: up, duplicate } of admissions) {
+        // Exact retries are already represented by their original event; do not emit a second trace
+        // record that could be mistaken for a second transcript mutation.
+        if (duplicate) continue;
+        const payload = up.payload;
         // At debug (opt-in) we include a clipped content preview — the formatter bounds it. Secrets
         // (keys, OAuth) are never carried here; conversation text is fine once you've asked for debug.
         if (this.#trace.enabled("debug")) {
@@ -372,45 +546,64 @@ export class MitmProxy {
       return sendJson(res, { results });
     }
     if (sub === "/worker/events/stream" && method === "GET") {
-      void this.#streamWorker(s, res); // long-lived SSE; runs until the worker disconnects
+      void this.#streamWorker(s, res).catch(() => {
+        s.close();
+        if (!res.destroyed) {
+          if (res.headersSent) res.destroy();
+          else sendJson(res, { error: "worker stream failed" }, 500);
+        }
+      }); // long-lived SSE; runs until the worker disconnects
       return res;
+    }
+    if (isWorkerRoute(sub)) {
+      s.close();
+      return sendJson(res, { error: "invalid worker request" }, 400);
     }
     return sendJson(res, {});
   }
 
   async #streamWorker(s: Session, res: ServerResponse): Promise<void> {
+    const gen = s.claimNativeWorkerStream();
+    if (gen === null) {
+      sendJson(res, { error: "session closed" }, 410);
+      return;
+    }
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "close",
     });
-    const gen = s.claimWorkerStream(); // supersede any prior stream → single deliverer
     s.pushInitialize();
     this.#trace.debug("worker SSE connected", { session: s.id, gen });
     // A remote disconnect can close/destroy the response WITHOUT setting writableEnded, so watch the
     // `close` event too — else a dead follower lingers, waking on every heartbeat and holding the
     // response forever. The flag is re-checked by the stop predicate below.
     let closed = false;
+    const stopped = () => this.#stopped || closed || res.writableEnded || res.destroyed;
     res.on("close", () => {
       closed = true;
+      s.endNativeWorkerStream(gen);
       s.wake(); // break the follower out of its heartbeat wait immediately
     });
     try {
-      for await (const ev of s.followDownstream(
-        gen,
-        () => this.#stopped || closed || res.writableEnded || res.destroyed,
-      )) {
+      for await (const ev of s.followDownstream(gen, stopped)) {
         if (ev === null) {
-          res.write(":keepalive\n\n");
+          if (!stopped()) res.write(":keepalive\n\n");
           continue;
         }
-        res.write(
-          `event: client_event\nid: ${ev.sequenceNum}\ndata: ${JSON.stringify(ev.wire())}\n\n`,
-        );
+        // Serialize before the synchronous session-wide fence. With no await between the fence and
+        // write, another generation cannot interleave and claim the same mutating event. Claiming is
+        // an at-most-one write ATTEMPT: even a socket failure after this point must not cause replay.
+        const frame = `event: client_event\nid: ${ev.sequenceNum}\ndata: ${JSON.stringify(ev.wire())}\n\n`;
+        if (stopped() || !s.claimDownstreamWriteAttempt(gen, ev.eventId)) continue;
+        res.write(frame);
       }
     } catch {
-      // client/socket went away — the follower exits on the stop predicate
+      // A socket loss is handled by the close listener. Any other stream failure is terminal rather
+      // than escaping as a process-level rejection or leaving a live cse behind a lost write.
+      if (!stopped()) s.close();
     } finally {
+      s.endNativeWorkerStream(gen);
       res.end();
     }
   }
@@ -452,6 +645,16 @@ export class MitmProxy {
         res.writeHead(up.statusCode ?? 502, up.headers);
         if (rc !== null)
           this.#trace.info("rc ←", { dir: "←", path: rc, status: up.statusCode ?? 0 });
+        else {
+          const requestPath = path.split("?", 1)[0] ?? "";
+          if (isInferencePath(requestPath)) {
+            this.#trace.debug("inference passthrough response", {
+              dir: "←",
+              path: requestPath,
+              status: up.statusCode ?? 0,
+            });
+          }
+        }
         const isSse = String(up.headers["content-type"] ?? "").includes("text/event-stream");
         if (rc !== null && isSse && this.#trace.enabled("debug")) {
           this.#teeSse(rc, up, res); // worker event stream: forward + trace each event
@@ -579,17 +782,47 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-function readBody(req: IncomingMessage): Promise<Buffer | null> {
+function readBody(
+  req: IncomingMessage,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<BodyReadResult> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
+    let bytes = 0;
     let settled = false;
-    const settle = (body: Buffer | null) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (body: BodyReadResult, drain = false) => {
       if (settled) return;
       settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (body !== null && !Buffer.isBuffer(body)) chunks.length = 0;
+      if (drain) req.resume();
       resolve(body);
     };
-    req.on("data", (c: Buffer) => chunks.push(c));
-    req.once("end", () => settle(Buffer.concat(chunks)));
+
+    const declaredLength = req.headers["content-length"];
+    if (
+      typeof declaredLength === "string" &&
+      /^\d+$/.test(declaredLength) &&
+      Number(declaredLength) > maxBytes
+    ) {
+      settle(BODY_TOO_LARGE, true);
+      return;
+    }
+
+    timer = setTimeout(() => settle(BODY_TIMED_OUT, true), timeoutMs);
+    timer.unref();
+    req.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        settle(BODY_TOO_LARGE, true);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.once("end", () => settle(Buffer.concat(chunks, bytes)));
     req.once("aborted", () => settle(null));
     req.once("error", () => settle(null));
     req.once("close", () => {
@@ -604,6 +837,35 @@ function normalizeHeaders(headers: IncomingMessage["headers"]): Record<string, s
   const out: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(headers)) out[k] = Array.isArray(v) ? v.join(", ") : v;
   return out;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isWorkerRoute(sub: string | undefined): boolean {
+  return sub === "/worker" || sub?.startsWith("/worker/") === true;
+}
+
+function matchesWorkerBearer(header: string | undefined, token: string): boolean {
+  if (header === undefined) return false;
+  const actual = Buffer.from(header, "utf8");
+  const expected = Buffer.from(`Bearer ${token}`, "utf8");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+/** Complete a header-only rejection immediately, then discard any body without retaining it. Closing
+ *  the connection keeps a peer that never finishes a chunked upload from occupying a reusable socket. */
+function rejectBeforeBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+  obj: unknown,
+  status: number,
+): void {
+  res.shouldKeepAlive = false;
+  res.setHeader("Connection", "close");
+  sendJson(res, obj, status);
+  req.resume();
 }
 
 /** Send a JSON response and return it (Express-style), so callers can `return sendJson(...)`. */

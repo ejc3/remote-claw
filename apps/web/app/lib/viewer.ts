@@ -4,10 +4,17 @@
 // SecurityProvider plus the shared FrameOrderer, so there is no second wire/security implementation
 // to drift; the host inbound pump deliberately uses direct command dedup instead of FrameOrderer.
 
-import { type FrameHeader, type Identity, parsePass, utf8 } from "@remote-claw/clawsec";
+import {
+  type FrameHeader,
+  type Identity,
+  parsePass,
+  timingSafeEqual,
+  utf8,
+} from "@remote-claw/clawsec";
 import {
   BrokerClient,
   type BrokerClientOptions,
+  BrokerStreamRotationError,
   FrameOrderer,
   securityProvider,
 } from "@remote-claw/cli/broker";
@@ -24,6 +31,11 @@ export const FRESH_WINDOW_MS = 60_000;
  *  any phase/needs change (relay's ANNOUNCE_KEEPALIVE_MS), so a healthy session stays well under this;
  *  crossing it means ≥2 keepalives were missed → we're RECONNECTING, not yet declared gone (#58). */
 export const CONNECTED_WINDOW_MS = 45_000;
+
+/** Maximum host-clock lead accepted as a live presence observation. A larger lead is retained for
+ * authenticated ordering/debugging but starts stale, so a cold reload cannot repeatedly rebase one
+ * far-future frame onto the viewer's local receipt time. */
+export const ANNOUNCE_FUTURE_SKEW_MS = 5_000;
 
 /** Once an announce goes stale we show RECONNECTING for this long before declaring the host gone — and
  *  the countdown RESTARTS on focus (see connState). Sized over the keepalive (~20s) + a stream
@@ -52,9 +64,9 @@ export type ConnState = "connected" | "reconnecting" | "disconnected";
  * (sub-window focus must not hold a dead session alive forever). `reconnectingSince` defaults to 0:
  * callers that don't track it get the plain stale→reconnecting→disconnected ladder anchored at staleAt.
  */
-export function connState(sentAt: number, now: number, reconnectingSince = 0): ConnState {
-  if (now - sentAt < CONNECTED_WINDOW_MS) return "connected";
-  const anchor = reconnectingSince > 0 ? reconnectingSince : sentAt + CONNECTED_WINDOW_MS;
+export function connState(freshnessAt: number, now: number, reconnectingSince = 0): ConnState {
+  if (now - freshnessAt < CONNECTED_WINDOW_MS) return "connected";
+  const anchor = reconnectingSince > 0 ? reconnectingSince : freshnessAt + CONNECTED_WINDOW_MS;
   if (now - anchor < RECONNECTING_WINDOW_MS) return "reconnecting";
   return "disconnected";
 }
@@ -183,7 +195,11 @@ export interface Announce {
   sessionId: string;
   title: string;
   cwd: string | null;
+  /** Authenticated host wall clock, used only to order otherwise-unversioned legacy announces. */
   sentAt: number;
+  /** Viewer-local liveness clock. Small host skew is capped at receipt; a timestamp over the skew bound
+   * starts stale. An exact legacy replay keeps its first receipt so reconnects cannot forge a keepalive. */
+  freshnessAt: number;
   /** Per relay-process launch id. A change means non-durable transcript seq may have restarted at 0. */
   incarnation: string | null;
   /** Wall-clock start of that relay process. Orders normal forward restarts, but is not a durable epoch:
@@ -207,6 +223,32 @@ export interface Announce {
   /** Which harness (agent + bridge mode) the session runs, for the list label. Absent on a pre-harness
    *  host → treated as the MITM harness (a legacy host is always native-RC Claude Code). */
   harness?: Harness;
+}
+
+/** Convert an accepted announce into a bounded liveness observation. Current hosts prove a new
+ * keepalive with a strictly increasing announce_seq. Legacy hosts have no such coordinate, so an
+ * equal-timestamp replay retains its original receipt time instead of becoming fresh on every SSE
+ * reconnect. Different incarnations are distinct observations even when their wall clocks tie. */
+export function announceFreshnessAt(
+  existing: Announce | undefined,
+  incoming: Pick<Announce, "announceSeq" | "incarnation" | "sentAt">,
+  receivedAt: number,
+): number {
+  if (
+    existing !== undefined &&
+    existing.incarnation === incoming.incarnation &&
+    (existing.incarnation === null
+      ? existing.sentAt === incoming.sentAt
+      : existing.announceSeq !== null && incoming.announceSeq !== null
+        ? existing.announceSeq === incoming.announceSeq
+        : existing.sentAt === incoming.sentAt)
+  ) {
+    return existing.freshnessAt;
+  }
+  if (incoming.sentAt > receivedAt + ANNOUNCE_FUTURE_SKEW_MS) {
+    return receivedAt - CONNECTED_WINDOW_MS;
+  }
+  return Math.min(incoming.sentAt, receivedAt);
 }
 
 /** Which harness a session runs (mirrors the host's HarnessDescriptor) — the viewer's session list
@@ -236,8 +278,11 @@ export interface Capabilities {
 /** Defensively coerce an announce's `capabilities` into Capabilities|undefined. Decrypted-but-untrusted
  *  (AEAD proves the host wrote it, not that it's well-formed), so every field is type-checked. A missing
  *  or malformed body returns undefined → the viewer treats the host as fully capable (no false gating of
- *  a legacy MITM host). Each control defaults to ENABLED when absent, for the same don't-over-gate reason;
- *  a driver that can't honor a verb states `false` explicitly. */
+ *  a legacy MITM host). A present vector's `status` must be a literal boolean because truthful status is
+ *  part of the exact stable-Claude admission tuple; missing/malformed status therefore fails that tuple.
+ *  Mutation fields default to ENABLED when absent, for the same don't-over-gate reason, which also keeps
+ *  a partial vector on the compatibility surface; a driver that can't honor a mutation states `false`
+ *  explicitly. */
 export function parseCapabilities(raw: unknown): Capabilities | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const c = raw as Record<string, unknown>;
@@ -248,7 +293,7 @@ export function parseCapabilities(raw: unknown): Capabilities | undefined {
   const bool = (v: unknown, dflt: boolean): boolean => (typeof v === "boolean" ? v : dflt);
   return {
     structuredPermissions: bool(c.structuredPermissions, true),
-    status: bool(c.status, true),
+    status: bool(c.status, false),
     controls: {
       interrupt: bool(ctlRaw.interrupt, true),
       setModel: bool(ctlRaw.setModel, true),
@@ -306,6 +351,9 @@ export interface Message {
    *  clientMsgId) re-keys it to the real `user-<seq>` so the host's content echo dedups — no flash, no dup. */
   clientMsgId?: string;
   optimistic?: boolean;
+  /** True only for a local user echo whose publish outcome is ambiguous. This state is absorbing until
+   *  an `accepted` frame for the exact clientMsgId proves host receipt; it never authorizes a resend. */
+  deliveryUnknown?: boolean;
   /** Present only on kind:"gap": the first seq the orderer is still waiting for. */
   nextSeq?: number;
   /** Present only on kind:"gap": buffered content entries blocked behind that missing seq. */
@@ -314,13 +362,25 @@ export interface Message {
   since?: number;
 }
 
+/** A session lifecycle terminal is absorbing: once the authenticated identity bus says the host has
+ * closed this session, this Viewer instance must never publish another command to its channel. */
+export class SessionTerminalError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`session is terminal: ${sessionId}`);
+    this.name = "SessionTerminalError";
+  }
+}
+
 export class Viewer {
   readonly #client: BrokerClient;
   readonly #identityId: Uint8Array;
   /** The exact same generation-order state the UI uses. Filtering here is essential: a superseded
    * incarnation frame must never reach #rememberIncarnation and reset a live transcript. This does not
-   * filter by wall-clock age; the UI renders connection state from `sentAt`. */
+   * filter by wall-clock age; the UI renders connection state from the bounded `freshnessAt`. */
   readonly #acceptedAnnounces = new Map<string, Announce>();
+  /** Permanent, per-Viewer lifecycle tombstones. Never clear these on a later announce: terminal is
+   * absorbing even when a stale/replayed host frame arrives after it. */
+  readonly #terminalSessions = new Set<string>();
   readonly #incarnations = new Map<string, string>();
   readonly #incarnationListeners = new Map<string, Set<(incarnation: string) => void>>();
   readonly #durability = new Map<string, boolean>();
@@ -331,7 +391,7 @@ export class Viewer {
     fetchFn?: typeof fetch,
     backend?: string,
   ) {
-    this.#identityId = identity.identityId;
+    this.#identityId = identity.identityId.slice();
     const opts: BrokerClientOptions = {
       baseUrl,
       provider: securityProvider("sealed", identity),
@@ -398,6 +458,10 @@ export class Viewer {
     };
   }
 
+  #assertSessionWritable(sessionId: string): void {
+    if (this.#terminalSessions.has(sessionId)) throw new SessionTerminalError(sessionId);
+  }
+
   async #durable(sessionId: string, fallback?: boolean): Promise<boolean> {
     for (let attempt = 0; attempt < DURABILITY_PROBE_ATTEMPTS; attempt++) {
       try {
@@ -416,7 +480,7 @@ export class Viewer {
   /**
    * Tail the identity bus; yield each generation-accepted session_announce (decrypted under K_meta),
    * including an old one that seeds a disconnected row on cold replay. The UI derives
-   * connected/reconnecting/disconnected from `sentAt`; this generator only prevents delivery
+   * connected/reconnecting/disconnected from bounded local `freshnessAt`; this generator only prevents delivery
    * reordering from rolling the accepted incarnation backward. Re-subscribes
    * when the stream ends: the bus channel may not exist yet (you opened the app before any host
    * announced) or may have been explicitly closed/replaced. The generator applies
@@ -429,10 +493,14 @@ export class Viewer {
    * up — a frame streamed, or the stream drained cleanly (the channel just doesn't exist yet). Discovery
    * itself NEVER ends on an error; it always falls through to the retry. The caller debounces (a single
    * SSE blip clears on the next subscribe; only a persistent failure should surface to the user).
+   * `onTerminal` reports a newly authenticated `session_terminal` tombstone exactly once so callers can
+   * remove/deselect the row; the tombstone itself remains internal and permanently suppresses later
+   * announces and commands for that session.
    */
   async *announces(
     signal: AbortSignal,
     onError?: (err: unknown) => void,
+    onTerminal?: (sessionId: string) => void,
   ): AsyncGenerator<Announce> {
     while (!signal.aborted) {
       try {
@@ -442,7 +510,42 @@ export class Viewer {
             up = true;
             onError?.(null); // a frame streamed → transport is up → clear any prior outage
           }
+          // The bus is shared only within this identity. A broker is an untrusted router: reject a
+          // foreign coordinate before selecting a key or letting it affect lifecycle state. Sealed
+          // mode would eventually fail AEAD for another identity, but this explicit fence keeps the
+          // routing invariant independent of provider behavior and avoids needless key work.
+          if (!timingSafeEqual(frame.identityId, this.#identityId)) continue;
+          if (frame.recordKind === "session_terminal") {
+            if (
+              frame.dir !== "out" ||
+              frame.seq !== null ||
+              frame.part !== 0 ||
+              frame.parts !== 1 ||
+              frame.msgId !== `terminal-${frame.sessionId}`
+            )
+              continue;
+            let plaintext: string;
+            try {
+              plaintext = td.decode(await this.#client.openFrame(frame));
+            } catch {
+              continue;
+            }
+            // This is a protocol marker, not an extensible announce. Accept only the exact v1 payload so
+            // malformed or future-version lifecycle records cannot accidentally tombstone a live session.
+            if (plaintext !== '{"v":1}') continue;
+            const sessionId = frame.sessionId;
+            if (sessionId === "" || this.#terminalSessions.has(sessionId)) continue;
+            this.#terminalSessions.add(sessionId);
+            this.#acceptedAnnounces.delete(sessionId);
+            this.#incarnations.delete(sessionId);
+            this.#durability.delete(sessionId);
+            onTerminal?.(sessionId);
+            continue;
+          }
           if (frame.recordKind !== "session_announce") continue;
+          // Check both the authenticated routing id and the decrypted payload id. A terminal session can
+          // never be resurrected by a later live/replayed announce under either spelling.
+          if (this.#terminalSessions.has(frame.sessionId)) continue;
           let body: Record<string, unknown>;
           try {
             body = JSON.parse(td.decode(await this.#client.openFrame(frame)));
@@ -450,11 +553,16 @@ export class Viewer {
             continue; // a frame we can't open/parse (not ours / corrupt) — skip, never crash the list
           }
           const sessionId = String(body.session_id ?? frame.sessionId);
+          if (this.#terminalSessions.has(sessionId)) continue;
+          const receivedAt = Date.now();
+          const sentAt =
+            typeof body.sent_at === "number" && Number.isFinite(body.sent_at) ? body.sent_at : 0;
           const announce: Announce = {
             sessionId,
             title: typeof body.title === "string" ? body.title : String(body.session_id ?? ""),
             cwd: typeof body.cwd === "string" ? body.cwd : null,
-            sentAt: typeof body.sent_at === "number" ? body.sent_at : 0,
+            sentAt,
+            freshnessAt: 0,
             incarnation: parseIncarnation(body),
             incarnationStartedAt: parseNonNegativeInteger(body.incarnation_started_at),
             announceSeq: parseNonNegativeInteger(body.announce_seq),
@@ -471,6 +579,7 @@ export class Viewer {
           if (harness) announce.harness = harness;
           const existing = this.#acceptedAnnounces.get(sessionId);
           if (!shouldAcceptAnnounce(existing, announce)) continue;
+          announce.freshnessAt = announceFreshnessAt(existing, announce, receivedAt);
           this.#acceptedAnnounces.set(sessionId, announce);
           this.#rememberIncarnation(sessionId, announce.incarnation);
           yield announce;
@@ -481,7 +590,8 @@ export class Viewer {
         // through to the resume-or-retry sleep and re-subscribe, exactly like the relay does. But REPORT it
         // so the UI can debounce a SUSTAINED outage into a visible "can't reach the broker" signal rather
         // than spinning forever in silence.
-        onError?.(e);
+        if (BrokerStreamRotationError.is(e)) onError?.(null);
+        else onError?.(e);
       }
       if (signal.aborted) break;
       await new Promise((r) => setTimeout(r, 150)); // bus absent / stream closed → resume-or-retry
@@ -630,7 +740,26 @@ export class Viewer {
               (res) => ({ type: "frame" as const, res }),
               (error) => ({ type: "error" as const, error }),
             );
-            if (frame.dir !== "out") continue; // the viewer renders host→web frames only
+            // A session subscription is only a broker routing hint, not an authenticated boundary.
+            // Bind the cleartext coordinate to the Viewer selection BEFORE decryption, dedup, or
+            // ordering. Otherwise a broker can replay a valid frame from sibling session B on A's
+            // stream; BrokerClient would correctly decrypt it under B's derived session key and the
+            // orderer could consume A's sequence slot with B's content.
+            if (
+              frame.dir !== "out" ||
+              frame.sessionId !== sessionId ||
+              !timingSafeEqual(frame.identityId, this.#identityId)
+            )
+              continue;
+            // Authenticate each individual frame before it can mutate FrameOrderer. Opening only
+            // after accept() let a forged seq N advance the cursor; the later genuine N was then
+            // classified as old and silently lost. Chunk groups are opened again below so
+            // openMessage still enforces same-message membership and complete part coverage.
+            try {
+              await this.#client.openFrame(frame);
+            } catch {
+              continue;
+            }
             // The orderer releases a chunked message (parts > 1) as its parts together, in part order — so
             // reassemble those with openMessage; a single frame opens directly.
             const ready = orderer.accept(frame);
@@ -673,6 +802,7 @@ export class Viewer {
 
   /** Ask the host to replay history from `since` (a control frame on the session channel). */
   async requestHistory(sessionId: string, since = 0): Promise<void> {
+    this.#assertSessionWritable(sessionId);
     await this.#client.postFrame(
       this.#header({ recordKind: "catch_up", sessionId, msgId: `catchup-${since}-${randomId()}` }),
       utf8(JSON.stringify({ since, expiry: Date.now() + FRESH_WINDOW_MS })),
@@ -692,6 +822,7 @@ export class Viewer {
     behavior: "allow" | "deny" = "allow",
     extra?: { answers?: Record<string, string | string[]>; toolUseId?: string },
   ): Promise<void> {
+    this.#assertSessionWritable(sessionId);
     // An empty request_id can't match any worker control_request — never seal a useless frame.
     if (requestId === "") throw new Error("grantPermission: empty requestId");
     const body: Record<string, unknown> = { request_id: requestId, behavior };
@@ -714,6 +845,7 @@ export class Viewer {
     kind: string,
     body: Record<string, unknown> = {},
   ): Promise<void> {
+    this.#assertSessionWritable(sessionId);
     await this.#client.postFrame(
       this.#header({ recordKind: kind, sessionId, msgId: `${kind}-${randomId()}` }),
       utf8(JSON.stringify({ ...body, expiry: Date.now() + FRESH_WINDOW_MS })),
@@ -756,6 +888,7 @@ export class Viewer {
     text: string,
     clientMsgId = `c-${randomId()}`,
   ): Promise<string> {
+    this.#assertSessionWritable(sessionId);
     await this.#client.postFrame(
       this.#header({ recordKind: "user", sessionId, msgId: clientMsgId, clientMsgId }),
       utf8(text),
@@ -776,6 +909,7 @@ export class Viewer {
     att: { images: { name: string; mime: string; data: string }[]; caption?: string },
     clientMsgId = `att-${randomId()}`,
   ): Promise<string> {
+    this.#assertSessionWritable(sessionId);
     const msgId = clientMsgId;
     const payload = utf8(JSON.stringify({ images: att.images, caption: att.caption ?? "" }));
     // Chunking handles the per-frame ~4.5 MB body cap, but still bound the TOTAL so a pathological send

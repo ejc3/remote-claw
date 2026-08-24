@@ -3,9 +3,11 @@ import type { Viewer } from "../app/lib/viewer.js";
 import {
   enterShouldSend,
   fitStaged,
-  restageImages,
+  isStableClaudeSurface,
+  remoteMutationEnabled,
   sendComposer,
   shouldClearOptimisticMode,
+  stableTextBlockReason,
 } from "../app/page.js";
 
 // Composer send-on-submit (#108/#112): attachments are STAGED then sent together with the text on submit
@@ -61,31 +63,55 @@ describe("sendComposer", () => {
   });
 });
 
-// #150 send-failure resilience: on a failed send the draft is restored to the composer. The original
-// object URLs are revoked when the composer was optimistically cleared, so restored previews need FRESH
-// URLs minted from the (still-valid) File — restageImages does that, keeping id/name/file stable.
-describe("restageImages", () => {
-  it("mints a fresh object URL per image from the File, preserving id/name/file", () => {
-    const fileA = img("a.jpg");
-    const fileB = img("b.jpg");
-    const failed = [
-      { id: "1", name: "a.jpg", file: fileA, url: "blob:revoked-a" },
-      { id: "2", name: "b.jpg", file: fileB, url: "blob:revoked-b" },
-    ];
-    const makeUrl = vi.fn((f: File) => `blob:fresh-${f.name}`);
-    const out = restageImages(failed, makeUrl);
-    expect(makeUrl).toHaveBeenCalledTimes(2);
-    expect(makeUrl).toHaveBeenNthCalledWith(1, fileA);
-    expect(out).toEqual([
-      { id: "1", name: "a.jpg", file: fileA, url: "blob:fresh-a.jpg" },
-      { id: "2", name: "b.jpg", file: fileB, url: "blob:fresh-b.jpg" },
-    ]);
-    // a fresh URL replaces the revoked one (the whole point — the old preview is dead)
-    expect(out[0]?.url).not.toBe(failed[0]?.url);
+describe("stable Claude mutation surface", () => {
+  const stableCaps = {
+    structuredPermissions: false,
+    status: true,
+    controls: { interrupt: false, setModel: false, setMode: false, end: false },
+    attachments: false,
+  };
+
+  it("recognizes only the exact claude-code/rc all-mutations-off tuple", () => {
+    expect(isStableClaudeSurface({ agent: "claude-code", mode: "rc" }, stableCaps)).toBe(true);
+    expect(
+      isStableClaudeSurface(
+        { agent: "claude-code", mode: "rc" },
+        { ...stableCaps, attachments: true },
+      ),
+    ).toBe(false);
+    expect(
+      isStableClaudeSurface(
+        { agent: "claude-code", mode: "rc" },
+        { ...stableCaps, structuredPermissions: true },
+      ),
+    ).toBe(false);
+    expect(
+      isStableClaudeSurface({ agent: "claude-code", mode: "rc" }, { ...stableCaps, status: false }),
+    ).toBe(false);
+    for (const control of ["interrupt", "setModel", "setMode", "end"] as const) {
+      expect(
+        isStableClaudeSurface(
+          { agent: "claude-code", mode: "rc" },
+          { ...stableCaps, controls: { ...stableCaps.controls, [control]: true } },
+        ),
+      ).toBe(false);
+    }
+    expect(isStableClaudeSurface({ agent: "claude-code", mode: "tmux" }, stableCaps)).toBe(false);
+    expect(isStableClaudeSurface({ agent: "claude-code", mode: "rc" }, undefined)).toBe(false);
   });
 
-  it("returns an empty list for no images (a text-only failed send restores no previews)", () => {
-    expect(restageImages([], () => "blob:x")).toEqual([]);
+  it("rejects trimmed empty/slash text on stable Claude but preserves compatibility slash text", () => {
+    expect(stableTextBlockReason("   ", true)).toBe("empty");
+    expect(stableTextBlockReason("  /compact  ", true)).toBe("slash");
+    expect(stableTextBlockReason("//still slash-prefixed", true)).toBe("slash");
+    expect(stableTextBlockReason("use /compact later", true)).toBeNull();
+    expect(stableTextBlockReason(" /compact ", false)).toBeNull();
+  });
+
+  it("requires fresh connected presence in addition to capability support", () => {
+    expect(remoteMutationEnabled(true, true)).toBe(true);
+    expect(remoteMutationEnabled(false, true)).toBe(false);
+    expect(remoteMutationEnabled(true, false)).toBe(false);
   });
 });
 

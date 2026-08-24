@@ -1,7 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // App e2e: drives the REAL web client (a real Chromium) against a REAL Next server running the broker
-// on the in-process LocalBackend (BROKER_BACKEND=local). The host side is a real, persistent process: the
+// on the durable per-channel SQLite backend. Stable Claude deliberately refuses a non-durable broker,
+// so the primary browser gate must use the same durability class as production rather than silently
+// downgrading the host to a compatibility profile. The host side is a real, persistent process: the
 // seedHost fixture (app-e2e/fixtures.ts) spawns host-runner.ts (a real HostRcRelay + serve() + a scripted
 // RC turn) per test. Separate from playwright.config.ts (the docs site) — run with `pnpm test:app`.
 //
@@ -47,7 +49,10 @@ export default defineConfig({
     command: "pnpm exec next build --webpack && pnpm exec next start -p 3100",
     cwd: "../../apps/web",
     port: 3100,
-    env: { BROKER_BACKEND: "local" },
+    env: {
+      BROKER_BACKEND: "sqlite",
+      RC_SQLITE_DIR: process.env.RC_SQLITE_DIR ?? "/tmp/rc-sqlite-app-e2e",
+    },
     // NEVER reuse a server already on the port (was `!CI`). Our command does a `next build` — i.e. it is a
     // one-shot ephemeral server, not a long-lived dev server. With reuse on, a LEFTOVER server (a prior run
     // hard-killed, an orphan, a stale build from another session) silently substitutes for the

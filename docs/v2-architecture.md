@@ -270,14 +270,25 @@
 > publication, browser rendering, and fail-stop ambiguity. A1-V2 would bind the real connector, add
 > exhaustive recovery/isolation proof, and enable normal advertisement without redesigning that path.
 >
-> Wrapped `--rc-app` MITM, OpenCode, and tmux paths connect to or best-effort autostart the owner;
-> plain and help paths, trace mode, and the local `--rc-identity` action do not. A1.4 registration is
-> installed only for an explicit trusted `registrationAdapter`; the ordinary CLI passes none. Its
-> only successful production owner operation is therefore authenticated health, and health
-> reports `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. A0 driver behavior
-> remains unchanged and owner unavailability falls back to the exact A0 path. Wrapper exit closes only
-> the owner's RPC collaborator and leaves the owner service alive; existing A0 native teardown remains
-> separate. The narrow `native.root.activate` operation is installed only with that same explicit
+> The stable `--rc-app` MITM path requires exact Claude Code 2.1.237 output on Linux arm64 before
+> identity creation. Its production probe resolves the requested Claude launcher (`RC_CLAUDE_BIN` or
+> `claude` on `PATH`),
+> opens its resolved target with `O_RDONLY|O_NOFOLLOW`, and requires that target to be a root:root
+> regular mode-`0755` file with
+> exactly 331,864,296 bytes and SHA-256
+> `a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177`, and holds that inode while
+> launching through `/proc` until child exit; an atomic pathname replacement cannot substitute
+> different bytes. The trusted installed proof separately refuses `RC_CLAUDE_BIN` and requests
+> `/usr/bin/claude`. The path deliberately does not start the dormant runtime owner. Only the experimental
+> OpenCode and tmux paths connect to or best-effort autostart it; stable MITM, plain and help paths,
+> trace mode, and the local `--rc-identity` action do not. A1.4 registration is installed only for an
+> explicit trusted `registrationAdapter`; the ordinary CLI passes none. Its only successful
+> production owner operation is therefore authenticated health, and health reports
+> `ownerOperationsWritable:false` and `nativeRegistrationEnabled:false`. Experimental A0 driver
+> behavior remains unchanged and owner unavailability falls back to those exact A0 paths. Wrapper
+> exit closes only the owner's RPC collaborator and leaves the owner service alive; existing A0
+> native teardown remains separate. The narrow `native.root.activate` operation is installed only
+> with that same explicit
 > adapter; it signs the protected payload, obtains a fresh nonce-bound callable-port proof, and then
 > synchronously enters the closed transaction-local finalizer. No real driver performs durable owner registration, A1 binding activation, or root
 > activation, and no A1 remote mutation, inference, or live broker capability is enabled. The
@@ -349,32 +360,37 @@ The whole design serves this human flow. Two roles (often the same person): the
 
 ### A. Operator — on the machine
 1. **Use `remote-claw` exactly like `claude`.** It's a **transparent wrapper**:
-   every `claude` flag, arg, env var and positional prompt **passes straight
+   every non-`--rc-*` flag, arg, and positional prompt **passes straight
    through** (`remote-claw --continue`, `remote-claw --model opus`,
    `remote-claw -p "…"`, `remote-claw .` …). You get the **exact normal claude TUI** — same
    behavior, same options. The wrapper consumes only a small reserved **`--rc-*`**
-   namespace (§3.1) and forwards the rest. There is **no separate `serve`
+   namespace (§3.1) and forwards the rest. Most environment variables are inherited, but the brokered
+   launcher deliberately rewrites proxy routing and scrubs host-only secrets and inherited Claude
+   parent-session identity. There is **no separate `serve`
    command** — `remote-claw` *is* claude, plus remote-control.
 2. **Get your machine's identity (one-time):** run `remote-claw --rc-identity` → it ensures
    this **machine's** identity exists (the master secret lives in one local file, created on
-   first use — a plain `remote-claw` run also auto-creates it **silently**, so if you've already
-   launched once, this is a quiet status re-run). The raw master secret is the **operator's**
+   first use; a plain launch without `--rc-app`/`RC_APP` does not create it). The raw master secret is the **operator's**
    and is shown only to the operator — `--rc-identity` prints the `rc1_…` master at create, and
    `--rc-show-secret` re-reveals it. The artifact you hand a **viewer** (phone/browser) is a
-   **pass**, not the master: with `--rc-app` set, `--rc-qr` uploads the pass as a **one-time, TTL-bounded
+   **pass**, not the master: `remote-claw --rc-pass` prints it; adding `--rc-qr --rc-app <origin>`
+   uploads the pass as a **one-time, TTL-bounded
    handoff** so the QR carries only `<app>/#otk1_<OTK>` — a single-use bootstrap token, not the pass
    (see [ephemeral-handoff.md](ephemeral-handoff.md)). Still treat the QR as sensitive (single-use; expires).
    Need a *different* machine identity for one run? Point `--rc-file <path>` at a different secret
    file for that run.
-3. **Share a session:** in any `remote-claw` TUI, hit `/remote-control` → it flips
-   to "Remote Control active," and **that instance becomes a chat in the web app**.
-   (Or launch already remote-controlled with claude's own `--remote-control`.)
+3. **Share a session:** use an origin configured with `BROKER_BACKEND=sqlite`, launch with
+   `remote-claw --rc-app <origin> …` (or set `RC_APP`), then hit
+   `/remote-control` in that TUI → it flips to "Remote Control active," and **that instance becomes a
+   chat in the web app**. (Or include Claude's own `--remote-control` on that app-armed launch.) A plain
+   launch without an app origin is intentionally just Claude; its slash command uses Anthropic's
+   official RC path, not our broker.
 4. Run **as many instances as you like** — one per repo/branch/task; each is its
    own chat. Close the TUI → that chat goes offline.
 
 *Ergonomic promises:* **zero change to the local workflow** (full claude
-passthrough); **opt-in per session** — running `remote-claw` like claude sends
-**nothing** to the broker (not even presence) until you `/remote-control`; the MITM
+passthrough); **opt-in per session** — an app-armed launch sends **nothing** to our broker (not even
+presence) until you `/remote-control`; the MITM
 setup is **automatic and invisible**; in **Sealed**/**Managed** nothing leaves the box
 unencrypted (in **Open** you deliberately trust the server, behind a loud banner — §2A).
 
@@ -399,20 +415,19 @@ onboarded pass (an operator may still enable Vercel Deployment Protection at the
 a messaging app; one pass per machine, onboard as many machines as you run.
 
 ### C. Naming & organization
-- Each chat's default name is meaningful — the wrapper reads the inner session's
-  **repo + branch / cwd** and the **title claude already generates** from the first
-  prompt, and includes them (inside the `K_meta`-encrypted `session_announce`).
-  Rename is not shipped in A0; local aliases and cross-device/persistent rename are
+- Each chat announces the configured wrapper title (currently `remote-claw` by default), launch cwd,
+  and bounded git metadata, all inside the `K_meta`-encrypted `session_announce`. Claude-generated
+  titles and rename are not shipped in A0; local aliases and cross-device/persistent rename are
   deferred (§6C).
-- Identities default to **hostname** (an `identity_label` inside the `K_meta` announce, announced by the
-  wrapper); chats group under them. The label is the machine's name because the identity **is**
-  the machine (one secret per machine). Identity rename is likewise deferred.
-- **Online = connected:** a chat shows connected while the latest accepted signed announce has
+- The viewer is scoped by the pass-derived machine `identity_id`; A0 does not announce a hostname or
+  friendly `identity_label`. Identity rename is deferred.
+- **Online = connected:** a chat shows connected while the latest accepted AEAD-authenticated announce has
   `age < 45 s`; its wrapper normally refreshes that announce every 20 s on the identity bus (§6B).
   If a chat you're looking at goes quiet
   (host sleeps/crashes), the app moves its retained row through **reconnecting** to
-  **offline**. On a cold open, the shipped viewer also renders any older announcements selected by
-  its last-64-frame bus read as reconnecting/offline rows; it has no complete
+  **offline**. On a cold open, the shipped viewer first absorbs terminal markers, then renders any
+  older unfenced announcements selected by its last-64-frame bus read as reconnecting/offline rows;
+  it has no complete
   durable offline registry (§6C).
 
 ### D. Reconnect / offline (what it feels like)
@@ -423,7 +438,7 @@ a messaging app; one pass per machine, onboard as many machines as you run.
   command queue. If that client guard is bypassed, shipped A0's transport can still retain an opaque
   relay frame without a live native attachment; that is ambiguous transport buffering, not an
   admitted command, and is covered explicitly in §16 scenario 20.
-- Bring the host back (`remote-claw --continue` → `/remote-control`) → Claude's native local history
+- Bring the host back (`remote-claw --rc-app <origin> --continue` → `/remote-control`) → Claude's native local history
   is intact, but shipped A0 does not re-stream it over RC. A non-durable relaunch exposes a new,
   initially empty viewer row; a durable broker can retain the old route's sealed projection, but A0
   still lacks the stable logical binding needed to make the relaunched process transparently reclaim
@@ -523,12 +538,12 @@ swapping in its own), so it is **deferred**.
 ## 3. Components
 
 ```text
-  ┌── server A (your machine) ──────────────┐         ┌──── Vercel Workflow profile ─────┐        ┌── phone / laptop ──┐
+  ┌── server A (your machine) ──────────────┐         ┌──── durable SQLite/libSQL ────────┐        ┌── phone / laptop ──┐
   │ claude --remote-control                  │         │  POST /api/relay + GET /api/stream│       │  web app (Next.js) │
   │      ▲  MITM (our relay = RC backend)    │  wss/   │   (auth_token gate)               │  SSE/  │  paste PASS →      │
-  │      │  + in-memory log (claude=record) │  https  │  per-identity BUS (discover/pres) │ stream │  load keys →       │
-  │ remote-claw [claude args] --rc-app <app> ┼────────▶│  per-session WF (resumable stream)│◀──────▶│  decrypt & render  │
-  │   (per-machine identity: secret S, 0600) │ ciphertext retained for the run lifetime │        │  encrypt & send    │
+  │      │                                    │  https  │  per-identity BUS (discover/pres) │ stream │  load keys →       │
+  │ remote-claw [claude args] --rc-app <app> ┼────────▶│  per-channel sealed Turso log     │◀──────▶│  decrypt & render  │
+  │   (per-machine identity: secret S, 0600) │         │  indefinite ordinary retention    │        │  encrypt & send    │
   └──────────────────────────────────────────┘         └──────────────────────────────────┘        └────────────────────┘
     one secret = one machine's identity (identity_id/auth); each claude instance on it = one "space"/chat
     (one secret per machine in a local file; override per run with --rc-file)
@@ -538,15 +553,17 @@ swapping in its own), so it is **deferred**.
 ### 3.1 CLI — one transparent wrapper around `claude`
 
 There is **no `serve`/`identity` subcommand split.** `remote-claw` is a **drop-in
-wrapper**: you invoke it **exactly like `claude`** and **every argument, flag, env
-var and positional prompt passes straight through** to the inner real `claude`.
+wrapper**: you invoke it **exactly like `claude`**, and every non-`--rc-*` argument,
+flag, and positional prompt passes straight through to the inner real `claude`.
 The wrapper consumes only a reserved **`--rc-*`** namespace for itself and forwards
-everything else verbatim; `--` forces all following args to passthrough. (`claude`
+everything else verbatim; `--` forces all following args to passthrough. Most of the
+environment is inherited, but brokered launches intentionally set/clear proxy variables
+and scrub host-only secrets plus inherited Claude parent-session identity. (`claude`
 has no `--rc*` flags today; the prefix is our reserved convention.)
 
 ```text
 remote-claw [ANY claude args/flags/prompt] [--rc-* wrapper flags]
-# e.g.  remote-claw --continue --model opus      (== claude --continue --model opus, + RC capability)
+# e.g.  remote-claw --rc-app <origin> --continue --model opus  (passthrough + our brokered RC)
 #       remote-claw -p "summarize this repo"      (passthrough headless prompt)
 #       remote-claw --rc-identity                 (identity work; does NOT launch claude)
 ```
@@ -570,15 +587,7 @@ security review — §14A.)
     the **local secret file** (`$XDG_STATE_HOME/remote-claw/secret`, default
     `~/.local/state/remote-claw/secret`; reads refuse symlinks (`O_NOFOLLOW`) and
     group/other-readable modes; a `0600` sidecar holds `created_at`). Print a
-    summary (**public** `identity_id`, created-at, path) and **the `rc1_…` on its own bare line** (the
-    onboarding step). *(With the broker phase:* if the app origin is configured (`--rc-app`), `--rc-qr`
-    uploads the pass as a **one-time, TTL-bounded handoff** and prints `https://<app>/#otk1_<OTK>` + a
-    terminal **QR** of it — a single-use bootstrap token, **not the pass verbatim** (the broker stores only
-    a hash + an opaque blob; see [ephemeral-handoff.md](ephemeral-handoff.md)). ⚠️ Still treat the QR as a
-    credential (single-use, short-TTL; shoulder-surf/recording risk) — **not** "safe to screen-share." It
-    **fails closed**: if the upload fails, no QR is printed (never a forever-pass QR). (A raw-`S` deep
-    link exists only on the **operator** path, under `--rc-show-secret` for re-onboarding your
-    own device.)*) The
+    summary (**public** `identity_id`, created-at, path) and **the `rc1_…` on its own bare line**. The
     create itself is local-only; `--rc-identity` accepts `--rc-file`/`--rc-json`/`--rc-quiet` plus
     the replace controls (`--rc-confirm`/`--rc-keep-old`/`--rc-force-noninteractive`). Exit 0.
   - *Secret exists, no `--rc-confirm` (idempotent re-run) →* **never** regenerates/overwrites `S`;
@@ -608,50 +617,67 @@ security review — §14A.)
   and group/other-readable modes — but the **directory** is trusted to be the user's own; a
   world-writable parent defeats create-once (another local user could plant a valid token), so
   point `--rc-file` only at a directory you control (the default under `$XDG_STATE_HOME` is).
-- **`--rc-show-secret`** — the **only** post-creation reveal of `S` (+ deep link/QR),
+- **`--rc-show-secret`** — the **only** post-creation reveal of `S`,
   for re-onboarding a device. On a TTY: a shoulder-surf/scrollback warning (STDERR) +
   Enter pause (skip with `--rc-yes`); non-TTY: bare token to STDOUT, warning to STDERR.
   Never regenerates.
-- **`--rc-app <url>`** — the **single app origin** (else `REMOTE_CLAW_APP` env / config): its
+- **`--rc-pass`** — reads an existing identity and emits the viewer pass in default, JSON, or quiet
+  mode without revealing `S` or launching Claude. Add `--rc-qr` to render a QR. With
+  `--rc-app <url>` or `RC_APP`, the command uploads a one-time, TTL-bounded handoff and the QR carries
+  `<app>/#otk1_<OTK>`; upload failure prints no QR. Without an origin, the QR contains the bare pass.
+- **`--rc-app <url>`** — the **single app origin** (else `RC_APP`): its
   `/api/*` is the Vercel broker the wrapper POSTs ciphertext to (incl. the one-time `/api/handoff`), and
   its web UI is what the viewer-facing `https://<app>/#otk1_<OTK>` deep-link/QR points at (the UI reads the
   `#fragment` client-side, claims the one-time handoff, and recovers the **pass**, never `S`). One deployment serves both, so
-  there is **one** URL — read as an opaque local string (no probe). Unset ⇒ print the bare
-  pass for manual onboarding, or omit the link.
+  there is **one** URL — read as an opaque local string (no probe). Unset ⇒ a relayed launch is not
+  armed; `--rc-pass` still prints the bare pass and an optional bare-pass QR.
   The CLI presents its per-identity `auth_token` to the broker (no app-wide key — §4.5).
+- **`--rc-backend <name>`** (else `RC_BACKEND`) — selects `vercel`, `local`, or `sqlite` for every
+  host broker call; omitted means the deployment default. Host and viewer must select the same store.
+  Stable Claude trusts the server's reported capability, not this flag, and fails closed before
+  discovery when it reports `durable:false`. The supported deployment therefore defaults to
+  `BROKER_BACKEND=sqlite`; use a per-request override only with the matching viewer `?backend=sqlite`.
 - **Starting already remote-controlled** is just claude's own **`--remote-control`** flag,
   which the wrapper forwards verbatim (no separate `--rc-share`).
-- **`--help` / `-h`** prints this `--rc-*` help and then **falls through to `claude --help`**,
-  so you see both layers in one go.
-- The identity's friendly name defaults to the **hostname**, carried as `identity_label`
-  inside the `K_meta`-encrypted `session_announce` once RC is on (never sent to the broker
-  in the clear). Custom labels and rename are not shipped in A0; they are deferred rather
-  than exposed as a CLI flag (§1A C).
+- **`--help` / `-h`** on the normal wrapper path prints this `--rc-*` help and then **falls through to
+  `claude --help`**, so you see both layers in one go. With `--rc-trace`, it prints only the RC help
+  and exits without launching the trace child.
+- A0 announces no hostname or friendly `identity_label`; the pass-derived `identity_id` scopes the
+  machine, and friendly labels/rename remain deferred (§1A C).
 - **`--rc-json` / `--rc-quiet`** — machine-readable / minimal output. **Never emit the
   raw secret** in either (a script that truly needs it reads the `0600` file directly)
   — JSON/quiet output is exactly what leaks into CI logs. `--rc-json` takes precedence
   over the bare-token form.
 
 **What the shipped v2/A0 wrapper does** (otherwise it's just claude):
-- Runs the **real interactive `claude` TUI** with all your passthrough args. The
-  **identity is auto-created on first run** if absent (local only — no network).
-- **Nothing is sent to the broker until you enable remote control.** Running
-  `remote-claw` like `claude` registers nothing and sends no heartbeat.
-- When you hit `/remote-control` (or pass claude's `--remote-control`), it makes the inner claude
-  RC-eligible **pointed at our local MITM** (not Anthropic's RC relay — §14) by
-  **automatically** setting `HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS` for the child
-  process. Our relay is the RC backend; it bridges that traffic E2E-encrypted to the
-  app **under the chosen secret**.
+- Without `--rc-app`/`RC_APP`, runs the **real `claude`** with passthrough args and does not create an
+  identity, arm the MITM, start a driver, or contact the broker.
+- With `--rc-app`/`RC_APP`, starts the selected driver. The default stable MITM first validates the
+  exact Claude/platform/executable tuple and retains its opened inode before creating an identity, then
+  sets `HTTPS_PROXY` +
+  `NODE_EXTRA_CA_CERTS` before spawning the interactive child; the broker still receives nothing until
+  the child enables `/remote-control` (or starts with Claude's `--remote-control`). Our relay is then the
+  RC backend, discovers the server's effective durability, and bridges traffic E2E-encrypted under the
+  chosen secret. Stable Claude requires SQLite/libSQL durability; a Workflow/local result closes that
+  remote session before it announces or serves.
 - Relay logic (Node/TS, reimplementing the Phase-0 interception knowledge): on each
   worker→relay event, allocate `seq`, encrypt with the per-session key, and
   `POST /api/relay`; on a non-durable backend also append it to host `#log`. Subscribe to the
   inbound channel (Workflow SSE or SQLite/libSQL log polling), **dedup by `msg_id`**, decrypt,
   allocate `seq`, emit `accepted`, echo and record the user frame, and only then enqueue it for
-  Claude. `accepted` is relay receipt/order, not native acceptance.
+  Claude. `accepted` is relay receipt/order, not native acceptance. Initial stream headers have a
+  bounded attempt wall, established SSE fails after 40 s without an actual byte, an entire logical
+  post has one 65 s wall and is never replayed after timeout ambiguity, and the third
+  consecutive inbound failure closes the `cse_*`. Only clean absent-channel completion or a newly
+  admitted authenticated frame resets that count; owner abort is exempt. The server instead ends a
+  healthy long stream 240 s after response-body start with the exact standalone `: rotate` marker.
+  That planned reconnect is
+  circuit-neutral; raw/unmarked EOF still counts as failure.
 - **Joins the identity bus** (§6B): on first `/remote-control` it opens the derived per-identity
-  channel (`bus:${identity_id}`) on the selected broker backend and **periodically broadcasts** its own signed
+  channel (`bus:presence-v2:${identity_id}`) on the selected broker backend and **periodically broadcasts** its own AEAD-sealed
   `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change) — that *is* both
-  discovery and presence (the shipped client shows it connected while announce age is <45 s, then
+  discovery and presence (the shipped client shows it connected while bounded local freshness is
+  <45 s, then
   reconnecting and disconnected; §4.3). It exposes the session's stream (`sess:${identity_id}:${session_id}`) for live
   frames. No server-side heartbeat/registry store.
 - Maintains **in-memory** relay state (`msg_id` seen-set, sessions, crypto state) accumulated live
@@ -660,9 +686,15 @@ security review — §14A.)
   its sealed frame log and host `#log` stays empty. Claude's on-disk session remains the separate
   native durable layer but is **not** re-streamed over RC; neither broker path gets worker backfill
   (§6).
-- The wrapper does **not** outlive the CLI; on exit it stops broadcasting → its announces
-  age through the client's 45 s connected threshold + 30 s reconnecting grace → a mounted viewer
-  retains those rows as disconnected.
+- The wrapper does **not** outlive the CLI. If it previously announced the session, normal or fatal
+  closure publishes an authenticated, absorbing `session_terminal`; the viewer removes that row,
+  permanently refuses its later commands/announces, and discloses that the final delivery/output tail
+  may be incomplete. If every bounded terminal publish is lost during an outage, the older freshness
+  fallback still ages the last announce through connected → reconnecting → disconnected. Ordinary
+  announce transport/5xx failure is advisory, but the broker's fixed coordinate-free HTTP 410 JSON
+  response with `code:"channel_storage_lost"` proves the previously established identity-bus store is
+  gone; that typed permanent loss synchronously closes the Session rather than letting an undiscoverable
+  controller run. A bare 410 or that code on any other status remains an ordinary broker error.
 
 ### 3.2 Vercel app (the broker—no registry or plaintext message store)
 The Workflow profile collapses to **two data-plane** ciphertext endpoints; there is
@@ -677,7 +709,7 @@ answered live on the per-identity **bus** (§6B).
   admin/cron surfaces use the distinct gates described in §4.5.)
 - **`POST /api/relay`** (Node, fast + die) — publish one ciphertext frame by
   **value-addressed** `resumeHook(token, frame)`: the per-identity bus token
-  `bus:${identity_id}` (a wrapper's periodic `session_announce` broadcast) or a per-session
+  `bus:presence-v2:${identity_id}` (a wrapper's `session_announce`/`session_terminal` lifecycle) or a per-session
   token `sess:${identity_id}:${session_id}` (a prompt/control to one session). Gated by
   `Bearer auth_token`; **ciphertext only**.
 - **`GET /api/stream?identity=… | session=…`** — subscribe: the Function resolves the
@@ -690,11 +722,12 @@ answered live on the per-identity **bus** (§6B).
   first `/remote-control`. A machine running `remote-claw` (as Claude) with RC off is invisible on
   the relay plane. A separately requested pre-RC `/api/handoff` may hold its sealed short-TTL pairing
   row.
-- **Discovery + presence have no materialized server state:** **connected** wrappers periodically
-  **broadcast** a signed `session_announce{…, sent_at}` on the bus; a client tails it and
+- **Discovery + live presence have no plaintext/materialized registry:** **connected** wrappers periodically
+  **broadcast** an AEAD-sealed `session_announce{…, sent_at}` on the bus; a client tails it and
   applies the 45 s connected + 30 s reconnecting display ladder, retaining the row as disconnected
   afterward. A0 admits by incarnation/generation rather than rejecting on age. There is no server
-  `heartbeat`/`last_seen` record; SQLite/libSQL may retain the sealed announce frame.
+  `heartbeat`/`last_seen` record. SQLite/libSQL does retain sealed announce frames plus an opaque
+  per-session terminal fence so a late announce cannot resurrect an ended row.
   **Timestamp-driven** (§4.3/§6B). **Multiple wrappers under one identity** coexist because
   the bus is a single relay run that *owns* the hook; wrappers are publishers +
   stream-readers, not hook-owners (so no token collision).
@@ -702,7 +735,7 @@ answered live on the per-identity **bus** (§6B).
   rides the **session channel** (`sess:${identity_id}:${session_id}`) to the wrapper, which replays
   host `#log` (no worker backfill and no `GET /api/messages` store). The durable SQLite/libSQL
   alternative in §6D instead replays sealed frames from its broker log and leaves host `#log` empty.
-  The bus carries only `session_announce` broadcasts (§6B).
+  The bus carries only `session_announce` and `session_terminal` lifecycle records (§6B).
 
 ### 3.3 Web client (stateless, mobile-first)
 - Onboard a machine's **pass** (paste/scan, or open a link with the pass in the **URL
@@ -747,7 +780,7 @@ auth_token    = HKDF-Expand(PRK, "remote-claw/v1/auth",          32B)  → beare
 identity_id   = trunc(SHA256(auth_token), 16B)                          → PUBLIC identity id = the FIRST (leftmost) 16 bytes of SHA256(auth_token); a FUNCTION of auth_token (so the broker self-verifies the bearer with NO store — changing identity abandons the old routes but does not revoke their bearer; actual revocation requires broker state, §4.4)
 content_root  = HKDF-Expand(PRK, "remote-claw/v1/content",       32B)  → CLIENT-ONLY master content key
 control_key   = HKDF-Expand(PRK, "remote-claw/v1/control",       32B)  → AEAD key for control frames (dir:in)
-K_meta        = HKDF-Expand(PRK, "remote-claw/v1/meta-frame",    32B)  → AEAD key for ALL meta frames (accepted/session_announce); their whole payload (title/cwd/identity_label/status/last_activity/sent_at) is encrypted+authenticated under it, so the broker can neither read nor forge them
+K_meta        = HKDF-Expand(PRK, "remote-claw/v1/meta-frame",    32B)  → AEAD key for ALL meta frames (accepted/session_announce/session_terminal/permission_resolved); their whole payload is encrypted+authenticated under it, so the broker can neither read nor forge them
 ```
 
 *(One meta key. The earlier per-field `K_identity_meta`/`K_session_meta` are dropped —
@@ -760,7 +793,8 @@ fields, so there's nothing to double-encrypt and nothing left cleartext.)*
   (preimage resistance) — infeasible. So the broker **cannot read message or metadata
   bodies, nor forge meta/presence frames**.
 - **Self-verifying identity auth—no credential lookup store** (§6B).
-  `identity_id = trunc(SHA256(auth_token))`, so on a request targeting `bus:${identity_id}` the broker
+  `identity_id = trunc(SHA256(auth_token))`, so on a request targeting
+  `bus:presence-v2:${identity_id}` the broker
   recomputes `identity_id` from the presented bearer and checks it matches — **no
   per-identity `sha256(auth_token)` table, no registration**. Knowing the **public**
   `identity_id` alone never grants access (you need `auth_token`; preimage-resistant).
@@ -827,16 +861,29 @@ crypto safety. (We will publish formal limits + cross-runtime test vectors in P1
 rather than rely on a back-of-envelope bound. Alternative for misuse-resistance
 without per-message HKDF: XChaCha20-Poly1305 — heavier; not needed.)
 
-**Which key encrypts what (three planes).** In shipped A0: (1) **Content** (transcript) → `K_session`:
+**Which key encrypts what (three planes).** The shipped A0 wire is a compatibility superset: (1)
+**Content** (transcript) → `K_session`:
 `user`, `assistant`, `assistant_sub`, `assistant_thinking`, `assistant_thinking_sub`, `result`,
 `system`, `status`, `rate_limit`, `can_use_tool`, `tool_use`, `tool_result`, `task`, and
 `permission_request`. This includes an inbound `user` prompt (`dir:in`); a `user` frame is content in
 both directions (web→wrapper prompt and wrapper→web echo). (2) **Control** → `control_key`:
 `catch_up`, `permission`, `interrupt`, `set_mode`, `set_model`, `end`, `attachment`, plus the reserved
 but currently unused `command` kind; slash commands use `user`. (3)
-**Meta** → `K_meta`: `accepted`, `session_announce`, and replayable native/projection state
-`permission_resolved` (so the broker **can't forge presence, acknowledgements, or gate state** —
-AEAD-authenticated, not plaintext).
+**Meta** → `K_meta`: `accepted`, `session_announce`, the exact lifecycle tombstone
+`session_terminal`, and replayable native/projection state `permission_resolved` (so the broker
+**can't forge presence, lifecycle, acknowledgements, or gate state** — AEAD-authenticated, not
+plaintext).
+
+Claude 1.0 recognizes the stable surface only when the harness is exactly
+`{agent:"claude-code",mode:"rc"}` and its capability vector is exactly
+`{structuredPermissions:false,status:true,controls:{interrupt:false,setModel:false,setMode:false,end:false},attachments:false}`.
+That vector is a release-surface discriminator, not advisory UI metadata. An absent/non-object vector
+remains legacy compatibility. Within a present vector, absent or ill-typed `status` parses as `false`,
+while missing mutation bits retain legacy compatibility-enabled defaults, so a partial vector cannot
+select stable. The browser exposes only
+non-empty, non-slash text, and the host independently rejects blank/slash user input, suppresses
+permission requests/answers, rejects attachments, and drops every false control. `catch_up` remains
+internal replay machinery. The broader wire families below remain compatibility code only.
 
 Selected A1 keeps those plane assignments and adds meta `action_result` for the exact coordinator
 decision payload in §6. `permission_resolved` remains a native/projection gate-state observation; it
@@ -929,7 +976,7 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   `(identity_id, collaborationServerId, logicalChatId)`. The session key is derived
   from a canonical encoding of both server/chat coordinates, and A1 AAD binds
   `identity_id`, `collaborationServerId`, and `logicalChatId` separately. The shorter
-  `bus:${identity_id}`, `sess:${identity_id}:${session_id}`, and AAD forms elsewhere in this
+  `bus:presence-v2:${identity_id}`, `sess:${identity_id}:${session_id}`, and AAD forms elsewhere in this
   historical document describe only the shipped A0 baseline; A0 has neither local aliases nor a
   persistent browser transcript cache.
   Every A1 broker hook/run/cache key, viewer/client row, and channel—and any future alias or
@@ -1252,20 +1299,35 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   **independent of every other session** (§1); one wrapper process may host several controllers, and
   each publishes **its own** announce. While RC is on, a session (every `ANNOUNCE_INTERVAL`, and
   immediately on any change) broadcasts
-  `session_announce{session_id, title, cwd, identity_label, status, last_activity, sent_at, incarnation, incarnation_started_at, announce_seq}`
+  `session_announce{session_id, title, cwd, sent_at, incarnation, incarnation_started_at, announce_seq, status, phase, needs, git, capabilities, harness, [mode]}`
   on the identity bus — the *whole* payload AEAD under `K_meta`, `sent_at` and
   `incarnation_started_at` are the wrapper's wall clock **inside the ciphertext** (broker can't forge a
   fresh or later one). No client→wrapper request.
-- **Shipped A0 presence is a display-state ladder, not an announce-admission window.** A client tails
-  the bus and builds its list keyed by `session_id`; `shouldAcceptAnnounce` folds valid decrypted
-  announcements by incarnation/generation ordering but does **not** reject one merely because
-  `sent_at` is old or future-skewed. `connState` shows **connected** while
+- **Shipped A0 presence uses authenticated ordering plus a bounded local liveness clock.** A client
+  tails the bus and builds its list keyed by `session_id`; `shouldAcceptAnnounce` folds valid
+  decrypted announcements by incarnation/generation ordering. Raw `sent_at` remains available for
+  legacy ordering and list sort, but it does not directly grant liveness. For each accepted
+  generation the viewer records `freshnessAt`: an exact replay keeps its first value; if
+  `sentAt > receivedAt + ANNOUNCE_FUTURE_SKEW` (5 s), it uses
+  `receivedAt - CONNECTED_WINDOW`; otherwise it uses `min(sentAt, receivedAt)`. `connState` shows
+  **connected** while local
   `age < CONNECTED_WINDOW = 45 s`, then **reconnecting** for a
   `RECONNECTING_WINDOW = 30 s` countdown anchored when that row is first observed stale, then
-  **disconnected**. The row remains in memory. A cold viewer may therefore seed a disconnected row
-  from an old announcement in its last-64-frame bus slice.
+  **disconnected**. Without an authenticated terminal marker, the row remains in memory and a cold
+  viewer may seed a disconnected row from an old announcement in its last-64-frame bus slice. A
+  far-future frame retained by a cold viewer is immediately reconnecting and non-writable rather
+  than becoming fresh again.
   `FRESH_WINDOW = 60 s` is the separate current expiry-stamping constant: the four direct verbs
   enforce it, while `catch_up` ignores its stamped expiry. It is not the A0 presence threshold.
+- **Shipped A0 terminality is separate and absorbing.** After live presence admission begins,
+  `Session.close()` synchronously makes the old remote session non-writable, aborts outstanding live
+  announces, and publishes canonical `session_terminal` outside transcript HOL with an initial attempt
+  plus three retries, each bounded to 1 s. Its header is `dir:out`, `seq:null`,
+  `msg_id:terminal-<session_id>`, absent `client_msg_id`, epoch 0, and part 0/1; its exact `K_meta`
+  plaintext is `{"v":1}`. The broker suppresses every later terminal retry/live announce and the
+  viewer permanently removes the row. This proves lifecycle only; the UI still warns that the final
+  projection tail may be incomplete. If every attempt is lost, local terminality still holds but a
+  viewer has only the freshness ladder above.
 - **Selected A1 tightens admission.** Its row is keyed by
   `(identity_id, collaborationServerId, logicalChatId)`; the machine coordinate keeps broker routes,
   viewer rows, and any future browser-cache keys from colliding. A1 requires the exact server
@@ -1287,11 +1349,12 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   at the defaults) — not exactly one window — after which it greys.
 - **Restart / new session / late client.** In current A0, a restarted relay that somehow retains the
   same `session_id` broadcasts a later `incarnation_started_at` and clients un-grey that row. An
-  ordinary wrapper/Claude restart instead mints a new synthetic RC `session_id`, so an already-open
-  viewer keeps the old row as disconnected and adds a separate row. A cold reload reads the broker's
-  last-64-frame bus slice and can show both the stale disconnected row and the new connected row; it
-  is not a complete offline registry. That is a current implementation fact, not the selected
-  recovery model.
+  ordinary wrapper/Claude restart instead mints a new synthetic RC `session_id`. If the old relay's
+  terminal marker landed, the viewer permanently removes that old row and only the successor can
+  appear; if the old process crashed or could not publish terminality, an already-open viewer keeps the
+  old row as disconnected and adds a separate row. A cold reload's last-64-frame bus slice is still
+  not a complete offline registry. That is a current implementation fact, not the selected recovery
+  model.
   A1 persists the `(collaborationServerId, logicalChatId)` scope and uses its durable coordinator
   epoch for restart ordering. It first resumes the stored Claude conversation UUID and tries the known
   private `cse_*`; if Claude needs a replacement `cse_*`, that value becomes a new fenced inner
@@ -1304,16 +1367,19 @@ client-side fold** (no `identify?`, no challenge, no `beat_seq`).
   for the bus's **last 64 retained frames** with `startIndex=-64`. That tail slice normally includes
   each live session's latest announce; if activity displaced one, that session renders absent until
   its next broadcast within ≤ `ANNOUNCE_INTERVAL` (+jitter).
-- **Clock assumption and blast radius.** Shipped A0 uses the wrapper's `sent_at` directly for its
-  display-state age and does not apply a future-skew admission bound, so a badly skewed timestamp can
-  produce a wrong dot or a long-lived stale row. That remains scoped to presence display: message
+- **Clock assumption and blast radius.** Shipped A0 uses raw host `sent_at` for authenticated legacy
+  ordering but derives display state and write admission from the bounded local `freshnessAt`. A host
+  clock at most 5 s fast is capped at receipt; a farther-future frame starts reconnecting and
+  non-writable, including after a cold reload; an exact mounted replay cannot refresh its first local
+  observation. Clock error therefore cannot create an unbounded false-online row. This remains scoped
+  to presence display: message
   **confidentiality and integrity** are clock-free (`K_session`/`control_key` AEAD), and message
   replay defense is `msg_id`-based. The shipped message-plane clock check is encrypted `expiry` on
   `interrupt`, `set_model`, `set_mode`, and `end` (§6A/§8); `catch_up` carries but does not enforce
   it, and `permission` currently omits it. HTTP `409` is reserved for the separately typed transient
-  channel-disposal/replacement publish race. Selected A1's certified two-sided window supplies the
-  bounded `FRESH_WINDOW + SKEW` false-online claim; current A0 does not. A zero-clock-trust
-  challenge-handshake variant is recorded in §14A.
+  channel-disposal/replacement publish race. Selected A1 remains stronger: its certified two-sided
+  window rejects out-of-window frames rather than retaining them as stale ordering evidence. A
+  zero-clock-trust challenge-handshake variant is recorded in §14A.
 
 ### 4.4 Machine reset (a "burn", not a true rotation) & the revocation tension
 Resetting a machine here is a symmetric credential **replace scoped to one machine**, not an in-place
@@ -1334,7 +1400,7 @@ rotation in §4.3; that rotation neither changes A1 route/KDF keys nor revokes a
 
 **What a reset does and does *not* do.** It moves **this machine** to a new bus; it does **not**
 revoke the old one. Because the broker keeps no credential/revocation registry (§4.5),
-`bus:${old_identity_id}` is never torn down and the old `auth_token` still self-verifies **forever** —
+`bus:presence-v2:${old_identity_id}` is never torn down and the old `auth_token` still self-verifies **forever** —
 anyone still holding the old `S` (or
 a pass derived from it, §4.2a) keeps a live credential and can keep
 subscribing to and publishing on the abandoned routes. It can forge inbound proposals, but selected A1
@@ -1457,16 +1523,15 @@ clients decrypt and render.
 
 **Web → worker** (your prompt): web encrypts a `user` content frame (`dir:"in"`,
 `client_msg_id`, under `K_session`) → `POST /api/relay` → the selected channel subscription wakes or
-is read by the wrapper → wrapper **dedups by `msg_id`**, decrypts, assigns `seq`, emits
-`accepted{client_msg_id, seq}` on the outbound channel, echoes and records the user frame, and then
-**injects into Claude via the Phase-0-verified MITM downstream** (the worker SSE path — see
-[`phase0-findings.md`](phase0-findings.md)). The user frame is recorded before the inject, but
-`accepted` itself is only relay receipt/order and is deliberately emitted before native delivery.
-The current relay does not have a native idempotency key: if delivery may have crossed the
-worker boundary and its acknowledgement is lost, a later legacy retry can execute the prompt twice.
-`msg_id` deduplicates the relay/viewer frame, not Claude execution. The selected host runtime records
-that case as `outcome_unknown` and does not retry automatically. Claude replies → the worker→web path
-above.
+is read by the wrapper → wrapper authenticates before persistent **`msg_id` dedup**, assigns `seq`,
+durably emits `accepted{client_msg_id, seq}` plus the user echo, and queues one downstream native event.
+`accepted` means ordered receipt by the host, not Claude execution. At the Phase-0-verified MITM worker
+SSE boundary (see [`phase0-findings.md`](phase0-findings.md)), the stable Claude path synchronously marks
+that mutation immediately before its first write attempt. It never offers the mutation to another
+worker stream. If the stream ends after a write attempt but before Claude's delivery acknowledgement,
+the wrapper permanently closes that remote `cse_*`, publishes terminality, and leaves the local TUI
+alive; it does not retry into possible duplicate execution. The separately parked compatibility path
+does not weaken this stable boundary. Claude replies → the worker→web path above.
 
 **History follows the selected relay path, never the worker.** A Workflow subscriber can re-read the
 current run's persistent stream by absolute `startIndex`; because that profile lacks safe cap
@@ -1731,8 +1796,10 @@ call). See §14.)
   (§6B). Discovery and presence are messages on the per-identity **bus**, not rows in an application
   registry. Ciphertext frames go out over **SSE from a streaming Vercel Function**, backed by the
   Workflow persistent resumable stream. A subscriber can resume that run from an absolute
-  `startIndex`, including index 0; the stream is not a rolling recent-frame buffer. When the SSE
-  connection hits Vercel's function-duration cap (or drops), the client reconnects to the same run.
+  `startIndex`, including index 0; the stream is not a rolling recent-frame buffer. The SSE route
+  emits exact `: rotate` 240 s after its response body starts, nominally 60 s before the configured
+  300 s Function wall, and the client reconnects to the same run under its existing `startIndex` and
+  dedup policy. Unmarked EOF remains a transport failure.
   The wrapper also keeps host `#log` and answers `catch_up`, but current production has no
   pre-25,000-event rollover, generation handoff, or host recovery cursor for Workflow, so the adapter
   correctly reports `durable:false` and cannot promise continuity across the run-cap cliff.
@@ -1772,7 +1839,7 @@ live delivery + reconnection feel natural without the workflow becoming the reco
 All frames share the §8 envelope (AEAD ciphertext + cleartext routing header).
 `dir`: **out** = wrapper→web, **in** = web→wrapper. **Three AEAD keys** (§4.2):
 **content** → `K_session` (transcript); **control** → `control_key` (control plane);
-**meta** → `K_meta` (`accepted`/`session_announce`). Every frame is AEAD-authenticated —
+**meta** → `K_meta` (`accepted`/`session_announce`/`session_terminal`). Every frame is AEAD-authenticated —
 the broker forges nothing.
 
 Content frames (transcript; encrypted under **`K_session`**; carry `seq`). A `user`
@@ -1787,7 +1854,7 @@ frame is content in **both** directions — `in` = the typed prompt (carries
 | `system` / `status` / `rate_limit` | out | RC | lifecycle (init, "requesting", limits) |
 | `can_use_tool` | out | RC | permission request, *if* a mode ever gates a tool |
 
-Control frames (**in** — web client → wrapper → worker, on the **session** channel;
+Compatibility control frames (**in** — web client → wrapper → worker, on the **session** channel;
 encrypted under **`control_key`** and carrying `msg_id` in the authenticated header, §8).
 **Shipped A0 replay defense is the process-local `msg_id` seen-set (clock-free).** For `interrupt`,
 `set_model`, `set_mode`, and `end`, the encrypted body also carries `expiry`, stamped exactly
@@ -1796,7 +1863,7 @@ reject a first delivery after it expires. `catch_up` is stamped with the same fi
 validate it; `permission` currently carries no expiry and its branch performs no expiry check. Thus an
 old authenticated `catch_up` can cause redundant replay after a non-durable host restart, while a
 withheld permission answer can act if its native gate is still open (§4.3 and
-[Protocol & Runtime §11](protocol.md#11-control-verbs-and-freshness)):
+[Protocol & Runtime §11](protocol.md#11-compatibility-control-verbs-and-freshness)):
 
 | kind | maps to RC verb | notes |
 | --- | --- | --- |
@@ -1824,26 +1891,40 @@ Our non-content meta frames (**AEAD under `K_meta`** — broker can't forge them
 | kind | dir | notes |
 | --- | --- | --- |
 | `accepted` | out | wrapper ack of a client frame: `{client_msg_id, seq}` |
-| `session_announce` | out (bus) | the **periodic broadcast** that is *both* discovery and presence: `{session_id, title, cwd, identity_label, status, last_activity, sent_at, incarnation, incarnation_started_at, announce_seq}`, whole payload AEAD under `K_meta`. Each **independent session controller** broadcasts **its own**, one per `ANNOUNCE_INTERVAL` (§4.3) + on change. Shipped A0 keys by `session_id`, folds by incarnation/generation (legacy `sent_at` fallback), and classifies the retained row with the 45 s connected + 30 s reconnecting ladder; it does not freshness-reject an old announce at admission. Selected A1 adds the certified two-sided freshness check. No client discovery request frame reaches the wrapper, and there is no challenge/`beat_seq`. |
+| `session_announce` | out (bus) | the **periodic broadcast** that is *both* discovery and presence: `{session_id, title, cwd, sent_at, incarnation, incarnation_started_at, announce_seq, status, phase, needs, git, capabilities, harness, [mode]}`, whole payload AEAD under `K_meta`. Each **independent session controller** broadcasts **its own**, one per `ANNOUNCE_INTERVAL` (§4.3) + on change. Shipped A0 keys by `session_id`, folds by incarnation/generation (legacy `sent_at` fallback), derives `freshnessAt` as the replay-stable first value, stale-edge value for host lead over 5 s, or `min(sentAt, receivedAt)` otherwise, and classifies the retained row with the 45 s connected + 30 s reconnecting ladder. Old/far-future announces may remain as stale ordering evidence but cannot grant fresh write authority. Selected A1 adds certified two-sided rejection. No client discovery request frame reaches the wrapper, and there is no challenge/`beat_seq`. |
+| `session_terminal` | out (bus) | exact `{"v":1}` lifecycle tombstone under `K_meta`, with canonical `dir:out`, `seq:null`, `msg_id:terminal-<session_id>`, absent `client_msg_id`, epoch 0, and part 0/1. After live presence started, session close latches the old remote session non-writable, bypasses transcript HOL, aborts outstanding live announces, and makes up to four total 1 s-bounded publish attempts (the initial attempt plus three retries). Broker adapters absorb retries and suppress every later live announce; the viewer removes the row permanently and warns that the final tail may be incomplete. |
 
 (`catch_up` on a non-durable backend re-posts the original content frames with their
 `seq`/`msg_id`; durable subscription replay yields the stored frames directly. The client's orderer
 dedups either path—there is **no** separate `historical` kind or wire flag. There is
-**no** server-side `heartbeat`/registry and **no** `identify?`/`present` — presence is a
-signed `session_announce` reduced to a client-side connected/reconnecting/disconnected state.)
+**no** server-side `heartbeat`/registry and **no** `identify?`/`present`. A live
+`session_announce` reduces to the client-side connected/reconnecting/disconnected ladder; an
+authenticated `session_terminal` is the separate absorbing lifecycle fact.)
 
 ### Channels (two logical kinds, both addressed by a derived token—§6B)
 
-- **identity bus** (`bus:${identity_id}`): one channel per identity, **identity-level only**.
-  Wrappers periodically broadcast `session_announce`; clients tail it and compute presence from
-  `sent_at` freshness. **Discovery + presence only**—no client discovery request frame to the
-  wrapper and no control/turn frames.
+- **identity bus** (`bus:presence-v2:${identity_id}`): one channel per identity, **identity-level
+  only**. Wrappers periodically broadcast `session_announce` and publish one canonical
+  `session_terminal` after an announced session closes; clients tail it and compute live presence from
+  bounded local `freshnessAt` while retaining raw `sent_at` for authenticated ordering and treating
+  terminality as absorbing. **Presence lifecycle only**—no client
+  discovery request frame to the wrapper and no control/turn frames. The namespace version prevents
+  a pre-terminal-semantics Workflow run from sharing this bus.
 - **per-session stream** (`sess:${identity_id}:${session_id}`): live turn frames plus all
   per-session traffic—prompts, outputs, `catch_up`, permissions, and RC verbs.
 - **Backend mapping:** Workflow maps each token to one relay run, `resumeHook` publisher, and
   resumable out-stream. SQLite/libSQL maps each token to one channel database, idempotent insert, and
-  indexed subscription poll. The Workflow path consumes hook/step events in both directions; the
-  SQLite path retains sealed frames.
+  indexed subscription poll. Each frame/state query has a hard 15-second ceiling that configuration can
+  only tighten. Both query kinds share a three-consecutive-transient-failure budget; row-bearing frame
+  results and complete successful empty-frame/state decisions reset it. The third transient, a query
+  deadline, or a nontransient failure terminates with a coordinate-free SSE error, evicts/releases the
+  client, and exposes the outage to the host fail-stop circuit. Channel disappearance remains immediate
+  permanent storage loss. Its independent continuity catalog makes channel creation create-once:
+  physical provision → readiness/preparation → core schema → singleton witness → catalog → first frame.
+  A catalogued channel whose database, either core table, or singleton witness disappears is permanent
+  storage loss, never authority to recreate an empty log.
+  The Workflow path consumes hook/step events in both directions; the SQLite path retains sealed
+  frames and an opaque terminal-session fence.
 - No presence channel and no registry — both are subsumed by the bus.
 
 ### A0 transport and host state
@@ -1853,8 +1934,11 @@ stream, its absolute-index replay positions, and the inbound **hook**; stream ch
 for that run rather than rolling out of a recent-frame window. It has no `msg_id` dedup set, and the
 shipped adapter has no safe rollover or recovery fence at the 25,000-event run cap, so it is
 operationally non-durable. On the durable SQLite backend, each channel's database retains the sealed
-frame log, while `UNIQUE(gen, msg_id, part)` makes an exact physical re-POST idempotent inside that
-channel generation. Neither transport is a durable semantic command/result map.
+frame log, while `UNIQUE(gen, msg_id, part)` makes only a byte-identical canonical wire-frame re-POST
+idempotent inside that channel generation; changed bytes fail as a hard collision. A freshly sealed
+retry of an already-fenced canonical `session_terminal` is the sole semantic exception: it neither
+inserts nor updates the first terminal bytes. Neither transport is a durable semantic command/result
+map.
 
 The viewer's `FrameOrderer` separately has a bounded 8,192-key rendering-dedup window. On
 both backends, the host wrapper's per-session relay has an incarnation-long, unbounded
@@ -1865,11 +1949,11 @@ empty when durable broker subscription supplies that sealed history
 ([Protocol & Runtime §5](protocol.md#5-delivery-discipline-viewer-frameorderer-host-command-dedup)).
 The Workflow run provides live delivery and same-run absolute-index replay up to its unsupported cap
 boundary; the durable backend retains ciphertext projection history with explicit recovery cursors.
-The host supplies incarnation-local replay suppression, and the bus provides discovery/presence
-messages. None proves a durable semantic command outcome.
+The host supplies incarnation-local replay suppression, and the bus provides authenticated presence
+lifecycle. None proves a durable semantic command outcome.
 
 ### Lifecycle (the natural flow)
-RC enabled → the session's wrapper joins the identity **bus** (`bus:${identity_id}`), starts
+RC enabled → the session's wrapper joins the identity **bus** (`bus:presence-v2:${identity_id}`), starts
 **broadcasting its own `session_announce`**, + opens its per-session stream.
 Live turn → `assistant`/`result` flow the session out-stream, `user` arrives via the
 session channel; clients tail; the wrapper emits `accepted`, then echoes/records the user
@@ -1880,9 +1964,12 @@ SQLite/libSQL backend, subscription replays the broker frame log and the host ig
 client opening cold tails the bus from `startIndex=-64` → sees up to the last 64 retained
 `session_announce` frames at connection time, including stale ones that become
 reconnecting/disconnected rows.
-Session ends / wrapper exits (it never outlives the CLI) → it stops broadcasting → its last announce
-ages through the 45 s connected threshold and 30 s reconnecting grace → clients mark the row
-disconnected. Claude retains native history, but it does
+Session ends / wrapper exits (it never outlives the CLI) → after any live announce, the relay publishes
+the canonical absorbing `session_terminal` independently of the transcript queue → clients remove the
+row, refuse later commands/announces, and show the incomplete-tail disclosure. If all bounded attempts
+fail, the old remote session remains locally closed/non-writable while the last announce ages through
+the 45 s connected threshold and 30 s reconnecting grace to disconnected. Claude retains native
+history, but it does
 not backfill RC; viewer projection may remain on an old Workflow run or in a durable broker frame log,
 but an A0 relaunch starts a new logical row and does not bind either old route to it.
 
@@ -1891,16 +1978,21 @@ but an A0 relaunch starts a new logical row and does not bind either old route t
 The "registry" is **not a stored table** — it's a **per-machine message bus** (one per
 `identity_id`, which is now a machine id). Every
 **connected** session (an independent relay controller; one wrapper process may host several)
-**periodically broadcasts** its own signed `session_announce`; a client tails the bus, keys
+**periodically broadcasts** its own AEAD-sealed `session_announce`; a client tails the bus, keys
 by `session_id`, and renders every generation-accepted announce among the last 64 retained bus frames
 requested at connection time.
 It classifies a row **connected** for 45 s, then **reconnecting** for 30 s, then
-**disconnected**. Stale rows are retained rather than freshness-rejected. There is no materialized
-server `heartbeat`/`last_seen` state; both Workflow and SQLite/libSQL may retain sealed announce
-frames, but the client's `startIndex=-64` request provides only incomplete offline listing (§6C).
+  **disconnected**, using the bounded local `freshnessAt` rather than raw host time. Stale rows are
+  retained rather than freshness-rejected, but exact replay cannot refresh a mounted row and host lead
+  beyond 5 s starts reconnecting/non-writable even on a cold reload. A canonical authenticated
+`session_terminal` instead removes and permanently tombstones that row. There is no plaintext
+server `heartbeat`/`last_seen` state; both Workflow and SQLite/libSQL retain sealed lifecycle frames,
+and SQLite also retains an opaque terminal fence, but the client's `startIndex=-64` request provides
+only incomplete offline listing (§6C).
 **Timestamp-driven presence**
 (§4.3)—no client discovery request frame to the wrapper, no challenge, and no `beat_seq`.
-**Channel split:** the **bus** carries only `session_announce` broadcasts; all per-session
+**Channel split:** the **bus** carries only `session_announce`/`session_terminal` lifecycle records;
+all per-session
 traffic — prompts, turn frames, `catch_up`, permissions, RC verbs — flows on that
 session's own channel (`sess:${identity_id}:${session_id}`), so the bus stays low-rate.
 (Settled by a research→design→verify panel against the SDK type defs — §13/§14A.)
@@ -1920,15 +2012,15 @@ returned `Hook` **carries `runId`**. So a **deterministic token is a stable chan
 name**, and the whole bridge is:
 
 ```text
-bus channel  =  "bus:" + identity_id                 # client-derivable; no lookup
-  publish →   resumeHook("bus:"+identity_id, frame)  # wake/announce (value-addressed)
-  subscribe → getHookByToken("bus:"+identity_id).runId
+bus channel  =  "bus:presence-v2:" + identity_id     # client-derivable; no lookup
+  publish →   resumeHook("bus:presence-v2:"+identity_id, frame)  # lifecycle (value-addressed)
+  subscribe → getHookByToken("bus:presence-v2:"+identity_id).runId
               → getRun(runId).getReadable({startIndex})   # the live stream
 ```
 
 - **Creation is explicit `start()`, not `resumeHook`.** The first wrapper to enable RC
   for an identity calls **`start()`** to create the bus run, which immediately
-  `createHook("bus:"+identity_id)` (custom token — verified, §13). `resumeHook` only *wakes*
+  `createHook("bus:presence-v2:"+identity_id)` (custom token — verified, §13). `resumeHook` only *wakes*
   an existing run; it never creates one (verified). So a wrapper coming online does
   **resume-or-start**: try `getHookByToken`/`resumeHook`; on a missing/dead run `start()`
   then retry **with bounded exponential backoff + jitter** (**50 ms base, ×2, ≤2 s ceiling,
@@ -1950,10 +2042,11 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   The run is **shared by all of the identity's sessions** (each publish just emits a
   `hook_received` event and resumes it); `getHookByToken` keeps resolving and `start()`'s
   random runId is irrelevant because the **token** is the durable address. **Consequence:**
-  when the last session leaves, the bus run does **not** auto-end — it simply goes quiet and
-  the token stays resolvable. A cold client classifies any announcements in its last-64-frame tail slice
-  as reconnecting/disconnected, or renders an empty list if none remain; either result is harmless
-  for liveness. The run ends only if the workflow returns, fails, is cancelled, or is explicitly
+  when the last session leaves, the bus run does **not** auto-end — it retains the emitted terminal
+  lifecycle and stays resolvable. A cold client applies any terminal markers and classifies remaining
+  announcements in its last-64-frame tail slice as reconnecting/disconnected, or renders an empty
+  list if none remain; either result is harmless for liveness. The run ends only if the workflow
+  returns, fails, is cancelled, or is explicitly
   closed. *Optional* self-cleanup: to free the token
   on inactivity we can race the hook against a **durable `sleep`** (the documented pattern for
   a hook timeout, vercel/workflow#553) and complete the run if no publish arrives for, say,
@@ -1968,7 +2061,7 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   controller must fence publishers, close before the cap, publish a durable generation handoff, and
   prove retry/cursor behavior. Selected A1 instead requires the durable generation-manifest broker in
   §4.3.
-- **"Connected" derives from announce age, not mere bus existence.** A resolvable bus only means a
+- **"Connected" derives from bounded local announce freshness, not mere bus existence.** A resolvable bus only means a
   wrapper once created it. A0 renders generation-accepted announcements from the requested
   last-64-frame slice and applies its
   45 s connected + 30 s reconnecting ladder; an old replay can therefore create a disconnected row.
@@ -1977,8 +2070,9 @@ bus channel  =  "bus:" + identity_id                 # client-derivable; no look
   doesn't call it directly — it hits our **`GET /api/stream?identity=…`** Function, which
   resolves the token and pipes the run's stream back as SSE (gated by `Bearer auth_token`).
 
-So the application registry is **nothing**: no rows, presence keys, or pointer. Discovery/presence
-live as sealed frames on the bus. Projection history comes from the current Workflow run's persistent
+So the application registry is **nothing**: no plaintext session rows or token→run pointer.
+Presence lifecycle lives as sealed frames on the bus; the SQLite adapter's opaque terminal fence is
+only replay suppression, not a queryable registry. Projection history comes from the current Workflow run's persistent
 sealed stream plus host `#log`/`catch_up`, or from sealed broker replay in SQLite/libSQL; Claude's
 native transcript remains separate.
 
@@ -1988,7 +2082,7 @@ native transcript remains separate.
 | --- | --- | --- |
 | **native transcript/effects (the record)** | Claude `.jsonl` plus the working tree/processes it mutated | durable host evidence |
 | **viewer projection history** | current Workflow run's persistent out-stream + wrapper in-memory `#log` | provider-backed for that run and process-local backup; no safe run-cap/restart handoff |
-| **the bus** (identity-level: discovery + presence only) | **one Workflow run per identity**, addressed by token `bus:${identity_id}` | provider-backed for that run; shipped cap rollover is not implemented |
+| **the bus** (identity-level: presence lifecycle only) | **one Workflow run per identity**, addressed by token `bus:presence-v2:${identity_id}` | provider-backed for that run; shipped cap rollover is not implemented |
 | **per-session frames** (high volume) | per-session Workflow out-stream | provider-backed for that run; 25,000-event cap cliff |
 | **functions** | — | **none** |
 
@@ -2005,7 +2099,8 @@ exists until a wrapper enables `/remote-control` and starts broadcasting):
    §4.2a) — no HKDF, no `S`. The pass never leaves the device.
 2. **Subscribe to the bus.** `GET /api/stream?identity=identity_id`
    (`Bearer auth_token` — broker recomputes `identity_id=trunc(SHA256(auth_token))` and
-   checks it matches, §4.2). The Function `getHookByToken("bus:"+identity_id)` →
+   checks it matches, §4.2). The Function
+   `getHookByToken("bus:presence-v2:"+identity_id)` →
    **HookNotFound ⇒ no bus ⇒ nothing connected ⇒ `200` empty**; else
    `getRun(runId).getReadable({startIndex:-64})` → SSE, reading the **last 64 retained bus
    frames**. Each live session's latest `session_announce` is normally present and arrives at once.
@@ -2014,10 +2109,14 @@ exists until a wrapper enables `/remote-control` and starts broadcasting):
    (Offline/absent/mismatch all return the same empty, so status never leaks an *offline*
    identity; a *connected* one is observable to anyone holding its `auth_token`.)
 3. **Render—pure subscribe, no ask.** Decrypt each `session_announce{…, sent_at}` (AEAD
-   `K_meta`), fold it by incarnation/generation, and add/refresh the row. `connState` classifies it
-   connected, reconnecting, or disconnected from its age; A0 does not discard it merely for being
-   stale. The list fills from that last-64-frame slice and stays current from the wrappers' periodic +
-   on-change broadcasts. No client→wrapper discovery request frame is sent.
+   `K_meta`), fold it by incarnation/generation, and add/refresh the row. Derive a bounded local
+   `freshnessAt`: keep the first value for an exact coordinate; use the stale edge for host lead over
+   5 s; otherwise use `min(sentAt, receivedAt)`. Then classify it connected, reconnecting, or
+   disconnected. A0 does not discard the
+   raw announce merely for being stale. Decrypt canonical `session_terminal` markers, permanently tombstone/remove that session,
+   and ignore every later announce. The list fills from that last-64-frame slice and stays current
+   from the wrappers' periodic + on-change broadcasts. No client→wrapper discovery request frame is
+   sent.
 4. **Open a chat.** Tap a session → subscribe to **its per-session stream**, addressed by
    the **derived token** `sess:${identity_id}:${session_id}`
    (`GET /api/stream?identity=…&session=…` → `getHookByToken`→`getRun`→`getReadable`) + send
@@ -2029,8 +2128,9 @@ While RC is on, each **independent session controller** **broadcasts**
 immediately on change, AEAD under `K_meta` (`sent_at` = wrapper wall clock, inside the
 ciphertext). Current wrappers also include an opaque `incarnation`, its wall-clock
 `incarnation_started_at`, and a strict per-incarnation `announce_seq`. A client folds each
-session by that restart/generation order (legacy frames fall back to `sent_at`), then shows it
-**connected while `age < 45 s`**, **reconnecting** for a 30 s grace anchored when first observed
+session by that restart/generation order (legacy frames fall back to raw `sent_at`), derives
+`freshnessAt` with the exact replay/stale-edge/`min(sentAt, receivedAt)` rule above, then shows it
+**connected while local age `< 45 s`**, **reconnecting** for a 30 s grace anchored when first observed
 stale, then **disconnected**. When broadcasts stop (host sleeps/crashes), the retained row moves
 through that ladder; when it resumes, or a new session starts, the next announce
 un-greys/adds it automatically—without a discovery request frame to the wrapper or a
@@ -2039,10 +2139,11 @@ challenge/`beat_seq`. `FRESH_WINDOW = 60 s` is the separate direct-control expir
 only a wall-clock restart fence, **not** a durable coordinator epoch: a clock-regressed start fails
 stable, while equal starts use opaque-incarnation lexical order. That order prevents flips but cannot
 prove which process is newer; A1 removes that ambiguity.
-**Replay/withhold behavior:** an old timestamp does not become fresh merely because the broker
-replays it, so under an honest clock it cannot turn a disconnected row back to connected. A0 does
-not, however, freshness-reject that frame: a cold viewer may seed an offline row from it, and there
-is no future-skew bound. Selected A1 adds the certified two-sided admission window (§4.3).
+**Replay/withhold behavior:** an exact accepted coordinate retains its first `freshnessAt`, so a
+mounted replay cannot turn a disconnected row back to connected. A cold viewer can seed an old row,
+but raw host time more than 5 s ahead starts at the stale boundary and is non-writable instead of
+being rebased as a fresh keepalive. A0 retains that frame as ordering evidence; selected A1 adds the
+stronger certified two-sided admission rejection (§4.3).
 This is a **purely client-side liveness reduction** with no materialized server presence state; the
 recent broker window offers incomplete, opportunistic offline listing rather than a durable registry
 (§6C). Cost: each session's announce is a bus **event**
@@ -2055,9 +2156,10 @@ but they still consume hook/step events on those runs. Keep the interval generou
 - **Offline listing is opportunistic, not complete.** A cold viewer can show stale rows selected by
   its last-64-frame bus read, but there is no independently queryable registry and older rows may
   fall outside that client-requested slice (§6C).
-- **Presence is timestamp-driven** (§4.3): shipped A0's dot/state ladder trusts the wrapper timestamp
-  without a future-skew admission bound. Clock error can therefore produce a wrong or long-lived dot,
-  but never changes message security (§12). Selected A1 adds the bounded certified window.
+- **Presence is timestamp-driven** (§4.3), but shipped A0's dot/write state uses a replay-stable local
+  freshness clock: at most 5 s host lead is capped at receipt and greater lead starts stale. Clock
+  error can therefore grey a live row, but cannot create unbounded false-online authority and never
+  changes message security (§12). Selected A1 adds the bounded certified rejection window.
 - **Two-call composition** (`getHookByToken`→`getRun`→`getReadable`): each call is
   **docs-confirmed** (§13) — incl. the `getRun(id).getReadable({startIndex})` reconnect in
   the resumable-streams guide — but the *cross-process bus wiring* (resolve a derived token to
@@ -2086,18 +2188,19 @@ reliable offline listing or a history browser. Upstash Redis, Vercel Blob, and N
 shipped SQLite/libSQL broker's sealed per-channel frame log (§6D); that log supplies transport replay,
 not an offline chat registry or plaintext history service.
 
-## 6D. Broker backends — execution-model comparison (why Vercel Workflows, vs per-channel SQLite — and why not Temporal)
+## 6D. Broker backends — execution-model comparison (why SQLite ships for Claude 1.0)
 
 The broker is a **pluggable port** (`BrokerBackend` in `apps/web/lib/broker/backend.ts`):
 `publish(token, frame)` and `subscribe(token, {startIndex})`, selected per-request via the
-`x-broker-backend` header / `?backend=`. Three implementations ship — `vercel` (live default),
-`sqlite` (one libSQL database per channel token—local file or Turso Cloud), `local` (dev/test). They divide on **one
+`x-broker-backend` header / `?backend=`. Three implementations ship — `vercel` (unset code fallback,
+compatibility/experimental), `sqlite` (the supported Claude 1.0 default: one libSQL database per
+channel token—local file or Turso Cloud), and `local` (dev/test). They divide on **one
 axis: who runs the execution, and whether reads are push or poll.** Temporal was evaluated as a fourth
 backend and **deliberately not adopted** (it doesn't fit a live relay's shape — the analysis below);
 the implementation has been removed. This section captures the verified design of each so the choice of
 default is auditable.
 
-### Vercel Workflows — the live default (per-event materialization, push reads)
+### Vercel Workflows — compatibility/experimental (per-event materialization, push reads)
 
 The headline property: **there is no orchestrator service and no standing worker.** An SWC plugin
 compiles each `"use workflow"` and `"use step"` into separate **Vercel Function** handlers reachable
@@ -2181,13 +2284,41 @@ worker at all**—broker subscription serves replay directly from the database. 
 (`SELECT … WHERE id > cursor`), but
 replay and live are the *same* query (no gap/dupe boundary), and unlike Vercel it is **flagged
 durable**, so broker subscription serves replay and the host can retire its `#log`/`catch_up` replay. The defining choice
-is **one database PER channel token** (not one shared log): physical isolation, retention = drop the db,
-a per-channel write lock, and no cross-channel at-rest exposure. The **only** deployment variable is
+is **one database PER channel token** (not one shared log): physical isolation, a per-channel write
+lock, and no cross-channel at-rest exposure. Ordinary retention is deliberately indefinite:
+inactivity cannot distinguish an idle live session from an ended one because keepalives use a
+different bus, and the broker cannot authenticate collection from ciphertext. `sweep()` therefore
+deletes and compacts nothing. The HTTP dev-sweep route also returns 501 without constructing a locator:
+its truncated database-name scope cannot prove exact deployment ownership. Low-level manual tooling is
+not application retention authority. The **only** deployment variable is
 where each db lives — a local `file:` (dev) or a Turso Cloud database created on demand via the Platform
 API and connected with a group token (prod) — behind the `DbLocator` seam, with no code change. Schema
 and the RC-event/broker-frame split are in `docs/durable-log-design.md`. (This is our **own**
 `BrokerBackend` port talking to libSQL directly — `publish`=`INSERT`, `subscribe`=poll — **not** a
 Workflow DevKit "World"; the World note below covers why building one would be more machinery for less.)
+
+The poll is bounded liveness, not an infinite masking loop. Every query has a hard 15-second maximum;
+`RC_SQLITE_POLL_QUERY_TIMEOUT_MS` can only reduce it. Frame and state polls share a three-consecutive-
+transient-failure budget. A row-bearing frame query resets it, while an empty frame query resets only
+after the paired state query succeeds. The third transient, any timeout, or any nontransient failure
+ends the subscription with a coordinate-free error and evicts/releases the client. A missing channel
+still fails immediately as permanent storage loss.
+
+The durable catalog is not collection authority, but it is a mandatory create-once continuity
+witness. For a genuinely new token, the order is physical provision → Turso readiness/preparation →
+core schema → singleton `channel` witness row → catalog commit → first frame. A catalogued token whose
+physical store, either core table (`channel` or `frames`), or singleton witness row is missing throws
+`ChannelStorageLossError` and is never recreated as an empty log. An intact uncatalogued store with its
+witness is recatalogued; an empty pre-witness provision may finish initialization; and the derived
+`presence_terminals` projection can be rebuilt from retained terminal frames. Every newly opened Turso
+channel client awaits readiness before caching or schema access. Every continuity-index build or rebuild
+first forces Platform create-or-existing confirmation, then opens and awaits readiness before constructing
+`SessionIndex`, so no catalog DDL/read precedes readiness; failure closes the client and clears the build
+promise. The default hard readiness wall is 30 s and an environment override can only tighten it. Only
+the server-derived `ChannelStorageLossError` maps to the fixed coordinate-free HTTP 410 JSON disposition
+with `code:"channel_storage_lost"`; when that exact status-and-code pair comes from identity-bus
+publication, the host closes the Session. A bare 410 or that code on any other status remains an ordinary
+broker error, and ordinary announce 5xx remains advisory.
 
 ### The World abstraction (why "no worker" is a Vercel property, not universal)
 
@@ -2213,17 +2344,18 @@ workflows at all (no event-log replay, no step queue, no executor) — the DB *i
 matter if we wanted the full durable-execution programming model (steps, hooks, replay) backed by Turso
 instead of Vercel's managed platform; the relay doesn't need that model.
 
-### Verdict (the auditable default)
+### Verdict (the auditable profiles)
 
 | | reads | writes | who runs compute | standing process | durability | infra pieces |
 | --- | --- | --- | --- | --- | --- | --- |
-| **Vercel** (default) | **push** (`getReadable` cursor/viewer) | `resumeHook` (event-driven) | **Vercel**, per-event | **none** | capped stream + host `#log`; cap handoff not shipped | 1 |
-| **Sqlite** | poll (`id > cursor`) | `INSERT … ON CONFLICT` | nobody (DB serves reads) | **none** | **ordered log per channel token** (file or Turso Cloud) | 1 |
+| **Vercel** (unset code fallback; compatibility only) | **push** (`getReadable` cursor/viewer) | `resumeHook` (event-driven) | **Vercel**, per-event | **none** | capped stream + host `#log`; cap handoff not shipped | 1 |
+| **Sqlite** (Claude 1.0 deployment default) | poll (`id > cursor`) | `INSERT … ON CONFLICT` | nobody (DB serves reads) | **none** | **ordered log per channel token** (file or Turso Cloud) | 1 |
 | *Temporal (evaluated, not adopted)* | poll a query | signal (2k pending cap) | your worker | standing worker | history (capped → terminates) | 1 (wrong-shaped) / 2 with Redis |
 
 Vercel Workflows is the one managed system giving **event-driven execution + push fan-out + zero hosted
-infra** in a single piece (hence the live default); per-channel **SQLite** is the clean **durable-log**
-backend (local files in dev, one Turso Cloud database per channel token in prod). Temporal is durable orchestration
+infra** in a single piece, but its missing recovery cursors and cap rollover make it non-durable to the
+stable host. Per-channel **SQLite** is therefore the Claude 1.0 **durable-log** production default
+(local files in dev, one Turso Cloud database per channel token in prod). Temporal is durable orchestration
 that would need an external pub/sub bolted on to be a broker — strictly more infra for no gain here, so
 it was evaluated and dropped, not shipped.
 
@@ -2235,7 +2367,7 @@ runs), 1000 claudes pumping ~10 frames/sec/run (~1000/sec aggregate), and *no vi
 The load-bearing fact: **the host posts unconditionally.** `#pumpUpstream` (`host/rc/relay.ts`)
 `#emit`s every frame the worker produces as it happens, and never checks for a viewer — it *can't*,
 because the zero-knowledge broker API gives the host **no viewer-presence back-channel** (the
-bus carries host→viewer announces; there is no viewer→host "I'm watching" beat). So zero viewers does
+bus carries host→viewer presence lifecycle; there is no viewer→host "I'm watching" beat). So zero viewers does
 **not** reduce the publish load — the fleet pays full relay price to broadcast into the void.
 
 Per-frame cost on a run's event log ≈ **~4 events**: 1 `hook_received` (the `resumeHook`) + the `emit`
@@ -2269,24 +2401,25 @@ to the host. The honest mitigations, in order: (a) add a sealed presence beat so
 outbound on ≥1 viewer (drops an idle fleet to the ~20 s `ANNOUNCE_KEEPALIVE_MS` announce floor); (b)
 use the **Turso** backend, which has no per-run event cap (publish is `INSERT`, so the Workflow replay
 tax vanishes—the cost shifts to libSQL write throughput and at-rest ciphertext retention); or (c)
-implement and retain-proof a fenced pre-cap close/generation handoff. Today's Vercel default has both
-the viewer-gating and cap-handoff gaps.
+implement and retain-proof a fenced pre-cap close/generation handoff. The Vercel compatibility
+profile has both the viewer-gating and cap-handoff gaps; it is the unset code fallback, not the
+stable-Claude deployment default.
 
 ## 7. Identity, "spaces" & onboarding (one machine at a time)
 Hierarchy: **machine (identity_id) → its spaces (each space = one claude instance =
 one chat).** A space is *not* a container of sessions — it **is** one session.
 - The onboarded pass = one **machine**; **each claude instance on it = one
   space (chat)**. The client holds **exactly one pass at a time** (no multi-machine
-  list) and renders that machine's spaces with decrypted friendly names (default hostname
-  for the machine, claude's generated title for each space — both from the `K_meta`
-  `session_announce`; rename and local aliases are deferred, §1A/§6C). One pass
+  list) and renders that machine's sessions using the configured announce title (currently
+  `remote-claw` by default), cwd, and git metadata. A0 announces neither a hostname nor a
+  Claude-generated title; rename and local aliases are deferred (§1A/§6C). One pass
   surfaces that **one machine's** every chat at once; to watch a second machine you onboard
   *its* pass too (one active at a time).
 - **Switch machine:** onboard a different machine's pass to **replace** the current one — its
   keys load, the prior pass is forgotten from the device (§1A E),
   and the client subscribes to the new machine's **bus** (`GET /api/stream?identity=…`) →
   its connected sessions' broadcast `session_announce`s populate its spaces (§6B).
-- Spaces are listed gchat-style (encrypted title + last-activity, online dot), all under
+- Spaces are listed gchat-style (encrypted title + latest announce time, online dot), all under
   the one active machine. Routing metadata (`identity_id`, `session_id`, timestamps,
   sizes) is unavoidably visible to the broker — minimized and documented.
 
@@ -2302,7 +2435,8 @@ explicit indexed frame log and recovery cursors, while retaining no plaintext tr
 semantic command/result map (§6D). The separate `/api/handoff` bootstrap plane uses its own sealed
 short-TTL store (§4.5).
 
-Shipped A0 relay **wire frame** (`session_announce` alone rides the identity bus; every other frame
+Shipped A0 relay **wire frame** (`session_announce` and `session_terminal` alone ride the identity bus;
+every other frame
 rides its per-session stream). Workflow retains it as an opaque chunk for the current run; the durable
 SQLite/libSQL profile stores it as an indexed sealed frame row with recovery cursors:
 
@@ -2354,7 +2488,7 @@ Shipped A0 `record_kind` belongs to this closed taxonomy (aligned with §6A):
 - **meta** (AEAD under `K_meta`, `dir:out`): `accepted` `{client_msg_id, seq}`;
   `permission_resolved` (replayable native/projection gate state);
   `session_announce` (bus, the **periodic broadcast**)
-  `{session_id, title, cwd, identity_label, status, last_activity, sent_at, incarnation, incarnation_started_at, announce_seq}`
+  `{session_id, title, cwd, sent_at, incarnation, incarnation_started_at, announce_seq, status, phase, needs, git, capabilities, harness, [mode]}`
   — **the whole payload is inside the ciphertext**, so the broker reads none of it.
 
 Selected A1 keeps those content, chat-control, and meta families and adds meta `action_result`; its
@@ -2397,17 +2531,21 @@ that same writer in the exact §4.3 order, but its frame parser and encryption r
 by A1.0; CBOR and ad-hoc `a|b|c` concatenation are not alternatives. The presence
 fields (`sent_at`, ordering tags, names/titles/status) live **inside** the `K_meta` payload, not the
 cleartext header. Shipped A0 opens an AEAD-valid announce, folds it by
-`incarnation_started_at`/`announce_seq`, and applies the 45 s connected + 30 s reconnecting display
-ladder; it does not freshness-reject an old or future-skewed frame at admission. Selected A1 adds the
+`incarnation_started_at`/`announce_seq`, derives a replay-stable local `freshnessAt` with a 5 s
+future-skew ceiling, and applies the 45 s connected + 30 s reconnecting display ladder. It may retain
+an old or farther-future frame as stale ordering evidence, but that evidence cannot grant liveness.
+Selected A1 adds the
 certified two-sided `now − FRESH_WINDOW ≤ sent_at ≤ now + SKEW` liveness check, which supplies its
 bounded stale-replay claim (§4.3).
 
-Presence has **no materialized server state**. Shipped A0 retains a generation-accepted
-`session_announce` row and derives connected/reconnecting/disconnected from its age; the next
-broadcast un-greys/adds it automatically (§6B). A durable broker may retain the sealed announce
-frame, but there is no server-side `heartbeat`/`last_seen`; `last_activity` (in the decrypted
-announce) drives client-side "most-active first" sorting. Selected A1 adds strict certified
-freshness admission.
+Live presence has **no plaintext materialized registry**. Shipped A0 retains a generation-accepted
+`session_announce` row and derives connected/reconnecting/disconnected from bounded local freshness;
+the next
+broadcast un-greys/adds it automatically unless an authenticated terminal already fenced that
+session (§6B). Workflow reconstructs its absorbing terminal set while replaying the bus run;
+SQLite/libSQL retains an opaque `session_id` terminal fence atomically with the sealed marker. There
+is still no server-side `heartbeat`/`last_seen`; the decrypted announce's `sent_at` drives
+client-side newest-announce-first sorting. Selected A1 adds strict certified freshness admission.
 
 The outward data plane has **two endpoints** (both gated by `Bearer auth_token` §4.5,
 self-verifying, ciphertext only): **`POST /api/relay`** publishes a bus or per-session frame, and
@@ -2434,7 +2572,7 @@ count used to fence a new durable host incarnation. Neither profile adds `/api/i
    (`.jsonl`) remains the separate durable native record and is **not** re-streamed over RC—there is
    no worker backfill (grounded—§6/§17). Neither profile persists a plaintext transcript, semantic
    command/result map, or offline registry; offline listing remains deferred (§6C).
-2. **Realtime transport → pluggable, with no third-party fan-out service.** The live-default Workflow
+2. **Realtime transport → pluggable, with no third-party fan-out service.** The compatibility Workflow
    profile uses SSE from a streaming Function backed by the Workflow persistent resumable stream;
    subscribers replay the current run by absolute index, and host `#log`/`catch_up` supplies a
    redundant process-local projection source. The shipped SQLite/libSQL profile exposes the
@@ -2461,7 +2599,7 @@ count used to fence a new durable host incarnation. Neither profile adds `/api/i
    sends nothing to the broker; only on first `/remote-control` does the wrapper join
    the identity bus and become discoverable (§3.2, §6B, §15 #2).
 8. **Registry → a per-identity value-addressed bus, NO application registry store** (§6B). A Workflow can't
-   be a queryable index, but `getHookByToken("bus:"+identity_id)` resolves a derived
+   be a queryable index, but `getHookByToken("bus:presence-v2:"+identity_id)` resolves a derived
    token → run → stream (verified in the SDK types, §13/§14A), so discovery + presence
    are answered **live** by connected wrappers on the bus — no rows, no presence keys,
    no pointer. The two data-plane endpoints are `/api/relay` and `/api/stream`; `/api/seq` exposes the
@@ -2517,16 +2655,17 @@ phase0/            unchanged — the Python reference + protocol findings
   transparent wrapper skeleton (parse/strip the `--rc-*` namespace, classify tokens,
   forward all other args to `claude`, `--` escape), and the identity surface (§3.1):
   `--rc-identity` (idempotent `O_CREAT|O_EXCL` create-once into the single local secret
-  file, derive ids, print `rc1_…` + optional `--rc-app` QR/deep-link; host registration
+  file, derive ids, and print `rc1_…`; host registration
   deferred to first RC; and `--rc-confirm <identity_id>` to **replace** it — secure-delete +
-  re-create, §4.4), `--rc-file` (use a specific secret file), `--rc-show-secret`,
+  re-create, §4.4), `--rc-file` (use a specific secret file), `--rc-show-secret`, `--rc-pass`
+  (print a viewer pass, with optional `--rc-qr` and one-time handoff via `--rc-app`/`RC_APP`),
   `--rc-json/--rc-quiet` (never emit `S`). **Depends on P1 `clawsec`** for all key work (HKDF derivation +
   `rc1_` parse/checksum); also wires the broker config (the `--rc-app` origin,
   §3.1/§4.5) used later in P4. Local only (mock app); unit-test the token
   classifier + the create-once/never-reveal/secure-delete invariants.
 - **P3 — Vercel app (the bus). ✅ BUILT 2026-06-09 (`apps/web`, PR10 — §14A).** The two data-plane routes,
   the per-identity-bus / per-session relay workflow, the `Bearer auth_token` admission gate, the §8
-  wire codec, resume-or-`start()` backoff, and the bus-only-announce guard are implemented and
+  wire codec, resume-or-`start()` backoff, and the bus-only-presence-lifecycle guard are implemented and
   **proven end-to-end on the real Workflow runtime** (in-process `@workflow/vitest`): a sealed
   announce/turn round-trips host → bus/session → viewer and the broker sees only ciphertext. The rest
   of this bullet is the original plan it fulfils. `apps/web` (Next.js): **per-identity bearer
@@ -2535,7 +2674,7 @@ phase0/            unchanged — the Python reference + protocol findings
   (`POST /api/relay`, `GET /api/stream`) — the unguessable `identity_id` + required
   `auth_token` is the anti-scanning gate, no app-key; Vercel Deployment Protection may gate the
   whole deployment separately (§4.5); the
-  per-identity bus relay workflow (`bus:${identity_id}` hook + out-stream) and the
+  per-identity bus relay workflow (`bus:presence-v2:${identity_id}` hook + out-stream) and the
   token→stream resolver (`getHookByToken→getRun→getReadable`); **per-session runs are
   resume-or-`start()`ed exactly like the bus** (first inbound/out frame on
   `sess:${identity_id}:${session_id}` creates the run + hook; same 1:1-token / backoff rules
@@ -2566,8 +2705,11 @@ phase0/            unchanged — the Python reference + protocol findings
      see stream **EOF**, publishers are fenced across close/re-`start()`, and no accepted frame or
      cursor is lost; the existing explicit-`__close` test proves only the primitive.
   5. Browser path: `GET /api/stream` obtains World creds (per-request vs cached — measure),
-     pipes SSE within the Function `maxDuration` (300s Hobby / 800s Pro, §13 — reconnect by
-     `seq` past it); `HookNotFound` ⇒ `200` empty.
+     emits exact standalone `: rotate` 240 s after its response body starts and then EOF, nominally
+     60 s before the configured 300 s route wall, and reconnects using the existing consumer-specific
+     `startIndex`/dedup policy. Planned rotation is
+     circuit-neutral; raw/open/data/bodyless
+     EOF and malformed/continued markers are failures. `HookNotFound` ⇒ `200` empty.
   6. Shipped-A0 size/chunk limits (the shared relay route rejects decoded ciphertext at 3.3 MB;
      Workflow then crosses its hook and ≤10 MB writer chunk; target ~3 MB plaintext frames) +
      `(msg_id, part)` dedup.
@@ -2578,7 +2720,9 @@ phase0/            unchanged — the Python reference + protocol findings
     `NODE_EXTRA_CA_CERTS`.
   - `session.ts` — `RelayCore`/`Session`: the downstream(→worker) / upstream(←worker) event bus,
     `initialize`-first (enqueued at session-create so a fast client prompt can't race ahead of it),
-    worker-stream supersede, delivery acks. Async generators replace the Python `threading.Condition`.
+    worker-stream supersede, delivery acks, Claude-only atomic UUIDv4/native-type admission, and a
+    session-wide downstream write-attempt fence. Async generators replace the Python
+    `threading.Condition`; generic tmux/OpenCode `pushUpstream` remains separate from strict MITM intake.
   - `mitm.ts` — an http/tls CONNECT proxy that TLS-terminates the MITM host, **serves** the worker
     `/v1/code/sessions*` endpoints (register, bridge, worker SSE, events, events/delivery, heartbeat,
     PUT worker), and in the default `--rc-inference=anthropic` mode **passes** `/v1/messages` + OAuth
@@ -2587,27 +2731,122 @@ phase0/            unchanged — the Python reference + protocol findings
     remaining Anthropic-origin control/API surface; other hosts blind-tunnel.
   - `relay.ts` — `HostRcRelay` bridges one RC session to the broker (the v2 replacement for Phase-0's
     localhost ClientServer): an OUTBOUND pump (worker upstream → sealed content frames: assistant,
-    result, `tool_use`/`assistant_sub` for sub-agents, `permission_request`; sequence allocation; host
-    `#log` only when non-durable; 409 disposed-channel retry) and an INBOUND pump (client `user` → echo
-    + inject; Workflow `catch_up` → host replay; durable subscription → sealed broker replay;
-    `permission` → control_response), each re-subscribing across channel absence, close, or replacement.
+    result, `tool_use`/`assistant_sub` for sub-agents, `permission_request`) and an INBOUND pump (client
+    `user` → echo + inject; Workflow `catch_up` → host replay; durable subscription → sealed broker
+    replay; `permission` → control_response). Complete must-succeed units from both pumps share one
+    head-of-line publication queue, and native control verbs join it even without allocating a
+    transcript sequence; first failure closes that `cse_*` before a later sequence or native side
+    effect proceeds. Cursor and stream-header attempts have explicit walls; established SSE requires
+    an actual byte within 40 s; exact planned rotation 240 s after response-body start is neutral; raw EOF charges the
+    bounded circuit, and the third consecutive inbound failure closes the session, with the count reset only by
+    clean absence or newly admitted authenticated traffic; and one 65 s wall covers every chunk and 409
+    retry in a logical post, with no replay after timeout ambiguity. Owner abort is normal shutdown.
+    Non-durable replay and ordinary advisory presence remain outside the queue; exact typed permanent
+    identity-bus storage loss is fatal.
   - `launch.ts` + `run.ts` — `remote-claw [claude args] --rc-app <broker>` runs the **real** claude
-    behind the MITM (`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`, `NO_PROXY` cleared), auto-creating the
-    machine identity; lazy — nothing reaches the broker until `/remote-control` registers a session.
+    behind the MITM (`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`, `NO_PROXY` cleared). The stable path checks
+    Linux arm64, exact `2.1.237 (Claude Code)` output, resolves the requested Claude launcher
+    (`RC_CLAUDE_BIN` or `claude` on `PATH`), and requires its resolved target to be a root:root regular mode-`0755` file of the exact
+    size
+    and SHA-256 before identity creation; retains the proved inode through child exit; skips the dormant
+    A1 runtime owner; and stays lazy until `/remote-control` registers a session.
 
-  **Proven end-to-end** by `apps/web/test/e2e/rc-spine.integration.test.ts`: a fake worker speaks the
-  **exact captured `--remote-control` worker protocol** through the real MITM, and the browser viewer
-  drives a turn, bus discovery, history replay (catch_up), **sub-agents** (`Task` + nested replies),
-  **tool-permission grants**, and **multi-client** — all through the real broker on the real Workflow
-  runtime. The real binary's leg is the in-repo Phase-0 capture + the gated `real-rc.prove.test.ts`
-  (needs a claude.ai login + a PTY). The native **`stream-json` SDK transport** (`HostRelay` +
+  The broader compatibility path is proven end-to-end by
+  `apps/web/test/e2e/rc-spine.integration.test.ts`: a fake worker speaks the captured
+  `--remote-control` worker protocol through the real MITM, and the browser viewer drives a turn, bus
+  discovery, history replay, sub-agents, compatibility-only tool-permission grants, and multi-client
+  through the real broker on the Workflow runtime. The exact stable launch boundary—including the
+  production tuple/capability gate, registrar/readiness, and child-env scrubs—is exercised with a real
+  logged-in Claude under a PTY by the gated `apps/web/test/prove/real-launch.prove.test.ts`.
+  `real-rc.prove.test.ts` remains lower-level MITM/relay coverage. The executable
+  `./scripts/run-trusted-real-topology-clean.sh` from the repository root is the only trusted entry;
+  direct Node refuses. Its pinned static BusyBox shell self-attests through `/proc/$$/exe`, then
+  NUL-pipes only seven allowlisted inputs into a clean `env -i` Node runner with no secret in argv. It
+  archives the exact clean HEAD and builds/packs only in isolated source. For a running descendant it
+  first requires the resolved Claude executable path, then selects the exact nonsecret release-payload
+  argument tail rather than the same-inode `--version` probe, and finally attests size, hash, and a
+  release-clean environment through `/proc`. It supplies minimal child
+  environments, verifies the exact live handoff WAF rule,
+  and exercises the deployed broker default without `--rc-backend` or `?backend=`. That installed
+  exact-SHA deployed Turso/browser proof produces the first release-chain receipt,
+  `remote-claw-real-topology-browser-leg/v4`. It binds canonical `sqlite`/Turso organization, group,
+  and `pr-<7sha>` scope, refuses any scope override, and brackets its at-most-30-minute Preview window
+  with BEGIN/END Runtime Log canaries. It must observe the live `: rotate` at a monotonically measured
+  235–270 s, establish a later
+  successful session subscription, re-attest the same pinned Claude descendant, and complete a second
+  received/replied turn on the same `cse_*`. It consumes two Claude inference turns and cannot finish
+  before the rotation boundary.
+
+  The second receipt, `remote-claw-real-topology-inspection/v1`, is produced only by the no-argv
+  BusyBox final-inspection wrapper using a newly minted short-lived read-only group token. Before
+  credentials reach Node, that bootstrap byte-pins BusyBox/Git/Node, requires the clean exact topology
+  HEAD, and materializes and byte-compares its committed wrapper/runner/schema closure from candidate Git
+  blobs. The runner independently rechecks the clean candidate before and after provider access and uses
+  only a private snapshot of the exact byte-pinned `@libsql/client` dependency closure. Its bounded
+  scanner requires a physically stable exact-prefix Turso fleet and scans every table value under read
+  snapshots. Each fleet hostname is either exact legacy `<database>-<organization>.turso.io` or has one
+  extra DNS label exactly equal to the API row's validated `primaryRegion`; any other host shape fails.
+  The scanner also recursively exhausts the immutable deployment's queryable retained Runtime Logs
+  for the canary-bounded window twice. Inspection may start at most 71 hours after that window began,
+  with at most five minutes of future skew at its completed edge. It records only
+  coordinates/hashes/counts/times and zero run-sentinel matches, and does not claim inaccessible or
+  expired provider telemetry. Its credential-bearing runner writes only a private durable noncanonical
+  stage. The wrapper binds its SHA-256/device/inode/size, independently rechecks the exact candidate, and
+  materializes a fresh committed publisher closure. Only that exact credential-free publisher may
+  strict-validate the stage and exclusively publish the canonical mode-0600 receipt after complete file
+  and parent-directory sync.
+
+  Both downstream receipt publishers implement the same three-phase no-overwrite transaction. They
+  create a random stage-hash-bound source; sync its exact bytes and the source-only pinned-directory
+  entry; hard-link the non-authoritative two-name canonical/source inode; sync the pair and re-open and
+  revalidate both names and the visible root; then unlink the source, sync the canonical file and parent,
+  and revalidate the exact single-link canonical inode. When canonical is absent or two-linked, a pinned
+  streaming scan refuses on entry 4,097, adopts an exact same-stage orphan deterministically, ignores
+  torn/stale random sources, and recovers the exact two-link pair without deleting conflicts. Exact
+  single-link recovery bypasses enumeration and directly syncs and revalidates canonical. Typed
+  indeterminate exit 75 or a child signal receives one fresh same-stage publisher retry. Any publisher
+  outcome still unresolved after retry preserves the bound stage, and later normal wrapper entry refuses
+  a preserved stage instead of regenerating different evidence. Once publisher success is observed,
+  cleanup may remove the stage; a later outer-wrapper interruption still reports no success and leaves
+  the committed canonical inode.
+  Cross-wrapper automatic recovery is deliberately not claimed without a caller-held provenance ticket
+  outside the same-UID result directory; such a death remains a fail-closed operator stop.
+
+  After merge, the terminal `remote-claw-production-release-attestation/v1` accepts an inspection
+  completion at most 71 hours old or five minutes in the future. Its zero-argv wrapper independently
+  byte-pins BusyBox/Git/Node, derives the candidate from the canonical private inspection filename,
+  requires the clean candidate-ancestor/equal-tree merge, and materializes and byte-compares committed
+  wrapper, verifier, and schema blobs before piping six credentials; it rechecks the repository
+  afterward. The credential-bearing verifier writes only a private durable noncanonical stage. The
+  wrapper binds its SHA-256/device/inode/size, rechecks the exact initial merged HEAD/tree, and
+  materializes a fresh committed publisher closure; only that exact credential-free publisher may
+  strict-validate/recheck it and exclusively, atomically, and durably publish the canonical Production
+  receipt. Raw local Git rejects replacement refs and graft metadata, then requires clean
+  candidate-ancestor/equal-tree state; GitHub's compare result and both commit-tree objects must
+  independently agree. The verifier binds the newest successful exact-`main` Production deployment and
+  no-store `sqlite`/Turso/`prod` runtime for the same organization/group, re-attests the exact enabled
+  live active Firewall config with pinned owner/team, canonical update time, the pinned project ID plus
+  `#active` project key, empty active `ips`/`changes`, and the exact managed-rule matrix
+  (`gen`/`rce`/`sqli`/`xss` active/log;
+  `java`/`lfi`/`ma`/`php`/`rfi`/`sd`/`sf` inactive/log), its sole valid `/api/handoff` custom rule,
+  unambiguous draft/version state, plus a separate empty Firewall-bypass list, and proves Deployment
+  Protection with a request that carries no automation bypass. That bypass is confined to runtime-attestation, frame-count, and relay requests at the
+  immutable origin. A random fresh session on the unselected deployment default must progress from
+  null durable frame count through a `created:true` relay write to count one; the content-free evidence
+  retains its physical `rc-prod-s-*` database ID and frame digest/counts. The canonical terminal
+  mode-0600 receipt becomes authoritative when source unlink exposes the single-link inode, only after
+  the outer recheck and durable pair validation; it is reported committed only after canonical-file and
+  parent-directory sync plus exact final revalidation. Exact-merge
+  Actions CI is a separate release-record precondition and is not queried or attested by this receipt.
+  Actual run state and hashes belong in the release record rather than these candidate-bound bytes. The native
+  **`stream-json` SDK transport** (`HostRelay` +
   `ClaudeStreamSession`, PR16–18, Bedrock/Vertex via `{ bedrock: true }`) remains as the **documented
   cousin** for protocol cross-checks + a headless inference-agnostic path — NOT the RC backend (§14
   resolved MITM, not the SDK bridge).
 - **P5 — Web client. ✅ BUILT 2026-06-09 (`apps/web/app`, PR14).** A mobile-first Next.js client:
   paste a **pass** (or open a link with it in the URL `#fragment`, stripped after load), discover the
-  machine's live sessions on the bus (decrypted titles, timestamp-driven presence that greys as
-  announces lapse), open one, render the transcript (history + live, deduped/reordered), and send
+  machine's live sessions on the bus (decrypted titles, locally bounded timestamp-driven presence that
+  greys as announces lapse), open one, render the transcript (history + live, deduped/reordered), and send
   prompts — all decrypted in-browser (WebCrypto), reusing the **same** transport the host uses
   (`@remote-claw/cli/broker`, browser-safe subpath — PR13). Same-origin to the two data-plane routes.
   Original plan: Paste/fragment secret, identity + spaces list (each space =
@@ -2619,9 +2858,9 @@ phase0/            unchanged — the Python reference + protocol findings
   rate-limiting, secret-handling hygiene.
 
 ## 12. Risks / inherited fragility
-- **Anthropic RC interception** (the Phase 0 MITM of `/v1/code/sessions`, pinned to
-  `claude` 2.1.168) underpins v2 too — it can break or be re-gated on any Claude
-  upgrade. Keep the capture tool (`mitm/capture-proxy.py`) to re-verify.
+- **Anthropic RC interception** is grounded in historical Phase 0 evidence captured at Claude 2.1.168,
+  while the current supported executable bytes are pinned at 2.1.237. It can break or be re-gated on
+  any Claude upgrade; keep `phase0/mitm/capture-proxy.py` to re-verify before moving the pin.
 - **One secret per machine** (one local file; override per run with `--rc-file`) is the
   **intended boundary**, not a flaw: a steal/reset blast radius is exactly **one machine**, with
   the others untouched. The honest cost is no partial/per-pass revocation — resetting a machine =
@@ -2641,17 +2880,20 @@ phase0/            unchanged — the Python reference + protocol findings
 - **The bus list is a last-64-frame projection, not a complete offline registry** (§6B/§6C).
   Connected sessions keep it current, while retained old announcements can seed offline rows on a
   cold viewer.
-- **Presence is timestamp-driven.** Shipped A0 admits announcements by
-  incarnation/generation ordering, then displays connected for 45 s, reconnecting for 30 s, and
-  disconnected thereafter. It does not reject by age or future skew, so a future-dated host clock can
-  keep a row connected longer than intended. The assumption's **blast radius is the presence display
-  only**—message **confidentiality/integrity** are clock-free
+- **Presence is timestamp-driven but liveness is locally bounded.** Shipped A0 admits announcements by
+  incarnation/generation ordering, then derives replay-stable `freshnessAt`: retain the first value for
+  an exact coordinate; use the stale edge for host lead over 5 s; otherwise use
+  `min(sentAt, receivedAt)`.
+  Host lead up to 5 s is capped at receipt; greater lead starts stale and non-writable, including on a
+  cold reload. The viewer displays connected for 45 s, reconnecting for 30 s, and disconnected
+  thereafter. The clock assumption's **blast radius is the presence display only**—message
+  **confidentiality/integrity** are clock-free
   (`K_session`/`control_key` AEAD) and replay defense is `msg_id`-based. Selected A1 requires the
   certified two-sided `FRESH_WINDOW = 60 s` / `SKEW = 5 s` admission predicate described in §4.3.
   A0 checks encrypted `expiry` only for `interrupt`, `set_model`, `set_mode`, and `end`;
   a stale direct verb is rejected—availability, never a breach. `catch_up` stamps but ignores expiry,
   and `permission` omits it, leaving the documented late-replay/late-answer boundaries (§6A/§8). A
-  badly skewed clock degrades to a wrong dot/row or direct-verb expiry rejection, **never** a
+  badly skewed clock degrades to a stale dot/row or direct-verb expiry rejection, **never** a
   message breach. A `409` instead means the separately typed transient channel-disposal/replacement
   publish race; clock skew and semantic/direct-verb rejection do not produce it. (A
   zero-clock-trust challenge-handshake variant is recorded in §14A if ever needed.)
@@ -2683,8 +2925,8 @@ phase0/            unchanged — the Python reference + protocol findings
   `collaborationServerId`, `logicalChatId`, and the derived opaque route token. A1 admission remains
   self-verifying—the broker can recompute and bind the token without a credential lookup—but its frame,
   idempotency, cursor, and manifest state is durable. It also sees frame **sizes/timing** and the
-  `session_announce` **broadcast cadence**. Everything *inside* a frame — titles/cwd/
-  status/last_activity/identity_label as well as message bodies — is AEAD-encrypted
+  `session_announce` **broadcast cadence**. Everything *inside* a frame — title/cwd/status/phase/needs,
+  git/capability/harness metadata, optional mode, and message bodies — is AEAD-encrypted
   (`K_meta`/`K_session`/`control_key`), so the broker reads none of it. Not fully
   metadata-private (it still learns which `session_id`s exist + activity timing); salt
   `session_id`s + pad/normalize sizes later if that matters.
@@ -2805,7 +3047,8 @@ tightening. Accepted fixes are already folded into §3–§8 above:
   it). (§6,§11,§14,§17)
 - **AAD/envelope canonicalized** (binds v, identity_id, session_id, dir, record_kind,
   seq, msg_id, key_epoch via one serialization). (§4.3,§8)
-- **Meta-frame key.** A0 meta frames (`accepted`/`session_announce`/`permission_resolved`) are AEAD
+- **Meta-frame key.** A0 meta frames
+  (`accepted`/`session_announce`/`session_terminal`/`permission_resolved`) are AEAD
   under a single **`K_meta`** (the earlier per-field `K_identity_meta`/`K_session_meta` were collapsed
   into it); selected A1 adds `action_result` on the same plane. (§4.2,§6A,§8)
 - **Honest zero-knowledge scope:** confidentiality covers `content_root`/`control_key`/
@@ -2893,23 +3136,23 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   rotatable epoch. (The crypto core — HKDF labels, 3-level content key flow, per-message AEAD,
   canonical AAD, the §4.4 pick-two theorem, the blind credential-registry-free relay — is unchanged.) The earlier
   "one user identity across hosts" entry below is **SUPERSEDED** by this.
-- **`--rc-identity` & the identity CLI surface (2026-06-07).** A 3-lens panel
+- **`--rc-identity` & the identity CLI surface (2026-06-07; later onboarding split supersedes the QR details).** A 3-lens panel
   (security / ergonomics / simplicity) → synthesis → 3 adversarial verifiers settled
   §3.1's identity flags. Confirmed-sound core: local, idempotent, **create-once**
   (`O_CREAT|O_EXCL`), exits without launching claude, **zero network I/O** (lazy
   registration), prints `S` only at creation, quiet status re-runs. Security fixes the
-  review forced in (now reflected in §3.1/§4.4): a **QR/deep-link is not
-  screen-share-safe** (it encodes `S` verbatim); **`--rc-json`/`--rc-quiet` never emit
+  review forced in: a credential QR/deep-link is not screen-share-safe; **`--rc-json`/`--rc-quiet` never emit
   `S`** (CI-log leak); **the replace (`--rc-identity --rc-confirm`) securely deletes** the old
-  `S` (same secret re-derives a live credential — not "keys to dead data"); the deep-link is built from the
-  **one `--rc-app` origin** (its web UI reads the `#fragment`; its `/api` is the broker — one
-  Vercel deployment, so no separate `--rc-web`); `--rc-confirm <identity_id>` is an
+  `S` (same secret re-derives a live credential — not "keys to dead data"); `--rc-confirm <identity_id>` is an
   accident guard (identity_id is public), so the reset (the destructive
-  `--rc-identity --rc-confirm`) also requires a TTY.
+  `--rc-identity --rc-confirm`) also requires a TTY. Current code separates viewer onboarding into
+  `--rc-pass`; only `--rc-pass --rc-qr --rc-app <origin>` creates the TTL-bounded one-time link, using
+  `RC_APP` as its sole environment fallback. `--rc-show-secret` prints only `S` and accepts no app/QR flag.
   - **CLI surface trim (2026-06-08, user call):** dropped `--rc-share` (claude's own
     `--remote-control`, forwarded verbatim by the wrapper, already starts a session
-    remote-controlled) and `--rc-web` (collapsed into the one `--rc-app` origin). `--help`/`-h`
-    prints the `--rc-*` help and then falls through to `claude --help` so both layers show.
+    remote-controlled) and `--rc-web` (collapsed into the one `--rc-app` origin). On the normal wrapper
+    path, `--help`/`-h` prints the `--rc-*` help and then falls through to `claude --help` so both layers
+    show; `--rc-trace --help` intentionally prints only the RC help and exits without launching.
 - **Registry / state expression (2026-06-07 → -08).** Three research→design→verify
   panels, ending against the **SDK type definitions** (and later **web-verified against the
   live docs**, §13). Evolution: (1) a Workflow can't be a *queryable* registry
@@ -2921,7 +3164,7 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   2026-06-08: identity is now per-machine, see the entry above]**; (3) the linchpin —
   whether the bus is addressable by a derived value — resolved **yes**:
   `getHookByToken(token): Promise<Hook>` is public and returns `runId`, so
-  `bus:${identity_id}` → `getHookByToken` → `getRun` → `getReadable` subscribes with
+  `bus:presence-v2:${identity_id}` → `getHookByToken` → `getRun` → `getReadable` subscribes with
   **no stored pointer**. **Final: a per-identity value-addressed bus, no application registry**
   (§6B); incomplete last-64-frame listing is the trade; an application index is optional for complete offline listing
   (§6C).
@@ -2935,16 +3178,18 @@ Beyond §14's plan review, individual decisions are settled with small design pa
   first sound form was a **challenge–response** (`identify?{challenge}` → `in_reply_to`),
   which gets recency from a client round-trip with **no clock trust** — but it needs the
   round-trip + challenge/`beat_seq`/`wrapper_instance_id` machinery. **Adopted (user
-  choice, 2026-06-08): Design B — timestamp-driven push.** Wrappers periodically broadcast
-  a signed `session_announce{…, sent_at}`; online = a within-`FRESH_WINDOW` announce. One
+  choice, 2026-06-08): Design B — timestamp-driven push.** The selected A1 server periodically broadcasts
+  a host-signed `session_announce{…, sent_at}`; online = a within-`FRESH_WINDOW` announce. One
   signed frame + one freshness check replaces `identify?`/challenge/`beat_seq`/
   `wrapper_instance_id`/`present`. Trade: assumes **NTP-synced clocks (~seconds)** — but
   the assumption's blast radius is the **online dot only** (message security stays
   clock-free), and a replayed/withheld announce is stale → rejected. The challenge variant
   is retained here as the **zero-clock-trust fallback** if device clocks ever can't be
-  trusted. **Implementation status:** this paragraph records the selected design, not shipped A0:
-  the current viewer uses the 45 s + 30 s display ladder without age/SKEW admission rejection.
-  The certified two-sided predicate remains a selected A1 requirement (§4.3).
+  trusted. **Implementation status:** this paragraph records the selected certified-rejection design,
+  not shipped A0. The current viewer does implement the 45 s + 30 s display ladder and a local 5 s
+  future-skew ceiling, but retains out-of-window frames as stale ordering evidence rather than
+  verifying a host certificate and rejecting them. The certified two-sided predicate remains a
+  selected A1 requirement (§4.3).
 - **Design B assessor pass + the independent-session model (2026-06-08).** codex
   (gpt-5.5) + the review workflow re-ran against Design B. Verdict: **sound** under the
   bounded-clock assumption (codex: "minor-issues"); no forge/replay path can keep a dead
@@ -2991,7 +3236,7 @@ Beyond §14's plan review, individual decisions are settled with small design pa
     over SSE), the per-identity-bus / per-session relay workflow (one run owns a channel token's
     hook, re-emits frames onto its durable out-stream), the `Bearer auth_token` admission gate
     (recompute `identity_id`, route by it), resume-or-`start()` with §6B backoff, and the §6A
-    bus-only-`session_announce` guard. That original Workflow relay profile has no application
+    bus-only-presence-lifecycle guard (`session_announce`/`session_terminal`). That original Workflow relay profile has no application
     registry or semantic message table, although Workflow persistently backs the opaque stream for
     each capped run. The later SQLite/libSQL backend and recovery cursor routes add an explicit sealed
     frame log without a registry or plaintext store.
@@ -3021,12 +3266,18 @@ Beyond §14's plan review, individual decisions are settled with small design pa
     **inference-agnostic** (PR18): `{ bedrock: true, env: {…} }` points the relayed session at Amazon
     **Bedrock** (or Vertex) — claude routes inference via the AWS SDK while remote-claw relays the
     session, never touching the inference creds.
-  So the encrypted spine is **complete and proven with a real, multi-turn claude on any inference
-  backend**. The only thing NOT built is the **optional** HTTPS-MITM of claude's *native*
+  At that historical PR18 snapshot, the encrypted spine was **complete and proven with a real,
+  multi-turn claude on any inference backend**. The only thing then not built was the **optional** HTTPS-MITM of claude's *native*
   `--remote-control` (driving the interactive TUI the user has open locally, vs a headless stream-json
   session) — a different UX, Phase-0-verified, not a missing capability. Build/deploy note: `apps/web`
   uses `next build --webpack` + `extensionAlias` to bundle clawsec's raw-TS source (Turbopack can't
   resolve its `.js`-specifier imports in `node_modules`).
+
+  **Current supersession:** the native HTTPS-MITM is the stable Claude 1.0 candidate. It is exact
+  text-only/fail-stop on the byte-pinned Linux arm64 Claude tuple, while the stream-json, permission,
+  and control breadth above remains compatibility or historical coverage. Source-tree real-Claude
+  evidence does not substitute for the exact-candidate topology/inspection and equal-tree Production
+  release chain.
 
 ## 15. Use cases / scenario matrix (also the v2 test plan)
 
@@ -3038,10 +3289,12 @@ rc_api_bridge); others are specs to build/test.
 durability/sequence cursor `/api/seq` and host-only inbound cursor `/api/frame-count` = §8; offline
 *listing* across cold starts is deferred, §6C.)
 
-Unless a scenario names both branches, concrete A0 words such as `resumeHook`, run, hook, out-stream,
-SSE, persistent run stream, and absolute `startIndex` describe the live-default Workflow profile.
-SQLite/libSQL uses the same derived bus/session tokens and HTTP data plane, but maps publish to a
-frame insert and subscribe to indexed sealed-log polling/replay; host `#log` stays empty.
+Concrete A0 words such as `resumeHook`, run, hook, out-stream, SSE, persistent run stream, and absolute
+`startIndex` describe the compatibility Workflow profile. The shipped stable-Claude scenarios instead
+assume an origin whose deployment default is `BROKER_BACKEND=sqlite`: SQLite/libSQL uses the same
+derived bus/session tokens and HTTP data plane, but maps publish to a frame insert and subscribe to
+indexed sealed-log polling/replay; host `#log` stays empty. Stable Claude rejects the Workflow/local
+profiles before discovery.
 
 **Identity & bring-up**
 1. **Fresh identity bootstrap.** `remote-claw --rc-identity` → generate `S` (0600),
@@ -3055,35 +3308,42 @@ frame insert and subscribe to indexed sealed-log polling/replay; host `#log` sta
 
 **Enabling remote control**
 
-4. **Enable RC mid-session via `/remote-control`.** Wrapper points the inner claude at
-   the local MITM (our relay = RC backend), then **joins the identity bus**
-   (`bus:${identity_id}`, resume-or-`start()`), starts **broadcasting** `session_announce`
-   for the session + opens its stream (`sess:${identity_id}:${session_id}`). There is **no
+4. **Enable RC mid-session via `/remote-control`.** A wrapper launched against the durable deployment
+   with `--rc-app`/`RC_APP` already
+   placed the inner claude behind the local MITM; when Claude registers RC, our relay first recovers
+   the durable cursors, then **joins the identity bus** (`bus:presence-v2:${identity_id}`), starts
+   **broadcasting** `session_announce`, and opens the indexed session log
+   (`sess:${identity_id}:${session_id}`). The compatibility Workflow mapping resume-or-starts the
+   corresponding hook-backed runs. There is **no
    backfill** — the worker does not re-emit the pre-RC turns (grounded §17), so the relay's
-   log (and therefore the viewer) covers the conversation **from RC-enable forward**; the
+   sealed broker log (and therefore the viewer) covers the conversation **from RC-enable forward**; the
    prior local turns remain in claude's `.jsonl` only. No completeness gate is needed
    because the log is complete from the moment it starts. **[V]** C1 (C2 disproven)
-5. **Launch with RC on.** `remote-claw --remote-control` → fresh session, relay is the
-   backend from the start, empty history, joins the bus + broadcasts. **[V]** (Phase 0)
+5. **Launch with RC on.** `remote-claw --rc-app <origin> --remote-control` → fresh session, relay
+   verifies the durable backend from the start, empty history, joins the bus + broadcasts. **[V]**
+   (Phase 0)
 
 **Client onboarding & discovery (the bus)**
 
 6. **Client first connection.** Onboard the machine's **pass** (paste/scan or `#fragment`) →
    load its keys → `GET /api/stream?identity=identity_id` (subscribe the bus) → reads the
-   last 64 retained frames → folds available `session_announce`s and renders each as connected,
-   reconnecting, or disconnected; it is empty only when no announcement remains available. After a
+   last 64 retained frames → folds `session_announce` and authenticated `session_terminal` lifecycle
+   frames. A terminal is absorbing: it removes that session and no later/replayed announce can resurrect
+   it. Remaining live announces render as connected, reconnecting, or disconnected; the list is empty
+   when no non-terminal announcement remains available. After a
    successful connection, wrap the pass under the non-extractable IndexedDB `CryptoKey`
    and store only its ciphertext in tab-scoped `sessionStorage`. The URL fragment itself
    is never sent to the server.
 7. **One MACHINE, 5 independent sessions.** On one machine (one secret), 5
    separate `remote-claw` processes each broadcast their **own**
    `session_announce`; the client subscribes that machine's single bus and renders all 5 as
-   separate spaces, each with **independent** presence derived from its own announce age.
+   separate spaces, each with **independent** presence derived from its own bounded local freshness.
    Tests the per-session/no-aggregator model (§1) — no batching, one pass on the client. (To
    watch several **machines** from one viewer you hold several passes, one active at a time.)
-8. **List an identity's spaces.** = the wrappers' broadcast `session_announce`s in that
-   identity bus's client-requested last-64-frame slice; decrypt titles/cwd → gchat-style list. A space is a chat;
-   its row may be connected, reconnecting, or disconnected (§4.3).
+8. **List an identity's spaces.** Fold the wrappers' `session_announce`s and absorbing
+   `session_terminal`s in that identity bus's client-requested last-64-frame slice; decrypt title/cwd
+   for every surviving row. A space is a chat; its row may be connected, reconnecting, or disconnected
+   (§4.3), while a terminal row is absent permanently and selecting it is unwritable.
 
 **Shipped A0 history sync**
 
@@ -3103,16 +3363,17 @@ frame insert and subscribe to indexed sealed-log polling/replay; host `#log` sta
 **Messaging (the core loop)**
 
 11. **Send from client → underlying claude.** Client encrypts a `user` frame
-    (`client_msg_id`) → `POST /api/relay` (`resumeHook sess:…`) → wrapper hook → dedup
+    (`client_msg_id`) → `POST /api/relay` (durable SQLite insert) → wrapper indexed subscription → dedup
     by `msg_id` → decrypt → allocate `seq` → emit `accepted{client_msg_id, seq}` → echo
     and record the user frame → inject into claude via MITM downstream; claude replies →
-    `assistant`/`result` on the session out-stream → client renders. `accepted` is not
+    sealed `assistant`/`result` rows → client stream renders. The compatibility Workflow mapping uses
+    `resumeHook`/hook/out-stream instead. `accepted` is not
     native-application evidence. **[V]** C3
 12. **The client-driven exchange also appears in the local TUI.** The real TUI renders
     the remote prompt and its reply in the same native session. Ordinary prompts typed
     directly at that TUI are not currently projected to clients. **[V]** C4
-13. **Two clients, one session (fan-out).** Phone + laptop both tail the session
-    out-stream (each resolves the same `sess:` token → same run → multi-reader); a
+13. **Two clients, one session (fan-out).** Phone + laptop both tail the session's indexed sealed log
+    (each resolves the same `sess:` token → same channel → multi-reader); a
     message from either shows on both + the TUI. **Connected at different times:** a
     late-joining laptop independently subscribes the bus → reads the available bus replay → gets
     the *same* live list from the wrappers' broadcast announces, opens the session +
@@ -3131,19 +3392,22 @@ frame insert and subscribe to indexed sealed-log polling/replay; host `#log` sta
     tab-scoped credential, and subscribe the **new** machine's bus → its
     connected sessions' announces render its spaces. The client holds **one pass at a
     time** (§7). There is no persistent transcript or alias cache to retain across the switch.
-15. **Rename identity/space.** Rename is not shipped in A0. The client renders the defaults
-    from `session_announce` (identity = hostname, space = Claude's title) and sends no
-    rename frame. Local aliases and persistent/shared rename are deferred (§6C).
+15. **Rename identity/space.** Rename is not shipped in A0. The client renders the pass-derived
+    `identity_id` plus the configured session title (currently `remote-claw` by default) and sends no
+    rename frame. Hostname and Claude-generated title are not announced. Local aliases and
+    persistent/shared rename are deferred (§6C).
 
-**Control & permissions**
+**Compatibility control & permissions**
 
-16. **Tool permission (`can_use_tool`).** Worker emits a `control_request` → session
+16. **Tool permission (`can_use_tool`, compatibility only).** Worker emits a `control_request` → session
     out-stream → client Allow/Deny → encrypted `permission` control frame → wrapper →
     `control_response` to claude. (plumbed; RC auto-runs today)
-17. **Remote control verbs.** Client sends `interrupt` (ESC) / `set_mode` / `set_model`
+17. **Remote control verbs (compatibility only).** Client sends `interrupt` (ESC) / `set_mode` / `set_model`
     control frames (session channel) → wrapper → claude. Slash commands such as `/compact` and
     `/clear` use the ordinary `user` content path, so Claude receives, acknowledges, echoes, and
-    replays them like prompts; the reserved `command` control kind is not emitted.
+    replays them like prompts; the reserved `command` control kind is not emitted. Stable Claude 1.0
+    advertises every control/permission/attachment bit false, suppresses these families in both viewer
+    and host, and accepts only non-empty, non-slash text.
 
 **Resilience**
 
@@ -3151,16 +3415,18 @@ frame insert and subscribe to indexed sealed-log polling/replay; host `#log` sta
     `GET /api/stream?identity=id&session=sid` (resolve token → run → resume by `startIndex`);
     at-least-once → dedup by `msg_id`; no missed/dup frames.
 19. **Wrapper/CLI restart.** **Current A0:** reboot/crash → relaunch
-    `remote-claw --continue` + `/remote-control`. `claude --continue` reloads the prior
+    `remote-claw --rc-app <origin> --continue` + `/remote-control`. `claude --continue` reloads the prior
     conversation into its **own local TUI**, but the RC wire does **not** re-stream it
     (grounded §17). The process-local wrapper starts with an empty binding and normally exposes a new
     synthetic RC `session_id`; Workflow also starts with an empty host `#log`, while SQLite/libSQL
     may retain the old route's sealed projection but cannot make the new process reclaim it. The new
-    announce creates a separate row while an
-    already-open viewer keeps the old row disconnected. A cold reload reads the last-64-frame bus slice, so
-    it may show both the old disconnected row and the new connected row; this is incomplete transport
-    replay, not an offline registry. Under an honest host clock, replaying the old timestamp does not
-    make that row connected again, but A0 has no future-skew admission bound. **[V]** C5 (re-scoped: the **local TUI** recovers;
+    announce creates a separate row. A successfully published pre-crash `session_terminal` removes and
+    permanently fences the old row; after an abrupt crash or exhausted terminal publication, an
+    already-open viewer instead keeps that old row disconnected. A cold reload reads the last-64-frame
+    lifecycle slice, so it may apply a terminal or show both an old disconnected row and the new
+    connected row; this is incomplete transport replay, not an offline registry. Replaying the same
+    coordinate cannot refresh a mounted row, and a far-future timestamp retained on cold reload starts
+    reconnecting/non-writable under A0's local 5 s skew ceiling. **[V]** C5 (re-scoped: the **local TUI** recovers;
     RC does not backfill)
 
     **Selected A1 target:** reopen the persisted `(collaborationServerId, logicalChatId)` scope,
@@ -3173,9 +3439,11 @@ frame insert and subscribe to indexed sealed-log polling/replay; host `#log` sta
     `bus:a1:${scopeAddress}` and `sess:a1:${chatAddress}` (§4.3). The existing
     `(identity_id, collaborationServerId, logicalChatId)` viewer row un-greys and continues;
     uncertain pre-crash delivery stays quarantined rather than being resent.
-20. **Host offline → back.** Wrapper exits (never outlives the CLI) → **stops
-    broadcasting** → a mounted client moves its rows through connected (<45 s), reconnecting
-    (30 s), and disconnected, then retains them. A cold open shows any old announcements in its
+20. **Host offline → back.** A graceful wrapper/native exit after live presence publishes
+    `session_terminal`, removes/fences its row, and requires a new synthetic row on relaunch. An abrupt
+    crash or exhaustion of every terminal publish attempt merely **stops broadcasting** → a mounted
+    client moves its rows through connected (<45 s), reconnecting (30 s), and disconnected, then
+    retains them. A cold open applies terminal markers and shows any unfenced old announcements in its
     last-64-frame tail slice as reconnecting/disconnected rows and otherwise shows none; complete
     offline listing remains deferred (§6C). On Workflow the bus run persists without an idle timeout
     (§6B/§13); on SQLite/libSQL the bus channel database persists sealed frames. Either way,
@@ -3194,9 +3462,10 @@ frame insert and subscribe to indexed sealed-log polling/replay; host `#log` sta
     `(identity_id, collaborationServerId, logicalChatId)` viewer row after recovery.
 21. **Workflow bus reaches its event-cap boundary.** Current A0 has no production pre-cap controller. The tested
     `__close` primitive can end the old stream and free the token, but neither wrapper nor broker counts
-    events or invokes it. A release proof must add publisher fencing, explicit close/re-`start()`, client
-    EOF/re-tail, and no-loss cursor behavior; until then, availability at this boundary is unsupported.
-    Selected A1 uses its durable per-route generation manifest instead.
+    events or invokes it. Any future claim that promotes Workflow to a production backend must first add
+    and prove publisher fencing, explicit close/re-`start()`, client EOF/re-tail, and no-loss cursor
+    behavior. This does not block Claude 1.0's SQLite/libSQL release. Selected A1 uses its durable
+    per-route generation manifest instead.
 22. **Client returns after being away (cold tab).** A client that closed comes back:
     a reload in the same tab decrypts the wrapped credential from `sessionStorage` with the
     non-extractable IndexedDB key, while a new tab must onboard again. It subscribes to the bus,
@@ -3209,7 +3478,7 @@ frame insert and subscribe to indexed sealed-log polling/replay; host `#log` sta
     *offline*, not *gone* (§6B), so the client retries rather than treating absence as deletion.
 23. **Two wrappers, one machine, one drops.** Two `remote-claw` processes on one machine
     (one secret) both
-    broadcast on `bus:${identity_id}` (each its own session's announces). A client sees
+    broadcast on `bus:presence-v2:${identity_id}` (each its own session's announces). A client sees
     both sets of spaces. One process exits → only *its* announces age out → client greys
     *those* locally; the other process's sessions + bus channel stay live because the survivor keeps
     broadcasting (§6B).
@@ -3221,20 +3490,23 @@ reorder/**replay**, no keys)
     initially shows it connected. After 45 s it becomes reconnecting and, after the 30 s grace,
     disconnected. An exact same-generation replay to that mounted client is rejected by
     `shouldAcceptAnnounce` ordering, not by timestamp age. A cold client with no accepted state may
-    accept the old frame and seed a disconnected row. A delayed higher-sequence frame keeps its
-    original `sent_at`, so under an honest host clock it cannot look connected after
-    `sent_at + 45 s`; A0 has no future-skew bound. Selected A1 adds the certified two-sided freshness
-    rejection (§4.3).
+    accept the old frame and seed a disconnected row. A delayed higher-sequence frame keeps its raw
+    `sent_at`; its liveness keeps the first value for an exact coordinate, uses
+    `min(sentAt, receivedAt)` when host lead is at most 5 s, and starts stale when the lead is greater.
+    Thus neither mounted replay nor cold future replay grants
+    unbounded write authority. Selected A1 adds certified two-sided freshness rejection (§4.3).
 25. **Two wrappers race the initial Workflow bus create.** Both sessions of a cold identity enable RC
     at once → both `resumeHook`→`HookNotFound`→`start()`. The 1:1 token lets one win; the
     other workflow terminates with `HookConflictError`. That workflow's caller never receives or
     catches the error; it keeps polling the deterministic token with bounded backoff, resolves the
     winning run, and resume-tails it (§6B). This create race is not an HTTP `409`. Both wrappers end
     up broadcasting on the one bus; no announce is lost.
-26. **Clean session end (vs crash).** The wrapper or local native process exiting stops that
-    session's announces; a mounted viewer shows connected for at most the remaining 45 s threshold,
-    reconnecting for 30 s, then retains a disconnected row—same as a crash, since presence is
-    broadcast-driven (no special "left" frame needed). In the current relay an
+26. **Clean session end (vs crash).** If live presence began, wrapper or local native-process exit
+    synchronously closes the old remote session and publishes its canonical `session_terminal`
+    outside transcript HOL. An admitted marker makes the broker fence absorbing and the viewer removes
+    the row permanently with the incomplete-tail warning. A crash before that marker, or exhaustion
+    of all terminal publish attempts during an outage, follows the weaker announce-age ladder to a
+    retained disconnected row. In the current relay an
     authenticated viewer `end` does **not** stop the native session or announcements: it emits no
     `end_session` and only clears open relay permission gates.
 27. **Mutation-control reorder / ambiguous timeout.** The broker reorders or withholds mutation verbs.
@@ -3249,11 +3521,13 @@ reorder/**replay**, no keys)
     omit `expiry`; a withheld answer may act only while the corresponding native gate remains open.
     Selected A1 makes exact retry safe by returning the stored action-specific result.
 
-    The active Claude 1.0 release does not implement that broader control reconciliation: it disables
-    slash text, interrupt, model/mode changes, and end-session; adds authenticated expiry to exact open
-    permission/question answers; and removes automatic ambiguous Retry. One live relay deduplicates the
-    source ID, while a session-wide pre-write fence prevents mutating worker-SSE redelivery. Same-session
-    takeover remains parked, so no broker dispatch CAS or durable command journal is required.
+    The active Claude 1.0 release does not implement that broader control reconciliation. Its exact
+    stable capability vector disables attachments, interrupt, model/mode changes, end-session, and
+    permission/question answers; browser and host both reject blank/slash text, and an ambiguous send
+    keeps the same bubble/source ID as **Delivery unknown — it may have reached the host. It was not
+    retried.** One live relay authenticates before dedup, while a session-wide pre-write fence prevents
+    mutating worker-SSE redelivery. Same-session takeover remains parked, so no broker dispatch CAS or
+    durable command journal is required.
 
 Also covered by the same mechanisms (not numbered): **machine reset** (after stopping the old relays,
 new `S` → new `identity_id` = a new identity for that machine with a fresh, empty set of spaces;
@@ -3276,15 +3550,14 @@ Actors: **C**=web/generic client · **V**=broker ·
 Anthropic-origin control surface. All C↔V↔W payloads are
 ciphertext (`{…}` = decrypted view); every C/W→V call carries
 `Bearer auth_token` (§4.5; Vercel Deployment Protection may additionally gate the deployed
-origin). Frame kinds per §6A. `→` one
-message; steps are ordered. The concrete steps below preserve the as-built **Workflow profile**:
-`POST /api/relay` maps to `resumeHook`, while `GET /api/stream` maps to
-`getHookByToken→getRun→getReadable` over SSE. In the shipped SQLite/libSQL profile those same
-data-plane calls map to an idempotent frame insert and indexed log subscription; the host additionally
-uses `/api/seq` and `/api/frame-count` when starting a durable incarnation.
+origin). Frame kinds per §6A. `→` one message; steps are ordered. The concrete stable steps below use
+the shipped **SQLite/libSQL profile**: `POST /api/relay` maps to an idempotent frame insert and
+`GET /api/stream` to indexed log polling/replay; the host additionally uses `/api/seq` and
+`/api/frame-count` before starting a durable incarnation. Compatibility-only Workflow operation maps
+those same calls to `resumeHook` and `getHookByToken→getRun→getReadable` over SSE.
 
 Channels are addressed by **derived tokens** (§6B): the identity **bus**
-`bus:${identity_id}` and per-session `sess:${identity_id}:${session_id}`.
+`bus:presence-v2:${identity_id}` and per-session `sess:${identity_id}:${session_id}`.
 No `/api/identity`, `/api/sessions`, or `/api/heartbeat`.
 In the shipped A0 sequences below, `session_id` is the private synthetic RC `cse_*`. In the selected
 A1 target, the discovery token is
@@ -3298,31 +3571,43 @@ transport binding and may change without changing this channel.
 1. W: gen `S`; derive `identity_id, auth_token, content_root, control_key, K_meta`
 2. W prints `rc1_…`; **exits** *(no T, no session, no broker call — lazy)*
 
-**2. Wrapper launches real TUI, RC OFF** (`remote-claw …` used as `claude`)
-1. W spawns **T** (passthrough args). MITM env (`HTTPS_PROXY→W`, `NODE_EXTRA_CA_CERTS`)
-   is **armed but inert** until RC is enabled.
-2. T→A inference for local use (passthrough; `/v1/messages` not intercepted)
-3. **No broker traffic at all** — W is not on any bus. The machine is invisible.
+**2. App-armed wrapper launches real TUI, RC OFF** (`remote-claw --rc-app <origin> …`, with that
+origin configured `BROKER_BACKEND=sqlite`)
+1. W validates the stable tuple, ensures the identity, starts the MITM, and spawns **T** with passthrough
+   args plus the scrubbed proxy environment.
+2. T→A inference for local use tunnels through the MITM; the default Anthropic inference path passes it through.
+3. **No broker traffic yet** — W is not on any bus until Claude registers RC. The machine is invisible.
 
 **3. Work locally, RC OFF**
 1. user↔T locally; T→A inference; transcript persists on disk
 2. V sees **nothing** — no bus membership, no content
 
-**4. Enable `/remote-control` mid-session — shipped A0** *(C1 verified; C2 disproven — no backfill)*
+**4. Enable `/remote-control` mid-session on that app-armed launch — shipped A0** *(C1 verified; C2 disproven — no backfill)*
 1. user types `/remote-control` in T
 2. T→W `POST /v1/code/sessions {title, config{cwd,model}}` *(MITM-intercepted)* → W `200 {session{id:rcSid}}`
 3. T→W `POST …/{rcSid}/bridge` → W `200 {worker_jwt, api_base_url}`
 4. T→W `GET …/{rcSid}/worker/events/stream` (SSE); W→T `control_request{initialize}`
-5. **No backfill** — the stream carries only **new** events from here (grounded §17: the worker does **not** re-emit pre-RC turns). W's in-memory log starts effectively empty and covers the conversation **from RC-enable forward**; the prior local turns stay in claude's `.jsonl`.
-6. W **joins the bus immediately**: `resumeHook("bus:"+identity_id, …)` (resume-or-**start** the bus run; after a start, its caller polls `getHookByToken` with bounded backoff on absence; a duplicate start's `HookConflictError` terminates only that losing workflow and is never caught by the caller); opens the session stream `sess:${identity_id}:${rcSid}`; **broadcasts** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change). **No completeness gate** is needed — the log is complete from the moment it starts, so a client racing in with `catch_up{since=0}` gets the whole session-so-far. The selected A1 path instead binds `rcSid` beneath a stable `(collaborationServerId, logicalChatId)` scope, publishes discovery on `bus:a1:${scopeAddress}`, and uses `sess:a1:${chatAddress}` for that chat.
+5. **No backfill** — the stream carries only **new** events from here (grounded §17: the worker does
+   **not** re-emit pre-RC turns). The durable broker log starts empty and covers the conversation
+   **from RC-enable forward**; the prior local turns stay in claude's `.jsonl`, and the durable host
+   keeps no compatibility `#log`.
+6. W verifies the server reports durable SQLite/libSQL, opens the session log and identity bus, then
+   **broadcasts** `session_announce{…, sent_at}` (every `ANNOUNCE_INTERVAL` + on change). **No
+   completeness gate** is needed — the durable log is complete from the moment it starts, so a client
+   racing in replays the session-so-far. The compatibility Workflow mapping uses
+   `resumeHook("bus:presence-v2:"+identity_id, …)` and the selected A1 path instead binds `rcSid` beneath
+   a stable `(collaborationServerId, logicalChatId)` scope, publishes discovery on
+   `bus:a1:${scopeAddress}`, and uses `sess:a1:${chatAddress}` for that chat.
 
-**5. Launch with RC ON** (`remote-claw --remote-control`) — as #4 steps 2–4 + the join-bus/broadcast of step 6, **no backfill** (empty history).
+**5. Launch with RC ON** (`remote-claw --rc-app <origin> --remote-control`) — as #4 steps 2–4 + the join-bus/broadcast of step 6, **no backfill** (empty history).
 
 **6. Client first connection**
 1. user onboards the machine's **pass**; C loads `{identity_id/auth_token, content_root, control_key, K_meta}` from it (no derivation, no `rc1_`)
-2. C→V `GET /api/stream?identity=identity_id` → V `getHookByToken("bus:"+identity_id)`→`getRun`→`getReadable({startIndex:-64})` → SSE *(HookNotFound ⇒ `200` empty: nothing connected)*
+2. C→V `GET /api/stream?identity=identity_id&startIndex=-64` → V polls the retained identity-bus
+   SQLite/libSQL log and streams the selected tail as SSE *(an absent log ⇒ `200` empty: nothing
+   connected)*
 3. the requested last-64-frame slice normally includes each connected W's latest
-   `session_announce{sid, title, cwd, identity_label, status, last_activity, sent_at}` (AEAD `K_meta`);
+   `session_announce{session_id,title,cwd,sent_at,incarnation,incarnation_started_at,announce_seq,status,phase,needs,git,capabilities,harness,[mode]}` (AEAD `K_meta`);
    C folds valid frames by incarnation/generation, decrypts them, and derives connected (<45 s),
    reconnecting (30 s), or disconnected. Old frames can seed offline rows; A0 does not reject them
    by age. C sends no discovery request frame to W; wrappers' periodic broadcasts keep live rows current.
@@ -3331,7 +3616,7 @@ transport binding and may change without changing this channel.
 1. one machine's secret → one `(identity_id, auth_token, …)`; 5 separate `remote-claw` processes on that machine each broadcast their **own** `session_announce` on the one bus
 2. C subscribes that single bus (as #6) → last-64-frame slice normally includes all 5 sessions' latest announces
 3. C renders all 5 as separate spaces, each with **independent** presence state derived from its own
-   announce age—per-session, no aggregator (§1). To watch several **machines** from one viewer, hold
+   bounded local freshness—per-session, no aggregator (§1). To watch several **machines** from one viewer, hold
    several passes (one active at a time)
 
 **8. List an identity's spaces** = generation-accepted `session_announce`s in that identity bus's
@@ -3339,13 +3624,11 @@ client-requested last-64-frame slice; C decrypts titles and renders each row wit
 This is a gchat-style list, not a complete offline registry.
 
 **9. Open a session cold — full history sync**
-1. Workflow: C encrypts `catch_up{since:0, msg_id, expiry}` (control key) → C→V
-   `POST /api/relay` → `resumeHook("sess:"+identity_id+":"+sid,…)`.
-2. Workflow: V→W via the session hook; W decrypts `catch_up` and replays host `#log` from 0 with
-   original `{seq,msg_id}`.
-3. SQLite/libSQL alternative: C subscribes from frame index 0; V reads the retained sealed log
-   directly, W keeps `#log` empty, and a redundant `catch_up` is ignored.
-4. V→C stream → C deduplicates, decrypts, renders history, then tails live.
+1. SQLite/libSQL: C subscribes from frame index 0; V reads the retained sealed log directly, W keeps
+   `#log` empty, and a redundant `catch_up` is ignored.
+2. V→C stream → C deduplicates, decrypts, renders history, then tails live.
+3. Compatibility Workflow: C encrypts `catch_up{since:0, msg_id, expiry}` → V resumes the session
+   hook → W decrypts it and replays host `#log` from 0 with original `{seq,msg_id}`.
 
 **10. Mounted viewer reconnect**
 
@@ -3360,15 +3643,17 @@ This is a gchat-style list, not a complete offline registry.
 
 **11. Send from client → underlying claude** *(verified C3 — the core loop)*
 
-1. C: encrypt `user{content}` **as a content frame under `K_session`** → C→V `POST /api/relay {kind:user, client_msg_id, msg_id}` → `resumeHook("sess:…",…)`
-2. V `hook.resume(sess token, frame)`
-3. W: hook fires → shipped A0 **dedups by `msg_id`** before open/decrypt; a duplicate is silently
-   dropped, while a new frame decrypts and allocates `seq`
-4. W→V session out-stream `{kind:accepted, client_msg_id, seq}` → V→C SSE → C clears "pending"; this proves relay receipt/order only
-5. W→V echoes and records the user frame, then W→T injects it on the worker SSE *(MITM downstream)*
+1. C: encrypt `user{content}` **as a content frame under `K_session`** → C→V
+   `POST /api/relay {kind:user, client_msg_id, msg_id}` → V inserts the exact sealed frame.
+2. W's indexed subscription yields the new frame.
+3. W fences the exact identity/session/`dir:in` coordinates and AEAD-opens
+   every frame **before** `msg_id` dedup; a forged source cannot poison the genuine ID. An authenticated
+   duplicate is silently dropped, while a new frame allocates `seq`.
+4. W→V inserts `{kind:accepted, client_msg_id, seq}` → V→C SSE → C clears "pending"; this proves relay receipt/order only
+5. W→V inserts the user echo, then W→T injects it on the worker SSE *(MITM downstream)*
 6. T→A `POST /v1/messages` *(inference, passthrough)*
 7. T→W `POST …/worker/events [{assistant},{result}]`
-8. W: log+encrypt → W→V session out-stream `{assistant, seq}` then `{result, seq}`
+8. W: encrypt → W→V inserts `{assistant, seq}` then `{result, seq}`
 9. V→C SSE → C decrypts + renders
 
 Selected A1 changes step 3: it authenticates and reassembles first, then consults the durable
@@ -3383,8 +3668,8 @@ source.
 2. Ordinary prompts typed directly at T are not currently projected to C
 
 **13. Two clients, one session (fan-out)**
-1. C₁,C₂ each: C→V `GET /api/stream?identity=id&session=sid` (two readers on the session out-stream, via token→run)
-2. any out frame → V fans to both; an `in` frame from either → session hook → W→T → out-stream → both + T
+1. C₁,C₂ each: C→V `GET /api/stream?identity=id&session=sid` (two indexed readers on the same session log)
+2. any out frame → V streams to both; an `in` frame from either → W's log subscription → W→T → sealed output log → both + T
 
 **14. Switch machine (replace, not accumulate)**
 1. user onboards machine 2's pass → C **closes the old SSE** → **forgets** the prior pass (remove wrapped `sessionStorage` blob, best-effort delete the IndexedDB device key, and drop in-memory viewer/transcript/order state, §1A E) → loads keys for `identity_id₂` → saves its newly wrapped tab credential → subscribes the **new** bus (as #6) → its connected sessions' announces render its spaces. One pass on the client at a time (§7); no persistent transcript or alias cache is shipped.
@@ -3393,29 +3678,34 @@ source.
 1. C renders the default from `session_announce`; it has no rename action or local alias store
 2. **no** frame is sent. Local aliases and cross-device/persistent rename are deferred (§6C).
 
-**16. Tool permission (`can_use_tool`)**
+**16. Tool permission (`can_use_tool`, compatibility only)**
 1. T→W `POST …/worker/events [{control_request can_use_tool, request_id, tool_name, tool_input}]`
 2. W→V session out-stream → C shows Allow/Deny
 3. C: `enc permission{request_id, behavior}` (control_key) → C→V `POST /api/relay` → `resumeHook("sess:…")`
 4. V→W session hook → W→T `control_response{request_id, behavior}` on the worker SSE → T proceeds/denies
 
-**17. Remote control verbs**
+**17. Remote control verbs (compatibility only)**
 1. C: `enc {interrupt | set_mode | set_model | command}` (control_key) → C→V `POST /api/relay` (sess token)
 2. V→W session hook → W→T the matching RC verb (interrupt / set_permission_mode / set_model / slash) → T acts
 
+Stable Claude 1.0 advertises all these capabilities false. Its viewer cannot emit them and its host
+independently suppresses them; only non-empty, non-slash text is writable.
+
 **18. Network blip mid-turn**
-1. C's SSE drops → C→V `GET /api/stream?identity=id&session=sid` (token→run; resume by `startIndex`)
+1. C's SSE drops → C→V `GET /api/stream?identity=id&session=sid` (resume by durable frame `startIndex`)
 2. C dedups by `msg_id`, reorders by `seq` → no gap, no dup
 
 **19. Wrapper/CLI restart** *(C5 re-scoped: local TUI recovers; RC does not backfill)*
 
 **Current A0**
 
-1. both die → operator relaunches `remote-claw --continue` *(passthrough; `claude --continue` reloads the conversation into its **own local TUI**)* → W spawns **T** through the MITM
+1. both die → operator relaunches `remote-claw --rc-app <origin> --continue` *(passthrough; `claude --continue` reloads the conversation into its **own local TUI**)* → W spawns **T** through the MITM
 2. user `/remote-control` → bridge→stream (as #4) → **no backfill**: the worker streams only **new** events, and the process-local wrapper exposes a new synthetic RC `session_id` with an empty log/binding
-3. W joins the bus and broadcasts that new id; an already-open C retains the old row as disconnected
-   and adds a separate new row. A cold reload may also show both while the old announce remains in the
-   last-64-frame bus slice.
+3. W joins the bus and broadcasts that new id. If the old process published terminality before its
+   restart, C has removed/fenced that old row and adds only the separate new row. After an abrupt crash
+   or exhausted terminal publication, an already-open C retains the old row as disconnected and a
+   cold reload may show both while the unfenced old announce remains in the last-64-frame lifecycle
+   slice.
 
 **Selected A1 target**
 
@@ -3429,31 +3719,42 @@ source.
    chat rather than receiving a second row; any future browser cache uses that complete tuple
 
 **20. Host offline → back**
-1. W/CLI exit → W **stops broadcasting**; the last announce ages past A0's 45 s connected threshold
-2. C (tailing the bus) shows **reconnecting** for 30 s and then retains a **disconnected** row. A
-   fresh open accepts any old announce in the last-64-frame slice as an offline row, or renders empty
-   if none remains (the bus run persists—there is no idle-timeout).
-3. send is blocked **client-side** (greyed → disabled); if bypassed, publish may create/reuse a Workflow run and buffer a frame without a native consumer. The same relay incarnation may consume it on return; an A0 relaunch under a new synthetic ID can orphan it. Do not automatically resend an ambiguously accepted mutation.
+1. Graceful W/CLI/native exit after live presence publishes `session_terminal`; C removes and
+   permanently fences that old row with the incomplete-tail disclosure.
+2. Abrupt crash or exhausted terminal publication instead stops broadcasts; the last announce ages
+   past A0's 45 s connected threshold, C shows **reconnecting** for 30 s, then retains a
+   **disconnected** row. A fresh open applies terminal markers and accepts only unfenced old announces
+   from the last-64-frame lifecycle slice, or renders empty if none remains (the retained bus log
+   persists; there is no inactivity collection).
+3. send is blocked **client-side** (greyed → disabled); if bypassed, publish may insert into the old
+   SQLite channel log—or, on the compatibility profile, create/reuse a Workflow run—and retain a frame
+   without a native consumer. The same relay incarnation may consume it on return; an A0 relaunch under
+   a new synthetic ID can orphan it. Do not automatically resend an ambiguously accepted mutation.
 4. if the same live controller returns, its next accepted current announce un-greys the row and
-   `catch_up` fills the gap; a process relaunch follows #19 (new row in A0, same recovered logical row in A1)
+   durable subscription replay fills the gap (compatibility Workflow uses `catch_up`); a process
+   relaunch follows #19 (new row in A0, same recovered logical row in A1)
 
 **21. Bus reaches its event-cap boundary**
 1. current A0 does not count events or invoke the tested `__close` primitive before 25k
-2. clean publisher fencing, close/re-`start()`, EOF/re-tail, and no-loss cursor behavior remain a release proof, not shipped behavior
+2. clean publisher fencing, close/re-`start()`, EOF/re-tail, and no-loss cursor behavior would be
+   mandatory for any future production Workflow claim; they do not block the SQLite-backed Claude 1.0
+   release
 3. selected A1 instead follows its durable route generation manifest
 
 **22. Client returns cold (was away)**
-1. same-tab reload: C decrypts the wrapped `sessionStorage` credential with its non-extractable IndexedDB key; new tab: user onboards again → C→V `GET /api/stream?identity=id` (subscribe bus) → last-64-frame `session_announce` slice
-2. C folds them by incarnation/generation and renders connected/reconnecting/disconnected rows
+1. same-tab reload: C decrypts the wrapped `sessionStorage` credential with its non-extractable IndexedDB key; new tab: user onboards again → C→V `GET /api/stream?identity=id` (subscribe bus) → last-64-frame presence-lifecycle slice
+2. C first absorbs authenticated canonical terminals, then folds unfenced announces by
+   incarnation/generation and renders connected/reconnecting/disconnected rows
    *(no per-client server state was kept)*
-3. open a chat → with no persistent transcript cache, Workflow uses `catch_up{since=0}`, while
-   SQLite/libSQL resumes the retained frame log from its start → caught up to the projection available
-   on that relay path
+3. open a chat → with no persistent transcript cache, SQLite/libSQL resumes the retained frame log
+   from its start; compatibility Workflow uses `catch_up{since=0}` → caught up to the projection
+   available on that relay path
 
 **23. Two wrappers, one identity, one drops**
-1. W₁,W₂ (same secret) both **broadcast** on `bus:${id}` (each its own sessions' announces); C lists both sets
+1. W₁,W₂ (same secret) both **broadcast** on `bus:presence-v2:${id}` (each its own sessions' announces); C lists both sets
 2. W₁ sleeps → its announces age through connected→reconnecting→disconnected → C greys **only
-   W₁'s** sessions; W₂'s sessions + the bus run stay live (W₂ keeps broadcasting, re-waking the run — §6B)
+   W₁'s** sessions; W₂'s sessions + the bus channel stay live (on compatibility Workflow, W₂ keeps
+   broadcasting and re-waking the run — §6B)
 3. W₁ returns → rejoins → broadcasts again → C un-greys W₁'s sessions on the next fresh announce
 
 ### 16.1 Primitives used (per scenario)
@@ -3465,15 +3766,18 @@ Compact map of the building blocks each scenario exercises. Vocabulary: `HKDF`
 durability/sequence cursor: `/api/seq` · host-only inbound cursor: `/api/frame-count` ·
 `bearer`(`auth_token`, self-verifying)
 `deployment-protection`(optional Vercel edge gate) · shipped-A0 bus:
-`bus:${id}` `sess:${id}:${sid}`; selected-A1 routes:
+`bus:presence-v2:${id}` `sess:${id}:${sid}`; selected-A1 routes:
 `bus:a1:${scopeAddress}` `ctl:a1:${serverControlAddress}` `sess:a1:${chatAddress}`, each derived from
 the full machine/server/route-or-chat scope ·
-`session_announce`(periodic broadcast, `sent_at`) `a0-conn-state`(connected if age <45 s,
-then reconnecting 30 s, then disconnected/retained) `a1-fresh`(certified two-sided
+`session_announce`(periodic broadcast, `sent_at`) `session_terminal`(authenticated absorbing lifecycle)
+`a0-conn-state`(without terminal: connected if age <45 s, then reconnecting 30 s, then
+disconnected/retained) `a1-fresh`(certified two-sided
 `FRESH_WINDOW`/`SKEW` admission) `grey-local` ·
-workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
+stable SQLite/libSQL: `frame-insert` `indexed-log-poll` `durable-cursors` · compatibility Workflow:
+`hook` `wf-stream`(persistent but non-durable to the host) · host/MITM: `args-passthrough`
 `--rc-*` `intercept`(/v1/code/sessions*) `passthrough`(/v1/messages) `bridge`(worker_jwt)
-`worker-SSE` `/worker/events` `initialize` `log`(live, no backfill) `dedup`(msg_id)
+`worker-SSE` `/worker/events` `initialize` `log`(compatibility Workflow only; live, no backfill)
+`dedup`(msg_id)
 `seq-alloc` `/remote-control`.
 
 | # | Scenario | Primitives |
@@ -3481,29 +3785,29 @@ workflow: `hook` `wf-stream`(durable resumable) · host/MITM: `args-passthrough`
 | 1 | Fresh identity bootstrap (`--rc-identity`) | `CSPRNG(S)`, `HKDF`→{identity_id,auth_token,content_root,control_key,K_meta}, `checksum`, print `rc1_…` *(local only; no broker call)* |
 | 2 | Wrapper launches TUI, RC off | `args-passthrough`, MITM `passthrough`, CA trust *(no broker traffic; not on bus)* |
 | 3 | Work locally, RC off | `passthrough`, claude on-disk transcript (no /v1/code; broker sees nothing) |
-| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, `log`(live, no backfill), `GCM`, **join-bus**(`resumeHook bus:${id}`), broadcast `session_announce`, `bearer` |
-| 5 | Launch with RC on (`--remote-control`) | `intercept`, `bridge`, `worker-SSE`, `initialize`, `log`, join-bus + broadcast |
-| 6 | Client first connection | `HKDF`, optional `deployment-protection`, `bearer`, `/api/stream`(`getHookByToken bus:${id}`, `startIndex=-64` tail slice), generation-folded `session_announce`, `a0-conn-state`, `GCM-open(name)`, wrapped credential in tab-scoped `sessionStorage` + non-extractable IndexedDB key |
+| 4 | Enable `/remote-control` | `intercept`, `bridge`, `worker-SSE`, `initialize`, durable-cursor preflight, `GCM`, **join-bus**(SQLite frame insert/indexed poll; compatibility Workflow `resumeHook`), broadcast `session_announce`, `bearer` |
+| 5 | Launch with RC on (`--remote-control`) | `intercept`, `bridge`, `worker-SSE`, `initialize`, durable sealed log, join-bus + broadcast |
+| 6 | Client first connection | `HKDF`, optional `deployment-protection`, `bearer`, `/api/stream`(SQLite indexed bus-log `startIndex=-64` lifecycle slice; compatibility Workflow `getHookByToken`), absorb canonical `session_terminal`, generation-fold unfenced `session_announce`, `a0-conn-state`, `GCM-open(name)`, wrapped credential in tab-scoped `sessionStorage` + non-extractable IndexedDB key |
 | 7 | One MACHINE, 5 independent sessions | 1× `HKDF`, `bearer`, **1× bus subscribe**, 5× per-session `session_announce`, independent `a0-conn-state`, `GCM-open`, no aggregator (§1) |
-| 8 | List an identity's spaces | last-64-frame `session_announce` bus slice, generation fold, `a0-conn-state`, `GCM-open(title/cwd)`, opportunistic—not complete—offline rows |
-| 9 | Cold full history sync | Workflow: `GCM(control_key)`, `catch_up`, session hook, host `#log`, `wf-stream/SSE`; SQLite/libSQL: subscription from frame 0, sealed broker-log replay, empty host `#log`; both: `seq`/dedup |
+| 8 | List an identity's spaces | last-64-frame presence-lifecycle bus slice, absorb canonical terminals, generation-fold unfenced announces, `a0-conn-state`, `GCM-open(title/cwd)`, opportunistic—not complete—offline rows |
+| 9 | Cold full history sync | SQLite/libSQL: subscription from frame 0, sealed broker-log replay, empty host `#log`; compatibility Workflow: `GCM(control_key)`, `catch_up`, session hook, host `#log`, `wf-stream/SSE`; both: `seq`/dedup |
 | 10 | Mounted viewer reconnect | full mode re-reads from 0 with in-memory `FrameOrderer` dedup; non-durable incarnation resumes `streamCursor` + host `catch_up{since=0}`; UI revive/cold viewer requests from 0; explicit gap repair alone requests `gap.nextSeq`; no persistent browser transcript cache |
-| 11 | Client → claude → back | `GCM(content)`, `resumeHook sess:`, `dedup(msg_id)`, `log`, `seq-alloc`, `intercept`-inject, `passthrough`, `accepted`, `wf-stream/SSE`, `AAD` |
+| 11 | Client → claude → back | `GCM(content)`, SQLite `frame-insert` + `indexed-log-poll`, `dedup(msg_id)`, `seq-alloc`, `intercept`-inject, `passthrough`, `accepted`, SSE, `AAD`; compatibility Workflow uses `resumeHook` + host `#log`/`wf-stream` |
 | 12 | Client-driven exchange appears in TUI | `intercept`-inject, `passthrough`, native TUI render; ordinary TUI prompts are not projected to clients |
-| 13 | Two clients (fan-out) | `wf-stream` multi-reader (session), `SSE`, `seq`/`dedup` |
+| 13 | Two clients (fan-out) | SQLite indexed-log multi-reader (session), `SSE`, `seq`/`dedup`; compatibility Workflow uses `wf-stream` |
 | 14 | Switch machine (replace) | forget prior pass, load machine 2's keys, optional `deployment-protection`, `bearer`, **new** bus subscribe → broadcast `session_announce`s (one pass on client) |
 | 15 | Rename identity/space | not shipped in A0; defaults from `session_announce`; local aliases and shared rename deferred (§6C) |
-| 16 | Tool permission | `control_request/response`, `GCM(control_key)`, session `hook`, `worker-SSE` |
-| 17 | Remote control verbs | control frames (`control_key`), session `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`) |
+| 16 | Tool permission (compatibility only) | `control_request/response`, `GCM(control_key)`, session `hook`, `worker-SSE`; stable Claude suppresses request/answer |
+| 17 | Remote control verbs (compatibility only) | control frames (`control_key`), session `hook`, RC verbs (`interrupt`/`set_permission_mode`/`set_model`); stable Claude suppresses all controls/slash |
 | 18 | Network blip resume | `/api/stream?identity=&session=`; Workflow token→run/`wf-stream startIndex`, SQLite/libSQL indexed subscription cursor; `seq` reorder, `dedup` |
-| 19 | Wrapper/CLI restart recovery | **A0:** new synthetic RC id/log; open or cold viewers may retain/replay the old disconnected row and add the new connected row while both announcements remain available. **A1 target:** persisted `(collaborationServerId, logicalChatId)` scope, resume UUID + known `cse_*` first, fenced replacement `cse_*` if needed, same full `(identity_id, collaborationServerId, logicalChatId)` broker channel/viewer row, no worker backfill |
-| 20 | Host offline → back | stop-broadcast, `a0-conn-state`→disconnected row retained; cold replay may seed offline row; bypassed send may land in a Workflow run or SQLite channel log with no native consumer; exact-incarnation return versus A0-orphan handling |
+| 19 | Wrapper/CLI restart recovery | **A0:** new synthetic RC id/log; landed old terminal removes/fences the old row, while crash/exhausted terminal may leave it disconnected beside the new row. **A1 target:** persisted `(collaborationServerId, logicalChatId)` scope, resume UUID + known `cse_*` first, fenced replacement `cse_*` if needed, same full `(identity_id, collaborationServerId, logicalChatId)` broker channel/viewer row, no worker backfill |
+| 20 | Host offline → back | graceful exit → absorbing terminal/removal; crash or exhausted terminal → `a0-conn-state` disconnected row retained; bypassed send may land in a Workflow run or SQLite channel log with no native consumer; exact-incarnation return versus A0-orphan handling |
 | 21 | Workflow bus reaches event cap | shipped gap: explicit-close primitive exists, but pre-cap fencing, close/re-`start()`, EOF/re-tail, and no-loss proof do not |
-| 22 | Client returns cold | same-tab wrapped credential restore or new-tab re-onboard, bus subscribe from `-64`; retained announcements may render connected or offline rows; no persistent transcript cache; Workflow current-run replay plus `catch_up{since=0}`, or SQLite retained-log replay; relay-retained projection only—no native backfill |
+| 22 | Client returns cold | same-tab wrapped credential restore or new-tab re-onboard, bus subscribe from `-64`; absorb terminal markers before rendering/writing unfenced announces; no persistent transcript cache; Workflow current-run replay plus `catch_up{since=0}`, or SQLite retained-log replay; relay-retained projection only—no native backfill |
 | 23 | Two wrappers, one drops | both broadcast on the bus; survivor keeps the logical bus channel active; dropped wrapper's rows alone traverse `a0-conn-state` to disconnected |
-| 24 | Broker replays stale announce | A0 exact current-generation mounted replay rejected by generation order (legacy equal timestamps may replace without refreshing time); cold replay may seed disconnected row; honest-clock connected bound is `sent_at+45 s`, with no future-skew admission bound. A1 adds `a1-fresh` rejection |
+| 24 | Broker replays stale announce | A0 exact current-generation mounted replay is rejected by generation order (legacy equal timestamps may replace but retain their first local freshness); cold replay may seed a disconnected row; raw host lead beyond 5 s starts reconnecting/non-writable instead of refreshing liveness. A1 adds certified `a1-fresh` rejection. |
 | 25 | Two wrappers race Workflow bus create | `resumeHook`→`HookNotFound`→`start()`; 1:1 token; losing workflow terminates with `HookConflictError` while its caller polls the winning token and resume-tails it; no caller catch, no `409`, no announce lost |
-| 26 | Clean session end (vs crash) | local/wrapper exit → stop-broadcast → `a0-conn-state` to retained disconnected row; viewer `end` only clears open relay gates |
+| 26 | Clean session end (vs crash) | graceful local/wrapper exit after live presence → canonical terminal, absorbing broker fence, row removal + incomplete-tail disclosure; crash/exhausted terminal alone falls back to disconnected retention; viewer `end` remains disabled on stable Claude |
 | 27 | Control reorder / ambiguous timeout | client-serialized order-dependent controls; A0 direct-verb `expiry` check + incarnation-local `dedup(msg_id)`, then native-effect reconciliation or visible ambiguity—never blind fresh-ID resend; A1 exact replay returns stored result |
 
 ## 17. Appendix — Claude's Remote Control protocol (reverse-engineered)
@@ -3645,7 +3949,9 @@ match the request length/hash, ordered types, UUID aliases, payload hashes, and 
 four retried event types are incidental to that one request-level observation. This narrower proof does
 not establish deterministic/per-type retry, revalidate every endpoint-map detail, or make a
 cross-version, cross-platform, question/permission-family, native-process-identity, or
-server-application claim.
+server-application claim. Its offline verifier hashes the captured source blobs at their historical
+Git commit, while executable current-tree trace-contract tests guard the pass-through/reset seam; live
+recapture is reserved for a tuple, proof-claim, or fault-model change or a concrete contradiction.
 
 ## 18. Appendix — Happy's Claude/Codex relay (not official Codex Remote)
 

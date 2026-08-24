@@ -32,8 +32,13 @@ pnpm --filter @remote-claw/claude-native-output-proof test:run
 recapture requires the authenticated exact Claude binary on `PATH`, a fresh Remote Control session,
 and a PTY. The probe rejects `RC_CLAUDE_BIN`, pins the PATH-resolved executable/package, source commit,
 and directly observed remote-claw runtime sources, writes only a new owner-only file, and keeps raw
-bodies in memory. The offline verifier additionally hashes the checked-out CLI argument/entrypoint
-route plus every retained runtime source; changing any of those bytes invalidates the gate.
+bodies in memory. The offline verifier checks those source hashes against the exact Git blobs at the
+captured commit rather than conflating historical provenance with current whole-file equality; it
+fails closed when that commit is absent from repository history. The same gate runs the current
+argument, launch, and real-TLS trace-route contract tests, including the fully-buffered
+HTTP-200/reset boundary used by this proof. A supported Claude version/platform change, a changed
+proof claim or fault model, or a concrete contradiction requires a live recapture; an unrelated
+relay-only implementation change does not.
 
 From the repository root, create one new owner-only output directory, then run each leg from the CLI
 package in a real terminal. Keep `RC_LOG=info`; body-trace logging would defeat the retained-artifact

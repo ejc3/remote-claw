@@ -1,5 +1,5 @@
-import { uploadHandoff } from "@remote-claw/cli";
 import { parsePass, toHex } from "@remote-claw/clawsec";
+import { uploadHandoff } from "@remote-claw/cli";
 import { expect, test } from "./fixtures";
 
 // End-to-end proof of the ephemeral one-time-handoff PAIRING flow (docs/ephemeral-handoff.md) across the

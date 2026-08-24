@@ -1,15 +1,22 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Frame, FrameHeader } from "@remote-claw/clawsec";
+import { deriveIdentity, type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { type BrokerClient, BrokerError } from "../../broker/client.js";
+import {
+  BrokerClient,
+  BrokerError,
+  BrokerPermanentStorageLossError,
+  BrokerTimeoutError,
+} from "../../broker/client.js";
+import { securityProvider } from "../../security/provider.js";
 import type { Tracer } from "../../trace.js";
 import {
   type DriverCapabilities,
   MITM_CAPABILITIES,
   MITM_HARNESS,
   OPENCODE_HARNESS,
+  STABLE_MITM_CAPABILITIES,
   TMUX_HARNESS,
 } from "./driver.js";
 import {
@@ -26,18 +33,20 @@ import { Session } from "./session.js";
 function spyTracer(): {
   tracer: Tracer;
   errors: Array<{ msg: string; fields: Record<string, unknown> | undefined }>;
+  debugs: Array<{ msg: string; fields: Record<string, unknown> | undefined }>;
 } {
   const errors: Array<{ msg: string; fields: Record<string, unknown> | undefined }> = [];
+  const debugs: Array<{ msg: string; fields: Record<string, unknown> | undefined }> = [];
   const noop = () => {};
   const t = {
     error: (msg: string, fields?: Record<string, unknown>) => errors.push({ msg, fields }),
     warn: noop,
     info: noop,
-    debug: noop,
+    debug: (msg: string, fields?: Record<string, unknown>) => debugs.push({ msg, fields }),
     trace: noop,
     child: () => t,
   } as unknown as Tracer;
-  return { tracer: t, errors };
+  return { tracer: t, errors, debugs };
 }
 
 describe("safeAttachmentName", () => {
@@ -146,6 +155,8 @@ class FakeClient {
   #inbound: Frame[] = [];
   #wakes = new Set<() => void>();
   streamStarts: Array<number | undefined> = [];
+  /** Inbound msgIds yielded into the relay, before any queue/authentication work. */
+  streamedInbound: string[] = [];
 
   queueInbound(f: Frame): void {
     this.#inbound.push(f);
@@ -193,7 +204,10 @@ class FakeClient {
     for (;;) {
       while (cursor < this.#inbound.length) {
         const f = this.#inbound[cursor++];
-        if (f !== undefined) yield f;
+        if (f !== undefined) {
+          this.streamedInbound.push(f.msgId);
+          yield f;
+        }
       }
       if (opts.signal?.aborted) return;
       await new Promise<void>((resolve) => {
@@ -211,7 +225,7 @@ class FakeClient {
   /** msgIds whose openFrame should REJECT — simulates an AEAD/auth failure (forged/tampered frame). */
   failOpen = new Set<string>();
   /** Every msgId passed to openFrame, in order — lets a test prove which inbound frames the relay
-   *  actually DECRYPTED (e.g. the durable path consumes a catch_up frame without ever opening it). */
+   *  authenticated before admission (including an otherwise ignored durable catch_up). */
   opened: string[] = [];
 
   openFrame(frame: Frame): Promise<Uint8Array> {
@@ -254,6 +268,20 @@ class FakeClient {
   }
 }
 
+/** A FakeClient whose inbound opens use the real sealed provider. This proves a sibling-session or
+ * wrong-identity header can carry a perfectly valid AEAD tag under the same machine identity; the
+ * relay's expected-coordinate fence, rather than decryption failure, must reject it. */
+class SealedInboundClient extends FakeClient {
+  constructor(readonly provider: ReturnType<typeof securityProvider>) {
+    super();
+  }
+
+  override openFrame(frame: Frame): Promise<Uint8Array> {
+    this.opened.push(frame.msgId);
+    return this.provider.openFrame("session", frame);
+  }
+}
+
 /** A publish fake whose content POSTs fail with the supplied HTTP statuses before succeeding. */
 class SequencedStatusClient extends FakeClient {
   postMessageAttempts = 0;
@@ -266,6 +294,72 @@ class SequencedStatusClient extends FakeClient {
     this.postMessageAttempts++;
     const status = this.failureStatuses.shift();
     if (status !== undefined) throw new BrokerError(status, `injected ${status}`);
+    return super.postMessage(header, body);
+  }
+}
+
+/** Blocks the first matching publish until released, then fails it. This makes the queue head and a
+ *  successor admitted by the opposite pump observable without scheduler sleeps. */
+class BlockingFailureClient extends FakeClient {
+  readonly failureStarted: Promise<void>;
+  #markFailureStarted: () => void = () => {};
+  #releaseFailure: () => void = () => {};
+  readonly #failureRelease: Promise<void>;
+  #failed = false;
+
+  constructor(readonly targetRecordKind: string) {
+    super();
+    this.failureStarted = new Promise<void>((resolve) => {
+      this.#markFailureStarted = resolve;
+    });
+    this.#failureRelease = new Promise<void>((resolve) => {
+      this.#releaseFailure = resolve;
+    });
+  }
+
+  releaseFailure(): void {
+    this.#releaseFailure();
+  }
+
+  override async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
+    if (!this.#failed && header.recordKind === this.targetRecordKind) {
+      this.#failed = true;
+      this.#markFailureStarted();
+      await this.#failureRelease;
+      throw new BrokerError(500, `injected blocked ${header.recordKind} failure`);
+    }
+    return super.postMessage(header, body);
+  }
+}
+
+/** Blocks the first matching publish until released, then lets it succeed. */
+class BlockingSuccessClient extends FakeClient {
+  readonly blocked: Promise<void>;
+  #markBlocked: () => void = () => {};
+  #release: () => void = () => {};
+  readonly #released: Promise<void>;
+  #didBlock = false;
+
+  constructor(readonly targetRecordKind: string) {
+    super();
+    this.blocked = new Promise<void>((resolve) => {
+      this.#markBlocked = resolve;
+    });
+    this.#released = new Promise<void>((resolve) => {
+      this.#release = resolve;
+    });
+  }
+
+  release(): void {
+    this.#release();
+  }
+
+  override async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
+    if (!this.#didBlock && header.recordKind === this.targetRecordKind) {
+      this.#didBlock = true;
+      this.#markBlocked();
+      await this.#released;
+    }
     return super.postMessage(header, body);
   }
 }
@@ -298,6 +392,166 @@ class DelayedFirstAnnounceClient extends FakeClient {
       await this.#firstAnnounceRelease;
     }
     return super.postFrame(header, body);
+  }
+}
+
+/** Lets the initial presence land, then parks one advisory refresh until released. */
+class BlockingAdvisoryAnnounceClient extends FakeClient {
+  readonly advisoryStarted: Promise<void>;
+  #markAdvisoryStarted: () => void = () => {};
+  #releaseAdvisory: () => void = () => {};
+  readonly #advisoryRelease: Promise<void>;
+  #announcePosts = 0;
+
+  constructor() {
+    super();
+    this.advisoryStarted = new Promise<void>((resolve) => {
+      this.#markAdvisoryStarted = resolve;
+    });
+    this.#advisoryRelease = new Promise<void>((resolve) => {
+      this.#releaseAdvisory = resolve;
+    });
+  }
+
+  releaseAdvisory(): void {
+    this.#releaseAdvisory();
+  }
+
+  override async postFrame(header: FrameHeader, body: Uint8Array): Promise<unknown> {
+    if (header.recordKind === "session_announce" && this.#announcePosts++ === 1) {
+      this.#markAdvisoryStarted();
+      await this.#advisoryRelease;
+    }
+    return super.postFrame(header, body);
+  }
+}
+
+class FailOnceAdvisoryAnnounceClient extends FakeClient {
+  announceAttempts = 0;
+
+  override async postFrame(header: FrameHeader, body: Uint8Array): Promise<unknown> {
+    if (header.recordKind === "session_announce") {
+      this.announceAttempts += 1;
+      if (this.announceAttempts === 2) throw new BrokerError(500, "advisory failed");
+    }
+    return super.postFrame(header, body);
+  }
+}
+
+class PermanentLossAnnounceClient extends FakeClient {
+  announceAttempts = 0;
+
+  constructor(readonly failOnAttempt: number) {
+    super();
+  }
+
+  override async postFrame(header: FrameHeader, body: Uint8Array): Promise<unknown> {
+    if (header.recordKind === "session_announce") {
+      this.announceAttempts += 1;
+      if (this.announceAttempts === this.failOnAttempt) {
+        throw new BrokerPermanentStorageLossError();
+      }
+    }
+    return super.postFrame(header, body);
+  }
+}
+
+/** Proves the relay's own terminal deadline is authoritative even when a custom transport ignores
+ * AbortSignal and never settles its first request. */
+class HangingFirstTerminalClient extends FakeClient {
+  terminalAttempts = 0;
+
+  override async postFrame(header: FrameHeader, body: Uint8Array): Promise<unknown> {
+    if (header.recordKind === "session_terminal" && this.terminalAttempts++ === 0) {
+      return new Promise<never>(() => {});
+    }
+    return super.postFrame(header, body);
+  }
+}
+
+/** Parks the inbound user echo while ignoring its deadline signal, then lets the test settle it late. */
+class HangingInboundContentClient extends FakeClient {
+  userAttempts = 0;
+  userSignals: AbortSignal[] = [];
+  resolveLate: () => void = () => {};
+
+  override async postMessage(
+    header: FrameHeader,
+    body: Uint8Array,
+    _maxChunkBytes?: number,
+    signal?: AbortSignal,
+  ): Promise<unknown[]> {
+    if (header.recordKind !== "user") return super.postMessage(header, body);
+    this.userAttempts += 1;
+    if (signal !== undefined) this.userSignals.push(signal);
+    return new Promise<unknown[]>((resolve) => {
+      this.resolveLate = () => resolve([{ ok: true }]);
+    });
+  }
+}
+
+/** Completes a content post just inside its wall and records whether the deadline fired too early. */
+class NearDeadlineSuccessClient extends FakeClient {
+  assistantAttempts = 0;
+  abortedAtSuccess: boolean | null = null;
+
+  override async postMessage(
+    header: FrameHeader,
+    body: Uint8Array,
+    _maxChunkBytes?: number,
+    signal?: AbortSignal,
+  ): Promise<unknown[]> {
+    if (header.recordKind !== "assistant") return super.postMessage(header, body);
+    this.assistantAttempts += 1;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    this.abortedAtSuccess = signal?.aborted ?? false;
+    return super.postMessage(header, body);
+  }
+}
+
+type StreamAttempt =
+  | { kind: "fail"; status: number }
+  | { kind: "clean" }
+  | { kind: "frame-then-fail"; frame: Frame; status: number }
+  | { kind: "frames-then-fail"; frames: Frame[]; status: number }
+  | { kind: "park"; rejectOnAbort?: boolean };
+
+/** Script one result per subscription so the consecutive-failure circuit is directly observable. */
+class ScriptedInboundClient extends FakeClient {
+  constructor(readonly attempts: StreamAttempt[]) {
+    super();
+  }
+
+  override async *streamFrames(opts: {
+    startIndex?: number;
+    signal?: AbortSignal;
+  }): AsyncGenerator<Frame> {
+    this.streamStarts.push(opts.startIndex);
+    const attempt = this.attempts.shift() ?? { kind: "park" };
+    if (attempt.kind === "fail") {
+      throw new BrokerError(attempt.status, `injected stream ${attempt.status}`);
+    }
+    if (attempt.kind === "clean") return;
+    if (attempt.kind === "frame-then-fail") {
+      this.streamedInbound.push(attempt.frame.msgId);
+      yield attempt.frame;
+      throw new BrokerError(attempt.status, `injected stream ${attempt.status}`);
+    }
+    if (attempt.kind === "frames-then-fail") {
+      for (const frame of attempt.frames) {
+        this.streamedInbound.push(frame.msgId);
+        yield frame;
+      }
+      throw new BrokerError(attempt.status, `injected stream ${attempt.status}`);
+    }
+    await new Promise<void>((resolve) => {
+      if (opts.signal?.aborted) {
+        resolve();
+        return;
+      }
+      opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    if (attempt.rejectOnAbort) throw new BrokerError(503, "owner-abort race");
   }
 }
 
@@ -336,6 +590,11 @@ function relayOf(
   session: Session,
   client: FakeClient,
   capabilities?: DriverCapabilities,
+  timing: {
+    postTimeoutMs?: number;
+    inboundRetryDelayMs?: number;
+    cursorRetryBaseMs?: number;
+  } = {},
 ): HostRcRelay {
   return new HostRcRelay({
     client: client as unknown as BrokerClient,
@@ -343,6 +602,7 @@ function relayOf(
     sessionId: session.id,
     session,
     ...(capabilities ? { capabilities } : {}),
+    ...timing,
   });
 }
 
@@ -355,6 +615,153 @@ async function waitFor(pred: () => boolean, ms = 2000): Promise<void> {
 function assistant(text: string): Record<string, unknown> {
   return { type: "assistant", message: { content: [{ type: "text", text }] } };
 }
+
+describe("HostRcRelay inbound coordinate binding", () => {
+  it("rejects an authenticated sibling-session command before dedup or side effects", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(41));
+    const provider = securityProvider("sealed", identity);
+    const client = new SealedInboundClient(provider);
+    const sessionA = new Session("session-a", "A", {});
+    const sessionB = new Session("session-b", "B", {});
+    const sharedMsgId = "same-source-coordinate";
+    const header = (sessionId: string): FrameHeader => ({
+      v: 1,
+      identityId: identity.identityId,
+      sessionId,
+      dir: "in",
+      recordKind: "user",
+      seq: null,
+      msgId: sharedMsgId,
+      keyEpoch: 0,
+      part: 0,
+      parts: 1,
+    });
+    // Both frames are validly sealed by one trusted controller under the same machine identity. The
+    // untrusted broker misroutes B first, then yields A's legitimate command with the SAME msgId.
+    client.queueInbound(
+      await provider.sealFrame("session", header(sessionB.id), utf8("command intended for B")),
+    );
+    client.queueInbound(
+      await provider.sealFrame("session", header(sessionA.id), utf8("command intended for A")),
+    );
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: identity.identityId,
+      sessionId: sessionA.id,
+      session: sessionA,
+    });
+    const pushUser = vi.spyOn(sessionA, "pushUserInput");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.content.some(({ text }) => text === "command intended for A"));
+    ac.abort();
+    await served;
+
+    expect(pushUser).toHaveBeenCalledTimes(1);
+    expect(pushUser).toHaveBeenCalledWith("command intended for A");
+    expect(client.content.filter(({ recordKind }) => recordKind === "user")).toEqual([
+      expect.objectContaining({ text: "command intended for A", seq: 0 }),
+    ]);
+    // Only A's frame reached AEAD open; B was rejected before decrypt and could not poison #seen.
+    expect(client.opened).toEqual([sharedMsgId]);
+  });
+
+  it("rejects a validly sealed wrong-identity header without poisoning the shared msgId", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(42));
+    const provider = securityProvider("sealed", identity);
+    const client = new SealedInboundClient(provider);
+    const session = new Session("session-a", "A", {});
+    const sharedMsgId = "wrong-identity-coordinate";
+    const header = (identityId: Uint8Array): FrameHeader => ({
+      v: 1,
+      identityId,
+      sessionId: session.id,
+      dir: "in",
+      recordKind: "user",
+      seq: null,
+      msgId: sharedMsgId,
+      keyEpoch: 0,
+      part: 0,
+      parts: 1,
+    });
+    // identityId is AEAD-associated data, but the session key derives from the same content root and
+    // sessionId. A same-secret sender can therefore seal this wrong clear identity coordinate validly.
+    client.queueInbound(
+      await provider.sealFrame(
+        "session",
+        header(new Uint8Array(identity.identityId.length).fill(0xff)),
+        utf8("wrong identity"),
+      ),
+    );
+    client.queueInbound(
+      await provider.sealFrame("session", header(identity.identityId), utf8("right identity")),
+    );
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+    });
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.content.some(({ text }) => text === "right identity"));
+    ac.abort();
+    await served;
+
+    expect(pushUser).toHaveBeenCalledTimes(1);
+    expect(pushUser).toHaveBeenCalledWith("right identity");
+    expect(client.content.filter(({ recordKind }) => recordKind === "user")).toEqual([
+      expect.objectContaining({ text: "right identity", seq: 0 }),
+    ]);
+    expect(client.opened).toEqual([sharedMsgId]);
+  });
+
+  it("authenticates before dedup so forged ciphertext cannot suppress a genuine same-msgId command", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(43));
+    const provider = securityProvider("sealed", identity);
+    const client = new SealedInboundClient(provider);
+    const session = new Session("session-auth-order", "auth order", {});
+    const header: FrameHeader = {
+      v: 1,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      dir: "in",
+      recordKind: "user",
+      seq: null,
+      msgId: "visible-shared-msg-id",
+      keyEpoch: 0,
+      part: 0,
+      parts: 1,
+    };
+    const genuine = await provider.sealFrame("session", header, utf8("genuine command"));
+    const forged = { ...genuine, ct: genuine.ct.slice() };
+    forged.ct[0] = (forged.ct[0] ?? 0) ^ 1;
+    // The untrusted broker sees msg_id in the clear and returns its tampered copy first.
+    client.queueInbound(forged);
+    client.queueInbound(genuine);
+
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+    });
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.content.some(({ text }) => text === "genuine command"));
+    ac.abort();
+    await served;
+
+    expect(pushUser).toHaveBeenCalledTimes(1);
+    expect(pushUser).toHaveBeenCalledWith("genuine command");
+    expect(client.opened).toEqual([header.msgId, header.msgId]);
+  });
+});
 
 describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
   it("renders a local_prompt user event as a `user` frame but still drops a normal upstream user echo", async () => {
@@ -389,6 +796,34 @@ describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
 });
 
 describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
+  it("projects one transcript item for an exact Claude-native request retry", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+    const nativeBatch = [
+      {
+        payload: {
+          uuid: "11111111-1111-4111-8111-111111111111",
+          type: "assistant",
+          session_id: session.id,
+          message: { content: [{ type: "text", text: "one projection" }] },
+        },
+      },
+    ];
+
+    expect(session.ingestNativeUpstreamBatch(1, nativeBatch)[0]?.duplicate).toBe(false);
+    expect(session.ingestNativeUpstreamBatch(1, nativeBatch)[0]?.duplicate).toBe(true);
+    await waitFor(() => client.content.length === 1);
+    ac.abort();
+    await served;
+
+    expect(client.content).toEqual([
+      expect.objectContaining({ recordKind: "assistant", seq: 0, text: "one projection" }),
+    ]);
+  });
+
   it("retries a broker 409 and preserves the same content frame", async () => {
     const session = new Session("s", "t", {});
     const client = new SequencedStatusClient([409]);
@@ -419,6 +854,138 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
 
     expect(client.postMessageAttempts).toBe(1);
     expect(client.content).toHaveLength(0);
+  });
+
+  it("hard-times an ambiguous content post without replay, latches fatal, and observes late reject", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(55));
+    let contentAttempts = 0;
+    const contentSignals: AbortSignal[] = [];
+    const busKinds: string[] = [];
+    let rejectLate: (reason: unknown) => void = () => {};
+    const fetchFn: typeof fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const pathname = new URL(typeof input === "string" ? input : input.toString()).pathname;
+      if (pathname === "/api/seq") {
+        return Promise.resolve(Response.json({ maxSeq: null, durable: false }, { status: 200 }));
+      }
+      if (pathname === "/api/stream") {
+        return Promise.resolve(
+          new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      }
+      if (pathname === "/api/relay") {
+        const body = JSON.parse(String(init?.body)) as { record_kind?: unknown };
+        if (body.record_kind === "assistant") {
+          contentAttempts += 1;
+          if (init?.signal !== undefined && init.signal !== null) contentSignals.push(init.signal);
+          return new Promise<Response>((_resolve, reject) => {
+            rejectLate = reject;
+          }); // deliberately ignores AbortSignal
+        }
+        if (typeof body.record_kind === "string") busKinds.push(body.record_kind);
+        return Promise.resolve(
+          Response.json({ ok: true, channel: "bus", runId: "r", created: true }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected broker route ${pathname}`));
+    }) as typeof fetch;
+    const client = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", identity),
+      fetchFn,
+    });
+    const session = new Session("s", "t", {});
+    const relay = new HostRcRelay({
+      client,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+      postTimeoutMs: 15,
+      inboundRetryDelayMs: 0,
+    });
+    await relay.announce("timed post");
+    session.pushUpstream(assistant("must publish once"));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const failure = await relay
+        .serve(new AbortController().signal)
+        .catch((error: unknown) => error);
+      expect(failure).toMatchObject({ name: "HostRcPostTimeoutError" });
+      await relay.settlePresence();
+
+      expect(session.closed).toBe(true);
+      expect(contentAttempts).toBe(1);
+      expect(contentSignals).toHaveLength(1);
+      expect(contentSignals[0]?.aborted).toBe(true);
+      expect(busKinds).toEqual(["session_announce", "session_terminal"]);
+      await expect(relay.prepare()).rejects.toBe(failure); // the first fatal cause stays latched
+
+      rejectLate(new Error("hostile late content rejection"));
+      await tick();
+      expect(contentAttempts).toBe(1); // no ambiguous replay after timeout/late settlement
+    } finally {
+      process.removeListener("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+  });
+
+  it("hard-times a hung inbound content echo, never injects, and ignores its late success", async () => {
+    const session = new Session("s", "t", {});
+    const client = new HangingInboundContentClient();
+    const relay = relayOf(session, client, undefined, {
+      postTimeoutMs: 15,
+      inboundRetryDelayMs: 0,
+    });
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    client.queueInbound(inFrame("user", "hung-inbound", "must never inject", "client-hung"));
+    await relay.announce("hung inbound");
+
+    const failure = await relay
+      .serve(new AbortController().signal)
+      .catch((error: unknown) => error);
+    await relay.settlePresence();
+
+    expect(failure).toMatchObject({ name: "HostRcPostTimeoutError" });
+    expect(session.closed).toBe(true);
+    expect(pushUser).not.toHaveBeenCalled();
+    expect(client.userAttempts).toBe(1);
+    expect(client.userSignals).toHaveLength(1);
+    expect(client.userSignals[0]?.aborted).toBe(true);
+    expect(client.posts.filter(({ recordKind }) => recordKind === "accepted")).toHaveLength(1);
+    expect(client.content).toEqual([]);
+    expect(client.posts.some(({ recordKind }) => recordKind === "session_terminal")).toBe(true);
+
+    client.resolveLate();
+    await tick();
+    expect(client.userAttempts).toBe(1); // late success cannot replay/resurrect the timed-out unit
+    expect(pushUser).not.toHaveBeenCalled();
+    expect(client.content).toEqual([]);
+  });
+
+  it("admits a content post that succeeds immediately before its hard deadline", async () => {
+    const session = new Session("s", "t", {});
+    const client = new NearDeadlineSuccessClient();
+    const relay = relayOf(session, client, undefined, {
+      postTimeoutMs: 30,
+      inboundRetryDelayMs: 0,
+    });
+    const owner = new AbortController();
+    const served = relay.serve(owner.signal);
+    session.pushUpstream(assistant("just in time"));
+
+    await waitFor(() => client.content.length === 1);
+    expect(client.assistantAttempts).toBe(1);
+    expect(client.abortedAtSuccess).toBe(false);
+    expect(session.closed).toBe(false);
+
+    owner.abort();
+    await served;
+    expect(client.content).toEqual([
+      expect.objectContaining({ recordKind: "assistant", seq: 0, text: "just in time" }),
+    ]);
   });
 
   it("a failing content post HALTS the relay (serve rejects) with a gap-free durable prefix", async () => {
@@ -475,6 +1042,128 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     expect(client.content.map((p) => p.seq)).toEqual([]);
   });
 
+  it("holds an inbound user unit behind blocked upstream N; failure closes the Session before N+1 or native injection", async () => {
+    const session = new Session("s", "t", {});
+    const client = new BlockingFailureClient("assistant");
+    const relay = relayOf(session, client);
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    session.pushUpstream(assistant("blocked N"));
+    const served = relay.serve(new AbortController().signal).then(
+      () => "resolved",
+      () => "rejected",
+    );
+
+    // Upstream owns queue head N. Admit an inbound user while N's broker POST is still blocked.
+    await client.failureStarted;
+    client.pushInbound(inFrame("user", "queued-inbound", "must not inject", "client-next"));
+    await waitFor(() => client.opened.includes("queued-inbound"));
+    await tick(); // openFrame's continuation has synchronously admitted the complete user unit
+
+    client.releaseFailure();
+    await expect(served).resolves.toBe("rejected");
+
+    expect(session.closed).toBe(true);
+    expect(pushUser).not.toHaveBeenCalled();
+    expect(client.posts.some((p) => p.recordKind === "accepted")).toBe(false);
+    expect(client.content).toEqual([]); // failed N is absent; queued N+1 never publishes
+  });
+
+  it("holds upstream N+1 behind a blocked inbound user unit; failure prevents both native injection and later publication", async () => {
+    const session = new Session("s", "t", {});
+    const client = new BlockingFailureClient("user");
+    const { tracer, debugs } = spyTracer();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: session.id,
+      session,
+      tracer,
+    });
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    client.queueInbound(inFrame("user", "blocked-inbound", "blocked N", "client-n"));
+    const served = relay.serve(new AbortController().signal).then(
+      () => "resolved",
+      () => "rejected",
+    );
+
+    // The inbound unit has allocated seq 0, published accepted, and is blocked failing its user echo.
+    await client.failureStarted;
+    session.pushUpstream(assistant("must not publish"));
+    await waitFor(() => debugs.some((entry) => entry.msg === "upstream event"));
+
+    client.releaseFailure();
+    await expect(served).resolves.toBe("rejected");
+
+    expect(session.closed).toBe(true);
+    expect(pushUser).not.toHaveBeenCalled();
+    expect(client.posts.filter((p) => p.recordKind === "accepted")).toHaveLength(1);
+    expect(client.content).toEqual([]); // failed inbound N + queued upstream N+1 are both absent
+  });
+
+  it("holds a control mutation behind blocked upstream N; failure closes before the verb reaches the worker", async () => {
+    const session = new Session("s", "t", {});
+    const client = new BlockingFailureClient("assistant");
+    const relay = relayOf(session, client);
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    session.pushUpstream(assistant("blocked N"));
+    const served = relay.serve(new AbortController().signal).then(
+      () => "resolved",
+      () => "rejected",
+    );
+
+    await client.failureStarted;
+    client.pushInbound(
+      inFrame("interrupt", "queued-control", JSON.stringify({ expiry: Date.now() + 60_000 })),
+    );
+    await waitFor(() => client.streamedInbound.includes("queued-control"));
+    await tick(); // the control unit is now queued behind the blocked publication
+
+    client.releaseFailure();
+    await expect(served).resolves.toBe("rejected");
+
+    expect(session.closed).toBe(true);
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(client.content).toEqual([]);
+  });
+
+  it("clean Session close terminates both pumps and rejects every later broker mutation", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const served = relay.serve(new AbortController().signal);
+    await waitFor(() => client.streamStarts.length > 0);
+
+    session.close();
+    await served;
+    client.pushInbound(inFrame("user", "after-close", "must not publish", "late-client"));
+    await tick();
+
+    expect(pushUser).not.toHaveBeenCalled();
+    expect(client.posts).toEqual([]);
+    expect(client.streamedInbound).not.toContain("after-close");
+  });
+
+  it("a close during an in-flight echo prevents the last-moment native injection", async () => {
+    const session = new Session("s", "t", {});
+    const client = new BlockingSuccessClient("user");
+    const relay = relayOf(session, client);
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    client.queueInbound(inFrame("user", "in-flight", "must not inject", "client-in-flight"));
+    const served = relay.serve(new AbortController().signal).then(
+      () => "resolved",
+      () => "rejected",
+    );
+
+    await client.blocked; // accepted posted; sequenced user echo is awaiting the broker
+    session.close();
+    client.release();
+    await expect(served).resolves.toBe("rejected");
+
+    expect(pushUser).not.toHaveBeenCalled();
+    expect(client.content.map((post) => post.recordKind)).toEqual(["user"]);
+  });
+
   it("a worker control_cancel_request clears an open gate so `needs` doesn't stick (grounded fix)", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
@@ -500,6 +1189,123 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
 
     expect(client.announces.at(-1)?.needs).toBe(false); // the gate was cleared, not left pinned
     expect(client.announces.some((a) => a.needs === true)).toBe(true); // we saw the open→clear transition
+  });
+
+  it("stable MITM suppresses both unexpected permission requests and attempted answers", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = relayOf(session, client, STABLE_MITM_CAPABILITIES);
+    const pushResponse = vi.spyOn(session, "pushControlResponse");
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "stable-gate",
+      request: { subtype: "can_use_tool", tool_name: "AskUserQuestion", tool_input: {} },
+    });
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.streamStarts.length === 1);
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "stable-answer",
+        JSON.stringify({ request_id: "stable-gate", behavior: "allow" }),
+      ),
+    );
+    await waitFor(() => client.streamedInbound.includes("stable-answer"));
+    await tick();
+    ac.abort();
+    await served;
+
+    expect(pushResponse).not.toHaveBeenCalled();
+    expect(client.posts.some((post) => post.recordKind === "permission_request")).toBe(false);
+    expect(client.posts.some((post) => post.recordKind === "permission_resolved")).toBe(false);
+    expect(STABLE_MITM_CAPABILITIES.structuredPermissions).toBe(false);
+  });
+
+  it("stable MITM admits only non-empty plain text and suppresses every unproved mutation family", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = relayOf(session, client, STABLE_MITM_CAPABILITIES);
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.streamStarts.length === 1);
+    client.pushInbound(inFrame("user", "stable-empty", "   "));
+    client.pushInbound(inFrame("user", "stable-slash", "   /compact"));
+    client.pushInbound(
+      inFrame(
+        "attachment",
+        "stable-attachment",
+        JSON.stringify({
+          name: "proof.png",
+          mime: "image/png",
+          data: Buffer.from("not-an-image").toString("base64"),
+        }),
+      ),
+    );
+    for (const kind of ["interrupt", "set_model", "set_mode", "end"]) {
+      client.pushInbound(
+        inFrame(
+          kind,
+          `stable-${kind}`,
+          JSON.stringify({
+            model: "opus",
+            mode: "plan",
+            expiry: Date.now() + 60_000,
+          }),
+        ),
+      );
+    }
+    client.pushInbound(inFrame("user", "stable-plain", "hello stable", "stable-client"));
+
+    await waitFor(() => pushUser.mock.calls.length === 1);
+    ac.abort();
+    await served;
+
+    expect(pushUser).toHaveBeenCalledWith("hello stable");
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(client.content.map(({ recordKind, text }) => ({ recordKind, text }))).toEqual([
+      { recordKind: "user", text: "hello stable" },
+    ]);
+    expect(client.posts.filter(({ recordKind }) => recordKind === "accepted")).toHaveLength(1);
+    // Capability suppression happens only after origin authentication; none of these valid but
+    // unsupported mutations reaches a native side effect or transcript publication.
+    expect(client.opened).toEqual(
+      expect.arrayContaining([
+        "stable-attachment",
+        "stable-interrupt",
+        "stable-set_model",
+        "stable-set_mode",
+        "stable-end",
+      ]),
+    );
+  });
+
+  it("stable MITM fails closed before pumps or discoverability on a non-durable broker", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    client.queueInbound(inFrame("user", "must-not-run", "unsafe legacy command"));
+    session.pushUpstream(assistant("must not publish"));
+    const relay = relayOf(session, client, STABLE_MITM_CAPABILITIES);
+
+    await expect(relay.prepare()).rejects.toThrow(
+      "stable Claude remote control requires a durable broker backend",
+    );
+    await expect(relay.serve(new AbortController().signal)).rejects.toThrow(
+      "stable Claude remote control requires a durable broker backend",
+    );
+
+    expect(session.closed).toBe(true);
+    expect(client.streamStarts).toEqual([]);
+    expect(client.content).toEqual([]);
+    expect(client.announces).toEqual([]);
+    expect(pushUser).not.toHaveBeenCalled();
   });
 
   it("the interrupt verb is a backstop that also clears an open gate", async () => {
@@ -741,9 +1547,9 @@ describe("HostRcRelay permission mode presence", () => {
     expect(pushControl).toHaveBeenCalledWith("set_permission_mode", { mode: "plan" });
   });
 
-  it("a driver that can't honor set_mode drives the verb but does NOT fabricate a confirmed mode", async () => {
-    // tmux/opencode-style caps: controls.setMode=false. The relay must still forward the verb (the driver
-    // safely no-ops it) but must NOT set #session.permissionMode — announcing it would be a "✓" lie.
+  it("a driver that can't honor set_mode suppresses the verb and does not fabricate a confirmed mode", async () => {
+    // The viewer disables unsupported controls, and the host independently enforces the same boundary
+    // against an old, racing, or crafted authenticated client.
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     const caps: DriverCapabilities = {
@@ -760,13 +1566,12 @@ describe("HostRcRelay permission mode presence", () => {
     client.pushInbound(
       inFrame("set_mode", "mode-1", JSON.stringify({ mode: "plan", expiry: Date.now() + 60_000 })),
     );
-    // The verb is still forwarded to the worker (driver decides what to do with it).
-    await waitFor(() => pushControl.mock.calls.some(([v]) => v === "set_permission_mode"));
-    await tick();
+    client.pushInbound(inFrame("user", "mode-barrier", "still alive"));
+    await waitFor(() => client.content.some(({ text }) => text === "still alive"));
     ac.abort();
     await served;
 
-    // But the relay never claims the mode took effect: no permissionMode write, no mode re-announce.
+    expect(pushControl).not.toHaveBeenCalled();
     expect(session.permissionMode).toBeNull();
     expect(client.announces.slice(annBefore).some((a) => a.mode === "plan")).toBe(false);
   });
@@ -852,6 +1657,217 @@ describe("HostRcRelay capabilities on session_announce", () => {
     } finally {
       now.mockRestore();
     }
+  });
+});
+
+describe("HostRcRelay absorbing presence terminal", () => {
+  it("fails closed on permanent identity-bus loss during the initial announce before serve can admit work", async () => {
+    const session = new Session("s", "t", {});
+    const client = new PermanentLossAnnounceClient(1);
+    const relay = relayOf(session, client);
+
+    const failure = await relay.announce("box").catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(BrokerPermanentStorageLossError);
+    expect(session.closed).toBe(true);
+    expect(session.closeReason).toBe("identity bus storage permanently lost");
+    await expect(relay.serve(new AbortController().signal)).rejects.toBe(failure);
+    expect(client.streamStarts).toEqual([]);
+    expect(client.content).toEqual([]);
+  });
+
+  it("latches permanent loss on a later announce, closes native routes with 410, and preserves the first cause", async () => {
+    const session = new Session("s", "t", {});
+    const client = new PermanentLossAnnounceClient(2);
+    const relay = relayOf(session, client);
+    await relay.announce("box");
+
+    const failure = await relay
+      .refreshAnnouncement("updated", null, null, MITM_CAPABILITIES)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(BrokerPermanentStorageLossError);
+    expect(session.closed).toBe(true);
+    expect(session.closeReason).toBe("identity bus storage permanently lost");
+    let nativeFailure: unknown;
+    try {
+      session.ingestNativeUpstreamBatch(1, [
+        {
+          payload: {
+            uuid: "11111111-1111-4111-8111-111111111111",
+            type: "assistant",
+            session_id: session.id,
+          },
+        },
+      ]);
+    } catch (error) {
+      nativeFailure = error;
+    }
+    expect(nativeFailure).toMatchObject({ status: 410 });
+    await expect(relay.prepare()).rejects.toBe(failure);
+  });
+
+  it("keeps ordinary announce 5xx advisory and leaves the native session open", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FailOnceAdvisoryAnnounceClient();
+    const relay = relayOf(session, client);
+    await relay.announce("box");
+
+    await expect(
+      relay.refreshAnnouncement("updated", null, null, MITM_CAPABILITIES),
+    ).rejects.toMatchObject({ status: 500 });
+    expect(session.closed).toBe(false);
+    expect(session.closeReason).toBeNull();
+    await expect(relay.prepare()).resolves.toBeUndefined();
+  });
+
+  it("publishes the canonical terminal exactly once and rejects every later live snapshot", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+
+    await relay.announce("box");
+    session.close();
+    await relay.terminalizePresence();
+    await relay.terminalizePresence();
+    await relay.settlePresence();
+
+    expect(client.posts.filter(({ recordKind }) => recordKind === "session_terminal")).toEqual([
+      {
+        recordKind: "session_terminal",
+        seq: null,
+        msgId: "terminal-s",
+        text: '{"v":1}',
+      },
+    ]);
+    await expect(relay.announce("resurrected")).rejects.toThrow("session closed");
+    await expect(
+      relay.refreshAnnouncement("resurrected", null, null, MITM_CAPABILITIES),
+    ).rejects.toThrow("session closed");
+    expect(client.announces.map(({ title }) => title)).toEqual(["box"]);
+  });
+
+  it("bounds a terminal attempt even when the transport ignores abort, then retries the same coordinate", async () => {
+    const session = new Session("s", "t", {});
+    const client = new HangingFirstTerminalClient();
+    const relay = relayOf(session, client);
+
+    await relay.announce("box");
+    session.close();
+    await relay.terminalizePresence();
+
+    expect(client.terminalAttempts).toBe(2);
+    expect(client.posts.filter(({ recordKind }) => recordKind === "session_terminal")).toEqual([
+      {
+        recordKind: "session_terminal",
+        seq: null,
+        msgId: "terminal-s",
+        text: '{"v":1}',
+      },
+    ]);
+  }, 5_000);
+
+  it("keeps transcript publication live behind a stuck advisory presence refresh", async () => {
+    const session = new Session("s", "t", {});
+    const client = new BlockingAdvisoryAnnounceClient();
+    const relay = relayOf(session, client);
+    await relay.announce("box");
+    const abort = new AbortController();
+    const served = relay.serve(abort.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+
+    session.workerStatus = "running";
+    session.wake();
+    await client.advisoryStarted;
+    session.pushUpstream(assistant("must pass the stuck bus"));
+    await waitFor(() =>
+      client.content.some(({ text }) => text.includes("must pass the stuck bus")),
+    );
+
+    abort.abort();
+    await served;
+    expect(session.closed).toBe(false);
+    client.releaseAdvisory();
+    await relay.settlePresence();
+  });
+
+  it("normalizes a failed advisory observer even when the tracer sink throws", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FailOnceAdvisoryAnnounceClient();
+    const noop = () => {};
+    const throwingTracer = {
+      error: noop,
+      warn: () => {
+        throw new Error("closed diagnostics sink");
+      },
+      info: noop,
+      debug: noop,
+      trace: noop,
+      child: () => throwingTracer,
+    } as unknown as Tracer;
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: session.id,
+      session,
+      tracer: throwingTracer,
+    });
+    await relay.announce("box");
+    const abort = new AbortController();
+    const served = relay.serve(abort.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      session.workerStatus = "running";
+      session.wake();
+      await waitFor(() => client.announceAttempts === 2);
+      session.wake();
+      await waitFor(() => client.announceAttempts === 3);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.removeListener("unhandledRejection", onUnhandled);
+      abort.abort();
+      await served;
+    }
+  });
+
+  it("does not emit a tombstone when terminality wins before any live announce is admitted", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+
+    session.close();
+    await relay.terminalizePresence();
+    await relay.settlePresence();
+
+    expect(client.posts).toHaveLength(0);
+    await expect(relay.announce("ghost")).rejects.toThrow("session closed");
+  });
+
+  it("dispatches terminal independently of a blocked live announce", async () => {
+    const session = new Session("s", "t", {});
+    const client = new DelayedFirstAnnounceClient();
+    const relay = relayOf(session, client);
+
+    const live = relay.announce("slow live");
+    await client.firstAnnounceStarted;
+    session.close();
+    await relay.terminalizePresence();
+
+    expect(client.posts.map(({ recordKind }) => recordKind)).toEqual(["session_terminal"]);
+    client.releaseFirstAnnounce();
+    await live;
+    await relay.settlePresence();
+
+    // Arrival is deliberately reversed. The broker contract tested at its own boundary latches the
+    // first terminal and reports this late live frame as an idempotent success without forwarding it.
+    expect(client.posts.map(({ recordKind }) => recordKind)).toEqual([
+      "session_terminal",
+      "session_announce",
+    ]);
   });
 });
 
@@ -1271,7 +2287,7 @@ describe("HostRcRelay mid-session reconnect = complete history from the relay lo
 // in-memory `#log` or re-post it on `catch_up` (that would be pure waste — the frames are already in the
 // durable log and already delivered by subscribe). "One log, mediated by the broker."
 describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", () => {
-  it("DURABLE: catch_up is consumed but never opened or replayed", async () => {
+  it("DURABLE: catch_up is authenticated but not replayed", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     client.reportedDurable = true; // server-reported durable libSQL backend
@@ -1294,10 +2310,9 @@ describe("HostRcRelay durable backend retires the host catch_up replay (A2a)", (
 
     // The user frame WAS opened (decrypted) — the pump reached past the catch_up …
     expect(client.opened).toContain("u-1");
-    // … but the catch_up frame was NEVER opened: the durable short-circuit skips it (its `since` is
-    // irrelevant — the durable log's own subscribe serves history). If that short-circuit regressed to
-    // open+replay, "cu-d" would appear here. (Pins relay.ts catch_up handler.)
-    expect(client.opened).not.toContain("cu-d");
+    // … and the catch_up frame was authenticated before persistent dedup even though its `since` is
+    // irrelevant on a durable backend. This prevents a forged clear msg_id from poisoning #seen.
+    expect(client.opened).toContain("cu-d");
     // … and nothing was re-posted: the only content frames are the 3 live ones + the echoed user prompt
     // (seq 3). No replay of seq 0–2 (contrast the non-durable test below, which re-posts them).
     expect(client.content.map((p) => p.seq)).toEqual([0, 1, 2, 3]);
@@ -1485,25 +2500,50 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
     expect(client.content[0]?.seq).toBe(0);
   });
 
-  it("uses the legacy path when durability discovery itself fails before durable=true is known", async () => {
+  it("fails closed when durability remains unknown after bounded discovery retries", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     client.maxSeqThrows = true;
     client.maxSeqValue = 9;
+    const { tracer, errors } = spyTracer();
+    const relay = new HostRcRelay({
+      client: client as unknown as BrokerClient,
+      identityId: ID,
+      sessionId: "s",
+      session,
+      tracer,
+    });
+
+    await expect(relay.serve(new AbortController().signal)).rejects.toThrow(/maxSeq failed/);
+
+    expect(client.maxSeqCalls).toBe(3);
+    expect(client.frameCountCalls).toBe(0);
+    expect(client.streamStarts).toEqual([]);
+    expect(client.content).toEqual([]);
+    expect(session.closed).toBe(true);
+    expect(
+      errors.find((event) => event.msg.includes("durability discovery failed after retries")),
+    ).toBeDefined();
+  });
+
+  it("recovers from transient durability-discovery failures before discoverability", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    client.maxSeqFailures = 2;
+    client.maxSeqValue = 4;
     const relay = relayOf(session, client);
     const ac = new AbortController();
     const served = relay.serve(ac.signal).catch(() => {});
 
-    session.pushUpstream(assistant("legacy after seq error"));
-    await waitFor(() => client.content.length >= 1);
-    await waitFor(() => client.streamStarts.length > 0);
+    session.pushUpstream(assistant("after discovery retries"));
+    await waitFor(() => client.content.length === 1);
     ac.abort();
     await served;
 
-    expect(client.maxSeqCalls).toBe(1);
-    expect(client.frameCountCalls).toBe(0);
-    expect(client.streamStarts[0]).toBe(0);
-    expect(client.content[0]?.seq).toBe(0);
+    expect(client.maxSeqCalls).toBe(3);
+    expect(client.frameCountCalls).toBe(1);
+    expect(client.content[0]?.seq).toBe(5);
   });
 
   it("fails loud after durable frameCount retries fail instead of reusing startIndex 0", async () => {
@@ -1520,14 +2560,521 @@ describe("HostRcRelay durable seq continuity across restart (A2b/#36)", () => {
       tracer,
     });
 
-    await expect(relay.serve(new AbortController().signal)).rejects.toThrow(/frameCount failed/);
+    const firstCause = await relay.prepare().catch((error: unknown) => error);
+    expect(firstCause).toBeInstanceOf(BrokerError);
+    expect((firstCause as Error).message).toMatch(/frameCount failed/);
 
     expect(client.maxSeqCalls).toBe(1);
     expect(client.frameCountCalls).toBe(3);
     expect(client.content).toHaveLength(0); // no seq 0 collision is posted
+    expect(session.closed).toBe(true);
+    let nativeFailure: unknown;
+    try {
+      session.ingestNativeUpstreamBatch(1, [
+        {
+          payload: {
+            uuid: "11111111-1111-4111-8111-111111111111",
+            type: "assistant",
+            session_id: session.id,
+          },
+        },
+      ]);
+    } catch (error) {
+      nativeFailure = error;
+    }
+    expect(nativeFailure).toMatchObject({ status: 410 });
+    await expect(relay.prepare()).rejects.toBe(firstCause);
     expect(
       errors.find((e) => e.msg.includes("inbound cursor resume failed after retries")),
     ).toBeDefined();
+  });
+});
+
+describe("HostRcRelay bounded transport liveness", () => {
+  it("bounds never-settling startup cursor attempts, then fails closed after the finite retry count", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(51));
+    const cursorSignals: AbortSignal[] = [];
+    const hostileFetch: typeof fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.signal !== undefined && init.signal !== null) cursorSignals.push(init.signal);
+      return new Promise<Response>(() => {}); // deliberately ignores AbortSignal forever
+    }) as typeof fetch;
+    const client = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", identity),
+      fetchFn: hostileFetch,
+      cursorTimeoutMs: 10,
+    });
+    const session = new Session("cursor-timeout", "t", {});
+    const relay = new HostRcRelay({
+      client,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+      cursorRetryBaseMs: 0,
+    });
+
+    await expect(relay.prepare()).rejects.toBeInstanceOf(BrokerTimeoutError);
+
+    expect(cursorSignals).toHaveLength(3);
+    expect(cursorSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(session.closed).toBe(true);
+  });
+
+  it("turns three initial-stream header stalls into a fatal close and terminal presence", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(52));
+    const streamSignals: AbortSignal[] = [];
+    const busKinds: string[] = [];
+    const fetchFn: typeof fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const pathname = new URL(typeof input === "string" ? input : input.toString()).pathname;
+      if (pathname === "/api/seq") {
+        return Promise.resolve(Response.json({ maxSeq: null, durable: false }, { status: 200 }));
+      }
+      if (pathname === "/api/relay") {
+        const body = JSON.parse(String(init?.body)) as { record_kind?: unknown };
+        if (typeof body.record_kind === "string") busKinds.push(body.record_kind);
+        return Promise.resolve(
+          Response.json({ ok: true, channel: "bus", runId: "r", created: true }),
+        );
+      }
+      if (pathname === "/api/stream") {
+        if (init?.signal !== undefined && init.signal !== null) streamSignals.push(init.signal);
+        return new Promise<Response>(() => {}); // ignores each connect abort
+      }
+      return Promise.reject(new Error(`unexpected broker route ${pathname}`));
+    }) as typeof fetch;
+    const client = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", identity),
+      fetchFn,
+      streamConnectTimeoutMs: 10,
+    });
+    const session = new Session("stream-timeout", "t", {});
+    const relay = new HostRcRelay({
+      client,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+      inboundRetryDelayMs: 0,
+    });
+    await relay.announce("stream timeout");
+
+    const failure = await relay
+      .serve(new AbortController().signal)
+      .catch((error: unknown) => error);
+    await relay.settlePresence();
+
+    expect(failure).toMatchObject({
+      name: "BrokerTimeoutError",
+      operation: "broker stream headers",
+    });
+    expect(streamSignals).toHaveLength(3);
+    expect(streamSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(session.closed).toBe(true);
+    expect(busKinds).toEqual(["session_announce", "session_terminal"]);
+    await expect(relay.prepare()).rejects.toBe(failure);
+  });
+
+  it("counts malformed SSE, established-stream idle, and broker SSE error as consecutive failures", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(54));
+    const busKinds: string[] = [];
+    let streamAttempts = 0;
+    const fetchFn: typeof fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const pathname = new URL(typeof input === "string" ? input : input.toString()).pathname;
+      if (pathname === "/api/seq") {
+        return Promise.resolve(Response.json({ maxSeq: null, durable: false }, { status: 200 }));
+      }
+      if (pathname === "/api/relay") {
+        const body = JSON.parse(String(init?.body)) as { record_kind?: unknown };
+        if (typeof body.record_kind === "string") busKinds.push(body.record_kind);
+        return Promise.resolve(
+          Response.json({ ok: true, channel: "bus", runId: "r", created: true }),
+        );
+      }
+      if (pathname === "/api/stream") {
+        streamAttempts += 1;
+        if (streamAttempts === 1) {
+          return Promise.resolve(
+            new Response("data: definitely-not-json\n\n", {
+              headers: { "content-type": "text/event-stream" },
+            }),
+          );
+        }
+        if (streamAttempts === 2) {
+          return Promise.resolve(
+            new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+              headers: { "content-type": "text/event-stream" },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response("event: error\ndata: broker stream failed\n\n", {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected broker route ${pathname}`));
+    }) as typeof fetch;
+    const client = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", identity),
+      fetchFn,
+      streamIdleTimeoutMs: 10,
+    });
+    const session = new Session("stream-protocol", "t", {});
+    const relay = new HostRcRelay({
+      client,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+      inboundRetryDelayMs: 0,
+    });
+    await relay.announce("protocol failures");
+
+    const failure = await relay
+      .serve(new AbortController().signal)
+      .catch((error: unknown) => error);
+    await relay.settlePresence();
+
+    expect(failure).toMatchObject({ name: "BrokerError", status: 502 });
+    expect(streamAttempts).toBe(3);
+    expect(session.closed).toBe(true);
+    expect(busKinds).toEqual(["session_announce", "session_terminal"]);
+  });
+
+  it("counts an established stream's clean EOF and fails closed on the third occurrence", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(58));
+    const busKinds: string[] = [];
+    let streamAttempts = 0;
+    const fetchFn: typeof fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const pathname = new URL(typeof input === "string" ? input : input.toString()).pathname;
+      if (pathname === "/api/seq") {
+        return Promise.resolve(Response.json({ maxSeq: null, durable: false }, { status: 200 }));
+      }
+      if (pathname === "/api/relay") {
+        const body = JSON.parse(String(init?.body)) as { record_kind?: unknown };
+        if (typeof body.record_kind === "string") busKinds.push(body.record_kind);
+        return Promise.resolve(
+          Response.json({ ok: true, channel: "bus", runId: "r", created: true }),
+        );
+      }
+      if (pathname === "/api/stream") {
+        streamAttempts += 1;
+        return Promise.resolve(
+          new Response(": open\n\n", {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected broker route ${pathname}`));
+    }) as typeof fetch;
+    const client = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", identity),
+      fetchFn,
+    });
+    const session = new Session("stream-open-eof", "t", {});
+    const relay = new HostRcRelay({
+      client,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+      inboundRetryDelayMs: 0,
+    });
+    await relay.announce("open eof");
+
+    const failure = await relay
+      .serve(new AbortController().signal)
+      .catch((error: unknown) => error);
+    await relay.settlePresence();
+
+    expect(failure).toMatchObject({
+      name: "BrokerError",
+      status: 502,
+      message: expect.stringContaining("broker stream ended unexpectedly"),
+    });
+    expect(streamAttempts).toBe(3);
+    expect(session.closed).toBe(true);
+    expect(busKinds).toEqual(["session_announce", "session_terminal"]);
+  });
+
+  it("keeps an idle session live across repeated broker-planned stream rotations", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(80));
+    let streamAttempts = 0;
+    const fetchFn: typeof fetch = ((input: RequestInfo | URL) => {
+      const pathname = new URL(typeof input === "string" ? input : input.toString()).pathname;
+      if (pathname === "/api/seq") {
+        return Promise.resolve(Response.json({ maxSeq: null, durable: false }, { status: 200 }));
+      }
+      if (pathname === "/api/relay") {
+        return Promise.resolve(
+          Response.json({ ok: true, channel: "bus", runId: "r", created: true }),
+        );
+      }
+      if (pathname === "/api/stream") {
+        streamAttempts += 1;
+        if (streamAttempts <= 6) {
+          return Promise.resolve(
+            new Response(": open\n\n: rotate\n\n", {
+              headers: { "content-type": "text/event-stream" },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected broker route ${pathname}`));
+    }) as typeof fetch;
+    const client = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", identity),
+      fetchFn,
+    });
+    const session = new Session("stream-planned-rotations", "t", {});
+    const relay = new HostRcRelay({
+      client,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+      inboundRetryDelayMs: 0,
+    });
+    const owner = new AbortController();
+    const served = relay.serve(owner.signal);
+
+    await waitFor(() => streamAttempts === 7);
+    expect(session.closed).toBe(false);
+    owner.abort();
+    await served;
+    expect(session.closed).toBe(false);
+  });
+
+  it("neither increments nor resets the failure circuit on planned rotations", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(81));
+    let streamAttempts = 0;
+    const fetchFn: typeof fetch = ((input: RequestInfo | URL) => {
+      const pathname = new URL(typeof input === "string" ? input : input.toString()).pathname;
+      if (pathname === "/api/seq") {
+        return Promise.resolve(Response.json({ maxSeq: null, durable: false }, { status: 200 }));
+      }
+      if (pathname === "/api/relay") {
+        return Promise.resolve(
+          Response.json({ ok: true, channel: "bus", runId: "r", created: true }),
+        );
+      }
+      if (pathname === "/api/stream") {
+        streamAttempts += 1;
+        if ([1, 5, 9].includes(streamAttempts)) {
+          return Promise.resolve(new Response("temporary", { status: 503 }));
+        }
+        return Promise.resolve(
+          new Response(": open\n\n: rotate\n\n", {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected broker route ${pathname}`));
+    }) as typeof fetch;
+    const client = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", identity),
+      fetchFn,
+    });
+    const session = new Session("stream-rotation-neutral", "t", {});
+    const relay = new HostRcRelay({
+      client,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+      inboundRetryDelayMs: 0,
+    });
+
+    const failure = await relay
+      .serve(new AbortController().signal)
+      .catch((error: unknown) => error);
+    await relay.settlePresence();
+
+    expect(failure).toMatchObject({ name: "BrokerError", status: 503 });
+    expect(streamAttempts).toBe(9);
+    expect(session.closed).toBe(true);
+  });
+
+  it("resets the real transport circuit only for an explicit empty-channel response", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(59));
+    let streamAttempts = 0;
+    const fetchFn: typeof fetch = ((input: RequestInfo | URL) => {
+      const pathname = new URL(typeof input === "string" ? input : input.toString()).pathname;
+      if (pathname === "/api/seq") {
+        return Promise.resolve(Response.json({ maxSeq: null, durable: false }, { status: 200 }));
+      }
+      if (pathname === "/api/relay") {
+        return Promise.resolve(
+          Response.json({ ok: true, channel: "bus", runId: "r", created: true }),
+        );
+      }
+      if (pathname === "/api/stream") {
+        streamAttempts += 1;
+        if ([1, 2, 4, 5].includes(streamAttempts)) {
+          return Promise.resolve(new Response("temporary", { status: 503 }));
+        }
+        if (streamAttempts === 3) {
+          return Promise.resolve(
+            new Response(": empty\n\n", {
+              headers: { "content-type": "text/event-stream" },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode(": open\n\n"));
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected broker route ${pathname}`));
+    }) as typeof fetch;
+    const client = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", identity),
+      fetchFn,
+    });
+    const session = new Session("stream-explicit-empty", "t", {});
+    const relay = new HostRcRelay({
+      client,
+      identityId: identity.identityId,
+      sessionId: session.id,
+      session,
+      inboundRetryDelayMs: 0,
+    });
+    const owner = new AbortController();
+    const served = relay.serve(owner.signal);
+
+    await waitFor(() => streamAttempts === 6);
+    expect(session.closed).toBe(false);
+    owner.abort();
+    await served;
+    expect(session.closed).toBe(false);
+  });
+
+  it("fails closed on the third consecutive selective stream 5xx", async () => {
+    const session = new Session("s", "t", {});
+    const client = new ScriptedInboundClient([
+      { kind: "fail", status: 500 },
+      { kind: "fail", status: 502 },
+      { kind: "fail", status: 503 },
+    ]);
+    const relay = relayOf(session, client, undefined, { inboundRetryDelayMs: 0 });
+    await relay.announce("selective failures");
+
+    const failure = await relay
+      .serve(new AbortController().signal)
+      .catch((error: unknown) => error);
+    await relay.settlePresence();
+
+    expect(failure).toMatchObject({ name: "BrokerError", status: 503 });
+    expect(client.streamStarts).toHaveLength(3);
+    expect(session.closed).toBe(true);
+    expect(client.posts.some(({ recordKind }) => recordKind === "session_terminal")).toBe(true);
+    await expect(relay.prepare()).rejects.toBe(failure);
+  });
+
+  it("resets consecutive failures only after a clean absent attempt or admitted frame", async () => {
+    const session = new Session("s", "t", {});
+    const client = new ScriptedInboundClient([
+      { kind: "fail", status: 500 },
+      { kind: "fail", status: 500 },
+      { kind: "clean" }, // existing absent-channel success resets the first pair
+      { kind: "fail", status: 502 },
+      { kind: "fail", status: 502 },
+      {
+        kind: "frame-then-fail",
+        frame: inFrame("catch_up", "admitted-reset", JSON.stringify({ since: 0 })),
+        status: 503,
+      }, // authenticated + handled frame resets, then this failure becomes #1
+      { kind: "fail", status: 503 }, // #2 after admitted reset
+      { kind: "park" },
+    ]);
+    const relay = relayOf(session, client, undefined, { inboundRetryDelayMs: 0 });
+    const owner = new AbortController();
+    const served = relay.serve(owner.signal);
+
+    await waitFor(() => client.streamStarts.length === 8);
+    expect(client.opened).toContain("admitted-reset");
+    expect(session.closed).toBe(false);
+
+    owner.abort();
+    await served;
+    expect(session.closed).toBe(false); // direct owner abort is lifecycle, not a fatal relay latch
+  });
+
+  it("does not let a replayed stable-disabled multipart attachment forgive stream failures", async () => {
+    const replay = inChunk("attachment", "stable-multipart-replay", 0, 2, "partial");
+    const session = new Session("s", "t", {});
+    const client = new ScriptedInboundClient([
+      { kind: "frame-then-fail", frame: replay, status: 503 },
+      { kind: "frame-then-fail", frame: replay, status: 503 },
+      { kind: "frame-then-fail", frame: replay, status: 503 },
+      { kind: "park" },
+    ]);
+    client.reportedDurable = true;
+    const relay = relayOf(session, client, STABLE_MITM_CAPABILITIES, {
+      inboundRetryDelayMs: 0,
+    });
+    await relay.announce("stable multipart replay");
+
+    const failure = await relay
+      .serve(new AbortController().signal)
+      .catch((error: unknown) => error);
+    await relay.settlePresence();
+
+    expect(failure).toMatchObject({ name: "BrokerError", status: 503 });
+    expect(client.streamStarts).toHaveLength(3);
+    expect(client.opened.filter((msgId) => msgId === replay.msgId)).toHaveLength(3);
+    expect(session.closed).toBe(true);
+    expect(client.posts.some(({ recordKind }) => recordKind === "session_terminal")).toBe(true);
+  });
+
+  it("does not let incomplete attachment-group eviction masquerade as admitted progress", async () => {
+    const partials = Array.from({ length: 5 }, (_unused, index) =>
+      inChunk("attachment", `partial-group-${index}`, 0, 2, `piece-${index}`),
+    );
+    const session = new Session("s", "t", {});
+    const client = new ScriptedInboundClient([
+      { kind: "frames-then-fail", frames: partials, status: 503 },
+      { kind: "frames-then-fail", frames: partials, status: 503 },
+      { kind: "frames-then-fail", frames: partials, status: 503 },
+      { kind: "park" },
+    ]);
+    const relay = relayOf(session, client, MITM_CAPABILITIES, { inboundRetryDelayMs: 0 });
+    await relay.announce("partial attachment churn");
+
+    const failure = await relay
+      .serve(new AbortController().signal)
+      .catch((error: unknown) => error);
+    await relay.settlePresence();
+
+    expect(failure).toMatchObject({ name: "BrokerError", status: 503 });
+    expect(client.streamStarts).toHaveLength(3);
+    expect(session.closed).toBe(true);
+  });
+
+  it("does not count a stream rejection raced with owner shutdown as fatal", async () => {
+    const session = new Session("s", "t", {});
+    const client = new ScriptedInboundClient([{ kind: "park", rejectOnAbort: true }]);
+    const relay = relayOf(session, client, undefined, { inboundRetryDelayMs: 0 });
+    const owner = new AbortController();
+    const served = relay.serve(owner.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+
+    owner.abort();
+    await expect(served).resolves.toBeUndefined();
+    expect(session.closed).toBe(false);
+    expect(client.posts.some(({ recordKind }) => recordKind === "session_terminal")).toBe(false);
   });
 });
 

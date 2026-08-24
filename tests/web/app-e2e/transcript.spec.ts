@@ -10,8 +10,9 @@ import { expect, test } from "./fixtures";
 // regression in the relay's frame mapping OR the transcript components fails the test.
 //
 // E2E_BACKEND (set by app-e2e.sqlite.config.ts) flips the broker via the ?backend= switch for the
-// browser AND the host (the fixture forwards it), so the IDENTICAL assertions run against LocalBackend
-// (default) or per-channel SQLite/Turso — proving the abstraction is swappable per-request.
+// browser AND the host (the fixture forwards it). The default gate already runs on durable per-channel
+// SQLite; the selector variant proves an explicit `?backend=sqlite` request reaches the same supported
+// durability class even when the server default is local.
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 
@@ -62,26 +63,38 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   await page.locator("section.chat").screenshot({ path: "test-results/transcript-e2e.png" });
 });
 
-test("a typed prompt appears as a user turn (the inbound echo path)", async ({ page, seedHost }) => {
+test("a typed prompt appears as a user turn (the inbound echo path)", async ({
+  page,
+  seedHost,
+}) => {
   const { pass } = await seedHost();
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
 
   // Type into the composer and send; the host acks + echoes it back as a user pill on every device.
-  await page.getByPlaceholder(/Send a prompt/).fill("ship it");
+  await page.getByRole("textbox", { name: "Message" }).fill("ship it");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.locator(".row-user .pill", { hasText: "ship it" })).toBeVisible();
+  const row = page.locator(".row-user", { hasText: "ship it" });
+  await expect(row).toHaveCount(1);
+  await expect(row.locator(".pill")).toBeVisible();
+  // The viewer claims host acceptance only after the exact accepted(client_msg_id, seq) frame arrives.
+  await expect(row.locator('.delivery-status[data-state="received"]')).toHaveText(
+    "Received by host",
+  );
 });
 
-test("a slash command renders as a command chip, not a chat pill (#41)", async ({ page, seedHost }) => {
-  const { pass } = await seedHost();
+test("a slash command renders as a command chip, not a chat pill (#41)", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ caps: "compat-mitm" });
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
 
   // /compact rides the same user path; the echo must render as a .cmd-chip, not a chat pill.
-  await page.getByPlaceholder(/Send a prompt/).fill("/compact");
+  await page.getByRole("textbox", { name: "Message" }).fill("/compact");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.locator(".cmd-chip", { hasText: "/compact" })).toBeVisible();
   await expect(page.locator(".row-user .pill", { hasText: "/compact" })).toHaveCount(0);
@@ -109,7 +122,7 @@ test("a granted permission stays resolved after a reload — no re-prompt (#56/#
   seedHost,
 }) => {
   // Seed WITH a permission card (perm), driven through the selected backend.
-  const { pass } = await seedHost({ perm: true });
+  const { pass } = await seedHost({ perm: true, caps: "compat-mitm" });
 
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
@@ -139,7 +152,7 @@ test("an AskUserQuestion renders a question UI and submits answers (#42)", async
   page,
   seedHost,
 }) => {
-  const { pass } = await seedHost({ askq: true });
+  const { pass } = await seedHost({ askq: true, caps: "compat-mitm" });
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
@@ -162,7 +175,7 @@ test("an AskUserQuestion accepts a FREEFORM 'type your own' answer with no optio
   page,
   seedHost,
 }) => {
-  const { pass } = await seedHost({ askq: true });
+  const { pass } = await seedHost({ askq: true, caps: "compat-mitm" });
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
@@ -198,7 +211,7 @@ test("a multiSelect AskUserQuestion sends BOTH picked options and an appended fr
   page,
   seedHost,
 }) => {
-  const { pass } = await seedHost({ askq: "multi" });
+  const { pass } = await seedHost({ askq: "multi", caps: "compat-mitm" });
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
@@ -234,7 +247,7 @@ test("a photo STAGES, then is sent on submit and echoes in the transcript (#44/#
   page,
   seedHost,
 }) => {
-  const { pass } = await seedHost();
+  const { pass } = await seedHost({ caps: "compat-mitm" });
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();

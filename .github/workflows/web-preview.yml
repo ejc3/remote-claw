@@ -1,58 +1,66 @@
 name: web-preview-e2e
 
-# Run the deployment-targeted e2e against the REAL broker on a Vercel deployment. Vercel's GitHub
-# app emits a `deployment_status` event when a preview (or prod) finishes; we run the e2e against its
-# URL. Until Vercel is connected to the repo this simply never fires (no-op). `workflow_dispatch`
-# lets you point it at any URL by hand.
+# Run the deployment-targeted e2e against the REAL broker on a Vercel deployment. This workflow is
+# manual-only because deployment_status selects workflow bytes from the commit being deployed: a
+# candidate-controlled workflow must never receive the Vercel bypass. An authenticated, typed
+# repository dispatch supplies a deployment ID, never an arbitrary URL; GitHub selects this workflow
+# from the default branch. The no-secret resolver then pins the GitHub deployment creator,
+# project/team hostname, successful status, immutable SHA, and containment in main before the protected
+# job exists.
 on:
-  deployment_status:
-  workflow_dispatch:
-    inputs:
-      url:
-        description: "Deployment URL to test (e.g. a Vercel preview URL)"
-        required: true
-        type: string
+  repository_dispatch:
+    types: [web-preview-e2e]
 
-# This job checks out and runs the DEPLOYMENT's code (which may be from a PR); keep the workflow
-# token read-only and unpersisted so that code can't read/exfiltrate it.
+# The resolver always executes main's trusted script. Deployment code is checked out only after its SHA
+# is proven to be on main; the workflow token remains read-only and unpersisted throughout. Repository
+# configuration must keep release-proof credentials exclusively in the release-proof environment and
+# admit only the branch `main`; candidate refs cannot access those credentials even if manually dispatched.
 permissions:
   contents: read
+  deployments: read
 
 jobs:
-  e2e:
-    # Only on a SUCCESSFUL Vercel PREVIEW deployment, or a manual dispatch. We match the environment
-    # POSITIVELY (Vercel sets it to "Preview") rather than "!= Production" — the repo also deploys docs
-    # to GitHub Pages, whose deployment_status has environment "github-pages"; a negative gate would
-    # wrongly fire the broker e2e against the docs site (no /api/relay → 404).
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.deployment_status.state == 'success' &&
-       github.event.deployment_status.environment == 'Preview')
+  resolve-trusted-deployment:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      # Vercel exposes the deployed URL as environment_url; target_url is a legacy fallback.
-      WEB_E2E_URL: >-
-        ${{ github.event.inputs.url
-            || github.event.deployment_status.environment_url
-            || github.event.deployment_status.target_url }}
-      # Maps the optional secret to an env so steps can gate on it (secrets aren't usable in `if:`).
-      DEV_SEED_TOKEN: ${{ secrets.DEV_SEED_TOKEN }}
-      # Vercel Deployment Protection (SSO) bounces anonymous requests to the preview with a 401 wall.
-      # The automation-bypass secret (x-vercel-protection-bypass) gets the e2e through it. Low blast
-      # radius (grants access only to the preview already under test), like DEV_SEED_TOKEN above.
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      # Opt-in flag for the REAL Turso Cloud sqlite e2e (below). Set it (GitHub secret) only when the
-      # Vercel Preview env also has the four Turso Cloud vars (TURSO_API_TOKEN/ORG/GROUP +
-      # TURSO_GROUP_AUTH_TOKEN — the group token, minted separately from the integration's per-db
-      # TURSO_AUTH_TOKEN) so ?backend=sqlite resolves to a real per-session Turso database. Until set,
-      # that step is skipped and web-preview stays green.
-      TURSO_CLOUD_E2E: ${{ secrets.TURSO_CLOUD_E2E }}
+    outputs:
+      trusted: ${{ steps.resolve.outputs.trusted }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      url: ${{ steps.resolve.outputs.url }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # Test the code that matches the deployment (deployment_status checks out the default
-          # branch by default); for a manual dispatch this is empty → the dispatched ref.
-          ref: ${{ github.event.deployment.sha }}
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit-test the deployment trust resolver
+        run: node --test scripts/resolve-trusted-vercel-deployment.test.mjs
+      - name: Resolve Vercel deployment and bind it to trusted main
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RC_DEPLOYMENT_ID: ${{ github.event.client_payload.deployment_id }}
+          RC_REQUIRE_TRUSTED: "1"
+        run: node scripts/resolve-trusted-vercel-deployment.mjs
+
+  e2e:
+    needs: resolve-trusted-deployment
+    if: needs.resolve-trusted-deployment.outputs.trusted == 'true'
+    runs-on: ubuntu-latest
+    # This environment is a REQUIRED security boundary: store both referenced secrets only there,
+    # require review, and allow only the branch `main` (not tags). This optional preview CI remains
+    # distinct from the manual topology + plaintext-inspection release proof.
+    environment: release-proof
+    env:
+      WEB_E2E_URL: ${{ needs.resolve-trusted-deployment.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Execute only the exact source independently proven above to be contained in trusted main.
+          ref: ${{ needs.resolve-trusted-deployment.outputs.sha }}
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
@@ -63,10 +71,32 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Detect optional deployed-preview credentials
+        id: optional_secrets
+        env:
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          TURSO_OPT_IN: ${{ secrets.TURSO_CLOUD_E2E }}
+        run: |
+          if [ -n "$BYPASS" ]; then echo "bypass=true" >> "$GITHUB_OUTPUT"; else echo "bypass=false" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$TURSO_OPT_IN" ]; then echo "turso=true" >> "$GITHUB_OUTPUT"; else echo "turso=false" >> "$GITHUB_OUTPUT"; fi
+      # GitHub/Vercel metadata can name a mutable branch alias. Before any e2e can SEND the bypass,
+      # prove that this exact pinned origin currently serves the resolved full SHA as a Vercel Preview.
+      # This is a transport/topology gate only, not the final release proof or plaintext inspection.
+      - name: Bind the served Preview bytes to the resolved SHA
+        id: runtime_attestation
+        if: ${{ steps.optional_secrets.outputs.bypass == 'true' }}
+        env:
+          EXPECTED_DEPLOYMENT_SHA: ${{ needs.resolve-trusted-deployment.outputs.sha }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          node scripts/attest-trusted-vercel-runtime.mjs
+          echo "verified=true" >> "$GITHUB_OUTPUT"
       - name: Deployment-targeted e2e (real broker over HTTP)
+        if: ${{ steps.optional_secrets.outputs.bypass != 'true' || steps.runtime_attestation.outputs.verified == 'true' }}
         env:
           # In this job the URL must resolve — make an empty URL a FAILURE, not a silent skip.
           WEB_E2E_REQUIRE: "1"
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: pnpm --filter @remote-claw/web run test:preview
 
       # The Playwright UI e2e against the deployed preview (the VERCEL backend). The e2e HOST runs as a
@@ -76,61 +106,28 @@ jobs:
       # both the browser and the host must clear the preview's Deployment-Protection (SSO) wall to reach it.
       # Until that secret is set this is skipped — web-preview stays green.
       - name: Install Chromium (UI e2e)
-        if: ${{ env.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}
+        if: ${{ steps.optional_secrets.outputs.bypass == 'true' && steps.runtime_attestation.outputs.verified == 'true' }}
         run: pnpm --filter remote-claw-web-tests exec playwright install --with-deps chromium
       - name: App UI e2e against the preview (vercel backend)
-        if: ${{ env.VERCEL_AUTOMATION_BYPASS_SECRET != '' }}
+        if: ${{ steps.optional_secrets.outputs.bypass == 'true' && steps.runtime_attestation.outputs.verified == 'true' }}
+        env:
+          # The deployment default is SQLite; select the legacy Vercel backend explicitly so this leg
+          # covers a distinct broker instead of duplicating the Turso-backed leg below.
+          E2E_BACKEND: vercel
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: pnpm --filter remote-claw-web-tests exec playwright test -c app-e2e.preview.config.ts
 
       # The SAME spec, flipped to the per-session SQLite backend on REAL Turso Cloud storage — the only
       # place the cloud locator's Platform-API create + group-token connect actually run. Identical UI
       # assertions, just routed via ?backend=sqlite. Needs the bypass (reach the preview) + the Turso Cloud
-      # creds (TURSO_CLOUD_E2E). DEV_SEED_TOKEN stays in the gate because this leg provisions real per-session
-      # dbs that ONLY the cleanup sweep below (which authenticates with that token) reclaims — so the two must
-      # run together. Skipped until all three are set, keeping web-preview green.
+      # creds (TURSO_CLOUD_E2E). The resulting opaque test databases are retained: automated prefix-based
+      # cleanup is disabled because a truncated scope cannot prove exact deployment ownership. Skipped until
+      # both prerequisites are set, keeping web-preview green.
       - name: App UI e2e against the preview (sqlite — real Turso Cloud)
-        if: ${{ env.VERCEL_AUTOMATION_BYPASS_SECRET != '' && env.DEV_SEED_TOKEN != '' && env.TURSO_CLOUD_E2E != '' }}
+        if: ${{ steps.optional_secrets.outputs.bypass == 'true' && steps.runtime_attestation.outputs.verified == 'true' && steps.optional_secrets.outputs.turso == 'true' }}
         env:
           # Same transcript.spec, flipped to ?backend=sqlite. The host runs as the persistent test-process
           # host-runner (identity auth + SSO bypass), not /api/dev/seed — so no seed token here.
           E2E_BACKEND: sqlite
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: pnpm --filter remote-claw-web-tests exec playwright test -c app-e2e.preview.config.ts
-
-      # Clean up after ourselves: the sqlite e2e above provisions REAL per-session Turso Cloud dbs, and
-      # nothing else drops them — left alone they'd accumulate. Hit the dev-only sweep route with retain=0
-      # so it reclaims them via the same cold-index sweep the prod cron uses. This is prod-safe on two
-      # levels: the dev-seed gate refuses production, AND a preview deploy uses a per-commit db scope
-      # (`rc-pr-<sha>-*` / `rc-pr-<sha>-index`), so the sweep only ever sees THIS deployment's dbs — it
-      # can't reach a production `rc-prod-` session (nor another preview's) though all share one org/group.
-      # `always()` so a failed e2e still cleans up; gated on the same secrets so it only runs when the
-      # cloud leg did. Best-effort — a non-200 logs a warning rather than redding the run.
-      - name: Reclaim the sqlite e2e's Turso Cloud dbs (clean up after itself)
-        # Mirror the sqlite leg's gate (+ a non-empty URL). The bypass is required: without it the sqlite leg
-        # is skipped (no dbs created) AND this sweep's curl would just bounce off the SSO 401 wall for ~4min.
-        if: ${{ always() && env.VERCEL_AUTOMATION_BYPASS_SECRET != '' && env.DEV_SEED_TOKEN != '' && env.TURSO_CLOUD_E2E != '' && env.WEB_E2E_URL != '' }}
-        run: |
-          # Delete this preview scope's dbs by name (POST /api/dev/sweep → locator.dropScope), LOOPING
-          # until the scope stays empty. A single pass may not be enough: a host-runner relay that has not
-          # yet been torn down keeps re-announcing to its bus channel, so it can recreate a db right after
-          # we delete it. The route returns `remaining` (re-listed after its deletes); we loop (~15s apart)
-          # until remaining=0 across a pass, i.e. until any lingering relay has exited. Bounded to ~4 min so
-          # a stuck relay can't hang the job. Best-effort: a non-200 or non-convergence logs a ::warning::
-          # rather than failing the run.
-          ok=""
-          for i in $(seq 1 16); do
-            code=$(curl -sS -o /tmp/sweep.json -w '%{http_code}' -X POST \
-              "${WEB_E2E_URL%/}/api/dev/sweep" \
-              -H "x-dev-seed-token: ${DEV_SEED_TOKEN}" \
-              -H "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" || echo "000")
-            body=$(cat /tmp/sweep.json 2>/dev/null)
-            echo "pass $i — HTTP ${code}: ${body}"
-            if [ "$code" = "200" ]; then
-              deleted=$(printf '%s' "$body" | sed -n 's/.*"deleted":\([0-9]*\).*/\1/p')
-              remaining=$(printf '%s' "$body" | sed -n 's/.*"remaining":\([0-9]*\).*/\1/p')
-              # Converged once a pass deletes nothing AND leaves nothing (relays dead, scope empty).
-              if [ "${remaining:-1}" = "0" ] && [ "${deleted:-1}" = "0" ]; then ok="1"; break; fi
-            fi
-            sleep 15
-          done
-          [ -n "$ok" ] && echo "✅ scope fully reclaimed" || \
-            echo "::warning::dev/sweep did not converge to an empty scope (dbs may linger until manually pruned)"

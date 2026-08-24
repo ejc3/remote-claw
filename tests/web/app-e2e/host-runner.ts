@@ -9,16 +9,20 @@
 //
 // Protocol with the spawner (fixtures.ts): config comes in via RC_E2E_* env; once the scripted frames are
 // durably published, we print one JSON line `{"pass":…,"sessionId":…}` to stdout (all logs go to stderr);
-// then we run serve() forever until SIGTERM/SIGINT aborts it.
+// then we run serve() until SIGTERM/SIGINT aborts it or the fixture closes the real Session over stdin.
+
+import { createInterface } from "node:readline";
 import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import {
   type DriverCapabilities,
   type HarnessDescriptor,
   HostRcRelay,
+  MITM_CAPABILITIES,
   MITM_HARNESS,
   OPENCODE_HARNESS,
   Session,
+  STABLE_MITM_CAPABILITIES,
   TMUX_HARNESS,
 } from "@remote-claw/cli/rc";
 import { scenario } from "./scenario.js";
@@ -32,8 +36,10 @@ function presetHarness(p: string | undefined): HarnessDescriptor {
 }
 
 /** Capability presets the browser e2e can drive (RC_E2E_CAPS) so the capability-gated viewer (#149) can be
- *  exercised end-to-end without a real tmux/opencode host. Unset ⇒ the relay's default (full MITM caps). */
-function presetCaps(p: string | undefined): DriverCapabilities | undefined {
+ * exercised end-to-end without a real tmux/opencode host. Unset is the shipped stable Claude tuple;
+ * maximal native-RC plumbing is deliberately opt-in as `compat-mitm`. */
+function presetCaps(p: string | undefined): DriverCapabilities {
+  if (p === "compat-mitm") return MITM_CAPABILITIES;
   if (p === "tmux")
     // tmux with mirroring on: structured permissions + interrupt + set_model (via `/model`), but no
     // faithful set_mode/end pane analogue → those controls disable in the viewer.
@@ -52,7 +58,7 @@ function presetCaps(p: string | undefined): DriverCapabilities | undefined {
       controls: { interrupt: true, setModel: false, setMode: false, end: false },
       attachments: true,
     };
-  return undefined; // default → MITM_CAPABILITIES (full)
+  return STABLE_MITM_CAPABILITIES;
 }
 
 const base = process.env.RC_E2E_BASE;
@@ -84,7 +90,7 @@ const clientOpts: ConstructorParameters<typeof BrokerClient>[0] = {
 if (backend) clientOpts.backend = backend;
 if (bypass) clientOpts.protectionBypass = bypass;
 const client = new BrokerClient(clientOpts);
-const caps = presetCaps(process.env.RC_E2E_CAPS); // capability-gated viewer e2e (#149); unset ⇒ full MITM
+const caps = presetCaps(process.env.RC_E2E_CAPS); // unset ⇒ exact stable Claude tuple
 const harness = presetHarness(process.env.RC_E2E_HARNESS); // agent+mode badge (#164); unset ⇒ MITM
 const relay = new HostRcRelay({
   client,
@@ -92,10 +98,20 @@ const relay = new HostRcRelay({
   sessionId,
   session,
   harness,
-  ...(caps ? { capabilities: caps } : {}),
+  capabilities: caps,
 });
 
 const ac = new AbortController();
+const commands = createInterface({ input: process.stdin });
+commands.on("line", (line) => {
+  if (line.trim() === "terminal") {
+    session.close();
+    void relay.terminalizePresence().then(
+      () => process.stdout.write(`${JSON.stringify({ terminal: true, sessionId })}\n`),
+      () => process.stdout.write(`${JSON.stringify({ terminal: false, sessionId })}\n`),
+    );
+  }
+});
 const stop = () => {
   ac.abort();
   // Force-exit if serve() doesn't unwind + release its handles promptly after the abort — we OVERRODE the
@@ -110,6 +126,10 @@ process.on("SIGINT", stop);
 // CLEANLY with a legible message — not crash as an unhandled rejection — so the fixture sees a clear
 // "host exited" instead of a stack dump. (announce is the first network call, so it catches most misconfig.)
 try {
+  // Match the production bridge's safety barrier: sample and validate the durable inbound/outbound
+  // cursors before the bus announce makes this session discoverable. Announce-before-prepare creates a
+  // window in which a browser command can land and then be skipped as historical by serve().
+  await relay.prepare();
   // A FIXED git snapshot (deterministic git chip, #49) — not the deployment's real repo.
   await relay.announce("rc box", "/home/ubuntu/remote-claw", {
     branch: "main",
@@ -144,14 +164,21 @@ const serving = relay.serve(ac.signal).catch((e) => {
 // every frame within its expect window regardless. (This is categorically unlike the old seed route, whose
 // after()-deferred publish could never land at all.)
 if (!(await waitForSeededFrames(client, sessionId))) {
-  // Timed out waiting for the publish to settle — surface it (stderr only) so a real "frames never
-  // published" failure is diagnosable. The browser's own assertion window is still the hard backstop.
-  console.error(`[host-runner] WARN: frames not confirmed durable within the wait window (${sessionId})`);
+  // Stable durable readiness is a release precondition, not advisory evidence. Never print the ready
+  // line after a timeout: doing so lets the browser exercise a half-published fixture and go green.
+  console.error(`[host-runner] frames not confirmed durable within the wait window (${sessionId})`);
+  ac.abort();
+  await serving;
+  await relay.settlePresence();
+  commands.close();
+  process.exit(2);
 }
 ready = true; // past here a serve() failure is mid-test (exit 1), not a setup failure (exit 2) — see catch
 process.stdout.write(`${JSON.stringify({ pass, sessionId })}\n`);
 
 await serving; // keep the host alive (serving LIVE inbound) until SIGTERM/SIGINT
+await relay.settlePresence(); // do not let the child exit before its terminal tombstone is published
+commands.close();
 
 /** Poll until the seeded turn's content frames are durably published — count > 0 and stable across a few
  *  polls — or a bounded timeout. Gates on the cursor's `durable` flag, not a null count: a durable backend

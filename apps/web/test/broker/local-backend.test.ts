@@ -17,7 +17,12 @@ import { LocalBackend } from "../../lib/broker/local";
 function frame(seq: number): WireFrame {
   return { seq } as unknown as WireFrame;
 }
+function presence(kind: "session_announce" | "session_terminal", sessionId: string): WireFrame {
+  return { record_kind: kind, session_id: sessionId } as WireFrame;
+}
 const seqs = (fs: WireFrame[]) => fs.map((f) => (f as unknown as { seq: number }).seq);
+const kinds = (fs: WireFrame[]) => fs.map((f) => f.record_kind);
+const BUS = `bus:presence-v2:${"ab".repeat(16)}`;
 
 function cursorBackend(
   cursors: Partial<Pick<BrokerBackend, "maxSeq" | "frameCount">>,
@@ -152,5 +157,36 @@ describe("LocalBackend — durable channel contract", () => {
     await b.publish("B", frame(2));
     expect(seqs(await readN(present(await b.subscribe("A", 0)), 1))).toEqual([1]);
     expect(seqs(await readN(present(await b.subscribe("B", 0)), 1))).toEqual([2]);
+  });
+
+  it("atomically appends a first terminal, dedups retries, and suppresses later live announces", async () => {
+    const b = new LocalBackend();
+    const sid = "cse_dead";
+    await b.publish(BUS, presence("session_announce", sid));
+    await b.publish(BUS, presence("session_terminal", sid));
+    await expect(b.publish(BUS, presence("session_terminal", sid))).resolves.toMatchObject({
+      created: false,
+    });
+    await expect(b.publish(BUS, presence("session_announce", sid))).resolves.toMatchObject({
+      created: false,
+    });
+
+    const stream = present(await b.subscribe(BUS, 0));
+    expect(kinds(await readN(stream, 2))).toEqual(["session_announce", "session_terminal"]);
+  });
+
+  it("keeps a terminal fence across internal close/reopen without blocking another session", async () => {
+    const b = new LocalBackend();
+    await b.publish(BUS, presence("session_terminal", "cse_dead"));
+    await b.publish(BUS, { __close: true });
+
+    // Neither a late live nor a duplicate terminal recreates the closed channel.
+    expect((await b.publish(BUS, presence("session_announce", "cse_dead"))).created).toBe(false);
+    expect((await b.publish(BUS, presence("session_terminal", "cse_dead"))).created).toBe(false);
+    expect(await b.subscribe(BUS, 0)).toBeNull();
+
+    // The lifecycle key is the exact session id, not the whole identity bus.
+    expect((await b.publish(BUS, presence("session_announce", "cse_live"))).created).toBe(true);
+    expect(kinds(await readN(present(await b.subscribe(BUS, 0)), 1))).toEqual(["session_announce"]);
   });
 });

@@ -625,8 +625,9 @@ is not a finding, but `padding: 8px 12px` on a 32px primary CTA is.
    layers present, the theme's `@scope` attribute matching, and no remote `url()`/`@font-face`.
 3. `playwright test -c app-e2e.config.ts` — the existing browser suite, driving a real Chromium against a
    real Next server, a real broker and a real host process.
-4. `playwright test -c app-e2e.shots.config.ts` — 11 surfaces × {phone, desktop} × {light, dark},
-   captured before and after each step and compared (both colour modes since the light-mode work).
+4. `playwright test -c app-e2e.shots.config.ts` — 12 surfaces × {phone, desktop} × {light, dark} =
+   48 generated images, captured before and after each step and compared (both colour modes since the
+   light-mode work; artifacts are not committed).
 5. `codex exec` as an independent reviewer on the diff.
 
 Each guard is **bite-validated**: we break the thing on purpose and confirm the test fails before trusting

@@ -33,8 +33,16 @@ interface Channel {
   subscribers: Set<Subscriber>;
 }
 
+const PRESENCE_BUS_PREFIX = "bus:presence-v2:";
+
+function isPresenceBus(token: string): boolean {
+  return token.startsWith(PRESENCE_BUS_PREFIX);
+}
+
 export class LocalBackend implements BrokerBackend {
   readonly #channels = new Map<string, Channel>();
+  /** Kept outside Channel so an internal close/reopen cannot erase an absorbing terminal fence. */
+  readonly #presenceTerminals = new Map<string, Set<string>>();
   #nextId = 0;
 
   #open(token: string): Channel {
@@ -65,6 +73,45 @@ export class LocalBackend implements BrokerBackend {
       this.#close(token, channel);
       return { created: false, channelId: channel.id };
     }
+
+    if (isPresenceBus(token)) {
+      const terminals = this.#presenceTerminals.get(token);
+      if (payload.record_kind === "session_terminal") {
+        if (terminals?.has(payload.session_id) === true) {
+          return {
+            created: false,
+            channelId: this.#channels.get(token)?.id ?? "local-terminal",
+          };
+        }
+        const created = !this.#channels.has(token);
+        const channel = this.#open(token);
+        const nextTerminals = terminals ?? new Set<string>();
+        // Latch before exposure. Both operations are synchronous in this JS turn, so no publish or
+        // subscriber callback can interleave between the fence and the append/fan-out below.
+        nextTerminals.add(payload.session_id);
+        this.#presenceTerminals.set(token, nextTerminals);
+        channel.frames.push(payload);
+        for (const sub of channel.subscribers) {
+          try {
+            sub.controller.enqueue(payload);
+          } catch {
+            channel.subscribers.delete(sub);
+          }
+        }
+        return { created, channelId: channel.id };
+      }
+      if (
+        payload.record_kind === "session_announce" &&
+        terminals?.has(payload.session_id) === true
+      ) {
+        // A delayed/retried live announce after the terminal cutoff is an idempotent successful no-op.
+        return {
+          created: false,
+          channelId: this.#channels.get(token)?.id ?? "local-terminal",
+        };
+      }
+    }
+
     const created = !this.#channels.has(token);
     const channel = this.#open(token);
     channel.frames.push(payload);

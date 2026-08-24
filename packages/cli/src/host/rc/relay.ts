@@ -4,9 +4,9 @@
 // subscribers (phone/laptop), and every frame is sealed so the broker sees only ciphertext.
 //
 // Two concurrent pumps run for the session's life:
-//   • OUTBOUND — tail the session's upstream (assistant/result the worker POSTs back), allocate a
-//     transcript `seq`, seal, and POST to the session channel; non-durable mode also logs it for
-//     host-served catch_up.
+//   • OUTBOUND — tail the session's upstream (assistant/result the worker POSTs back), then admit each
+//     rendered item to the shared publication queue, allocate a transcript `seq`, seal, and POST to the
+//     session channel; non-durable mode also logs it for host-served catch_up.
 //   • INBOUND  — tail the session channel for client frames: a `user` prompt is acked + echoed (so
 //     every device's transcript shows it) and injected into claude (pushUserInput); a `catch_up`
 //     replays the host log only in non-durable mode; a `permission` grant answers a worker
@@ -26,8 +26,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Frame, type FrameHeader, utf8 } from "@remote-claw/clawsec";
-import { type BrokerClient, BrokerError, type SeqCursor } from "../../broker/client.js";
+import { type Frame, type FrameHeader, timingSafeEqual, utf8 } from "@remote-claw/clawsec";
+import {
+  type BrokerClient,
+  BrokerError,
+  BrokerPermanentStorageLossError,
+  BrokerStreamRotationError,
+  type SeqCursor,
+} from "../../broker/client.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import {
   type DriverCapabilities,
@@ -89,14 +95,79 @@ const MAX_INFLIGHT_ATTACHMENT_GROUPS = 4;
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
 const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
 
+function supportsControl(capabilities: DriverCapabilities, kind: string): boolean {
+  switch (kind) {
+    case "interrupt":
+      return capabilities.controls.interrupt;
+    case "set_model":
+      return capabilities.controls.setModel;
+    case "set_mode":
+      return capabilities.controls.setMode;
+    case "end":
+      return capabilities.controls.end;
+    default:
+      return false;
+  }
+}
+
+function isStablePlainTextSurface(
+  capabilities: DriverCapabilities,
+  harness: HarnessDescriptor,
+): boolean {
+  return (
+    harness.agent === "claude-code" &&
+    harness.mode === "rc" &&
+    !capabilities.structuredPermissions &&
+    !capabilities.attachments &&
+    !capabilities.controls.interrupt &&
+    !capabilities.controls.setModel &&
+    !capabilities.controls.setMode &&
+    !capabilities.controls.end
+  );
+}
+
 /** Out-post retry budget for a transient broker error (409 = the channel was disposed or replaced
  *  between resolve and publish). A `seq` is allocated BEFORE the post, so a dropped post would
  *  strand the viewer on a permanent gap; retrying the SAME frame (deterministic msg_id → viewer
  *  dedups) closes that hole. */
 const POST_RETRIES = 6;
 const POST_RETRY_BASE_MS = 50;
+const LOGICAL_POST_TIMEOUT_MS = 65_000;
+const TERMINAL_POST_RETRIES = 3;
+const TERMINAL_POST_TIMEOUT_MS = 1_000;
 const SEQ_RESUME_ATTEMPTS = 3;
 const SEQ_RESUME_RETRY_BASE_MS = 100;
+const INBOUND_FAILURE_ATTEMPTS = 3;
+const INBOUND_RETRY_DELAY_MS = 150;
+
+function checkedDuration(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+  allowZero: boolean,
+): number {
+  const duration = value ?? fallback;
+  if (!Number.isFinite(duration) || (allowZero ? duration < 0 : duration <= 0)) {
+    throw new RangeError(`${name} must be ${allowZero ? "non-negative" : "positive"} and finite`);
+  }
+  return duration;
+}
+
+/** A retry delay that wakes on abort. Resolving (rather than rejecting) lets each caller re-check its
+ * own lifecycle/fatal condition without turning normal owner shutdown into a transport failure. */
+function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted || ms === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const done = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
 // One process-wide incarnation orders transcript resets; its wall-clock start plus each relay's
 // announce_seq orders presence frames that race in flight. The start time is deliberately explicit
 // instead of being parsed from the opaque incarnation id. It is not a durable epoch: equal or
@@ -145,6 +216,12 @@ export interface HostRcRelayOptions {
    *  session list can label it (Claude Code · RC / · TX / opencode). Defaults to MITM_HARNESS so a relay
    *  built without it behaves exactly as before. */
   harness?: HarnessDescriptor;
+  /** Test/embedding override for the 65s wall around one must-succeed logical publication. */
+  postTimeoutMs?: number;
+  /** Test/embedding override for the delay between inbound subscription attempts. */
+  inboundRetryDelayMs?: number;
+  /** Test/embedding override for the base delay between bounded startup cursor attempts. */
+  cursorRetryBaseMs?: number;
 }
 
 /** Default on-disk location for a viewer-sent attachment (#44): `~/.claude/uploads/<sessionId>/`. This
@@ -380,6 +457,12 @@ export class HostRcRelay {
   readonly #session: Session;
   /** Next transcript seq to allocate (a single shared timeline across both pumps). */
   #seq = 0;
+  /** One shared head-of-line queue for every must-succeed transcript publication from BOTH pumps.
+   *  A unit allocates its seq only after it reaches the head, publishes all of its evidence, and
+   *  performs its synchronous worker side effect before the next unit may begin. The stored tail is
+   *  always normalized after rejection so it can never become an unhandled rejected promise; each
+   *  caller still receives (and awaits) its own rejecting operation promise. */
+  #publicationTail: Promise<void> = Promise.resolve();
   /** Inbound at-least-once dedup set (msg_id). Grows with the count of DISTINCT client frames this
    *  session (prompts + catch_ups + permission grants) — modest, human-paced, and freed when the
    *  session ends. Must NOT be size-bounded: #tailInbound re-reads from this incarnation's fixed
@@ -423,6 +506,16 @@ export class HostRcRelay {
    *  value), this strictly orders concurrent publishes from this relay even when they share a
    *  millisecond or reach the broker out of order. */
   #annCount = 0;
+  /** One-way presence fence. Once the Session closes, no later keepalive/refresh may advertise its
+   *  cse as live. If any live announce was synchronously admitted, terminalization publishes an
+   *  absorbing bus tombstone independently of the transcript HOL and of any stalled announce. */
+  #presenceTerminal = false;
+  #presenceStarted = false;
+  #terminalPresenceTask: Promise<void> | null = null;
+  readonly #presenceTasks = new Set<Promise<void>>();
+  readonly #livePresenceControllers = new Set<AbortController>();
+  #advisoryPresenceInFlight = false;
+  #advisoryPresenceDirty = false;
   /** Throttle: the last announced presence key + when, so we only re-announce on change or keepalive. */
   #lastPresenceKey = "";
   #lastAnnounceAt = 0;
@@ -433,6 +526,10 @@ export class HostRcRelay {
    *  #fatal makes serve() tear down the coupled pumps instead of retrying into inconsistent state.
    *  (A durable seq gap may remain for a reconnecting viewer — §12 recovery boundary, #36.) */
   #fatal = false;
+  /** The first must-succeed publication failure. Queued successors reject with this SAME cause before
+   *  allocating a seq or publishing anything, so one failure cannot widen into several independent
+   *  holes. `#fatal` is the discriminator because JavaScript permits throwing `undefined`. */
+  #fatalCause: unknown;
 
   readonly #trace: Tracer;
   /** Where a viewer attachment is written before claude Reads it (#44). */
@@ -442,6 +539,9 @@ export class HostRcRelay {
   #capabilities: DriverCapabilities;
   /** Which harness (agent + bridge mode) this session runs; broadcast on every announce for the list label. */
   readonly #harness: HarnessDescriptor;
+  readonly #postTimeoutMs: number;
+  readonly #inboundRetryDelayMs: number;
+  readonly #cursorRetryBaseMs: number;
   /** Monotonic prefix making each on-disk attachment name unique (so a later upload can't overwrite a
    *  file an earlier still-queued prompt will Read). (#44) */
   #attachmentSeq = 0;
@@ -454,14 +554,41 @@ export class HostRcRelay {
 
   constructor(opts: HostRcRelayOptions) {
     this.#client = opts.client;
-    this.#identityId = opts.identityId;
+    this.#identityId = opts.identityId.slice();
     this.#sessionId = opts.sessionId;
     this.#session = opts.session;
     this.#attachmentsDir = opts.attachmentsDir ?? defaultAttachmentsDir(opts.sessionId);
     this.#capabilities = opts.capabilities ?? MITM_CAPABILITIES;
     this.#harness = opts.harness ?? MITM_HARNESS;
+    this.#postTimeoutMs = checkedDuration(
+      opts.postTimeoutMs,
+      LOGICAL_POST_TIMEOUT_MS,
+      "postTimeoutMs",
+      false,
+    );
+    this.#inboundRetryDelayMs = checkedDuration(
+      opts.inboundRetryDelayMs,
+      INBOUND_RETRY_DELAY_MS,
+      "inboundRetryDelayMs",
+      true,
+    );
+    this.#cursorRetryBaseMs = checkedDuration(
+      opts.cursorRetryBaseMs,
+      SEQ_RESUME_RETRY_BASE_MS,
+      "cursorRetryBaseMs",
+      true,
+    );
     // Bind the session id onto every line (span-like) so interleaved sessions are distinguishable.
     this.#trace = (opts.tracer ?? NOOP_TRACER).child({ session: opts.sessionId });
+    // Session.close() is the authoritative, synchronous open→terminal edge. Register here so every
+    // close source (native admission, worker/body failure, publication failure, or owner abort) starts
+    // the same presence fence without depending on a particular pump/finalizer reaching an await.
+    this.#session.onClose(() => {
+      void this.terminalizePresence().catch(() => {
+        // #postPresenceTerminal records the exhausted failure. The close path itself must stay
+        // synchronous/no-throw, and this observer must never create an unhandled rejection.
+      });
+    });
   }
 
   #header(recordKind: string, seq: number | null, msgId: string): FrameHeader {
@@ -488,12 +615,11 @@ export class HostRcRelay {
     cwd: string | null = null,
     git: GitInfo | null = null,
   ): Promise<void> {
-    // The bus announce publishes IMMEDIATELY — it must NOT wait on prepare() (the durable-cursor
-    // sample), because that round-trip would delay the bus publish enough to race a viewer's concurrent
-    // bus subscribe (the broker rejects a concurrent channel create). prepare() instead gates the
-    // INBOUND TAIL in serve(): the session's inbound cursor is sampled before any inbound is processed,
-    // and a viewer cannot post session-inbound faster than prepare() resolves (it must first receive
-    // this announce, subscribe to the session channel, and post — all well after the local sample).
+    // This method publishes immediately and deliberately does not call prepare() itself. The production
+    // bridge owns the ordering barrier: it completes prepare() BEFORE invoking announce(), then starts
+    // announce and serve concurrently. That makes the durable inbound cursor older than every command
+    // a newly discovering viewer can publish, without coupling the bus POST to pump startup.
+    if (this.#presenceTerminal || this.#session.closed) throw new Error("session closed");
     this.#annTitle = title;
     this.#annCwd = cwd;
     this.#annGit = git;
@@ -512,6 +638,7 @@ export class HostRcRelay {
     git: GitInfo | null,
     capabilities: DriverCapabilities,
   ): Promise<void> {
+    if (this.#presenceTerminal || this.#session.closed) throw new Error("session closed");
     this.#annTitle = title;
     this.#annCwd = cwd;
     this.#annGit = git;
@@ -532,6 +659,7 @@ export class HostRcRelay {
   /** Post a session_announce carrying the current presence. Meta-plane + seq===null, so the broker
    *  never logs it — re-announcing is cheap and idempotent (the viewer keeps only the freshest). */
   async #sendAnnounce(): Promise<void> {
+    if (this.#presenceTerminal || this.#session.closed) throw new Error("session closed");
     const p = this.#presence();
     // Allocate before the first await. JavaScript runs this section atomically, so every publish
     // admitted by one relay gets a strict generation even when the HTTP requests overlap.
@@ -552,10 +680,46 @@ export class HostRcRelay {
       harness: this.#harness,
     };
     if (p.mode !== null) body.mode = p.mode;
-    await this.#client.postFrame(
-      this.#header("session_announce", null, `ann-${this.#sessionId}-${announceSeq}`),
-      utf8(JSON.stringify(body)),
-    );
+    // This is the live-admission linearization point. It is deliberately before invoking postFrame:
+    // sealing itself may await. A close at any later instant therefore sees #presenceStarted and sends
+    // the terminal tombstone concurrently, allowing the broker's absorbing fence to suppress a late
+    // live request even when this request completes after terminal.
+    this.#presenceStarted = true;
+    const controller = new AbortController();
+    this.#livePresenceControllers.add(controller);
+    try {
+      const publish = this.#client
+        .postFrame(
+          this.#header("session_announce", null, `ann-${this.#sessionId}-${announceSeq}`),
+          utf8(JSON.stringify(body)),
+          controller.signal,
+        )
+        .then(() => undefined);
+      try {
+        await this.#trackPresence(publish);
+      } catch (error) {
+        if (BrokerPermanentStorageLossError.is(error)) {
+          // Losing the identity bus while the transcript remains writable would make this live cse
+          // undiscoverable and erase its lifecycle projection. This exact broker disposition is the
+          // one non-advisory presence failure: latch before close so every racing pump/prepare observes
+          // the same first cause, then synchronously make all native MITM routes return 410.
+          if (!this.#fatal) {
+            this.#fatal = true;
+            this.#fatalCause = error;
+          }
+          this.#session.close("identity bus storage permanently lost");
+          try {
+            this.#trace.error("identity bus storage lost — aborting relay");
+          } catch {
+            // Diagnostics are not authority: closing the native session above is the safety action.
+          }
+          throw this.#fatalCause;
+        }
+        throw error;
+      }
+    } finally {
+      this.#livePresenceControllers.delete(controller);
+    }
     this.#lastPresenceKey = `${p.status}|${p.needs}|${p.mode ?? ""}`;
     this.#lastAnnounceAt = Date.now();
     this.#trace.debug("announce", { phase: p.phase, needs: p.needs, mode: p.mode ?? "" });
@@ -566,20 +730,144 @@ export class HostRcRelay {
    *  Presence is ADVISORY: a failed announce is swallowed (warn-only) so a transient bus blip can't
    *  reject a pump — which, now that serve() couples the pumps, would otherwise tear the session down.
    *  The viewer's freshness check already degrades a missed announce to reconnecting/disconnected. */
-  async #maybeAnnounce(): Promise<void> {
-    if (!this.#announced) return; // first announce() hasn't run yet — nothing to refresh
+  #maybeAnnounce(): void {
+    if (!this.#announced || this.#presenceTerminal || this.#session.closed) return;
     const p = this.#presence();
     const key = `${p.status}|${p.needs}|${p.mode ?? ""}`;
     if (
       key !== this.#lastPresenceKey ||
       Date.now() - this.#lastAnnounceAt >= ANNOUNCE_KEEPALIVE_MS
     ) {
-      try {
-        await this.#sendAnnounce();
-      } catch (e) {
-        this.#trace.warn("announce failed (advisory)", {
-          error: (e as Error)?.message ?? String(e),
+      // Presence is advisory and must never become a transcript-pump HOL. Keep at most one background
+      // request; concurrent state changes coalesce into one fresh snapshot after it settles. A hung bus
+      // request therefore consumes one bounded task/controller but cannot stop native output or input.
+      if (this.#advisoryPresenceInFlight) {
+        this.#advisoryPresenceDirty = true;
+        return;
+      }
+      this.#advisoryPresenceInFlight = true;
+      const publish = this.#sendAnnounce();
+      void publish
+        .then(
+          () => this.#finishAdvisoryPresence(),
+          (error: unknown) => {
+            try {
+              if (!this.#presenceTerminal && !this.#session.closed) {
+                this.#trace.warn("announce failed (advisory)", {
+                  error: (error as Error)?.message ?? String(error),
+                });
+              }
+            } catch {
+              // Diagnostics are not authority: a broken sink cannot poison presence bookkeeping or
+              // turn a deliberately backgrounded advisory failure into an unhandled rejection.
+            } finally {
+              this.#finishAdvisoryPresence();
+            }
+          },
+        )
+        .catch(() => {
+          // Defense-in-depth for an unexpected bookkeeping exception in either observer. The normal
+          // rejection path above already records (best effort) and clears the single-flight latch.
+          this.#advisoryPresenceInFlight = false;
         });
+    }
+  }
+
+  #finishAdvisoryPresence(): void {
+    this.#advisoryPresenceInFlight = false;
+    if (this.#presenceTerminal || this.#session.closed) {
+      this.#advisoryPresenceDirty = false;
+      return;
+    }
+    if (this.#advisoryPresenceDirty) {
+      this.#advisoryPresenceDirty = false;
+      this.#maybeAnnounce();
+    }
+  }
+
+  /** Permanently fence this relay's bus presence. The latch and the decision that a tombstone is
+   *  required are synchronous, so callers may invoke this from Session.close() without awaiting. A
+   *  terminal publish never joins #publicationTail or an announce queue: it must overtake a blocked
+   *  transcript/announce request and let the broker suppress any live request that arrives later. */
+  terminalizePresence(): Promise<void> {
+    if (this.#terminalPresenceTask !== null) return this.#terminalPresenceTask;
+    this.#presenceTerminal = true;
+    this.#advisoryPresenceDirty = false;
+    // Abort every live announce fetch before publishing the tombstone. A request already committed at
+    // the broker is ordered before terminal; a request not yet committed cannot linger past close and
+    // later resurrect. The absorbing broker fence handles the unavoidable response/commit race.
+    for (const controller of this.#livePresenceControllers) controller.abort();
+    if (!this.#presenceStarted) {
+      this.#terminalPresenceTask = Promise.resolve();
+      return this.#terminalPresenceTask;
+    }
+    const task = this.#postPresenceTerminal();
+    this.#terminalPresenceTask = task;
+    return this.#trackPresence(task);
+  }
+
+  /** Await every live/terminal presence request already admitted. This intentionally never rejects:
+   *  individual callers retain their own rejection, while bridge teardown needs a complete flush
+   *  barrier without turning a handled broker outage into an unhandled process rejection. */
+  async settlePresence(): Promise<void> {
+    for (;;) {
+      const pending = [...this.#presenceTasks];
+      if (pending.length === 0) return;
+      await Promise.allSettled(pending);
+    }
+  }
+
+  #trackPresence(task: Promise<void>): Promise<void> {
+    this.#presenceTasks.add(task);
+    void task.then(
+      () => this.#presenceTasks.delete(task),
+      () => this.#presenceTasks.delete(task),
+    );
+    return task;
+  }
+
+  async #postPresenceTerminal(): Promise<void> {
+    const header = this.#header("session_terminal", null, `terminal-${this.#sessionId}`);
+    const body = utf8('{"v":1}');
+    for (let attempt = 0; ; attempt++) {
+      const controller = new AbortController();
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const post = this.#client.postFrame(header, body, controller.signal);
+        // If a custom fetch ignores abort and rejects after the deadline, keep that late settlement
+        // observed. The race below is the caller-visible hard bound.
+        void post.catch(() => undefined);
+        await Promise.race([
+          post,
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              controller.abort();
+              reject(
+                new Error(
+                  `presence terminal attempt timed out after ${TERMINAL_POST_TIMEOUT_MS}ms`,
+                ),
+              );
+            }, TERMINAL_POST_TIMEOUT_MS);
+          }),
+        ]);
+        this.#trace.debug("presence terminal published");
+        return;
+      } catch (error) {
+        // A lost response is ambiguous, but retrying is safe: the logical coordinate is deterministic
+        // and every broker backend latches terminality by (identity_id, session_id). Retry all transport
+        // failures, not only 409, because this is the last safety signal this relay can emit.
+        if (attempt < TERMINAL_POST_RETRIES) {
+          await new Promise((resolve) => setTimeout(resolve, POST_RETRY_BASE_MS * 2 ** attempt));
+          continue;
+        }
+        this.#trace.error("presence terminal publish failed after retries", {
+          attempts: attempt + 1,
+          error: (error as Error)?.message ?? String(error),
+        });
+        throw error;
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+        controller.abort();
       }
     }
   }
@@ -593,33 +881,70 @@ export class HostRcRelay {
   async #post(recordKind: string, seq: number | null, msgId: string, text: string): Promise<void> {
     const header = this.#header(recordKind, seq, msgId);
     const body = utf8(text);
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await this.#client.postMessage(header, body);
-        return;
-      } catch (e) {
-        // 409 = typed channel disposal/replacement race → retry. Anything else, or out of budget,
-        // is terminal.
-        if (BrokerError.is(e) && e.status === 409 && attempt < POST_RETRIES) {
-          this.#trace.debug("post 409 → retry", { kind: recordKind, seq, attempt: attempt + 1 });
-          await new Promise((r) => setTimeout(r, POST_RETRY_BASE_MS * 2 ** attempt));
-          continue;
+    const controller = new AbortController();
+    const timeoutError = new Error(
+      `logical ${recordKind} post timed out after ${this.#postTimeoutMs}ms`,
+    );
+    timeoutError.name = "HostRcPostTimeoutError";
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const operation = (async () => {
+      for (let attempt = 0; ; attempt++) {
+        attempts = attempt + 1;
+        if (controller.signal.aborted) throw controller.signal.reason ?? timeoutError;
+        try {
+          // One signal covers every chunk and every deterministic 409 retry belonging to this ONE
+          // logical post. The caller-visible wall below is authoritative even if the client ignores it.
+          await this.#client.postMessage(header, body, undefined, controller.signal);
+          return;
+        } catch (e) {
+          // Once the wall expires, the outcome is ambiguous. Never replay content: a late success plus
+          // a retry could duplicate a non-idempotent broker append despite the stable message coordinate.
+          if (controller.signal.aborted) throw controller.signal.reason ?? timeoutError;
+          // 409 is an authoritative rejection (not an ambiguous lost response), so preserve the existing
+          // bounded deterministic retry behavior inside the same logical-post wall.
+          if (BrokerError.is(e) && e.status === 409 && attempt < POST_RETRIES) {
+            this.#trace.debug("post 409 → retry", { kind: recordKind, seq, attempt: attempt + 1 });
+            await waitForRetry(POST_RETRY_BASE_MS * 2 ** attempt, controller.signal);
+            continue;
+          }
+          throw e;
         }
-        // Terminal. A CONTENT post (seq !== null) burns a durable transcript `seq` → a permanent gap
-        // that stalls a late viewer's orderer forever (§12 boundary #1). Surface it as an ERROR (with
-        // the burned seq) so it's an actionable alert, not just a silent #fatal teardown, before it
-        // propagates to #fatalOnThrow.
-        if (seq !== null) {
-          this.#trace.error("durable content post failed — seq burned (permanent gap)", {
-            kind: recordKind,
-            seq,
-            msgId,
-            attempts: attempt + 1,
-            error: (e as Error)?.message ?? String(e),
-          });
-        }
-        throw e;
       }
+    })();
+    // A custom BrokerClient/fetch may ignore abort and settle after the hard wall. Keep that late
+    // settlement observed so fail-closed teardown cannot create an unhandled process rejection.
+    void operation.catch(() => undefined);
+    try {
+      await Promise.race([
+        operation,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(timeoutError);
+            controller.abort(timeoutError);
+          }, this.#postTimeoutMs);
+        }),
+      ]);
+    } catch (e) {
+      // Terminal. A CONTENT post (seq !== null) burns a durable transcript `seq` → a permanent gap
+      // that stalls a late viewer's orderer forever (§12 boundary #1). Surface it as an ERROR (with
+      // the burned seq) so it's an actionable alert, not just a silent #fatal teardown, before it
+      // propagates to the enclosing #publishUnit.
+      if (seq !== null) {
+        this.#trace.error("durable content post failed — seq burned (permanent gap)", {
+          kind: recordKind,
+          seq,
+          msgId,
+          attempts,
+          error: (e as Error)?.message ?? String(e),
+        });
+      }
+      throw e;
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+      // On success this prevents no work (the operation is settled); on failure it stops cooperative
+      // fetch/body work. Non-cooperative late settlement remains observed above.
+      controller.abort();
     }
   }
 
@@ -634,17 +959,39 @@ export class HostRcRelay {
     this.#trace.trace("frame sealed", { kind: recordKind, seq, bytes: text.length });
   }
 
-  /** Run a must-succeed publish and latch #fatal on failure. For sequenced content, failure burns a
-   *  transcript seq; for unordered permission_resolved state, failure means the worker side effect
-   *  must not proceed without its durable evidence. serve()'s coupling + #pumpInbound's #fatal check
-   *  tear the relay down rather than continuing from inconsistent state. */
-  async #fatalOnThrow<T>(fn: () => Promise<T>): Promise<T> {
-    try {
-      return await fn();
-    } catch (e) {
-      this.#fatal = true;
-      throw e;
-    }
+  /** Admit one complete must-succeed publication unit to the cross-pump head-of-line queue. The first
+   *  failing unit closes this Session synchronously and latches its cause. Every successor already
+   *  parked on the tail observes that latch before its callback runs, so it cannot allocate a seq,
+   *  publish an ack/echo, or mutate the worker. Low-level #post/#emit deliberately stay unqueued: a
+   *  unit may need several ordered broker writes followed by one synchronous Session mutation. */
+  #publishUnit<T>(fn: () => Promise<T>): Promise<T> {
+    const operation = this.#publicationTail.then(async () => {
+      if (this.#fatal) throw this.#fatalCause;
+      if (this.#session.closed) {
+        this.#fatal = true;
+        this.#fatalCause = new Error("session closed");
+        throw this.#fatalCause;
+      }
+      try {
+        return await fn();
+      } catch (e) {
+        // There is only one queue head, but keep the guard explicit so the first cause remains the
+        // authoritative failure even if this method is refactored or Session.close() wakes a sibling.
+        if (!this.#fatal) {
+          this.#fatal = true;
+          this.#fatalCause = e;
+          this.#session.close();
+        }
+        throw this.#fatalCause;
+      }
+    });
+    // Normalize only the INTERNAL tail. Returning `operation` preserves rejection for the pump while
+    // preventing a rejected tail from becoming unhandled or poisoning queue bookkeeping.
+    this.#publicationTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 
   /** Replay the logged transcript from `since` onward — idempotent (the viewer dedups by seq/msg_id). */
@@ -657,7 +1004,7 @@ export class HostRcRelay {
   /** Serve the session until `signal` aborts: run the outbound + inbound pumps concurrently.
    *  The pumps are COUPLED: if either throws (a fatal publish failure), the other is aborted so the
    *  session tears down cleanly instead of limping on with a dead pump — which, combined with the
-   *  shared #publishLock/#halted, would otherwise leave a live session stranded behind a permanent seq
+   *  shared #publicationTail/#fatal, would otherwise leave a live session stranded behind a permanent seq
    *  gap. (Adversarial-review fix.) An external `signal` abort still stops both as before. */
   async serve(signal: AbortSignal): Promise<void> {
     await this.prepare();
@@ -674,10 +1021,16 @@ export class HostRcRelay {
       ac.abort(); // stop the sibling pump, then surface the original failure
       throw e;
     };
+    const stopSiblingOnCleanEnd = async (pump: Promise<void>): Promise<void> => {
+      await pump;
+      // Session.close() ends followUpstream cleanly. That is still a terminal bridge transition: do
+      // not leave the inbound broker pump alive under a cse whose MITM routes are now all 410.
+      if (!child.aborted) ac.abort();
+    };
     try {
       await Promise.all([
-        this.#pumpUpstream(child).catch(halt),
-        this.#pumpInbound(child).catch(halt),
+        stopSiblingOnCleanEnd(this.#pumpUpstream(child)).catch(halt),
+        stopSiblingOnCleanEnd(this.#pumpInbound(child)).catch(halt),
       ]);
     } finally {
       signal.removeEventListener("abort", onAbort);
@@ -688,35 +1041,60 @@ export class HostRcRelay {
    *  Idempotent so launch, announce(), and direct tests can all call it without racing duplicate cursor
    *  reads. On a durable backend, failing to resume all cursors remains fail-closed. */
   async prepare(): Promise<void> {
+    if (this.#fatal) throw this.#fatalCause;
     if (!this.#durabilityDiscovered) {
       if (this.#preparePromise === null) this.#preparePromise = this.#discoverDurability();
       await this.#preparePromise;
     }
+    if (this.#fatal) throw this.#fatalCause;
     if (this.#durable && !this.#durableCursorsReady) {
       throw new Error("durable broker reported but restart cursors are not ready");
     }
   }
 
-  /** Discover the broker's EFFECTIVE durability from the server before either pump starts. A failed
-   *  discovery means durability is still unknown, so the relay keeps the legacy non-durable path instead
-   *  of failing closed; fail-closed is reserved for the case where the server has already reported
-   *  `durable: true`. */
+  /** Discover the broker's EFFECTIVE durability from the server before either pump starts. Only an
+   * authoritative durable:false response may select the legacy path. A read failure leaves durability
+   * unknown: treating that as non-durable could replay durable history from zero, so bounded exhaustion
+   * is terminal for this cse. */
   async #discoverDurability(): Promise<void> {
-    let seqCursor: SeqCursor;
-    try {
-      seqCursor = await this.#client.seqCursor(this.#sessionId);
-    } catch (e) {
-      this.#durabilityDiscovered = true;
-      this.#durable = false;
-      this.#trace.warn("durability discovery failed — using non-durable relay path", {
-        error: (e as Error)?.message ?? String(e),
+    let seqCursor: SeqCursor | null = null;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < SEQ_RESUME_ATTEMPTS; attempt++) {
+      try {
+        seqCursor = await this.#client.seqCursor(this.#sessionId);
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, this.#cursorRetryBaseMs * 2 ** attempt),
+          );
+        }
+      }
+    }
+    if (seqCursor === null) {
+      this.#fatal = true;
+      this.#fatalCause = lastError;
+      this.#session.close();
+      this.#trace.error("durability discovery failed after retries — aborting relay", {
+        attempts: SEQ_RESUME_ATTEMPTS,
+        error: (lastError as Error)?.message ?? String(lastError),
       });
-      return;
+      throw lastError;
     }
 
     this.#durabilityDiscovered = true;
     this.#durable = seqCursor.durable;
     if (!this.#durable) {
+      if (isStablePlainTextSurface(this.#capabilities, this.#harness)) {
+        const error = new Error("stable Claude remote control requires a durable broker backend");
+        this.#fatal = true;
+        this.#fatalCause = error;
+        this.#session.close();
+        this.#trace.error("non-durable broker rejected by stable Claude boundary");
+        throw error;
+      }
       this.#trace.debug("broker reported non-durable relay path");
       return;
     }
@@ -753,16 +1131,18 @@ export class HostRcRelay {
       } catch (e) {
         lastErr = e;
         if (attempt < SEQ_RESUME_ATTEMPTS - 1) {
-          await new Promise((r) => setTimeout(r, SEQ_RESUME_RETRY_BASE_MS * 2 ** attempt));
+          await new Promise((r) => setTimeout(r, this.#cursorRetryBaseMs * 2 ** attempt));
         }
       }
     }
     this.#fatal = true;
+    this.#fatalCause = lastErr;
+    this.#session.close();
     this.#trace.error("inbound cursor resume failed after retries — aborting durable relay", {
       attempts: SEQ_RESUME_ATTEMPTS,
       error: (lastErr as Error)?.message ?? String(lastErr),
     });
-    throw lastErr;
+    throw this.#fatalCause;
   }
 
   /** OUTBOUND: tail the worker's upstream and relay each assistant/result as a content frame. */
@@ -770,7 +1150,7 @@ export class HostRcRelay {
     this.#trace.debug("pumpUpstream start");
     for await (const ev of this.#session.followUpstream(() => signal.aborted)) {
       if (ev === null) {
-        await this.#maybeAnnounce(); // idle null-tick → refresh presence (keepalive + a phase flip)
+        this.#maybeAnnounce(); // idle null-tick → refresh presence (keepalive + a phase flip)
         continue;
       }
       // The worker cancels a pending gate (e.g. the turn was interrupted) with a control_cancel_request
@@ -783,7 +1163,7 @@ export class HostRcRelay {
           this.#askqQuestions.delete(id); // symmetric with the other gate-teardown sites
           if (this.#openPerms.delete(id)) {
             this.#trace.debug("gate cancelled by worker", { request_id: id });
-            await this.#maybeAnnounce();
+            this.#maybeAnnounce();
           }
         }
         continue; // not a rendered content frame
@@ -791,7 +1171,7 @@ export class HostRcRelay {
       const mode = permissionModeFrom(ev.payload);
       if (mode !== null && mode !== this.#session.permissionMode) {
         this.#session.permissionMode = mode;
-        await this.#maybeAnnounce();
+        this.#maybeAnnounce();
       }
       const items = mapUpstreamItems(ev);
       this.#trace.debug("upstream event", {
@@ -799,49 +1179,53 @@ export class HostRcRelay {
         items: items.map((i) => i.kind).join(",") || "skip",
       });
       for (const item of items) {
-        // Register a permission gate BEFORE the publish, not after: #emit yields the event loop, so a
-        // fast viewer can grant the permission (and #pumpInbound run its delete) before this add would
-        // have happened — leaving the id stuck in #openPerms and `needs` true forever. Adding first
-        // (outside the lock — it's not seq work) means the inbound delete always finds it. Roll back if
-        // the publish fails, since the viewer never saw the request and could never answer it. (codex HIGH #1)
-        let gateId: string | null = null;
-        if (item.kind === "permission_request") {
-          try {
-            const parsed = JSON.parse(item.text) as {
-              request_id?: unknown;
-              tool_name?: unknown;
-              tool_input?: { questions?: unknown };
-            };
-            const id = parsed.request_id;
-            if (typeof id === "string" && id !== "") {
-              gateId = id;
-              this.#openPerms.add(id);
-              // Stash AskUserQuestion's questions so the answer's updatedInput carries {questions,answers}.
-              if (
-                parsed.tool_name === "AskUserQuestion" &&
-                parsed.tool_input?.questions !== undefined
-              ) {
-                this.#askqQuestions.set(id, parsed.tool_input.questions);
+        if (item.kind === "permission_request" && !this.#capabilities.structuredPermissions) {
+          this.#trace.warn("permission request suppressed by stable capability boundary");
+          continue;
+        }
+        await this.#publishUnit(async () => {
+          // Register a permission gate only after this item reaches the queue head, and BEFORE its
+          // publish: #emit yields the event loop, so a fast viewer can enqueue a grant while the POST
+          // is completing. The inbound grant is serialized behind this whole unit and therefore sees
+          // the gate. Roll it back if publication fails because no viewer can answer an unseen request.
+          let gateId: string | null = null;
+          if (item.kind === "permission_request") {
+            try {
+              const parsed = JSON.parse(item.text) as {
+                request_id?: unknown;
+                tool_name?: unknown;
+                tool_input?: { questions?: unknown };
+              };
+              const id = parsed.request_id;
+              if (typeof id === "string" && id !== "") {
+                gateId = id;
+                this.#openPerms.add(id);
+                // Stash AskUserQuestion's questions so the answer's updatedInput carries
+                // {questions,answers}.
+                if (
+                  parsed.tool_name === "AskUserQuestion" &&
+                  parsed.tool_input?.questions !== undefined
+                ) {
+                  this.#askqQuestions.set(id, parsed.tool_input.questions);
+                }
               }
+            } catch {
+              // a malformed permission_request body — don't track an unanswerable gate
             }
-          } catch {
-            // a malformed permission_request body — don't track an unanswerable gate
           }
-        }
-        const seq = this.#seq++;
-        try {
-          await this.#fatalOnThrow(() =>
-            this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text),
-          );
-        } catch (e) {
-          if (gateId !== null) {
-            this.#openPerms.delete(gateId); // publish failed → gate is unanswerable
-            this.#askqQuestions.delete(gateId);
+          const seq = this.#seq++;
+          try {
+            await this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text);
+          } catch (e) {
+            if (gateId !== null) {
+              this.#openPerms.delete(gateId); // publish failed → gate is unanswerable
+              this.#askqQuestions.delete(gateId);
+            }
+            throw e;
           }
-          throw e;
-        }
+        });
       }
-      await this.#maybeAnnounce(); // an event may have flipped phase (running) or opened a gate
+      this.#maybeAnnounce(); // an event may have flipped phase (running) or opened a gate
     }
     this.#trace.debug("pumpUpstream end");
   }
@@ -851,35 +1235,84 @@ export class HostRcRelay {
    *  prompt) or may have been explicitly closed/replaced; `#seen` dedups the re-read. */
   async #pumpInbound(signal: AbortSignal): Promise<void> {
     this.#trace.debug("pumpInbound start");
+    let consecutiveFailures = 0;
     while (!signal.aborted) {
       try {
-        await this.#tailInbound(signal);
+        await this.#tailInbound(signal, () => {
+          // Only a newly admitted authenticated frame proves this subscription carried useful
+          // protocol traffic. Replays, misroutes, and failed authentication do not forgive failures.
+          consecutiveFailures = 0;
+        });
+        if (signal.aborted || this.#session.closed) break;
+        // A successful empty/clean response is the broker's existing absent-channel signal (the host
+        // serves before the first client publish). It is not a transport/protocol failure.
+        consecutiveFailures = 0;
       } catch (e) {
         // A must-succeed publish or cursor-recovery failure latches #fatal; continuing could widen a
         // burned seq gap or apply a permission decision without durable evidence. Propagate and let
-        // serve() tear the relay down. Any other #tailInbound exception restarts the subscription;
-        // lifecycle failures (stream not up yet or explicitly closed/replaced) are the expected case.
-        // The error stays in local diagnostics: the human formatter clips it, while JSON file capture
-        // is intentionally unclipped.
+        // serve() tear the relay down.
         if (this.#fatal) throw e;
-        this.#trace.warn("inbound tail threw → retry", {
-          error: (e as Error)?.message ?? String(e),
-        });
+        // Owner shutdown is an expected lifecycle transition, even when it races an unrelated stream
+        // rejection. Check this only after the publication latch above: Session.close() is also how a
+        // real fatal wakes the sibling pump, and that first cause must still propagate.
+        if (signal.aborted || this.#session.closed) break;
+        if (BrokerStreamRotationError.is(e)) {
+          // The route deliberately closed below its hosting-runtime ceiling. This proves neither a new
+          // authenticated admission nor a transport failure, so preserve (but do not reset) the circuit.
+          this.#trace.debug("inbound stream planned rotation → reconnect", {
+            failures: consecutiveFailures,
+          });
+        } else {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= INBOUND_FAILURE_ATTEMPTS) {
+            this.#fatal = true;
+            this.#fatalCause = e;
+            this.#session.close();
+            this.#trace.error("inbound transport failed after retries — aborting relay", {
+              attempts: consecutiveFailures,
+              error: (e as Error)?.message ?? String(e),
+            });
+            throw e;
+          }
+          // The error stays in local diagnostics: the human formatter clips it, while JSON file capture
+          // is intentionally unclipped.
+          this.#trace.warn("inbound tail threw → retry", {
+            attempt: consecutiveFailures,
+            error: (e as Error)?.message ?? String(e),
+          });
+        }
       }
       if (signal.aborted) break;
-      await new Promise((r) => setTimeout(r, 150)); // run not up / stream closed → resume-or-retry
+      await waitForRetry(this.#inboundRetryDelayMs, signal); // run not up / stream closed → retry
     }
     this.#trace.debug("pumpInbound end");
   }
 
-  async #tailInbound(signal: AbortSignal): Promise<void> {
+  async #tailInbound(signal: AbortSignal, admitted: () => void): Promise<void> {
     this.#trace.debug("inbound subscribe");
     for await (const frame of this.#client.streamFrames({
       session: this.#sessionId,
       startIndex: this.#durable ? this.#inboundStartIndex : 0,
       signal,
     })) {
-      if (frame.dir !== "in") continue; // ignore our own out-frames on the shared stream
+      // The broker is an untrusted router. AEAD authenticates the CLEAR header the sender chose, but
+      // openFrame derives K_session from frame.sessionId; it does not prove that the broker returned the
+      // frame on the channel this relay requested. Bind every authenticated input to this relay BEFORE
+      // dedup, decryption, or side effects. Otherwise a broker could replay a valid `dir:"in"` command
+      // from sibling session B on session A's stream and it would open under B's key, then drive A.
+      // Rejecting before #seen is equally important: a misrouted frame must not suppress a later valid
+      // frame for this session that happens to carry the same cleartext msgId.
+      const sessionMatches = frame.sessionId === this.#sessionId;
+      const identityMatches = timingSafeEqual(frame.identityId, this.#identityId);
+      if (frame.dir !== "in" || !sessionMatches || !identityMatches) {
+        this.#trace.warn("dropped misrouted inbound frame", {
+          kind: frame.recordKind,
+          dir: frame.dir,
+          session_matches: sessionMatches,
+          identity_matches: identityMatches,
+        });
+        continue;
+      }
       // Multi-part inbound: ONLY an `attachment` may be reassembled (#114) — collect its chunks and act
       // only on the complete, AEAD-verified message. Every OTHER kind is still dropped loudly: `openFrame`
       // returns only THIS frame's plaintext, so acting on a `parts > 1` user/permission/control frame
@@ -893,54 +1326,96 @@ export class HostRcRelay {
           });
           continue;
         }
+        // Authenticate each chunk before retaining it in the in-flight group. The final openMessage
+        // below authenticates the complete coordinate again, but this first open is what prevents an
+        // untrusted broker from using a forged part to mutate the reassembly buffer.
+        if ((await this.#openInboundFrame(frame)) === null) continue;
+        if (!this.#capabilities.attachments) {
+          if (this.#seen.has(frame.msgId)) continue;
+          this.#seen.add(frame.msgId);
+          this.#trace.warn("attachment suppressed by stable capability boundary");
+          admitted();
+          continue;
+        }
         if (this.#seen.has(frame.msgId)) continue; // message already reassembled + handled
         const payload = await this.#collectAttachmentChunk(frame);
         if (payload === null) continue; // group not complete (or rejected) yet
         this.#seen.add(frame.msgId);
         await this.#handleAttachmentPayload(payload, frame.clientMsgId ?? null);
+        // A partial chunk is not a complete protocol admission. Reset only after the authenticated
+        // message is complete and dedup-latched; otherwise bounded-buffer eviction plus replay could
+        // make the same incomplete groups look like fresh progress on every failed subscription.
+        admitted();
         continue;
       }
       this.#trace.trace("inbound frame", { kind: frame.recordKind, msg: frame.msgId });
-      if (this.#seen.has(frame.msgId)) continue; // at-least-once dedup
+      // AEAD authentication MUST precede persistent dedup. The broker sees the clear msg_id and can
+      // return a tampered copy before the genuine frame. Remembering the id before open would let that
+      // invalid copy permanently suppress the later authentic command. Open failures are deterministic
+      // local authentication failures, so drop them and continue this stream rather than resubscribing
+      // behind a poisoned #seen entry.
+      const plaintext = await this.#openInboundFrame(frame);
+      if (plaintext === null) continue;
+      if (this.#seen.has(frame.msgId)) continue; // authenticated at-least-once replay
       this.#seen.add(frame.msgId);
 
       if (frame.recordKind === "user") {
-        const text = new TextDecoder().decode(await this.#client.openFrame(frame));
-        const userSeq = this.#seq++;
+        const text = new TextDecoder().decode(plaintext);
+        const trimmed = text.trim();
+        if (
+          isStablePlainTextSurface(this.#capabilities, this.#harness) &&
+          (trimmed === "" || trimmed.startsWith("/"))
+        ) {
+          this.#trace.warn("unsupported stable text mutation suppressed");
+          admitted();
+          continue;
+        }
         // Ack the client's frame (meta), echo the prompt (content, so every device sees it), then
-        // inject it into the real claude. A failed echo post is FATAL (a seq is burned) — tear down
-        // rather than feed claude a prompt no viewer can see.
-        await this.#fatalOnThrow(async () => {
+        // inject it into the real claude as ONE queued unit. Its seq is allocated only at the queue
+        // head, and the synchronous injection stays inside the unit so later publications cannot
+        // overtake the native side effect. A failed post closes the Session before any injection.
+        const userSeq = await this.#publishUnit(async () => {
+          const seq = this.#seq++;
           await this.#post(
             "accepted",
             null,
-            `accepted-${this.#sessionId}-${userSeq}`,
-            JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, seq: userSeq }),
+            `accepted-${this.#sessionId}-${seq}`,
+            JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, seq }),
           );
-          await this.#emit("user", userSeq, `user-${userSeq}`, text);
+          await this.#emit("user", seq, `user-${seq}`, text);
+          this.#assertSessionOpen();
+          this.#session.pushUserInput(text);
+          return seq;
         });
-        this.#session.pushUserInput(text);
         // Content preview at debug (opt-in); bytes always.
         this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length, text });
       } else if (frame.recordKind === "catch_up") {
         if (this.#durable) {
           // The durable backend's own log answers catch_up: the viewer's subscribe(startIndex:0) already
           // replays the full history straight from the frames table, so there's nothing for the host to
-          // re-post. (We don't even open the frame — `since` is irrelevant when the broker serves it.)
+          // re-post. `since` is irrelevant, but the frame was still authenticated before dedup above.
           this.#trace.debug("catch_up ignored — durable backend serves history");
         } else {
-          const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame)));
+          const body = JSON.parse(new TextDecoder().decode(plaintext));
           const since = typeof body.since === "number" ? body.since : 0;
           this.#trace.debug("catch_up replay", { since, frames: this.#log.length });
-          await this.#replay(since);
+          // Replays are must-succeed publications too. Queue them through the same fatal boundary so
+          // an ambiguous timeout closes this cse instead of letting a reconnect re-enter publication.
+          await this.#publishUnit(() => this.#replay(since));
         }
       } else if (frame.recordKind === "permission") {
-        const body = JSON.parse(new TextDecoder().decode(await this.#client.openFrame(frame)));
-        // Act only if this answer closes an OPEN gate. `#openPerms.delete` returns false for a
-        // duplicate, stale, or unknown request_id (two devices both granting; a re-read after
-        // reconnect), so gating on it makes the answer idempotent — no second pushControlResponse to
-        // the worker and no duplicate permission_resolved frame in the log. (codex HIGH #2)
-        if (typeof body.request_id === "string" && this.#openPerms.delete(body.request_id)) {
+        if (!this.#capabilities.structuredPermissions) {
+          this.#trace.warn("permission answer suppressed by stable capability boundary");
+          admitted();
+          continue;
+        }
+        const body = JSON.parse(new TextDecoder().decode(plaintext));
+        const resolved = await this.#publishUnit(async () => {
+          // Check/delete the gate only at the queue head. That makes a fast answer serialize behind the
+          // permission_request unit that registers it, while duplicates/stale ids remain idempotent.
+          if (typeof body.request_id !== "string" || !this.#openPerms.delete(body.request_id)) {
+            return false;
+          }
           // FAIL CLOSED: only an explicit "allow" grants; anything else (deny, or a malformed/absent
           // behavior) → deny, so a garbled answer frame can never auto-approve a tool. A real viewer
           // always sends an explicit "allow"/"deny", so this only changes malformed-frame handling.
@@ -964,45 +1439,63 @@ export class HostRcRelay {
           const askqQuestions = this.#askqQuestions.get(body.request_id);
           if (askqQuestions !== undefined) extra.questions = askqQuestions;
           this.#askqQuestions.delete(body.request_id);
-          // Log a permission_resolved unordered frame BEFORE the worker side effect. If the durable log
-          // publish fails, the worker must not act on a grant that reload/catch_up cannot observe (#56).
-          await this.#fatalOnThrow(() =>
-            this.#emit(
-              "permission_resolved",
-              null,
-              `permresolved-${body.request_id}`,
-              JSON.stringify(
-                extra.answers
-                  ? { request_id: body.request_id, behavior, answers: extra.answers }
-                  : { request_id: body.request_id, behavior },
-              ),
+          // Log permission_resolved BEFORE the worker side effect, in this same queued unit. A failed
+          // publish closes the Session and cannot be overtaken by another pump's publication.
+          await this.#emit(
+            "permission_resolved",
+            null,
+            `permresolved-${body.request_id}`,
+            JSON.stringify(
+              extra.answers
+                ? { request_id: body.request_id, behavior, answers: extra.answers }
+                : { request_id: body.request_id, behavior },
             ),
           );
+          this.#assertSessionOpen();
           this.#session.pushControlResponse(body.request_id, behavior, extra);
+          return true;
+        });
+        if (resolved) {
           // Clearing the gate also drops `needs` from presence — re-announce so the viewer's
           // needs-you indicator clears (#58).
-          await this.#maybeAnnounce();
+          this.#maybeAnnounce();
         }
       } else if (frame.recordKind === "attachment") {
-        // Open the (single-part) attachment in its OWN try so a forged/garbage frame (the untrusted
-        // broker can inject one) is dropped cleanly — NOT propagated (which could tear the session down)
-        // and NOT left poisoning #seen: deleting the msgId on failure means a broker can't pre-inject a
-        // bad frame reusing a legit CHUNKED attachment's (cleartext) msgId to permanently suppress it.
-        // #handleAttachmentPayload runs OUTSIDE this catch so its own fatal echo-failure still propagates.
-        let attBytes: Uint8Array | null = null;
-        try {
-          attBytes = await this.#client.openFrame(frame);
-        } catch (e) {
-          this.#seen.delete(frame.msgId);
-          this.#trace.warn("attachment open failed", { error: (e as Error)?.message ?? String(e) });
+        if (!this.#capabilities.attachments) {
+          this.#trace.warn("attachment suppressed by stable capability boundary");
+          admitted();
+          continue;
         }
-        if (attBytes !== null)
-          await this.#handleAttachmentPayload(attBytes, frame.clientMsgId ?? null);
+        await this.#handleAttachmentPayload(plaintext, frame.clientMsgId ?? null);
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
+        if (!supportsControl(this.#capabilities, frame.recordKind)) {
+          this.#trace.warn("control verb suppressed by capability boundary", {
+            kind: frame.recordKind,
+          });
+          admitted();
+          continue;
+        }
         // A client control verb (§3.7) — ESC the turn, switch model/mode, end the session. Forward it
-        // to the worker as a `control_request` with the mapped subtype + params.
-        await this.#driveControlVerb(frame.recordKind, frame);
+        // to the worker as a `control_request` with the mapped subtype + params. It owns no transcript
+        // seq, but still joins the shared queue: a control native side effect must not race past an
+        // earlier projection whose broker publication later fails.
+        await this.#publishUnit(() => this.#driveControlVerb(frame.recordKind, plaintext));
       }
+      admitted();
+    }
+  }
+
+  /** Authenticate one coordinate-bound inbound frame without letting a broker-forged ciphertext tear
+   *  down or poison the relay. No caller mutates dedup/reassembly/native state until this succeeds. */
+  async #openInboundFrame(frame: Frame): Promise<Uint8Array | null> {
+    try {
+      return await this.#client.openFrame(frame);
+    } catch (e) {
+      this.#trace.warn("inbound frame authentication failed", {
+        kind: frame.recordKind,
+        error: (e as Error)?.message ?? String(e),
+      });
+      return null;
     }
   }
 
@@ -1070,10 +1563,17 @@ export class HostRcRelay {
     if (written.length === 0) return; // nothing valid decoded → drop (no seq burned)
     // Ack FIRST (carries clientMsgId+seq so the viewer can reconcile its optimistic echo, #113), then the
     // content echo (durably — a failed post is fatal), THEN inject: same ordering as the `user` path, so a
-    // torn-down relay can't have driven claude to Read images that never reached any transcript.
-    const seq = this.#seq++;
+    // torn-down relay can't have driven claude to Read images that never reached any transcript. The
+    // complete ack+echo+inject action occupies one cross-pump queue slot.
     const chips = written.map((w) => `📎 ${w.name}`).join(", ");
-    await this.#fatalOnThrow(async () => {
+    // Reference every written file with the SAME `@"<abs-path>"` syntax real Anthropic uses for an
+    // app-uploaded image (captured via --rc-trace), so claude attaches them NATIVELY as image blocks. The
+    // caption (or a default) follows ALL the refs ONCE — claude treats it as one user turn with N images.
+    const refs = written.map((w) => `@"${w.path}"`).join(" ");
+    const fallback =
+      written.length > 1 ? "What do you see in these images?" : "What do you see in this image?";
+    await this.#publishUnit(async () => {
+      const seq = this.#seq++;
       await this.#post(
         "accepted",
         null,
@@ -1081,14 +1581,9 @@ export class HostRcRelay {
         JSON.stringify({ client_msg_id: clientMsgId, seq }),
       );
       await this.#emit("user", seq, `user-${seq}`, `${chips}${caption ? `\n${caption}` : ""}`);
+      this.#assertSessionOpen();
+      this.#session.pushUserInput(`${refs} ${caption || fallback}`);
     });
-    // Reference every written file with the SAME `@"<abs-path>"` syntax real Anthropic uses for an
-    // app-uploaded image (captured via --rc-trace), so claude attaches them NATIVELY as image blocks. The
-    // caption (or a default) follows ALL the refs ONCE — claude treats it as one user turn with N images.
-    const refs = written.map((w) => `@"${w.path}"`).join(" ");
-    const fallback =
-      written.length > 1 ? "What do you see in these images?" : "What do you see in this image?";
-    this.#session.pushUserInput(`${refs} ${caption || fallback}`);
   }
 
   /**
@@ -1120,20 +1615,18 @@ export class HostRcRelay {
   }
 
   /** Map a client control-verb frame → the worker control_request the spec uses (§3.7). */
-  async #driveControlVerb(kind: string, frame: Frame): Promise<void> {
-    // openFrame IS the authentication: a forged/corrupt/tampered frame fails AEAD here. We must NOT
-    // act on a frame that fails to open — even a bodyless verb (interrupt/end) proves authenticity by
-    // opening cleanly. (Earlier this swallowed the error and fired anyway, letting the UNTRUSTED
-    // broker forge an interrupt/end — both assessors flagged it.)
+  async #driveControlVerb(kind: string, plaintext: Uint8Array): Promise<void> {
+    // #tailInbound already AEAD-authenticated this frame before persistent dedup and queued this
+    // immutable plaintext. Even a bodyless verb (interrupt/end) therefore has authenticated origin.
     let body: Record<string, unknown>;
     try {
-      const raw = new TextDecoder().decode(await this.#client.openFrame(frame));
+      const raw = new TextDecoder().decode(plaintext);
       const parsed = raw ? JSON.parse(raw) : {};
       if (parsed === null || typeof parsed !== "object") return; // authenticated but malformed → drop
       body = parsed as Record<string, unknown>;
     } catch {
-      this.#trace.warn("control verb rejected (AEAD/parse)", { kind });
-      return; // AEAD open failed or unparseable → reject, never drive a control action
+      this.#trace.warn("control verb rejected (parse)", { kind });
+      return; // authenticated but unparseable → reject, never drive a control action
     }
     // Drop a STALE control frame: a malicious broker can withhold a valid frame and replay it much
     // later. The client stamps `expiry`; past it, the verb is a no-op. The separate catch_up branch
@@ -1142,6 +1635,7 @@ export class HostRcRelay {
       this.#trace.warn("control verb dropped (stale)", { kind });
       return;
     }
+    this.#assertSessionOpen();
     this.#trace.debug("control verb", { kind });
     switch (kind) {
       case "interrupt":
@@ -1165,7 +1659,7 @@ export class HostRcRelay {
           this.#session.pushControlRequest("set_permission_mode", { mode: body.mode });
           if (this.#capabilities.controls.setMode) {
             this.#session.permissionMode = body.mode;
-            await this.#maybeAnnounce();
+            this.#maybeAnnounce();
           }
         }
         break;
@@ -1189,6 +1683,10 @@ export class HostRcRelay {
     if (this.#openPerms.size === 0) return;
     this.#openPerms.clear();
     this.#askqQuestions.clear();
-    void this.#maybeAnnounce(); // #maybeAnnounce is self-swallowing; fire-and-forget the presence refresh
+    this.#maybeAnnounce(); // backgrounded + single-flight: presence never blocks a transcript unit
+  }
+
+  #assertSessionOpen(): void {
+    if (this.#session.closed) throw new Error("session closed");
   }
 }

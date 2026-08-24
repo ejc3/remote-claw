@@ -225,6 +225,47 @@ describe("runWrapper (functional)", () => {
     expect(lines.join("")).toMatch(/needs --rc-app/);
   });
 
+  it("fails the stable MITM path before identity or launch when compatibility is unproved", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-unsupported-"));
+    const secret = join(dir, "secret");
+    const lines: string[] = [];
+    let spawned = 0;
+    let ownerCalls = 0;
+    try {
+      const code = await runWrapper(
+        ["chat", "--rc-file", secret, "--rc-app", "http://broker.example"],
+        {
+          claudeBin: "/private/claude",
+          claudeCompatibilityCheck: async (bin) => {
+            expect(bin).toBe("/private/claude");
+            throw new Error("raw probe detail must not escape");
+          },
+          spawnRcEnv: async () => {
+            spawned++;
+            return 0;
+          },
+          runtimeOwnerBootstrap: async () => {
+            ownerCalls++;
+            return null;
+          },
+          stderr: (line) => lines.push(line),
+        },
+      );
+
+      expect(code).toBe(1);
+      expect(existsSync(secret)).toBe(false);
+      expect(spawned).toBe(0);
+      expect(ownerCalls).toBe(0);
+      expect(lines.join("")).toContain(
+        "stable --rc-app requires Claude 2.1.237 (Claude Code) on linux/arm64",
+      );
+      expect(lines.join("")).not.toContain("/private/claude");
+      expect(lines.join("")).not.toContain("raw probe detail");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(!haveOpenssl())(
     "--rc-app launches claude behind the MITM (RC enabled), auto-creating the identity",
     async () => {
@@ -232,25 +273,23 @@ describe("runWrapper (functional)", () => {
       const secret = join(dir, "secret");
       let seenEnv: NodeJS.ProcessEnv | null = null;
       let seenArgs: readonly string[] | null = null;
-      const ownerInputs: Array<{ machineIdentityId: string; secretPath: string }> = [];
-      let ownerSecret: Uint8Array | undefined;
+      const compatibilityBins: string[] = [];
+      let ownerCalls = 0;
       let ownerClosed = 0;
       try {
         const code = await runWrapper(
           ["chat", "--model", "opus", "--rc-file", secret, "--rc-app", "http://broker.example"],
           {
+            claudeCompatibilityCheck: async (bin) => {
+              compatibilityBins.push(bin);
+            },
             spawnRcEnv: async (_bin, args, env) => {
-              expect(ownerSecret?.every((byte) => byte === 0)).toBe(true);
               seenEnv = env;
               seenArgs = args;
               return 0;
             },
-            runtimeOwnerBootstrap: async (input) => {
-              ownerSecret = input.identitySecret;
-              ownerInputs.push({
-                machineIdentityId: input.machineIdentityId,
-                secretPath: input.secretPath,
-              });
+            runtimeOwnerBootstrap: async () => {
+              ownerCalls++;
               return {
                 close: async () => {
                   ownerClosed++;
@@ -265,10 +304,40 @@ describe("runWrapper (functional)", () => {
         const env = seenEnv as unknown as NodeJS.ProcessEnv;
         expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
         expect(env.NODE_EXTRA_CA_CERTS).toBe(join(dir, "mitm-certs", "ca.pem"));
-        expect(ownerInputs).toEqual([
-          { machineIdentityId: expect.stringMatching(/^[0-9a-f]{32}$/), secretPath: secret },
-        ]);
-        expect(ownerClosed).toBe(1);
+        expect(compatibilityBins).toEqual(["claude"]);
+        expect(ownerCalls).toBe(0);
+        expect(ownerClosed).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!haveOpenssl() || process.platform !== "linux" || process.arch !== "arm64")(
+    "retains the pre-identity checked executable through the eventual child spawn",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "rc-run-pin-"));
+      const secret = join(dir, "secret");
+      let spawnedPath = "";
+      try {
+        const code = await runWrapper(
+          ["--version", "--rc-file", secret, "--rc-app", "http://broker.example"],
+          {
+            claudeBin: "/usr/bin/claude",
+            spawnRcEnv: async (bin, args) => {
+              spawnedPath = bin;
+              expect(existsSync(secret)).toBe(true);
+              expect(execFileSync(bin, [...args], { encoding: "utf8" }).trim()).toBe(
+                "2.1.237 (Claude Code)",
+              );
+              return 0;
+            },
+          },
+        );
+
+        expect(code).toBe(0);
+        expect(spawnedPath).toMatch(/^\/proc\/[0-9]+\/fd\/[0-9]+$/);
+        expect(existsSync(spawnedPath)).toBe(false);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -380,7 +449,11 @@ describe("runWrapper (functional)", () => {
       try {
         const code = await runWrapper(
           ["chat", "--rc-file", secret, "--rc-app", "http://broker.example", "--rc-session-hook"],
-          { spawnRcEnv: async () => 0, stderr: (l) => lines.push(l) },
+          {
+            claudeCompatibilityCheck: async () => {},
+            spawnRcEnv: async () => 0,
+            stderr: (l) => lines.push(l),
+          },
         );
         expect(code).toBe(0); // the flag is a harmless no-op here — we warn, we do NOT fail
         // The warning names ONLY the flag actually passed (precise), not the whole tmux group.
@@ -409,7 +482,11 @@ describe("runWrapper (functional)", () => {
             "http://broker.example",
             "--rc-oc-skip-permissions",
           ],
-          { spawnRcEnv: async () => 0, stderr: (l) => lines.push(l) },
+          {
+            claudeCompatibilityCheck: async () => {},
+            spawnRcEnv: async () => 0,
+            stderr: (l) => lines.push(l),
+          },
         );
         expect(code).toBe(0); // a harmless no-op on mitm — we warn, we do NOT fail
         expect(lines.join("")).toMatch(

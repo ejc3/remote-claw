@@ -41,7 +41,8 @@ export function scenario(
           {
             type: "tool_result",
             tool_use_id: "toolu_b1",
-            content: "> build\n> tsc -p . && vite build\n✓ 214 modules transformed.\n✓ built in 3.42s",
+            content:
+              "> build\n> tsc -p . && vite build\n✓ 214 modules transformed.\n✓ built in 3.42s",
           },
         ],
       },

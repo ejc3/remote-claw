@@ -6,11 +6,7 @@ on:
       - "spikes/codex-multiclient/**"
       - "spikes/claude-native-output/**"
       - "spikes/opencode-native/**"
-      - "packages/cli/src/args.ts"
-      - "packages/cli/src/cli.ts"
-      - "packages/cli/src/host/rc/mitm.ts"
-      - "packages/cli/src/host/rc/trace-run.ts"
-      - "packages/cli/src/run.ts"
+      - "packages/cli/**"
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - "package.json"
@@ -20,11 +16,7 @@ on:
       - "spikes/codex-multiclient/**"
       - "spikes/claude-native-output/**"
       - "spikes/opencode-native/**"
-      - "packages/cli/src/args.ts"
-      - "packages/cli/src/cli.ts"
-      - "packages/cli/src/host/rc/mitm.ts"
-      - "packages/cli/src/host/rc/trace-run.ts"
-      - "packages/cli/src/run.ts"
+      - "packages/cli/**"
       - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - "package.json"
@@ -39,7 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          # The Claude verifier checks source blobs at its retained capture commit.
+          fetch-depth: 0
+      - name: Assert exact workflow revision
+        env:
+          RC_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "${RC_EXPECTED_SHA}"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -49,13 +48,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Require trace-contract prerequisites
+        run: openssl version
       - name: Check proof sources
         run: pnpm --filter @remote-claw/codex-multiclient-proof run check
       - name: Verify retained evidence
         run: pnpm --filter @remote-claw/codex-multiclient-proof run test:run
       - name: Check Claude native-output proof sources
         run: pnpm --filter @remote-claw/claude-native-output-proof run check
-      - name: Verify Claude native-output retained evidence
+      - name: Verify Claude native-output evidence and current trace contract
         run: pnpm --filter @remote-claw/claude-native-output-proof run test:run
       - name: Check OpenCode proof sources
         run: pnpm --filter @remote-claw/opencode-native-proof run check

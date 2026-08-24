@@ -4,6 +4,8 @@ import { hasDurableRecovery } from "../../../lib/broker/backend";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
+export const maxDuration = 60;
+
 // §6B GET /api/frame-count — the current publish-order stream length for this channel (per-session
 // with ?session=<sid>, else the bus), or null. Unlike /api/seq, this cursor counts every durable frame
 // row, so a restarted host can subscribe from this `startIndex` and skip all pre-incarnation inbound

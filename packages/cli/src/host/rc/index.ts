@@ -56,6 +56,7 @@ export {
   MITM_CAPABILITIES,
   MITM_HARNESS,
   OPENCODE_HARNESS,
+  STABLE_MITM_CAPABILITIES,
   TMUX_HARNESS,
   type UpstreamPayload,
 } from "./driver.js";

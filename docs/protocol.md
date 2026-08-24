@@ -61,6 +61,14 @@ Three parties, one of which (the broker) is untrusted and sees only ciphertext.
   `BrokerClient` and `SecurityProvider`, plus the shared `FrameOrderer`, so the wire and security
   primitives do not have separate implementations that can drift (`viewer.ts` header comment).
 
+The supported Claude 1.0 deployment sets `BROKER_BACKEND=sqlite` with the complete Turso fleet
+configuration, so host and viewer default to the same durable profile. Before discovery or pumps,
+`HostRcRelay` reads `/api/seq` plus `/api/frame-count`; stable Claude closes that remote session if the
+effective backend reports non-durable or either durable cursor cannot be recovered. Each cursor
+attempt has a 70 s wall; three failed attempts, rather than a never-settling fetch or an assumed
+non-durable fallback, close the `cse_*`. Vercel Workflow and local remain
+compatibility/experimental profiles, not stable release alternatives.
+
 **Dormant A1.6 transport.** A separate SQLite/libSQL provider exists behind
 `/api/a1/*` (`apps/web/app/api/a1/**/route.ts`, `lib/broker/a1-sqlite.ts`) with the browser-safe
 contracts in `packages/clawsec/src/a1-broker.ts` and client in
@@ -103,6 +111,17 @@ product path. The implemented OpenCode and tmux harnesses are experimental/inter
 paths, not supported release alternatives and not Claude 1.0 prerequisites. Every current harness
 produces a `Session`; Claude MITM, OpenCode, and tmux register that port through
 `LegacyRcConversationRegistrar`, which calls `startBridgeSession` only at `ready`.
+Before identity creation, the stable MITM entrypoint requires Linux arm64 and exact
+`claude --version` output `2.1.237 (Claude Code)`. Its production compatibility probe resolves the
+requested Claude launcher (`RC_CLAUDE_BIN` or `claude` on `PATH`), opens its resolved target with `O_RDONLY|O_NOFOLLOW`, and
+requires that target to be a root:root regular mode-`0755` file with exactly 331,864,296 bytes and SHA-256
+`a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177`, and retains that inode while
+launching through `/proc` until child exit, so a later pathname replacement cannot substitute different
+bytes. It deliberately does not initialize the parked A1 runtime owner. The experimental OpenCode/tmux
+launch paths retain their health-only owner
+collaborator while that platform remains dormant.
+The trusted installed release proof is narrower: it refuses `RC_CLAUDE_BIN` and requests
+`/usr/bin/claude` before applying the same byte/inode checks.
 **The broker, the relay
 (`HostRcRelay`), and the viewer are shared across drivers.** Frames, the two pumps,
 `seq`/ordering, `catch_up`, and presence therefore use one compatibility path, while the native
@@ -110,11 +129,21 @@ capability behind a frame can differ. Permission and attachment support are only
 selected harness. Both A0.2 paths wait for native setup evidence and publish conservative capability
 vectors. Only how the `Session` reaches the native harness differs:
 
+The stable release discriminator is the exact MITM harness plus exact capability vector
+`{structuredPermissions:false,status:true,controls:{interrupt:false,setModel:false,setMode:false,end:false},attachments:false}`.
+Any bit drift selects compatibility UI. An absent or non-object vector remains legacy compatibility. In
+a present vector, absent or ill-typed `status` is parsed as `false`, while absent mutation fields retain
+their legacy compatibility-enabled defaults; neither partial form can accidentally select stable.
+On that stable path, the browser and host independently permit
+only non-empty, non-slash text; the host suppresses permission requests/answers and rejects attachments
+and every disabled control. The table's broader mechanics remain implemented compatibility surfaces,
+not advertised Claude 1.0 mutations.
+
 | Driver | Native surface used by the local person | Inject (downstream → native client) | Capture (native client → upstream) | Permissions | Provider |
 |---|---|---|---|---|---|
-| **MITM** (`--rc-app`, `launch.ts`) | Real Claude Code TUI in the wrapped process; local prompt text is not currently projected to viewers | Intercept Claude's RC endpoints → worker downstream | Worker upstream POSTs (`followUpstream`) | Structured `can_use_tool` gates (§10) | Default: Anthropic API; `--rc-inference=bedrock`: Bedrock inference + locally synthesized control plane |
-| **tmux** (`--rc-driver=tmux`, `tmux/driver.ts`) | Real Claude Code TUI in a private-socket attachable pane; unmatched local prompts are projected post-hoc as `local_prompt` | Prompt bytes over stdin to `load-buffer`, then `paste-buffer` + `send-keys` (`runInjectPump`) | Tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **Default:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10), published only after settings/trust and the mandatory startup marker succeed. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | Any, including Bedrock/Vertex |
-| **opencode** (`--rc-driver=opencode`, `opencode/driver.ts`) | A native OpenCode TUI may share the server; the driver does not enforce one attachment, and unmatched local prompts are projected post-hoc as `local_prompt` | POST the prompt to the OpenCode session → `followDownstream` (+`ack`) | OpenCode **SSE** event stream → `pushUpstream` | **Default required setup:** strict parent policy read; append the ask-all rule only when absent; strict read-back before `ready`; then mirror SSE `permission.asked` (§10). **Opt-out** `--rc-oc-skip-permissions` leaves OpenCode's own permission config and advertises permissions off | Any OpenCode provider configuration |
+| **MITM** (`--rc-app`, `launch.ts`; only supported Claude 1.0 driver) | Real Claude Code TUI in the wrapped process; local prompt text is not currently projected to viewers | Intercept Claude's RC endpoints → worker downstream | Worker upstream POSTs (`followUpstream`) | Stable Claude 1.0 keeps questions/permissions local and suppresses their remote projection; structured `can_use_tool` round-trip remains compatibility-only (§10) | Supported default: Anthropic API. Experimental/outside 1.0: `--rc-inference=bedrock` inference + locally synthesized control plane |
+| **tmux** (experimental/internal; `--rc-driver=tmux`, `tmux/driver.ts`) | Real Claude Code TUI in a private-socket attachable pane; unmatched local prompts are projected post-hoc as `local_prompt` | Prompt bytes over stdin to `load-buffer`, then `paste-buffer` + `send-keys` (`runInjectPump`) | Tail the local transcript `.jsonl` → `pushUpstream` (`TranscriptTailer`) | **Default:** structured `can_use_tool` gates via an injected **PreToolUse hook** (§10), published only after settings/trust and the mandatory startup marker succeed. **Opt-out** `--rc-tmux-skip-permissions` → `--dangerously-skip-permissions` auto-approve | Any, including Bedrock/Vertex |
+| **opencode** (experimental/internal; `--rc-driver=opencode`, `opencode/driver.ts`) | A native OpenCode TUI may share the server; the driver does not enforce one attachment, and unmatched local prompts are projected post-hoc as `local_prompt` | POST the prompt to the OpenCode session → `followDownstream` (+`ack`) | OpenCode **SSE** event stream → `pushUpstream` | **Default required setup:** strict parent policy read; append the ask-all rule only when absent; strict read-back before `ready`; then mirror SSE `permission.asked` (§10). **Opt-out** `--rc-oc-skip-permissions` leaves OpenCode's own permission config and advertises permissions off | Any OpenCode provider configuration |
 
 Tmux's readiness hook is not optional: Claude must execute one `SessionStart` marker from the exact
 private merged-settings file before the registrar can enter `ready`. `--rc-no-session-hook` /
@@ -232,8 +261,8 @@ depends on the source client's profile or resource lifetime, an admitted bridge 
 the smallest non-authoritative compatibility or source-lease context proved necessary. remote-claw
 does not start a second app-server or thread store. None of this is implemented by the current relay.
 
-Because the relay owns the attachment write+inject, attachments work across the two Claude paths
-unchanged—the tmux driver never even sees an `attachment` frame
+On compatibility paths, the relay owns attachment write+inject, so attachments work across the two
+Claude paths unchanged—the tmux driver never even sees an `attachment` frame
 (`TMUX_CAPABILITIES.attachments = true`); the relay writes the file and injects the `@"path"` reference,
 which the pane's Claude attaches natively just as the MITM-driven worker does. OpenCode currently
 receives that Claude-specific text, not a native file part, so its current conservative capability
@@ -286,9 +315,10 @@ Each `recordKind` is sealed under exactly one **plane** (AEAD key), decided by `
 - **control** (`control_key`, `dir:"in"`) — client→host kinds: `catch_up`, `permission`, `interrupt`,
   `set_mode`, `set_model`, `end`, `attachment`, and the reserved but currently unused `command`
   (`CONTROL_KINDS`; slash commands use `user` content).
-- **meta** (`K_meta`, `seq:null`, unordered) — `accepted` (acks), `session_announce` (presence), and
-  replayable `permission_resolved` state (`META_KINDS`). Accepted/announce are not put in the host
-  replay log; `permission_resolved` deliberately is.
+- **meta** (`K_meta`, `seq:null`, unordered) — `accepted` (acks), `session_announce` (live presence),
+  the exact `session_terminal` lifecycle marker, and replayable `permission_resolved` state
+  (`META_KINDS`). Accepted and presence-lifecycle records are not put in the host transcript replay
+  log; `permission_resolved` deliberately is.
 
 `planeForKind` **throws** on an unknown kind rather than guessing (`protocol.ts`) — a wrong mapping would
 fail the AEAD open loudly, never silently mis-decrypt. The body is sealed/opened by the
@@ -305,9 +335,11 @@ out-of-range, or cross-message part before it can corrupt the buffer (`openMessa
 
 Two channel kinds, both append-only logs on the broker:
 
-- The **identity bus** — one per identity, carries `session_announce` only. `#publish` routes a
-  `session_announce` to the bus (no `?session=`) and everything else to its session channel
-  (`broker/client.ts` `#publish`, keyed on `recordKind === "session_announce"`).
+- The **identity bus** — one per identity, addressed as
+  `bus:presence-v2:<identity_id>`, carries only `session_announce` and `session_terminal`.
+  `presence-v2` is a deployment fence: an older Workflow run that lacks absorbing terminal semantics
+  cannot share the current namespace. `BrokerClient` routes both lifecycle kinds to the bus (no
+  `?session=`) and everything else to its session channel (`broker/client.ts` `#publish`).
 - The **per-session channel** — `?session=<sessionId>`, carries the transcript (out) and client frames
   (in).
 
@@ -320,6 +352,42 @@ not the index, for correctness (`viewer.ts transcript()` comment). An `event: er
 
 The broker is **at-least-once and not FIFO** (`order.ts` header). Everything below is built to make that
 substrate deliver a consistent transcript anyway.
+
+For the A0 SQLite/libSQL profile, one physical database holds one channel token. Within its current
+generation, `(msg_id, part)` is unique: an exact canonical wire-frame retry returns success without a
+second row, while changed stored bytes throw `PublishCollisionError` and `/api/relay` returns a hard
+HTTP 422. A canonical `session_terminal` retry after its session fence already exists is the one semantic
+exception because fresh AEAD sealing changes transport bytes; it succeeds without inserting or
+updating the first terminal row. On Vercel, a partial or absent Turso fleet configuration is a hard
+deployment error, never a fallback to per-instance local files. Off Vercel, incomplete/absent fleet
+configuration selects the explicit local file locator for development and conformance. Channel creation
+is also create-once: physical provision and Turso readiness/preparation precede core schema, then an
+in-database singleton `channel` witness; the mandatory durable catalog is committed next, and only then
+may the first frame append. Once catalogued, a missing physical store, either core table (`channel` or
+`frames`), or singleton witness is
+`ChannelStorageLossError`; publish, close, subscribe, `maxSeq`, and `frameCount` fail rather than
+recreating an empty channel under the same live token. An uncatalogued intact witness is crash/legacy
+evidence and is recatalogued; a genuinely empty pre-witness provision may finish initialization. The
+default hard Turso readiness wall is 30 s and its environment override can only tighten it. Every newly
+opened channel and handoff client crosses that barrier before schema/query. Every continuity-index build
+or rebuild first forces Platform create-or-existing confirmation, then opens and awaits readiness before
+constructing `SessionIndex`, so no catalog DDL/read races a newly created endpoint.
+
+SQLite subscriptions also fail closed under a persistent or hung provider. Every frame/state poll has
+a hard 15-second ceiling, and `RC_SQLITE_POLL_QUERY_TIMEOUT_MS` may only tighten it. A subscription
+shares one three-consecutive-transient-failure budget across both query kinds. A row-bearing frame query
+resets the budget; an empty frame query resets it only after its paired state decision succeeds. The
+third transient failure, a deadline, or a nontransient poll failure terminates the SSE subscription with
+a coordinate-free error, evicts the client, and releases its lease. Channel disappearance bypasses the
+retry budget and remains permanent `ChannelStorageLossError`.
+
+Ordinary `SqliteMultiBackend.sweep()` is deliberately non-mutating. Session-database inactivity is not
+proof that the host ended—the live keepalive is on a different bus—and the broker cannot authenticate
+a collection transition from ciphertext. It therefore neither deletes an idle database nor compacts
+bus frames. The HTTP dev/CI sweep route likewise returns 501 without constructing a locator or issuing
+a storage read/delete: the truncated scope embedded in database names cannot prove exact deployment
+ownership. Ordinary A0 ciphertext and lifecycle records are retained indefinitely until a future
+authenticated collection protocol is designed and proved.
 
 ---
 
@@ -353,7 +421,7 @@ Its canonical digest is `pxq9w0eeR1rKMUyVw5p5Sgl6VU1jdEHAPYlrS93Cbdo`. Open, rel
 also require that value in `x-remote-claw-a1-capabilities-digest`. Every A1 JSON response—including an
 error—sets `Cache-Control: no-store` and echoes that digest header. The selected Vercel deployment
 requires a complete Turso fleet configuration; local/self-hosted conformance may use the file locator
-only when no partial Turso configuration is present. Workflow, local, and A0 SQLite providers cannot
+when that tuple is incomplete or absent. Workflow, local, and A0 SQLite providers cannot
 advertise this vector.
 
 The operations are:
@@ -381,8 +449,8 @@ inserts the frame at index zero. An internal `seal` hook exists only for backend
 generation tests; there is no public seal endpoint. A drained sealed page, including an empty one,
 advances to `(g+1, 0)`; a drained open page stays at its sampled live tail. A1.6 retains every route's
 ciphertext bodies, attempt/part originals, collision tombstones, and manifests indefinitely under
-ordinary operation. The existing explicitly dev/CI-gated locator `dropScope()` remains destructive
-whole-scope cleanup; it is not an A1 retention, checkpoint, revocation, or production recovery rule.
+ordinary operation. A low-level locator `dropScope()` remains for explicit diagnostic tooling, but no
+HTTP or production path calls it; it is not retention, checkpoint, revocation, or recovery authority.
 A1.6 has no checkpoint, compaction, or broker-side route-revocation collection rule.
 
 The enforced bounds are 4,450,000 UTF-8 bytes per raw relay body; decoded ciphertext strictly less
@@ -790,9 +858,13 @@ of allocating before the durable write is analysed in [§12](#12-convergence-fai
 
 ## 5. Delivery discipline: viewer `FrameOrderer`, host command dedup
 
-Every viewer transcript subscriber runs frames through a `FrameOrderer`
-(`packages/cli/src/broker/order.ts`) before rendering them. It turns the at-least-once, non-FIFO stream
-into an exactly-once, in-order transcript projection:
+Every viewer transcript subscriber first fences the clear identity/session/direction coordinates and
+AEAD-opens each individual frame, then runs authenticated frames through a `FrameOrderer`
+(`packages/cli/src/broker/order.ts`) before rendering them. Authentication before ordering is
+load-bearing: a forged sequence must not advance the cursor and make the later genuine frame look old.
+Complete chunk groups are opened again with `openMessage` to prove group membership and coverage. The
+orderer turns the admitted at-least-once, non-FIFO stream into an exactly-once, in-order transcript
+projection:
 
 - **Dedup** by `msgId` (or `msgId:part` for a chunk) in a bounded FIFO window (`DEFAULT_SEEN_CAP = 8192`,
   `#markSeen`). A duplicate returns nothing.
@@ -811,11 +883,12 @@ Why content survives a bounded dedup window even though meta does not need to: f
 bounded window only de-dups the `seq === null` meta frames, which are idempotent to re-render as nothing
 (`order.ts` header). This is the crux of why reconnect-from-index-0 is safe (§8).
 
-The host's inbound pump does **not** use `FrameOrderer`: it consumes the broker stream directly and
-deduplicates client commands by `msgId` in its per-session `#seen` set before acting. That set is
-unbounded for the relay lifetime so a non-durable re-read from index 0 cannot re-inject an evicted
-command; chunked attachments are acted on only after complete reassembly and then mark the same
-message ID seen (`relay.ts` `#tailInbound`).
+The host's inbound pump does **not** use `FrameOrderer`: it consumes the broker stream directly, first
+fences the exact identity/session/`dir:"in"` coordinates, and AEAD-opens every individual frame before
+its `msgId` can enter the per-session `#seen` set. That ordering prevents a forged replay from poisoning
+the genuine source ID. The set is unbounded for the relay lifetime so a non-durable re-read from index
+0 cannot re-inject an evicted command. Chunk parts are authenticated before reassembly; only a complete
+authenticated attachment can be marked seen or acted on (`relay.ts` `#tailInbound`).
 
 ---
 
@@ -824,14 +897,36 @@ message ID seen (`relay.ts` `#tailInbound`).
 `HostRcRelay.serve()` runs two pumps concurrently for the session's life (`relay.ts`):
 
 - **OUTBOUND** `#pumpUpstream` — tails the worker's upstream via `Session.followUpstream`, maps each
-  event to zero or more content frames (`mapUpstreamItems`), allocates a `seq`, seals, and POSTs it.
-  On a non-durable backend `#emit` also appends the frame to host `#log` for `catch_up`; on a durable
-  backend the broker frame log is history and host `#log` stays empty.
+  event to zero or more content frames (`mapUpstreamItems`), and admits each item to the shared
+  publication queue. The queue allocates its `seq`, seals, and POSTs only when the item reaches the
+  head. On a non-durable backend `#emit` also appends the frame to host `#log` for `catch_up`; on a
+  durable backend the broker frame log is history and host `#log` stays empty.
 - **INBOUND** `#pumpInbound` — tails the session channel for `dir:"in"` client frames, dedups by `msgId`
-  in `#seen`, and drives the worker: a `user` prompt is `accepted`-acked, echoed as a `user` content
-  frame, and injected (`Session.pushUserInput`); a `catch_up` replays host `#log` only on a non-durable
-  backend and is ignored when durable broker subscription supplies history; a `permission` answers a
-  gate; a control verb (`interrupt`/`set_model`/`set_mode`/`end`) is forwarded.
+  in `#seen`, and drives the worker: one queued `user` unit publishes its `accepted` receipt and `user`
+  echo before synchronously injecting (`Session.pushUserInput`); a `catch_up` replays host `#log` only
+  on a non-durable backend and is ignored when durable broker subscription supplies history; a queued
+  `permission` unit publishes its resolution before the control response; a control verb
+  (`interrupt`/`set_model`/`set_mode`/`end`) is forwarded on the compatibility surface.
+
+Both pumps share one promise-tail publisher. A complete must-succeed unit allocates sequence only at
+the head; no later unit can publish or reach its synchronous worker side effect first. The first
+failure preserves its cause, closes only that `Session`, and makes every queued successor reject
+before allocation or publication. Advisory presence announcements and non-durable historical replay
+remain outside this transcript queue.
+
+The transport is bounded even when an injected or hostile fetch ignores `AbortSignal`. Every initial
+SSE response has a 20 s wall. After headers, 40 s without an actual body byte is an SSE idle failure;
+comments and keepalive bytes count because they prove transport progress, while elapsed time alone does
+not. `#pumpInbound` closes the `cse_*` on the third consecutive stream/connect/read/protocol failure.
+Only a clean absent-channel completion or a newly admitted authenticated frame resets that count;
+misroutes, replays, authentication failures, and malformed traffic do not, while owner abort is normal
+shutdown and consumes no failure budget. The server emits exact standalone `: rotate` 240 s after its
+response body starts and then closes, nominally 60 s before the route's configured 300 s deployment
+wall. The parser accepts that marker only
+after an opened stream and only at EOF; the host reconnects from its durable cursor without incrementing
+or resetting the failure count. Raw/open/data/bodyless EOF and malformed or continued rotation markers
+remain ordinary failures. The browser treats only the typed marker as planned/healthy and reconnects;
+ordinary failures follow its existing retry and error-reporting behavior.
 
 The person at the native TUI is a third as-built input path outside these two relay pumps. In MITM
 mode Claude consumes that input itself; in tmux and OpenCode mode the native client/server consumes it
@@ -853,7 +948,11 @@ bounded exponential backoff, because the `seq` is already allocated and a droppe
 every viewer on a permanent gap (`relay.ts` `#post` / `POST_RETRIES = 6`). The Vercel backend emits
 that 409 only when Workflow 4.4.0 classifies the resume race as `HookNotFoundError`. Payload
 serialization, event-store, queue, and other `resumeHook` failures remain 500-class failures and the
-host does not retry them.
+host does not retry them. A separate 65 s wall covers the **entire logical post**—all sealing, chunks,
+fetches, backoff, and authoritative 409 retries—not each attempt independently. Once that wall expires,
+the outcome may be ambiguous; the controller aborts cooperatively, the relay fails closed, and it never
+replays that logical content automatically. Late settlements are observed only to avoid an unhandled
+process rejection and cannot reopen the `cse_*`.
 
 ---
 
@@ -874,13 +973,15 @@ call `#gate.wake()`; followers `await #gate.wait(HEARTBEAT_MS)` and re-check the
 (`session.ts`). `followUpstream` yields `null` every `HEARTBEAT_MS = 10_000` as an idle tick — which the
 relay uses to drive the presence keepalive (§9).
 
-A reconnecting worker stream is handled by a **generation token**: `claimWorkerStream` bumps `#workerGen`,
-and `followDownstream` exits the moment `gen !== this.#workerGen`, so only the newest follower remains
-active (`session.ts` header + `followDownstream`). This fences concurrent followers; it does **not**
-prove at-most-once delivery across reconnect. Each follower has a fresh in-memory `sent` set, while
-`#acked` suppresses only event IDs the worker already confirmed. If a worker acted but its ACK was
-lost, a reconnect can redeliver; the future coordinator treats that boundary as uncertain unless
-worker idempotency is separately proven.
+A reconnecting worker stream is handled by a **generation token**: `claimWorkerStream` bumps
+`#workerGen`, and `followDownstream` rechecks that token between buffered yields, so only the newest
+follower remains active. On the Claude MITM path, a second session-lifetime fence is claimed
+synchronously immediately before `ServerResponse.write`. Every downstream event except the exact
+locally minted initialize handshake gets at most one write attempt across all worker generations;
+the mark is never cleared after a socket throw, backpressure, disconnect, or lost delivery ACK. This
+is an at-most-once transport attempt, not proof that Claude received or applied the event. The generic
+tmux/OpenCode injection paths do not call this MITM pre-write fence and retain their own ACK-after-
+successful-action retry contracts.
 
 For Claude MITM, `/worker/events/delivery` currently advances only this replay bookkeeping. It is a
 structured worker receipt, not proof that Claude applied, ordered, or durably recorded the command.
@@ -916,15 +1017,18 @@ the effective backend's `durable` flag and highest transcript `seq`: the host us
 resume outbound allocation, and the viewer uses `durable` to choose full broker replay versus its
 non-durable incarnation-recovery path. Host-only `GET /api/frame-count` reports the publish-order
 frame count, which becomes that durable relay incarnation's fixed inbound `startIndex`. Neither is an
-alternate message or discovery API.
+alternate message or discovery API. A fresh Turso endpoint has a hard 30 s readiness wall inside a
+60 s server-route ceiling; the client bounds each request, including its non-success body read, at
+70 s so the server has a 10 s response/edge margin. Stable preparation retries each cursor at most
+three times and closes the session on exhaustion before discovery or either pump begins.
 
 ---
 
-## 9. Presence: `session_announce`
+## 9. Presence lifecycle: `session_announce` and `session_terminal`
 
-Presence rides the meta-plane `session_announce` on the identity bus — idempotent and `seq:null`. It is
-never appended to the host's process-local `#log`, so re-announcing is cheap
-(`relay.ts` `#sendAnnounce`); a durable broker profile may still retain the sealed bus frame. The host
+Live presence rides the meta-plane `session_announce` on the identity bus — idempotent and `seq:null`.
+It is never appended to the host's process-local `#log`, so re-announcing is cheap
+(`relay.ts` `#sendAnnounce`); a durable broker profile still retains the sealed bus frame. The host
 folds live state onto **every** (re-)announce:
 
 - `title`, `cwd`, and `git` metadata (branch / dirty / ahead-behind, `gitinfo.ts`, #49).
@@ -937,15 +1041,17 @@ folds live state onto **every** (re-)announce:
 - `mode` — the worker's effective permission mode, present whenever it's known
   (`session.permissionMode !== null`: seeded from session config, or updated by an upstream `system/init`). A **viewer-requested**
   `set_mode`, though, is reflected as a confirmed mode **only when the driver can honor it**
-  (`capabilities.controls.setMode`); for a driver that can't (tmux/opencode) the relay still forwards the
-  `set_permission_mode` verb but does **not** write/announce the mode — announcing one would be a "✓" the
-  worker never entered (#149). In practice tmux/opencode carry no upstream mode either, so their announce
-  omits `mode` entirely.
+  (`capabilities.controls.setMode`). A false capability makes the host drop the verb and prevents the
+  viewer from presenting a writable control or false confirmed mode. Stable MITM has every control
+  false; experimental tmux/OpenCode use their own conservative vectors. Announcing an unperformed
+  choice would be a "✓" the worker never entered (#149).
 - `capabilities` — the driver's `DriverCapabilities` (`structuredPermissions`, `status`, `attachments`,
   and per-verb `controls.{interrupt,setModel,setMode,end}`). The viewer **disables + labels** the
-  controls a driver can't service and shows a "permissions off" posture when `structuredPermissions`
-  is false — so a permission-mode / model control never silently no-ops (#149). Absent on a legacy host
-  → the viewer assumes full capability (a pre-capability host is always the MITM driver).
+  controls a driver cannot service, and the host independently suppresses each false family. Exact
+  stable MITM capabilities are the text-only vector above; compatibility hosts may advertise more.
+  An absent/non-object vector selects legacy MITM compatibility, never the stable release
+  discriminator. For a present vector, missing or ill-typed `status` parses as `false`; missing mutation
+  fields retain the legacy enabled default. Only the complete literal stable tuple selects Claude 1.0.
 - `harness` — the driver's `HarnessDescriptor`
   (`{ agent: "claude-code" | "opencode"; mode: "rc" | "tmux" | "opencode" }`). The viewer labels each session-list row from it — **Claude Code · RC** /
   **Claude Code · TX** / **opencode** — so the three harnesses don't look identical (#164). Absent on a
@@ -960,15 +1066,25 @@ folds live state onto **every** (re-)announce:
 - `announce_seq` — a strict per-relay generation allocated before the publish await. It orders
   same-incarnation announces even when two share one wall-clock millisecond or their HTTP requests
   reach the broker in reverse order.
-- `sent_at` — the wall-clock freshness value the viewer reads for liveness. It remains the ordering
-  fallback for legacy hosts that omit the fields above.
+- `sent_at` — the authenticated host wall clock retained for legacy ordering. It does not directly grant
+  viewer liveness.
 
 Cadence (`relay.ts` `#maybeAnnounce`): re-announce **immediately** when the presence key
 (`status|needs|mode`) changes, else at the `ANNOUNCE_KEEPALIVE_MS = 20_000` idle floor (driven by
 `followUpstream`'s null tick). The same `#annCount++` value supplies `announce_seq` and a unique
 `msgId`, so no two same-incarnation announces reuse either.
 
-The viewer derives a connection state from announce freshness (`viewer.ts` `connState`): **connected**
+For each generation-accepted announce, the viewer records `freshnessAt` with an exact three-way rule:
+an exact accepted coordinate keeps its existing value; raw
+`sent_at > receivedAt + ANNOUNCE_FUTURE_SKEW_MS` (5,000 ms) uses
+`receivedAt - CONNECTED_WINDOW_MS`; otherwise it uses `min(sentAt, receivedAt)`. The raw value remains
+available for authenticated ordering and diagnosis. Thus farther-future presence starts exactly at the
+stale edge and is immediately reconnecting/non-writable, allowed positive skew is capped at receipt,
+and old/slow timestamps do not become newer than their authenticated time. A current same-coordinate
+replay is rejected by `announce_seq`, so neither SSE reconnect nor a cold reload can manufacture ongoing
+liveness from a far-future frame. A genuinely newer, clock-corrected `announce_seq` recovers normally.
+
+The viewer derives a connection state from that bounded local freshness (`viewer.ts` `connState`): **connected**
 while `age < CONNECTED_WINDOW_MS` (45 s). Once stale it shows **reconnecting** for a full
 `RECONNECTING_WINDOW_MS` (30 s) before **disconnected** — the ladder always passes through reconnecting,
 never connected→disconnected. The disconnect countdown is anchored per session at `reconnectingSince`
@@ -992,12 +1108,45 @@ the previous `sent_at` behavior (including equal-timestamp replacement when both
 Filtering occurs inside `Viewer.announces` **before** incarnation listeners run, then the React map
 applies the same pure comparator as a second idempotent fold.
 
+An announce that merely becomes stale is still only advisory liveness, and ordinary announce transport
+or 5xx failure remains warn-only. The exact HTTP 410 plus parsed JSON
+`code:"channel_storage_lost"` is the one non-advisory exception: `BrokerClient` types it as permanent
+storage loss and `HostRcRelay` synchronously latches the first fatal cause and closes the Session, making
+all native routes return 410. A bare 410 or that code on any other status remains an ordinary broker
+error. Once a relay that has published
+live presence closes, however, it synchronously latches terminality, aborts outstanding live announce
+requests, and independently publishes one canonical `session_terminal` operation outside transcript
+HOL. The initial attempt plus three retries are each hard-bounded to 1 s. Its AAD-authenticated header
+is exactly `dir:"out"`, `seq:null`, `msgId:"terminal-<session_id>"`, absent `clientMsgId`,
+`keyEpoch:0`, `part:0`, `parts:1`; its `K_meta` plaintext is exactly `{"v":1}`. The public relay route
+rejects any other terminal coordinates without decrypting the body. If live presence never began,
+there is no row to tombstone and no terminal publish is required.
+
+Local and SQLite backends make that terminal session ID absorbing within the versioned presence bus;
+Workflow makes it absorbing only within the current run/generation, whose replay reconstructs the
+in-memory fence. The stable Claude profile rejects Workflow, and any future Workflow rollover must
+carry this compact state. The first marker and its fence land in the same SQLite write transaction. A
+later terminal retry or live announce in the applicable fence lifetime succeeds as a semantic no-op,
+never overwrites the first stored bytes, and never exposes the session again. The viewer checks the selected identity and canonical header,
+AEAD-opens the frame, requires the exact v1 plaintext, permanently tombstones the session, removes its
+row/selection, and refuses later commands or announces for it. The UI says the session ended and that
+its most recent delivery/output tail may be incomplete; the marker is lifecycle evidence, not proof of
+a complete transcript. If every bounded terminal publish attempt is lost during an outage, ordinary
+announce freshness still degrades through reconnecting to disconnected, but cannot claim the stronger
+authenticated terminal fact.
+
 ---
 
-## 10. Permission gate lifecycle
+## 10. Compatibility permission gate lifecycle
 
-A worker `can_use_tool` control_request is surfaced as a `permission_request` content frame
-(`mapUpstreamItems`). The gate is tracked so it converges across the request→answer round trip:
+This section records internal/experimental compatibility mechanics. Stable Claude 1.0 advertises
+`structuredPermissions:false`; the host suppresses worker `permission_request` projection and ignores
+any replayed `permission` answer, while the viewer renders historical compatibility rows as local-only
+with no controls.
+
+On a compatibility surface, a worker `can_use_tool` control_request is surfaced as a
+`permission_request` content frame (`mapUpstreamItems`). The gate is tracked so it converges across the
+request→answer round trip:
 
 1. `#pumpUpstream` adds the `request_id` to `#openPerms` **before** the publish await, with rollback if
    the publish throws (`relay.ts`, codex HIGH #1). Adding first means a *fast* viewer grant — which can
@@ -1030,10 +1179,12 @@ transport behavior rather than proof of Claude's terminal permission outcome.
 
 ---
 
-## 10a. Attachment lifecycle (#44)
+## 10a. Compatibility attachment lifecycle (#44)
 
-One composer send can carry several images in remote-claw's own `attachment` message, never the worker
-protocol. The full round trip (`viewer.sendAttachment` → relay `#handleAttachmentPayload`) is:
+Stable Claude 1.0 advertises `attachments:false`; the picker is disabled/cleared and the host rejects a
+replayed attachment before reassembly or side effect. On a compatibility surface, one composer send
+can carry several images in remote-claw's own `attachment` message, never the worker protocol. The full
+round trip (`viewer.sendAttachment` → relay `#handleAttachmentPayload`) is:
 
 1. **Viewer** seals `{images:[{name,mime,data}], caption}` (`dir:"in"`, plane = `control_key`). The
    broker never sees plaintext. `BrokerClient.postMessage` splits a large sealed message into
@@ -1057,18 +1208,12 @@ ack `{client_msg_id, seq}` reconciles the pending bubble (`reconcileAccepted`): 
 `user-<seq>` so the real `dir:"out"` echo dedups by `msgId` (`appendUniqueMessage`) — exactly one bubble,
 either arrival order, idempotent against a re-delivered ack (#127).
 
-**Send failure restores the draft (#150).** If the publish POST rejects (usually: it never landed), rather
-than strand the content in a dead "failed to send" bubble (which also lost the staged images, their
-previews already revoked), the viewer **drops the optimistic bubble and restores the draft to the
-composer** (text + re-staged images with fresh object URLs, `restageImages`) and shows a "Couldn't send …"
-banner with **Retry**. The restore is skipped only if a *new* draft was typed during the in-flight send
-(don't clobber it) — in that rare case the failed bubble is kept so the text isn't lost. A `fetch`
-rejection can also be a **false failure** (the POST published but the response was lost); the host then
-still emits the `accepted` ack, so the accepted-handler clears the banner for that `clientMsgId`
-(`failedSendRef`) when that ACK arrives first. This narrows but does not close the ambiguity: the
-current Retry calls `send()` and mints a new `clientMsgId`, so a tap before a delayed ACK can duplicate
-an already-published command. The future coordinator must reuse an idempotent source ID or require
-explicit duplicate-risk confirmation; current Retry has no at-most-once guarantee.
+**Ambiguous send is absorbing.** A rejected publish fetch does not prove the broker rejected the frame:
+it may have committed the exact source and lost only the response. The viewer therefore preserves the
+same optimistic bubble, content, and `clientMsgId`, marks it **Delivery unknown — it may have reached
+the host. It was not retried.**, and offers no draft-restore/Retry path that could mint another source
+ID for the same semantic message. An exact late `accepted` frame may still reconcile that same bubble
+to **Received by host**.
 
 **Stream recovery.** The viewer no longer bumps `reviveKey` after a send (the old #121 post-send bump,
 which added latency on the common non-suspended path, was removed): the transport stall-watchdog (#125)
@@ -1077,9 +1222,10 @@ auto-reattaches a stalled stream for *all* streams, and `reviveKey` is now bumpe
 
 ---
 
-## 11. Control verbs and freshness
+## 11. Compatibility control verbs and freshness
 
-`interrupt` / `set_model` / `set_mode` / `end` ride the control plane (`dir:"in"`) and are handled by
+On compatibility surfaces, `interrupt` / `set_model` / `set_mode` / `end` ride the control plane
+(`dir:"in"`) and are handled by
 `#driveControlVerb` (`relay.ts`). Two defences protect those verbs against an **untrusted broker**
 replaying or forging a control action:
 
@@ -1127,9 +1273,11 @@ Slash commands (`/compact`, `/clear`, …) deliberately ride the **`user`** path
 claude processes them as input and they are acked + echoed + replayable like any prompt (`viewer.ts`
 `command`).
 
-Those are as-built compatibility mechanics, not the stable Claude 1.0 mutation surface. The stable UI
-disables slash-prefixed text, interrupt, model/mode changes, and end-session until each has the causal
-precondition and failure contract required by the
+Those are as-built compatibility mechanics, not the stable Claude 1.0 mutation surface. The stable
+browser and host accept only non-empty, non-slash text; attachments, interrupt, model/mode changes,
+end-session, and permission/question answers are absent, disabled, suppressed, or rejected according
+to the exact stable capability vector until each has the causal precondition and failure contract
+required by the
 [release finish line](release-finish-line.md#supported-mutation-boundary).
 
 ---
@@ -1152,18 +1300,30 @@ guarantees.
    can't double-render. Proven for multi-client + catch_up by `full-spine`/`rc-spine`, and the eviction
    case by `order.test.ts`.
 2. **Idempotent replay** — `catch_up` re-posts original `seq`+`msgId`; the orderer dedups (§8).
-3. **Ordered presence fold** — the viewer uses incarnation start + per-incarnation `announce_seq`,
-   falling back to `sent_at` for legacy/ambiguous frames (§9), so reordered current-host announces
-   converge and a retired incarnation cannot flip state back after a normal forward restart.
+3. **Ordered live presence plus absorbing terminality** — the viewer uses incarnation start +
+   per-incarnation `announce_seq`, falling back to `sent_at` for legacy/ambiguous frames (§9), so
+   reordered current-host announces converge. Once an authenticated `session_terminal` is accepted,
+   neither broker reordering nor a retired live announce can restore that session.
 4. **`needs` cannot stick** — a gate is added before publish, cleared by a delete-gated answer (§10), by
    the worker's `control_cancel_request` (the grounded cancel signal, below), or by the interrupt/end
    verbs (backstop). All paths re-announce, so `needs` reflects the live gate set.
-5. **Single live downstream follower via `gen`** — a reconnect supersedes the older follower, but a
-   lost worker ACK can still cause sequential redelivery (§7). Claude 1.0 closes that safety gap with a
-   session-wide emission-started fence before the first mutating SSE write.
-6. **Pump coupling bounds a recognized publish failure** — `serve()` aborts the sibling after a post
-   rejects. It does not currently serialize the two pumps, so a higher sequence may already have crossed
-   the unresolved predecessor. That release-blocking race is described below rather than claimed away.
+5. **Single live downstream follower plus session-wide write fence** — a reconnect supersedes the
+   older follower, and the Claude MITM never offers an ACK-lost mutation after its first SSE write
+   attempt (§7). Only the genuine initialize handshake remains reconnectable.
+6. **One cross-pump publisher** — both pumps allocate and publish through one head-of-line queue;
+   native control side effects also enter that queue even when they allocate no transcript sequence.
+   A failure closes that `cse_*` synchronously, aborts the sibling pump, and rejects queued successors
+   before they allocate, publish, or reach a worker side effect. The whole logical post has one 65 s
+   wall, so a never-settling head cannot leave a permanently writable session or authorize an
+   ambiguous replay.
+7. **Bounded broker intake** — durable-cursor attempts have 70 s walls, initial stream responses have
+   20 s walls, established
+   SSE requires an actual byte within each 40 s idle window, and the third consecutive inbound failure
+   closes the `cse_*`. Only clean channel absence or newly admitted authenticated traffic resets the
+   count; owner abort is exempt. Exact planned `: rotate` at 240 s is neutral; raw EOF still charges.
+8. **Create-once storage and bounded presence clocks** — a known channel store/core cannot be recreated,
+   permanent identity-bus loss closes the Session, and raw host `sent_at` cannot grant liveness beyond the
+   5 s future-skew allowance or refresh through exact replay/cold reload.
 
 > The adversarial review additionally **probed and refuted** permanent non-convergence from lost wakeups
 > / the `Gate` primitive (the `HEARTBEAT_MS` re-check is the backstop, §7), `FrameOrderer` stalls or
@@ -1172,14 +1332,13 @@ guarantees.
 
 ### Boundaries (NOT guaranteed — documented on purpose)
 
-1. **The two pumps can persist a higher `seq` past an unresolved predecessor.** Both increment shared
-   `#seq` before awaiting their own POST. If pump A stalls or fails after allocating `N`, pump B can
-   persist `N+1` before `#fatal` aborts it; abort also cannot cancel a post already in flight. The
-   durable channel then contains a real mid-stream gap and a viewer stalls there. Claude 1.0 gives one
-   head-of-line publisher ownership of allocation plus publication across both pumps: it admits no
-   `N+1` until `N` is accepted, and a failure closes the remote session before queued work proceeds.
-   It does not require a skip/tombstone or durable host journal because the dead session has no later
-   sequence or successor replay.
+1. **A terminal publish failure may leave an incomplete final tail.** The failed unit may already have
+   allocated `N`, but the shared queue admits no `N+1` until `N` is accepted. Failure closes the remote
+   session before queued work proceeds, so the durable channel remains a gap-free prefix rather than a
+   prefix plus a later stranded frame. There is no skip/tombstone or durable host outbox: the viewer
+   must disclose that the dead session's last delivery/output tail may be incomplete. A 65 s expiry is
+   this same terminal, ambiguous boundary; it is not evidence that the broker rejected the bytes and
+   therefore cannot authorize replay.
 2. **Reconnect cursor behavior is backend- and incarnation-specific.** A durable viewer normally
    re-reads from index 0 and deduplicates/reorders; a non-durable incarnation change tails from its
    stream cursor and asks the host for `catch_up`. A non-durable host re-reads inbound from 0; a
@@ -1188,36 +1347,44 @@ guarantees.
    and never processed (§8). It is not a durable source-ID result map: re-appending or replaying the
    same valid source frame above the floor meets a fresh `#seen`, and a lost pre-restart `accepted`
    result cannot be recovered. Durable viewer re-reads remain O(N).
-3. **Unbounded growth.** The inbound `#seen` (§6) and the per-identity **bus** channel (one
-   `session_announce` per 20 s keepalive, never trimmed) grow with session lifetime. Bus growth is the
-   broker's to window (§6); the 20 s cadence bounds the rate. `#openPerms` is human-paced. The relay
-   `#log` grows only with a non-durable backend; it stays empty when the broker supplies durable
-   history.
-4. **Presence is liveness, not delivery.** A `disconnected` reading means *no fresh announce*, which can
-   be a dead host or just a stalled bus subscription; the viewer can't distinguish them, and a transcript
-   frame can still arrive on the session channel while presence reads `disconnected` (different channels).
-   Advisory, not a transactional "the session ended" signal.
-5. **Presence reflects only the driver's evidence.** On Claude MITM, `phase`/`needs` mirror the
+3. **Unbounded growth.** The inbound `#seen` (§6), durable session-channel databases, and the
+   per-identity **bus** channel (one `session_announce` per 20 s keepalive, never trimmed) grow with
+   session lifetime. The 20 s cadence bounds the announce rate but is not collection authority;
+   ordinary SQLite sweep intentionally deletes and compacts nothing (§3). Workflow instead has a hard
+   run-event cap with no shipped rollover. `#openPerms` is human-paced. The relay `#log` grows only with
+   a non-durable backend; it stays empty when the broker supplies durable history.
+4. **Stale presence is liveness, not delivery or terminality.** A `disconnected` reading means *no
+   fresh announce*, which can be a dead host or just a stalled bus subscription; the viewer cannot
+   distinguish them, and a transcript frame can still arrive on the session channel while presence
+   reads `disconnected` (different channels). Only the separately authenticated, absorbing
+   `session_terminal` marker proves that the old remote session ended, and even it does not prove a
+   complete final transcript tail (§9).
+5. **Repeated broker intake failure is terminal, not indefinite reconnect.** An individual stream
+   connect/read/idle/protocol failure may recover, but three consecutive failures close the session.
+   A clean absent-channel completion or newly admitted authenticated frame starts a fresh count. This
+   deliberately trades availability for a truthful terminal boundary instead of leaving a writable
+   `cse_*` behind a permanently unavailable broker stream.
+6. **Presence reflects only the driver's evidence.** On Claude MITM, `phase`/`needs` mirror the
    worker's `PUT …/worker` (`worker_status` + `requires_action_details`) and there is no host-side
    timeout. If the worker finishes a turn but never PUTs `idle`, `phase` shows *thinking* until the
    next status change. Tmux has no equivalent signal: it uses transcript timing internally and
    advertises `capabilities.status:false`, so consumers must not treat that projection as native
    busy/idle truth.
-6. **`git` is a launch-time snapshot** (`launch.ts`) — a mid-session branch switch isn't reflected until
+7. **`git` is a launch-time snapshot** (`launch.ts`) — a mid-session branch switch isn't reflected until
    the native process is relaunched. Current A0 also creates a new broker-visible session. Claude 1.0
    selects that explicit-successor behavior; it does not silently present a new native conversation as
    the old session.
-7. **There is no durable host-wide session inventory in A0.** Process-local registrar leases keep live
+8. **There is no durable host-wide session inventory in A0.** Process-local registrar leases keep live
    sessions separate, but a wrapper/coordinator restart cannot enumerate all prior Claude, Codex, and
    OpenCode bindings and independently reattach them. That multi-engine restart multiplicity is not a
    Claude 1.0 claim; if revived, it requires a separately proved durable inventory and per-chat recovery
    lanes.
-8. **Tmux cleanup preserves uncertainty but does not recover it.** Each launch has a private `0700`
+9. **Tmux cleanup preserves uncertainty but does not recover it.** Each launch has a private `0700`
    runtime, private socket, and private settings/hook files. Teardown removes them only after a proved
    kill or proved absence. An unknown tmux outcome retains the runtime and emits the exact
    `tmux -S <socket> attach -t <session>` command; a new wrapper still cannot adopt that pane because
    the A0.2 registrar/binding is process-local and `liveReattach:false`.
-9. **A1.6 transport through A1.8a0 rejected-result finalization is still not a live collaboration path.**
+10. **A1.6 transport through A1.8a0 rejected-result finalization is still not a live collaboration path.**
    The parked provider/client, schema-v7 route installer, schema-v8 evidence-preserving ingress
    repository/actor, schema-v9 server signer, schema-v10 command adjudicator, and schema-v11 rejected
    finalizer are implemented and tested, but ordinary CLI
@@ -1243,17 +1410,23 @@ native-output proof in the
   session path. The retained witnesses independently match request length/SHA-256, ordered types,
   aliased UUID coordinates, payload hashes, and a present worker-epoch alias.
 
+The offline evidence verifier checks the exact captured source blobs at their pinned Git commit.
+Current `--rc-trace` routing and the fully-buffered-response/reset seam are separate executable
+contract tests, so relay-only implementation changes do not trigger a ceremonial live recapture. A
+supported Claude tuple, proof claim, fault model, or concrete contradiction does.
+
 The proof is intentionally narrow: it does not claim cross-version compatibility, native application,
 Claude process identity, a specific question/permission subtype, or Anthropic-side application/dedup.
-`Session.pushUpstream` still uses `payload.uuid` when present but invents a
-process-local `e_*` otherwise; that fallback must be removed from the stable path because it cannot
-distinguish an HTTP retry from two legitimate identical events. For Claude 1.0, the stable path must
-fail closed on an identity-less admitted event, reserve UUID plus exact payload bytes before appending,
-return the original event identity/sequence on exact replay, and reject changed bytes as a collision.
-Body equality alone is not the identity. The fail-stop contract may acknowledge a validated,
-in-memory-deduplicated observation before broker publication: output is not a native mutation, and
-bridge failure ends the remote session with an explicit possibly-incomplete-tail disclosure. Complete
-acknowledged-output recovery across wrapper death is not a 1.0 promise.
+The stable Claude MITM does not use generic `Session.pushUpstream`. Its atomic native batch admission
+requires the current numeric worker epoch, one of those eight types, and an RFC 4122 UUIDv4. It binds
+that coordinate to the UTF-8 bytes of `JSON.stringify(payload)`: exact replay returns the original
+event identity/sequence with `duplicate:true`, while changed normalized bytes collide and the whole
+request admits nothing and terminally closes that `cse_*`. Invalid epoch/type/UUID/batch shape does the
+same. Generic `pushUpstream` remains available to tmux/OpenCode's synthetic compatibility projections.
+The fail-stop contract may acknowledge a validated, in-memory-deduplicated
+native observation before broker publication: output is not a native mutation, and bridge failure
+ends the remote session with an explicit possibly-incomplete-tail disclosure. Complete acknowledged-
+output recovery across wrapper death is not a 1.0 promise.
 
 - **`control_cancel_request`** (worker→relay, `POST …/worker/events`) — payload
   `{type:"control_cancel_request", request_id, session_id, uuid}`. The worker cancels a pending gate

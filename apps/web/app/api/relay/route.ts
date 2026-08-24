@@ -1,7 +1,8 @@
 import { decodeFrame, encodeFrame, timingSafeEqual, WireError } from "@remote-claw/clawsec";
 import { AuthError, identityFromRequest } from "../../../lib/auth";
 import { backendSelector, getBackend, isRequestableBackend } from "../../../lib/broker";
-import { isClose, PublishConflictError } from "../../../lib/broker/backend";
+import { isClose, PublishCollisionError, PublishConflictError } from "../../../lib/broker/backend";
+import { ChannelStorageLossError } from "../../../lib/broker/sqlite-multi";
 import { channelToken } from "../../../lib/channel";
 import { json } from "../../../lib/http";
 
@@ -23,6 +24,25 @@ export const maxDuration = 60;
 // 4.4 MB decoded would be a ~5.9 MB body — over the edge limit — so the 413 would never fire for the very
 // range it targets.)
 export const MAX_RELAY_CIPHERTEXT_BYTES = 3_300_000;
+
+const BUS_RECORD_KINDS = new Set(["session_announce", "session_terminal"]);
+
+/** The broker cannot inspect terminal plaintext, but it can pin every AAD-authenticated clear header
+ * field. That leaves exactly one canonical terminal operation per (identity, session): the body is
+ * specified by the producer contract as the exact UTF-8 bytes `{"v":1}` sealed under K_meta. */
+function terminalHeaderIsCanonical(frame: ReturnType<typeof decodeFrame>): boolean {
+  return (
+    frame.v === 1 &&
+    frame.sessionId.length > 0 &&
+    frame.dir === "out" &&
+    frame.seq === null &&
+    frame.msgId === `terminal-${frame.sessionId}` &&
+    frame.clientMsgId === undefined &&
+    frame.keyEpoch === 0 &&
+    frame.part === 0 &&
+    frame.parts === 1
+  );
+}
 
 export async function POST(req: Request): Promise<Response> {
   let identityId: Uint8Array;
@@ -70,14 +90,24 @@ export async function POST(req: Request): Promise<Response> {
   if (sessionId !== null && frame.sessionId !== sessionId) {
     return json({ error: "frame session_id does not match ?session" }, 400);
   }
-  // The identity BUS carries ONLY session_announce broadcasts (§6A) — keep high-volume turn/content
-  // frames on per-session streams, else they'd burn the bus run's event cap (§12). record_kind is in
-  // the cleartext header, so the broker can enforce this without reading the ciphertext.
-  if (sessionId === null && frame.recordKind !== "session_announce") {
+  // The identity BUS carries ONLY the two presence-lifecycle records (§6A) — keep high-volume
+  // turn/content frames on per-session streams, else they'd burn the bus run's event cap (§12).
+  // record_kind and the terminal's canonical operation coordinates are AAD-bound clear header fields,
+  // so the broker can enforce this without reading the ciphertext.
+  if (sessionId === null && !BUS_RECORD_KINDS.has(frame.recordKind)) {
     return json(
-      { error: "the bus accepts only session_announce frames; use ?session for the rest" },
+      {
+        error:
+          "the bus accepts only session_announce or session_terminal frames; use ?session for the rest",
+      },
       400,
     );
+  }
+  if (sessionId !== null && BUS_RECORD_KINDS.has(frame.recordKind)) {
+    return json({ error: "presence lifecycle frames must use the identity bus" }, 400);
+  }
+  if (frame.recordKind === "session_terminal" && !terminalHeaderIsCanonical(frame)) {
+    return json({ error: "session_terminal header is not canonical" }, 400);
   }
 
   let token: string;
@@ -89,8 +119,9 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // Per-request backend selection: the `x-broker-backend` header (API calls) or `?backend=` query
-  // param (browser URLs) — same meaning; default vercel. Resolve before publishing so a bad name is a
-  // clean 400, not a 500, and the publish try below only owns the publish itself.
+  // param (browser URLs) — same meaning; unset code fallback is vercel, while supported production
+  // configures sqlite. Resolve before publishing so a bad name is a clean 400, not a 500, and the
+  // publish try below only owns the publish itself.
   const requested = backendSelector(req, url);
   if (requested !== null && !isRequestableBackend(requested)) {
     return json({ error: `backend "${requested}" is not selectable on this deployment` }, 400);
@@ -99,13 +130,29 @@ export async function POST(req: Request): Promise<Response> {
 
   // Resume-or-start the channel and deliver the frame. VercelBackend emits PublishConflictError only
   // for Workflow's typed HookNotFound race after resolution (concurrent close/replacement) -> 409,
-  // and the client re-posts the same frame. Serialization, event-store, queue, and other publish
-  // failures propagate -> 500, so the host fails fast instead of retry-looping them (it retries only
-  // 409).
+  // and the client may re-post the same frame. SQLite emits PublishCollisionError when the coordinate
+  // exists with changed bytes -> hard 422. Serialization, event-store, queue, and other publish failures
+  // propagate -> 500 rather than being mislabeled as a retryable channel race.
   let result: { created: boolean; channelId: string };
   try {
     result = await backend.publish(token, encodeFrame(frame));
   } catch (e) {
+    if (e instanceof ChannelStorageLossError) {
+      // This stable, content-free disposition is the only permanent-loss signal the host treats as
+      // fatal for identity presence. Never include the token, database name, or provider response.
+      return json(
+        {
+          ok: false,
+          code: "channel_storage_lost",
+          error: "permanent channel storage loss",
+        },
+        410,
+      );
+    }
+    if (PublishCollisionError.is(e)) {
+      // A changed replay is a hard semantic collision, never the retryable channel-turnover 409.
+      return json({ ok: false, error: e.message }, 422);
+    }
     if (PublishConflictError.is(e)) {
       return json({ ok: false, error: String((e as Error)?.message ?? e) }, 409);
     }

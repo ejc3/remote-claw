@@ -10,11 +10,11 @@ import {
   type RelayPayload,
 } from "./backend";
 
-// The production backend: Vercel Workflows. Each channel token addresses ONE durable `relayWorkflow`
-// run that owns the token's inbound hook and re-emits every published frame onto its resumable
-// out-stream (§6A/§6B). This file is the adapter — it holds the resume-or-start handshake and the
-// stream resolution that used to live inline in the two data-plane routes; the durable loop itself is
-// workflows/relay.ts (compiled by withWorkflow).
+// Compatibility/experimental backend: Vercel Workflows. Each channel token addresses ONE persistent
+// `relayWorkflow` run that owns the token's inbound hook and re-emits every published frame onto its
+// resumable out-stream (§6A/§6B). The adapter reports non-durable because it has neither safe cap
+// rollover nor host recovery cursors; stable Claude rejects it before discovery. This file holds the
+// resume-or-start handshake and stream resolution; workflows/relay.ts owns the compiled loop.
 
 const BASE_MS = 50;
 const CEIL_MS = 2000;

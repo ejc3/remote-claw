@@ -7,7 +7,7 @@ import { SessionSheet } from "../app/page.js";
 const render = (
   branch: string | null,
   currentModel: string | null = null,
-  caps: { canModel?: boolean; canInterrupt?: boolean } = {},
+  caps: { canModel?: boolean; canInterrupt?: boolean; hostConnected?: boolean } = {},
 ) =>
   renderToStaticMarkup(
     createElement(SessionSheet, {
@@ -15,6 +15,7 @@ const render = (
       currentModel,
       canModel: caps.canModel ?? true,
       canInterrupt: caps.canInterrupt ?? true,
+      hostConnected: caps.hostConnected ?? true,
       onModel: () => {},
       onInterrupt: () => {},
       onCopyBranch: () => {},
@@ -78,6 +79,17 @@ describe("SessionSheet", () => {
     const html = render("main", null, { canInterrupt: false });
     expect(html).toContain("Not supported by this harness");
     // the destructive row carries a disabled attribute
+    expect(html).toMatch(/mode-row-danger[^>]*disabled|disabled[^>]*mode-row-danger/);
+  });
+
+  it("keeps remote actions disabled and labels reconnection when host presence is stale", () => {
+    const html = render("main", null, {
+      canModel: false,
+      canInterrupt: false,
+      hostConnected: false,
+    });
+    expect(html).toContain("Reconnect to the host before changing model");
+    expect(html).toContain("Reconnect to the host before interrupting");
     expect(html).toMatch(/mode-row-danger[^>]*disabled|disabled[^>]*mode-row-danger/);
   });
 });

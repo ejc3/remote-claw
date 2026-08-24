@@ -52,7 +52,10 @@ test("a persistent bus outage shows the broker-unreachable banner, then clears o
   await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
 });
 
-test("a brief bus blip BELOW the threshold never flashes the banner", async ({ page, seedHost }) => {
+test("a brief bus blip BELOW the threshold never flashes the banner", async ({
+  page,
+  seedHost,
+}) => {
   const { pass } = await seedHost();
 
   // Fail the bus discovery stream exactly TWICE (one below BUS_ERROR_THRESHOLD=3), then PARK the third
@@ -104,4 +107,37 @@ test("a brief bus blip BELOW the threshold never flashes the banner", async ({ p
   releaseRecovery();
   await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
   await expect(page.locator(".bus-error")).toHaveCount(0);
+});
+
+test("an authenticated terminal marker removes and deselects the session permanently", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass, terminalize } = await seedHost();
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  const row = page.locator("button.row", { hasText: "rc box" });
+  await expect(row).toBeVisible();
+  await row.click();
+  await expect(row).toHaveAttribute("data-active", "true");
+  await expect(page.locator(".transcript")).toBeVisible();
+
+  // Drive the real Session.close() edge in the host process. Its HostRcRelay emits the same exact
+  // session_terminal marker as production; the page must remove the row and leave the selected chat.
+  await terminalize();
+  await expect(row).toHaveCount(0);
+  await expect(page.locator(".transcript")).toHaveCount(0);
+  await expect(page.locator("section.chat .empty")).toHaveText(
+    "Pick a session to open its transcript.",
+  );
+  await expect(page.locator(".empty-pad")).toContainText("No live sessions yet");
+  await expect(page.locator(".terminal-notice")).toContainText(
+    "Session ended — its most recent delivery and output tail may be incomplete.",
+  );
+
+  // Reload creates a fresh Viewer and forces durable bus replay (announce followed by terminal). The
+  // replayed terminal must still absorb the older live frame; an in-memory-only latch would resurrect.
+  await page.reload();
+  await expect(page.locator(".terminal-notice")).toContainText("Session ended");
+  await expect(row).toHaveCount(0);
 });

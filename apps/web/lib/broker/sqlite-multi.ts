@@ -1,18 +1,24 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { closeSync, constants, existsSync, mkdirSync, openSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { type Client, createClient, type ResultSet, type Transaction } from "@libsql/client";
 import type { WireFrame } from "@remote-claw/clawsec";
-import { type BrokerBackend, isClose, type PublishResult, type RelayPayload } from "./backend";
-import { SessionIndex, sqliteSweepBatch } from "./session-index";
+import {
+  type BrokerBackend,
+  isClose,
+  PublishCollisionError,
+  type PublishResult,
+  type RelayPayload,
+} from "./backend";
+import { SessionIndex } from "./session-index";
 
 // The per-channel SQLite (libSQL) durable backend — ONE database per channel token, rather than one
 // shared `frames` table for all channels. Each token addresses its OWN database, so a channel's frames
 // are physically isolated:
-// retention is "drop the file", there is no cross-channel write contention (SQLite serializes writes per
-// database, so the write lock is per channel, not one global mutex), and a leaked/compromised channel
-// can't even see another session's at-rest ciphertext. This is the broker's "dumb per-channel pipe"
-// model made physical, and the primary backend for local development (BROKER_BACKEND=sqlite).
+// there is no cross-channel write contention (SQLite serializes writes per database, so the write lock
+// is per channel, not one global mutex), and a leaked/compromised channel can't even see another
+// session's at-rest ciphertext. This is the broker's "dumb per-channel pipe" model made physical, and
+// the primary backend for local development (BROKER_BACKEND=sqlite).
 //
 // Storage is pluggable behind `DbLocator`: the default `FileDbLocator` maps a token to a local file:
 // database under RC_SQLITE_DIR. A Turso-Cloud locator (one remote libSQL database per channel token via
@@ -21,8 +27,6 @@ import { SessionIndex, sqliteSweepBatch } from "./session-index";
 // E2E preserved: `frame` stores the verbatim sealed WireFrame JSON; the broker never decrypts. The only
 // cleartext columns are the §8 routing fields it already routes on (seq/msg_id/part), minus `token`
 // (implicit — it IS the database).
-
-const SWEEP_DEADLINE_MS = 250_000;
 
 const writeLocks = new WeakMap<Client, Promise<void>>();
 
@@ -43,6 +47,8 @@ const CONNECTION_LIBSQL_CODES = new Set([
   "HRANA_PROTO_ERROR",
   "PROTOCOL_VERSION_ERROR",
 ]);
+const MAX_CONSECUTIVE_TRANSIENT_POLL_FAILURES = 3;
+const MAX_POLL_QUERY_MS = 15_000;
 
 type CodedError = { code?: unknown; extendedCode?: unknown; cause?: unknown };
 
@@ -77,29 +83,78 @@ function isConnLevelLibsqlErrorByCode(e: unknown): boolean {
   return code !== undefined && CONNECTION_LIBSQL_CODES.has(code);
 }
 
-/** A "channel gone" error: the per-channel database/namespace was deleted out from under a cached client
- *  — the retention sweep dropped it after long idle, or the dev `dropScope` teardown removed it. libSQL
- *  surfaces it as a generic error with NO transient/connection code, so it would otherwise hard-error
- *  (issue #111). The broker treats it as "channel absent": publish recreates + retries once, subscribe
- *  clean-closes, maxSeq/frameCount → null. Message-based (the only signal libSQL gives). */
+/** A "channel gone" error: the per-channel database/namespace was deleted out from under a cached client.
+ *  libSQL surfaces it as a generic error with no stable code, so this message check is the only signal.
+ *  Once the durable catalog says the token existed, this is irreversible storage loss: every operation
+ *  fails closed instead of silently creating an empty replacement under the same live token. */
 function isChannelGoneError(e: unknown): boolean {
   const msg = errorMessage(e);
   return (
     /was deleted while processing/i.test(msg) ||
     (/\bnamespace\b/i.test(msg) &&
-      /(doesn't exist|does not exist|not found|was deleted)/i.test(msg))
+      /(doesn't exist|does not exist|not found|was deleted)/i.test(msg)) ||
+    // Local SQLite can keep a cached handle to an unlinked database path; the next query then sees a
+    // fresh empty file/schema rather than a provider namespace error. Missing either non-derivable core
+    // table is the same permanent loss. (presence_terminals is excluded: it is rebuilt from frames.)
+    /no such table:\s*(?:channel|frames)\b/i.test(msg)
   );
+}
+
+/** A previously established token lost its physical per-channel store. The message deliberately carries
+ *  neither the token nor provider details: callers may surface/log it without disclosing coordinates. */
+export class ChannelStorageLossError extends Error {
+  constructor() {
+    super("sqlite: previously known channel storage is missing");
+    this.name = "ChannelStorageLossError";
+  }
+}
+
+/** A live subscription could no longer make a complete durable poll decision. Deliberately omit the
+ *  provider error/cause: this reaches the SSE error event and may therefore be shown or logged by a
+ *  client. The next subscription gets a fresh client because every path that throws this evicts first. */
+export class SqlitePollFailureError extends Error {
+  constructor() {
+    super("sqlite: subscription poll failed");
+    this.name = "SqlitePollFailureError";
+  }
+}
+
+/** Internal sentinel for a query that crossed the bounded live-poll deadline. */
+class PollQueryDeadlineError extends Error {
+  constructor() {
+    super("sqlite: subscription poll query exceeded its deadline");
+    this.name = "PollQueryDeadlineError";
+  }
+}
+
+/** The independent continuity catalog could not be re-opened. Keep this distinct from channel loss so
+ *  callers never turn an index outage into a false permanent-loss decision for the token database. */
+class ChannelCatalogUnavailableError extends Error {
+  constructor() {
+    super("sqlite: durable channel catalog is unavailable");
+    this.name = "ChannelCatalogUnavailableError";
+  }
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitAfterTransientPollError(e: unknown, pollMs: number): Promise<boolean> {
-  if (!isTransientLibsqlError(e)) return false;
-  console.warn("[sqlite] transient subscribe poll failed; retrying:", errorMessage(e));
-  await sleep(pollMs);
-  return true;
+/** Race one ongoing poll query against its hard deadline. The explicit rejection observer remains
+ *  attached after a timeout: evicting/closing the client may reject the underlying query later, and
+ *  that late settlement must never become an unhandled rejection. */
+async function executePollQuery<T>(query: () => Promise<T>, deadlineMs: number): Promise<T> {
+  const pending = Promise.resolve().then(query);
+  void pending.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new PollQueryDeadlineError()), deadlineMs);
+  });
+  try {
+    return await Promise.race([pending, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Serialize writes against a single per-channel client (SQLite is single-writer; a concurrent publish /
@@ -152,10 +207,11 @@ async function runWriteTransaction<T>(
 
 // Per-channel schema. No `token` column (it IS the database); `channel` is a single row (id = 1) holding
 // the live/closed flag and incarnation `gen` (bumps on a publish-after-__close so a recycled token starts
-// fresh WITHOUT deleting durable history, matching the shared-log backend). `frames` is the append-only
-// log; `id` (AUTOINCREMENT) is the total order AND the live cursor. UNIQUE(gen, msg_id, part) makes a
-// deterministic-msg_id re-POST idempotent; a NULL msg_id is distinct in SQLite, so a minimal frame
-// without one always inserts.
+// fresh WITHOUT deleting durable history, matching the shared-log backend). `frames` is append-only;
+// `id` (AUTOINCREMENT) is the total order AND the live cursor.
+// UNIQUE(gen, msg_id, part) identifies a transport retry coordinate: exact stored bytes are idempotent,
+// while changed bytes are a hard PublishCollisionError. A NULL msg_id is distinct in SQLite, so a
+// minimal internal/test frame without one always inserts.
 const DDL = [
   `CREATE TABLE IF NOT EXISTS channel (
      id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -175,7 +231,28 @@ const DDL = [
    )`,
   `CREATE INDEX IF NOT EXISTS frames_gen_id ON frames (gen, id)`,
   `CREATE INDEX IF NOT EXISTS frames_created_at ON frames (created_at)`,
+  `CREATE TABLE IF NOT EXISTS presence_terminals (
+     session_id  TEXT PRIMARY KEY,
+     created_at  INTEGER NOT NULL
+   )`,
 ];
+
+// `presence_terminals` is a derived projection, not an independent continuity witness. Older channel
+// databases predate that table, and an absent projection can be rebuilt exactly from the retained,
+// append-only terminal frames. Run this only when the table was absent so ordinary opens stay cold.
+const BACKFILL_PRESENCE_TERMINALS = `
+  INSERT OR IGNORE INTO presence_terminals (session_id, created_at)
+  SELECT json_extract(frame, '$.session_id'), MIN(created_at)
+  FROM frames
+  WHERE json_extract(frame, '$.record_kind') = 'session_terminal'
+    AND typeof(json_extract(frame, '$.session_id')) = 'text'
+  GROUP BY json_extract(frame, '$.session_id')`;
+
+const PRESENCE_BUS_PREFIX = "bus:presence-v2:";
+
+function isPresenceBus(token: string): boolean {
+  return token.startsWith(PRESENCE_BUS_PREFIX);
+}
 
 /**
  * A channel token's database filename. A real token (`bus:<hex>` / `sess:<hex>:<session_id>`) is
@@ -204,7 +281,7 @@ export interface DbLocator {
   /** The opaque drop/catalog handle for a token's db (the file path, or the cloud db name). Stable; used
    *  as the dropStored() argument and the channel-catalog primary key. */
   idFor(token: string): string;
-  /** Create the token's database if absent (write path). No-op for `file:` (createClient makes it). */
+  /** Materialize the token's database if absent (genuinely-new write path only). */
   ensure(token: string): Promise<void>;
   /** Configure a freshly-opened client (e.g. file: sets WAL + busy_timeout so its lock/concurrency
    *  semantics match a remote single-writer libSQL). Optional; omit when the store needs no per-client
@@ -218,11 +295,9 @@ export interface DbLocator {
   awaitReady?(client: Client, token: string): Promise<void>;
   /** Whether the token's database already exists. Read paths must NOT create one (subscribe-or-null). */
   exists(token: string): Promise<boolean>;
-  /** Forget any cached "this db exists" memo for the token, so the NEXT `ensure()` actually re-checks /
-   *  re-provisions the store. Called when a cached client hit a deleted-db (channel-gone) error: the cloud
-   *  locator's positive existence cache is TTL'd and per-process, so after a CROSS-instance retention
-   *  delete it can be stale — `ensure()` would then no-op and the recreate wouldn't really happen (issue
-   *  #111 / codex review). Optional; omit for locators with no such cache (`file:` recreates on open). */
+  /** Forget any cached "this db exists" memo for the token so the next exists() is authoritative after a
+   *  channel-gone error. This never grants recreation authority: the durable catalog separately fences a
+   *  previously-known id. Optional for locators with no positive existence cache. */
   forget?(token: string): void;
   /** Delete a stored database by its `id` (from idFor / the channel catalog), reclaiming its space. */
   dropStored?(id: string): Promise<void>;
@@ -243,11 +318,10 @@ export interface DbLocator {
 
   /** The auth token a retention probe uses to connect a catalogued db by its url (cloud: the group token). */
   probeAuthToken?(): string | undefined;
-  /** Drop the cold-index catalog db ITSELF (after its channels are reclaimed), so a short-lived scope
-   *  doesn't leave an empty index db behind. Used by the dev/CI cleanup; omit ⇒ no-op. */
+  /** Low-level diagnostic: drop the cold-index catalog db itself after its channels are gone. */
   dropIndex?(): Promise<void>;
-  /** Delete EVERY db in this locator's scope by name (cataloged or not) — the dev/CI cleanup primitive
-   *  that also reclaims uncatalogued orphans the index sweep misses. Returns this pass's `deleted` count
+  /** Dangerous low-level diagnostic: delete EVERY db matching this locator's scope by name (cataloged
+   *  or not), including uncatalogued orphans. Returns this pass's `deleted` count
    *  and the `remaining` count re-listed after (nonzero ⇒ a live relay recreated one ⇒ loop). Cloud-only;
    *  omit ⇒ the caller falls back to the index sweep. */
   dropScope?(): Promise<{ deleted: number; remaining: number }>;
@@ -289,8 +363,17 @@ export class FileDbLocator implements DbLocator {
     return this.#path(token);
   }
 
-  // No-op: opening a `file:` URL creates the database file, so there is nothing to pre-provision.
-  async ensure(_token: string): Promise<void> {}
+  // Materialize an empty file before the durable catalog boundary. This ordering is crash-safe: a crash
+  // before cataloguing leaves an unclaimed empty file that a retry may finish, while a catalog row is
+  // never committed for a path that did not yet exist. O_NOFOLLOW also refuses a substituted symlink.
+  async ensure(token: string): Promise<void> {
+    const descriptor = openSync(
+      this.#path(token),
+      constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+    closeSync(descriptor);
+  }
 
   // Align local-file lock semantics with a remote single-writer libSQL so concurrency has the SAME SHAPE
   // in dev and prod. WAL lets readers (the poll-tail subscribe, the sweep probe) proceed concurrently
@@ -357,17 +440,31 @@ function sqlitePollMs(): number {
   return Number.isFinite(n) && n > 0 ? n : 150;
 }
 
+/** A deployment may tighten the deadline (tests do); environment input can never relax the code ceiling. */
+function sqlitePollQueryMs(): number {
+  const n = Number.parseInt(process.env.RC_SQLITE_POLL_QUERY_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, MAX_POLL_QUERY_MS) : MAX_POLL_QUERY_MS;
+}
+
 /** A borrowed per-channel client; the borrower MUST call release() exactly once when done. */
 interface Lease {
   readonly client: Client;
+  isCatalogKnown(): boolean;
+  markCatalogKnown(): void;
   release(): void;
 }
 
 interface CacheEntry {
   client: Client;
   refs: number;
-  url: string; // the connection url (e.g. `file:<path>`) — lets the sweep evict by store path
+  catalogKnown: boolean;
 }
+
+interface OpenDisposition {
+  readonly catalogKnown: boolean;
+}
+
+type PrepareOpen = (token: string, create: boolean) => Promise<OpenDisposition | null>;
 
 // A bounded, ref-counted LRU of per-channel libSQL clients. Opening one client per channel and caching
 // it (a) reuses the connection across a session's publish/subscribe/maxSeq calls and (b) bounds the
@@ -383,21 +480,45 @@ class SessionDbCache {
   // Per-token mutex for the miss→create critical section (so only one client per token is opened).
   readonly #createLocks = new Map<string, Promise<void>>();
   readonly #newClient: ClientFactory;
+  readonly #prepareOpen: PrepareOpen;
 
   constructor(
     locator: DbLocator,
+    prepareOpen: PrepareOpen,
     max: number = sqliteMaxClients(),
     newClient: ClientFactory = createClient,
   ) {
     this.#locator = locator;
+    this.#prepareOpen = prepareOpen;
     this.#max = max;
     this.#newClient = newClient;
   }
 
-  #ensureSchema(client: Client): Promise<void> {
+  #ensureSchema(client: Client, catalogKnown: boolean): Promise<void> {
     let p = this.#migrated.get(client);
     if (p === undefined) {
-      p = client.batch(DDL, "write").then(
+      p = (async () => {
+        // CREATE IF NOT EXISTS must not heal a known/replaced database whose durable continuity core
+        // vanished. For an uncatalogued store, *no* user tables is the crash-safe pre-schema provisioning
+        // state; any other shape must contain both channel+frames. This also refuses an unrelated database
+        // at the deterministic name instead of mistaking it for a safely empty provision.
+        const schema = await client.execute(
+          "SELECT name FROM sqlite_master " + "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        );
+        const core = new Set(schema.rows.map((row) => String(row.name)));
+        const hasLegacyCore = core.has("channel") && core.has("frames");
+        if (
+          (catalogKnown && !hasLegacyCore) ||
+          (!catalogKnown && core.size > 0 && !hasLegacyCore)
+        ) {
+          throw new ChannelStorageLossError();
+        }
+        const presenceProjectionMissing = !core.has("presence_terminals");
+        await client.batch(
+          presenceProjectionMissing ? [...DDL, BACKFILL_PRESENCE_TERMINALS] : DDL,
+          "write",
+        );
+      })().then(
         () => undefined,
         (e) => {
           this.#migrated.delete(client);
@@ -426,11 +547,8 @@ class SessionDbCache {
     return this.#withCreateLock(token, async () => {
       const again = this.#entries.get(token);
       if (again !== undefined) return this.#lease(token, again); // created while we waited for the lock
-      if (create) {
-        await this.#locator.ensure(token); // provision the storage (file: no-op; cloud: Platform API)
-      } else if (!(await this.#locator.exists(token))) {
-        return null; // read path: never create a channel
-      }
+      const disposition = await this.#prepareOpen(token, create);
+      if (disposition === null) return null; // read path: genuinely new token, never create it
       const cfg = this.#locator.config(token);
       const client = this.#newClient(cfg);
       try {
@@ -448,7 +566,7 @@ class SessionDbCache {
         }
         throw e;
       }
-      const entry: CacheEntry = { client, refs: 0, url: cfg.url };
+      const entry: CacheEntry = { client, refs: 0, catalogKnown: disposition.catalogKnown };
       this.#entries.set(token, entry);
       return this.#lease(token, entry);
     });
@@ -463,7 +581,7 @@ class SessionDbCache {
     // hit a still-migrating client cannot run SQL against a schemaless database. refs > 0 here, so the
     // entry can't be evicted out from under the await.
     try {
-      await this.#ensureSchema(entry.client);
+      await this.#ensureSchema(entry.client, entry.catalogKnown);
     } catch (e) {
       entry.refs -= 1;
       if (entry.refs <= 0 && this.#entries.get(token) === entry) {
@@ -480,6 +598,10 @@ class SessionDbCache {
     this.#evict();
     return {
       client: entry.client,
+      isCatalogKnown: () => entry.catalogKnown,
+      markCatalogKnown: () => {
+        entry.catalogKnown = true;
+      },
       release: () => {
         if (released) return;
         released = true;
@@ -507,33 +629,12 @@ class SessionDbCache {
     }
   }
 
-  async runWrite<T>(token: string, fn: (c: Client) => Promise<T>): Promise<T> {
-    const lease = await this.acquire(token, true);
-    // create:true never returns null.
-    if (lease === null) throw new Error("sqlite: failed to open channel database");
-    try {
-      return await fn(lease.client);
-    } finally {
-      lease.release();
-    }
-  }
-
-  async runReadOrNull<T>(token: string, fn: (c: Client) => Promise<T>): Promise<T | null> {
-    const lease = await this.acquire(token, false);
-    if (lease === null) return null;
-    try {
-      return await fn(lease.client);
-    } finally {
-      lease.release();
-    }
-  }
-
   /**
    * On a connection-level error the client is already broken, so drop it from the cache (the next
    * acquire reopens a fresh one) and close it. We detach the entry even if a lease still holds it: that
    * outstanding lease's later release() decrements the now-detached entry (harmless — it is no longer in
-   * the map, so #evict()/activeTokens() never see it) while NEW acquires get a healthy client. The
-   * per-client write lock is dropped too so its Promise can't pile up across rapid reconnects.
+   * the map, so #evict() never sees it) while NEW acquires get a healthy client. The per-client write lock
+   * is dropped too so its Promise can't pile up across rapid reconnects.
    */
   evictClient(token: string, client: Client): void {
     const entry = this.#entries.get(token);
@@ -546,36 +647,6 @@ class SessionDbCache {
     } catch {
       /* already closed */
     }
-  }
-
-  /** Tokens with a live borrow (refs > 0) — the retention sweep must not drop these. */
-  activeTokens(): string[] {
-    const out: string[] = [];
-    for (const [token, entry] of this.#entries) if (entry.refs > 0) out.push(token);
-    return out;
-  }
-
-  /**
-   * Evict the IDLE cached client for a connection url, so the retention sweep can drop its db without a
-   * stale client (open on the unlinked file) surviving in the cache and serving the next access. Returns
-   * "busy" if a live borrow holds it — the caller must NOT drop the db then (it raced into use) — else
-   * "evicted" (closed + removed) or "absent" (nothing cached). Closing the dropped-then-evicted handle
-   * also re-checks the refs at drop time, closing the activeTokens()-snapshot TOCTOU.
-   */
-  evictByUrl(url: string): "evicted" | "busy" | "absent" {
-    for (const [token, entry] of this.#entries) {
-      if (entry.url !== url) continue;
-      if (entry.refs > 0) return "busy";
-      this.#entries.delete(token);
-      writeLocks.delete(entry.client);
-      try {
-        entry.client.close();
-      } catch {
-        /* already closed */
-      }
-      return "evicted";
-    }
-    return "absent";
   }
 
   #evict(): void {
@@ -603,8 +674,9 @@ export class SqliteMultiBackend implements BrokerBackend {
   readonly #cache: SessionDbCache;
   readonly #newClient: ClientFactory;
   readonly #pollMs = sqlitePollMs();
-  // The cold channel catalog (retention strategy B), built lazily from the locator's indexConfig. undefined
-  // = not yet built; the promise resolves to null when the locator has no index (→ dir-scan retention).
+  readonly #pollQueryMs = sqlitePollQueryMs();
+  // The cold channel continuity catalog, built lazily from the locator's indexConfig. undefined = not yet
+  // built; null is rejected on channel access because create-once loss detection requires durable evidence.
   #indexBuild: Promise<SessionIndex | null> | undefined;
 
   /** Production/dev uses the env-configured FileDbLocator; tests inject a tmp-dir locator (and may inject
@@ -612,7 +684,104 @@ export class SqliteMultiBackend implements BrokerBackend {
   constructor(locator: DbLocator = new FileDbLocator(), newClient: ClientFactory = createClient) {
     this.#locator = locator;
     this.#newClient = newClient;
-    this.#cache = new SessionDbCache(locator, sqliteMaxClients(), newClient);
+    this.#cache = new SessionDbCache(
+      locator,
+      (token, create) => this.#prepareOpen(token, create),
+      sqliteMaxClients(),
+      newClient,
+    );
+  }
+
+  /** Cold-open decision from two independent facts: the durable catalog says whether this token crossed
+   *  create-once before, while locator.exists says whether its physical store is still present. A known
+   *  id with no store is data loss, never a new channel. An uncatalogued existing store is recoverable
+   *  crash/legacy evidence and is reconciled only after its channel row is verified below. */
+  async #prepareOpen(token: string, create: boolean): Promise<OpenDisposition | null> {
+    const known = await this.#withIndex((index) => index.has(this.#locator.idFor(token)));
+    const exists = await this.#locator.exists(token);
+    if (known) {
+      if (!exists) {
+        this.#locator.forget?.(token);
+        throw new ChannelStorageLossError();
+      }
+      return { catalogKnown: true };
+    }
+    if (!exists) {
+      if (!create) return null;
+      // Genuinely new token: provision an empty physical store, but do not call it known until its
+      // channel witness row has committed. FileDbLocator.ensure materializes the file; Turso ensure
+      // creates the named database. Neither path can append a frame here.
+      await this.#locator.ensure(token);
+    }
+    return { catalogKnown: false };
+  }
+
+  /** Verify (or, only for a genuinely new write, establish) the in-database channel witness. Ordering:
+   *  witness row → durable catalog row → first frame. Thus every crash point is safe: before the witness
+   *  a retry may initialize; after it, the database itself proves existence; after cataloguing, either
+   *  witness being absent is a hard loss. */
+  async #establishChannel(
+    token: string,
+    lease: Lease,
+    create: boolean,
+  ): Promise<{ created: boolean } | null> {
+    let created = false;
+    if (create) {
+      created = await runWriteTransaction(lease.client, async (tx) => {
+        const current = await tx.execute("SELECT 1 FROM channel WHERE id = 1");
+        if (current.rows[0] !== undefined) return false;
+        if (lease.isCatalogKnown()) throw new ChannelStorageLossError();
+        await tx.execute({
+          sql: "INSERT INTO channel (id, gen, closed, created_at) VALUES (1, 0, 0, ?)",
+          args: [Date.now()],
+        });
+        return true;
+      });
+    } else {
+      const current = await lease.client.execute("SELECT 1 FROM channel WHERE id = 1");
+      if (current.rows[0] === undefined) {
+        if (lease.isCatalogKnown()) throw new ChannelStorageLossError();
+        return null;
+      }
+    }
+
+    if (!lease.isCatalogKnown()) {
+      await this.#withIndex((index) =>
+        index.add(this.#locator.idFor(token), this.#locator.config(token).url, Date.now()),
+      );
+      lease.markCatalogKnown();
+    }
+    return { created };
+  }
+
+  async #withChannel<T>(
+    token: string,
+    create: boolean,
+    fn: (client: Client, created: boolean) => Promise<T>,
+  ): Promise<T | null> {
+    let lease: Lease | null;
+    try {
+      lease = await this.#cache.acquire(token, create);
+    } catch (e) {
+      this.#raiseChannelGone(token, e);
+    }
+    if (lease === null) return null;
+    try {
+      const established = await this.#establishChannel(token, lease, create);
+      if (established === null) return null;
+      return await fn(lease.client, established.created);
+    } catch (e) {
+      if (isChannelGoneError(e)) this.#cache.evictClient(token, lease.client);
+      this.#raiseChannelGone(token, e);
+    } finally {
+      lease.release();
+    }
+  }
+
+  #raiseChannelGone(token: string, error: unknown): never {
+    if (!isChannelGoneError(error)) throw error;
+    this.#locator.forget?.(token);
+    throw new ChannelStorageLossError();
   }
 
   async publish(token: string, payload: RelayPayload): Promise<PublishResult> {
@@ -620,70 +789,24 @@ export class SqliteMultiBackend implements BrokerBackend {
       // Mark an EXISTING live channel closed — never delete its rows (a buffered replay must survive a
       // close; the durable history is the point). A later publish reopens a fresh incarnation (gen+1).
       // No-op (and DON'T create a database) if the token is absent or already closed.
-      try {
-        const res = await this.#cache.runReadOrNull(token, (c) =>
-          this.#withConnErrorEvict(token, c, async () => {
-            await withWriteLock(c, async () => {
-              await c.execute("UPDATE channel SET closed = 1 WHERE id = 1 AND closed = 0");
-            });
-            return { created: false, channelId: token } satisfies PublishResult;
-          }),
-        );
-        return res ?? { created: false, channelId: token };
-      } catch (e) {
-        // The db was deleted out from under us — there's nothing to close (issue #111). The dead client
-        // was already evicted by #withConnErrorEvict; treat the close as a no-op.
-        if (isChannelGoneError(e)) return { created: false, channelId: token };
-        throw e;
-      }
+      const res = await this.#withChannel(token, false, (c) =>
+        this.#withConnErrorEvict(token, c, async () => {
+          await withWriteLock(c, async () => {
+            await c.execute("UPDATE channel SET closed = 1 WHERE id = 1 AND closed = 0");
+          });
+          return {
+            created: false,
+            channelId: this.#locator.idFor(token),
+          } satisfies PublishResult;
+        }),
+      );
+      return res ?? { created: false, channelId: this.#locator.idFor(token) };
     }
-    const result = await this.#publishFrameRecreating(token, payload as Partial<WireFrame>);
-    // Catalog the db in the cold index — only on CREATE (once per session/incarnation), so this never
-    // touches the index on the per-frame hot path. Best-effort: the frame is already durable, so an index
-    // hiccup must not fail the publish (the worst case is one un-catalogued session escaping retention).
-    if (result.created) await this.#recordInIndex(token);
+    const result = await this.#withChannel(token, true, (c, created) =>
+      this.#withConnErrorEvict(token, c, () => this.#publishFrame(token, c, payload, created)),
+    );
+    if (result === null) throw new Error("sqlite: failed to establish channel database");
     return result;
-  }
-
-  /** Append a frame, transparently RECREATING the db if it was deleted under us (issue #111). The first
-   *  attempt's #withConnErrorEvict drops the dead client on a channel-gone error; the retry's runWrite
-   *  re-acquires with create:true → the locator re-ensure()s a fresh db and the frame lands (created=true,
-   *  a new incarnation). ONE retry only — a second channel-gone is a real failure and propagates. */
-  async #publishFrameRecreating(token: string, wire: Partial<WireFrame>): Promise<PublishResult> {
-    try {
-      return await this.#cache.runWrite(token, (c) =>
-        this.#withConnErrorEvict(token, c, () => this.#publishFrame(token, c, wire)),
-      );
-    } catch (e) {
-      if (!isChannelGoneError(e)) throw e;
-      console.warn(
-        "[sqlite] channel gone on publish; recreating db and retrying once:",
-        errorMessage(e),
-      );
-      // Forget the locator's "db exists" memo HERE, not only inside #withConnErrorEvict: a channel-gone
-      // can surface during runWrite's acquire() (ensure()/awaitReady/prepare against the deleted db),
-      // which throws BEFORE the #withConnErrorEvict callback runs — so forget() would never fire and the
-      // retry's ensure() would no-op on the stale cloud cache and re-point at the deleted db, dropping
-      // the frame (codex review). Idempotent with the in-callback forget on the fn()-failure path.
-      this.#locator.forget?.(token);
-      return await this.#cache.runWrite(token, (c) =>
-        this.#withConnErrorEvict(token, c, () => this.#publishFrame(token, c, wire)),
-      );
-    }
-  }
-
-  async #recordInIndex(token: string): Promise<void> {
-    try {
-      const index = await this.#getIndex();
-      if (index === null) return;
-      await index.add(this.#locator.idFor(token), this.#locator.config(token).url, Date.now());
-    } catch (e) {
-      // Best-effort: the frame is already durable, so an index hiccup must not fail the publish. But if
-      // the index CONNECTION died, drop the cached build so the next call reconnects (else every later
-      // catalog + the sweep would reuse a dead client and retention would stall).
-      if (isConnLevelLibsqlErrorByCode(e)) this.#indexBuild = undefined;
-      console.warn("[sqlite] failed to catalog session in the retention index:", errorMessage(e));
-    }
   }
 
   /** Lazily build the cold SessionIndex from the locator's indexConfig (null if the locator has none). */
@@ -694,14 +817,60 @@ export class SqliteMultiBackend implements BrokerBackend {
         if (cfg === undefined) return null;
         await this.#locator.ensureIndex?.();
         const client = this.#newClient(cfg);
-        await this.#locator.prepare?.(client);
-        return new SessionIndex(client);
+        try {
+          // The catalog is a real Turso database too. A first deployment can observe the same
+          // Platform-API create→serve 404 window as a channel database, and no SessionIndex DDL/read may
+          // race ahead of that readiness barrier. Keep the client uncached until both readiness and
+          // connection preparation succeed; #withIndex may then rebuild on its existing bounded retry.
+          await this.#locator.awaitReady?.(client, "index");
+          await this.#locator.prepare?.(client);
+          return new SessionIndex(client);
+        } catch (error) {
+          try {
+            client.close();
+          } catch {
+            /* a half-open client may already have closed itself */
+          }
+          throw error;
+        }
       })().catch((e) => {
         this.#indexBuild = undefined; // let a later call retry the build
         throw e;
       });
     }
     return this.#indexBuild;
+  }
+
+  /** Run a catalog operation, rebuilding once if its cached client was deleted/disconnected. A second
+   *  such failure is deliberately wrapped in a content-free catalog error: outer channel handling must
+   *  not mistake a provider's generic "namespace deleted" text for loss of the token database. */
+  async #withIndex<T>(operation: (index: SessionIndex) => Promise<T>): Promise<T> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let index: SessionIndex | null = null;
+      try {
+        index = await this.#getIndex();
+        if (index === null) {
+          throw new Error("sqlite: per-channel storage requires a durable channel catalog");
+        }
+        return await operation(index);
+      } catch (e) {
+        const reconnectable = isChannelGoneError(e) || isConnLevelLibsqlErrorByCode(e);
+        if (!reconnectable) throw e;
+        if (index !== null) await this.#discardIndex(index);
+        else this.#indexBuild = undefined;
+        if (attempt === 1) throw new ChannelCatalogUnavailableError();
+      }
+    }
+    throw new ChannelCatalogUnavailableError();
+  }
+
+  async #discardIndex(index: SessionIndex): Promise<void> {
+    const current = this.#indexBuild;
+    if (current !== undefined) {
+      const built = await current.catch(() => null);
+      if (built === index && this.#indexBuild === current) this.#indexBuild = undefined;
+    }
+    index.close();
   }
 
   /**
@@ -713,23 +882,40 @@ export class SqliteMultiBackend implements BrokerBackend {
   async #publishFrame(
     token: string,
     client: Client,
-    wire: Partial<WireFrame>,
+    wire: WireFrame,
+    establishedNow: boolean,
   ): Promise<PublishResult> {
     return runWriteTransaction(client, async (tx) => {
+      const presenceBus = isPresenceBus(token);
+      const terminal = presenceBus && wire.record_kind === "session_terminal";
+      const liveAnnounce = presenceBus && wire.record_kind === "session_announce";
+
+      if (presenceBus) {
+        if (terminal || liveAnnounce) {
+          const fenced = await tx.execute({
+            sql: "SELECT 1 FROM presence_terminals WHERE session_id = ? LIMIT 1",
+            args: [wire.session_id],
+          });
+          if (fenced.rows[0] !== undefined) {
+            // A terminal retry and a late live announce are both successful semantic no-ops. A retry is
+            // freshly AEAD-sealed, so its transport bytes legitimately differ at the same coordinate;
+            // the durable session_id fence identifies the already-accepted operation and deliberately
+            // bypasses collision checking WITHOUT inserting/updating the first stored terminal bytes.
+            // Check before resolving/reopening the channel so suppression cannot create an incarnation.
+            return { created: false, channelId: this.#locator.idFor(token) };
+          }
+        }
+      }
+
       const cur = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
       const row = cur.rows[0];
       let created: boolean;
       let gen: number;
       if (row === undefined) {
-        gen = 0;
-        created = true;
-        await tx.execute({
-          sql: "INSERT INTO channel (id, gen, closed, created_at) VALUES (1, 0, 0, ?)",
-          args: [Date.now()],
-        });
+        throw new ChannelStorageLossError();
       } else if (Number(row.closed) === 0) {
         gen = Number(row.gen);
-        created = false;
+        created = establishedNow;
       } else {
         gen = Number(row.gen) + 1;
         created = true;
@@ -738,7 +924,9 @@ export class SqliteMultiBackend implements BrokerBackend {
           args: [gen],
         });
       }
-      await tx.execute({
+      const now = Date.now();
+      const serialized = JSON.stringify(wire); // route-normalized canonical WireFrame key order
+      const inserted = await tx.execute({
         // `?? null` (nullish, NOT `||`) preserves a legitimate seq=0 / part=0; only an absent field → NULL.
         sql: `INSERT INTO frames (gen, seq, msg_id, part, frame, created_at)
               VALUES (?, ?, ?, ?, ?, ?)
@@ -748,72 +936,86 @@ export class SqliteMultiBackend implements BrokerBackend {
           wire.seq ?? null,
           wire.msg_id ?? null,
           wire.part ?? null,
-          JSON.stringify(wire), // the opaque sealed frame — never decrypted here
-          Date.now(),
+          serialized, // the opaque sealed frame — never decrypted here
+          now,
         ],
       });
-      return { created, channelId: token };
+      if (inserted.rowsAffected === 0) {
+        const occupied = await tx.execute({
+          sql: `SELECT frame FROM frames
+                WHERE gen = ? AND msg_id = ? AND part = ?
+                LIMIT 1`,
+          args: [gen, wire.msg_id, wire.part],
+        });
+        if (String(occupied.rows[0]?.frame ?? "") !== serialized) {
+          throw new PublishCollisionError();
+        }
+      }
+      if (terminal) {
+        // The frame append and absorbing fence share this write transaction: every total order is
+        // either live-before-terminal (both observable) or terminal-before-live (live suppressed).
+        await tx.execute({
+          sql: "INSERT INTO presence_terminals (session_id, created_at) VALUES (?, ?)",
+          args: [wire.session_id, now],
+        });
+      }
+      return { created, channelId: this.#locator.idFor(token) };
     });
   }
 
   async maxSeq(token: string): Promise<number | null> {
-    try {
-      return await this.#cache.runReadOrNull(token, (c) =>
-        this.#withConnErrorEvict(token, c, async () => {
-          const tx = await c.transaction("read");
-          try {
-            const ch = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
-            const meta = ch.rows[0];
-            if (meta === undefined || Number(meta.closed) === 1) return null;
-            const r = await tx.execute({
-              sql: "SELECT MAX(seq) AS m FROM frames WHERE gen = ?",
-              args: [Number(meta.gen)],
-            });
-            const m = r.rows[0]?.m;
-            return m === null || m === undefined ? null : Number(m);
-          } finally {
-            tx.close();
-          }
-        }),
-      );
-    } catch (e) {
-      // The db was deleted under us — the channel is absent, so report no max seq (the host resumes at
-      // seq 0 on the recreated db, same as a never-seen channel) (issue #111).
-      if (isChannelGoneError(e)) return null;
-      throw e;
-    }
+    return await this.#withChannel(token, false, (c) =>
+      this.#withConnErrorEvict(token, c, async () => {
+        const tx = await c.transaction("read");
+        try {
+          const ch = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
+          const meta = ch.rows[0];
+          if (meta === undefined) throw new ChannelStorageLossError();
+          if (Number(meta.closed) === 1) return null;
+          const r = await tx.execute({
+            sql: "SELECT MAX(seq) AS m FROM frames WHERE gen = ?",
+            args: [Number(meta.gen)],
+          });
+          const m = r.rows[0]?.m;
+          return m === null || m === undefined ? null : Number(m);
+        } finally {
+          tx.close();
+        }
+      }),
+    );
   }
 
   async frameCount(token: string): Promise<number | null> {
-    try {
-      return await this.#cache.runReadOrNull(token, (c) =>
-        this.#withConnErrorEvict(token, c, async () => {
-          const tx = await c.transaction("read");
-          try {
-            const ch = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
-            const meta = ch.rows[0];
-            if (meta === undefined || Number(meta.closed) === 1) return null;
-            const r = await tx.execute({
-              sql: "SELECT COUNT(*) AS n FROM frames WHERE gen = ?",
-              args: [Number(meta.gen)],
-            });
-            return Number(r.rows[0]?.n ?? 0);
-          } finally {
-            tx.close();
-          }
-        }),
-      );
-    } catch (e) {
-      if (isChannelGoneError(e)) return null; // channel absent (deleted) ⇒ startIndex 0 (issue #111)
-      throw e;
-    }
+    return await this.#withChannel(token, false, (c) =>
+      this.#withConnErrorEvict(token, c, async () => {
+        const tx = await c.transaction("read");
+        try {
+          const ch = await tx.execute("SELECT gen, closed FROM channel WHERE id = 1");
+          const meta = ch.rows[0];
+          if (meta === undefined) throw new ChannelStorageLossError();
+          if (Number(meta.closed) === 1) return null;
+          const r = await tx.execute({
+            sql: "SELECT COUNT(*) AS n FROM frames WHERE gen = ?",
+            args: [Number(meta.gen)],
+          });
+          return Number(r.rows[0]?.n ?? 0);
+        } finally {
+          tx.close();
+        }
+      }),
+    );
   }
 
   async subscribe(
     token: string,
     startIndex: number | undefined,
   ): Promise<ReadableStream<WireFrame> | null> {
-    const lease = await this.#cache.acquire(token, false);
+    let lease: Lease | null;
+    try {
+      lease = await this.#cache.acquire(token, false);
+    } catch (e) {
+      this.#raiseChannelGone(token, e);
+    }
     if (lease === null) return null; // subscribing never creates a channel
     let released = false;
     const release = (): void => {
@@ -823,10 +1025,16 @@ export class SqliteMultiBackend implements BrokerBackend {
     };
     const c = lease.client;
     try {
+      const established = await this.#establishChannel(token, lease, false);
+      if (established === null) {
+        release();
+        return null;
+      }
       const ch = await c.execute("SELECT gen, closed FROM channel WHERE id = 1");
       const meta = ch.rows[0];
-      // Absent OR closed → null ⇒ the route replies 200-empty (subscribing never creates a channel).
-      if (meta === undefined || Number(meta.closed) === 1) {
+      if (meta === undefined) throw new ChannelStorageLossError();
+      // Closed → null ⇒ the route replies 200-empty (subscribing never reopens a channel).
+      if (Number(meta.closed) === 1) {
         release();
         return null;
       }
@@ -842,34 +1050,54 @@ export class SqliteMultiBackend implements BrokerBackend {
       // bounded client LRU plus the route's maxDuration cap keep that from growing unbounded.
       let stopped = false;
       const pollMs = this.#pollMs;
+      const pollQueryMs = this.#pollQueryMs;
+      let consecutiveTransientFailures = 0;
       let pos = cursor;
+      const terminatePoll = (error: unknown): never => {
+        this.#cache.evictClient(token, c);
+        release();
+        if (isChannelGoneError(error)) {
+          this.#locator.forget?.(token);
+          throw new ChannelStorageLossError();
+        }
+        throw new SqlitePollFailureError();
+      };
+      const retryTransientPoll = async (error: unknown): Promise<boolean> => {
+        if (!isTransientLibsqlError(error)) return false;
+        consecutiveTransientFailures++;
+        if (consecutiveTransientFailures >= MAX_CONSECUTIVE_TRANSIENT_POLL_FAILURES) return false;
+        // Content-free by design: provider messages may contain database coordinates or request data.
+        console.warn(
+          `[sqlite] transient subscribe poll failed; retrying ` +
+            `(${consecutiveTransientFailures}/${MAX_CONSECUTIVE_TRANSIENT_POLL_FAILURES})`,
+        );
+        await sleep(pollMs);
+        return true;
+      };
       return new ReadableStream<WireFrame>({
         pull: async (controller) => {
           while (!stopped) {
-            let res: ResultSet;
+            let res!: ResultSet;
             try {
-              res = await c.execute({
-                sql: "SELECT id, frame FROM frames WHERE gen = ? AND id > ? ORDER BY id LIMIT 500",
-                args: [gen, pos],
-              });
+              res = await executePollQuery(
+                () =>
+                  c.execute({
+                    sql: "SELECT id, frame FROM frames WHERE gen = ? AND id > ? ORDER BY id LIMIT 500",
+                    args: [gen, pos],
+                  }),
+                pollQueryMs,
+              );
             } catch (e) {
-              // Channel-gone is checked BEFORE the transient-retry: a deleted-namespace error can carry
-              // a transient code (e.g. SERVER_ERROR), and treating it as transient would retry forever
-              // instead of ending the stream (codex review). End cleanly like a closed channel — a
-              // reconnect re-subscribes once a publish recreates the db (issue #111).
-              if (isChannelGoneError(e)) {
-                this.#cache.evictClient(token, c);
-                controller.close();
-                release();
-                return;
-              }
-              if (await waitAfterTransientPollError(e, pollMs)) continue;
-              if (isConnectionLevelLibsqlError(c, e)) this.#cache.evictClient(token, c);
-              release();
-              throw e;
+              // Channel-gone is checked BEFORE transient retry: loss may carry SERVER_ERROR, but it is
+              // permanent for this live token and must error the stream instead of retrying or clean-closing.
+              if (isChannelGoneError(e)) terminatePoll(e);
+              if (await retryTransientPoll(e)) continue;
+              terminatePoll(e);
             }
             if (stopped) return; // cancelled while the query was in flight (cancel() released)
             if (res.rows.length > 0) {
+              // A row-bearing frame query is itself a complete successful poll decision.
+              consecutiveTransientFailures = 0;
               let lastId = pos;
               try {
                 for (const r of res.rows) {
@@ -885,23 +1113,22 @@ export class SqliteMultiBackend implements BrokerBackend {
             }
             // No new frames: end the stream if the channel closed or recycled to a newer gen (the
             // buffered replay has drained); else wait and poll again.
-            let st: ResultSet;
+            let st!: ResultSet;
             try {
-              st = await c.execute("SELECT closed, gen FROM channel WHERE id = 1");
+              st = await executePollQuery(
+                () => c.execute("SELECT closed, gen FROM channel WHERE id = 1"),
+                pollQueryMs,
+              );
             } catch (e) {
-              // Channel-gone before the transient-retry (codex review): a deleted-namespace error with a
-              // transient code would otherwise retry forever. End cleanly like a closed channel.
-              if (isChannelGoneError(e)) {
-                this.#cache.evictClient(token, c);
-                controller.close();
-                release();
-                return;
-              }
-              if (await waitAfterTransientPollError(e, pollMs)) continue;
-              if (isConnectionLevelLibsqlError(c, e)) this.#cache.evictClient(token, c);
-              release();
-              throw e;
+              // A deleted namespace is permanent for this live token, even when it also carries a
+              // transient provider code. Error rather than clean-closing into an apparent empty history.
+              if (isChannelGoneError(e)) terminatePoll(e);
+              if (await retryTransientPoll(e)) continue;
+              terminatePoll(e);
             }
+            // An empty frame query is only half a poll. Reset after the state query also succeeds, so
+            // alternating frame-success/state-failure cannot keep an unhealthy subscription alive.
+            consecutiveTransientFailures = 0;
             const s = st.rows[0];
             if (s === undefined || Number(s.closed) === 1 || Number(s.gen) !== gen) {
               controller.close();
@@ -920,10 +1147,7 @@ export class SqliteMultiBackend implements BrokerBackend {
       if (isConnectionLevelLibsqlError(c, e) || isChannelGoneError(e))
         this.#cache.evictClient(token, c);
       release();
-      // The db was deleted before the stream opened → treat as channel-absent: null ⇒ 200-empty, and a
-      // reconnect re-subscribes once a publish recreates it (issue #111).
-      if (isChannelGoneError(e)) return null;
-      throw e;
+      this.#raiseChannelGone(token, e);
     }
   }
 
@@ -933,9 +1157,8 @@ export class SqliteMultiBackend implements BrokerBackend {
    * negative → the last |N| rows.
    *
    * The COUNT and the OFFSET run in ONE read transaction so a concurrent publish can't shift the count
-   * between them and skew the cursor. The OFFSET→id step assumes frame ids within a gen are CONTIGUOUS;
-   * that holds because the log is append-only and a session is only ever deleted whole (sweep drops the
-   * file) — never partially. If that ever changes (row-level retention), switch to a position query.
+   * between them and skew the cursor. OFFSET selects an actual row id rather than calculating one, so
+   * the cursor remains correct even if a future safe collection protocol ever makes ids sparse.
    */
   async #resolveCursor(c: Client, gen: number, startIndex: number | undefined): Promise<number> {
     const tx = await c.transaction("read");
@@ -970,22 +1193,20 @@ export class SqliteMultiBackend implements BrokerBackend {
   }
 
   /**
-   * Purge whole channels (their entire databases) idle longer than retainMs. Never partial-deletes a
-   * channel, and never drops one with a live borrow (an active subscriber) — so replay never starts on a
-   * gap. Uses the COLD channel catalog when the locator provides one (cloud — scalable, resumable), else a
-   * fleet dir-scan (file — drift-free, single-box). An empty/unreadable db is treated as stale.
+   * Inactivity is not proof that a session ended: a live host writes keepalives to its identity bus, not
+   * its idle per-session transcript. The broker also cannot AEAD-authenticate a collection transition.
+   * Therefore ordinary retention is deliberately fail-closed: it neither drops session databases nor
+   * compacts bus frames. Destructive locator methods remain low-level diagnostic primitives and are not
+   * reachable from an HTTP or production path.
    */
-  async sweep(retainMs: number): Promise<number> {
-    const index = await this.#getIndex();
-    return index !== null ? this.#sweepViaIndex(index, retainMs) : 0;
+  async sweep(_retainMs: number): Promise<number> {
+    return 0;
   }
 
-  /** Drop the cold-index catalog db itself, for the dev/CI cleanup of a short-lived scope AFTER its
-   *  sessions are swept — leaves no empty index db behind. SAFE: drops ONLY when the catalog has no
-   *  remaining sessions, so a sweep that intentionally left entries (non-zero retain, busy/fresh/
-   *  deadline-skipped) never has its catalog deleted out from under those still-reclaimable dbs. Closes
-   *  the catalog client and forgets the cached build (a later publish re-provisions both). No concurrent
-   *  publish during the post-sweep cleanup (same TOCTOU window the sweep itself accepts). */
+  /** Drop an empty catalog db as a low-level diagnostic primitive. Ordinary retention never calls this:
+   *  sweep() is deliberately a no-op because inactivity cannot authenticate a safe collection
+   *  transition. SAFE: an index with any session entry is retained. Closes the catalog client and
+   *  forgets the cached build (a later publish re-provisions both). */
   async dropIndex(): Promise<void> {
     const index = await this.#getIndex();
     if (index === null) return; // locator has no droppable index (e.g. file dir without one)
@@ -995,117 +1216,16 @@ export class SqliteMultiBackend implements BrokerBackend {
     await this.#locator.dropIndex?.();
   }
 
-  /** Walk the cold catalog in bounded, RESUMABLE batches (a persisted cursor that rotates through the
-   *  fleet across cron runs), probing only the current batch — the same index path for file and cloud,
-   *  so it's exercised by the file-backed tests. O(stale) per run. */
-  async #sweepViaIndex(index: SessionIndex, retainMs: number): Promise<number> {
-    const cutoff = Date.now() - retainMs;
-    const deadline = Date.now() + SWEEP_DEADLINE_MS;
-    const probeAuth = this.#locator.probeAuthToken?.();
-    const busyUrls = new Set(this.#cache.activeTokens().map((t) => this.#locator.config(t).url));
-    let cursor = await index.getCursor();
-    let swept = 0;
-    try {
-      for (;;) {
-        if (Date.now() >= deadline) break;
-        const batch = await index.batchAfter(cursor, sqliteSweepBatch());
-        if (batch.length === 0) {
-          await index.setCursor(""); // reached the end → wrap to the start next run
-          break;
-        }
-        for (const { id, url } of batch) {
-          // Deadline check is PER ITEM: each cloud probe+drop is up to two network round-trips, so a
-          // 200-item batch could blow past the route maxDuration and be killed mid-batch (losing the
-          // cursor advance). Persist progress and stop cleanly instead.
-          if (Date.now() >= deadline) {
-            await index.setCursor(cursor);
-            return swept;
-          }
-          cursor = id;
-          if (await this.#probeAndMaybeDrop(id, url, probeAuth, cutoff, busyUrls)) {
-            await index.remove(id);
-            swept += 1;
-          }
-        }
-        await index.setCursor(cursor);
-      }
-    } catch (e) {
-      // A dead index connection must not stall retention forever: drop the cached build so the next cron
-      // run reconnects. Persist progress so we resume rather than re-probe from the top.
-      if (isConnLevelLibsqlErrorByCode(e)) this.#indexBuild = undefined;
-      try {
-        await index.setCursor(cursor);
-      } catch {
-        /* index is down; cursor will resume from its last persisted value */
-      }
-      throw e;
-    }
-    return swept;
-  }
-
-  /** Probe one catalogued db's own MAX(created_at) (Turso has no last-activity API); if idle and not
-   *  actively borrowed, evict its cached client and drop it. Returns true iff it was dropped. */
-  async #probeAndMaybeDrop(
-    id: string,
-    url: string,
-    authToken: string | undefined,
-    cutoff: number,
-    busyUrls: Set<string>,
-  ): Promise<boolean> {
-    if (busyUrls.has(url)) return false;
-    const first = await this.#probeStale(url, authToken, cutoff);
-    if (!first.ok || !first.stale) return false;
-    // Evict any idle cached client FIRST, so any NEW publish must re-acquire (re-create) a fresh client —
-    // and skip the drop if a live borrow raced in (busy). THEN RE-PROBE: a frame that landed after the
-    // first read would bump MAX(created_at) past the cutoff, so we must NOT destroy a session that just
-    // came back. Only drop if it is STILL stale on the second read (TOCTOU data-loss guard — the residual
-    // window is just the two awaits between this re-probe and the drop).
-    if (this.#cache.evictByUrl(url) === "busy") return false;
-    const second = await this.#probeStale(url, authToken, cutoff);
-    if (!second.ok || !second.stale) return false;
-    await this.#locator.dropStored?.(id);
-    return true;
-  }
-
-  /** Read a db's MAX(created_at) and decide staleness. `ok:false` (unreadable/connect error) ⇒ never drop. */
-  async #probeStale(
-    url: string,
-    authToken: string | undefined,
-    cutoff: number,
-  ): Promise<{ ok: boolean; stale: boolean }> {
-    let probe: Client | undefined;
-    try {
-      // newClient is INSIDE the try so a construction/connect throw is handled like an unreadable db
-      // (leave it for a later sweep) rather than aborting the whole sweep.
-      probe = this.#newClient(authToken !== undefined ? { url, authToken } : { url });
-      await this.#locator.prepare?.(probe); // WAL (file): read concurrently with a live writer
-      const r = await probe.execute("SELECT MAX(created_at) AS m FROM frames");
-      const m = r.rows[0]?.m;
-      return { ok: true, stale: m === null || m === undefined ? true : Number(m) < cutoff };
-    } catch {
-      return { ok: false, stale: false }; // unreadable/locked → leave it for a later sweep
-    } finally {
-      try {
-        probe?.close();
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
   async #withConnErrorEvict<T>(token: string, c: Client, fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
     } catch (e) {
-      // Evict on a dead CONNECTION or a gone CHANNEL: either way the cached client is useless (a gone
-      // channel's client points at a deleted db), so the next acquire reopens — and for a write,
-      // re-ensure()s a fresh db (issue #111).
+      // Evict on a dead connection or gone channel. A gone channel is also permanently fenced by the
+      // durable catalog: forgetting only the locator's stale positive memo enables an authoritative
+      // exists() check; it never authorizes ensure()/recreation for the known id.
       if (isConnectionLevelLibsqlError(c, e) || isChannelGoneError(e))
         this.#cache.evictClient(token, c);
-      // …and forget the locator's "db exists" memo, or the cloud locator's stale positive cache would make
-      // the recreating ensure() no-op and the new client would re-point at the deleted db (codex review).
-      if (isChannelGoneError(e)) this.#locator.forget?.(token);
-      throw e;
+      this.#raiseChannelGone(token, e);
     }
   }
 }

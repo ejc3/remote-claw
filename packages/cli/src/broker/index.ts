@@ -28,6 +28,8 @@ export {
   BrokerClient,
   type BrokerClientOptions,
   BrokerError,
+  BrokerPermanentStorageLossError,
+  BrokerStreamRotationError,
   type RelayResult,
   type StreamOptions,
 } from "./client.js";

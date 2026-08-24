@@ -5,7 +5,7 @@ import {
   type Identity,
   utf8,
 } from "@remote-claw/clawsec";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BrokerClient } from "../broker/client.js";
 import { MockBroker } from "../broker/mockbroker.js";
 import { FrameOrderer } from "../broker/order.js";
@@ -65,11 +65,52 @@ function catchUpFrame(id: Identity, sid: string, msgId: string): FrameHeader {
   };
 }
 
-async function outFrames(viewer: BrokerClient, sid: string): Promise<Frame[]> {
+/** Finite inbound transport using the real sealed provider. Outbound writes are captured because
+ *  these tests target receive admission, not the already-covered BrokerClient publish path. */
+class SealedLegacyClient {
+  readonly opened: string[] = [];
+  readonly outbound: Array<{ header: FrameHeader; body: Uint8Array }> = [];
+
+  constructor(
+    readonly provider: ReturnType<typeof securityProvider>,
+    readonly inbound: Frame[],
+  ) {}
+
+  async *streamFrames(): AsyncGenerator<Frame> {
+    for (const frame of this.inbound) yield frame;
+  }
+
+  openFrame(frame: Frame): Promise<Uint8Array> {
+    this.opened.push(frame.msgId);
+    return this.provider.openFrame("session", frame);
+  }
+
+  postMessage(header: FrameHeader, body: Uint8Array): Promise<[]> {
+    this.outbound.push({ header, body });
+    return Promise.resolve([]);
+  }
+}
+
+async function outFrames(viewer: BrokerClient, sid: string, count: number): Promise<Frame[]> {
   const out: Frame[] = [];
   for await (const f of viewer.streamFrames({ session: sid, startIndex: 0 })) {
     if (f.dir === "out") out.push(f);
+    if (out.length === count) return out;
   }
+  throw new Error(`stream ended before ${count} outbound frame(s)`);
+}
+
+async function serveAndCollect(
+  relay: HostRelay,
+  viewer: BrokerClient,
+  sid: string,
+  count: number,
+): Promise<Frame[]> {
+  const owner = new AbortController();
+  const served = relay.serve(owner.signal);
+  const out = await outFrames(viewer, sid, count);
+  owner.abort();
+  await served;
   return out;
 }
 
@@ -88,9 +129,7 @@ describe("HostRelay (fake backend, mock broker)", () => {
       sessionId: sid,
       backend: fakeBackend(),
     });
-    await relay.serve(new AbortController().signal); // mock stream is finite → returns after the turn
-
-    const out = await outFrames(viewer, sid);
+    const out = await serveAndCollect(relay, viewer, sid, 4);
     expect(out.map((f) => f.recordKind)).toEqual(["accepted", "user", "assistant", "result"]);
     const text = async (f: Frame) => td.decode(await viewer.openFrame(f));
     expect(JSON.parse(await text(out[0] as Frame)).client_msg_id).toBe("c1"); // accepted ack
@@ -117,9 +156,7 @@ describe("HostRelay (fake backend, mock broker)", () => {
       sessionId: sid,
       backend: fakeBackend(),
     });
-    await relay.serve(new AbortController().signal);
-
-    const out = await outFrames(viewer, sid);
+    const out = await serveAndCollect(relay, viewer, sid, 4);
     // Exactly one turn relayed, not two.
     expect(out.filter((f) => f.recordKind === "assistant")).toHaveLength(1);
     expect(out.map((f) => f.recordKind)).toEqual(["accepted", "user", "assistant", "result"]);
@@ -141,9 +178,7 @@ describe("HostRelay (fake backend, mock broker)", () => {
       sessionId: sid,
       backend: fakeBackend(),
     });
-    await relay.serve(new AbortController().signal);
-
-    const out = await outFrames(viewer, sid);
+    const out = await serveAndCollect(relay, viewer, sid, 7);
     // The original turn (accepted + user/assistant/result) plus a replay of the 3 content frames.
     // The accepted ack is meta (not logged), so it is NOT replayed.
     expect(out.map((f) => f.recordKind)).toEqual([
@@ -181,7 +216,8 @@ describe("HostRelay (fake backend, mock broker)", () => {
       sessionId: sid,
       backend: fakeBackend(),
     });
-    await relay.serve(new AbortController().signal);
+    const owner = new AbortController();
+    const served = relay.serve(owner.signal);
 
     // Two full turns on a single shared timeline, in arrival order.
     const expectKinds = [
@@ -196,7 +232,7 @@ describe("HostRelay (fake backend, mock broker)", () => {
     ];
     // BOTH devices, reading the same out-stream, see byte-identical transcripts.
     for (const viewer of [phone, laptop]) {
-      const out = await outFrames(viewer, sid);
+      const out = await outFrames(viewer, sid, 8);
       expect(out.map((f) => f.recordKind)).toEqual(expectKinds);
       const orderer = new FrameOrderer();
       const content = out.filter((f) => f.seq !== null).flatMap((f) => orderer.accept(f));
@@ -208,12 +244,14 @@ describe("HostRelay (fake backend, mock broker)", () => {
       expect(await text(content[4] as Frame)).toBe("echo: from laptop");
     }
     // Each device's accepted ack carries ITS OWN client_msg_id, so each can match its own send.
-    const out = await outFrames(phone, sid);
+    const out = await outFrames(phone, sid, 8);
     const acks = out.filter((f) => f.recordKind === "accepted");
     const ackIds = await Promise.all(
       acks.map(async (f) => JSON.parse(td.decode(await phone.openFrame(f))).client_msg_id),
     );
     expect(ackIds).toEqual(["phone-c1", "laptop-c1"]);
+    owner.abort();
+    await served;
   });
 
   it("multi-client with mixed catch_ups: each late device gets exactly the tail it's missing", async () => {
@@ -238,9 +276,7 @@ describe("HostRelay (fake backend, mock broker)", () => {
       sessionId: sid,
       backend: fakeBackend(),
     });
-    await relay.serve(new AbortController().signal);
-
-    const out = await outFrames(driver, sid);
+    const out = await serveAndCollect(relay, driver, sid, 14);
     // Two real turns + a full replay (3 frames) after turn 1 + a tail replay (3 frames) after turn 2.
     expect(out.filter((f) => f.recordKind === "accepted")).toHaveLength(2);
     expect(out.filter((f) => f.seq !== null)).toHaveLength(2 * 3 + 3 + 3); // 6 live + 6 replayed
@@ -267,10 +303,86 @@ describe("HostRelay (fake backend, mock broker)", () => {
       sessionId: sid,
       backend: fakeBackend(),
     });
-    await relay.serve(new AbortController().signal);
-
-    const out = await outFrames(viewer, sid);
+    const out = await serveAndCollect(relay, viewer, sid, 4);
     // Just the original turn — nothing at/after seq 99 to replay.
     expect(out.map((f) => f.recordKind)).toEqual(["accepted", "user", "assistant", "result"]);
+  });
+});
+
+describe("HostRelay hostile broker admission", () => {
+  it("fences validly sealed sibling-session and wrong-identity frames before open or dedup", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(44));
+    const provider = securityProvider("sealed", identity);
+    const sessionA = "legacy-session-a";
+    const sessionB = "legacy-session-b";
+    const msgId = "shared-coordinate-id";
+    const header = (sessionId: string, identityId = identity.identityId): FrameHeader => ({
+      v: 1,
+      identityId,
+      sessionId,
+      dir: "in",
+      recordKind: "user",
+      seq: null,
+      msgId,
+      keyEpoch: 0,
+      part: 0,
+      parts: 1,
+    });
+    const sibling = await provider.sealFrame(
+      "session",
+      header(sessionB),
+      utf8("command for sibling"),
+    );
+    const wrongIdentity = await provider.sealFrame(
+      "session",
+      header(sessionA, new Uint8Array(identity.identityId.length).fill(0xff)),
+      utf8("command under wrong identity coordinate"),
+    );
+    const selected = await provider.sealFrame(
+      "session",
+      header(sessionA),
+      utf8("command for selected session"),
+    );
+    const sealedClient = new SealedLegacyClient(provider, [sibling, wrongIdentity, selected]);
+    const backend = fakeBackend();
+    const prompt = vi.spyOn(backend, "prompt");
+    const relay = new HostRelay({
+      client: sealedClient as unknown as BrokerClient,
+      identityId: identity.identityId,
+      sessionId: sessionA,
+      backend,
+    });
+
+    await relay.serve(new AbortController().signal);
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("command for selected session");
+    // Only the exact selected coordinate reached AEAD open; neither rejected frame poisoned msgId.
+    expect(sealedClient.opened).toEqual([msgId]);
+  });
+
+  it("authenticates before dedup so tampered ciphertext cannot suppress a genuine command", async () => {
+    const identity = await deriveIdentity(new Uint8Array(32).fill(45));
+    const provider = securityProvider("sealed", identity);
+    const sid = "legacy-auth-order";
+    const header = userFrame(identity, sid, "visible-shared-msg-id");
+    const genuine = await provider.sealFrame("session", header, utf8("genuine legacy command"));
+    const forged = { ...genuine, ct: genuine.ct.slice() };
+    forged.ct[0] = (forged.ct[0] ?? 0) ^ 1;
+    const sealedClient = new SealedLegacyClient(provider, [forged, genuine]);
+    const backend = fakeBackend();
+    const prompt = vi.spyOn(backend, "prompt");
+    const relay = new HostRelay({
+      client: sealedClient as unknown as BrokerClient,
+      identityId: identity.identityId,
+      sessionId: sid,
+      backend,
+    });
+
+    await relay.serve(new AbortController().signal);
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("genuine legacy command");
+    expect(sealedClient.opened).toEqual([header.msgId, header.msgId]);
   });
 });

@@ -76,7 +76,12 @@ test.describe("mobile layout", () => {
       window.scrollTo(9999, 0);
       const scrollX = window.scrollX;
       window.scrollTo(0, 0);
-      return { vw: de.clientWidth, docW: de.scrollWidth, bodyW: document.body.scrollWidth, scrollX };
+      return {
+        vw: de.clientWidth,
+        docW: de.scrollWidth,
+        bodyW: document.body.scrollWidth,
+        scrollX,
+      };
     });
     expect(m.scrollX).toBe(0); // attempting to scroll right does nothing
     expect(m.docW).toBeLessThanOrEqual(m.vw + 1); // no document-level horizontal overflow
@@ -96,7 +101,9 @@ test.describe("mobile layout", () => {
   });
 });
 
-test("a doc-reference link opens that doc in the viewer, not the raw markdown", async ({ page }) => {
+test("a doc-reference link opens that doc in the viewer, not the raw markdown", async ({
+  page,
+}) => {
   await page.goto("/index.html#v2");
   await expect(page.locator("article h1")).toContainText("remote-claw v2", { timeout: 15000 });
   // §17 references phase0-findings.md as a relative link; clicking it should switch tabs in-place
@@ -161,7 +168,9 @@ test("active release diagrams fit the mobile code block without horizontal scrol
   }
 });
 
-test("a composite doc-and-section hash loads and scrolls the active finish line", async ({ page }) => {
+test("a composite doc-and-section hash loads and scrolls the active finish line", async ({
+  page,
+}) => {
   await page.goto("/index.html#release:minimum-command-safety-contract");
   await expect(page.locator("article h1")).toContainText("remote-claw Claude 1.0 finish line", {
     timeout: 15000,

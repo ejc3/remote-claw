@@ -3,7 +3,7 @@ import { createHook, getWritable } from "workflow";
 
 // §6A/§6B — the relay run (the Vercel backend's durable loop). One run owns ONE channel token's
 // inbound hook and re-emits every published frame onto its durable resumable out-stream. The
-// per-identity BUS (`bus:<id>`, session_announce broadcasts) and a PER-SESSION stream
+// versioned per-identity presence BUS and a PER-SESSION stream
 // (`sess:<id>:<sid>`, turn/control frames) are the SAME workflow under different tokens — the broker
 // is a dumb ciphertext relay that never holds a key, so it forges nothing. Stream payload bytes bypass
 // event-log storage, but every publish still creates a hook receipt and a journaled emit step, so every
@@ -25,6 +25,10 @@ function isClose(p: RelayPayload): p is { __close: true } {
   return (p as { __close?: boolean }).__close === true;
 }
 
+function isPresenceBus(token: string): boolean {
+  return token.startsWith("bus:presence-v2:");
+}
+
 async function emit(frame: WireFrame) {
   "use step";
   const writer = getWritable<WireFrame>().getWriter();
@@ -44,8 +48,26 @@ async function closeStream() {
 export async function relayWorkflow(channelToken: string) {
   "use workflow";
   const hook = createHook<RelayPayload>({ token: channelToken });
+  // Workflow replay deterministically reconstructs this Set from the ordered hook history. It is the
+  // absorbing lifecycle fence for THIS run/generation: close/cap-roll still ends the run, and a future
+  // rollover design must carry this compact state before it can safely replace the token owner.
+  const terminalSessions = new Set<string>();
+  const presenceBus = isPresenceBus(channelToken);
   for await (const payload of hook) {
     if (isClose(payload)) break;
+    if (presenceBus && payload.record_kind === "session_terminal") {
+      if (terminalSessions.has(payload.session_id)) continue; // retry: semantic idempotency by sid
+      terminalSessions.add(payload.session_id); // latch before the durable emit step
+      await emit(payload);
+      continue;
+    }
+    if (
+      presenceBus &&
+      payload.record_kind === "session_announce" &&
+      terminalSessions.has(payload.session_id)
+    ) {
+      continue; // successful hook delivery, deliberately absent from the observable output stream
+    }
     await emit(payload);
   }
   await closeStream();
