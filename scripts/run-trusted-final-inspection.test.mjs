@@ -3,17 +3,21 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
+	closeSync,
 	cpSync,
 	existsSync,
+	fsyncSync,
 	linkSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	renameSync,
 	rmSync,
 	symlinkSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,6 +66,8 @@ const COMPLETED_AT_MS = STARTED_AT_MS + 780_000;
 const HASH = "b".repeat(64);
 const DB_ID_ONE = "11111111-1111-4111-8111-111111111111";
 const DB_ID_TWO = "22222222-2222-4222-8222-222222222222";
+const pinnedReleaseHost =
+	process.platform === "linux" && process.arch === "arm64";
 
 function topologyReceipt(overrides = {}) {
 	return {
@@ -204,9 +210,9 @@ function sha256(value) {
 	return createHash("sha256").update(value).digest("hex");
 }
 
-function stageBoundInspection(topologyPath) {
+function stageBoundInspection(topologyPath, overrides = {}) {
 	const topology = readTopologyReceipt(topologyPath);
-	const base = inspectionReceipt();
+	const base = inspectionReceipt(overrides);
 	const receipt = {
 		...base,
 		topology: {
@@ -305,16 +311,46 @@ test("bootstrap verifies and snapshots the committed scanner before opening the 
 	}
 	assert.match(source, /RC_INSPECTION_REPOSITORY_ROOT="\$repository_root"/);
 	assert.match(source, /RC_INSPECTION_MODE=scan/);
+	assert.match(source, /publisher_started=1[\s\S]*run_publisher/);
+	assert.match(
+		source,
+		/"\$publisher_started" -eq 0[\s\S]*"\$publisher_succeeded" -eq 1[\s\S]*rm -f -- "\$stage_file"/,
+	);
+	assert.match(
+		source,
+		/"\$publisher_status" -eq 75[\s\S]*"\$publisher_status" -ge 128[\s\S]*publisher_indeterminate_seen=1[\s\S]*run_publisher/,
+	);
+	assert.match(
+		source,
+		/"\$publisher_indeterminate_seen" -eq 1[\s\S]*publisher_status=75/,
+	);
+	assert.match(source, /publisher_succeeded=1[\s\S]*cat "\$runner_stdout"/);
+	assert.match(
+		source,
+		/stage_owned_by_this_run=0[\s\S]*"\$stage_owned_by_this_run" -eq 1/,
+	);
+	assert.match(source, /\[ ! -e "\$stage_file" \] \|\| fail/);
+	assert.doesNotMatch(
+		source,
+		/runner_stdout=\$snapshot_root\/runner\.stdout\n\/bin\/busybox rm/,
+	);
 	assert.match(
 		source,
 		/unset TURSO_API_TOKEN TURSO_GROUP_AUTH_TOKEN VERCEL_TOKEN/,
 	);
 });
 
-test("outer recheck publishes nothing after an equal-tree HEAD move, then a stable retry uses a fresh committed snapshot", () => {
+test("outer recheck publishes nothing after an equal-tree HEAD move, then a stable retry uses a fresh committed snapshot", (context) => {
+	if (!pinnedReleaseHost) {
+		context.skip("requires the pinned Linux/arm64 release host");
+		return;
+	}
 	const root = mkdtempSync(join(tmpdir(), "remote-claw-fresh-publisher-"));
 	const scripts = join(root, "scripts");
 	const receiptRoot = join(root, "tests", "web", "test-results");
+	const publisherRetryMarker = join(root, ".publisher-retried");
+	const failedRecoveryMarker = join(receiptRoot, "failed-recovery");
+	const failedRecoveryAttempt = join(receiptRoot, "failed-recovery-attempt");
 	const runGit = (...args) => {
 		const result = spawnSync("/usr/bin/git", ["-C", root, ...args], {
 			encoding: "utf8",
@@ -333,12 +369,14 @@ test("outer recheck publishes nothing after an equal-tree HEAD move, then a stab
 			`import { spawnSync } from "node:child_process";
 import { chmodSync, constants, copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-const finalPath = (topologyPath) => topologyPath.replace(/\\.json$/, ".inspection-v1.json");
-if (process.env.RC_INSPECTION_MODE === "scan") {
-	const [topologyPath] = readFileSync(0).toString("utf8").split("\\0");
-	const stagePath = \`\${finalPath(topologyPath)}.stage\`;
-	writeFileSync(stagePath, '{"schema":"committed-stage"}\\n', { mode: 0o600 });
-	chmodSync(process.argv[1], 0o600);
+	const finalPath = (topologyPath) => topologyPath.replace(/\\.json$/, ".inspection-v1.json");
+	if (process.env.RC_INSPECTION_MODE === "scan") {
+		const [topologyPath] = readFileSync(0).toString("utf8").split("\\0");
+		const stagePath = \`\${finalPath(topologyPath)}.stage\`;
+		writeFileSync(stagePath, '{"schema":"committed-stage"}\\n', { mode: 0o600 });
+		const failAfterStage = join(process.env.RC_INSPECTION_REPOSITORY_ROOT, "tests/web/test-results/fail-after-stage");
+		if (existsSync(failAfterStage)) process.exit(94);
+		chmodSync(process.argv[1], 0o600);
 	writeFileSync(process.argv[1], "process.exit(91);\\n");
 	const moveHead = join(process.env.RC_INSPECTION_REPOSITORY_ROOT, "tests/web/test-results/move-head");
 	if (existsSync(moveHead)) {
@@ -348,8 +386,32 @@ if (process.env.RC_INSPECTION_MODE === "scan") {
 	process.stdout.write(\`content-free staged final-inspection receipt: \${stagePath}\\n\`);
 } else if (process.env.RC_INSPECTION_MODE === "publish") {
 	const outputPath = finalPath(process.env.RC_TOPOLOGY_RECEIPT_FILE);
-	copyFileSync(process.env.RC_INSPECTION_STAGE_FILE, outputPath, constants.COPYFILE_EXCL);
-	chmodSync(outputPath, 0o600);
+	const failedRecoveryMarker = ${JSON.stringify(failedRecoveryMarker)};
+	const failedRecoveryAttempt = ${JSON.stringify(failedRecoveryAttempt)};
+	if (existsSync(failedRecoveryMarker)) {
+		if (!existsSync(failedRecoveryAttempt)) {
+			copyFileSync(process.env.RC_INSPECTION_STAGE_FILE, outputPath, constants.COPYFILE_EXCL);
+			chmodSync(outputPath, 0o600);
+			writeFileSync(failedRecoveryAttempt, "attempt\\n", { mode: 0o600, flag: "wx" });
+			process.exit(75);
+		}
+		process.exit(1);
+	}
+	const signalMarker = join(process.env.RC_INSPECTION_REPOSITORY_ROOT, "tests/web/test-results/signal-publisher");
+	if (existsSync(signalMarker)) {
+		copyFileSync(process.env.RC_INSPECTION_STAGE_FILE, outputPath, constants.COPYFILE_EXCL);
+		chmodSync(outputPath, 0o600);
+		process.kill(process.ppid, "SIGTERM");
+		await new Promise((resolve) => setTimeout(resolve, 250));
+		process.exit(74);
+	}
+	const retryMarker = ${JSON.stringify(publisherRetryMarker)};
+	if (!existsSync(retryMarker)) {
+		copyFileSync(process.env.RC_INSPECTION_STAGE_FILE, outputPath, constants.COPYFILE_EXCL);
+		chmodSync(outputPath, 0o600);
+		writeFileSync(retryMarker, "retry\\n", { mode: 0o600, flag: "wx" });
+		process.exit(75);
+	}
 	process.stdout.write(\`content-free final-inspection receipt: \${outputPath}\\n\`);
 } else {
 	process.exit(92);
@@ -392,6 +454,29 @@ if (process.env.RC_INSPECTION_MODE === "scan") {
 			});
 		const canonicalPath = inspectionReceiptPath(topologyPath);
 		const stagePath = inspectionReceiptStagePath(topologyPath);
+		const committedRunner = join(scripts, "run-trusted-final-inspection.mjs");
+		const committedRunnerBytes = readFileSync(committedRunner);
+		const failAfterStage = join(receiptRoot, "fail-after-stage");
+		writeFileSync(failAfterStage, "fail\\n", { mode: 0o600 });
+		const scannerFailed = invoke();
+		assert.equal(scannerFailed.status, 94, scannerFailed.stderr);
+		assert.equal(
+			readFileSync(stagePath, "utf8"),
+			'{"schema":"committed-stage"}\n',
+		);
+		assert.deepEqual(readFileSync(committedRunner), committedRunnerBytes);
+		rmSync(failAfterStage);
+		rmSync(stagePath);
+		writeFileSync(stagePath, "preserved-stage\n", { mode: 0o600 });
+		const preservedStageStat = lstatSync(stagePath);
+		const preserved = invoke();
+		assert.equal(preserved.status, 126, preserved.stderr);
+		const preservedStageAfter = lstatSync(stagePath);
+		assert.equal(preservedStageAfter.dev, preservedStageStat.dev);
+		assert.equal(preservedStageAfter.ino, preservedStageStat.ino);
+		assert.equal(readFileSync(stagePath, "utf8"), "preserved-stage\n");
+		assert.deepEqual(readFileSync(committedRunner), committedRunnerBytes);
+		rmSync(stagePath);
 		writeFileSync(moveHead, "move\n", { mode: 0o600 });
 		const refused = invoke();
 		assert.equal(refused.status, 126, refused.stderr);
@@ -402,6 +487,26 @@ if (process.env.RC_INSPECTION_MODE === "scan") {
 
 		runGit("update-ref", "HEAD", head);
 		rmSync(moveHead);
+		const signalMarker = join(receiptRoot, "signal-publisher");
+		writeFileSync(signalMarker, "signal\n", { mode: 0o600 });
+		const interrupted = invoke();
+		assert.equal(interrupted.status, 143, interrupted.stderr);
+		assert.equal(existsSync(canonicalPath), true);
+		assert.equal(existsSync(stagePath), true);
+		rmSync(canonicalPath);
+		rmSync(stagePath);
+		rmSync(signalMarker);
+
+		writeFileSync(failedRecoveryMarker, "fail\n", { mode: 0o600 });
+		const unresolved = invoke();
+		assert.equal(unresolved.status, 75, unresolved.stderr);
+		assert.equal(existsSync(canonicalPath), true);
+		assert.equal(existsSync(stagePath), true);
+		rmSync(canonicalPath);
+		rmSync(stagePath);
+		rmSync(failedRecoveryMarker);
+		rmSync(failedRecoveryAttempt);
+
 		const result = invoke();
 		assert.equal(result.status, 0, result.stderr);
 		assert.equal(
@@ -412,6 +517,8 @@ if (process.env.RC_INSPECTION_MODE === "scan") {
 			readFileSync(canonicalPath, "utf8"),
 			'{"schema":"committed-stage"}\n',
 		);
+		assert.equal(existsSync(publisherRetryMarker), true);
+		assert.equal(existsSync(stagePath), false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -1675,6 +1782,845 @@ test("publisher rejects staged-byte replacement and in-place drift before creati
 	}
 });
 
+test("publisher converges an observed one-time pair-sync failure without retracting canonical authority", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-sync-rollback-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		let directorySyncs = 0;
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+				fsyncDirectory(descriptor) {
+					directorySyncs += 1;
+					if (directorySyncs === 2) {
+						assert.equal(lstatSync(canonicalPath).nlink, 2);
+						throw new Error("injected commit sync failure");
+					}
+					fsyncSync(descriptor);
+				},
+			}).path,
+			canonicalPath,
+		);
+		assert.equal(directorySyncs, 4);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		assert.equal(existsSync(stage.stagePath), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("publisher converges a one-time source-unlink failure without deleting canonical", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-unlink-rollback-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		let unlinks = 0;
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+				unlinkFile(path) {
+					unlinks += 1;
+					if (unlinks === 1)
+						throw new Error("injected temporary unlink failure");
+					unlinkSync(path);
+				},
+			}).path,
+			canonicalPath,
+		);
+		assert.equal(unlinks, 2);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a fresh publisher reconciles an exact canonical link after an ambiguous EEXIST result", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-link-reconcile-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		assert.throws(
+			() =>
+				publishStagedInspectionReceipt({
+					topologyReceiptFile: topologyPath,
+					stageFile: stage.stagePath,
+					stageEvidence: stage.evidence,
+					receiptRoot: root,
+					repositoryRoot: root,
+					repositoryInspector: () => undefined,
+					linkFile(source, target) {
+						linkSync(source, target);
+						const error = new Error("injected ambiguous link result");
+						error.code = "EEXIST";
+						throw error;
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(lstatSync(canonicalPath).nlink, 2);
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+			}).path,
+			canonicalPath,
+		);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("fresh inspection publication adopts an exact orphaned source after a pre-link failure", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-orphan-source-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		const publish = (options = {}) =>
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+				...options,
+			});
+		assert.throws(
+			() =>
+				publish({
+					linkFile() {
+						throw new Error("injected pre-link failure");
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(existsSync(canonicalPath), false);
+		const temporaries = readdirSync(root).filter((name) =>
+			name.endsWith(".publish.tmp"),
+		);
+		assert.equal(temporaries.length, 1);
+		const orphanStat = lstatSync(join(root, temporaries[0]));
+		assert.equal(orphanStat.nlink, 1);
+
+		assert.equal(publish().path, canonicalPath);
+		const canonicalStat = lstatSync(canonicalPath);
+		assert.equal(canonicalStat.nlink, 1);
+		assert.equal(canonicalStat.dev, orphanStat.dev);
+		assert.equal(canonicalStat.ino, orphanStat.ino);
+		assert.equal(
+			readdirSync(root).filter((name) => name.endsWith(".publish.tmp")).length,
+			0,
+		);
+		assert.equal(lstatSync(stage.stagePath).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a torn random inspection source cannot block a fresh exact publication", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-torn-source-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		const publish = (options = {}) =>
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+				...options,
+			});
+		assert.throws(
+			() =>
+				publish({
+					writeFile(descriptor, bytes) {
+						writeFileSync(descriptor, bytes.subarray(0, 7));
+						throw new Error("injected torn publication write");
+					},
+				}),
+			/could not be published safely/,
+		);
+		assert.equal(existsSync(canonicalPath), false);
+		const torn = readdirSync(root).filter((name) =>
+			name.endsWith(".publish.tmp"),
+		);
+		assert.equal(torn.length, 1);
+		assert.equal(lstatSync(join(root, torn[0])).size, 7);
+
+		assert.equal(publish().path, canonicalPath);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		assert.deepEqual(
+			readdirSync(root).filter((name) => name.endsWith(".publish.tmp")),
+			torn,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("inspection publication deterministically adopts one of multiple exact orphan sources", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-orphan-set-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		const prefix = `.${basename(canonicalPath)}.${stage.evidence.sha256}.`;
+		const first = join(
+			root,
+			`${prefix}00000000-0000-4000-8000-000000000001.publish.tmp`,
+		);
+		const second = join(
+			root,
+			`${prefix}00000000-0000-4000-8000-000000000002.publish.tmp`,
+		);
+		const stageBytes = readFileSync(stage.stagePath);
+		writeFileSync(first, stageBytes, { mode: 0o600, flag: "wx" });
+		writeFileSync(second, stageBytes, { mode: 0o600, flag: "wx" });
+		const firstStat = lstatSync(first);
+
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+			}).path,
+			canonicalPath,
+		);
+		const canonicalStat = lstatSync(canonicalPath);
+		assert.equal(canonicalStat.dev, firstStat.dev);
+		assert.equal(canonicalStat.ino, firstStat.ino);
+		assert.equal(existsSync(first), false);
+		assert.equal(lstatSync(second).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a failed inspection source-only sync leaves no canonical and a fresh invocation adopts the exact source", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-source-sync-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		const publish = (options = {}) =>
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+				...options,
+			});
+		assert.throws(
+			() =>
+				publish({
+					fsyncDirectory() {
+						throw new Error("injected source-only sync failure");
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(existsSync(canonicalPath), false);
+		const temporaries = readdirSync(root).filter((name) =>
+			name.endsWith(".publish.tmp"),
+		);
+		assert.equal(temporaries.length, 1);
+		const sourceStat = lstatSync(join(root, temporaries[0]));
+		assert.equal(sourceStat.nlink, 1);
+
+		assert.equal(publish().path, canonicalPath);
+		const canonicalStat = lstatSync(canonicalPath);
+		assert.equal(canonicalStat.nlink, 1);
+		assert.equal(canonicalStat.dev, sourceStat.dev);
+		assert.equal(canonicalStat.ino, sourceStat.ino);
+		assert.equal(
+			readdirSync(root).filter((name) => name.endsWith(".publish.tmp")).length,
+			0,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("inspection publication revalidates the exact link pair after its directory sync", () => {
+	const root = mkdtempSync(join(tmpdir(), "remote-claw-inspection-pair-race-"));
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		let directorySyncs = 0;
+		assert.throws(
+			() =>
+				publishStagedInspectionReceipt({
+					topologyReceiptFile: topologyPath,
+					stageFile: stage.stagePath,
+					stageEvidence: stage.evidence,
+					receiptRoot: root,
+					repositoryRoot: root,
+					repositoryInspector: () => undefined,
+					fsyncDirectory(descriptor) {
+						directorySyncs += 1;
+						fsyncSync(descriptor);
+						if (directorySyncs === 2) {
+							const [temporary] = readdirSync(root).filter((name) =>
+								name.endsWith(".publish.tmp"),
+							);
+							unlinkSync(join(root, temporary));
+							writeFileSync(join(root, temporary), "replacement\n", {
+								mode: 0o600,
+								flag: "wx",
+							});
+						}
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		const [replacement] = readdirSync(root).filter((name) =>
+			name.endsWith(".publish.tmp"),
+		);
+		assert.equal(
+			readFileSync(join(root, replacement), "utf8"),
+			"replacement\n",
+		);
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+			}).path,
+			canonicalPath,
+		);
+		assert.equal(
+			readFileSync(join(root, replacement), "utf8"),
+			"replacement\n",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("inspection publication refuses an unbounded recovery directory before mutation", () => {
+	const root = mkdtempSync(join(tmpdir(), "remote-claw-inspection-dir-bound-"));
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		let directoryReads = 0;
+		let directoryClosed = false;
+		assert.throws(
+			() =>
+				publishStagedInspectionReceipt({
+					topologyReceiptFile: topologyPath,
+					stageFile: stage.stagePath,
+					stageEvidence: stage.evidence,
+					receiptRoot: root,
+					repositoryRoot: root,
+					repositoryInspector: () => undefined,
+					openPublicationDirectory: () => ({
+						readSync() {
+							directoryReads += 1;
+							return { name: "entry" };
+						},
+						closeSync() {
+							directoryClosed = true;
+						},
+					}),
+				}),
+			/could not be published safely/,
+		);
+		assert.equal(directoryReads, 4_097);
+		assert.equal(directoryClosed, true);
+		assert.equal(existsSync(canonicalPath), false);
+		assert.equal(
+			readdirSync(root).filter((name) => name.endsWith(".publish.tmp")).length,
+			0,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a newer inspection stage is not blocked by an older orphaned source", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-stale-source-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const oldStage = stageBoundInspection(topologyPath);
+		assert.throws(
+			() =>
+				publishStagedInspectionReceipt({
+					topologyReceiptFile: topologyPath,
+					stageFile: oldStage.stagePath,
+					stageEvidence: oldStage.evidence,
+					receiptRoot: root,
+					repositoryRoot: root,
+					repositoryInspector: () => undefined,
+					linkFile() {
+						throw new Error("injected pre-link crash");
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		const oldTemporaries = readdirSync(root).filter((name) =>
+			name.endsWith(".publish.tmp"),
+		);
+		assert.equal(oldTemporaries.length, 1);
+		rmSync(oldStage.stagePath);
+
+		const newStage = stageBoundInspection(topologyPath, {
+			inspection: {
+				startedAt: new Date(COMPLETED_AT_MS + 2_000).toISOString(),
+				completedAt: new Date(COMPLETED_AT_MS + 3_000).toISOString(),
+			},
+		});
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: newStage.stagePath,
+				stageEvidence: newStage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+			}).path,
+			canonicalPath,
+		);
+		assert.deepEqual(
+			JSON.parse(readFileSync(canonicalPath, "utf8")),
+			newStage.receipt,
+		);
+		assert.deepEqual(
+			readdirSync(root).filter((name) => name.endsWith(".publish.tmp")),
+			oldTemporaries,
+		);
+		assert.equal(lstatSync(join(root, oldTemporaries[0])).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("publisher rejects descriptor-bound canonical byte mismatch without deleting either link", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-byte-mismatch-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		let reads = 0;
+		assert.throws(
+			() =>
+				publishStagedInspectionReceipt({
+					topologyReceiptFile: topologyPath,
+					stageFile: stage.stagePath,
+					stageEvidence: stage.evidence,
+					receiptRoot: root,
+					repositoryRoot: root,
+					repositoryInspector: () => undefined,
+					readFile(descriptor) {
+						reads += 1;
+						const bytes = readFileSync(descriptor);
+						if (reads >= 2) bytes[0] ^= 1;
+						return bytes;
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(lstatSync(canonicalPath).nlink, 2);
+		assert.equal(existsSync(stage.stagePath), true);
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+			}).path,
+			canonicalPath,
+		);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		assert.equal(existsSync(stage.stagePath), true);
+		assert.equal(
+			readdirSync(root).filter((name) => name.endsWith(".publish.tmp")).length,
+			0,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("post-commit directory close failure cannot downgrade an inspection receipt", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-close-after-commit-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+				closeDirectory(descriptor) {
+					closeSync(descriptor);
+					throw new Error("injected close acknowledgement failure");
+				},
+			}).path,
+			canonicalPath,
+		);
+		assert.equal(existsSync(canonicalPath), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("persistent inspection sync failure preserves a non-authoritative canonical inode and reports indeterminate", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-indeterminate-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		let directorySyncs = 0;
+		assert.throws(
+			() =>
+				publishStagedInspectionReceipt({
+					topologyReceiptFile: topologyPath,
+					stageFile: stage.stagePath,
+					stageEvidence: stage.evidence,
+					receiptRoot: root,
+					repositoryRoot: root,
+					repositoryInspector: () => undefined,
+					fsyncDirectory(descriptor) {
+						directorySyncs += 1;
+						if (directorySyncs >= 2) {
+							throw new Error("injected persistent sync failure");
+						}
+						fsyncSync(descriptor);
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(directorySyncs, 3);
+		assert.equal(lstatSync(canonicalPath).nlink, 2);
+		assert.equal(existsSync(stage.stagePath), true);
+		assert.equal(
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+			}).path,
+			canonicalPath,
+		);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		assert.equal(existsSync(stage.stagePath), true);
+		assert.equal(
+			readdirSync(root).filter((name) => name.endsWith(".publish.tmp")).length,
+			0,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an exhausted post-unlink inspection sync is recovered by a fresh exact invocation", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-post-unlink-recovery-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		let directorySyncs = 0;
+		assert.throws(
+			() =>
+				publishStagedInspectionReceipt({
+					topologyReceiptFile: topologyPath,
+					stageFile: stage.stagePath,
+					stageEvidence: stage.evidence,
+					receiptRoot: root,
+					repositoryRoot: root,
+					repositoryInspector: () => undefined,
+					fsyncDirectory(descriptor) {
+						directorySyncs += 1;
+						if (directorySyncs >= 3) {
+							throw new Error("injected exhausted post-unlink sync failure");
+						}
+						fsyncSync(descriptor);
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(directorySyncs, 4);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		assert.equal(lstatSync(stage.stagePath).nlink, 1);
+
+		let recoveryFileSyncs = 0;
+		const recovered = publishStagedInspectionReceipt({
+			topologyReceiptFile: topologyPath,
+			stageFile: stage.stagePath,
+			stageEvidence: stage.evidence,
+			receiptRoot: root,
+			repositoryRoot: root,
+			repositoryInspector: () => undefined,
+			fsyncFile(descriptor) {
+				recoveryFileSyncs += 1;
+				fsyncSync(descriptor);
+			},
+		});
+		assert.equal(recovered.path, canonicalPath);
+		assert.equal(recoveryFileSyncs, 1);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		assert.equal(existsSync(stage.stagePath), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("fresh inspection recovery refuses a pre-existing canonical with different bytes", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-recovery-mismatch-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		writeFileSync(canonicalPath, "{}\n", { mode: 0o600, flag: "wx" });
+		assert.throws(
+			() =>
+				publishStagedInspectionReceipt({
+					topologyReceiptFile: topologyPath,
+					stageFile: stage.stagePath,
+					stageEvidence: stage.evidence,
+					receiptRoot: root,
+					repositoryRoot: root,
+					repositoryInspector: () => undefined,
+				}),
+			(error) => {
+				assert.doesNotMatch(
+					error.message,
+					/publication state is indeterminate/,
+				);
+				return /could not be published safely/.test(error.message);
+			},
+		);
+		assert.equal(readFileSync(canonicalPath, "utf8"), "{}\n");
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		assert.equal(lstatSync(stage.stagePath).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("fresh inspection recovery refuses an exact inode replacement after its durability sync", () => {
+	const root = mkdtempSync(
+		join(tmpdir(), "remote-claw-inspection-recovery-race-"),
+	);
+	chmodSync(root, 0o700);
+	const topologyPath = join(
+		root,
+		`real-topology-browser-leg-${HEAD}-${COMPACT_RUN_ID}.json`,
+	);
+	const canonicalPath = inspectionReceiptPath(topologyPath);
+	try {
+		writeFileSync(topologyPath, `${JSON.stringify(topologyReceipt())}\n`, {
+			mode: 0o600,
+		});
+		const stage = stageBoundInspection(topologyPath);
+		const publish = (options = {}) =>
+			publishStagedInspectionReceipt({
+				topologyReceiptFile: topologyPath,
+				stageFile: stage.stagePath,
+				stageEvidence: stage.evidence,
+				receiptRoot: root,
+				repositoryRoot: root,
+				repositoryInspector: () => undefined,
+				...options,
+			});
+		publish();
+		const exactBytes = readFileSync(canonicalPath);
+		const replacement = join(root, ".replacement-inspection-receipt");
+		assert.throws(
+			() =>
+				publish({
+					fsyncDirectory(descriptor) {
+						fsyncSync(descriptor);
+						writeFileSync(replacement, exactBytes, {
+							mode: 0o600,
+							flag: "wx",
+						});
+						renameSync(replacement, canonicalPath);
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(lstatSync(canonicalPath).nlink, 1);
+		assert.deepEqual(readFileSync(canonicalPath), exactBytes);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("publisher keeps stage and canonical operations anchored when the visible receipt root is swapped", () => {
 	const root = mkdtempSync(join(tmpdir(), "remote-claw-inspection-root-race-"));
 	const displacedRoot = `${root}.displaced`;
@@ -1704,9 +2650,19 @@ test("publisher keeps stage and canonical operations anchored when the visible r
 						linkSync(source, target);
 					},
 				}),
-			/could not be published safely/,
+			/publication state is indeterminate/,
 		);
 		assert.equal(existsSync(canonicalPath), false);
+		const displacedCanonical = join(displacedRoot, basename(canonicalPath));
+		const [temporary] = readdirSync(displacedRoot).filter((name) =>
+			name.endsWith(".publish.tmp"),
+		);
+		const canonicalStat = lstatSync(displacedCanonical);
+		const temporaryStat = lstatSync(join(displacedRoot, temporary));
+		assert.equal(canonicalStat.nlink, 2);
+		assert.equal(temporaryStat.nlink, 2);
+		assert.equal(canonicalStat.dev, temporaryStat.dev);
+		assert.equal(canonicalStat.ino, temporaryStat.ino);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 		rmSync(displacedRoot, { recursive: true, force: true });

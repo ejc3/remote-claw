@@ -11,9 +11,15 @@ fail() {
 snapshot_root=
 publisher_snapshot_root=
 stage_file=
+stage_owned_by_this_run=0
+publisher_started=0
+publisher_succeeded=0
+publisher_indeterminate_seen=0
 cleanup() {
-	if [ -n "$stage_file" ]; then
-		/bin/busybox rm -f -- "$stage_file"
+	if [ "$stage_owned_by_this_run" -eq 1 ] && [ -n "$stage_file" ]; then
+		if [ "$publisher_started" -eq 0 ] || [ "$publisher_succeeded" -eq 1 ]; then
+			/bin/busybox rm -f -- "$stage_file"
+		fi
 	fi
 	if [ -n "$snapshot_root" ]; then
 		/bin/busybox rm -rf -- "$snapshot_root"
@@ -22,7 +28,10 @@ cleanup() {
 		/bin/busybox rm -rf -- "$publisher_snapshot_root"
 	fi
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # This statically linked shell is the only process that inherits credentials. Before opening the
 # credential pipe, it binds the candidate HEAD and clean worktree, pins every executable it invokes,
@@ -158,7 +167,9 @@ materialize_committed_module scripts/inspection-receipt-schema.mjs 100644 "$snap
 
 runner_path=$snapshot_root/scripts/run-trusted-final-inspection.mjs
 runner_stdout=$snapshot_root/runner.stdout
-/bin/busybox rm -f -- "$stage_file" || fail
+# A prior failed publisher owns this exact evidence. A normal scan must never erase or supersede it;
+# same-wrapper reconciliation is bounded below, while cross-wrapper recovery is an explicit operation.
+[ ! -e "$stage_file" ] || fail
 set +e
 {
 	printf '%s\0' \
@@ -204,6 +215,10 @@ case "$stage_sha256" in
 	*[!0-9a-f]*) fail ;;
 esac
 stage_stat=$stage_device:$stage_inode:$stage_size
+# Ownership is established only after this scanner successfully returned the exact path and the
+# wrapper bound its stable identity and bytes. A concurrent scanner that loses exclusive creation
+# must never treat the winner's stage as its own during EXIT cleanup.
+stage_owned_by_this_run=1
 
 # A successful JS self-check is not substituted for this independent, bounded bootstrap recheck.
 verify_candidate_tree || fail
@@ -221,18 +236,41 @@ publisher_runner_path=$publisher_snapshot_root/scripts/run-trusted-final-inspect
 
 # Only this credential-free committed publisher may create the canonical passed receipt, and only
 # after the independent outer recheck above has succeeded.
+publisher_stderr=$snapshot_root/publisher.stderr
+run_publisher() {
+	/bin/busybox env -i \
+		PATH=/usr/bin:/bin \
+		LANG=C.UTF-8 \
+		RC_INSPECTION_MODE=publish \
+		RC_INSPECTION_REPOSITORY_ROOT="$repository_root" \
+		RC_TOPOLOGY_RECEIPT_FILE="$receipt_path" \
+		RC_INSPECTION_STAGE_FILE="$stage_file" \
+		RC_INSPECTION_STAGE_SHA256="$stage_sha256" \
+		RC_INSPECTION_STAGE_STAT="$stage_stat" \
+		/usr/bin/node "$publisher_runner_path" >"$runner_stdout" 2>"$publisher_stderr"
+}
+
+publisher_started=1
 set +e
-/bin/busybox env -i \
-	PATH=/usr/bin:/bin \
-	LANG=C.UTF-8 \
-	RC_INSPECTION_MODE=publish \
-	RC_INSPECTION_REPOSITORY_ROOT="$repository_root" \
-	RC_TOPOLOGY_RECEIPT_FILE="$receipt_path" \
-	RC_INSPECTION_STAGE_FILE="$stage_file" \
-	RC_INSPECTION_STAGE_SHA256="$stage_sha256" \
-	RC_INSPECTION_STAGE_STAT="$stage_stat" \
-	/usr/bin/node "$publisher_runner_path" >"$runner_stdout"
+run_publisher
 publisher_status=$?
+# Exit 75 means the transaction has durable or ambiguous state that requires exact same-stage
+# reconciliation. A signal-killed publisher may have crossed the same boundary before it died.
+# Retry either outcome once in a fresh clean process, then preserve the stage on any failure.
+if [ "$publisher_status" -eq 75 ] || [ "$publisher_status" -ge 128 ]; then
+	publisher_indeterminate_seen=1
+	run_publisher
+	publisher_status=$?
+fi
+if [ "$publisher_indeterminate_seen" -eq 1 ] && [ "$publisher_status" -ne 0 ]; then
+	publisher_status=75
+fi
 set -e
-[ "$publisher_status" -eq 0 ] || exit "$publisher_status"
+[ "$publisher_status" -eq 0 ] || {
+	# The publisher may have crossed the irreversible canonical-link boundary. Preserve the bound
+	# private stage for diagnosis/recovery; deleting it cannot retract canonical visibility.
+	/bin/busybox cat "$publisher_stderr" >&2 || :
+	exit "$publisher_status"
+}
+publisher_succeeded=1
 /bin/busybox cat "$runner_stdout"

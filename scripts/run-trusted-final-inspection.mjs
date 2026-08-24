@@ -10,6 +10,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	opendirSync,
 	openSync,
 	readdirSync,
 	readFileSync,
@@ -88,6 +89,10 @@ const MAX_VALUE_BYTES = 4 * 1_024 * 1_024 * 1_024;
 const ROW_PAGE_SIZE = 500;
 const MAX_LOG_QUERIES = 4_096;
 const MAX_LOG_ROWS = 1_000_000;
+const MAX_PUBLICATION_DIRECTORY_ENTRIES = 4_096;
+const PUBLISH_INDETERMINATE_EXIT_CODE = 75;
+const PUBLISH_INDETERMINATE_MESSAGE =
+	"inspection receipt publication state is indeterminate";
 const MAX_PROOF_WINDOW_MS = 30 * 60_000;
 const MAX_LOG_RETENTION_AGE_MS = 71 * 60 * 60_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
@@ -101,6 +106,8 @@ const UUID_V4_PATTERN =
 const STORAGE_COORDINATE_PATTERN = /^[A-Za-z0-9._-]+$/;
 const IMMUTABLE_PREVIEW_ORIGIN_PATTERN =
 	/^https:\/\/remote-claw-[a-z0-9]{9}-ejc3-7031s-projects\.vercel\.app$/;
+
+class PublicationIndeterminateError extends Error {}
 
 export const PINNED_LIBSQL_PACKAGES = Object.freeze(
 	[
@@ -2427,6 +2434,35 @@ function sameBigIntFileIdentity(left, right) {
 	);
 }
 
+// A hard-link transaction changes ctime and link count. Publication identity therefore pins every
+// other inode field, while descriptor-bound reads below independently bind the exact bytes.
+function sameBigIntPublicationFile(left, right) {
+	return (
+		left.dev === right.dev &&
+		left.ino === right.ino &&
+		left.size === right.size &&
+		left.mode === right.mode &&
+		left.uid === right.uid &&
+		left.gid === right.gid &&
+		left.mtimeNs === right.mtimeNs
+	);
+}
+
+function validateBigIntPublicationFile(stat, allowedLinks) {
+	if (
+		!stat.isFile() ||
+		stat.isSymbolicLink() ||
+		(stat.mode & 0o777n) !== 0o600n ||
+		stat.size < 2n ||
+		stat.size > BigInt(MAX_TOPOLOGY_RECEIPT_BYTES) ||
+		!allowedLinks.has(stat.nlink) ||
+		(typeof process.getuid === "function" &&
+			stat.uid !== BigInt(process.getuid()))
+	) {
+		throw new Error("inspection publication inode is unsafe");
+	}
+}
+
 function readPinnedTopologyReceipt(pinned, path) {
 	if (
 		!isAbsolute(path) ||
@@ -2661,6 +2697,16 @@ export function publishStagedInspectionReceipt({
 	newId = randomUUID,
 	linkFile = linkSync,
 	unlinkFile = unlinkSync,
+	openFile = openSync,
+	statFile = fstatSync,
+	statPath = lstatSync,
+	openPublicationDirectory = opendirSync,
+	readFile = readFileSync,
+	writeFile = writeFileSync,
+	fsyncFile = fsyncSync,
+	closeFile = closeSync,
+	fsyncDirectory = fsyncSync,
+	closeDirectory = closeSync,
 } = {}) {
 	if (
 		!isAbsolute(topologyReceiptFile) ||
@@ -2677,23 +2723,321 @@ export function publishStagedInspectionReceipt({
 	if (stageFile !== expectedStage) {
 		throw new Error("staged inspection receipt path is not canonical");
 	}
-	const id = newId();
-	if (!UUID_V4_PATTERN.test(id)) {
-		throw new Error("inspection publication temporary id is invalid");
-	}
 	const pinned = openPinnedInspectionDirectory(receiptRoot);
 	const anchoredStage = join(pinned.anchoredRoot, basename(stageFile));
 	const anchoredOutput = join(pinned.anchoredRoot, basename(outputPath));
-	const temporaryPath = join(
-		pinned.anchoredRoot,
-		`.${basename(outputPath)}.${id}.publish.tmp`,
-	);
 	let staged;
 	let temporaryDescriptor;
-	let temporaryExists = false;
+	let temporaryPath;
+	let publicationStat;
+	let publicationAttempted = false;
+	let publicationCreated = false;
+	let publicationCommitted = false;
+	let authoritativeCanonicalObserved = false;
+	let inspection;
 	let result;
 	let failure;
 	let closeFailed = false;
+	const readExactCanonical = (
+		allowedLinks,
+		{ requirePublicationIdentity = true, syncFile = false } = {},
+	) => {
+		let canonicalDescriptor;
+		let canonicalBytes;
+		let canonicalStat;
+		let readFailure;
+		let canonicalCloseFailed = false;
+		try {
+			canonicalDescriptor = openFile(
+				anchoredOutput,
+				constants.O_RDONLY | constants.O_NOFOLLOW,
+			);
+			const before = statFile(canonicalDescriptor, { bigint: true });
+			validateBigIntPublicationFile(before, allowedLinks);
+			if (
+				requirePublicationIdentity &&
+				(publicationStat === undefined ||
+					!sameBigIntPublicationFile(publicationStat, before))
+			) {
+				throw new Error("canonical inspection receipt identity changed");
+			}
+			canonicalBytes = readFile(canonicalDescriptor);
+			let after = statFile(canonicalDescriptor, { bigint: true });
+			const pathStat = statPath(anchoredOutput, { bigint: true });
+			if (
+				!Buffer.isBuffer(canonicalBytes) ||
+				staged?.bytes === undefined ||
+				BigInt(canonicalBytes.length) !== before.size ||
+				sha256Bytes(canonicalBytes) !== stageEvidence.sha256 ||
+				!canonicalBytes.equals(staged.bytes) ||
+				!sameBigIntFileIdentity(before, after) ||
+				!sameBigIntFileIdentity(after, pathStat)
+			) {
+				throw new Error("canonical inspection receipt bytes changed");
+			}
+			if (after.nlink === 1n) {
+				authoritativeCanonicalObserved = true;
+			}
+			if (syncFile) {
+				fsyncFile(canonicalDescriptor);
+				const synced = statFile(canonicalDescriptor, { bigint: true });
+				const syncedPath = statPath(anchoredOutput, { bigint: true });
+				if (
+					!sameBigIntFileIdentity(after, synced) ||
+					!sameBigIntFileIdentity(synced, syncedPath)
+				) {
+					throw new Error("canonical inspection receipt changed while syncing");
+				}
+				after = synced;
+			}
+			canonicalStat = after;
+		} catch (error) {
+			readFailure = error;
+		} finally {
+			if (canonicalBytes !== undefined) canonicalBytes.fill(0);
+			if (canonicalDescriptor !== undefined) {
+				try {
+					closeFile(canonicalDescriptor);
+				} catch {
+					canonicalCloseFailed = true;
+				}
+			}
+		}
+		if (canonicalCloseFailed) {
+			throw new Error(
+				"canonical inspection receipt descriptor could not close",
+			);
+		}
+		if (readFailure !== undefined) throw readFailure;
+		return canonicalStat;
+	};
+	const readExactTemporary = (allowedLinks, { syncFile = false } = {}) => {
+		let temporaryReadDescriptor;
+		let temporaryBytes;
+		let temporaryStat;
+		let readFailure;
+		let temporaryCloseFailed = false;
+		try {
+			temporaryReadDescriptor = openFile(
+				temporaryPath,
+				constants.O_RDONLY | constants.O_NOFOLLOW,
+			);
+			const before = statFile(temporaryReadDescriptor, { bigint: true });
+			validateBigIntPublicationFile(before, allowedLinks);
+			temporaryBytes = readFile(temporaryReadDescriptor);
+			let after = statFile(temporaryReadDescriptor, { bigint: true });
+			const pathStat = statPath(temporaryPath, { bigint: true });
+			if (
+				!Buffer.isBuffer(temporaryBytes) ||
+				staged?.bytes === undefined ||
+				BigInt(temporaryBytes.length) !== before.size ||
+				sha256Bytes(temporaryBytes) !== stageEvidence.sha256 ||
+				!temporaryBytes.equals(staged.bytes) ||
+				!sameBigIntFileIdentity(before, after) ||
+				!sameBigIntFileIdentity(after, pathStat)
+			) {
+				throw new Error("inspection publication source bytes changed");
+			}
+			if (syncFile) {
+				fsyncFile(temporaryReadDescriptor);
+				const synced = statFile(temporaryReadDescriptor, { bigint: true });
+				const syncedPath = statPath(temporaryPath, { bigint: true });
+				if (
+					!sameBigIntFileIdentity(after, synced) ||
+					!sameBigIntFileIdentity(synced, syncedPath)
+				) {
+					throw new Error(
+						"inspection publication source changed while syncing",
+					);
+				}
+				after = synced;
+			}
+			temporaryStat = after;
+		} catch (error) {
+			readFailure = error;
+		} finally {
+			if (temporaryBytes !== undefined) temporaryBytes.fill(0);
+			if (temporaryReadDescriptor !== undefined) {
+				try {
+					closeFile(temporaryReadDescriptor);
+				} catch {
+					temporaryCloseFailed = true;
+				}
+			}
+		}
+		if (temporaryCloseFailed) {
+			throw new Error(
+				"inspection publication source descriptor could not close",
+			);
+		}
+		if (readFailure !== undefined) throw readFailure;
+		return temporaryStat;
+	};
+	const readBoundedPublicationEntries = () => {
+		let directory;
+		const entries = [];
+		try {
+			directory = openPublicationDirectory(pinned.anchoredRoot);
+			if (
+				directory === null ||
+				typeof directory !== "object" ||
+				typeof directory.readSync !== "function" ||
+				typeof directory.closeSync !== "function"
+			) {
+				throw new Error("inspection publication directory is unsafe");
+			}
+			while (true) {
+				const entry = directory.readSync();
+				if (entry === null) return entries;
+				if (typeof entry !== "object" || typeof entry.name !== "string") {
+					throw new Error("inspection publication directory is unsafe");
+				}
+				entries.push(entry.name);
+				if (entries.length > MAX_PUBLICATION_DIRECTORY_ENTRIES) {
+					throw new Error("inspection publication directory is unbounded");
+				}
+			}
+		} finally {
+			directory?.closeSync();
+		}
+	};
+	const findExactLinkedTemporary = (canonicalStat) => {
+		const entries = readBoundedPublicationEntries();
+		const prefix = `.${basename(outputPath)}.${stageEvidence.sha256}.`;
+		const suffix = ".publish.tmp";
+		const candidates = [];
+		for (const entry of entries) {
+			if (!entry.startsWith(prefix) || !entry.endsWith(suffix)) continue;
+			const id = entry.slice(prefix.length, -suffix.length);
+			if (!UUID_V4_PATTERN.test(id)) continue;
+			const candidatePath = join(pinned.anchoredRoot, entry);
+			const candidateStat = statPath(candidatePath, { bigint: true });
+			if (sameBigIntPublicationFile(canonicalStat, candidateStat)) {
+				candidates.push(candidatePath);
+			}
+		}
+		if (candidates.length !== 1) {
+			throw new Error("inspection publication source is ambiguous");
+		}
+		temporaryPath = candidates[0];
+		const sourceStat = readExactTemporary(new Set([2n]), { syncFile: true });
+		if (!sameBigIntPublicationFile(canonicalStat, sourceStat)) {
+			throw new Error("inspection publication source link changed");
+		}
+		return sourceStat;
+	};
+	const findExactOrphanedTemporary = () => {
+		const entries = readBoundedPublicationEntries();
+		const prefix = `.${basename(outputPath)}.${stageEvidence.sha256}.`;
+		const suffix = ".publish.tmp";
+		const candidates = entries
+			.filter((entry) => {
+				if (!entry.startsWith(prefix) || !entry.endsWith(suffix)) return false;
+				const id = entry.slice(prefix.length, -suffix.length);
+				return UUID_V4_PATTERN.test(id);
+			})
+			.sort();
+		for (const entry of candidates) {
+			temporaryPath = join(pinned.anchoredRoot, entry);
+			try {
+				return readExactTemporary(new Set([1n]), { syncFile: true });
+			} catch {
+				// Incomplete or concurrently changed random attempts cannot be authoritative while
+				// canonical is absent. Never delete them because another publisher may own them.
+			}
+		}
+		temporaryPath = undefined;
+		return undefined;
+	};
+	const assertVisibleCanonical = (canonicalStat) => {
+		assertPinnedInspectionDirectory(pinned);
+		const visibleStat = statPath(outputPath, { bigint: true });
+		if (!sameBigIntFileIdentity(canonicalStat, visibleStat)) {
+			throw new Error("canonical inspection receipt path changed");
+		}
+	};
+	const assertTemporaryAbsent = () => {
+		try {
+			statPath(temporaryPath, { bigint: true });
+			throw new Error("inspection publication source is unexpectedly present");
+		} catch (error) {
+			if (error?.code !== "ENOENT") throw error;
+		}
+	};
+	const assertCanonicalAbsent = () => {
+		try {
+			statPath(anchoredOutput, { bigint: true });
+			throw new Error("canonical inspection receipt already exists");
+		} catch (error) {
+			if (error?.code !== "ENOENT") throw error;
+		}
+	};
+	const convergePublication = () => {
+		let canonicalStat = readExactCanonical(new Set([1n, 2n]));
+		if (canonicalStat.nlink === 2n) {
+			const sourceStat = readExactTemporary(new Set([2n]), {
+				syncFile: true,
+			});
+			if (!sameBigIntPublicationFile(canonicalStat, sourceStat)) {
+				throw new Error("inspection publication source link changed");
+			}
+			// The canonical name is first made durable while nlink=2 keeps it invalid to ordinary
+			// readers. Removing the source is the irreversible transition to canonical authority.
+			fsyncDirectory(pinned.descriptor);
+			const durableCanonicalStat = readExactCanonical(new Set([2n]));
+			const durableSourceStat = readExactTemporary(new Set([2n]));
+			if (
+				!sameBigIntPublicationFile(canonicalStat, durableCanonicalStat) ||
+				!sameBigIntPublicationFile(sourceStat, durableSourceStat) ||
+				!sameBigIntPublicationFile(durableCanonicalStat, durableSourceStat)
+			) {
+				throw new Error(
+					"inspection publication link pair changed while syncing",
+				);
+			}
+			canonicalStat = durableCanonicalStat;
+			assertVisibleCanonical(canonicalStat);
+			unlinkFile(temporaryPath);
+		} else {
+			try {
+				statPath(temporaryPath, { bigint: true });
+				throw new Error("inspection publication source cleanup is ambiguous");
+			} catch (error) {
+				if (error?.code !== "ENOENT") throw error;
+			}
+		}
+		assertTemporaryAbsent();
+		canonicalStat = readExactCanonical(new Set([1n]), { syncFile: true });
+		assertVisibleCanonical(canonicalStat);
+		fsyncDirectory(pinned.descriptor);
+		const durableCanonicalStat = readExactCanonical(new Set([1n]));
+		if (!sameBigIntFileIdentity(canonicalStat, durableCanonicalStat)) {
+			throw new Error("canonical inspection receipt changed while committing");
+		}
+		canonicalStat = durableCanonicalStat;
+		assertVisibleCanonical(canonicalStat);
+		assertTemporaryAbsent();
+		publicationCommitted = true;
+	};
+	const recoverExistingCanonical = () => {
+		let canonicalStat = readExactCanonical(new Set([1n]), {
+			requirePublicationIdentity: false,
+			syncFile: true,
+		});
+		assertVisibleCanonical(canonicalStat);
+		// A fresh publisher may finish the directory sync that a previous invocation could not
+		// observe after exposing nlink=1. Recovery never retracts or replaces canonical authority.
+		fsyncDirectory(pinned.descriptor);
+		const durableCanonicalStat = readExactCanonical(new Set([1n]), {
+			requirePublicationIdentity: false,
+		});
+		if (!sameBigIntFileIdentity(canonicalStat, durableCanonicalStat)) {
+			throw new Error("canonical inspection receipt changed during recovery");
+		}
+		canonicalStat = durableCanonicalStat;
+		assertVisibleCanonical(canonicalStat);
+		publicationCommitted = true;
+	};
 	try {
 		const topology = readPinnedTopologyReceipt(pinned, topologyReceiptFile);
 		validateTopologyReceiptLocation(
@@ -2701,29 +3045,12 @@ export function publishStagedInspectionReceipt({
 			topology.receipt,
 			receiptRoot,
 		);
-		try {
-			lstatSync(anchoredOutput);
-			throw new Error("canonical inspection receipt already exists");
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message === "canonical inspection receipt already exists"
-			) {
-				throw error;
-			}
-			if (error?.code !== "ENOENT") {
-				throw new Error("canonical inspection receipt target is unsafe");
-			}
-		}
 		staged = readPinnedStagedInspectionReceipt(
 			pinned,
 			stageFile,
 			stageEvidence,
 		);
-		const inspection = validateStagedInspectionBinding(
-			staged.receipt,
-			topology,
-		);
+		inspection = validateStagedInspectionBinding(staged.receipt, topology);
 		repositoryInspector({
 			expectedHead: topology.receipt.headSha,
 			repositoryRoot,
@@ -2735,102 +3062,130 @@ export function publishStagedInspectionReceipt({
 		if (finalTopology.receiptSha256 !== topology.receiptSha256) {
 			throw new Error("topology receipt changed before inspection publication");
 		}
-		const stableStage = lstatSync(anchoredStage, { bigint: true });
+		const stableStage = statPath(anchoredStage, { bigint: true });
 		if (!sameBigIntFileIdentity(staged.stat, stableStage)) {
 			throw new Error("staged receipt changed before inspection publication");
 		}
 		assertPinnedInspectionDirectory(pinned);
-		temporaryDescriptor = openSync(
-			temporaryPath,
-			constants.O_CREAT |
-				constants.O_EXCL |
-				constants.O_WRONLY |
-				constants.O_NOFOLLOW,
-			0o600,
-		);
-		temporaryExists = true;
-		const created = fstatSync(temporaryDescriptor, { bigint: true });
-		if (
-			!created.isFile() ||
-			created.nlink !== 1n ||
-			(created.mode & 0o777n) !== 0o600n ||
-			(typeof process.getuid === "function" &&
-				created.uid !== BigInt(process.getuid()))
-		) {
-			throw new Error("inspection publication temporary file is unsafe");
-		}
-		writeFileSync(temporaryDescriptor, staged.bytes);
-		fsyncSync(temporaryDescriptor);
-		const written = fstatSync(temporaryDescriptor, { bigint: true });
-		const temporaryStat = lstatSync(temporaryPath, { bigint: true });
-		if (
-			written.size !== BigInt(staged.bytes.length) ||
-			!sameBigIntFileIdentity(written, temporaryStat)
-		) {
-			throw new Error("inspection publication bytes were not staged exactly");
-		}
-		const finalStableStage = lstatSync(anchoredStage, { bigint: true });
-		if (
-			!sameBigIntFileIdentity(staged.stat, finalStableStage) ||
-			sha256Bytes(staged.bytes) !== stageEvidence.sha256
-		) {
-			throw new Error("staged receipt changed before inspection publication");
-		}
-		assertPinnedInspectionDirectory(pinned);
+		let canonicalExists = true;
 		try {
-			lstatSync(anchoredOutput);
-			throw new Error("canonical inspection receipt already exists");
+			statPath(anchoredOutput);
 		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message === "canonical inspection receipt already exists"
-			) {
-				throw error;
-			}
 			if (error?.code !== "ENOENT") {
 				throw new Error("canonical inspection receipt target is unsafe");
 			}
+			canonicalExists = false;
 		}
-		linkFile(temporaryPath, anchoredOutput);
-		unlinkFile(temporaryPath);
-		temporaryExists = false;
-		const published = fstatSync(temporaryDescriptor, { bigint: true });
-		const finalPathStat = lstatSync(anchoredOutput, { bigint: true });
-		if (
-			published.nlink !== 1n ||
-			!sameBigIntFileIdentity(published, finalPathStat) ||
-			published.size !== BigInt(staged.bytes.length)
-		) {
-			throw new Error("canonical inspection receipt verification failed");
+		if (canonicalExists) {
+			const canonicalStat = readExactCanonical(new Set([1n, 2n]), {
+				requirePublicationIdentity: false,
+			});
+			if (canonicalStat.nlink === 1n) {
+				recoverExistingCanonical();
+			} else {
+				publicationAttempted = true;
+				publicationStat = findExactLinkedTemporary(canonicalStat);
+				publicationCreated = true;
+				convergePublication();
+			}
+		} else {
+			publicationStat = findExactOrphanedTemporary();
+			if (publicationStat === undefined) {
+				const id = newId();
+				if (typeof id !== "string" || !UUID_V4_PATTERN.test(id)) {
+					throw new Error("inspection publication id is invalid");
+				}
+				temporaryPath = join(
+					pinned.anchoredRoot,
+					`.${basename(outputPath)}.${stageEvidence.sha256}.${id}.publish.tmp`,
+				);
+				temporaryDescriptor = openFile(
+					temporaryPath,
+					constants.O_CREAT |
+						constants.O_EXCL |
+						constants.O_WRONLY |
+						constants.O_NOFOLLOW,
+					0o600,
+				);
+				const created = statFile(temporaryDescriptor, { bigint: true });
+				if (
+					!created.isFile() ||
+					created.nlink !== 1n ||
+					(created.mode & 0o777n) !== 0o600n ||
+					(typeof process.getuid === "function" &&
+						created.uid !== BigInt(process.getuid()))
+				) {
+					throw new Error("inspection publication temporary file is unsafe");
+				}
+				writeFile(temporaryDescriptor, staged.bytes);
+				fsyncFile(temporaryDescriptor);
+				const written = statFile(temporaryDescriptor, { bigint: true });
+				validateBigIntPublicationFile(written, new Set([1n]));
+				const temporaryStat = statPath(temporaryPath, { bigint: true });
+				if (
+					written.size !== BigInt(staged.bytes.length) ||
+					!sameBigIntFileIdentity(written, temporaryStat)
+				) {
+					throw new Error(
+						"inspection publication bytes were not staged exactly",
+					);
+				}
+				publicationStat = written;
+				closeFile(temporaryDescriptor);
+				temporaryDescriptor = undefined;
+			}
+			// Persist the exact source name before a canonical link can exist. This prevents a
+			// crash from replaying canonical authority without its recoverable source alias.
+			publicationAttempted = true;
+			fsyncDirectory(pinned.descriptor);
+			const durableSourceStat = readExactTemporary(new Set([1n]));
+			if (!sameBigIntPublicationFile(publicationStat, durableSourceStat)) {
+				throw new Error("inspection publication source changed while staging");
+			}
+			publicationStat = durableSourceStat;
+			const finalStableStage = statPath(anchoredStage, { bigint: true });
+			if (
+				!sameBigIntFileIdentity(staged.stat, finalStableStage) ||
+				sha256Bytes(staged.bytes) !== stageEvidence.sha256
+			) {
+				throw new Error("staged receipt changed before inspection publication");
+			}
+			assertPinnedInspectionDirectory(pinned);
+			assertCanonicalAbsent();
+			linkFile(temporaryPath, anchoredOutput);
+			publicationCreated = true;
+			convergePublication();
 		}
-		closeSync(temporaryDescriptor);
-		temporaryDescriptor = undefined;
-		fsyncSync(pinned.descriptor);
-		assertPinnedInspectionDirectory(pinned);
 		result = { path: outputPath, receipt: inspection };
 	} catch (error) {
 		failure = error;
+		if (publicationCreated && !publicationCommitted) {
+			try {
+				convergePublication();
+				result ??= { path: outputPath, receipt: inspection };
+			} catch {
+				// Canonical visibility is irreversible. Preserve it and the source evidence; only
+				// exact descriptor-bound convergence may authorize success.
+			}
+		}
 	} finally {
 		if (staged?.bytes !== undefined) staged.bytes.fill(0);
 		if (temporaryDescriptor !== undefined) {
 			try {
-				closeSync(temporaryDescriptor);
+				closeFile(temporaryDescriptor);
 			} catch {
 				closeFailed = true;
 			}
 		}
-		if (temporaryExists) {
-			try {
-				unlinkFile(temporaryPath);
-			} catch {
-				// Only the anchored unpublished temporary is safe to remove.
-			}
-		}
 		try {
-			closeSync(pinned.descriptor);
+			closeDirectory(pinned.descriptor);
 		} catch {
-			closeFailed = true;
+			if (!publicationCommitted) closeFailed = true;
 		}
+	}
+	if (publicationCommitted) return result;
+	if (publicationAttempted || authoritativeCanonicalObserved) {
+		throw new PublicationIndeterminateError(PUBLISH_INDETERMINATE_MESSAGE);
 	}
 	if (failure !== undefined || closeFailed) {
 		throw new Error("staged inspection receipt could not be published safely");
@@ -3076,11 +3431,12 @@ export async function runTrustedFinalInspection({
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+	const inspectionMode = process.env.RC_INSPECTION_MODE;
 	try {
 		if (process.argv.length !== 2) {
 			throw new Error("final inspection accepts no command-line arguments");
 		}
-		if (process.env.RC_INSPECTION_MODE === "scan") {
+		if (inspectionMode === "scan") {
 			const input = readInspectionBootstrapInput();
 			const repositoryRoot = validateInspectionBootstrapEnvironment(
 				process.env,
@@ -3090,7 +3446,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 				repositoryRoot,
 				receiptRoot: join(repositoryRoot, "tests", "web", "test-results"),
 			});
-		} else if (process.env.RC_INSPECTION_MODE === "publish") {
+		} else if (inspectionMode === "publish") {
 			const publication = validateInspectionPublishEnvironment(process.env);
 			const result = publishStagedInspectionReceipt({
 				...publication,
@@ -3108,10 +3464,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 			throw new Error("final inspection mode is invalid");
 		}
 	} catch (error) {
-		void error;
 		process.stderr.write(
 			"final inspection refused: release gate did not pass\n",
 		);
-		process.exitCode = 1;
+		process.exitCode =
+			inspectionMode === "publish" &&
+			error instanceof PublicationIndeterminateError
+				? PUBLISH_INDETERMINATE_EXIT_CODE
+				: 1;
 	}
 }

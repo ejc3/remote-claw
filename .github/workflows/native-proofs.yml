@@ -31,9 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           # The Claude verifier checks source blobs at its retained capture commit.
           fetch-depth: 0
+      - name: Assert exact workflow revision
+        env:
+          RC_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "${RC_EXPECTED_SHA}"
       - uses: pnpm/action-setup@v4
         with:
           version: 10

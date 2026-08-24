@@ -159,6 +159,8 @@ describe("assertStableClaudeCompatibility", () => {
     try {
       const executable = await acquireStableClaudeExecutable("claude", {
         path: root,
+        platform: "linux",
+        arch: "arm64",
         expectedExecutableIdentity,
       });
       release = executable.release;

@@ -391,6 +391,27 @@ noncanonical stage and the outer wrapper binds its digest/file identity and pass
 recheck. A freshly materialized committed credential-free publisher then strict-validates the stage and
 atomically/durably/exclusively publishes the receipt after file and directory sync.
 
+Inspection and Production share one publication state machine. The publisher writes exact staged bytes
+to a random hash-bound mode-0600 source, syncs that file, syncs the pinned parent while only the source
+name exists, and revalidates the source, stage, root, and absent canonical name. It then hard-links the
+canonical name while the inode remains non-authoritative at link count two, syncs the parent, and
+re-opens and revalidates both exact same-inode names plus the visible root before unlinking the source.
+Finally it syncs the canonical file and parent and revalidates the exact single-link canonical inode.
+When canonical is absent or two-linked, fresh recovery uses a pinned streaming directory read that
+refuses on the 4,097th entry: it deterministically adopts an exact same-stage single-link orphan, ignores
+torn or stale random sources, or reconciles the sole grammar-valid alias of an exact two-link canonical
+inode. An exact single-link canonical inode bypasses enumeration and is recovered by direct file and
+directory sync plus revalidation. Recovery never deletes conflicting evidence. Exit 75 or a
+signal-killed publisher gets one fresh same-stage process retry; a failed retry remains 75. Once
+publication has started, an outcome still unresolved after that retry—or an outer-wrapper signal while
+the publisher outcome remains unresolved—preserves the stage. Once publisher success is observed,
+cleanup may remove the stage; a later outer-wrapper signal still reports no success and leaves the
+committed canonical inode. A later normal wrapper invocation refuses any preserved stage instead of
+regenerating different evidence. Automatic recovery after death of the whole outer wrapper is not a 1.0
+claim because it would require a caller-held provenance ticket outside the same-UID receipt namespace.
+The retained transaction is fail-stop and indeterminate to the caller: it may include an irreversibly
+visible canonical inode, but the interrupted wrapper never reports a passed receipt.
+
 The terminal post-merge link, `remote-claw-production-release-attestation/v1`, binds that inspection
 receipt's exact bytes only while its completion is at most 71 hours old or five minutes in the future.
 It binds raw-local and GitHub-proved candidate ancestry/equal trees to the exact live Production

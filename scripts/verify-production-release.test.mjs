@@ -3,15 +3,23 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	chmodSync,
+	closeSync,
+	constants,
 	existsSync,
+	fchmodSync,
+	fstatSync,
 	fsyncSync,
+	linkSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	openSync,
 	readdirSync,
 	readFileSync,
 	realpathSync,
+	renameSync,
 	rmSync,
+	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,6 +87,37 @@ const PRODUCTION_ORIGIN =
 	"https://remote-claw-def456uvw-ejc3-7031s-projects.vercel.app";
 const PROJECT_ID = "prj_qUeYYc7P87JmsQUipJG0m0kqmYbM";
 const TEAM_ID = "team_fYexi4KRmIrq9wtYsiXs9e9H";
+const pinnedReleaseHost =
+	process.platform === "linux" && process.arch === "arm64";
+
+function ensurePrivateResultRoot() {
+	try {
+		mkdirSync(RESULT_ROOT, { mode: 0o700 });
+	} catch (error) {
+		if (error?.code !== "EEXIST") throw error;
+	}
+	const descriptor = openSync(
+		RESULT_ROOT,
+		constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+	);
+	try {
+		const stat = fstatSync(descriptor);
+		if (
+			!stat.isDirectory() ||
+			stat.isSymbolicLink() ||
+			(typeof process.getuid === "function" && stat.uid !== process.getuid())
+		) {
+			throw new Error(
+				"production test result root is not a private owned directory",
+			);
+		}
+		fchmodSync(descriptor, 0o700);
+	} finally {
+		closeSync(descriptor);
+	}
+}
+
+ensurePrivateResultRoot();
 
 function sha256(bytes) {
 	return createHash("sha256").update(bytes).digest("hex");
@@ -93,6 +132,10 @@ function stagedBinding(stagePath) {
 		inode: String(stat.ino),
 		size: String(stat.size),
 	};
+}
+
+function publicationTemporaries(root) {
+	return readdirSync(root).filter((name) => name.endsWith(".publish.tmp"));
 }
 
 function inspectionReceipt(overrides = {}) {
@@ -697,6 +740,24 @@ test("BusyBox wrapper proves and snapshots committed release bytes before openin
 		source,
 		/\/usr\/bin\/node "\$publisher_runner_path" >"\$publisher_stdout"/,
 	);
+	assert.match(source, /publisher_started=1[\s\S]*run_publisher/);
+	assert.match(
+		source,
+		/"\$publisher_started" -eq 0[\s\S]*"\$publisher_succeeded" -eq 1[\s\S]*rm -f -- "\$staged_receipt"/,
+	);
+	assert.match(
+		source,
+		/"\$publisher_status" -eq 75[\s\S]*"\$publisher_status" -ge 128[\s\S]*publisher_indeterminate_seen=1[\s\S]*run_publisher/,
+	);
+	assert.match(
+		source,
+		/"\$publisher_indeterminate_seen" -eq 1[\s\S]*publisher_status=75/,
+	);
+	assert.match(source, /publisher_succeeded=1[\s\S]*cat "\$publisher_stdout"/);
+	assert.match(
+		source,
+		/find "\$receipt_root" -maxdepth 1 -name '\.production-release-stage-\*\.json' -print -quit[\s\S]*\[ -z "\$preserved_stage" \] \|\| fail/,
+	);
 	for (const path of [
 		"scripts/verify-production-release-clean.sh",
 		"scripts/verify-production-release.mjs",
@@ -706,7 +767,11 @@ test("BusyBox wrapper proves and snapshots committed release bytes before openin
 	}
 });
 
-test("outer HEAD recheck leaves no final receipt and permits a clean retry", () => {
+test("outer HEAD recheck leaves no final receipt and permits a clean retry", (context) => {
+	if (!pinnedReleaseHost) {
+		context.skip("requires the pinned Linux/arm64 release host");
+		return;
+	}
 	const sandbox = realpathSync(
 		mkdtempSync(join(tmpdir(), "rc-production-outer-recheck-")),
 	);
@@ -714,6 +779,10 @@ test("outer HEAD recheck leaves no final receipt and permits a clean retry", () 
 	const scripts = join(repository, "scripts");
 	const receiptRoot = join(repository, "tests", "web", "test-results");
 	const marker = join(sandbox, ".head-moved-once");
+	const publisherRetryMarker = join(sandbox, ".publisher-retried");
+	const signalPublisherMarker = join(sandbox, ".signal-publisher");
+	const failedRecoveryMarker = join(sandbox, ".failed-recovery");
+	const failedRecoveryAttempt = join(sandbox, ".failed-recovery-attempt");
 	const gitEnvironment = {
 		GIT_CONFIG_GLOBAL: "/dev/null",
 		GIT_CONFIG_NOSYSTEM: "1",
@@ -767,8 +836,28 @@ test("outer HEAD recheck leaves no final receipt and permits a clean retry", () 
 			"  const stage = fields[0];",
 			'  const head = spawnSync("/usr/bin/git", ["-C", root, "rev-parse", "--verify", "HEAD"], { encoding: "utf8", env: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", LANG: "C.UTF-8", PATH: "/usr/bin:/bin" } }).stdout.trim();',
 			'  const finalPath = join(dirname(stage), "production-release-attestation-" + head + "-123.json");',
-			"  linkSync(stage, finalPath);",
-			"  unlinkSync(stage);",
+			`  const failedRecoveryMarker = ${JSON.stringify(failedRecoveryMarker)};`,
+			`  const failedRecoveryAttempt = ${JSON.stringify(failedRecoveryAttempt)};`,
+			"  if (existsSync(failedRecoveryMarker)) {",
+			"    if (!existsSync(failedRecoveryAttempt)) {",
+			'      writeFileSync(finalPath, readFileSync(stage), { mode: 0o600, flag: "wx" });',
+			'      writeFileSync(failedRecoveryAttempt, "attempt\\n", { mode: 0o600, flag: "wx" });',
+			"      process.exit(75);",
+			"    }",
+			"    process.exit(1);",
+			"  }",
+			`  if (existsSync(${JSON.stringify(signalPublisherMarker)})) {`,
+			'    writeFileSync(finalPath, readFileSync(stage), { mode: 0o600, flag: "wx" });',
+			'    process.kill(process.ppid, "SIGTERM");',
+			"    await new Promise((resolve) => setTimeout(resolve, 250));",
+			"    process.exit(74);",
+			"  }",
+			`  const retryMarker = ${JSON.stringify(publisherRetryMarker)};`,
+			"  if (!existsSync(retryMarker)) {",
+			'    writeFileSync(finalPath, readFileSync(stage), { mode: 0o600, flag: "wx" });',
+			'    writeFileSync(retryMarker, "retry\\n", { mode: 0o600, flag: "wx" });',
+			"    process.exit(75);",
+			"  }",
 			'  process.stdout.write("production release attestation: " + finalPath + "\\n");',
 			"} else { process.exit(3); }",
 		].join("\n");
@@ -806,6 +895,24 @@ test("outer HEAD recheck leaves no final receipt and permits a clean retry", () 
 			VERCEL_AUTOMATION_BYPASS_SECRET: "bypass-secret",
 			VERCEL_TOKEN: "vercel-secret",
 		};
+		const preservedStage = join(
+			receiptRoot,
+			".production-release-stage-00000000-0000-4000-8000-000000000001.json",
+		);
+		writeFileSync(preservedStage, "preserved-stage\n", { mode: 0o600 });
+		const preservedStageStat = lstatSync(preservedStage);
+		const preserved = spawnSync(
+			join(scripts, "verify-production-release-clean.sh"),
+			[],
+			{ encoding: "utf8", env: environment },
+		);
+		assert.equal(preserved.status, 126, preserved.stderr);
+		const preservedStageAfter = lstatSync(preservedStage);
+		assert.equal(preservedStageAfter.dev, preservedStageStat.dev);
+		assert.equal(preservedStageAfter.ino, preservedStageStat.ino);
+		assert.equal(readFileSync(preservedStage, "utf8"), "preserved-stage\n");
+		assert.equal(existsSync(marker), false);
+		rmSync(preservedStage);
 		const first = spawnSync(
 			join(scripts, "verify-production-release-clean.sh"),
 			[],
@@ -824,6 +931,46 @@ test("outer HEAD recheck leaves no final receipt and permits a clean retry", () 
 			),
 			[],
 		);
+
+		writeFileSync(signalPublisherMarker, "signal\n", { mode: 0o600 });
+		const interrupted = spawnSync(
+			join(scripts, "verify-production-release-clean.sh"),
+			[],
+			{ encoding: "utf8", env: environment },
+		);
+		assert.equal(interrupted.status, 143, interrupted.stderr);
+		const interruptedCanonical = readdirSync(receiptRoot).filter((name) =>
+			name.startsWith("production-release-attestation-"),
+		);
+		const interruptedStage = readdirSync(receiptRoot).filter((name) =>
+			name.startsWith(".production-release-stage-"),
+		);
+		assert.equal(interruptedCanonical.length, 1);
+		assert.equal(interruptedStage.length, 1);
+		rmSync(join(receiptRoot, interruptedCanonical[0]));
+		rmSync(join(receiptRoot, interruptedStage[0]));
+		rmSync(signalPublisherMarker);
+
+		writeFileSync(failedRecoveryMarker, "fail\n", { mode: 0o600 });
+		const unresolved = spawnSync(
+			join(scripts, "verify-production-release-clean.sh"),
+			[],
+			{ encoding: "utf8", env: environment },
+		);
+		assert.equal(unresolved.status, 75, unresolved.stderr);
+		const unresolvedCanonical = readdirSync(receiptRoot).filter((name) =>
+			name.startsWith("production-release-attestation-"),
+		);
+		const unresolvedStage = readdirSync(receiptRoot).filter((name) =>
+			name.startsWith(".production-release-stage-"),
+		);
+		assert.equal(unresolvedCanonical.length, 1);
+		assert.equal(unresolvedStage.length, 1);
+		rmSync(join(receiptRoot, unresolvedCanonical[0]));
+		rmSync(join(receiptRoot, unresolvedStage[0]));
+		rmSync(failedRecoveryMarker);
+		rmSync(failedRecoveryAttempt);
+
 		const retry = spawnSync(
 			join(scripts, "verify-production-release-clean.sh"),
 			[],
@@ -835,6 +982,13 @@ test("outer HEAD recheck leaves no final receipt and permits a clean retry", () 
 				name.startsWith("production-release-attestation-"),
 			).length,
 			1,
+		);
+		assert.equal(existsSync(publisherRetryMarker), true);
+		assert.deepEqual(
+			readdirSync(receiptRoot).filter((name) =>
+				name.startsWith(".production-release-stage-"),
+			),
+			[],
 		);
 	} finally {
 		rmSync(sandbox, { recursive: true, force: true });
@@ -1841,12 +1995,15 @@ test("receipt staging precedes credential-free atomic publication", () => {
 			},
 		});
 		assert.equal(written, expected);
-		assert.equal(existsSync(staged), false);
+		assert.equal(existsSync(staged), true);
 		const stat = lstatSync(written);
 		assert.equal(stat.mode & 0o777, 0o600);
 		assert.equal(stat.nlink, 1);
 		assert.deepEqual(JSON.parse(readFileSync(written, "utf8")), receipt);
-		assert.deepEqual(readdirSync(root), [basename(expected)]);
+		assert.deepEqual(
+			readdirSync(root).sort(),
+			[basename(expected), basename(staged)].sort(),
+		);
 		assert.ok(directorySyncs >= 2);
 		assert.throws(
 			() =>
@@ -1907,6 +2064,690 @@ test("publisher rejects replacement staging bytes, leaves no final, and a fresh 
 			expected,
 		);
 		assert.equal(existsSync(expected), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("publisher converges an observed one-time pair-sync failure without retracting canonical authority", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-sync-rollback-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		let directorySyncs = 0;
+		assert.equal(
+			publishStagedProductionReceipt(stagedBinding(stage), {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+				fsyncDirectory(descriptor) {
+					directorySyncs += 1;
+					if (directorySyncs === 2) {
+						assert.equal(lstatSync(expected).nlink, 2);
+						throw new Error("injected commit sync failure");
+					}
+					fsyncSync(descriptor);
+				},
+			}),
+			expected,
+		);
+		assert.equal(directorySyncs, 4);
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.equal(existsSync(stage), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("publisher converges a one-time source-unlink failure without deleting canonical", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-unlink-rollback-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		let unlinks = 0;
+		assert.equal(
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+				unlinkFile(path) {
+					unlinks += 1;
+					if (unlinks === 1) throw new Error("injected source unlink failure");
+					unlinkSync(path);
+				},
+			}),
+			expected,
+		);
+		assert.equal(unlinks, 2);
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.equal(existsSync(stage), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a fresh publisher reconciles an exact canonical link after an ambiguous EEXIST result", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-link-reconcile-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(binding, {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					linkFile(source, target) {
+						linkSync(source, target);
+						const error = new Error("injected ambiguous link result");
+						error.code = "EEXIST";
+						throw error;
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(lstatSync(expected).nlink, 2);
+		assert.equal(
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+			}),
+			expected,
+		);
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.equal(existsSync(stage), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("fresh publication adopts an exact orphaned source after a pre-link failure", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-orphan-source-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(binding, {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					linkFile() {
+						throw new Error("injected pre-link failure");
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(existsSync(expected), false);
+		const temporaries = publicationTemporaries(root);
+		assert.equal(temporaries.length, 1);
+		const orphanStat = lstatSync(join(root, temporaries[0]));
+		assert.equal(orphanStat.nlink, 1);
+
+		assert.equal(
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+			}),
+			expected,
+		);
+		const canonicalStat = lstatSync(expected);
+		assert.equal(canonicalStat.nlink, 1);
+		assert.equal(canonicalStat.dev, orphanStat.dev);
+		assert.equal(canonicalStat.ino, orphanStat.ino);
+		assert.equal(publicationTemporaries(root).length, 0);
+		assert.equal(lstatSync(stage).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a torn random production source cannot block a fresh exact publication", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-torn-source-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		const publish = (options = {}) =>
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+				...options,
+			});
+		assert.throws(
+			() =>
+				publish({
+					writeFile(descriptor, bytes) {
+						writeFileSync(descriptor, bytes.subarray(0, 7));
+						throw new Error("injected torn publication write");
+					},
+				}),
+			/could not be published exclusively/,
+		);
+		assert.equal(existsSync(expected), false);
+		const torn = publicationTemporaries(root);
+		assert.equal(torn.length, 1);
+		assert.equal(lstatSync(join(root, torn[0])).size, 7);
+
+		assert.equal(publish(), expected);
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.deepEqual(publicationTemporaries(root), torn);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("production publication deterministically adopts one of multiple exact orphan sources", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-orphan-set-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		const prefix = `.${basename(expected)}.${binding.sha256}.`;
+		const first = join(
+			root,
+			`${prefix}00000000-0000-4000-8000-000000000001.publish.tmp`,
+		);
+		const second = join(
+			root,
+			`${prefix}00000000-0000-4000-8000-000000000002.publish.tmp`,
+		);
+		const stageBytes = readFileSync(stage);
+		writeFileSync(first, stageBytes, { mode: 0o600, flag: "wx" });
+		writeFileSync(second, stageBytes, { mode: 0o600, flag: "wx" });
+		const firstStat = lstatSync(first);
+
+		assert.equal(
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+			}),
+			expected,
+		);
+		const canonicalStat = lstatSync(expected);
+		assert.equal(canonicalStat.dev, firstStat.dev);
+		assert.equal(canonicalStat.ino, firstStat.ino);
+		assert.equal(existsSync(first), false);
+		assert.equal(lstatSync(second).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a failed production source-only sync leaves no canonical and a fresh invocation adopts the exact source", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-source-sync-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		const publish = (options = {}) =>
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+				...options,
+			});
+		assert.throws(
+			() =>
+				publish({
+					fsyncDirectory() {
+						throw new Error("injected source-only sync failure");
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(existsSync(expected), false);
+		const temporaries = publicationTemporaries(root);
+		assert.equal(temporaries.length, 1);
+		const sourceStat = lstatSync(join(root, temporaries[0]));
+		assert.equal(sourceStat.nlink, 1);
+
+		assert.equal(publish(), expected);
+		const canonicalStat = lstatSync(expected);
+		assert.equal(canonicalStat.nlink, 1);
+		assert.equal(canonicalStat.dev, sourceStat.dev);
+		assert.equal(canonicalStat.ino, sourceStat.ino);
+		assert.equal(publicationTemporaries(root).length, 0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("production publication revalidates the exact link pair after its directory sync", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-pair-race-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		let directorySyncs = 0;
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(binding, {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					fsyncDirectory(descriptor) {
+						directorySyncs += 1;
+						fsyncSync(descriptor);
+						if (directorySyncs === 2) {
+							const [temporary] = publicationTemporaries(root);
+							unlinkSync(join(root, temporary));
+							writeFileSync(join(root, temporary), "replacement\n", {
+								mode: 0o600,
+								flag: "wx",
+							});
+						}
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(lstatSync(expected).nlink, 1);
+		const [replacement] = publicationTemporaries(root);
+		assert.equal(
+			readFileSync(join(root, replacement), "utf8"),
+			"replacement\n",
+		);
+		assert.equal(
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+			}),
+			expected,
+		);
+		assert.equal(
+			readFileSync(join(root, replacement), "utf8"),
+			"replacement\n",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("production publication refuses an unbounded recovery directory before mutation", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-dir-bound-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		let directoryReads = 0;
+		let directoryClosed = false;
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(stagedBinding(stage), {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					openPublicationDirectory: () => ({
+						readSync() {
+							directoryReads += 1;
+							return { name: "entry" };
+						},
+						closeSync() {
+							directoryClosed = true;
+						},
+					}),
+				}),
+			/publication directory is unbounded/,
+		);
+		assert.equal(directoryReads, 4_097);
+		assert.equal(directoryClosed, true);
+		assert.equal(existsSync(expected), false);
+		assert.equal(publicationTemporaries(root).length, 0);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a newer exact stage is not blocked by an older orphaned source", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-stale-source-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const oldStage = stageProductionReceipt(receipt, { receiptRoot: root });
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(stagedBinding(oldStage), {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					linkFile() {
+						throw new Error("injected pre-link crash");
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		const oldTemporary = publicationTemporaries(root);
+		assert.equal(oldTemporary.length, 1);
+
+		const newerReceipt = {
+			...receipt,
+			verifiedAt: "2026-08-24T02:01:00.000Z",
+		};
+		const newStage = stageProductionReceipt(newerReceipt, {
+			receiptRoot: root,
+		});
+		assert.equal(
+			publishStagedProductionReceipt(stagedBinding(newStage), {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+			}),
+			expected,
+		);
+		assert.deepEqual(JSON.parse(readFileSync(expected, "utf8")), newerReceipt);
+		assert.deepEqual(publicationTemporaries(root), oldTemporary);
+		assert.equal(lstatSync(join(root, oldTemporary[0])).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("publisher rejects descriptor-bound canonical byte mismatch without deleting either link", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-byte-mismatch-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		let reads = 0;
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(stagedBinding(stage), {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					readFile(descriptor) {
+						reads += 1;
+						const bytes = readFileSync(descriptor);
+						if (reads > 2) bytes[0] ^= 1;
+						return bytes;
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.ok(reads >= 4);
+		assert.equal(lstatSync(expected).nlink, 2);
+		assert.equal(lstatSync(stage).nlink, 1);
+		const temporaries = publicationTemporaries(root);
+		assert.equal(temporaries.length, 1);
+		assert.equal(lstatSync(join(root, temporaries[0])).nlink, 2);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("root swap preserves the anchored canonical and reports indeterminate", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-root-race-")),
+	);
+	const displacedRoot = `${root}.displaced`;
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(binding, {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					linkFile(source, target) {
+						renameSync(root, displacedRoot);
+						mkdirSync(root, { mode: 0o700 });
+						linkSync(source, target);
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(existsSync(expected), false);
+		const displacedCanonical = join(displacedRoot, basename(expected));
+		const [temporary] = publicationTemporaries(displacedRoot);
+		const canonicalStat = lstatSync(displacedCanonical);
+		const temporaryStat = lstatSync(join(displacedRoot, temporary));
+		assert.equal(canonicalStat.nlink, 2);
+		assert.equal(temporaryStat.nlink, 2);
+		assert.equal(canonicalStat.dev, temporaryStat.dev);
+		assert.equal(canonicalStat.ino, temporaryStat.ino);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(displacedRoot, { recursive: true, force: true });
+	}
+});
+
+test("post-commit directory close failure cannot downgrade a durable publication", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-close-after-commit-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		let closes = 0;
+		assert.equal(
+			publishStagedProductionReceipt(stagedBinding(stage), {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+				closeDirectory(descriptor) {
+					closes += 1;
+					closeSync(descriptor);
+					throw new Error("injected close acknowledgement failure");
+				},
+			}),
+			expected,
+		);
+		assert.equal(closes, 2);
+		assert.equal(existsSync(expected), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("persistent sync failure preserves a non-authoritative canonical inode and reports indeterminate", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-indeterminate-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		let directorySyncs = 0;
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(binding, {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					fsyncDirectory(descriptor) {
+						directorySyncs += 1;
+						if (directorySyncs >= 2) {
+							throw new Error("injected persistent sync failure");
+						}
+						fsyncSync(descriptor);
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(directorySyncs, 3);
+		assert.equal(lstatSync(expected).nlink, 2);
+		assert.equal(lstatSync(stage).nlink, 1);
+		const temporaries = publicationTemporaries(root);
+		assert.equal(temporaries.length, 1);
+		assert.equal(lstatSync(join(root, temporaries[0])).nlink, 2);
+		assert.equal(
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+			}),
+			expected,
+		);
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.equal(publicationTemporaries(root).length, 0);
+		assert.equal(lstatSync(stage).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an exhausted post-unlink sync failure is recovered by a fresh exact invocation", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-post-unlink-recovery-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		let directorySyncs = 0;
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(binding, {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					fsyncDirectory(descriptor) {
+						directorySyncs += 1;
+						if (directorySyncs >= 3) {
+							throw new Error("injected exhausted post-unlink sync failure");
+						}
+						fsyncSync(descriptor);
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(directorySyncs, 4);
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.equal(lstatSync(stage).nlink, 1);
+		assert.equal(publicationTemporaries(root).length, 0);
+
+		let recoveryFileSyncs = 0;
+		assert.equal(
+			publishStagedProductionReceipt(binding, {
+				receiptRoot: root,
+				repositoryRoot: ROOT,
+				localInspector: () => localState(),
+				fsyncFile(descriptor) {
+					recoveryFileSyncs += 1;
+					fsyncSync(descriptor);
+				},
+			}),
+			expected,
+		);
+		assert.equal(recoveryFileSyncs, 1);
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.equal(existsSync(stage), true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("fresh recovery refuses a pre-existing canonical with different bytes", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-recovery-mismatch-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		writeFileSync(expected, "{}\n", { mode: 0o600, flag: "wx" });
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(stagedBinding(stage), {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+				}),
+			(error) => {
+				assert.doesNotMatch(
+					error.message,
+					/publication state is indeterminate/,
+				);
+				return /canonical bytes changed/.test(error.message);
+			},
+		);
+		assert.equal(readFileSync(expected, "utf8"), "{}\n");
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.equal(lstatSync(stage).nlink, 1);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("fresh recovery refuses an exact canonical inode replacement after its durability sync", () => {
+	const root = realpathSync(
+		mkdtempSync(join(tmpdir(), "rc-production-recovery-race-")),
+	);
+	const receipt = productionReceipt();
+	const expected = productionReceiptPath(receipt, root);
+	try {
+		const stage = stageProductionReceipt(receipt, { receiptRoot: root });
+		const binding = stagedBinding(stage);
+		publishStagedProductionReceipt(binding, {
+			receiptRoot: root,
+			repositoryRoot: ROOT,
+			localInspector: () => localState(),
+		});
+		const exactBytes = readFileSync(expected);
+		const replacement = join(root, ".replacement-production-receipt");
+		assert.throws(
+			() =>
+				publishStagedProductionReceipt(binding, {
+					receiptRoot: root,
+					repositoryRoot: ROOT,
+					localInspector: () => localState(),
+					fsyncDirectory(descriptor) {
+						fsyncSync(descriptor);
+						writeFileSync(replacement, exactBytes, {
+							mode: 0o600,
+							flag: "wx",
+						});
+						renameSync(replacement, expected);
+					},
+				}),
+			/publication state is indeterminate/,
+		);
+		assert.equal(lstatSync(expected).nlink, 1);
+		assert.deepEqual(readFileSync(expected), exactBytes);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

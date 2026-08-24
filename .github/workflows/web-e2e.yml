@@ -20,6 +20,13 @@ jobs:
       CI: "true"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact workflow revision
+        env:
+          RC_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "${RC_EXPECTED_SHA}"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -28,6 +35,23 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # The trusted release modules deliberately require the operator tools at fixed /usr/bin paths.
+      # The setup actions install immutable runner bytes elsewhere, so bind those exact executables at
+      # the production coordinates for portable pure-JS gate tests. The arm64 BusyBox wrapper
+      # integration remains platform-gated and runs in the local release gate on the pinned host.
+      - name: Bind setup tools at the trusted test coordinates
+        shell: bash
+        run: |
+          set -euo pipefail
+          setup_node="$(command -v node)"
+          setup_npm="$(command -v npm)"
+          setup_pnpm="$(command -v pnpm)"
+          sudo -n ln -sfn -- "${setup_node}" /usr/bin/node
+          sudo -n ln -sfn -- "${setup_npm}" /usr/bin/npm
+          sudo -n ln -sfn -- "${setup_pnpm}" /usr/bin/pnpm
+          [ "$(realpath /usr/bin/node)" = "$(realpath "${setup_node}")" ]
+          [ "$(realpath /usr/bin/npm)" = "$(realpath "${setup_npm}")" ]
+          [ "$(realpath /usr/bin/pnpm)" = "$(realpath "${setup_pnpm}")" ]
       - run: pnpm install --frozen-lockfile
 
       # Typecheck the e2e harness (configs + specs + the tsx host-runner) under the same strict TS the rest

@@ -1072,6 +1072,25 @@ materializes a fresh committed publisher closure. Only that exact credential-fre
 strict-validate the stage and publish the canonical mode-0600 artifact without overwrite after
 complete-byte and parent-directory sync.
 
+Both publishers prove the same three durability phases: exact random hash-bound source file plus
+source-only parent sync; canonical/source hard-link pair plus parent sync and exact post-sync
+same-inode/root revalidation; then source unlink, canonical-file sync, parent sync, and exact final
+single-link revalidation. When canonical is absent or two-linked, recovery streams the pinned directory
+and refuses on the 4,097th entry; exact single-link recovery bypasses enumeration and directly syncs and
+revalidates canonical. Tests cover torn random sources, deterministic selection among multiple exact
+same-stage orphans, source-only sync failure, ambiguous link results, pair-sync failure, post-sync
+path/inode substitution, unlink and
+final-sync failure, visible-root replacement, exact one-link/two-link fresh recovery, stale-stage
+isolation, and mismatched/conflicting evidence preservation. The wrapper retries once in a fresh process
+after typed exit 75 or a signal-killed publisher and latches any failed retry back to 75. Once
+publication has started, an outcome still unresolved after that retry—or an outer-wrapper signal while
+the publisher outcome remains unresolved—preserves the bound stage. Once publisher success is observed,
+cleanup may remove the stage; a later outer-wrapper signal still reports no success and leaves committed
+canonical evidence. A normal later invocation refuses any preserved stage rather than replacing it.
+Whole-wrapper-death auto-recovery is outside the release claim without an external caller-held
+provenance ticket; the observable outcome is fail-stop and indeterminate to the caller. An irreversible
+canonical inode may already exist, but the interrupted wrapper does not report success.
+
 After that exact candidate merges without changing its Git tree and exact-merge CI passes, invoke only
 `verify-production-release-clean.sh`. Its wrapper accepts no argv and independently byte-pins BusyBox,
 Git, and Node. It derives the inspected candidate from the canonical private receipt filename, requires

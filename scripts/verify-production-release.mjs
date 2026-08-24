@@ -8,6 +8,7 @@ import {
 	fsyncSync,
 	linkSync,
 	lstatSync,
+	opendirSync,
 	openSync,
 	readFileSync,
 	readSync,
@@ -93,11 +94,17 @@ const MAX_INSPECTION_RECEIPT_BYTES = 128 * 1_024;
 const MAX_PROVIDER_RESPONSE_BYTES = 1024 * 1_024;
 const MAX_RUNTIME_ATTESTATION_BYTES = 4 * 1_024;
 const MAX_DATA_PLANE_RESPONSE_BYTES = 16 * 1_024;
+const MAX_PUBLICATION_DIRECTORY_ENTRIES = 4_096;
 const MAX_INSPECTION_AGE_MS = 71 * 60 * 60 * 1_000;
 const MAX_INSPECTION_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const LOCAL_GIT_TIMEOUT_MS = 15_000;
+const PUBLISH_INDETERMINATE_EXIT_CODE = 75;
+const PUBLISH_INDETERMINATE_MESSAGE =
+	"production receipt publication state is indeterminate";
 const IMMUTABLE_DEPLOYMENT_ORIGIN =
 	/^https:\/\/remote-claw-[a-z0-9]{9}-ejc3-7031s-projects\.vercel\.app$/;
+
+class PublicationIndeterminateError extends Error {}
 
 function refusal(message) {
 	return new Error(message);
@@ -538,6 +545,36 @@ function sameFile(left, right) {
 		left.mtimeMs === right.mtimeMs &&
 		left.ctimeMs === right.ctimeMs
 	);
+}
+
+// Linking and unlinking deliberately change ctime and link count. Publication identity therefore pins
+// every other inode field, while descriptor-bound reads below independently bind the exact bytes.
+function samePublicationFile(left, right) {
+	return (
+		left.dev === right.dev &&
+		left.ino === right.ino &&
+		left.size === right.size &&
+		left.mode === right.mode &&
+		left.uid === right.uid &&
+		left.gid === right.gid &&
+		left.mtimeMs === right.mtimeMs
+	);
+}
+
+function validatePrivatePublicationReceiptStat(stat, allowedLinks) {
+	const currentUid =
+		typeof process.getuid === "function" ? process.getuid() : undefined;
+	if (
+		!stat.isFile() ||
+		stat.isSymbolicLink?.() ||
+		(stat.mode & 0o777) !== 0o600 ||
+		stat.size < 1 ||
+		stat.size > MAX_INSPECTION_RECEIPT_BYTES ||
+		!allowedLinks.has(stat.nlink) ||
+		(currentUid !== undefined && stat.uid !== currentUid)
+	) {
+		throw refusal("production receipt publication inode is unsafe");
+	}
 }
 
 function validatePrivateReceiptStat(stat) {
@@ -2309,13 +2346,17 @@ export function publishStagedProductionReceipt(
 		receiptRoot = MODULE_DEFAULT_RECEIPT_ROOT,
 		repositoryRoot = MODULE_DEFAULT_REPOSITORY_ROOT,
 		localInspector = inspectLocalReleaseState,
+		newId = randomUUID,
 		openFile = openSync,
 		readFile = readFileSync,
+		writeFile = writeFileSync,
 		statFile = fstatSync,
+		fsyncFile = fsyncSync,
 		closeFile = closeSync,
 		linkFile = linkSync,
 		unlinkFile = unlinkSync,
 		statPath = lstatSync,
+		openPublicationDirectory = opendirSync,
 		realpath = realpathSync,
 		openDirectory = openSync,
 		statDirectory = fstatSync,
@@ -2403,7 +2444,321 @@ export function publishStagedProductionReceipt(
 	const anchoredRoot = `/proc/self/fd/${directoryDescriptor}`;
 	const anchoredStagePath = join(anchoredRoot, basename(stagePath));
 	let descriptor;
-	let linked = false;
+	let temporaryDescriptor;
+	let temporaryPath;
+	let anchoredFinalPath;
+	let finalPath;
+	let stagedBytes;
+	let publicationStat;
+	let publicationAttempted = false;
+	let publicationCreated = false;
+	let publicationCommitted = false;
+	let authoritativeCanonicalObserved = false;
+	const readExactCanonical = (
+		allowedLinks,
+		{ requirePublicationIdentity = true, syncFile = false } = {},
+	) => {
+		let canonicalDescriptor;
+		let canonicalStat;
+		let failure;
+		let closeFailed = false;
+		try {
+			canonicalDescriptor = openFile(
+				anchoredFinalPath,
+				constants.O_RDONLY | constants.O_NOFOLLOW,
+			);
+			const before = statFile(canonicalDescriptor);
+			validatePrivatePublicationReceiptStat(before, allowedLinks);
+			if (
+				requirePublicationIdentity &&
+				(publicationStat === undefined ||
+					!samePublicationFile(publicationStat, before))
+			) {
+				throw refusal("production receipt canonical identity changed");
+			}
+			const canonicalBytes = readFile(canonicalDescriptor);
+			let after = statFile(canonicalDescriptor);
+			const pathStat = statPath(anchoredFinalPath);
+			if (
+				!Buffer.isBuffer(canonicalBytes) ||
+				stagedBytes === undefined ||
+				canonicalBytes.length !== before.size ||
+				sha256(canonicalBytes) !== stageBinding.sha256 ||
+				!canonicalBytes.equals(stagedBytes) ||
+				!sameFile(before, after) ||
+				!sameFile(after, pathStat)
+			) {
+				throw refusal("production receipt canonical bytes changed");
+			}
+			if (after.nlink === 1) {
+				authoritativeCanonicalObserved = true;
+			}
+			if (syncFile) {
+				fsyncFile(canonicalDescriptor);
+				const synced = statFile(canonicalDescriptor);
+				const syncedPath = statPath(anchoredFinalPath);
+				if (!sameFile(after, synced) || !sameFile(synced, syncedPath)) {
+					throw refusal("production receipt canonical changed while syncing");
+				}
+				after = synced;
+			}
+			canonicalStat = after;
+		} catch (error) {
+			failure = error;
+		} finally {
+			if (canonicalDescriptor !== undefined) {
+				try {
+					closeFile(canonicalDescriptor);
+				} catch {
+					closeFailed = true;
+				}
+			}
+		}
+		if (closeFailed) {
+			throw refusal("production receipt canonical descriptor could not close");
+		}
+		if (failure !== undefined) throw failure;
+		return canonicalStat;
+	};
+	const readExactTemporary = (allowedLinks, { syncFile = false } = {}) => {
+		let temporaryReadDescriptor;
+		let temporaryStat;
+		let failure;
+		let closeFailed = false;
+		try {
+			temporaryReadDescriptor = openFile(
+				temporaryPath,
+				constants.O_RDONLY | constants.O_NOFOLLOW,
+			);
+			const before = statFile(temporaryReadDescriptor);
+			validatePrivatePublicationReceiptStat(before, allowedLinks);
+			const temporaryBytes = readFile(temporaryReadDescriptor);
+			let after = statFile(temporaryReadDescriptor);
+			const pathStat = statPath(temporaryPath);
+			if (
+				!Buffer.isBuffer(temporaryBytes) ||
+				stagedBytes === undefined ||
+				temporaryBytes.length !== before.size ||
+				sha256(temporaryBytes) !== stageBinding.sha256 ||
+				!temporaryBytes.equals(stagedBytes) ||
+				!sameFile(before, after) ||
+				!sameFile(after, pathStat)
+			) {
+				throw refusal("production receipt publication source bytes changed");
+			}
+			if (syncFile) {
+				fsyncFile(temporaryReadDescriptor);
+				const synced = statFile(temporaryReadDescriptor);
+				const syncedPath = statPath(temporaryPath);
+				if (!sameFile(after, synced) || !sameFile(synced, syncedPath)) {
+					throw refusal(
+						"production receipt publication source changed while syncing",
+					);
+				}
+				after = synced;
+			}
+			temporaryStat = after;
+		} catch (error) {
+			failure = error;
+		} finally {
+			if (temporaryReadDescriptor !== undefined) {
+				try {
+					closeFile(temporaryReadDescriptor);
+				} catch {
+					closeFailed = true;
+				}
+			}
+		}
+		if (closeFailed) {
+			throw refusal("production receipt publication source could not close");
+		}
+		if (failure !== undefined) throw failure;
+		return temporaryStat;
+	};
+	const readBoundedPublicationEntries = () => {
+		let directory;
+		const entries = [];
+		try {
+			directory = openPublicationDirectory(anchoredRoot);
+			if (
+				directory === null ||
+				typeof directory !== "object" ||
+				typeof directory.readSync !== "function" ||
+				typeof directory.closeSync !== "function"
+			) {
+				throw refusal("production receipt publication directory is unsafe");
+			}
+			while (true) {
+				const entry = directory.readSync();
+				if (entry === null) return entries;
+				if (
+					entry === null ||
+					typeof entry !== "object" ||
+					typeof entry.name !== "string"
+				) {
+					throw refusal("production receipt publication directory is unsafe");
+				}
+				entries.push(entry.name);
+				if (entries.length > MAX_PUBLICATION_DIRECTORY_ENTRIES) {
+					throw refusal(
+						"production receipt publication directory is unbounded",
+					);
+				}
+			}
+		} finally {
+			directory?.closeSync();
+		}
+	};
+	const findExactLinkedTemporary = (canonicalStat) => {
+		const entries = readBoundedPublicationEntries();
+		const prefix = `.${basename(finalPath)}.${stageBinding.sha256}.`;
+		const suffix = ".publish.tmp";
+		const candidates = [];
+		for (const entry of entries) {
+			if (!entry.startsWith(prefix) || !entry.endsWith(suffix)) continue;
+			const id = entry.slice(prefix.length, -suffix.length);
+			if (
+				!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+					id,
+				)
+			) {
+				continue;
+			}
+			const candidatePath = join(anchoredRoot, entry);
+			const candidateStat = statPath(candidatePath);
+			if (samePublicationFile(canonicalStat, candidateStat)) {
+				candidates.push(candidatePath);
+			}
+		}
+		if (candidates.length !== 1) {
+			throw refusal("production receipt publication source is ambiguous");
+		}
+		temporaryPath = candidates[0];
+		const sourceStat = readExactTemporary(new Set([2]), { syncFile: true });
+		if (!samePublicationFile(canonicalStat, sourceStat)) {
+			throw refusal("production receipt publication source link changed");
+		}
+		return sourceStat;
+	};
+	const findExactOrphanedTemporary = () => {
+		const entries = readBoundedPublicationEntries();
+		const prefix = `.${basename(finalPath)}.${stageBinding.sha256}.`;
+		const suffix = ".publish.tmp";
+		const candidates = entries
+			.filter((entry) => {
+				if (!entry.startsWith(prefix) || !entry.endsWith(suffix)) return false;
+				const id = entry.slice(prefix.length, -suffix.length);
+				return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+					id,
+				);
+			})
+			.sort();
+		for (const entry of candidates) {
+			temporaryPath = join(anchoredRoot, entry);
+			try {
+				return readExactTemporary(new Set([1]), { syncFile: true });
+			} catch {
+				// Partial or concurrently changed random attempts are inert while canonical is absent.
+				// They are never deleted here because another exact publisher may still own them.
+			}
+		}
+		temporaryPath = undefined;
+		return undefined;
+	};
+	const assertVisibleCanonical = (canonicalStat) => {
+		const currentRootStat = statPath(receiptRoot);
+		validatePrivateReceiptDirectory(currentRootStat);
+		if (
+			currentRootStat.dev !== rootPathStat.dev ||
+			currentRootStat.ino !== rootPathStat.ino ||
+			!sameFile(canonicalStat, statPath(finalPath)) ||
+			realpath(receiptRoot) !== receiptRoot ||
+			realpath(finalPath) !== finalPath
+		) {
+			throw refusal("production receipt canonical path changed");
+		}
+	};
+	const assertTemporaryAbsent = () => {
+		try {
+			statPath(temporaryPath);
+			throw refusal(
+				"production receipt publication source is unexpectedly present",
+			);
+		} catch (error) {
+			if (error?.code !== "ENOENT") throw error;
+		}
+	};
+	const assertCanonicalAbsent = () => {
+		try {
+			statPath(anchoredFinalPath);
+			throw refusal("production receipt canonical already exists");
+		} catch (error) {
+			if (error?.code !== "ENOENT") throw error;
+		}
+	};
+	const convergePublication = () => {
+		let canonicalStat = readExactCanonical(new Set([1, 2]));
+		if (canonicalStat.nlink === 2) {
+			const sourceStat = readExactTemporary(new Set([2]), { syncFile: true });
+			if (!samePublicationFile(canonicalStat, sourceStat)) {
+				throw refusal("production receipt source link changed");
+			}
+			// Make the exact canonical entry durable while it is still non-authoritative: ordinary
+			// readers reject the two-link inode. Only then may removing the source expose nlink=1.
+			fsyncDirectory(directoryDescriptor);
+			const durableCanonicalStat = readExactCanonical(new Set([2]));
+			const durableSourceStat = readExactTemporary(new Set([2]));
+			if (
+				!samePublicationFile(canonicalStat, durableCanonicalStat) ||
+				!samePublicationFile(sourceStat, durableSourceStat) ||
+				!samePublicationFile(durableCanonicalStat, durableSourceStat)
+			) {
+				throw refusal("production receipt link pair changed while syncing");
+			}
+			canonicalStat = durableCanonicalStat;
+			assertVisibleCanonical(canonicalStat);
+			unlinkFile(temporaryPath);
+		} else {
+			try {
+				statPath(temporaryPath);
+				throw refusal("production receipt source cleanup is ambiguous");
+			} catch (error) {
+				if (error?.code !== "ENOENT") throw error;
+			}
+		}
+		assertTemporaryAbsent();
+		canonicalStat = readExactCanonical(new Set([1]), { syncFile: true });
+		assertVisibleCanonical(canonicalStat);
+		fsyncDirectory(directoryDescriptor);
+		const durableCanonicalStat = readExactCanonical(new Set([1]));
+		if (!sameFile(canonicalStat, durableCanonicalStat)) {
+			throw refusal("production receipt canonical changed while committing");
+		}
+		canonicalStat = durableCanonicalStat;
+		assertVisibleCanonical(canonicalStat);
+		assertTemporaryAbsent();
+		publicationCommitted = true;
+	};
+	const recoverExistingCanonical = () => {
+		let canonicalStat = readExactCanonical(new Set([1]), {
+			requirePublicationIdentity: false,
+			syncFile: true,
+		});
+		assertVisibleCanonical(canonicalStat);
+		// A previous publisher may have exposed nlink=1 but failed to observe the directory sync
+		// that makes the source unlink durable. An exact fresh invocation may finish that sync; it
+		// never deletes, replaces, or relinks the already-authoritative canonical entry.
+		fsyncDirectory(directoryDescriptor);
+		const durableCanonicalStat = readExactCanonical(new Set([1]), {
+			requirePublicationIdentity: false,
+		});
+		if (!sameFile(canonicalStat, durableCanonicalStat)) {
+			throw refusal("production receipt canonical changed during recovery");
+		}
+		canonicalStat = durableCanonicalStat;
+		assertVisibleCanonical(canonicalStat);
+		publicationCommitted = true;
+	};
 	try {
 		descriptor = openFile(
 			anchoredStagePath,
@@ -2424,6 +2779,7 @@ export function publishStagedProductionReceipt(
 				"production receipt staging bytes could not be read exactly",
 			);
 		}
+		stagedBytes = bytes;
 		const afterReadStat = statPath(anchoredStagePath);
 		if (
 			!sameFile(descriptorStat, afterReadStat) ||
@@ -2467,22 +2823,124 @@ export function publishStagedProductionReceipt(
 		) {
 			throw refusal("production receipt changed before publishing");
 		}
-		const finalPath = productionReceiptPath(receipt, receiptRoot);
-		const anchoredFinalPath = join(anchoredRoot, basename(finalPath));
-		linkFile(anchoredStagePath, anchoredFinalPath);
-		linked = true;
-		unlinkFile(anchoredStagePath);
-		const finalStat = statPath(anchoredFinalPath);
-		validatePrivateReceiptStat(finalStat);
-		if (
-			finalStat.nlink !== 1 ||
-			!sameFile(finalStat, statPath(finalPath)) ||
-			realpath(receiptRoot) !== receiptRoot
-		) {
-			throw refusal("production receipt final verification failed");
+		finalPath = productionReceiptPath(receipt, receiptRoot);
+		anchoredFinalPath = join(anchoredRoot, basename(finalPath));
+		let canonicalExists = true;
+		try {
+			statPath(anchoredFinalPath);
+		} catch (error) {
+			if (error?.code !== "ENOENT") {
+				throw refusal("production receipt canonical target is unsafe");
+			}
+			canonicalExists = false;
 		}
-		fsyncDirectory(directoryDescriptor);
-		closeDirectory(directoryDescriptor);
+		if (canonicalExists) {
+			const canonicalStat = readExactCanonical(new Set([1, 2]), {
+				requirePublicationIdentity: false,
+			});
+			if (canonicalStat.nlink === 1) {
+				recoverExistingCanonical();
+			} else {
+				publicationAttempted = true;
+				publicationStat = findExactLinkedTemporary(canonicalStat);
+				publicationCreated = true;
+				convergePublication();
+			}
+		} else {
+			publicationStat = findExactOrphanedTemporary();
+			if (publicationStat === undefined) {
+				const id = newId();
+				if (
+					typeof id !== "string" ||
+					!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+						id,
+					)
+				) {
+					throw refusal("production receipt publication id is invalid");
+				}
+				temporaryPath = join(
+					anchoredRoot,
+					`.${basename(finalPath)}.${stageBinding.sha256}.${id}.publish.tmp`,
+				);
+				temporaryDescriptor = openFile(
+					temporaryPath,
+					constants.O_CREAT |
+						constants.O_EXCL |
+						constants.O_WRONLY |
+						constants.O_NOFOLLOW,
+					0o600,
+				);
+				const created = statFile(temporaryDescriptor);
+				if (
+					!created.isFile() ||
+					created.isSymbolicLink?.() ||
+					(created.mode & 0o777) !== 0o600 ||
+					created.nlink !== 1 ||
+					(typeof process.getuid === "function" &&
+						created.uid !== process.getuid())
+				) {
+					throw refusal("production receipt publication temporary is unsafe");
+				}
+				writeFile(temporaryDescriptor, stagedBytes);
+				fsyncFile(temporaryDescriptor);
+				const written = statFile(temporaryDescriptor);
+				validatePrivatePublicationReceiptStat(written, new Set([1]));
+				const temporaryStat = statPath(temporaryPath);
+				if (
+					written.size !== stagedBytes.length ||
+					!sameFile(written, temporaryStat)
+				) {
+					throw refusal(
+						"production receipt publication bytes were not staged exactly",
+					);
+				}
+				publicationStat = written;
+				closeFile(temporaryDescriptor);
+				temporaryDescriptor = undefined;
+			}
+			// Make the exact source name durable before a canonical link can exist. A crash can
+			// therefore replay either no transaction or a recoverable two-name transaction, never
+			// a canonical-only inode that skipped this durability boundary.
+			publicationAttempted = true;
+			fsyncDirectory(directoryDescriptor);
+			const durableSourceStat = readExactTemporary(new Set([1]));
+			if (!samePublicationFile(publicationStat, durableSourceStat)) {
+				throw refusal(
+					"production receipt publication source changed while staging",
+				);
+			}
+			publicationStat = durableSourceStat;
+			const finalStableStage = statPath(anchoredStagePath);
+			const finalRootStat = statPath(receiptRoot);
+			validatePrivateReceiptStat(finalStableStage);
+			validatePrivateReceiptDirectory(finalRootStat);
+			if (
+				!sameFile(stagePathStat, finalStableStage) ||
+				!sameFile(stagePathStat, statPath(stagePath)) ||
+				finalRootStat.dev !== rootPathStat.dev ||
+				finalRootStat.ino !== rootPathStat.ino ||
+				sha256(stagedBytes) !== stageBinding.sha256 ||
+				realpath(receiptRoot) !== receiptRoot ||
+				realpath(stagePath) !== stagePath
+			) {
+				throw refusal("production receipt changed before publication linking");
+			}
+			assertCanonicalAbsent();
+			linkFile(temporaryPath, anchoredFinalPath);
+			publicationCreated = true;
+			convergePublication();
+		}
+		try {
+			closeDirectory(directoryDescriptor);
+		} catch {
+			// The canonical link and its parent are already durable. Descriptor cleanup cannot turn a
+			// committed receipt back into a failed publication or leave a false failure artifact.
+			try {
+				closeDirectory(directoryDescriptor);
+			} catch {
+				// This publisher is a one-shot child; process exit owns the last-resort descriptor cleanup.
+			}
+		}
 		directoryDescriptor = undefined;
 		return finalPath;
 	} catch (error) {
@@ -2493,12 +2951,23 @@ export function publishStagedProductionReceipt(
 				// Preserve the fixed refusal below.
 			}
 		}
-		if (directoryDescriptor !== undefined) {
+		if (temporaryDescriptor !== undefined) {
 			try {
-				fsyncDirectory(directoryDescriptor);
+				closeFile(temporaryDescriptor);
 			} catch {
-				// A failed directory sync cannot authorize a release.
+				// Preserve the fixed refusal below.
 			}
+			temporaryDescriptor = undefined;
+		}
+		if (publicationCreated && !publicationCommitted) {
+			try {
+				convergePublication();
+			} catch {
+				// A possibly visible canonical receipt is irreversible. Preserve it and the source
+				// evidence for diagnosis; only an exact convergence may authorize success.
+			}
+		}
+		if (directoryDescriptor !== undefined) {
 			try {
 				closeDirectory(directoryDescriptor);
 			} catch {
@@ -2506,9 +2975,11 @@ export function publishStagedProductionReceipt(
 			}
 			directoryDescriptor = undefined;
 		}
-		if (linked) {
-			// The final link was created only after the outer proof boundary passed.
-			throw refusal("production receipt final verification failed");
+		if (publicationCommitted) {
+			return finalPath;
+		}
+		if (publicationAttempted || authoritativeCanonicalObserved) {
+			throw new PublicationIndeterminateError(PUBLISH_INDETERMINATE_MESSAGE);
 		}
 		if (error instanceof Error && error.message.startsWith("production ")) {
 			throw error;
@@ -2629,11 +3100,12 @@ export async function verifyProductionRelease({
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+	const publishMode = Object.hasOwn(process.env, PUBLISH_INPUT_FD_FIELD);
 	try {
 		if (process.argv.length !== 2) {
 			throw refusal("production verifier accepts no command-line arguments");
 		}
-		if (Object.hasOwn(process.env, PUBLISH_INPUT_FD_FIELD)) {
+		if (publishMode) {
 			const stageBinding = readPublishBootstrapInput();
 			const repositoryRoot = validatePublishBootstrapEnvironment(process.env);
 			const receiptFile = publishStagedProductionReceipt(stageBinding, {
@@ -2658,6 +3130,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 		process.stderr.write(
 			`production release verification refused: ${message}\n`,
 		);
-		process.exitCode = 1;
+		process.exitCode =
+			publishMode && error instanceof PublicationIndeterminateError
+				? PUBLISH_INDETERMINATE_EXIT_CODE
+				: 1;
 	}
 }

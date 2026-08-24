@@ -2791,6 +2791,22 @@ phase0/            unchanged — the Python reference + protocol findings
   strict-validate the stage and exclusively publish the canonical mode-0600 receipt after complete file
   and parent-directory sync.
 
+  Both downstream receipt publishers implement the same three-phase no-overwrite transaction. They
+  create a random stage-hash-bound source; sync its exact bytes and the source-only pinned-directory
+  entry; hard-link the non-authoritative two-name canonical/source inode; sync the pair and re-open and
+  revalidate both names and the visible root; then unlink the source, sync the canonical file and parent,
+  and revalidate the exact single-link canonical inode. When canonical is absent or two-linked, a pinned
+  streaming scan refuses on entry 4,097, adopts an exact same-stage orphan deterministically, ignores
+  torn/stale random sources, and recovers the exact two-link pair without deleting conflicts. Exact
+  single-link recovery bypasses enumeration and directly syncs and revalidates canonical. Typed
+  indeterminate exit 75 or a child signal receives one fresh same-stage publisher retry. Any publisher
+  outcome still unresolved after retry preserves the bound stage, and later normal wrapper entry refuses
+  a preserved stage instead of regenerating different evidence. Once publisher success is observed,
+  cleanup may remove the stage; a later outer-wrapper interruption still reports no success and leaves
+  the committed canonical inode.
+  Cross-wrapper automatic recovery is deliberately not claimed without a caller-held provenance ticket
+  outside the same-UID result directory; such a death remains a fail-closed operator stop.
+
   After merge, the terminal `remote-claw-production-release-attestation/v1` accepts an inspection
   completion at most 71 hours old or five minutes in the future. Its zero-argv wrapper independently
   byte-pins BusyBox/Git/Node, derives the candidate from the canonical private inspection filename,
@@ -2813,7 +2829,9 @@ phase0/            unchanged — the Python reference + protocol findings
   immutable origin. A random fresh session on the unselected deployment default must progress from
   null durable frame count through a `created:true` relay write to count one; the content-free evidence
   retains its physical `rc-prod-s-*` database ID and frame digest/counts. The canonical terminal
-  mode-0600 receipt appears only after the outer recheck and complete file/directory sync. Exact-merge
+  mode-0600 receipt becomes authoritative when source unlink exposes the single-link inode, only after
+  the outer recheck and durable pair validation; it is reported committed only after canonical-file and
+  parent-directory sync plus exact final revalidation. Exact-merge
   Actions CI is a separate release-record precondition and is not queried or attested by this receipt.
   Actual run state and hashes belong in the release record rather than these candidate-bound bytes. The native
   **`stream-json` SDK transport** (`HostRelay` +

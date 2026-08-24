@@ -14,9 +14,14 @@ materialization_root=
 staged_receipt=
 initial_release_head=
 initial_release_tree=
+publisher_started=0
+publisher_succeeded=0
+publisher_indeterminate_seen=0
 cleanup() {
 	if [ -n "$staged_receipt" ]; then
-		/bin/busybox rm -f -- "$staged_receipt"
+		if [ "$publisher_started" -eq 0 ] || [ "$publisher_succeeded" -eq 1 ]; then
+			/bin/busybox rm -f -- "$staged_receipt"
+		fi
 	fi
 	if [ -n "$snapshot_root" ]; then
 		/bin/busybox rm -rf -- "$snapshot_root"
@@ -25,7 +30,10 @@ cleanup() {
 		/bin/busybox rm -rf -- "$publisher_snapshot_root"
 	fi
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # This statically linked shell is the only process that inherits credentials. Before opening the
 # credential pipe, it binds the inspection's candidate to an exact clean, equal-tree release HEAD,
@@ -76,6 +84,10 @@ receipt_root=$repository_root/tests/web/test-results
 [ "${receipt_path%/*}" = "$receipt_root" ] || fail
 current_uid=$(/bin/busybox id -u) || fail
 [ "$(/bin/busybox stat -Lc '%u:%a' "$receipt_root")" = "$current_uid:700" ] || fail
+# A prior failed publication's random stage is its only outer-wrapper provenance binding. Never run a
+# new timestamp-varying verifier over it or silently select one from same-uid storage.
+preserved_stage=$(/bin/busybox find "$receipt_root" -maxdepth 1 -name '.production-release-stage-*.json' -print -quit) || fail
+[ -z "$preserved_stage" ] || fail
 receipt_stat=$(/bin/busybox stat -Lc '%u:%a:%h:%s' "$receipt_path") || fail
 receipt_owner=${receipt_stat%%:*}
 receipt_rest=${receipt_stat#*:}
@@ -270,22 +282,44 @@ materialize_committed_module scripts/inspection-receipt-schema.mjs 100644 || fai
 publisher_runner_path=$publisher_snapshot_root/scripts/verify-production-release.mjs
 
 publisher_stdout=$snapshot_root/publisher.stdout
+publisher_stderr=$snapshot_root/publisher.stderr
+run_publisher() {
+	{
+		printf '%s\0' \
+			"$staged_receipt" \
+			"$stage_sha256" \
+			"$stage_device" \
+			"$stage_inode" \
+			"$stage_size"
+	} | /bin/busybox env -i \
+		PATH=/usr/bin:/bin \
+		LANG=C.UTF-8 \
+		RC_PRODUCTION_PUBLISH_INPUT_FD=0 \
+		RC_PRODUCTION_REPOSITORY_ROOT="$repository_root" \
+		/usr/bin/node "$publisher_runner_path" >"$publisher_stdout" 2>"$publisher_stderr"
+}
+
+publisher_started=1
 set +e
-{
-	printf '%s\0' \
-		"$staged_receipt" \
-		"$stage_sha256" \
-		"$stage_device" \
-		"$stage_inode" \
-		"$stage_size"
-} | /bin/busybox env -i \
-	PATH=/usr/bin:/bin \
-	LANG=C.UTF-8 \
-	RC_PRODUCTION_PUBLISH_INPUT_FD=0 \
-	RC_PRODUCTION_REPOSITORY_ROOT="$repository_root" \
-	/usr/bin/node "$publisher_runner_path" >"$publisher_stdout"
+run_publisher
 publisher_status=$?
+# Exit 75 means the transaction has durable or ambiguous state that requires exact same-stage
+# reconciliation. A signal-killed publisher may have crossed the same boundary before it died.
+# Retry either outcome once in a fresh clean process, then preserve the stage on any failure.
+if [ "$publisher_status" -eq 75 ] || [ "$publisher_status" -ge 128 ]; then
+	publisher_indeterminate_seen=1
+	run_publisher
+	publisher_status=$?
+fi
+if [ "$publisher_indeterminate_seen" -eq 1 ] && [ "$publisher_status" -ne 0 ]; then
+	publisher_status=75
+fi
 set -e
-[ "$publisher_status" -eq 0 ] || exit "$publisher_status"
-staged_receipt=
+[ "$publisher_status" -eq 0 ] || {
+	# Preserve the independent bound stage so an unresolved publication retains exact recovery
+	# evidence. The publisher never deletes or replaces an already-visible canonical receipt.
+	/bin/busybox cat "$publisher_stderr" >&2 || :
+	exit "$publisher_status"
+}
+publisher_succeeded=1
 /bin/busybox cat "$publisher_stdout"

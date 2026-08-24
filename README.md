@@ -157,7 +157,21 @@ libSQL dependency bytes. Its credential-bearing runner writes only a private dur
 The wrapper binds that stage's SHA-256 and file identity, independently rechecks the exact candidate,
 and materializes a fresh committed publisher snapshot; only that exact credential-free publisher may
 strict-validate the stage and exclusively, atomically, and durably publish the canonical inspection
-receipt. Third, after merge, `remote-claw-production-release-attestation/v1` accepts the inspection only
+receipt. Both downstream publishers use the same three-phase hard-link transaction: sync an exact
+random hash-bound source file and its source-only directory entry; link the still-non-authoritative
+two-name canonical/source pair, sync the directory, and re-open/revalidate both names plus the visible
+root; then unlink the source, sync the canonical file and directory, and perform a final exact
+single-link revalidation. When canonical is absent or two-linked, recovery refuses on directory entry
+4,097 while streaming from a pinned handle, adopts an exact same-stage orphan, ignores torn/stale
+sources, and reconciles an exact two-link pair without deleting conflicting evidence. Exact single-link
+canonical state is recovered directly without directory enumeration. The wrapper retries one typed
+indeterminate or signal-killed publisher in a fresh process with the same bound stage. Any unresolved
+publisher result preserves that stage, and a later normal wrapper invocation refuses a preserved stage
+rather than destroy or supersede it. Once publisher success is observed, cleanup may remove the stage;
+a later outer-wrapper interruption still reports no success and leaves the committed canonical inode.
+Automatic recovery across whole-wrapper death is not claimed without an external caller-held
+provenance ticket. Third, after merge,
+`remote-claw-production-release-attestation/v1` accepts the inspection only
 within a 71-hour age and five-minute future-skew bound. Its zero-argv wrapper byte-pins
 BusyBox, Git, and Node; derives the candidate from the canonical private inspection filename; requires
 the clean candidate-ancestor/equal-tree merge; materializes committed wrapper/verifier/schema blobs

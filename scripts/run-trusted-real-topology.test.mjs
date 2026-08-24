@@ -66,6 +66,8 @@ const WINDOW_COMPLETED_AT_MS = WINDOW_STARTED_AT_MS + 780_000;
 const ARTIFACT_SHA = "b".repeat(64);
 const CLAUDE_SHA =
 	"a701cfb6bb4703abc6f3ce47508c878ca8158ebdbeacd5c35c7d510c7bc70177";
+const pinnedReleaseHost =
+	process.platform === "linux" && process.arch === "arm64";
 
 test("receipt-root hardening refuses symlinks before chmod and secures the opened directory", () => {
 	const root = mkdtempSync(join(tmpdir(), "remote-claw-receipt-root-"));
@@ -858,7 +860,11 @@ test("direct system-Node entrypoint refuses before reading bootstrap input", () 
 	);
 });
 
-test("static BusyBox bootstrap strips hostile loader, Node, shell, and npm state", () => {
+test("static BusyBox bootstrap strips hostile loader, Node, shell, and npm state", (context) => {
+	if (!pinnedReleaseHost) {
+		context.skip("requires the pinned Linux/arm64 release host");
+		return;
+	}
 	const scratch = mkdtempSync(join(tmpdir(), "remote-claw-bootstrap-test-"));
 	const nodeMarker = join(scratch, "node-marker");
 	const loaderMarker = join(scratch, "loader-marker");
