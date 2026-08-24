@@ -6,21 +6,25 @@
 //
 // Every command goes through an injectable `TmuxExec` so the unit suite asserts exact argv and process
 // options with no real tmux (mirrors gitinfo.test.ts's canned-output discipline). Session probes keep
-// "absent" distinct from "couldn't ask", and errors expose only a fixed operation name + exit code:
-// child argv, environment, stdout, and stderr can all contain secrets.
+// "absent" distinct from "couldn't ask", and errors expose only a fixed operation name, exit code,
+// and application-outcome enum: child argv, environment, stdout, and stderr can all contain secrets.
 
 import { execFile } from "node:child_process";
 
 /** Hard timeout on any single `tmux` invocation so a hung tmux server can't wedge a pump or teardown
  *  (codex review #3). Generous — real tmux verbs return in ms; only a true hang hits this. On timeout
- *  execFile kills the child and resolves with a spawn-style failure (code 127), never a hang. */
+ *  execFile kills the child and resolves with an unknown-application failure, never a hang. */
 export const TMUX_EXEC_TIMEOUT_MS = 15_000;
 
-/** The result of one `tmux` invocation. `code` is the process exit status (null ⇒ killed by signal). */
+/** The result of one `tmux` invocation. `code` is the process exit status (null ⇒ killed by signal).
+ * On failure, `application` distinguishes a tmux rejection that proves the command did not apply from
+ * a timeout/spawn/stdin/signal/transport outcome where the server may already have applied it. An
+ * injected executor that omits the field is treated conservatively as `unknown`. */
 export interface TmuxExecResult {
   code: number | null;
   stdout: string;
   stderr: string;
+  application?: "not-applied" | "unknown";
 }
 
 /** Process-local options for one tmux client invocation. Environment values and stdin payloads stay
@@ -37,8 +41,21 @@ export type TmuxExec = (
   options?: TmuxExecOptions,
 ) => Promise<TmuxExecResult>;
 
-/** The default exec: a real `tmux` child via execFile (no shell). A spawn/stdin error resolves with a
- * redacted code 127 result rather than rejecting or exposing the child Error object. */
+/** A small closed set of tmux diagnostics that prove a command never reached a mutable target. Keep
+ * this deliberately narrow: an unfamiliar diagnostic is an unknown application outcome. */
+function provesCommandNotApplied(code: number | null, stderr: string): boolean {
+  if (code !== 1) return false;
+  const diagnostic = stderr.trim();
+  return (
+    /^can't find (?:pane|window|session): [^\r\n]+$/.test(diagnostic) ||
+    /^no server running on [^\r\n]+$/.test(diagnostic) ||
+    /^error connecting to [^\r\n]+ \(No such file or directory\)$/.test(diagnostic)
+  );
+}
+
+/** The default exec: a real `tmux` child via execFile (no shell). Spawn, stdin, timeout, signal, and
+ * other unproved failures resolve with a redacted `unknown` application outcome rather than rejecting
+ * or exposing the child Error object. */
 export const realTmuxExec: TmuxExec = (args, options) =>
   new Promise((resolve) => {
     let settled = false;
@@ -64,20 +81,28 @@ export const realTmuxExec: TmuxExec = (args, options) =>
           ...(childEnv === undefined ? {} : { env: childEnv }),
         },
         (err, stdout, stderr) => {
-          const code =
-            err && typeof (err as { code?: unknown }).code === "number"
-              ? (err as { code: number }).code
-              : err
-                ? 127 // spawn failure (ENOENT etc.) has a string `code` like "ENOENT"
-                : 0;
-          finish({ code, stdout: stdout ?? "", stderr: stderr ?? "" });
+          if (err === null) {
+            finish({ code: 0, stdout: stdout ?? "", stderr: stderr ?? "" });
+            return;
+          }
+          const meta = err as { code?: unknown; killed?: unknown; signal?: unknown };
+          const signalled = typeof meta.signal === "string" && meta.signal !== "";
+          const code = signalled ? null : typeof meta.code === "number" ? meta.code : 127;
+          const diagnostic = stderr ?? "";
+          const application =
+            meta.killed !== true && !signalled && provesCommandNotApplied(code, diagnostic)
+              ? "not-applied"
+              : "unknown";
+          finish({ code, stdout: stdout ?? "", stderr: diagnostic, application });
         },
       );
       // Spawn and stdin failures may contain argv, environment values, or the input payload in their
       // Error objects. Collapse them to a redacted failure and ensure an EPIPE can never become an
       // unhandled stream error. The normal exec callback still retains tmux's own stderr internally so
       // the façade can recognize narrowly defined "session absent" diagnostics without surfacing them.
-      child.once("error", () => finish({ code: 127, stdout: "", stderr: "" }));
+      child.once("error", () =>
+        finish({ code: 127, stdout: "", stderr: "", application: "unknown" }),
+      );
       if (options?.stdin !== undefined) {
         const input = child.stdin;
         const failInput = (): void => {
@@ -87,7 +112,7 @@ export const realTmuxExec: TmuxExec = (args, options) =>
           } catch {
             // The child may already have exited. The redacted failure below remains authoritative.
           }
-          finish({ code: 127, stdout: "", stderr: "" });
+          finish({ code: 127, stdout: "", stderr: "", application: "unknown" });
         };
         if (input === null) {
           failInput();
@@ -101,7 +126,7 @@ export const realTmuxExec: TmuxExec = (args, options) =>
         }
       }
     } catch {
-      finish({ code: 127, stdout: "", stderr: "" });
+      finish({ code: 127, stdout: "", stderr: "", application: "unknown" });
     }
   });
 
@@ -123,11 +148,13 @@ export type TmuxSessionState = "present" | "gone" | "unknown";
 export type TmuxKillOutcome = "terminated" | "already-gone" | "unknown";
 
 /** Thrown when a tmux command we REQUIRE to succeed (e.g. new-session) exits non-zero. Deliberately
- * carries no argv, environment, stdout, stderr, or cause: each may contain a prompt, token, or path. */
+ * carries only the fixed operation, exit code, and application-outcome enum: argv, environment,
+ * stdout, stderr, and causes may contain a prompt, token, or path. */
 export class TmuxError extends Error {
   constructor(
     readonly operation: TmuxOperation,
     readonly code: number | null,
+    readonly application: "not-applied" | "unknown",
   ) {
     super(`tmux ${operation} failed (code ${code ?? "unknown"})`);
     this.name = "TmuxError";
@@ -181,7 +208,7 @@ export class TmuxCtl {
       // The real executor is non-rejecting, but an injected executor may throw arbitrary data. Collapse
       // that boundary to the same redacted spawn-failure shape so rejection text cannot escape via a
       // required-command error or a driver log.
-      return { code: 127, stdout: "", stderr: "" };
+      return { code: 127, stdout: "", stderr: "", application: "unknown" };
     }
   }
 
@@ -192,7 +219,7 @@ export class TmuxCtl {
     options?: TmuxExecOptions,
   ): Promise<TmuxExecResult> {
     const r = await this.#run(args, options);
-    if (r.code !== 0) throw new TmuxError(operation, r.code);
+    if (r.code !== 0) throw new TmuxError(operation, r.code, r.application ?? "unknown");
     return r;
   }
 

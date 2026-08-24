@@ -29,8 +29,14 @@ describe("entryFromFragment (load-time routing)", () => {
   it("classifies a legacy bare pass", () => {
     expect(entryFromFragment("rcp1_ABC")).toEqual({ kind: "pass", value: "rcp1_ABC" });
   });
-  it("classifies a one-time handoff token", () => {
-    expect(entryFromFragment("otk1_XYZ")).toEqual({ kind: "handoff", value: "otk1_XYZ" });
+  it("denies a one-time handoff token by default", () => {
+    expect(entryFromFragment("otk1_XYZ", false)).toEqual({ kind: "handoff-disabled" });
+  });
+  it("classifies a one-time handoff token when the deployment feature is enabled", () => {
+    expect(entryFromFragment("otk1_XYZ", true)).toEqual({
+      kind: "handoff",
+      value: "otk1_XYZ",
+    });
   });
   it("falls back to restore (auto-reconnect) for an empty/unknown fragment", () => {
     expect(entryFromFragment("")).toEqual({ kind: "restore" });

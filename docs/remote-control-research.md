@@ -1,4 +1,11 @@
-# Remote Control — Research & Implementation Notes
+# Remote Control — historical research notes
+
+> **Current context (2026-08-24):** this is an unabridged historical notebook, not current product
+> direction. The full product covers Claude Code, Codex, OpenCode, and tmux. A bounded M0 run proved
+> lower-fidelity coexistence through the retained tmux route; the next structured milestone uses the
+> client REST/SSE seam summarized in [Phase 0 findings](phase0-findings.md) to preserve normal Claude
+> Remote Control while adding encrypted browsers and verifying the official app UI. Current contracts live in
+> [Architecture](v2-architecture.md) and [Product goal and release gates](release-finish-line.md).
 
 > **Purpose of this document.** Capture, in exhaustive detail, everything we
 > learned about Claude Code's "Remote Control" feature and how to build our
@@ -6,7 +13,7 @@
 > the hand-off doc for a fresh implementation session. Read it top to bottom;
 > the load-bearing section is **Part 3 (the reverse-engineered protocol)**.
 
-> **Status:** research only. No code yet. All protocol details about
+> **Historical status at capture:** research only. No code yet. All protocol details about
 > undocumented flags are **reverse-engineered and unsupported** — pin a Claude
 > Code version and verify empirically before relying on any frame shape.
 

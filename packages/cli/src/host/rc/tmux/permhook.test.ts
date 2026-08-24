@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -35,18 +35,31 @@ describe("resolveMirrorPermissions (default ON, opt-out)", () => {
 });
 
 describe("preToolUseHookCommand", () => {
-  it("builds `<node> <helper> <req> <dec> <poll>` with every token single-quoted", () => {
-    const cmd = preToolUseHookCommand("/run/h.mjs", "/run/req.ndjson", "/run/dec", 100);
-    expect(cmd).toBe("'node' '/run/h.mjs' '/run/req.ndjson' '/run/dec' '100'");
+  it("builds `<node> <helper> <req> <dec> <active> <poll>` with every token single-quoted", () => {
+    const cmd = preToolUseHookCommand(
+      "/run/h.mjs",
+      "/run/req.ndjson",
+      "/run/dec",
+      "/run/active",
+      100,
+    );
+    expect(cmd).toBe("'node' '/run/h.mjs' '/run/req.ndjson' '/run/dec' '/run/active' '100'");
   });
 
   it("uses the provided (absolute) node interpreter, single-quoted, so a bare `node` PATH miss can't break it", () => {
-    const cmd = preToolUseHookCommand("/run/h.mjs", "/run/req", "/run/dec", 100, "/abs/bin/node");
+    const cmd = preToolUseHookCommand(
+      "/run/h.mjs",
+      "/run/req",
+      "/run/dec",
+      "/run/active",
+      100,
+      "/abs/bin/node",
+    );
     expect(cmd.startsWith("'/abs/bin/node' '/run/h.mjs'")).toBe(true);
   });
 
   it("escapes single quotes / spaces in paths so the shell can't split or break them", () => {
-    const cmd = preToolUseHookCommand("/r u n/it's.mjs", "/r/req", "/r/dec", 50);
+    const cmd = preToolUseHookCommand("/r u n/it's.mjs", "/r/req", "/r/dec", "/r/active", 50);
     // a path with a space + apostrophe survives intact (the apostrophe is closed-escaped-reopened)
     expect(cmd).toContain("'/r u n/it'\\''s.mjs'");
     expect(cmd).toContain("'50'");
@@ -55,7 +68,7 @@ describe("preToolUseHookCommand", () => {
 
 describe("preToolUseHookFragment", () => {
   it("registers a PreToolUse hook matching every tool (matcher '*')", () => {
-    const frag = preToolUseHookFragment("/h.mjs", "/req", "/dec");
+    const frag = preToolUseHookFragment("/h.mjs", "/req", "/dec", "/active");
     expect(frag.hooks.PreToolUse).toHaveLength(1);
     const entry = frag.hooks.PreToolUse[0];
     expect(entry?.matcher).toBe("*");
@@ -64,7 +77,7 @@ describe("preToolUseHookFragment", () => {
   });
 
   it("threads a custom node interpreter through to the command", () => {
-    const frag = preToolUseHookFragment("/h.mjs", "/req", "/dec", 100, "/abs/bin/node");
+    const frag = preToolUseHookFragment("/h.mjs", "/req", "/dec", "/active", 100, "/abs/bin/node");
     expect(frag.hooks.PreToolUse[0]?.hooks[0]?.command).toContain("'/abs/bin/node' '/h.mjs'");
   });
 });
@@ -97,7 +110,7 @@ describe("mergeHookFragments (SessionStart + PreToolUse coexist)", () => {
     };
     const merged = mergeHookFragments(base, [
       sessionHookFragment("/sentinel"),
-      preToolUseHookFragment("/h.mjs", "/req", "/dec"),
+      preToolUseHookFragment("/h.mjs", "/req", "/dec", "/active"),
     ]) as { model: string; hooks: Record<string, unknown[]> };
     // other top-level key preserved
     expect(merged.model).toBe("opus");
@@ -110,7 +123,9 @@ describe("mergeHookFragments (SessionStart + PreToolUse coexist)", () => {
   });
 
   it("adds PreToolUse fresh when the user had no hooks at all", () => {
-    const merged = mergeHookFragments({}, [preToolUseHookFragment("/h.mjs", "/req", "/dec")]) as {
+    const merged = mergeHookFragments({}, [
+      preToolUseHookFragment("/h.mjs", "/req", "/dec", "/active"),
+    ]) as {
       hooks: Record<string, unknown[]>;
     };
     expect(merged.hooks.PreToolUse).toHaveLength(1);
@@ -196,11 +211,17 @@ describe("PRE_TOOL_USE_HELPER_SOURCE (subprocess)", () => {
     const helper = join(dir, "perm-hook.mjs");
     const reqSentinel = join(dir, "req.ndjson");
     const decisionDir = dir; // decisions land at <dir>/<id>.json
+    const activeSentinel = join(dir, "active");
     await writeFile(helper, PRE_TOOL_USE_HELPER_SOURCE, "utf8");
+    await writeFile(activeSentinel, "active\n", "utf8");
 
-    const child = spawn(process.execPath, [helper, reqSentinel, decisionDir, "20"], {
-      stdio: ["pipe", "pipe", "inherit"],
-    });
+    const child = spawn(
+      process.execPath,
+      [helper, reqSentinel, decisionDir, activeSentinel, "20"],
+      {
+        stdio: ["pipe", "pipe", "inherit"],
+      },
+    );
     let stdout = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (d) => {
@@ -344,8 +365,10 @@ describe("PRE_TOOL_USE_HELPER_SOURCE (subprocess)", () => {
     const dir = await mkdtemp(join(tmpdir(), "permhook-fc-"));
     const helper = join(dir, "perm-hook.mjs");
     const reqSentinel = join(dir, "req.ndjson");
+    const activeSentinel = join(dir, "active");
     await writeFile(helper, PRE_TOOL_USE_HELPER_SOURCE, "utf8");
-    const child = spawn(process.execPath, [helper, reqSentinel, dir, "20"], {
+    await writeFile(activeSentinel, "active\n", "utf8");
+    const child = spawn(process.execPath, [helper, reqSentinel, dir, activeSentinel, "20"], {
       stdio: ["pipe", "pipe", "inherit"],
     });
     let stdout = "";
@@ -396,5 +419,87 @@ describe("PRE_TOOL_USE_HELPER_SOURCE (subprocess)", () => {
         permissionDecisionReason: "blocked",
       },
     });
+  });
+
+  it("asks in the local pane without publishing when the remote permission gate is already retired", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "permhook-local-"));
+    const helper = join(dir, "perm-hook.mjs");
+    const reqSentinel = join(dir, "req.ndjson");
+    const activeSentinel = join(dir, "not-active");
+    await writeFile(helper, PRE_TOOL_USE_HELPER_SOURCE, "utf8");
+
+    const child = spawn(process.execPath, [helper, reqSentinel, dir, activeSentinel, "20"], {
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    const closed = new Promise<void>((resolve) => child.on("close", () => resolve()));
+    child.stdin.end(
+      JSON.stringify({
+        tool_use_id: "tu_after_disconnect",
+        tool_name: "Bash",
+        tool_input: { command: "dangerous-command" },
+      }),
+    );
+    await closed;
+
+    expect(JSON.parse(stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason:
+          "remote-claw viewer disconnected; approve this tool in the local pane",
+      },
+    });
+    await expect(readFile(reqSentinel, "utf8")).rejects.toThrow();
+  });
+
+  it("hands an in-flight, still-unexecuted tool to the local permission UI when the remote gate retires", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "permhook-takeover-"));
+    const helper = join(dir, "perm-hook.mjs");
+    const reqSentinel = join(dir, "req.ndjson");
+    const activeSentinel = join(dir, "active");
+    await writeFile(helper, PRE_TOOL_USE_HELPER_SOURCE, "utf8");
+    await writeFile(activeSentinel, "active\n", "utf8");
+
+    const child = spawn(process.execPath, [helper, reqSentinel, dir, activeSentinel, "20"], {
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    const closed = new Promise<void>((resolve) => child.on("close", () => resolve()));
+    child.stdin.end(
+      JSON.stringify({
+        tool_use_id: "tu_during_disconnect",
+        tool_name: "Write",
+        tool_input: { file_path: "/sensitive" },
+      }),
+    );
+
+    let request = "";
+    for (let i = 0; i < 200 && request === ""; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      request = await readFile(reqSentinel, "utf8").catch(() => "");
+    }
+    expect(request).toContain("tu_during_disconnect");
+    expect(stdout).toBe("");
+
+    await rm(activeSentinel);
+    await closed;
+    expect(JSON.parse(stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason:
+          "remote-claw viewer disconnected; approve this tool in the local pane",
+      },
+    });
+    await expect(readFile(join(dir, "tu_during_disconnect.json"), "utf8")).rejects.toThrow();
   });
 });

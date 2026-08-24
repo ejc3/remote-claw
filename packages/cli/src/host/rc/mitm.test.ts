@@ -884,7 +884,7 @@ describe.skipIf(!RUN)("MITM proxy (fake worker over real TLS interception)", () 
     expect(session.workerStatus).toBe("WORKER_STATUS_UNSPECIFIED");
   }, 30_000);
 
-  it("accepts Claude 2.1.237 metadata-only worker registration and fences invalid variants", async () => {
+  it("accepts Claude 2.1.237 metadata-only worker updates and fences invalid variants", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rc-mitm-worker-metadata-"));
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     const certs = ensureCerts(dir);
@@ -892,8 +892,11 @@ describe.skipIf(!RUN)("MITM proxy (fake worker over real TLS interception)", () 
     let index = 0;
     const core = new RelayCore({ newSessionId: () => `worker-metadata-${++index}` });
     const valid = core.create({ title: "valid metadata" });
+    const connection = core.create({ title: "valid connection" });
     const wrongEpoch = core.create({ title: "wrong epoch" });
     const malformed = core.create({ title: "malformed metadata" });
+    const connected = core.create({ title: "unsupported connection value" });
+    const extraConnection = core.create({ title: "extra connection field" });
     const proxy = new MitmProxy({
       port: 0,
       leafCert: certs.leafPem,
@@ -904,8 +907,11 @@ describe.skipIf(!RUN)("MITM proxy (fake worker over real TLS interception)", () 
     cleanup.push(() => void proxy.close());
     const agent = proxyAgent(proxy.port, ca);
     const validToken = await bridgeWorker(agent, valid.id);
+    const connectionToken = await bridgeWorker(agent, connection.id);
     const wrongEpochToken = await bridgeWorker(agent, wrongEpoch.id);
     const malformedToken = await bridgeWorker(agent, malformed.id);
+    const connectedToken = await bridgeWorker(agent, connected.id);
+    const extraConnectionToken = await bridgeWorker(agent, extraConnection.id);
 
     expect(
       (
@@ -938,6 +944,20 @@ describe.skipIf(!RUN)("MITM proxy (fake worker over real TLS interception)", () 
         await rpcResponse(
           agent,
           "PUT",
+          `/v1/code/sessions/${connection.id}/worker`,
+          { worker_epoch: 1, connection_status: "disconnected" },
+          connectionToken,
+        )
+      ).status,
+    ).toBe(200);
+    expect(connection.closed).toBe(false);
+    expect(connection.workerStatus).toBe("WORKER_STATUS_UNSPECIFIED");
+
+    expect(
+      (
+        await rpcResponse(
+          agent,
+          "PUT",
           `/v1/code/sessions/${wrongEpoch.id}/worker`,
           { worker_epoch: 2, external_metadata: {} },
           wrongEpochToken,
@@ -958,5 +978,31 @@ describe.skipIf(!RUN)("MITM proxy (fake worker over real TLS interception)", () 
       ).status,
     ).toBe(400);
     expect(malformed.closed).toBe(true);
+
+    expect(
+      (
+        await rpcResponse(
+          agent,
+          "PUT",
+          `/v1/code/sessions/${connected.id}/worker`,
+          { worker_epoch: 1, connection_status: "connected" },
+          connectedToken,
+        )
+      ).status,
+    ).toBe(400);
+    expect(connected.closed).toBe(true);
+
+    expect(
+      (
+        await rpcResponse(
+          agent,
+          "PUT",
+          `/v1/code/sessions/${extraConnection.id}/worker`,
+          { worker_epoch: 1, connection_status: "disconnected", unexpected: true },
+          extraConnectionToken,
+        )
+      ).status,
+    ).toBe(400);
+    expect(extraConnection.closed).toBe(true);
   }, 30_000);
 });

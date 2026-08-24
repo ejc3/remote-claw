@@ -5,10 +5,7 @@
 	"scripts": {
 		"test": "playwright test",
 		"typecheck": "tsc --noEmit",
-		"test:app": "playwright test -c app-e2e.config.ts",
-		"test:app:sqlite": "env E2E_BACKEND=sqlite pnpm exec playwright test -c app-e2e.sqlite.config.ts",
-		"test:run": "pnpm run test:real-topology-runner",
-		"test:real-topology-runner": "node --test ../../scripts/resolve-trusted-vercel-deployment.test.mjs ../../scripts/run-trusted-real-topology.test.mjs ../../scripts/run-trusted-final-inspection.test.mjs ../../scripts/verify-production-release.test.mjs ../../scripts/web-preview-runtime-gate.test.mjs"
+		"test:app": "playwright test -c app-e2e.config.ts"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.49.0",

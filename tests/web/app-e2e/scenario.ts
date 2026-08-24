@@ -187,3 +187,14 @@ export function scenario(
   }
   return events;
 }
+
+/** Minimal deployed-smoke seed: one replayable assistant turn and its terminal marker. */
+export function smokeScenario(): Array<Record<string, unknown>> {
+  return [
+    {
+      type: "assistant",
+      message: { content: [{ type: "text", text: "Deployed broker smoke is ready." }] },
+    },
+    { type: "result", subtype: "success", is_error: false, result: "ok" },
+  ];
+}

@@ -1,8 +1,54 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
 // These run against docs/index.html (served by the webServer in playwright.config.ts), which
 // renders docs/*.md live via marked.js — so they guard both the page chrome
 // (the mobile TOC drawer) and the rendered markdown (the ordered-list "jumble" regression).
+
+const markdownDocs = [
+  ...["README.md", "AGENTS.md", "CLAUDE.md"].map((name) => ({
+    name,
+    source: readFileSync(new URL(`../../${name}`, import.meta.url), "utf8"),
+  })),
+  ...readdirSync(new URL("../../docs/", import.meta.url))
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => ({
+      name: `docs/${name}`,
+      source: readFileSync(new URL(`../../docs/${name}`, import.meta.url), "utf8"),
+    })),
+];
+
+test("every maintained markdown document has balanced fences and clean list rendering", async ({
+  page,
+}) => {
+  for (const { name, source } of markdownDocs) {
+    for (const [kind, pattern] of [
+      ["backtick", /^\s*```/gm],
+      ["tilde", /^\s*~~~/gm],
+    ] as const) {
+      const fences = source.match(pattern) ?? [];
+      expect(fences.length % 2, `${name}: unbalanced ${kind} fences`).toBe(0);
+    }
+  }
+
+  await page.goto("/index.html#release");
+  const bad = await page.evaluate((docs) => {
+    const renderer = (
+      globalThis as unknown as {
+        marked: { parse(source: string): string };
+      }
+    ).marked;
+    const parser = new DOMParser();
+    return docs.flatMap(({ name, source }) => {
+      const document = parser.parseFromString(renderer.parse(source), "text/html");
+      const stranded = [...document.querySelectorAll("p")].filter((paragraph) =>
+        /\n\s*(?:\d+\.|[-*])\s+\S/.test(paragraph.innerHTML),
+      );
+      return stranded.length === 0 ? [] : [`${name}: ${stranded.length}`];
+    });
+  }, markdownDocs);
+  expect(bad, `list markers stranded in rendered paragraphs: ${bad.join(", ")}`).toEqual([]);
+});
 
 async function openDocAndToc(page: import("@playwright/test").Page) {
   await page.goto("/index.html#v2");
@@ -42,18 +88,26 @@ test.describe("mobile TOC drawer (hamburger)", () => {
 
   test("tapping a TOC link closes the drawer and unlocks the page", async ({ page }) => {
     await openDocAndToc(page);
-    await page.locator("nav#toc a", { hasText: "What changes and why" }).first().click();
+    await page
+      .locator("nav#toc a", { hasText: "Product outcome and current status" })
+      .first()
+      .click();
     await expect(page.locator("nav#toc")).not.toHaveClass(/open/);
     expect(await page.evaluate(() => document.body.classList.contains("nav-open"))).toBe(false);
     expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).not.toBe("hidden");
   });
 });
 
-test("§15 scenarios render as list items, not run-on paragraphs (jumble fix)", async ({ page }) => {
+test("numbered architecture steps render as list items, not run-on paragraphs", async ({
+  page,
+}) => {
   await page.goto("/index.html#v2");
   await expect(page.locator("article ol li")).not.toHaveCount(0, { timeout: 15000 });
-  // these scenarios were previously trapped inside the <p> of their bold category header
-  for (const t of ["Client first connection", "Enable RC mid-session", "5 independent sessions"]) {
+  for (const t of [
+    "Bind to one exact native session",
+    "Page native history",
+    "Preserve unknown live frames",
+  ]) {
     await expect(page.locator("article li", { hasText: t }).first()).toBeVisible();
   }
   // no article <p> is a stranded multi-item numbered run-on
@@ -105,7 +159,9 @@ test("a doc-reference link opens that doc in the viewer, not the raw markdown", 
   page,
 }) => {
   await page.goto("/index.html#v2");
-  await expect(page.locator("article h1")).toContainText("remote-claw v2", { timeout: 15000 });
+  await expect(page.locator("article h1")).toContainText("remote-claw architecture", {
+    timeout: 15000,
+  });
   // §17 references phase0-findings.md as a relative link; clicking it should switch tabs in-place
   await page.locator('article a[href="phase0-findings.md"]').first().click();
   await expect(page.locator("article h1")).toContainText("Phase 0 — Empirical Findings");
@@ -115,44 +171,39 @@ test("a doc-reference link opens that doc in the viewer, not the raw markdown", 
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
-test("the default docs route opens the active Claude 1.0 finish line", async ({ page }) => {
+test("the default docs route opens the active product goal", async ({ page }) => {
   await page.goto("/index.html");
-  await expect(page.locator("article h1")).toContainText("remote-claw Claude 1.0 finish line", {
-    timeout: 15000,
-  });
-  await expect(page.locator(".tab.active")).toHaveText("Claude 1.0 Finish Line");
+  await expect(page.locator("article h1")).toContainText(
+    "remote-claw product goal and release gates",
+    {
+      timeout: 15000,
+    },
+  );
+  await expect(page.locator(".tab.active")).toHaveText("Product Goal & Gates");
   await expect(page).toHaveURL(/#release$/);
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
 test("the pinned Codex proof opens as a rendered viewer tab", async ({ page }) => {
-  await page.goto("/index.html#host");
-  await expect(page.locator("article h1")).toContainText("Client-driven host runtime", {
-    timeout: 15000,
-  });
-  await page.locator('article a[href="codex-app-server-multiclient-proof.md"]').first().click();
+  await page.goto("/index.html#codex-proof");
   await expect(page.locator("article h1")).toContainText("Codex app-server multi-client proof");
-  await expect(page.locator(".tab.active")).toHaveText("Codex Research Proof");
+  await expect(page.locator(".tab.active")).toHaveText("Codex Evidence");
   await expect(page).toHaveURL(/#codex-proof$/);
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
 test("the pinned OpenCode proof opens as a rendered viewer tab", async ({ page }) => {
-  await page.goto("/index.html#host");
-  await expect(page.locator("article h1")).toContainText("Client-driven host runtime", {
-    timeout: 15000,
-  });
-  await page.locator('article a[href="opencode-native-proof.md"]').first().click();
-  await expect(page.locator("article h1")).toContainText("OpenCode native protocol proof");
-  await expect(page.locator(".tab.active")).toHaveText("OpenCode Research Proof");
+  await page.goto("/index.html#opencode-proof");
+  await expect(page.locator("article h1")).toContainText("OpenCode 1.17.5 protocol fixture");
+  await expect(page.locator(".tab.active")).toHaveText("OpenCode Evidence");
   await expect(page).toHaveURL(/#opencode-proof$/);
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
-test("active release diagrams fit the mobile code block without horizontal scrolling", async ({
+test("primary architecture diagrams fit the mobile code block without horizontal scrolling", async ({
   page,
 }) => {
-  const docs = [{ id: "release", diagrams: ["real browser"] }];
+  const docs = [{ id: "v2", diagrams: ["local native TUI"] }];
 
   for (const { id, diagrams } of docs) {
     await page.goto(`/index.html?diagram-fit=${id}#${id}`);
@@ -168,14 +219,17 @@ test("active release diagrams fit the mobile code block without horizontal scrol
   }
 });
 
-test("a composite doc-and-section hash loads and scrolls the active finish line", async ({
+test("a composite doc-and-section hash loads and scrolls the active product goal", async ({
   page,
 }) => {
-  await page.goto("/index.html#release:minimum-command-safety-contract");
-  await expect(page.locator("article h1")).toContainText("remote-claw Claude 1.0 finish line", {
-    timeout: 15000,
-  });
-  await expect(page.locator(".tab.active")).toHaveText("Claude 1.0 Finish Line");
-  await expect(page).toHaveURL(/#release:minimum-command-safety-contract$/);
-  await expect(page.locator('[id="minimum-command-safety-contract"]')).toBeInViewport();
+  await page.goto("/index.html#release:5-shared-safety-invariants");
+  await expect(page.locator("article h1")).toContainText(
+    "remote-claw product goal and release gates",
+    {
+      timeout: 15000,
+    },
+  );
+  await expect(page.locator(".tab.active")).toHaveText("Product Goal & Gates");
+  await expect(page).toHaveURL(/#release:5-shared-safety-invariants$/);
+  await expect(page.locator('[id="5-shared-safety-invariants"]')).toBeInViewport();
 });

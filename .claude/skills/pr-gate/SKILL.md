@@ -1,153 +1,108 @@
 ---
 name: pr-gate
-description: The consolidated review gate for remote-claw — run before every PR push. Mechanical checks, VISUAL correctness for any viewer change, the traps each of which cost a real debugging cycle, and the process rules. Invoke on a branch to walk the gate against its diff.
+description: "Run remote-claw's proportional pre-PR gate after a change is frozen: common local checks once, path-owned conditional evidence, independent review, and a green-CI merge."
 ---
 
-# The remote-claw PR gate
+# remote-claw PR gate
 
-Every entry here exists because something shipped wrong once. When invoked: run **Part 1**
-mechanically, then review the diff against **Parts 2–5**, then confirm **Part 6**. A PR pushes only
-when every gate passes, or a deviation is written explicitly into the PR description.
+Use this skill when a tranche is ready to finish. The purpose is working software with credible safety
+evidence, not a growing proof system.
 
-The rule that governs the whole document: **assert on the artifact that actually ships, not on the
-source that produced it.** Most of what follows is a consequence of that.
+## 1. Freeze the claim
 
----
+Before the final gate:
 
-## Part 1 — The mechanical gate (all must pass, in order)
+- state the user outcome and safety boundaries changed by the diff;
+- finish code, schema, generated artifacts, and docs;
+- run focused owner tests while iterating; and
+- do not repeatedly run the full gate on a moving tree.
 
-Run from `apps/web` unless noted. Biome lives only in the workspaces, never at the repo root.
+If the diff grew beyond its durable boundary, split it only at a closed, crash-safe seam. Do not weaken a
+safety invariant to make a tranche smaller.
 
+## 2. Run the common local gate once
+
+From the repository root:
+
+```bash
+pnpm check
+pnpm typecheck
+pnpm test
+pnpm test:install
 ```
-pnpm exec biome check .           # lint + format, from apps/web (NOT the repo root)
-pnpm exec tsc --noEmit
-pnpm run theme:build              # only if app/theme/remote-claw.ts changed
-pnpm run build                    # MUST precede the tests — see below
-RC_CI=1 pnpm exec vitest run      # RC_CI turns "no build output" into a failure, not a skip
-cd ../../tests/web && pnpm exec playwright test -c app-e2e.config.ts
-```
 
-1. **Build before test, always.** `test/astryx-foundation.test.ts` asserts on the CSS webpack emits
-   into `.next`. Without a build it finds nothing and *skips* — which is exactly how the cascade-layer
-   guard was silently absent from CI for a commit. `RC_CI=1` makes that skip a hard failure.
-2. **Reviews ran**: `codex exec -s read-only` on the diff, plus the `/simplify` angles. Findings
-   triaged; every accepted one got a test that BITES (Part 3).
-3. **Merge on green only** — CI on the PR head, including `web-preview-e2e`, which deploys a real
-   Vercel preview and drives it.
+These commands cover formatting/lint, strict TypeScript, deterministic package tests, and the packed CLI.
+They do not substitute for a real browser, provider, durable cloud, or deployed environment when one of
+those boundaries is causal to the change.
 
----
+## 3. Add only path-owned evidence
 
-## Part 2 — Visual correctness (mandatory for ANY change under `apps/web/app`)
+Use `docs/test-plan.md` to select conditional gates.
 
-**A green test suite does not mean the UI is right.** The migration onto Astryx flipped the primary
-button to pale lavender with dark-blue text, and 375 tests stayed green — the design guard asserted the
-disabled *treatment*, not the hue. A screenshot caught it. Nothing else could have.
+- For viewer CSS or rendered markup, build the production app, run the product browser suite, and inspect
+  the light/dark phone and desktop screenshots. Run theme generation/checks when theme inputs changed.
+- After the web production build, run web Vitest with `RC_CI=1` so emitted-CSS assertions cannot skip.
+- For browser transport or broker/viewer wiring, run the product browser suite. Do not require visual
+  screenshots for code-only changes with no rendered effect.
+- For private Claude launch or translation changes, run the logged-in real-Claude smoke when its declared
+  prerequisites are available; a required but unavailable prerequisite is not green.
+- For OpenCode, Bedrock, Anthropic-native, Turso, stress, or deployed behavior, run the corresponding
+  conditional gate only when the diff changes or claims that surface.
+- The deployed Preview smoke is a trusted post-default-branch `repository_dispatch` check bound to the
+  exact deployed SHA. It is not a PR-head check and must not be represented as one.
 
-So, for any diff that touches rendered markup or CSS:
+Keep non-obvious Astryx rules in `AGENTS.md` and `docs/astryx-migration.md`; do not duplicate their full
+history here.
 
-1. **Capture before AND after.** Take the shots on the base commit first, then on the branch.
+## 4. Turn E2E findings into proportional regressions
 
-   ```
-   cd tests/web
-   pnpm exec playwright test -c app-e2e.shots.config.ts   # 11 surfaces × phone + desktop
-   pnpm exec playwright test -c app-e2e.zoom.config.ts    # tight 3× crops + measured geometry
-   ```
+E2E is the final reality check and the discovery layer. When it finds a failure, first classify it as a
+reproducible product defect, harness defect, external outage, or unsupported claim. Fix the owning cause.
 
-2. **LOOK at the images.** Open them. Not the filenames, not the test result — the pixels. This is
-   non-negotiable and it is the whole point of the harness existing.
+For a product defect likely to recur:
 
-3. **Read `tests/web/zoom/metrics.json`.** "Padding looks fine" is not a finding; `padding: 8px 12px`
-   on a 32px-tall primary CTA is. The harness measures padding, inter-element gaps, radius, background,
-   and surface-vs-page contrast precisely so spacing is argued with numbers.
+1. identify the earliest trustworthy boundary that reproduces the cause;
+2. add the cheapest deterministic regression at that boundary;
+3. retain only a thin E2E sentinel when cross-layer wiring is itself causal; and
+4. record why an expensive regression cannot shift left when it depends on a real browser engine,
+   provider, process race, storage behavior, deployment, or security boundary.
 
-4. **Check these every time**, because each has been wrong at least once here:
-   - **Touch targets ≥ 44px** on anything tappable. Astryx's largest Button is 36px; this app holds a
-     44px floor (`.connect .astryx-button { min-height: 44px }`) and asserts it.
-   - **Surface separation.** A card at 1.14:1 against the page is invisible; it needs a border AND
-     elevation on this near-black palette. If a screen reads as one flat slab, this is why.
-   - **Grouping.** A single uniform gap between every child produces an undifferentiated stack. Space
-     BETWEEN groups (20px) must exceed space WITHIN one (8px).
-   - **Focus rings** stay the bright accent, not the button fill (Part 4).
-   - **Type hierarchy.** Explanatory copy must outrank a footnote. Astryx's `Text size` prop is INERT
-     when the theme styles that `type`, so verify with `getComputedStyle`, not by reading the prop.
+Cheaper never means less faithful. A mock is unsuitable if it removes the behavior that caused the bug.
+Do not duplicate one scenario at every layer, preserve incidental timing as a contract, invent an
+abstraction solely for a test, or add a permanent guard for a one-off harness mistake. Coverage for
+lower-risk bugs is proportional to recurrence and blast radius.
 
-5. **A design regression gets a test only if a test could have caught it.** Hue, elevation and
-   grouping mostly cannot be — say so in the PR and rely on the shots. Geometry can be: touch-target
-   height, computed outline colour and font size all became assertions here.
+A reachable security failure gets a deterministic regression at its causal trust boundary and, only when
+needed, the smallest integration sentinel proving that boundary is wired into the product. Prefer direct
+malformed-input, authorization, replay, custody, and fail-stop tests over exhaustive synthetic state
+graphs. New proof machinery needs a demonstrated failure and should be removed when a cheaper faithful
+test supersedes it.
 
----
+Before retaining an expensive regression, note in the test or PR:
 
-## Part 3 — Tests must bite
+- the observed failure;
+- its causal boundary;
+- cheaper alternatives considered; and
+- why this is the smallest faithful sentinel.
 
-- **Bite-validate every new guard**: break the thing on purpose, SEE the test go red with a message
-  that names the actual problem, then restore. A guard that has never failed is a guess. Two guards in
-  this repo passed happily against the bug they were written for — one read the wrong regex capture
-  group, another crashed at collection instead of asserting.
-- **`describe.skipIf` still RUNS its callback.** It skips the tests, not the body. A `sheets!` inside
-  throws a TypeError at collection rather than skipping.
-- **Assert on emitted artifacts.** `.next/static/css`, the prerendered HTML, `getComputedStyle` — not
-  the source file. Both cascade-layer bugs read correctly in source.
-- **Prove the regression path RAN**, not just that the end state looks right — count the action (e.g.
-  `submit-count === 2`), and for a negative ("the banner never appeared") park the recovery assertion
-  on a mutually exclusive element so a paint race can't fake a pass.
-- **Generated artifacts get a drift gate.** `theme:check` rebuilds and diffs; it needs `git add -N`
-  first, because `git diff` ignores untracked files and a deleted-from-commit artifact would otherwise
-  pass.
+Every declared-required gate must fail or report inconclusive with a nonzero exit when prerequisites are
+missing. It must not silently skip green.
 
----
+## 5. Sync documentation
 
-## Part 4 — Astryx / CSS traps (each cost a real cycle)
+When Markdown or a documented surface changes, perform the mandatory `AGENTS.md` doc-sync pass:
 
-Full findings, with evidence, in `docs/astryx-migration.md`.
+- render changed docs with GFM and reject list markers stranded in paragraphs;
+- check flags, verbs, endpoints, permissions, and capability claims against code;
+- reconcile `v2-architecture.md`, `protocol.md`, driver docs, the release finish line, and test plan; and
+- remove stale or superseded references.
 
-- **`app/globals.css` is an import manifest.** A rule written there is UNLAYERED, and unlayered CSS
-  beats every cascade layer.
-- **`@import "…" layer(x)` does not work on Next 16** — the pipeline drops `layer()` and inlines the
-  file unlayered, silently. Put `@layer name { … }` INSIDE the file.
-- **The layer-order declaration needs its own file, imported first** (`app/layers.css`); webpack hoists
-  imported CSS above the importing file's inline rules.
-- **No bare element selectors in `@layer remote-claw`.** That layer is declared last, so `button { … }`
-  or `code { … }` there silently restyles every Astryx component built from that element. Both of ours
-  were redundant with Astryx's own reset and were doing real damage. Guarded.
-- **The theme is compiled.** Edit `app/theme/remote-claw.ts`, run `pnpm run theme:build`; never edit
-  `app/theme/built/`.
-- **The accent is pinned on purpose.** Seeding `color: { accent }` alone makes Astryx INVERT it in dark
-  mode. Pin `--color-accent` AND `--color-on-accent` together, never one alone.
-- **Focus rings come from `--color-accent`**, which this theme pins to the darker fill. The global
-  `:focus-visible` rule in `viewer.css` is what keeps them bright — it is NOT migration debt and must
-  outlive the file.
-- **Theme-layer rules beat prop-driven size classes.** `<Text size>` (and anything else the generated
-  theme styles) is inert; the class is still emitted, so it looks like it worked.
+## 6. Review and merge
 
----
+Review the frozen diff for correctness, security, unnecessary machinery, and preservation of the final
+product goal. Run the required independent read-only review once; turn concrete findings into fixes and
+focused checks, not unbounded rereading.
 
-## Part 5 — Simplify & altitude
-
-- **Check whether the tool already does it.** Half of `build-theme.mjs` re-implemented
-  `astryx theme build --out`, which relocates the whole artifact set. Read the CLI's own source before
-  writing a workaround for it.
-- **Prefer the CLI to scraping.** `astryx docs <topic>` / `astryx component <Name>` (with `--json`,
-  `--dense`) is complete, offline and authoritative. A 240-agent scrape of the docs site was thrown away
-  once the CLI was found.
-- **Shared wrappers live in the shared component**, not copy-pasted at each call site.
-- **A test hook is `data-testid` or a semantic locator**, never a dead CSS class kept alive for a
-  selector.
-- **Sentinels in guards should be things designed to SURVIVE**, or the guard cries wolf every time a
-  component legitimately migrates and gets deleted.
-
----
-
-## Part 6 — Process rules (non-negotiable, from CLAUDE.md)
-
-- **Docs are source of truth and get a doc-sync pass** whenever `docs/*.md`, `CLAUDE.md` or the surface
-  they describe changes: render through marked (no list markers stranded in `<p>`), check every claim
-  against the code, reconcile the docs against each other, remove stale references.
-- **Blank line before every list and table** in `docs/*.md` — an ordered list not starting at `1.`
-  cannot interrupt a paragraph, and the result is the "jumbled" render.
-- **Report findings honestly, including against ourselves.** One finding in the Astryx report was
-  corrected after review because it named a non-bug; reporting it upstream would have been wrong.
-- **Never kill the user's processes.** No `pkill` of live claude sessions or drivers; use worktrees.
-- **Commit messages describe the diff**, not the request. PR bodies cover EVERY commit —
-  `git log main..HEAD` read in full first.
-- **Secrets never reach argv, logs, or `--rc-json`/`--rc-quiet` output.**
-- **Merge on green, aggressively.** Don't stop at "PR opened".
+Push the reviewed commit, require ordinary path-owned CI on that exact PR head to be green, then merge.
+Do not stop at an open PR. Never call a skipped, unavailable, wrong-SHA, or inconclusive required gate
+green. Secrets must not enter argv, logs, artifacts, screenshots, or ordinary CLI output.

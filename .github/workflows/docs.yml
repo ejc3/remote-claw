@@ -2,9 +2,16 @@ name: docs
 on:
   push:
     branches: [main]
-    paths: ["docs/**", "tests/web/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "README.md", "AGENTS.md", "CLAUDE.md", "tests/web/docs.spec.ts", "tests/web/playwright.config.ts", "tests/web/package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/docs.yml"]
   pull_request:
-    paths: ["docs/**", "tests/web/**", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "README.md", "AGENTS.md", "CLAUDE.md", "tests/web/docs.spec.ts", "tests/web/playwright.config.ts", "tests/web/package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml", "package.json", ".github/workflows/docs.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   web-tests:

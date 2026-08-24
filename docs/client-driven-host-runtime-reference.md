@@ -1,20 +1,17 @@
-# Client-driven host runtime reference
+# Host-runtime reference map
 
-This path is an authority map retained for old links. It is not a technical specification or roadmap.
+The generalized A1 host runtime was retired and its unused implementation removed on 2026-08-24.
+Git history is the archive; the repository no longer carries a parallel 18,000-line design copy.
 
-## Current authority
+Use these current sources:
 
-- [Claude 1.0 release finish line](release-finish-line.md) — the only active product endpoint and
-  release gate.
-- [Protocol & Runtime](protocol.md) — current as-built behavior.
-- [Client-driven Host Runtime](client-driven-host-runtime.md) — optional platform architecture and
-  implemented dormant-foundation inventory.
-- [A1 OpenCode vertical slice](a1-opencode-vertical-slice.md) — parked optional expansion; not a Claude
-  1.0 prerequisite.
+- [Product goal and release gates](release-finish-line.md) for the outcome and gate policy.
+- [Architecture](v2-architecture.md) for the as-built encrypted broker and current drivers.
+- [Protocol](protocol.md) for current wire and mutation behavior.
+- [Native RC coexistence scoping](native-rc-passthrough-scoping.md) for the selected thin
+  provider-native experiment.
+- [Retired host-runtime decision](client-driven-host-runtime.md) for why the generalized coordinator
+  was removed.
 
-## Historical material
-
-The complete former 17,800-line generalized reference is preserved as a
-[frozen, non-authoritative archive](client-driven-host-runtime-generalized-design-archive.md). Its
-record shapes, recovery proposals, proof matrices, and obsolete tranche names are historical research;
-they cannot add a release prerequisite or override current code and the authorities above.
+OpenCode and tmux remain intended product adapters with experimental guarantees; see their driver
+documents for what they actually do today. Codex has retained native seam evidence but no adapter yet.

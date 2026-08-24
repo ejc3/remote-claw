@@ -24,8 +24,9 @@ import {
   Session,
   STABLE_MITM_CAPABILITIES,
   TMUX_HARNESS,
+  tmuxCapabilities,
 } from "@remote-claw/cli/rc";
-import { scenario } from "./scenario.js";
+import { scenario, smokeScenario } from "./scenario.js";
 
 /** Which harness the announce declares (RC_E2E_HARNESS), so the agent+mode badge (#164) can be exercised
  *  end-to-end for all three drivers without a real tmux/opencode host. Unset ⇒ MITM (native-RC). */
@@ -40,15 +41,10 @@ function presetHarness(p: string | undefined): HarnessDescriptor {
  * maximal native-RC plumbing is deliberately opt-in as `compat-mitm`. */
 function presetCaps(p: string | undefined): DriverCapabilities {
   if (p === "compat-mitm") return MITM_CAPABILITIES;
-  if (p === "tmux")
-    // tmux with mirroring on: structured permissions + interrupt + set_model (via `/model`), but no
-    // faithful set_mode/end pane analogue → those controls disable in the viewer.
-    return {
-      structuredPermissions: true,
-      status: true,
-      controls: { interrupt: true, setModel: true, setMode: false, end: false },
-      attachments: true,
-    };
+  // Explicitly choose the default READY posture. The driver itself starts conservative and publishes
+  // this tuple only after its permission hook is proved ready; a static pre-ready constant previously
+  // let this fixture silently advertise the wrong permission posture.
+  if (p === "tmux") return tmuxCapabilities(true);
   if (p === "opencode-skip")
     // opencode with --skip-permissions: NO structured gating (the "permissions off" posture), interrupt
     // only — set_model needs a providerID/modelID the viewer's aliases lack, set_mode/end no-op.
@@ -72,6 +68,7 @@ const withPerm = process.env.RC_E2E_PERM === "1";
 const askqMode = process.env.RC_E2E_ASKQ; // "1" (single-select) | "multi" (multiSelect) | unset
 const withAskq = askqMode === "1" || askqMode === "multi";
 const askqMulti = askqMode === "multi";
+const smoke = process.env.RC_E2E_PROFILE === "smoke";
 
 // A fresh random identity per host so each test gets isolated bus/session channels.
 const secret = new Uint8Array(32);
@@ -138,7 +135,9 @@ try {
     ahead: 2,
     behind: 0,
   });
-  for (const payload of scenario(withPerm, withAskq, askqMulti)) session.pushUpstream(payload);
+  for (const payload of smoke ? smokeScenario() : scenario(withPerm, withAskq, askqMulti)) {
+    session.pushUpstream(payload);
+  }
 } catch (e) {
   console.error(`[host-runner] announce/seed failed (base=${base}):`, e);
   process.exit(2);

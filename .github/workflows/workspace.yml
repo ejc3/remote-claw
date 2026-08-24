@@ -4,14 +4,14 @@ name: workspace
 # spikes/*) shares ONE root pnpm-lock.yaml, so a manifest change in ANY member can desync it — and
 # the per-package CI jobs only trigger on their own paths (a spikes/* or tests/* dep bump would slip
 # through and then fail an unrelated job's frozen install later). This job runs on a change to ANY
-# tracked package.json, the lockfile, or the workspace file, and fails loudly if the root lockfile is
+# tracked package.json, vendored package bytes, the lockfile, or the workspace file, and fails loudly if the root lockfile is
 # out of sync — so the desync is caught on the PR that introduced it.
 on:
   push:
     branches: [main]
-    paths: ["**/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".github/workflows/workspace.yml"]
+    paths: ["**/package.json", "vendor/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".github/workflows/workspace.yml"]
   pull_request:
-    paths: ["**/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".github/workflows/workspace.yml"]
+    paths: ["**/package.json", "vendor/**", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".github/workflows/workspace.yml"]
 
 jobs:
   lockfile:

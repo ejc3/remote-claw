@@ -61,7 +61,7 @@ export const MITM_CAPABILITIES: DriverCapabilities = {
   attachments: true,
 };
 
-/** Stable Claude 1.0 exposes only plain text. Compatibility plumbing remains available internally,
+/** The stable private-relay beta exposes only plain text. Compatibility plumbing remains available internally,
  * but old/current viewers cannot drive a mutation family that is absent from the supported proof. */
 export const STABLE_MITM_CAPABILITIES: DriverCapabilities = {
   structuredPermissions: false,
@@ -136,9 +136,9 @@ export interface DriverContext {
  *      control_request; apply an answer by observing the matching control_response in
  *      followDownstream. The relay's existing permission_request ⇄ permission round-trip does the
  *      broker side — no relay change.
- * Current compatibility drivers register the Session through the process-local registrar. They keep
- * the registration in `starting` with no broker client until native readiness is proved, then `ready`
- * creates the relay and publishes presence. The driver tears the harness and relay down on exit.
+ * Current compatibility drivers keep a ReadyBridge in `starting` with no broker client until native
+ * readiness is proved. Its one `start` edge creates the relay and publishes presence; close fences the
+ * harness and relay together.
  */
 export interface Driver {
   readonly capabilities: DriverCapabilities;
@@ -263,9 +263,8 @@ export interface ToolResultBlock {
 //     handle or safely no-op every verb it receives (never throw on an unsupported one): an older viewer,
 //     a race before the first announce, or a hand-crafted frame can still deliver any verb. Declaring a
 //     verb false hides its button; it does not guarantee the verb never arrives.
-//  5. TEARDOWN cleanly (review #10). bridgeSession returns the served promise; on teardown abort the
-//     signal, session.close(), and await it (mirrors runRcLaunch) so a final frame flushes and the
-//     relay's death is observable rather than swallowed.
+//  5. TEARDOWN cleanly (review #10). Close the ReadyBridge and await its served promise so a final
+//     frame flushes and relay death remains observable instead of being swallowed.
 // Known v1 limitation (documented, not a bug): tool_use `id` is dropped by the relay, so the viewer
 // cannot correlate a tool_result to its row (review #7). Local native prompts are surfaced by drivers
 // with `local_prompt:true`.

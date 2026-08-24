@@ -66,8 +66,8 @@ export function canonicalAad(h: FrameHeader): Uint8Array {
   w.str(recordKind);
   w.optionalUint(seq);
   w.str(msgId);
-  // The A0 DTO predates A1's explicit-null optional fields. Adapt its omitted property at
-  // this boundary while rejecting explicit null or non-string runtime values.
+  // Canonical encoding uses explicit null for an absent optional string. Adapt the DTO's omitted
+  // property at this boundary while rejecting explicit null or non-string runtime values.
   if (clientMsgId !== undefined && typeof clientMsgId !== "string") {
     throw new TypeError("clientMsgId must be a string when present");
   }

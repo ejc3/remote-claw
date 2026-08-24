@@ -1,8 +1,7 @@
-// `--rc-pass --rc-qr --rc-app <origin>`: instead of putting the FOREVER pass in the QR, mint a one-time
-// key (OTK), seal the pass under it, upload the sealed box to the broker's zero-knowledge handoff store, and
-// return the QR/deep-link `<origin>/#otk1_<OTK>`. The QR is then a single-use, TTL-bounded bootstrap token,
-// not a permanent credential (docs/ephemeral-handoff.md). The broker only ever sees one-way hashes + a blob
-// it cannot read; the OTK rides the URL #fragment and never reaches a server.
+// Default-off producer for `--rc-pass --rc-qr --rc-app <origin>`. Once the deployment's external WAF
+// control is verified and NEXT_PUBLIC_RC_HANDOFF_ENABLED=1, mint an OTK, seal the forever pass under it,
+// upload the box, and return `<origin>/#otk1_<OTK>`. The broker sees only one-way hashes + ciphertext; the
+// OTK rides the URL #fragment and never reaches a server.
 import {
   encodeHandoffBox,
   formatOtk,
@@ -18,6 +17,8 @@ import {
 export interface UploadHandoffOptions {
   /** Injectable fetch (tests). Defaults to the global fetch. */
   fetchFn?: typeof fetch;
+  /** Injectable deployment env (tests). Production reads process.env. */
+  env?: NodeJS.ProcessEnv;
   /** Vercel Deployment-Protection bypass for an SSO-gated preview origin (prod /api is public). */
   bypass?: string;
   /** Requested TTL seconds (the server clamps to its own [MIN, MAX]); omit ⇒ server default (10 min). */
@@ -33,6 +34,12 @@ export async function uploadHandoff(
   pass: string,
   opts: UploadHandoffOptions = {},
 ): Promise<string> {
+  const env = opts.env ?? process.env;
+  if (env.NEXT_PUBLIC_RC_HANDOFF_ENABLED !== "1") {
+    throw new Error(
+      "one-time handoff is disabled; set NEXT_PUBLIC_RC_HANDOFF_ENABLED=1 only after verifying the deployment's per-IP WAF rate limit",
+    );
+  }
   const fetchFn = opts.fetchFn ?? globalThis.fetch;
   if (fetchFn === undefined) throw new Error("uploadHandoff: global fetch is unavailable");
   // Validate + normalize the origin: a real http(s) origin only; strip any query/fragment so a malformed

@@ -1,10 +1,12 @@
-// The MITM proxy — a faithful port of phase0/remote_claw/mitm.py to Node's http/tls/net.
+// The MITM proxy, ported from the retired Phase 0 prototype to Node's http/tls/net.
 //
 // `claude` is pointed here via HTTPS_PROXY. For `api.anthropic.com` we TLS-terminate with our leaf
 // (claude trusts our CA via NODE_EXTRA_CA_CERTS) and either:
 //   • INTERCEPT the Remote Control endpoints (`/v1/code/sessions*`, `/v1/code/triggers`) — we are the
 //     RC backend, serving them from the in-memory RelayCore; or
-//   • PASS THROUGH everything else (inference `/v1/messages`, OAuth, telemetry) to the real upstream.
+//   • In the default Anthropic profile, PASS THROUGH everything else (inference `/v1/messages`, OAuth,
+//     telemetry) to the real upstream. With `--rc-inference=bedrock`, translate inference to Bedrock
+//     and synthesize the required Anthropic control plane, so no request reaches Anthropic.
 // Any other host is blind-tunnelled untouched. This is the §14/§17.5 mechanism, verified in Phase 0.
 
 import { timingSafeEqual } from "node:crypto";
@@ -26,7 +28,7 @@ import {
   type Session,
 } from "./session.js";
 
-/** Endpoint prefixes we serve ourselves; everything else on the MITM host is passed through. */
+/** Endpoint prefixes the local RC facade always serves; other routes follow the selected inference profile. */
 const INTERCEPT_PREFIXES = ["/v1/code/sessions", "/v1/code/triggers"];
 
 /** SSE event boundary — a blank line, LF or CRLF framed. */
@@ -464,14 +466,18 @@ export class MitmProxy {
         s.close(`invalid worker update: ${reason}`);
         return sendJson(res, { error: "invalid worker update" }, 400);
       };
-      // Claude 2.1.237 sends an authenticated metadata-only registration PUT before its first status
-      // transition. It is not a status contradiction: accept the exact required coordinates and leave
-      // the prior status unchanged. A missing/mismatched epoch or malformed metadata still fails closed.
+      // Claude 2.1.237 sends authenticated metadata-only PUTs for registration and graceful disconnect.
+      // Neither changes worker status: acknowledge the two observed, epoch-bound shapes and leave the
+      // prior status unchanged. A malformed shape, extra connection-only field, or wrong epoch closes.
       if (data.worker_status === undefined) {
         if (data.worker_epoch !== s.workerEpoch)
           return rejectWorkerUpdate("metadata-only update has the wrong worker epoch");
-        if (!isRecord(data.external_metadata))
-          return rejectWorkerUpdate("metadata-only update lacks object external_metadata");
+        const connectionOnly =
+          data.external_metadata === undefined &&
+          Object.keys(data).length === 2 &&
+          data.connection_status === "disconnected";
+        if (!isRecord(data.external_metadata) && !connectionOnly)
+          return rejectWorkerUpdate("metadata-only update has an unsupported shape");
         return sendJson(res, {});
       }
       if (typeof data.worker_status !== "string")
@@ -527,18 +533,17 @@ export class MitmProxy {
         // record that could be mistaken for a second transcript mutation.
         if (duplicate) continue;
         const payload = up.payload;
-        // At debug (opt-in) we include a clipped content preview — the formatter bounds it. Secrets
-        // (keys, OAuth) are never carried here; conversation text is fine once you've asked for debug.
+        // Debug records shape and size only. Full bounded bodies are reserved for explicit trace mode,
+        // where credential-shaped fields are recursively redacted and the output is treated as sensitive.
         if (this.#trace.enabled("debug")) {
           const type = typeof payload.type === "string" ? payload.type : "event";
-          const fields: { session: string; type: string; bytes?: number; text?: string } = {
+          const fields: { session: string; type: string; bytes?: number } = {
             session: s.id,
             type,
           };
           if (payload.type === "assistant") {
             const txt = assistantText(payload);
             fields.bytes = txt.length;
-            fields.text = txt;
           }
           this.#trace.debug("upstream event", fields);
         }

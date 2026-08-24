@@ -6,12 +6,7 @@
 			"tests/web/**/*.ts",
 			"packages/clawsec/**",
 			"packages/cli/**",
-			"apps/web/**",
-			"spikes/claude-native-output/**",
-			"spikes/codex-multiclient/**/*.mjs",
-			"spikes/codex-multiclient/**/*.json",
-			"spikes/opencode-native/**/*.mjs",
-			"spikes/opencode-native/**/*.json"
+			"apps/web/**"
 		]
 	},
 	"formatter": { "enabled": true, "indentStyle": "tab", "lineWidth": 80 },

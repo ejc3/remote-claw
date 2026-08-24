@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "remote-claw \u2014 a transparent wrapper around `claude` (P2). Consumes the reserved --rc-* namespace; forwards everything else.",
+  "description": "The remote-claw host wrapper and encrypted broker clients.",
   "engines": {
     "node": "^22.13.0 || >=23.5.0"
   },
@@ -20,6 +20,7 @@
     "dev": "tsx src/cli.ts",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:opencode-live": "RC_OPENCODE_E2E_RUN=1 vitest run --config vitest.opencode-live.config.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",
     "format": "biome format --write .",

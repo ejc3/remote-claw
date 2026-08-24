@@ -1,145 +1,87 @@
 # Codex app-server multi-client proof
 
-**Status:** evidence captured 2026-07-29; this proves the basic one-app-server seam for one pinned Codex
-build, not a complete Codex product gate.
+**Status:** bounded evidence captured 2026-07-29 against Codex CLI `0.146.0`; not a product adapter or
+a current-version guarantee. Codex is an intended remote-claw surface. This evidence establishes a
+native seam but does not prove local-TUI, browser, or Codex/ChatGPT Remote coexistence.
 
-> **Roadmap authority:** Codex integration is parked optional multi-engine research. It is not selected,
-> supported, or release-blocking for the active [Claude 1.0 finish line](release-finish-line.md). Every
-> compatibility requirement below is conditional on a future explicit decision to resume Codex work.
+## What was observed
 
-## Result
+### Two raw clients
 
-The checked raw-client probe proves that two independently initialized app-server clients can mutate one materialized thread through one real Codex CLI `0.146.0` app-server: client A creates it, client B joins after creation, and B eventually resumes that exact native thread ID. For one model-free command from each client after resume, both clients receive the same selected, correlated native command-event projection, including event order, thread, turn, and item IDs, command text, output bytes, completion status, and exit code.
+Two independently initialized app-server clients shared one materialized native thread. Client A
+created it; client B joined and resumed the exact thread ID. A model-free shell command from each
+client produced the same selected native event projection on both connections: matching thread, turn,
+item, command, output, completion, and exit status.
 
-The checked real-TUI probe starts one real Codex CLI `0.146.0` app-server, connects one raw client, and attaches one real `codex resume <same-id> --remote <transparent-recorder> --no-alt-screen` TUI to the exact same thread. A model-free shell command in each direction produces deeply equal selected five-event native projections at the raw connection and transparent TUI recorder, and both command markers render in the TUI pane. Together with the pinned source proof below, these fixtures establish the basic one-`MessageProcessor` and real-TUI coexistence seam for the selected commands; they do not prove every notification, full TUI parity, a production Unix front door, the outward ChatGPT Remote gateway, or a complete future Codex compatibility tuple.
+### Real TUI plus one raw client
 
-The checked multi-chat probe starts the same one app-server with three independently initialized raw connections standing in for direct client A, direct client B, and the one host observer. A and B each create a different persistent top-level thread. Before the host joins, only the requester is natively subscribed and receives that thread's selected five-event shell-command projection; both other initialized connections report `notSubscribed` and receive no correlated selected events. The host then resumes both exact native thread IDs and receives deeply equal projections with the owning client for a later command on each thread, while each non-owning direct client remains `notSubscribed`. This proves the top-level multi-thread subscription shape and one host-wide observer for the selected model-free path. It does not exercise core-created child-agent threads, whose different best-effort fan-out requires a model-driven collaboration-tool fixture.
+One app-server accepted a raw protocol client and a real
+`codex resume <same-id> --remote <recorder> --no-alt-screen` TUI. A model-free shell command in each
+direction produced deeply equal selected five-event projections, and both markers rendered in the TUI
+pane. This establishes a basic real-TUI coexistence seam for those commands.
 
-The checked raw two-client probe closes an important ambiguity for one method. A late client cannot resume an untouched persistent thread because no rollout exists, but `thread/shellCommand` still accepts that live thread ID: B's pre-resume command executes and A receives its selected five-event projection. B's native `thread/unsubscribe` checks immediately before and after the write both report `notSubscribed`, and its selected projection for that exact old turn/item remains empty even after B resumes and receives two later completed command turns. For this pinned `thread/shellCommand` path, the write can be accepted between two native `notSubscribed` observations while B receives none of the selected correlated command events. The first response or error also consumes a global server-request ID without being bound to the responding connection, and an external-clock request fails unless exactly one connection is subscribed. Those constraints remain gated as described below.
+### Multiple native threads
 
-## Version pin
+Three initialized raw connections represented clients A and B plus a host observer. A and B created
+different top-level threads. Before the observer resumed a thread, only its creating connection
+received the selected projection. After the observer resumed both exact IDs, it received each later
+projection alongside that thread's owner while the non-owner remained unsubscribed.
 
-- Installed binary: `codex-cli 0.146.0`, `aarch64-unknown-linux-musl`.
-- Resolved binary SHA-256: `cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6`.
-- Official [`rust-v0.146.0` release asset](https://github.com/openai/codex/releases/download/rust-v0.146.0/codex-aarch64-unknown-linux-musl.zst): 75,983,207-byte compressed SHA-256 `28453d95f8d35913e3789d10daa2b5bcbb82aa6ccc5f07bb66bd764ee1870201`; it decompresses to the installed binary's 269,098,800 bytes and SHA-256 above.
-- Checked probe SHA-256: `539f92d9e72f3faf9b8abf41746f258cf8dcb346da96e0e6ae606d79fd746090`; the evidence records the same hash.
-- Checked real-TUI probe SHA-256: `698d2202c9dcaa5f1d5789fe11c7f8d27e35f430109cedd0bc6aeac3a703bc73`; the evidence records the same hash.
-- Checked multi-chat attachment probe SHA-256: `f1f6a14c69a1d8650cbc6519c129d7afc50e96c43e968d9866952615569065ba`; the evidence records the same hash.
-- Retained fixtures use `<codex-binary>` instead of an install path; the binary hash above remains the
-  executable identity.
-- Matching open-source tag: `rust-v0.146.0`.
-- Peeled source commit: [`e363b08c9175ac1cbe5893615dd2cb9ddf95043b`](https://github.com/openai/codex/commit/e363b08c9175ac1cbe5893615dd2cb9ddf95043b).
-- Protocol inspection: JSON Schemas were generated locally from this exact binary with `codex app-server generate-json-schema`; retaining and hashing a supported schema fixture would be a future Codex gate.
-- Official surface: [Codex app-server](https://learn.chatgpt.com/docs/app-server) documents `codex app-server`, `codex --remote`, per-connection initialization, thread resume/subscription, Unix sockets, and the experimental loopback WebSocket transport used by the probe.
+### Subscription is not mutation authority
 
-## Source proof
+For the pinned `thread/shellCommand` method, a late client could submit to a live thread while native
+checks immediately before and after reported it unsubscribed. The owning connection received the
+events; the submitting connection did not. A bridge must therefore treat subscription, write
+admission, and event observation as separate facts.
 
-The pinned TUI is not a different Codex implementation. Its remote path constructs the shared `RemoteAppServerClient` with client name `codex-tui`: [`tui/src/lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/tui/src/lib.rs#L400-L415).
+The pinned server also used one global server-request ID whose first response or error consumed the
+callback before payload validation, and an external-clock request required exactly one subscribed
+connection. Permission/question fan-out cannot safely be inferred from ordinary notification fan-out.
 
-Codex also ships embedded, implicit local-daemon, and explicit remote deployment choices. The parked remote-claw design proposes an explicit `--remote` endpoint, which selects `AppServerTarget::Remote` and calls `connect_remote_app_server`; it would not start the TUI's embedded app-server path: [`tui/src/lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/tui/src/lib.rs#L458-L484), [`tui/src/lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/tui/src/lib.rs#L862-L883). Those are deployment modes around shared Codex components, not two active processors in that proposed topology.
+## Pinned tuple
 
-The app-server keeps a set of initialized connection IDs per thread and a set of thread IDs per connection, and its subscription methods add several connections to the same thread state: [`thread_state.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/thread_state.rs#L302-L384), [`thread_state.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/thread_state.rs#L516-L564). Ordinary app-server `thread/start` explicitly attaches the requesting connection: [`thread_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/request_processors/thread_processor.rs#L1294-L1311). A different receiver path best-effort attaches every initialized connection when core reports a newly spawned or resumed child-agent thread: [`app-server/src/lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/lib.rs#L1119-L1134), [`thread_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/request_processors/thread_processor.rs#L2975-L3007), [`spawn.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/core/src/agent/control/spawn.rs#L340-L355), [`spawn.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/core/src/agent/control/spawn.rs#L510-L522), [`spawn.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/core/src/agent/control/spawn.rs#L867-L879). Any future target would have to preserve and differentially prove these native top-level, child-thread, resume, unsubscribe, broadcast, and routing rules; it could not impose a simpler selected-thread policy.
+- Binary: `codex-cli 0.146.0`, `aarch64-unknown-linux-musl`.
+- Binary SHA-256: `cb5e8cb8a333a408ce6adbe0d4fad1845c69772c2216af7c1f88c98a11460dc6`.
+- Source tag: `rust-v0.146.0`; commit
+  [`e363b08c9175ac1cbe5893615dd2cb9ddf95043b`](https://github.com/openai/codex/commit/e363b08c9175ac1cbe5893615dd2cb9ddf95043b).
+- Official surface: [Codex app-server](https://learn.chatgpt.com/docs/app-server).
 
-`thread/shellCommand` resolves the live thread from the global thread manager and submits the operation without checking whether the requesting connection is subscribed: [`thread_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/request_processors/thread_processor.rs#L1916-L1946). The checked late-join result below confirms the consequence at runtime.
+The source and generated protocol schema showed per-connection initialization, per-thread subscriber
+sets, explicit resume/unsubscribe, and a shared app-server processor. Those facts explain the observed
+multi-client behavior; they do not promise it for another release.
 
-Server-initiated requests are sent with one app-server request ID to the selected connection set. Response handling removes the callback before validating the returned payload and does not check the responding connection: [`outgoing_message.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/outgoing_message.rs#L287-L350), [`outgoing_message.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/outgoing_message.rs#L374-L411), [`message_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/message_processor.rs#L748-L758). The first response or error therefore consumes the request ID, even if its result is malformed. Any future bridge would have to treat every other local app-server connection as trusted and isolate the socket from unrelated processes.
+## Product implication
 
-The external-clock implementation permits multiple subscriptions but a current-time request explicitly fails unless exactly one connection is subscribed: [`current_time.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/current_time.rs#L95-L150).
+The smallest Codex adapter should first prove:
 
-The same pinned source exposes the official Remote host/daemon nesting. A compatible plain TUI probes
-the managed daemon's default Unix socket, while `codex --remote` selects an explicit endpoint:
-[`tui/src/lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/tui/src/lib.rs#L862-L983).
-The app-server starts its local acceptor and official Remote Control transport with the same transport
-event channel, then routes both through one connection map and one `MessageProcessor`:
-[`app-server/src/lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/lib.rs#L717-L817),
-[`app-server/src/lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/lib.rs#L874-L911).
-The Remote Control tracker turns every client stream into an ordinary `ConnectionId`, and distinct
-streams from one client still receive distinct IDs:
-[`client_tracker.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server-transport/src/transport/remote_control/client_tracker.rs#L94-L216),
-[`client_tracker.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server-transport/src/transport/remote_control/client_tracker.rs#L860-L894).
+1. one exact app-server thread and readiness-gated broker bridge;
+2. a real local Codex TUI plus two remote-claw browsers;
+3. native history/subscription reconciliation without duplicate mutation;
+4. explicit request/response ownership for approvals and questions; and
+5. failure isolation that leaves the native TUI usable.
 
-That direct native layout is the outward fidelity oracle, but a future remote-claw integration could not enable it unchanged because official clients would bypass the coordinator and the isolated daemon would own an OpenAI socket. The parked design would therefore need one protocol-aware outward gateway that turns official streams into outside collaborators and relays admitted native mutations through one authenticated daemon-wide bridge, with one logical binding and aggregate subscription per managed top-level chat thread. The proposed inner app-server would have exactly one initialized remote-claw bridge `ConnectionId`; official streams would terminate in the gateway and never become native connection IDs, subscribers, or writers. The gateway would retain their complete protocol state, including provider enrollment/envelopes, sequence, chunks and ACKs, initialization, capabilities, request-ID domains, notification preferences, per-stream subscriptions, server-request correlation, backpressure, reconnect state, and lifecycle. Stream-local initialize, resume, unsubscribe, and close would update that gateway state; a reconciler would map the union of current host/collaborator demand to zero or one fenced native subscription transition on the bridge, while admitted semantic native mutations would map to one bridge request.
+Only after that vertical works should Codex/ChatGPT Remote be added through a supported provider
+boundary. The proof does not justify a generalized coordinator, outward gateway, signing hierarchy,
+or durable command schema. Add state only for a demonstrated native failure with an executable fault
+test.
 
-Moving the transport alone would be insufficient. In this build the sole `MessageProcessor` routes the `remoteControl/*` enable, status, pairing, and client-management methods through `RemoteControlRequestProcessor` and its in-process `RemoteControlHandle`. The surrounding app-server runtime starts that handle, resolves persisted enablement, watches its status, and emits `remoteControl/status/changed`: [`remote_control_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/request_processors/remote_control_processor.rs#L20-L127), [`message_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/message_processor.rs#L931-L969), [`lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/lib.rs#L777-L817), [`lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/lib.rs#L884-L908), [`lib.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/lib.rs#L1105-L1117). The parked design proposes an upstreamable `RemoteControlService` injected at the app-server runtime level and shared by the sole processor's management path and the surrounding startup/status loop. That service would cover only management. Pinned request processing also derives behavior from the physical connection's client name/version, form-elicitation support, and connection-owned resource lifetime: [`message_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/message_processor.rs#L789-L849), [`turn_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/request_processors/turn_processor.rs#L474-L514), [`message_processor.rs`](https://github.com/openai/codex/blob/e363b08c9175ac1cbe5893615dd2cb9ddf95043b/codex-rs/app-server/src/message_processor.rs#L714-L740). A future target would keep one bridge identity and first use gateway request-ID/handle remapping plus explicit cleanup. Where differential tests prove that native behavior still depends on the originating official client's profile or resource lifetime, one admitted bridge request could carry the smallest versioned compatibility profile or source-lease context. That context could not open a native connection, subscribe, write independently, or authorize anything. Until management injection, exact native subscription/routing parity, exact remapping/cleanup, any proved narrow compatibility seam, and their differential tests exist, multi-chat outward pairing and official-client control through remote-claw remain unsupported.
+## What this does not prove
 
-## Reproducible two-client probe
+- model turns, tools, approvals, questions, forms, attachments, or child-agent fan-out;
+- every notification or full TUI rendering parity;
+- browser transport, encrypted broker integration, or durable reconnect;
+- exactly-once native application after an ambiguous request;
+- official Codex/ChatGPT Remote coexistence;
+- a production socket/authentication boundary; or
+- compatibility beyond the pinned binary/platform.
 
-Run:
+## Retained evidence
 
-```bash
-node spikes/codex-multiclient/probe.mjs
-```
+`spikes/codex-multiclient/` retains three sanitized Codex 0.146.0 observations: two-client sharing,
+real-TUI coexistence, and multi-chat attachment. They are research inputs, not executable gates or a
+current-version compatibility claim. The one-off probes and hash/offline verifiers were removed; Git
+history is the recapture archive.
 
-The probe:
-
-1. Resolves the exact installed Codex executable, requires version `0.146.0`, and records hashes of both that binary and the probe.
-2. Re-executes itself inside a private Linux network namespace whose only interface is loopback and which has no default route. The unprivileged path also creates a private user namespace; the sudo fallback creates the network namespace and then drops to the original UID/GID. It refuses to run if network containment cannot be established. The retained evidence records the `unprivileged-user-net` path.
-3. Gives Codex empty temporary Codex and user homes, constructs an explicit child-environment allowlist with no ambient provider credentials or proxy-bypass settings, and routes attempted HTTP(S) egress to a local deny proxy that records and closes each connection.
-4. Starts one real app-server on its experimental loopback WebSocket transport with analytics, MCP servers, apps, plugins, browser features, tool suggestions, and shell snapshots disabled.
-5. Initializes A, creates one persistent empty thread through A, then connects and initializes late client B; the two independent connections deliberately reuse JSON request ID `1`.
-6. Requires B's pre-materialization `thread/resume` to fail with pinned RPC error `-32600` / `no rollout found`.
-7. Requires B's native `thread/unsubscribe` check to report `notSubscribed`, sends a model-free shell command through B, requires the request to succeed and A to receive the selected five-event correlated native projection, then requires a second B subscription check to remain `notSubscribed`. B then resumes the exact same native thread ID.
-8. Sends one more model-free shell command through A and a different one through B.
-9. Requires both clients to receive deeply equal selected, correlated native projections for each post-resume command, from `turn/started` through `turn/completed`, including event order, native IDs, wrapped command text, output bytes, completion status, and exit code. After B receives both later completed turns, the probe requires its projection for the exact pre-resume turn/item to remain empty.
-10. Requires that the probe sent no `turn/start` request and no model prompt. One outbound TCP connection attempt reached the local deny proxy and was closed; the retained evidence does not identify its target or protocol. The namespace had no external route.
-11. Deletes the synthetic Codex thread through the native API, proves that a subsequent native `thread/read` fails, stops the app-server normally, and removes its temporary root before emitting successful evidence.
-
-The checked-in result is `spikes/codex-multiclient/evidence-0.146.0.json`.
-
-## Reproducible real-TUI probe
-
-Run:
-
-```bash
-node spikes/codex-multiclient/real-tui-probe.mjs
-```
-
-The retained fixture:
-
-1. Resolves and hashes the pinned Codex CLI `0.146.0` binary and this probe, then re-executes in an isolated Linux network namespace whose only interface is loopback and which has no default route.
-2. Creates empty temporary server and TUI homes and a fixed synthetic ChatGPT-shaped authentication record inside the temporary server home only. It does not inherit provider credentials or read ambient Codex authentication.
-3. Starts exactly one real app-server on its experimental loopback WebSocket transport, one raw protocol client, and one transparent WebSocket recorder between that app-server and a real TUI.
-4. Has the real TUI issue `codex resume <same-id> --remote <transparent-recorder> --no-alt-screen` under tmux and requires both its requested and returned thread IDs to equal the raw client's exact native thread ID.
-5. Sends one model-free shell command through the raw client and enters another as `!printf ...` through the real TUI. For each direction, it requires the raw client and transparent TUI recorder to receive deeply equal selected five-event projections from `turn/started` through `turn/completed`, including identical native thread, turn, and item IDs, command text, output bytes, completion status, and exit code.
-6. Requires the TUI pane to contain both command markers, observes no `turn/start` request and sends no model prompt, and records 25 connection attempts that reached the local deny proxy and were closed while the namespace remained without an external route. The retained evidence does not classify their targets or protocols.
-7. Requires the TUI's native `thread/unsubscribe` to return `unsubscribed`, the real TUI process to exit with status `0`, native `thread/delete` to succeed, and native `thread/read` after deletion to fail.
-8. Closes the raw client, recorder, tmux server, app-server, and deny proxy; removes the temporary root, tmux socket directory, and synthetic authentication record; and emits evidence only after that cleanup is complete.
-
-The checked-in result is `spikes/codex-multiclient/evidence-real-tui-0.146.0.json`. This proves coexistence only for one thread and the selected model-free shell-command path over the instrumented experimental WebSocket transport. It is not a claim of complete TUI or app-server protocol parity.
-
-## Reproducible multi-chat attachment probe
-
-Run:
-
-```bash
-node spikes/codex-multiclient/multi-chat-attachment-probe.mjs
-```
-
-The retained fixture:
-
-1. Uses the same pinned binary, private loopback-only network namespace, empty homes, credential allowlist, deny proxy, and model-free app-server setup as the other probes.
-2. Opens three independently initialized sockets whose request-ID domains all start at `1`: direct-client stand-ins A and B, plus one host observer.
-3. Has A and B each create a distinct persistent top-level thread without sending any resume request.
-4. Before the host joins, sends one model-free shell command on each thread; requires only its creating client to receive the selected five-event projection, and fences both other initialized connections with native `notSubscribed` responses and empty correlated projections.
-5. Has the host observer resume both exact native thread IDs, then sends another different model-free command on each thread.
-6. Requires the host and owning client to receive deeply equal selected projections for the appropriate thread, while the non-owning direct client remains `notSubscribed` with an empty correlated projection.
-7. Sends no `turn/start` or model prompt, deletes both native threads, proves both readbacks fail, closes all three sockets, stops the app-server normally, and removes its temporary root.
-
-The checked-in result is `spikes/codex-multiclient/evidence-multi-chat-attachment-0.146.0.json`. This proves ordinary top-level multi-thread subscription and one host observer for selected shell commands. It deliberately does not claim the same result for core-created child-agent threads, model turns, real-TUI multiplicity, server requests, or other method families.
-
-The normal workspace test gate runs `spikes/codex-multiclient/verify-evidence.mjs` and `spikes/codex-multiclient/verify-multi-chat-attachment-evidence.mjs`. It fails if any retained probe hash drifts or if the evidence no longer satisfies the exact isolation, identity, selected-projection, subscription-fence, model-safety, deletion, and cleanup claims above.
-
-## Constraints before any future Codex activation
-
-1. **An empty-thread late join can write between two `notSubscribed` observations.** In the checked probe, B connected only after A created the persistent untouched thread. B's `thread/resume` returned `-32600` / `no rollout found`, yet B's `thread/shellCommand` request succeeded and mutated the live thread between native pre-write and post-write `thread/unsubscribe` results that both said `notSubscribed`. A received that command's selected five-event projection. B's selected old turn/item projection was still empty after B resumed the same ID and received two later completed turns. This does not claim absence from unselected methods or resume history. Therefore any future bridge would have to prove its subscription before the coordinator forwards a write whose required observation path depends on it, and recovery before the first rollout would have to remain non-writable at the coordinator. A best-effort native listener attachment is not an admission or security boundary, and a future integration could not create a fake native event merely to force materialization.
-2. **A `turn/start` response may not be canonical applied-turn identity during a race.** An unarchived live `0.146.0` run sent `turn/start` from B while A had an active model turn. B received a fresh response turn ID, but native events appeared to place B's input in A's existing turn and retain A's turn ID. Because this used a live model and retained no fixture, it is a hypothesis for a pinned race test, not proof. The safe design rule is to adopt applied identity/order from native events and history rather than manufacture a second turn from the response.
-3. **Server requests need a pinned policy and tests.** Approvals, questions, and similar requests are visible inward to the native subscribed connection set, which may include trusted direct TUI connections and the one bridge. A future gateway could fan the bridge copy to several outside collaborators, but its coordinator would admit at most one response inward. In this build the first native response or error consumes the global request ID before payload validation. Before any future Codex release, test simultaneous, malformed, and late TUI/bridge responses, outside response races, reconnect replay, stale suppression, and exact global request-ID behavior. Keep the private socket inaccessible to unrelated processes.
-4. **External-clock requests are incompatible with two subscribers in this build.** Subscriptions may exist, but a clock request fails unless the subscriber set contains exactly one connection. Disable or advertise the feature unsupported until the native seam supports a deterministic multi-client policy.
-5. **Top-level multi-chat is proved narrowly; child-thread routing is not.** The retained three-connection fixture proves that two ordinary top-level `thread/start` requests subscribe only their requesters, non-owning initialized clients remain `notSubscribed` with no selected correlated events, and one host observer can explicitly resume and observe both threads. The core child-agent notification path separately attempts to attach every initialized connection. Before any future Codex release, prove that child-thread path, real-TUI multiplicity, explicit unsubscribe, connection-local versus broadcast events, and native TUI routing without inventing a simpler policy or treating best-effort attachment as admission.
-6. **One bridge needs collision-safe stream remapping, not virtual native clients.** A future gateway would have to retain each official stream's complete state, including provider enrollment/envelopes, sequence, chunks and ACKs, initialization, capabilities, request IDs, notification preferences, subscriptions, server-request correlation, backpressure, reconnect state, and lifecycle, while the inner app-server sees one remote-claw connection. Several streams may concurrently reuse the same JSON-RPC ID or source-owned process/watch handle, so that gateway would need a bridge-wide ID allocator/map, handle namespacing, exact response/error routing, reconnect tombstones, and per-stream cleanup. It would also need an aggregate subscription reconciler: one stream's initialize, resume, unsubscribe, close, or reconnect updates only that stream's state and maps to zero or one fenced native transition based on the union of current host/collaborator demand; it could never blindly forward one native lifecycle request per source request or let one leaver unsubscribe the bridge for everyone else. The raw two-client fixture deliberately reuses initialize ID `1` on separate connections; collapsing streams onto one bridge removes that native separation. Before any future Codex release, prove overlapping subscriptions, first join, non-final leave, last aggregate leaver, reconnect, and cleanup. If ordinary mapping is insufficient, add only a non-authoritative compatibility profile or source-lease context to an admitted bridge request; it could never create another native connection, subscriber, or writer.
-7. **Use the supported local transport in production.** All three runtime probes use loopback WebSocket for instrumentation; the official documentation calls that transport experimental. A supported production tuple must prove the complete front-door behavior over the documented Unix socket.
-8. **Bridge replacement needs positive native disconnect, not only an epoch.** If the bridge crashes while the app-server and TUI stay alive, a replacement cannot initialize until the old bridge socket has produced native `ConnectionClosed` handling and subscription cleanup; external containment counts only when it provably causes that native close. The suite must prove that stale old writes, responses, and errors cannot mutate a thread or consume a global server-request ID, every managed top-level chat binding and any child subscription required by pinned routing rebind under the new fenced bridge incarnation, and the private app-server never has more than one live remote-claw bridge `ConnectionId`.
-9. **A native child thread is not automatically another user-visible chat.** The pinned source distinguishes ordinary top-level threads from core-created child-agent threads, but the retained fixtures do not classify their identity or outward presentation. Bind logical chats only to managed top-level chat threads until a retained lineage fixture proves how `thread_source` and parent identity map. An attach-all notification for a child ID must remain nested native evidence under its parent unless that proof explicitly promotes it; it must never allocate a new remote-claw or official-client chat by itself.
-10. **The optional Codex product gate remains open.** Full request, notification, and server-request method families—including model turns, tools, approvals, questions, steer, and interrupt—plus concurrent races, reconnect, overload/backpressure, crash recovery, external-clock behavior, native top-level/child-thread identity and subscription routing, and outward child presentation still require pinned differential tests. The provider façade and network boundary, injected native management, collision-safe gateway stream/handle remapping and cleanup, exclusive bridge takeover, any proved narrow compatibility or source-lease seam, coordinator-routed outward gateway, official pairing and identity persistence, live official-client parity, one daemon-wide bridge across multiple managed top-level chats, durable complete official-stream transport state, and exact generated-schema retention are also unimplemented or unproved. None blocks Claude 1.0.
-
-The research supports a narrow candidate if Codex work is explicitly resumed: retain one real Codex app-server and exactly one native remote-claw collaborator bridge; add the outward gateway, native management injection, and only compatibility or source-lease metadata that differential proof requires around that one implementation; preserve the pinned app-server's own subscription and routing semantics instead of replacing them; and keep official streams outside the native connection set. Unsupported behavior would remain a future Codex proof gate or require the smallest upstream seam, never a reason to implement a second Codex server.
+When a future Codex adapter makes a concrete compatibility claim, add the smallest current-version
+native acceptance that proves it. Ordinary changes should inspect the evidence, not replay historical
+proof machinery.

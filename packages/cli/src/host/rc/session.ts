@@ -1,6 +1,6 @@
 // RC relay state: sessions and the event bus between the worker (the real `claude --remote-control`
-// process, reached through our MITM) and the clients (our broker subscribers). A faithful port of
-// phase0/remote_claw/core.py — the difference is Node is single-threaded async, so the blocking
+// process, reached through our MITM) and the clients (our broker subscribers). It was ported from the
+// retired Phase 0 core. Node is single-threaded async, so the blocking
 // `threading.Condition` follower loops become async generators that await a wake signal instead of a
 // condition variable. Semantics are identical:
 //

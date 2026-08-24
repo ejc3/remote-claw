@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const scratch = mkdtempSync(join(tmpdir(), "remote-claw-install-proof-"));
+const scratch = mkdtempSync(join(tmpdir(), "remote-claw-install-smoke-"));
 
 try {
 	execFileSync(
@@ -91,11 +91,6 @@ try {
 		throw new Error("installed CLI bundle lost shebang");
 	if (bundle.includes(repositoryRoot))
 		throw new Error("installed CLI bundle embeds repository path");
-	if (/\bfrom\s+["']node:sqlite["']/.test(bundle)) {
-		throw new Error(
-			"stable CLI entrypoint eagerly imports the dormant node:sqlite owner graph",
-		);
-	}
 	process.stdout.write("installed remote-claw artifact: green\n");
 } finally {
 	rmSync(scratch, { recursive: true, force: true });

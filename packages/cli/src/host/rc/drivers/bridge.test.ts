@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { BrokerClient } from "../../../broker/client.js";
 import { securityProvider } from "../../../security/provider.js";
 import { NOOP_TRACER } from "../../../trace.js";
-import { type DriverCapabilities, MITM_CAPABILITIES, TMUX_HARNESS } from "../driver.js";
+import { MITM_CAPABILITIES, TMUX_HARNESS } from "../driver.js";
 import { Session } from "../session.js";
-import { bridgeSession, startBridgeSession } from "./bridge.js";
+import { startBridgeSession } from "./bridge.js";
 
 const ID = new Uint8Array(16);
 
@@ -247,162 +247,7 @@ describe("bridge lifecycle", () => {
     await handle.served;
   });
 
-  it("refreshes one live bridge without restarting its pumps", async () => {
-    const session = new Session("s", "session", {});
-    const client = new FakeClient();
-    const relays = new Set<Promise<void>>();
-    const abort = new AbortController();
-    const handle = startBridgeSession({
-      session,
-      capabilities: MITM_CAPABILITIES,
-      harness: TMUX_HARNESS,
-      newClient: () => client as unknown as BrokerClient,
-      identityId: ID,
-      title: "starting",
-      cwd: "/old",
-      git: null,
-      signal: abort.signal,
-      relays,
-      terminalTasks: new Set(),
-      tracer: NOOP_TRACER,
-    });
-    const readyCapabilities: DriverCapabilities = {
-      structuredPermissions: false,
-      status: true,
-      controls: { interrupt: true, setModel: false, setMode: false, end: false },
-      attachments: false,
-    };
-    const git = { branch: "main", sha: "deadbeef", dirty: false, ahead: 0, behind: 0 };
-
-    await waitFor(() => client.announces.length === 1 && client.streamStarts === 1);
-    expect(relays.has(handle.served)).toBe(true);
-    await handle.refresh({
-      title: "ready",
-      cwd: "/new",
-      git,
-      capabilities: readyCapabilities,
-    });
-
-    expect(client.streamStarts).toBe(1);
-    expect(client.announces).toHaveLength(2);
-    expect(client.announces.at(-1)).toMatchObject({
-      title: "ready",
-      cwd: "/new",
-      git,
-      capabilities: readyCapabilities,
-      harness: TMUX_HARNESS,
-    });
-
-    client.failAnnounces = 1;
-    const retainedCapabilities: DriverCapabilities = {
-      structuredPermissions: true,
-      status: false,
-      controls: { interrupt: true, setModel: false, setMode: true, end: false },
-      attachments: false,
-    };
-    await expect(
-      handle.refresh({
-        title: "missed",
-        cwd: "/missed",
-        git: null,
-        capabilities: retainedCapabilities,
-      }),
-    ).rejects.toThrow("injected announce failure");
-
-    // Advisory delivery failed, but the validated snapshot is still the relay's latest truth. A
-    // presence change must re-announce that snapshot without requiring the owner to replay refresh().
-    session.workerStatus = "running";
-    session.wake();
-    await waitFor(() => client.announces.length === 3);
-    expect(client.announces.at(-1)).toMatchObject({
-      title: "missed",
-      cwd: "/missed",
-      git: null,
-      capabilities: retainedCapabilities,
-      harness: TMUX_HARNESS,
-      status: "running",
-      phase: "thinking",
-    });
-
-    await handle.refresh({
-      title: "recovered",
-      cwd: "/recovered",
-      git,
-      capabilities: readyCapabilities,
-    });
-    expect(client.announces).toHaveLength(4);
-    expect(client.announces.at(-1)?.title).toBe("recovered");
-    expect(client.streamStarts).toBe(1);
-
-    abort.abort();
-    await handle.served;
-    expect(relays.has(handle.served)).toBe(false);
-  });
-
-  it("captures a queued refresh snapshot when refresh is called", async () => {
-    const session = new Session("queued", "session", {});
-    const client = new FakeClient();
-    let releaseInitial = () => {};
-    client.announceBlocks.push(
-      new Promise<void>((resolve) => {
-        releaseInitial = resolve;
-      }),
-    );
-    const relays = new Set<Promise<void>>();
-    const abort = new AbortController();
-    const handle = startBridgeSession({
-      session,
-      capabilities: MITM_CAPABILITIES,
-      harness: TMUX_HARNESS,
-      newClient: () => client as unknown as BrokerClient,
-      identityId: ID,
-      title: "starting",
-      cwd: "/old",
-      git: null,
-      signal: abort.signal,
-      relays,
-      terminalTasks: new Set(),
-      tracer: NOOP_TRACER,
-    });
-    const capabilities: DriverCapabilities = {
-      structuredPermissions: false,
-      status: true,
-      controls: { interrupt: true, setModel: false, setMode: false, end: false },
-      attachments: true,
-    };
-    const git = { branch: "main", sha: "12345678", dirty: false, ahead: 0, behind: 0 };
-    const announcement = {
-      title: "captured",
-      cwd: "/captured",
-      git,
-      capabilities,
-    };
-
-    const refreshing = handle.refresh(announcement);
-    announcement.title = "mutated";
-    announcement.cwd = "/mutated";
-    git.branch = "mutated";
-    capabilities.status = false;
-    capabilities.controls.interrupt = false;
-    releaseInitial();
-    await refreshing;
-
-    expect(client.announces).toHaveLength(2);
-    expect(client.announces.at(-1)).toMatchObject({
-      title: "captured",
-      cwd: "/captured",
-      git: { branch: "main" },
-      capabilities: {
-        status: true,
-        controls: { interrupt: true },
-      },
-    });
-
-    abort.abort();
-    await handle.served;
-  });
-
-  it("overtakes a delayed live announce with terminality and drops queued refreshes on abort", async () => {
+  it("publishes terminality before awaiting a delayed live announce", async () => {
     const session = new Session("delayed", "session", {});
     const client = new FakeClient();
     let releaseInitial = () => {};
@@ -427,45 +272,14 @@ describe("bridge lifecycle", () => {
       terminalTasks: new Set(),
       tracer: NOOP_TRACER,
     });
-    const refreshing = handle.refresh({
-      title: "ready",
-      cwd: "/repo",
-      git: null,
-      capabilities: MITM_CAPABILITIES,
-    });
 
     await waitFor(() => client.streamStarts === 1);
     abort.abort();
     await waitFor(() =>
       client.busPosts.some(({ header }) => header.recordKind === "session_terminal"),
     );
-    const terminal = client.busPosts.find(({ header }) => header.recordKind === "session_terminal");
-    expect(terminal).toEqual({
-      header: {
-        v: 1,
-        identityId: ID,
-        sessionId: "delayed",
-        dir: "out",
-        recordKind: "session_terminal",
-        seq: null,
-        msgId: "terminal-delayed",
-        keyEpoch: 0,
-        part: 0,
-        parts: 1,
-      },
-      text: '{"v":1}',
-    });
     expect(session.closed).toBe(true);
     expect(client.announces).toHaveLength(0);
-    await expect(refreshing).rejects.toThrow("bridge is no longer serving");
-    await expect(
-      handle.refresh({
-        title: "dead",
-        cwd: "/repo",
-        git: null,
-        capabilities: MITM_CAPABILITIES,
-      }),
-    ).rejects.toThrow("bridge is no longer serving");
 
     let teardownFinished = false;
     void handle.served.then(() => {
@@ -473,7 +287,6 @@ describe("bridge lifecycle", () => {
     });
     await tick();
     expect(teardownFinished).toBe(false);
-    expect(relays.has(handle.served)).toBe(true);
 
     releaseInitial();
     await handle.served;
@@ -481,69 +294,7 @@ describe("bridge lifecycle", () => {
       "session_terminal",
       "session_announce",
     ]);
-    expect(client.announces.map((announcement) => announcement.title)).toEqual(["starting"]);
     expect(relays.has(handle.served)).toBe(false);
-  });
-
-  it("rejects refresh after a fatal relay termination", async () => {
-    const session = new Session("fatal", "session", {});
-    const client = new FakeClient();
-    client.durable = true;
-    client.frameCountError = new Error("injected durable cursor failure");
-    const relays = new Set<Promise<void>>();
-    const abort = new AbortController();
-    const siblingSession = new Session("healthy", "session", {});
-    const siblingClient = new FakeClient();
-    const siblingAbort = new AbortController();
-    const sibling = startBridgeSession({
-      session: siblingSession,
-      capabilities: MITM_CAPABILITIES,
-      harness: TMUX_HARNESS,
-      newClient: () => siblingClient as unknown as BrokerClient,
-      identityId: ID,
-      title: "healthy",
-      cwd: "/repo",
-      git: null,
-      signal: siblingAbort.signal,
-      relays,
-      terminalTasks: new Set(),
-      tracer: NOOP_TRACER,
-    });
-    const handle = startBridgeSession({
-      session,
-      capabilities: MITM_CAPABILITIES,
-      harness: TMUX_HARNESS,
-      newClient: () => client as unknown as BrokerClient,
-      identityId: ID,
-      title: "starting",
-      cwd: "/repo",
-      git: null,
-      signal: abort.signal,
-      relays,
-      terminalTasks: new Set(),
-      tracer: NOOP_TRACER,
-    });
-
-    await handle.served;
-    expect(session.closed).toBe(true); // prepare failed before a pump could close it: bridge backstop
-    expect(siblingSession.closed).toBe(false); // the fatal boundary is this cse, not every live bridge
-    expect(client.announces).toHaveLength(0);
-    expect(client.streamStarts).toBe(0);
-    expect(relays.has(handle.served)).toBe(false);
-    expect(relays.has(sibling.served)).toBe(true);
-    await expect(
-      handle.refresh({
-        title: "dead",
-        cwd: "/repo",
-        git: null,
-        capabilities: MITM_CAPABILITIES,
-      }),
-    ).rejects.toThrow("bridge is no longer serving");
-    expect(client.announces).toHaveLength(0);
-
-    siblingAbort.abort();
-    await sibling.served;
-    expect(siblingSession.closed).toBe(true); // A0 has no supported bridge reattachment after owner exit
   });
 
   it("isolates a fatal publication to one live bridge while its sibling keeps projecting", async () => {
@@ -636,14 +387,6 @@ describe("bridge lifecycle", () => {
     expect(client.seqCursorCalls).toBe(0);
     expect(client.frameCountCursorCalls).toBe(0);
     expect(client.streamStarts).toBe(0);
-    await expect(
-      handle.refresh({
-        title: "still dead",
-        cwd: "/repo",
-        git: null,
-        capabilities: MITM_CAPABILITIES,
-      }),
-    ).rejects.toThrow("bridge is no longer serving");
   });
 
   it("does not advertise or serve a Session that fail-stops before its durable barrier settles", async () => {
@@ -674,42 +417,5 @@ describe("bridge lifecycle", () => {
     expect(client.announces).toHaveLength(0);
     expect(client.streamStarts).toBe(0);
     expect(relays.has(handle.served)).toBe(false);
-    await expect(
-      handle.refresh({
-        title: "still hidden",
-        cwd: "/repo",
-        git: null,
-        capabilities: MITM_CAPABILITIES,
-      }),
-    ).rejects.toThrow("bridge is no longer serving");
-  });
-
-  it("keeps bridgeSession as the served-promise compatibility API", async () => {
-    const session = new Session("legacy", "session", {});
-    const client = new FakeClient();
-    const relays = new Set<Promise<void>>();
-    const abort = new AbortController();
-
-    const served = bridgeSession({
-      session,
-      capabilities: MITM_CAPABILITIES,
-      harness: TMUX_HARNESS,
-      newClient: () => client as unknown as BrokerClient,
-      identityId: ID,
-      title: "legacy",
-      cwd: "/repo",
-      git: null,
-      signal: abort.signal,
-      relays,
-      terminalTasks: new Set(),
-      tracer: NOOP_TRACER,
-    });
-
-    expect(served).toBeInstanceOf(Promise);
-    expect(relays.has(served)).toBe(true);
-    abort.abort();
-    await served;
-    expect(session.closed).toBe(true);
-    expect(relays.has(served)).toBe(false);
   });
 });

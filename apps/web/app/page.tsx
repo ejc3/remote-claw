@@ -28,6 +28,7 @@ import {
 } from "react";
 import { clearCredential, loadCredential, saveCredential } from "./lib/credential-store";
 import { claimHandoff } from "./lib/handoff-claim";
+import { handoffEnabled } from "./lib/handoff-feature";
 import { friendlySendError } from "./lib/send-error";
 import {
   basename,
@@ -141,7 +142,7 @@ export async function sendComposer(
   }
 }
 
-/** The one browser mutation surface shipped by Claude 1.0. Compatibility hosts may still advertise
+/** The one browser mutation surface supported by the private-relay beta. Compatibility hosts may still advertise
  * individual mutation capabilities, but the stable native-RC tuple is deliberately exact: Claude RC,
  * truthful status, and every browser mutation family except plain text disabled. */
 export function isStableClaudeSurface(
@@ -306,8 +307,8 @@ export default function Home() {
   }, []);
 
   // A credential may arrive in the URL fragment (never sent to the server): `#rcp1_…` is a (legacy, still
-  // accepted) bare pass — prefill it; `#otk1_…` is a ONE-TIME handoff token — defer it to a gesture-gated
-  // claim (NOT auto-claimed, so a prefetch/unfurler that runs JS can't burn it). Strip the fragment in both
+  // accepted) bare pass — prefill it. An enabled `#otk1_…` token is deferred to a gesture-gated claim;
+  // a disabled one is stripped and routed to manual entry without a request. Strip the fragment in both
   // cases. On a PLAIN RELOAD the fragment is gone, so restore the stored credential (§3.6) and RECONNECT
   // automatically — a reload should return to the console, not the pass form. `restoring` stays up through
   // the connect attempt; a failure falls through to the Connect screen (pass prefilled + error shown) so
@@ -324,6 +325,10 @@ export default function Home() {
     } else if (entry.kind === "handoff") {
       setHandoffOtk(entry.value);
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      setRestoring(false);
+    } else if (entry.kind === "handoff-disabled") {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      setError("One-time pairing is not enabled on this deployment. Enter a pass manually.");
       setRestoring(false);
     } else {
       void loadCredential()
@@ -351,9 +356,12 @@ export default function Home() {
       setRestoring(false);
       if (entry.kind === "handoff") {
         setHandoffOtk(entry.value);
-      } else {
+      } else if (entry.kind === "pass") {
         setHandoffOtk(null);
         setPassInput(entry.value);
+      } else {
+        setHandoffOtk(null);
+        setError("One-time pairing is not enabled on this deployment. Enter a pass manually.");
       }
     };
     window.addEventListener("hashchange", onHashChange);
@@ -407,14 +415,21 @@ export default function Home() {
   );
 }
 
-/** Classify what's in the URL fragment on load: a legacy bare pass (`rcp1_`), a one-time handoff token
- *  (`otk1_`), or nothing — in which case we restore + reconnect from the stored credential. Pure so the
- *  load-time routing is unit-testable without a DOM. */
+/** Classify what's in the URL fragment on load: a legacy bare pass, an enabled/disabled one-time token,
+ *  or nothing — in which case we restore + reconnect from the stored credential. Pure so the load-time
+ *  routing is unit-testable without a DOM. */
 export function entryFromFragment(
   frag: string,
-): { kind: "pass"; value: string } | { kind: "handoff"; value: string } | { kind: "restore" } {
+  featureEnabled = handoffEnabled(),
+):
+  | { kind: "pass"; value: string }
+  | { kind: "handoff"; value: string }
+  | { kind: "handoff-disabled" }
+  | { kind: "restore" } {
   if (frag.startsWith("rcp1_")) return { kind: "pass", value: frag };
-  if (frag.startsWith("otk1_")) return { kind: "handoff", value: frag };
+  if (frag.startsWith("otk1_")) {
+    return featureEnabled ? { kind: "handoff", value: frag } : { kind: "handoff-disabled" };
+  }
   return { kind: "restore" };
 }
 

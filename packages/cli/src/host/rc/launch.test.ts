@@ -253,7 +253,7 @@ function assertNoSensitiveMaterial(
 }
 
 describe("runRcLaunch public stable boundary", () => {
-  it("rejects an unsupported tuple before certificates, network setup, or child spawn", async () => {
+  it("rejects an unsupported version before certificates, network setup, or child spawn", async () => {
     const certsDir = tmp();
     let spawned = false;
 
@@ -266,14 +266,14 @@ describe("runRcLaunch public stable boundary", () => {
         claudeBin: "unsupported-claude",
         claudeCompatibilityCheck: async (bin) => {
           expect(bin).toBe("unsupported-claude");
-          throw new Error("unsupported stable tuple");
+          throw new Error("unsupported stable version");
         },
         spawnClaude: async () => {
           spawned = true;
           return 0;
         },
       }),
-    ).rejects.toThrow("unsupported stable tuple");
+    ).rejects.toThrow("unsupported stable version");
 
     expect(spawned).toBe(false);
     expect(existsSync(join(certsDir, "ca.pem"))).toBe(false);
@@ -281,34 +281,6 @@ describe("runRcLaunch public stable boundary", () => {
 });
 
 describe.skipIf(!RUN)("runRcLaunch wiring", () => {
-  it.skipIf(process.platform !== "linux" || process.arch !== "arm64")(
-    "spawns the exact checked executable inode and retains it through child exit",
-    async () => {
-      const root = tmp();
-      const id = await deriveIdentity(new Uint8Array(32).fill(69));
-      let spawnedPath = "";
-
-      const code = await runRcLaunchBoundary({
-        claudeArgs: ["--version"],
-        identity: id,
-        brokerUrl: "http://broker.example",
-        certsDir: join(root, "certs"),
-        claudeBin: "/usr/bin/claude",
-        spawnClaude: async (bin, args) => {
-          spawnedPath = bin;
-          expect(execFileSync(bin, [...args], { encoding: "utf8" }).trim()).toBe(
-            "2.1.237 (Claude Code)",
-          );
-          return 0;
-        },
-      });
-
-      expect(code).toBe(0);
-      expect(spawnedPath).toMatch(/^\/proc\/[0-9]+\/fd\/[0-9]+$/);
-      expect(existsSync(spawnedPath)).toBe(false);
-    },
-  );
-
   it("spawns claude with HTTPS_PROXY → a live MITM + NODE_EXTRA_CA_CERTS → our CA, then tears down", async () => {
     const id = await deriveIdentity(new Uint8Array(32).fill(70));
     const certsDir = tmp();
@@ -1116,7 +1088,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
             );
             await waitFor(() => broker.posts.some((p) => p.frame.record_kind === "assistant"));
 
-            // Stable Claude 1.0 never exposes or answers the internal permission compatibility path.
+            // The stable private-relay beta never exposes or answers this compatibility path.
             // An old/current authenticated viewer frame is still rejected at the host boundary.
             await viewer.postFrame(
               clientHeader(id, sessionId, "permission", "permission-in-1"),

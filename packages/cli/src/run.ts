@@ -1,19 +1,18 @@
-// The transparent-wrapper runner. For this P2 skeleton it classifies argv and either forwards
-// to `claude` (the common path) or reports a parse error. The `--rc-*` actions (identity,
-// share, …) are wired in later PRs; here a recognized rc flag is reported as not-yet-
-// implemented so the namespace never silently leaks into claude.
+// The transparent-wrapper runner. It classifies argv, executes the implemented `--rc-*` actions and
+// drivers, or forwards ordinary arguments to `claude`. Reserved flags are consumed or rejected here;
+// they never leak silently into the child.
 
 import { spawn as nodeSpawn } from "node:child_process";
 import { writeSync } from "node:fs";
 import { constants } from "node:os";
 import { dirname, join } from "node:path";
-import { deriveIdentity, toHex } from "@remote-claw/clawsec";
+import { deriveIdentity } from "@remote-claw/clawsec";
 import { classifyArgs } from "./args.js";
 import { BrokerClient } from "./broker/client.js";
 import { RC_HELP } from "./help.js";
 import { parseStripKeys } from "./host/rc/bedrock/translate.js";
 import {
-  acquireStableClaudeExecutable,
+  assertStableClaudeCompatibility,
   STABLE_CLAUDE_REQUIREMENT,
 } from "./host/rc/compatibility.js";
 import type { DriverContext } from "./host/rc/driver.js";
@@ -122,48 +121,6 @@ export interface RunOptions {
   runTmuxDriver?: typeof runTmuxDriver;
   /** Injectable stable-Claude compatibility boundary (tests). Defaults to the fail-closed probe. */
   claudeCompatibilityCheck?: (claudeBin: string) => Promise<void>;
-  /**
-   * Production-only bridge used by experimental drivers. The stable Claude MITM path deliberately
-   * does not initialize the parked A1 owner graph.
-   */
-  runtimeOwnerBootstrap?: RuntimeOwnerBootstrap;
-}
-
-export interface RuntimeOwnerBootstrapInput {
-  readonly machineIdentityId: string;
-  readonly identitySecret: Uint8Array;
-  readonly secretPath: string;
-}
-
-export interface RuntimeOwnerCollaborator {
-  close(): void | Promise<void>;
-}
-
-export type RuntimeOwnerBootstrap = (
-  input: RuntimeOwnerBootstrapInput,
-) => Promise<RuntimeOwnerCollaborator | null>;
-
-async function bootstrapRuntimeOwnerForDriver(
-  opts: RunOptions,
-  input: RuntimeOwnerBootstrapInput,
-): Promise<RuntimeOwnerCollaborator | null> {
-  if (opts.runtimeOwnerBootstrap === undefined) return null;
-  try {
-    const collaborator = await opts.runtimeOwnerBootstrap(input);
-    return collaborator !== null && typeof collaborator.close === "function" ? collaborator : null;
-  } catch {
-    // A1.3 activation is deliberately fail-soft for the still-A0 driver paths. No A1 capability is
-    // advertised, and native/broker behavior stays exactly as it was before the owner was available.
-    return null;
-  }
-}
-
-async function closeRuntimeOwnerCollaborator(collaborator: RuntimeOwnerCollaborator | null) {
-  try {
-    await collaborator?.close();
-  } catch {
-    // Disconnect means detach only. It must not replace the driver's exit result or terminate a runtime.
-  }
 }
 
 async function withClearedRootSecret<T>(
@@ -176,6 +133,63 @@ async function withClearedRootSecret<T>(
   } finally {
     secret.fill(0);
   }
+}
+
+function resolveSecretFile(rc: Record<string, unknown>): string {
+  return resolveSecretPath({
+    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
+  }).path;
+}
+
+function resolveBrokerBackend(rc: Record<string, unknown>): string | undefined {
+  return (
+    (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
+    (process.env.RC_BACKEND ?? "").trim() ||
+    undefined
+  );
+}
+
+interface DriverContextOptions {
+  brokerUrl: string;
+  rc: Record<string, unknown>;
+  harnessArgs: string[];
+  tracerTarget: string;
+  harnessBin?: string;
+  extra?: Record<string, unknown>;
+}
+
+/** Build the identity/broker half shared by every non-MITM harness. Driver-specific parsing stays at
+ * the dispatch edge; crypto, deployment protection, backend selection, cwd, and git do not. */
+async function createDriverContext(options: DriverContextOptions): Promise<DriverContext> {
+  const secretPath = resolveSecretFile(options.rc);
+  const backend = resolveBrokerBackend(options.rc);
+  await ensureIdentity(secretPath);
+  return withClearedRootSecret(secretPath, async (secret) => {
+    const identity = await deriveIdentity(secret);
+    const provider = securityProvider("sealed", identity);
+    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const newClient = () =>
+      new BrokerClient({
+        baseUrl: options.brokerUrl,
+        provider,
+        ...(bypass ? { protectionBypass: bypass } : {}),
+        ...(backend !== undefined ? { backend } : {}),
+      });
+    const cwd = process.cwd();
+    return {
+      harnessArgs: options.harnessArgs,
+      ...(options.harnessBin !== undefined ? { harnessBin: options.harnessBin } : {}),
+      identity,
+      brokerUrl: options.brokerUrl,
+      ...(backend !== undefined ? { backend } : {}),
+      title: "remote-claw",
+      cwd,
+      git: await gitInfo(cwd),
+      newClient,
+      tracer: tracerFromEnv(options.tracerTarget),
+      ...(options.extra !== undefined ? { extra: options.extra } : {}),
+    };
+  });
 }
 
 const realSpawn: SpawnFn = (bin, args) =>
@@ -350,9 +364,7 @@ async function runRcTracePath(
   opts: RunOptions,
   warn: (line: string) => void,
 ): Promise<number> {
-  const secretPath = resolveSecretPath({
-    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
-  }).path;
+  const secretPath = resolveSecretFile(rc);
   try {
     return await runRcTrace({
       claudeArgs,
@@ -375,15 +387,10 @@ async function runRcLaunchPath(
   opts: RunOptions,
   warn: (line: string) => void,
 ): Promise<number> {
-  const secretPath = resolveSecretPath({
-    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
-  }).path;
+  const secretPath = resolveSecretFile(rc);
   // Which broker backend this host targets: --rc-backend wins, else RC_BACKEND, else the broker's
   // default (undefined ⇒ no x-broker-backend header). Empty/whitespace is treated as unset.
-  const backend =
-    (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
-    (process.env.RC_BACKEND ?? "").trim() ||
-    undefined;
+  const backend = resolveBrokerBackend(rc);
   // Inference target: --rc-inference / RC_INFERENCE, default "anthropic" (pass through). "bedrock"
   // routes /v1/messages to Amazon Bedrock and synthesizes the rest — zero api.anthropic.com.
   const inferenceRaw =
@@ -423,17 +430,8 @@ async function runRcLaunchPath(
     );
     return 2;
   }
-  let executable: { readonly claudeBin: string; release(): void };
   try {
-    // Production retains the checked executable inode before identity creation. The injected checker
-    // is a deterministic-test seam and preserves its synthetic command without touching the filesystem.
-    executable =
-      opts.claudeCompatibilityCheck === undefined
-        ? await acquireStableClaudeExecutable(bin)
-        : await opts.claudeCompatibilityCheck(bin).then(() => ({
-            claudeBin: bin,
-            release() {},
-          }));
+    await (opts.claudeCompatibilityCheck ?? assertStableClaudeCompatibility)(bin);
   } catch {
     warn(`remote-claw: ${STABLE_CLAUDE_REQUIREMENT}\n`);
     return 1;
@@ -446,10 +444,8 @@ async function runRcLaunchPath(
       identity,
       brokerUrl,
       certsDir: join(dirname(secretPath), "mitm-certs"),
-      claudeBin: executable.claudeBin,
-      // The descriptor path above is immutable while `executable` is held. The exported launch
-      // boundary independently pins ordinary direct callers; this internal handoff needs no second
-      // mutable-path lookup.
+      claudeBin: bin,
+      // The CLI boundary checked the version already. Direct runRcLaunch callers are checked there.
       claudeCompatibilityCheck: async () => {},
       spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
       ...(backend !== undefined ? { backend } : {}),
@@ -460,8 +456,6 @@ async function runRcLaunchPath(
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);
     return 1;
-  } finally {
-    executable.release();
   }
 }
 
@@ -478,13 +472,6 @@ async function runOpencodeDriverPath(
   opts: RunOptions,
   warn: (line: string) => void,
 ): Promise<number> {
-  const secretPath = resolveSecretPath({
-    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
-  }).path;
-  const backend =
-    (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
-    (process.env.RC_BACKEND ?? "").trim() ||
-    undefined;
   // OpenCode server origin (--rc-oc-url, else OPENCODE_URL, else the default loopback). The model is
   // "providerID/modelID" (--rc-oc-model, else RC_OC_MODEL, else the bedrock-sonnet default — a reliable
   // tool-caller via the region-agnostic `global.` profile; the opencode server supplies AWS creds).
@@ -510,65 +497,33 @@ async function runOpencodeDriverPath(
     undefined;
 
   try {
-    await ensureIdentity(secretPath);
-    const { ctx, runtimeOwner } = await withClearedRootSecret(secretPath, async (secret) => {
-      const identity = await deriveIdentity(secret);
-      const provider = securityProvider("sealed", identity);
-      const cwd = process.cwd();
-      const git = await gitInfo(cwd);
-      const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-      const newClient = () =>
-        new BrokerClient({
-          baseUrl: brokerUrl,
-          provider,
-          ...(bypass ? { protectionBypass: bypass } : {}),
-          ...(backend !== undefined ? { backend } : {}),
-        });
-      const ctx: DriverContext = {
-        harnessArgs: claudeArgs,
-        identity,
-        brokerUrl,
-        title: "remote-claw",
-        cwd,
-        git,
-        newClient,
-        tracer: tracerFromEnv("rc.opencode"),
-        extra: {
-          ...(baseUrl !== undefined ? { baseUrl } : {}),
-          model,
-          ...(password !== undefined ? { password } : {}),
-          ...(ocSessionId !== undefined ? { sessionId: ocSessionId } : {}),
-          // Permission MIRRORING (B2 parity, DEFAULT ON): add a catch-all "ask" so
-          // otherwise-unconfigured tools raise a viewer gate. Opt out with
-          // --rc-oc-skip-permissions / RC_OC_SKIP_PERMISSIONS truthy.
-          mirrorPermissions: resolveMirrorPermissions({
-            skipFlag: rc["rc-oc-skip-permissions"] === true,
-            env: process.env.RC_OC_SKIP_PERMISSIONS,
-          }),
-        },
-        ...(backend !== undefined ? { backend } : {}),
-      };
-      const runtimeOwner = await bootstrapRuntimeOwnerForDriver(opts, {
-        machineIdentityId: toHex(identity.identityId),
-        identitySecret: secret,
-        secretPath,
-      });
-      return { ctx, runtimeOwner };
+    const ctx = await createDriverContext({
+      brokerUrl,
+      rc,
+      harnessArgs: claudeArgs,
+      tracerTarget: "rc.opencode",
+      extra: {
+        ...(baseUrl !== undefined ? { baseUrl } : {}),
+        model,
+        ...(password !== undefined ? { password } : {}),
+        ...(ocSessionId !== undefined ? { sessionId: ocSessionId } : {}),
+        // Permission MIRRORING is on unless the user explicitly opts out.
+        mirrorPermissions: resolveMirrorPermissions({
+          skipFlag: rc["rc-oc-skip-permissions"] === true,
+          env: process.env.RC_OC_SKIP_PERMISSIONS,
+        }),
+      },
     });
 
+    const ac = new AbortController();
+    const onSig = () => ac.abort();
+    process.once("SIGINT", onSig);
+    process.once("SIGTERM", onSig);
     try {
-      const ac = new AbortController();
-      const onSig = () => ac.abort();
-      process.once("SIGINT", onSig);
-      process.once("SIGTERM", onSig);
-      try {
-        return await (opts.runOpencodeDriver ?? runOpencodeDriver)(ctx, ac.signal);
-      } finally {
-        process.removeListener("SIGINT", onSig);
-        process.removeListener("SIGTERM", onSig);
-      }
+      return await (opts.runOpencodeDriver ?? runOpencodeDriver)(ctx, ac.signal);
     } finally {
-      await closeRuntimeOwnerCollaborator(runtimeOwner);
+      process.removeListener("SIGINT", onSig);
+      process.removeListener("SIGTERM", onSig);
     }
   } catch (e) {
     warn(`remote-claw: could not start opencode driver: ${(e as Error)?.message ?? e}\n`);
@@ -592,87 +547,46 @@ async function runTmuxDriverPath(
   opts: RunOptions,
   warn: (line: string) => void,
 ): Promise<number> {
-  const secretPath = resolveSecretPath({
-    ...(typeof rc["rc-file"] === "string" ? { file: rc["rc-file"] } : {}),
-  }).path;
-  const backend =
-    (typeof rc["rc-backend"] === "string" ? rc["rc-backend"] : "").trim() ||
-    (process.env.RC_BACKEND ?? "").trim() ||
-    undefined;
   try {
-    await ensureIdentity(secretPath); // local, idempotent — create on first run, no network
-    const { ctx, injectSessionHook, mirrorPermissions, runtimeOwner } = await withClearedRootSecret(
-      secretPath,
-      async (secret) => {
-        const identity = await deriveIdentity(secret);
-        const provider = securityProvider("sealed", identity);
-        // The Vercel deployment-protection bypass (SSO) for the host's own broker calls; scrubbed from
-        // the child claude's env by the driver. An unprotected broker leaves it unset → no header.
-        const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-        const newClient = () =>
-          new BrokerClient({
-            baseUrl: brokerUrl,
-            provider,
-            ...(bypass ? { protectionBypass: bypass } : {}),
-            ...(backend !== undefined ? { backend } : {}),
-          });
-        const cwd = process.cwd();
-        const ctx: DriverContext = {
-          harnessArgs: claudeArgs,
-          harnessBin: bin, // spawn the SAME binary the MITM path resolves (RC_CLAUDE_BIN-aware) — codex #6
-          identity,
-          brokerUrl,
-          title: "remote-claw",
-          cwd,
-          git: await gitInfo(cwd),
-          newClient,
-          tracer: tracerFromEnv("rc.tmux"),
-          ...(backend !== undefined ? { backend } : {}),
-        };
-        // Whether capture keeps following the private SessionStart marker for exact transcript
-        // discovery + rotations after startup. The driver ALWAYS injects and waits for that marker once.
-        const injectSessionHook = resolveInjectSessionHook({
-          noFlag: rc["rc-no-session-hook"] === true,
-          yesFlag: rc["rc-session-hook"] === true,
-          env: process.env.RC_SESSION_HOOK,
-        });
-        const mirrorPermissions = resolveMirrorPermissions({
-          skipFlag: rc["rc-tmux-skip-permissions"] === true,
-          env: process.env.RC_TMUX_SKIP_PERMISSIONS,
-        });
-        const runtimeOwner = await bootstrapRuntimeOwnerForDriver(opts, {
-          machineIdentityId: toHex(identity.identityId),
-          identitySecret: secret,
-          secretPath,
-        });
-        return { ctx, injectSessionHook, mirrorPermissions, runtimeOwner };
-      },
-    );
+    const ctx = await createDriverContext({
+      brokerUrl,
+      rc,
+      harnessArgs: claudeArgs,
+      harnessBin: bin,
+      tracerTarget: "rc.tmux",
+    });
+    // The driver always uses a private SessionStart hook for startup readiness. This flag controls
+    // only continued transcript/rotation following after that barrier.
+    const injectSessionHook = resolveInjectSessionHook({
+      noFlag: rc["rc-no-session-hook"] === true,
+      yesFlag: rc["rc-session-hook"] === true,
+      env: process.env.RC_SESSION_HOOK,
+    });
+    const mirrorPermissions = resolveMirrorPermissions({
+      skipFlag: rc["rc-tmux-skip-permissions"] === true,
+      env: process.env.RC_TMUX_SKIP_PERMISSIONS,
+    });
     // Couple Ctrl-C / SIGTERM to the driver's abort so teardown (flush + kill-session) runs. Record
     // which signal fired so we return the shell-standard 128+N code (codex review #9) instead of 0.
+    const ac = new AbortController();
+    let firedSignal: NodeJS.Signals | null = null;
+    const onSignal = (sig: NodeJS.Signals) => {
+      firedSignal = sig;
+      ac.abort();
+    };
+    const onInt = () => onSignal("SIGINT");
+    const onTerm = () => onSignal("SIGTERM");
+    process.once("SIGINT", onInt);
+    process.once("SIGTERM", onTerm);
     try {
-      const ac = new AbortController();
-      let firedSignal: NodeJS.Signals | null = null;
-      const onSignal = (sig: NodeJS.Signals) => {
-        firedSignal = sig;
-        ac.abort();
-      };
-      const onInt = () => onSignal("SIGINT");
-      const onTerm = () => onSignal("SIGTERM");
-      process.once("SIGINT", onInt);
-      process.once("SIGTERM", onTerm);
-      try {
-        const code = await (opts.runTmuxDriver ?? runTmuxDriver)(ctx, ac.signal, {
-          injectSessionHook,
-          mirrorPermissions,
-        });
-        return firedSignal !== null ? signalExitCode(firedSignal) : code;
-      } finally {
-        process.removeListener("SIGINT", onInt);
-        process.removeListener("SIGTERM", onTerm);
-      }
+      const code = await (opts.runTmuxDriver ?? runTmuxDriver)(ctx, ac.signal, {
+        injectSessionHook,
+        mirrorPermissions,
+      });
+      return firedSignal !== null ? signalExitCode(firedSignal) : code;
     } finally {
-      await closeRuntimeOwnerCollaborator(runtimeOwner);
+      process.removeListener("SIGINT", onInt);
+      process.removeListener("SIGTERM", onTerm);
     }
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);

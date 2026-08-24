@@ -3,15 +3,18 @@
 // To mirror permissions to the viewer faithfully — block each tool until the remote viewer answers,
 // exactly like a real RC (mitm) session — we inject a `PreToolUse` hook via the SAME `--settings`
 // deep-merge seam as the SessionStart hook (sessionhook.ts). claude honors a PreToolUse hook that
-// returns `{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow"|"deny"}}`
-// (verified live), and the hook command's stdin carries session_id / tool_name / tool_input /
-// tool_use_id / permission_mode.
+// returns `{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:…}}`: viewer answers use
+// `allow`/`deny`, while remote-projection loss uses Claude's supported `ask` to restore the native prompt.
+// The hook command's stdin carries session_id / tool_name / tool_input / tool_use_id / permission_mode.
 //
 // The hook command is a tiny, self-contained Node helper (Node is always present — claude runs on it)
 // that the driver writes to the run's temp dir. On each tool the helper:
 //   1. appends ONE request line (the tool + its tool_use_id) to a REQUESTS sentinel the driver tails,
 //   2. BLOCKS, polling a per-tool DECISION file the driver writes when the viewer answers,
 //   3. emits the decision as the PreToolUse hookSpecificOutput and exits.
+// If the remote compatibility Session closes while the native tmux pane stays alive, the driver removes
+// a private ACTIVE sentinel. An in-flight or later helper then returns `permissionDecision:"ask"`, which
+// puts the still-unexecuted tool behind Claude's normal LOCAL permission prompt. It never guesses allow.
 // The driver tails the requests sentinel → raises a canonical `can_use_tool` gate (the relay + viewer
 // already render that), and writes `<decisionDir>/<toolUseId>.json` when the viewer grants/denies.
 //
@@ -47,13 +50,14 @@ function shq(s: string): string {
 
 /**
  * The self-contained Node helper source. Written to disk by the driver and invoked as
- * `node <helperPath> <reqSentinel> <decisionDir> <pollMs>`. No imports from this package (it runs as a
- * standalone script under the child claude). Logic, kept deliberately small:
+ * `node <helperPath> <reqSentinel> <decisionDir> <activeSentinel> <pollMs>`. No imports from this package
+ * (it runs as a standalone script under the child claude). Logic, kept deliberately small:
  *  - read the whole PreToolUse payload from stdin,
  *  - derive the tool_use_id (fall back to a per-process synthetic id used for BOTH the request line and
  *    the decision poll, so the two always match even if claude omitted it),
  *  - append one compact NDJSON request line in a single O_APPEND write (overlapping fires can't tear),
- *  - poll `<decisionDir>/<id>.json` until it appears, then emit the PreToolUse decision and exit 0.
+ *  - poll `<decisionDir>/<id>.json` until it appears, then emit the PreToolUse decision and exit 0,
+ *  - if the remote-active sentinel disappears, emit `ask` instead so the local pane owns the gate.
  * It FAILS CLOSED: if it can't even record the request (an IO error that would otherwise hang the turn
  * forever) it emits `deny` with a reason rather than block — a denied tool is recoverable; a wrongly
  * allowed one is not. And it emits ONLY on a well-formed `{behavior:"allow"|"deny"}` decision: an empty
@@ -65,8 +69,9 @@ export const PRE_TOOL_USE_HELPER_SOURCE = String.raw`#!/usr/bin/env node
 import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-const [, , reqSentinel, decisionDir, pollMsArg] = process.argv;
+const [, , reqSentinel, decisionDir, activeSentinel, pollMsArg] = process.argv;
 const pollMs = Math.max(20, Number.parseInt(pollMsArg ?? "", 10) || 100);
+const localReason = "remote-claw viewer disconnected; approve this tool in the local pane";
 
 function emit(behavior, reason, updatedInput) {
   const out = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: behavior } };
@@ -91,6 +96,11 @@ async function readStdin() {
 const raw = await readStdin().catch(() => "");
 let p = {};
 try { p = JSON.parse(raw); } catch { p = {}; }
+
+// The remote projection may already be gone when a later tool fires. Force Claude's native permission
+// prompt without recording a request nobody can deliver. "ask" is intentionally explicit: an empty hook
+// result could defer to an existing allow rule, while takeover must never silently approve an unsafe tool.
+if (!existsSync(activeSentinel)) emit("ask", localReason);
 
 // A stable id for THIS invocation: claude's tool_use_id when present, else a synthetic one used for both
 // the request line and the decision poll so the driver's write always matches our read. The synthetic id
@@ -118,6 +128,8 @@ try {
 
 const decFile = join(decisionDir, id + ".json");
 for (;;) {
+  // Honor an answer already durably written by the viewer before observing disconnect. Otherwise hand the
+  // SAME, still-unexecuted tool call to Claude's local permission UI; no tool is replayed or auto-approved.
   if (existsSync(decFile)) {
     let d = {};
     try { d = JSON.parse(readFileSync(decFile, "utf8")); } catch { d = {}; }
@@ -135,19 +147,22 @@ for (;;) {
       emit(d.behavior, typeof d.reason === "string" ? d.reason : undefined, ui);
     }
   }
+  if (!existsSync(activeSentinel)) emit("ask", localReason);
   await new Promise((r) => setTimeout(r, pollMs));
 }
 `;
 
-/** Build the PreToolUse hook command string: `<node> <helper> <reqSentinel> <decisionDir> <pollMs>`,
- *  each token single-quoted so spaces in a path are safe. `nodeBin` is the Node interpreter: the driver
- *  passes `process.execPath` (an ABSOLUTE path) rather than relying on a bare `node` being on the pane
- *  shell's PATH — a standalone/native claude install may run with no `node` on PATH, which would make the
- *  hook fail to spawn and silently bypass the gate. Defaults to `"node"` for callers/tests that don't care. */
+/** Build the PreToolUse hook command string:
+ *  `<node> <helper> <reqSentinel> <decisionDir> <activeSentinel> <pollMs>`, each token single-quoted so
+ *  spaces in a path are safe. `nodeBin` is the Node interpreter: the driver passes `process.execPath` (an
+ *  ABSOLUTE path) rather than relying on a bare `node` being on the pane shell's PATH — a
+ *  standalone/native claude install may run with no `node` on PATH, which would make the hook fail to
+ *  spawn and silently bypass the gate. Defaults to `"node"` for callers/tests that don't care. */
 export function preToolUseHookCommand(
   helperPath: string,
   reqSentinel: string,
   decisionDir: string,
+  activeSentinel: string,
   pollMs = 100,
   nodeBin = "node",
 ): string {
@@ -156,6 +171,7 @@ export function preToolUseHookCommand(
     shq(helperPath),
     shq(reqSentinel),
     shq(decisionDir),
+    shq(activeSentinel),
     shq(String(pollMs)),
   ].join(" ");
 }
@@ -167,6 +183,7 @@ export function preToolUseHookFragment(
   helperPath: string,
   reqSentinel: string,
   decisionDir: string,
+  activeSentinel: string,
   pollMs = 100,
   nodeBin = "node",
 ): {
@@ -182,7 +199,14 @@ export function preToolUseHookFragment(
           hooks: [
             {
               type: "command",
-              command: preToolUseHookCommand(helperPath, reqSentinel, decisionDir, pollMs, nodeBin),
+              command: preToolUseHookCommand(
+                helperPath,
+                reqSentinel,
+                decisionDir,
+                activeSentinel,
+                pollMs,
+                nodeBin,
+              ),
             },
           ],
         },

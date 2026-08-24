@@ -6,7 +6,7 @@ import {
   toHex,
   utf8,
 } from "@remote-claw/clawsec";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { claimHandoff } from "../app/lib/handoff-claim";
 
 // The viewer-side claim helper (app/lib/handoff-claim.ts): POST {id, proof} → open the returned box with
@@ -29,7 +29,28 @@ function fetchReturning(res: Response): typeof fetch {
   return (async () => res) as unknown as typeof fetch;
 }
 
+beforeEach(() => {
+  vi.stubEnv("NEXT_PUBLIC_RC_HANDOFF_ENABLED", "1");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("claimHandoff", () => {
+  it("is default-off and makes no claim request without the deployment feature flag", async () => {
+    delete process.env.NEXT_PUBLIC_RC_HANDOFF_ENABLED;
+    const { token } = await mint();
+    let called = false;
+    const fetchFn = (async () => {
+      called = true;
+      return Response.json({});
+    }) as unknown as typeof fetch;
+
+    await expect(claimHandoff(token, fetchFn)).rejects.toThrow(/not enabled.*manually/i);
+    expect(called).toBe(false);
+  });
+
   it("round-trips: POSTs id+proof to /api/handoff and opens the returned box back to the pass", async () => {
     const { token, box } = await mint();
     let sentUrl: string | undefined;

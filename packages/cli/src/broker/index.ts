@@ -12,19 +12,6 @@ export {
   securityProvider,
 } from "../security/provider.js";
 export {
-  A1BrokerClient,
-  type A1BrokerClientOptions,
-  type A1BrokerErrorCode,
-  A1BrokerHttpError,
-  type A1BrokerNegotiatedClient,
-  A1BrokerOutcomeUnknownError,
-  A1BrokerProtocolError,
-  type A1BrokerRouteHandle,
-  A1BrokerTransportCollisionError,
-  type OpenA1BrokerRouteOptions,
-  type ReadA1BrokerRouteOptions,
-} from "./a1-client.js";
-export {
   BrokerClient,
   type BrokerClientOptions,
   BrokerError,

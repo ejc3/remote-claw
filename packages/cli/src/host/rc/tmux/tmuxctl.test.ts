@@ -223,6 +223,7 @@ describe("redacted required-command failure", () => {
     const error = thrown as TmuxError;
     expect(error.operation).toBe("new-session");
     expect(error.code).toBe(127);
+    expect(error.application).toBe("unknown");
     expect(error.message).toBe("tmux new-session failed (code 127)");
     expect("args" in error).toBe(false);
     expect("result" in error).toBe(false);
@@ -251,7 +252,26 @@ describe("redacted required-command failure", () => {
     }
     expect(thrown).toBeInstanceOf(TmuxError);
     expect(String(thrown)).toBe("TmuxError: tmux version failed (code 127)");
+    expect((thrown as TmuxError).application).toBe("unknown");
     expect(String(thrown)).not.toContain("REJECTED_EXEC_SECRET");
+  });
+
+  it.each([
+    "not-applied",
+    "unknown",
+  ] as const)("preserves an explicit %s application outcome in TmuxError", async (application) => {
+    const { exec } = spyExec([{ code: 1, stdout: "", stderr: "", application }]);
+
+    let thrown: unknown;
+    try {
+      await new TmuxCtl(exec).sendKeys("rc-cse_x", "Enter");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(TmuxError);
+    expect((thrown as TmuxError).operation).toBe("send-keys");
+    expect((thrown as TmuxError).application).toBe(application);
   });
 
   it("does not copy a failed load-buffer stdin payload or tmux output into its error", async () => {

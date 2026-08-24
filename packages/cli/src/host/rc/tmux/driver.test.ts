@@ -8,13 +8,15 @@
 //   • abort tears down: the tmux session is killed.
 // No real tmux, no real claude, no real broker — every side effect is injected.
 
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { appendFile, chmod, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { deriveIdentity, type Frame, type FrameHeader, type Identity } from "@remote-claw/clawsec";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
+import type { Tracer } from "../../../trace.js";
+import type { Session } from "../session.js";
 import { parseUserSession, runTmuxDriver, tmuxCapabilities } from "./driver.js";
 import type { TmuxExec, TmuxExecOptions, TmuxExecResult } from "./tmuxctl.js";
 import { projectSlug, subagentDir } from "./transcript.js";
@@ -43,6 +45,7 @@ interface Posted {
 class FakeClient {
   posts: Posted[] = [];
   announces: Array<Record<string, unknown>> = [];
+  failContent = false;
   #inbound: Frame[] = [];
   #wakes = new Set<() => void>();
   #sessionId: string | null = null;
@@ -75,6 +78,9 @@ class FakeClient {
   }
 
   async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
+    if (this.failContent && header.seq !== null) {
+      throw new Error("injected broker publication failure");
+    }
     this.posts.push({
       recordKind: header.recordKind,
       seq: header.seq,
@@ -759,6 +765,145 @@ describe("runTmuxDriver wiring", () => {
     expect(rawArgv).not.toContain(FORWARDED_ARG_SECRET);
   });
 
+  it("keeps a healthy local pane and its native permission UI alive when the broker projection fails", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-driver-projection-cwd-");
+    const home = tmp("rc-driver-projection-home-");
+    const projDir = join(home, ".claude", "projects", projectSlug(cwd));
+    await mkdir(projDir, { recursive: true });
+    const nativeId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const transcript = join(projDir, `${nativeId}.jsonl`);
+    const runtime = tmp("rc-driver-projection-runtime-");
+    const permActivePath = join(runtime, "permission-remote-active");
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    let session: Session | null = null;
+    let resolved = false;
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "projection failure",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+        onSession: (created) => {
+          session = created;
+        },
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        runtimeDir: runtime,
+        sessionId: nativeId,
+        pollMs: 5,
+        paneWatchMs: 5,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms ?? 0, 5))),
+      },
+    ).then((code) => {
+      resolved = true;
+      return code;
+    });
+
+    try {
+      await waitFor(() => client.announces.length === 1);
+      expect(existsSync(permActivePath)).toBe(true);
+
+      client.failContent = true;
+      await appendFile(
+        transcript,
+        `${JSON.stringify({
+          type: "assistant",
+          uuid: "projection-failure",
+          message: { role: "assistant", content: [{ type: "text", text: "local survives" }] },
+        })}\n`,
+      );
+      await waitFor(() => (session as unknown as Session | null)?.closed === true);
+      await waitFor(() => !existsSync(permActivePath));
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      // This wiring test owns only the bridge-close → sentinel-retirement → pane-survival edge. The
+      // focused helper tests prove that both in-flight and later tools observe a missing sentinel as
+      // explicit local `ask`, without publishing a remote request or guessing an allow.
+      expect(resolved).toBe(false);
+      expect(spy.killed()).toBe(false);
+    } finally {
+      ac.abort();
+      await expect(run).resolves.toBe(0);
+    }
+    expect(spy.killed()).toBe(true);
+  });
+
+  it("fails the private pane closed when local permission takeover cannot be made durable", async () => {
+    const identity = await makeIdentity();
+    const client = new FakeClient();
+    const cwd = tmp("rc-perm-retire-fail-cwd-");
+    const home = tmp("rc-perm-retire-fail-home-");
+    const runtime = tmp("rc-perm-retire-fail-runtime-");
+    await mkdir(join(home, ".claude", "projects", projectSlug(cwd)), { recursive: true });
+    const spy = tmuxSpy();
+    const ac = new AbortController();
+    let session: Session | null = null;
+    const throwingDiagnostic: Tracer = {
+      error(message) {
+        if (message === "could not retire tmux remote permission gate")
+          throw new Error("sink closed");
+      },
+      warn() {},
+      info() {},
+      debug() {},
+      trace() {},
+      child() {
+        return this;
+      },
+      enabled() {
+        return true;
+      },
+    };
+    const run = runTmuxDriver(
+      {
+        harnessArgs: [],
+        identity,
+        brokerUrl: "https://broker.example",
+        title: "permission takeover failure",
+        cwd,
+        git: null,
+        newClient: () => client as unknown as BrokerClient,
+        onSession: (created) => {
+          session = created;
+        },
+        tracer: throwingDiagnostic,
+      },
+      ac.signal,
+      {
+        tmuxExec: spy.exec,
+        home,
+        runtimeDir: runtime,
+        sessionId: "bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc",
+        pollMs: 5,
+        paneWatchMs: 5,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms ?? 0, 5))),
+      },
+    );
+
+    try {
+      await waitFor(() => client.announces.length === 1);
+      const activePath = join(runtime, "permission-remote-active");
+      rmSync(activePath);
+      await mkdir(activePath); // makes non-recursive rm fail: takeover cannot be signaled to the helper
+      (session as unknown as Session | null)?.close("injected projection failure");
+
+      await expect(run).resolves.toBe(0);
+    } finally {
+      ac.abort();
+      await run;
+    }
+    expect(spy.killed()).toBe(true);
+  });
+
   it("keeps concurrent wrapped sessions isolated by cwd, runtime, socket, target, and paste buffer", async () => {
     const identity = await makeIdentity();
     const clients = [new FakeClient(), new FakeClient()] as const;
@@ -871,6 +1016,7 @@ describe("runTmuxDriver wiring", () => {
       await expect(mode(join(runtime, "session-events.ndjson"))).resolves.toBe(0o600);
       await expect(mode(join(runtime, "permission-requests.ndjson"))).resolves.toBe(0o600);
       await expect(mode(join(runtime, "permission-hook.mjs"))).resolves.toBe(0o600);
+      await expect(mode(join(runtime, "permission-remote-active"))).resolves.toBe(0o600);
       await expect(mode(join(runtime, "permission-decisions"))).resolves.toBe(0o700);
     } finally {
       ac.abort();

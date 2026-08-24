@@ -23,7 +23,7 @@ export interface BridgeArgs {
   newClient: () => BrokerClient;
   /** This machine's 16-byte identity id (frame headers). */
   identityId: Uint8Array;
-  /** Initial announce title / cwd / git chip. A live bridge can refresh these through its handle. */
+  /** Immutable announce title / cwd / git chip sampled at the driver's readiness edge. */
   title: string;
   cwd: string;
   git: GitInfo | null;
@@ -39,25 +39,18 @@ export interface BridgeArgs {
   tracer: Tracer;
 }
 
-/** The complete viewer-facing snapshot replaced by one live bridge refresh. All fields are required so
- * a caller cannot accidentally retain an optimistic pre-setup capability or stale location field. */
-export interface BridgeAnnouncement {
+/** The immutable viewer-facing snapshot used when one ready bridge starts. */
+interface BridgeAnnouncement {
   title: string;
   cwd: string;
   git: GitInfo | null;
   capabilities: DriverCapabilities;
 }
 
-/** A running broker bridge. The owner controls its lifetime through BridgeArgs.signal; `served` lets it
- * await teardown, while `refresh` replaces announcement metadata/capabilities without restarting either
- * relay pump. Harness identity is fixed for the bridge lifetime. */
+/** A running broker bridge. The owner controls its lifetime through BridgeArgs.signal and awaits teardown
+ * through `served`. Harness readiness is established before this bridge is constructed. */
 export interface BridgeSessionHandle {
   served: Promise<void>;
-  refresh(announcement: BridgeAnnouncement): Promise<void>;
-}
-
-function bridgeEndedError(): Error {
-  return new Error("bridge is no longer serving");
 }
 
 function snapshotAnnouncement(announcement: BridgeAnnouncement): BridgeAnnouncement {
@@ -125,26 +118,15 @@ export function startBridgeSession(a: BridgeArgs): BridgeSessionHandle {
     return task;
   };
   const prepared = ownerEnded() ? Promise.resolve() : relay.prepare();
-  let announceTail = prepared
+  const announced = prepared
     .then(() =>
       ownerEnded() ? undefined : relay.announce(initial.title, initial.cwd, initial.git),
     )
     .catch(() => {});
-  let acceptingRefreshes = !ownerEnded();
-  let resolveEnded = () => {};
-  const ended = new Promise<void>((resolve) => {
-    resolveEnded = resolve;
-  });
-  const stopAcceptingRefreshes = () => {
-    if (!acceptingRefreshes) return;
-    acceptingRefreshes = false;
-    resolveEnded();
-  };
-  // The bridge owner is the only lifetime owner in A0: there is no supported reattachment path after
+  // The bridge owner is the only lifetime owner: there is no supported reattachment path after
   // its signal ends. Close the cse synchronously so every MITM/native route becomes unusable and the
   // relay's Session.close observer can start the terminal bus publish before any stalled announce.
   const closeOnOwnerAbort = () => {
-    stopAcceptingRefreshes();
     a.session.close();
     void terminalize().catch(() => {
       // The terminal publisher records the exhausted failure; the abort listener stays no-throw.
@@ -155,7 +137,6 @@ export function startBridgeSession(a: BridgeArgs): BridgeSessionHandle {
   } else {
     closeOnOwnerAbort();
   }
-  void prepared.catch(stopAcceptingRefreshes);
   // Surface relay death rather than silently swallowing it (review #10): serve() ending early (a fatal
   // seq error tears down only this session's relay) is logged so a driver/operator can see the bridge
   // died while the harness keeps running. The RETURNED promise lets a driver await teardown / observe
@@ -183,52 +164,13 @@ export function startBridgeSession(a: BridgeArgs): BridgeSessionHandle {
     // then rejects/suppresses that late live request regardless of network completion order. Await all
     // admitted presence work before declaring teardown complete; launch teardown is independently
     // bounded, so a permanently stalled broker cannot hang process exit.
-    stopAcceptingRefreshes();
     a.signal.removeEventListener("abort", closeOnOwnerAbort);
     const terminal = terminalize();
-    await announceTail;
+    await announced;
     await Promise.allSettled([terminal]);
     await relay.settlePresence();
   });
   a.relays.add(served);
   void served.finally(() => a.relays.delete(served));
-  return {
-    served,
-    refresh(announcement) {
-      const snapshot = snapshotAnnouncement(announcement);
-      if (!acceptingRefreshes || ownerEnded()) {
-        return Promise.reject(bridgeEndedError());
-      }
-      // Preserve publish order when setup completes immediately or several refinements arrive together:
-      // an older, slow announce must not be posted after the newer snapshot.
-      const refreshed = announceTail.then(() => {
-        // A refresh admitted while an older announce was in flight may reach the head of the queue
-        // only after abort/fatal relay termination. Recheck here so it cannot re-advertise a dead
-        // session merely because it was queued while the bridge was still live.
-        if (!acceptingRefreshes || ownerEnded()) throw bridgeEndedError();
-        return relay.refreshAnnouncement(
-          snapshot.title,
-          snapshot.cwd,
-          snapshot.git,
-          snapshot.capabilities,
-        );
-      });
-      // A transient advisory publish failure rejects this refresh so its caller can react, but must not
-      // permanently poison the queue: a later truthful snapshot still gets a chance to re-announce.
-      announceTail = refreshed.catch(() => {});
-      // Report lifecycle loss immediately even when this refresh is parked behind a stalled older
-      // announce. `announceTail` still tracks the queued operation so `served` waits for it to settle.
-      return Promise.race([
-        refreshed,
-        ended.then(() => {
-          throw bridgeEndedError();
-        }),
-      ]);
-    },
-  };
-}
-
-/** Backward-compatible bridge entrypoint used by the existing launchers and drivers. */
-export function bridgeSession(a: BridgeArgs): Promise<void> {
-  return startBridgeSession(a).served;
+  return { served };
 }

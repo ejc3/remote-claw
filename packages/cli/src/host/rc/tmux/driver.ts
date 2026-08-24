@@ -2,9 +2,9 @@
 // broker — provider-agnostic (works on Bedrock/Vertex, where native Remote Control is disabled),
 // because there is NO MITM and NO HTTPS_PROXY/NODE_EXTRA_CA_CERTS. claude talks to whatever provider
 // it's configured for; we CAPTURE by tailing its local transcript JSONL and INJECT by typing into the
-// pane via tmux. Startup uses the shared process-local registration lifecycle: prepare the private
-// wrapper, spawn the pane, require both pane liveness and Claude's private SessionStart marker, construct
-// every native pump, then publish truthful capabilities and make the broker bridge visible at `ready`.
+// pane via tmux. Startup prepares the private wrapper, spawns the pane, requires both pane liveness and
+// Claude's private SessionStart marker, constructs every native pump, then crosses one readiness latch
+// to publish truthful capabilities and make the broker bridge visible.
 //
 // Because the transcript's `message.content` blocks are byte-identical to the relay's input and the
 // relay is a pure function of (Session, BrokerClient), this is a PURE ADDITION: the relay, the broker
@@ -20,13 +20,8 @@ import { chmod, mkdir, mkdtemp, open, readFile, rename, rm } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
-import type { NativeConversationCapabilities } from "../../native/adapter.js";
 import { type Driver, type DriverContext, TMUX_HARNESS } from "../driver.js";
-import {
-  type LegacyRcConversationMetadata,
-  LegacyRcConversationRegistrar,
-} from "../drivers/legacy-registrar.js";
-import type { GitInfo } from "../gitinfo.js";
+import { ReadyBridge } from "../drivers/ready-bridge.js";
 import { RelayCore, type Session } from "../session.js";
 import { INJECT_BUFFER, runInjectPump } from "./inject.js";
 import {
@@ -77,19 +72,6 @@ export function tmuxCapabilities(mirrorPermissions: boolean): Driver["capabiliti
     attachments: true,
   };
 }
-
-/** A driver is conservative until its private pane and hooks are proved ready. */
-export const TMUX_CAPABILITIES: Driver["capabilities"] = tmuxCapabilities(false);
-
-/** Honest A0 evidence: tmux delivery has no native receipt, transcript capture is partial/post-hoc, and
- * the current wrapper cannot reattach to a live pane after its own process restarts. */
-export const TMUX_NATIVE_CAPABILITIES: NativeConversationCapabilities = {
-  version: 1,
-  mutationAdmission: "post_hoc",
-  history: "partial",
-  deliveryEvidence: "best_effort",
-  liveReattach: false,
-};
 
 /** Env vars scrubbed from the child claude — ONLY the stub-gotcha ids + our host-only secrets.
  *  CLAUDE_CODE_CHILD_SESSION makes the spawned claude a STUB bridged to the launcher (never a real
@@ -321,12 +303,12 @@ async function makeRuntimeDir(override: string | undefined): Promise<{
 
 /**
  * Run the tmux driver until `signal` aborts, claude exits / the pane closes, or a pump crashes:
- *   1. Open a process-local registration in `starting`; no broker client exists yet.
+ *   1. Create a readiness latch in `starting`; no broker client exists yet.
  *   2. Prepare a private runtime directory/socket, hooks, trust, and a scrubbed launch environment.
  *   3. Spawn claude and require both a live pane and its exact private SessionStart marker.
- *   4. Construct capture/injection/permission pumps, then move the lease to `ready`. That transition
- *      alone creates the broker client and announces the conversation.
- *   5. Teardown closes the lease and pane under one deadline; private files are removed only when pane
+ *   4. Construct capture/injection/permission pumps, then start the bridge. That readiness edge alone
+ *      creates the broker client and announces the conversation.
+ *   5. Teardown closes the bridge and pane under one deadline; private files are removed only when pane
  *      termination is known.
  * Exit code: 1 if a pump crashed, else 0 (a clean pane death / external abort). The run.ts dispatch maps
  * SIGINT/SIGTERM to 128+N. NOTE: unlike a bare detached pane, claude exiting now ENDS the wrapper (the
@@ -366,61 +348,30 @@ export async function runTmuxDriver(
   session.pushInitialize(); // guarantees `initialize` is the first downstream event
   ctx.onSession?.(session);
 
-  // An internal controller so a spawn failure (or the pumps ending) tears down cleanly. Closing a
-  // starting lease requests drain synchronously, so cancellation cannot race a later ready transition.
-  const ac = new AbortController();
-  const stop = ac.signal;
-
   const relays = new Set<Promise<void>>();
   const terminalTasks = new Set<Promise<void>>();
-  const registrar = new LegacyRcConversationRegistrar({
+  const bridge = new ReadyBridge({
+    session,
     newClient: ctx.newClient,
     identityId: ctx.identity.identityId,
     relays,
     terminalTasks,
     tracer,
+    parentSignal: signal,
   });
-  const startingMetadata: LegacyRcConversationMetadata = {
-    title: ctx.title,
-    cwd: ctx.cwd,
-    git: ctx.git as GitInfo | null,
-    capabilities: tmuxCapabilities(false),
-    harness: TMUX_HARNESS,
-  };
-  let lease: Awaited<ReturnType<LegacyRcConversationRegistrar["open"]>> | undefined;
+  const stop = bridge.signal;
 
-  // Closing a starting lease synchronously requests drain inside the registrar, so a queued `ready`
-  // transition cannot overtake cancellation, pane death, or a pump crash and publish a ghost.
+  // Closing the readiness latch aborts synchronously, so cancellation, pane death, or a pump crash
+  // cannot be overtaken by a late ready result and publish a ghost.
   const requestDriverStop = (reason: string): void => {
-    ac.abort();
-    if (lease !== undefined) {
-      void lease.close(reason).catch((error: unknown) => {
-        tracer.error("tmux starting lease close failed", { error: String(error) });
-      });
-    }
-  };
-  const onRegistrationAbort = () => requestDriverStop("parent cancelled");
-  if (signal.aborted) onRegistrationAbort();
-  else signal.addEventListener("abort", onRegistrationAbort, { once: true });
-
-  try {
-    lease = await registrar.open({
-      bindingId: null,
-      registrationAttemptId: randomUUID(),
-      descriptor: { product: "claude-code", access: "tmux" },
-      project: null,
-      nativeRef: null,
-      phase: "starting",
-      capabilities: null,
-      port: session,
-      metadata: startingMetadata,
+    void bridge.close(reason).catch((error: unknown) => {
+      try {
+        tracer.error("tmux bridge close failed", { error: String(error) });
+      } catch {
+        // Diagnostics never own the shutdown boundary.
+      }
     });
-  } catch (error) {
-    signal.removeEventListener("abort", onRegistrationAbort);
-    ac.abort();
-    session.close();
-    throw error;
-  }
+  };
 
   const tmuxName = `rc-${session.id}`;
   let spawnAttempted = false;
@@ -435,6 +386,7 @@ export async function runTmuxDriver(
   let permReqPath: string | null = null;
   let permDecDir: string | null = null;
   let permHelperPath: string | null = null;
+  let permActivePath: string | null = null;
   let status: StatusTracker | null = null;
   let capture: Promise<void> = Promise.resolve();
   let inject: Promise<void> = Promise.resolve();
@@ -520,26 +472,67 @@ export async function runTmuxDriver(
     permHelperPath = mirror
       ? (deps.permHelperPath ?? join(runtime.path, "permission-hook.mjs"))
       : null;
+    permActivePath = mirror ? join(runtime.path, "permission-remote-active") : null;
     await writePrivateFile(readinessPath, "");
     privateFiles.add(readinessPath);
-    if (mirror && permReqPath !== null && permDecDir !== null && permHelperPath !== null) {
+    if (
+      mirror &&
+      permReqPath !== null &&
+      permDecDir !== null &&
+      permHelperPath !== null &&
+      permActivePath !== null
+    ) {
       await writePrivateFile(permReqPath, "");
       privateFiles.add(permReqPath);
       await mkdir(permDecDir, { recursive: false, mode: 0o700 });
       await chmod(permDecDir, 0o700);
       await writePrivateFile(permHelperPath, PRE_TOOL_USE_HELPER_SOURCE);
       privateFiles.add(permHelperPath);
+      await writePrivateFile(permActivePath, "active\n");
+      privateFiles.add(permActivePath);
+
+      // Broker/relay failure closes only the compatibility Session; the native tmux pane deliberately
+      // remains alive. Retire the remote permission gate at that exact one-way boundary. The helper sees
+      // the missing sentinel and returns explicit `ask`, so both an in-flight and every later tool fall
+      // back to Claude's LOCAL permission UI instead of waiting forever or being auto-approved.
+      const activePath = permActivePath;
+      session.onClose(() => {
+        void rm(activePath, { force: true }).catch((error: unknown) => {
+          // Preserving a pane whose hook still believes a dead viewer owns permissions would wedge its
+          // next tool forever. If retirement itself fails, fail the native owner closed: aborting the
+          // driver reaches bounded teardown and kills the private pane instead of leaving it unserviceable.
+          requestDriverStop("could not retire tmux remote permission gate");
+          try {
+            tracer.error("could not retire tmux remote permission gate", { error: String(error) });
+          } catch {
+            // Diagnostics never own the fail-closed action above.
+          }
+        });
+      });
     }
     throwIfAborted(stop);
 
     // Build the combined settings file (SessionStart + PreToolUse), deep-merged with the user's. The
     // merged JSON is never placed in tmux argv or the public error surface.
     const fragments: HookFragment[] = [sessionHookFragment(readinessPath)];
-    if (mirror && permReqPath !== null && permDecDir !== null && permHelperPath !== null) {
+    if (
+      mirror &&
+      permReqPath !== null &&
+      permDecDir !== null &&
+      permHelperPath !== null &&
+      permActivePath !== null
+    ) {
       // Pass this process's absolute node binary so the helper works even when the pane shell has no
       // `node` on PATH. Local tmux means both processes share the same filesystem.
       fragments.push(
-        preToolUseHookFragment(permHelperPath, permReqPath, permDecDir, 100, process.execPath),
+        preToolUseHookFragment(
+          permHelperPath,
+          permReqPath,
+          permDecDir,
+          permActivePath,
+          100,
+          process.execPath,
+        ),
       );
     }
     const { value, rest } = extractSettingsArg(ctx.harnessArgs);
@@ -654,7 +647,11 @@ export async function runTmuxDriver(
     // so this synthetic result lands immediately after the answer it closes.
     const runStatus = new StatusTracker({
       session,
-      onTurnEnd: () => session.pushUpstream({ type: "result", subtype: "success", result: "" }),
+      onTurnEnd: () => {
+        if (!session.closed) {
+          session.pushUpstream({ type: "result", subtype: "success", result: "" });
+        }
+      },
     });
     status = runStatus;
 
@@ -777,8 +774,11 @@ export async function runTmuxDriver(
       }
       // Push the frame BEFORE status.onLine so that when onLine sees a terminal assistant line and fires
       // onTurnEnd (→ a synthetic `result`), the result is queued AFTER the assistant answer it closes.
+      // A broker fail-stop closes only the compatibility Session. Keep watching the local pane, but
+      // stop projecting into the closed relay so remote failure cannot become a pane failure.
+      if (session.closed) return;
       if (!suppressFrame) session.pushUpstream(payload);
-      runStatus.onLine(payload); // ALWAYS: a top-level user text turn is a turn boundary even when suppressed
+      runStatus.onLine(payload); // ALWAYS while projected: a user text line remains a turn boundary
     };
 
     // Drain newly-appended lines from the main transcript AND every discovered sub-agent file. Idempotent
@@ -910,8 +910,9 @@ export async function runTmuxDriver(
     const askqGateIds = new Set<string>();
 
     // INJECT: drain the downstream queue into the pane (strict serial; ack after success — review #5/#9).
-    // Per-session paste buffer so concurrent drivers can't cross-wire (codex review #5); failed injects
-    // retry step-aware until they land or abort (codex review #4 / wf#1).
+    // Per-session paste buffer so concurrent drivers can't cross-wire (codex review #5). Injection
+    // retries only idempotent work or a command proved not applied; an unknown mutating outcome retires
+    // the compatibility Session without killing the still-owned local pane/provider session.
     const decisionDir = mirror ? permDecDir : null;
     inject = runInjectPump({
       session,
@@ -990,8 +991,13 @@ export async function runTmuxDriver(
         ? (async () => {
             const reqTailer = new TranscriptTailer(permReqPath);
             const seen = new Set<string>();
-            while (!stop.aborted) {
-              for (const line of await reqTailer.poll()) {
+            while (!stop.aborted && !session.closed) {
+              const lines = await reqTailer.poll();
+              // Session closure can race the async file read. Once the remote owner is retired, do not
+              // try to publish a just-read request into the closed Session: the helper observes the
+              // missing active sentinel and hands that still-unexecuted tool to the local prompt.
+              if (stop.aborted || session.closed) break;
+              for (const line of lines) {
                 const req = parsePermRequest(line);
                 if (req === null || seen.has(req.toolUseId)) continue;
                 if (!isSafeToolUseId(req.toolUseId)) {
@@ -1025,16 +1031,17 @@ export async function runTmuxDriver(
         : Promise.resolve();
 
     // All native-side pumps now exist, and the SessionStart marker proved that Claude loaded the exact
-    // settings source carrying the required hooks. Only now may the process-local registrar create a
-    // broker client and publish writable capabilities.
+    // settings source carrying the required hooks. Only now may the readiness latch create a broker
+    // client and publish writable capabilities.
     throwIfAborted(stop);
     const readyCapabilities = tmuxCapabilities(mirror);
-    await lease.update(
-      { ...startingMetadata, capabilities: readyCapabilities },
-      TMUX_NATIVE_CAPABILITIES,
-    );
-    throwIfAborted(stop);
-    await lease.setPhase("ready");
+    bridge.start({
+      title: ctx.title,
+      cwd: ctx.cwd,
+      git: ctx.git,
+      capabilities: readyCapabilities,
+      harness: TMUX_HARNESS,
+    });
     registrationReady = true;
     if (publishedCapabilities !== undefined) {
       Object.assign(publishedCapabilities, readyCapabilities);
@@ -1054,7 +1061,7 @@ export async function runTmuxDriver(
     );
 
     // Run until the signal fires — external abort, a confirmed pane death, or a crashed pump (each
-    // synchronously closes the lease before aborting the local pumps).
+    // synchronously closes the readiness latch before aborting the local pumps).
     await new Promise<void>((resolve) => {
       if (stop.aborted) return resolve();
       stop.addEventListener("abort", () => resolve(), { once: true });
@@ -1068,18 +1075,11 @@ export async function runTmuxDriver(
     throw error;
   } finally {
     const teardownDeadline = Date.now() + TEARDOWN_FLUSH_MS;
-    ac.abort();
-    signal.removeEventListener("abort", onRegistrationAbort);
-    session.close();
+    const bridgeTeardown = bridge.close(registrationReady ? "driver teardown" : "startup failed");
     // Pumps and registration/relay closure share one deadline so an unresponsive broker cannot add a
     // second timeout window after an unresponsive pane operation.
     await boundedWait(
-      Promise.allSettled([
-        capture,
-        inject,
-        permPump,
-        lease?.close(registrationReady ? "driver teardown" : "startup failed") ?? Promise.resolve(),
-      ]),
+      Promise.allSettled([capture, inject, permPump, bridgeTeardown]),
       Math.max(0, teardownDeadline - Date.now()),
     );
     // Dispose AFTER the capture pump settles (it is the only caller of status.onLine, which re-arms the

@@ -7,8 +7,8 @@ import { uniqueIdentity } from "../helpers";
 // HEAVY local encryption stress — the LocalBackend is in-process, so we crank the volume far past what
 // the Vercel runtime could absorb in a unit test: thousands of sealed round-trips, hundreds
 // of concurrent publishers, and a multi-hundred-part chunked message. Proves the AEAD round-trip + the
-// LocalBackend hold under real load. Gated by STRESS_HEAVY so the normal gate stays fast; the CI
-// web-e2e job sets it (`pnpm --filter @remote-claw/web test:stress:heavy`). Scale via STRESS_N/STRESS_K.
+// LocalBackend hold under real load. Gated by STRESS_HEAVY so the normal gate stays fast; the scheduled
+// or manually dispatched web-stress workflow sets it. Scale via STRESS_N/STRESS_K.
 
 const HEAVY = Boolean(process.env.STRESS_HEAVY);
 const N = Number.parseInt(process.env.STRESS_N ?? "2000", 10);

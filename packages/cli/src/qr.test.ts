@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { renderQr } from "./qr.js";
 
 // NOTE: there is no `passQrPayload` deep-link builder anymore — the `<origin>/#<pass>` forever-credential
-// QR shape was dropped for the one-time OTK handoff (pass.ts emits `<origin>/#otk1_<OTK>` with --rc-app, or
-// the bare pass without). renderQr just turns whatever text it's given into terminal QR art.
+// QR shape was dropped for the default-off OTK handoff (when enabled, pass.ts emits
+// `<origin>/#otk1_<OTK>` with --rc-app; without an origin it emits the bare pass). renderQr just turns
+// whatever text it's given into terminal QR art.
 describe("renderQr — terminal QR rendering", () => {
   it("returns non-empty half-block art and is deterministic for the same input", async () => {
     const sample = "https://app.example.com/#otk1_SAMPLEtoken"; // representative one-time pairing link

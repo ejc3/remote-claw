@@ -1,4 +1,4 @@
-// Cross-runtime canonical field encoding shared by A0 AAD and A1 signed/wire records.
+// Cross-runtime canonical field encoding shared by the authenticated wire formats.
 // Keep this module limited to Web Platform primitives so the exact same implementation runs
 // in Node and browsers.
 

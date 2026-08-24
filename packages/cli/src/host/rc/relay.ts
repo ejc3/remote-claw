@@ -19,7 +19,7 @@
 // full history on its own; the host builds no `#log` and ignores `catch_up`.
 //
 // The transcript `seq` is allocated solely here (§6: clients never assign order), and an
-// incarnation-long, unbounded `#seen` set dedups the at-least-once inbound stream. Mirrors HostRelay's
+// incarnation-long, unbounded `#seen` set dedups the at-least-once inbound stream. This relay's
 // broker discipline, but is decoupled into the event-driven shape RC needs (a turn's response is
 // async, tool turns interleave).
 
@@ -171,7 +171,8 @@ function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
 // One process-wide incarnation orders transcript resets; its wall-clock start plus each relay's
 // announce_seq orders presence frames that race in flight. The start time is deliberately explicit
 // instead of being parsed from the opaque incarnation id. It is not a durable epoch: equal or
-// clock-regressed process starts remain ambiguous until the coordinator owns a persisted epoch (A1).
+// clock-regressed process starts remain ambiguous unless a future recovery design owns a persisted
+// epoch. The current live-session path fails closed instead of claiming cross-process adoption.
 const RELAY_INCARNATION_STARTED_AT = Date.now();
 const RELAY_INCARNATION = `${RELAY_INCARNATION_STARTED_AT.toString(36)}-${Math.random()
   .toString(36)
@@ -496,9 +497,7 @@ export class HostRcRelay {
   /** Whether announce() has run; gates the periodic re-announce so a session with a genuinely empty
    *  title/cwd still keepalives (and an un-announced session never does). */
   #announced = false;
-  /** Title/cwd/git captured by announce(), reused by every periodic re-announce (presence refreshes
-   *  status/phase/needs). A bridge lifecycle refresh can replace this metadata without restarting the
-   *  relay pumps. */
+  /** Immutable title/cwd/git captured by announce(), reused by periodic presence updates. */
   #annTitle = "";
   #annCwd: string | null = null;
   #annGit: GitInfo | null = null;
@@ -534,9 +533,8 @@ export class HostRcRelay {
   readonly #trace: Tracer;
   /** Where a viewer attachment is written before claude Reads it (#44). */
   readonly #attachmentsDir: string;
-  /** Declared driver capabilities, broadcast on every announce so the viewer can gate controls.
-   *  Mutable only through refreshAnnouncement(), after native setup has established the truthful set. */
-  #capabilities: DriverCapabilities;
+  /** Driver capabilities frozen at readiness and broadcast so the viewer can gate controls. */
+  readonly #capabilities: DriverCapabilities;
   /** Which harness (agent + bridge mode) this session runs; broadcast on every announce for the list label. */
   readonly #harness: HarnessDescriptor;
   readonly #postTimeoutMs: number;
@@ -607,7 +605,7 @@ export class HostRcRelay {
   }
 
   /** Broadcast the first presence announce for this session on the bus (§6B), and remember the
-   *  title/cwd/git so the periodic re-announce (#maybeAnnounce) can refresh presence without them.
+   *  immutable title/cwd/git so periodic presence updates can reuse them.
    *  `git` is a static snapshot of the session's repo state (branch/dirty/ahead-behind) for the
    *  viewer's git chip (#49); null when the session isn't in a git repo. */
   async announce(
@@ -624,26 +622,6 @@ export class HostRcRelay {
     this.#annCwd = cwd;
     this.#annGit = git;
     this.#announced = true; // gate the periodic re-announce on a real first announce, not on title===""
-    await this.#sendAnnounce();
-  }
-
-  /** Replace the bridge-owned announcement snapshot and publish it immediately, without touching the
-   *  running inbound/outbound pumps. Harness identity is deliberately fixed for the relay's lifetime:
-   *  only metadata and capabilities that native setup can refine are refreshable. The validated local
-   *  snapshot remains current if this advisory publish fails, so a later presence update retries truth
-   *  instead of rolling the host back to stale metadata. */
-  async refreshAnnouncement(
-    title: string,
-    cwd: string | null,
-    git: GitInfo | null,
-    capabilities: DriverCapabilities,
-  ): Promise<void> {
-    if (this.#presenceTerminal || this.#session.closed) throw new Error("session closed");
-    this.#annTitle = title;
-    this.#annCwd = cwd;
-    this.#annGit = git;
-    this.#capabilities = capabilities;
-    this.#announced = true;
     await this.#sendAnnounce();
   }
 
@@ -1387,8 +1365,8 @@ export class HostRcRelay {
           this.#session.pushUserInput(text);
           return seq;
         });
-        // Content preview at debug (opt-in); bytes always.
-        this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length, text });
+        // Debug records shape and size only; conversation content requires explicit trace mode.
+        this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length });
       } else if (frame.recordKind === "catch_up") {
         if (this.#durable) {
           // The durable backend's own log answers catch_up: the viewer's subscribe(startIndex:0) already

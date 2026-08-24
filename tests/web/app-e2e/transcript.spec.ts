@@ -9,10 +9,9 @@ import { expect, test } from "./fixtures";
 // attachment), which the persistent host echoes back. Assertions target the actual rendered DOM, so a
 // regression in the relay's frame mapping OR the transcript components fails the test.
 //
-// E2E_BACKEND (set by app-e2e.sqlite.config.ts) flips the broker via the ?backend= switch for the
-// browser AND the host (the fixture forwards it). The default gate already runs on durable per-channel
-// SQLite; the selector variant proves an explicit `?backend=sqlite` request reaches the same supported
-// durability class even when the server default is local.
+// E2E_BACKEND optionally flips the broker via the ?backend= switch for both the browser and host (the
+// fixture forwards it). The normal local gate leaves it unset; deployed smoke leaves the supported
+// production default in control.
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 

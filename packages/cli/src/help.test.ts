@@ -74,10 +74,11 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toContain("fails closed before discovery");
   });
 
-  it("does not present parked drivers as supported Claude 1.0 alternatives", () => {
-    expect(RC_HELP).toContain("only supported Claude 1.0 driver");
-    expect(RC_HELP).toContain("retained experimental/internal compatibility drivers");
-    expect(RC_HELP).toContain("outside the Claude 1.0 release");
+  it("does not present experimental drivers as native-coexistence alternatives", () => {
+    expect(RC_HELP).toContain("only supported private-relay driver");
+    expect(RC_HELP).toMatch(/retained experimental\/internal compatibility\s+drivers/);
+    expect(RC_HELP).toContain("tmux leaves Claude's own --remote-control untouched");
+    expect(RC_HELP).toMatch(/outside the primary coexistence\s+path/);
   });
 
   it("does not advertise removed flags", () => {
