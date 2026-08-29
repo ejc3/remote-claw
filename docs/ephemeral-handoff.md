@@ -1,13 +1,16 @@
 # Ephemeral one-time credential handoff (OTK)
 
-**Status:** implemented but default-off. The crypto, zero-knowledge handoff store, route, CLI producer,
-and browser consumer exist. Enabling them is conditional on the external rate-limit boundary below.
+**Status:** core implemented but default-off. The crypto, zero-knowledge handoff store, route, CLI
+producer, and browser consumer exist. The current pairing copy does not disclose that the recovered pass
+is indefinite and machine-wide, so handoff must remain disabled until that copy and its pre-claim test
+land and the external rate-limit boundary below is verified.
 
 > **Release scope:** The route, CLI upload, and browser claim path deny handoff by default. Set
-> `NEXT_PUBLIC_RC_HANDOFF_ENABLED=1` only after the deployment's per-IP WAF rate limit on `/api/handoff`
-> has been verified from outside the application (§5). The public flag is an operator attestation, not a
-> rate limiter and not proof that the WAF remains installed. If the rule is absent or its status is
-> uncertain, unset the flag and redeploy. Manual pass onboarding remains available.
+> `NEXT_PUBLIC_RC_HANDOFF_ENABLED=1` only after the pre-claim authority disclosure and its browser test
+> are green and the deployment's per-IP WAF rate limit on `/api/handoff` has been verified from outside
+> the application (§5). The public flag is configuration, not a rate limiter or proof that either gate
+> remains true. If either gate is absent or uncertain, unset the flag and redeploy. Manual pass onboarding
+> remains available.
 
 **Goal:** replace the *forever pass embedded in the QR* with a **one-time, short-TTL bootstrap token**, so the
 handoff store is — to an *honest-but-curious* broker, a DB dump, or a passive log/edge observer — a store it
@@ -116,7 +119,7 @@ OTK never reaches the server, so the bytes it does store are hex-encoded one-way
 Both methods return an opaque, `no-store` **404 before reading the request body** unless the deployment
 was built with `NEXT_PUBLIC_RC_HANDOFF_ENABLED=1`. The same exact flag gates the CLI producer and browser
 consumer. This is intentionally default-off: enabling the code path is permitted only after the external
-per-IP WAF rule described below has been verified.
+per-IP WAF rule described below has been verified and the pre-claim authority disclosure test is green.
 
 - **`PUT`** (host upload): a **route-level body cap before JSON parse** — `MAX_BODY = 8192` bytes, enforced
   *while streaming* so a chunked / missing-`content-length` body can't force an unbounded buffer; an over-cap
@@ -173,11 +176,14 @@ per-IP WAF rule described below has been verified.
   it, makes no claim request, and sends the user to manual pass entry. When enabled, it **strips the
   fragment immediately** (`history.replaceState`), then
   **requires an explicit user gesture** ("Pair this device") **before** the destructive POST claim — so a
-  webview/prefetch/unfurler that runs JS can't auto-burn it. After the claim, **reveal the resolved pass's
-  `identity_id`** for the user to confirm against the host's `--rc-pass` output **before the credential is
-  trusted/used** (the binding — anti-QR-swap; RFC 8628/CIBA `binding_message`). The confirm is necessarily
-  *after* the claim (the binding value lives inside the sealed box) but *before* connect; if it fails to match,
-  the user re-pairs (this is the enabled baseline's viewer-side "detectable"). After a successful claim+confirm, **decrypt,
+  webview/prefetch/unfurler that runs JS can't auto-burn it. Before that gesture, an enabled release UI
+  must distinguish the one-time delivery link from the indefinite machine-wide read/steer/forge pass it
+  recovers. The current pairing copy says only “one-time” and does not yet meet that enablement gate, so
+  handoff must remain disabled. After the claim, **reveal the resolved pass's `identity_id`** for the user
+  to confirm against the host's `--rc-pass` output **before the credential is trusted/used** (the binding —
+  anti-QR-swap; RFC 8628/CIBA `binding_message`). The confirm is necessarily *after* the claim (the binding
+  value lives inside the sealed box) but *before* connect; if it fails to match, the user re-pairs (this is
+  the enabled baseline's viewer-side "detectable"). After a successful claim+confirm, **decrypt,
   wrap the pass with one non-extractable AES-256-GCM device key in IndexedDB, and store only the wrapped
   ciphertext in tab-scoped sessionStorage** (see §3.6) — never a raw pass or OTK in browser storage. Serve
   the route with `Referrer-Policy: no-referrer` + the existing strict
@@ -244,18 +250,21 @@ these):** (1) atomic burn-on-touch on the
 edge rate limit** (uniform fail-closed responses + pre-parse size cap are in-repo, while the rate-limit
 rule is an out-of-band deployment dependency); (6) **user gesture before claim** +
 **`identity_id` binding** confirmation (the host's identity, recomputed from the pass's `authToken`); (7)
-**non-extractable AES device key in IndexedDB + wrapped pass ciphertext in sessionStorage**; (8) PUT
+**pre-claim disclosure** that the link is one-time but the recovered pass is indefinite, machine-wide,
+and grants read/steer/forge authority; (8) **non-extractable AES device key in IndexedDB + wrapped pass
+ciphertext in sessionStorage**; (9) PUT
 `409`-on-conflict with host
 re-mint.
 
 > **#5 is the one enabled-feature must-have provisioned outside the repo.** Keep
-> `NEXT_PUBLIC_RC_HANDOFF_ENABLED` unset while provisioning the route-specific per-IP WAF rule. From one
-> external source IP, send a bounded burst and confirm that the named provider rule denies requests at
-> the configured threshold; retain the rule identifier and provider telemetry in deployment evidence.
-> Only then set the flag to exactly `1` for the web build/runtime and for CLI hosts that produce handoff
-> links, and redeploy. A value such as `true` does not enable it. If the rule is removed or cannot be
-> re-verified, unset the flag and redeploy immediately. Do not couple handoff release to unrelated
-> firewall settings or build an in-app shadow limiter. Disabled handoff never blocks manual-pass use.
+> `NEXT_PUBLIC_RC_HANDOFF_ENABLED` unset until #7's pre-claim browser disclosure test is green and while
+> provisioning the route-specific per-IP WAF rule. From one external source IP, send a bounded burst and
+> confirm that the named provider rule denies requests at the configured threshold; retain the rule
+> identifier and provider telemetry in deployment evidence. Only after both checks pass, set the flag to
+> exactly `1` for the web build/runtime and for CLI hosts that produce handoff links, then redeploy. A value
+> such as `true` does not enable it. If either check regresses or cannot be re-verified, unset the flag and
+> redeploy immediately. Do not couple handoff release to unrelated firewall settings or build an in-app
+> shadow limiter. Disabled handoff never blocks manual-pass use.
 
 - **No PAKE** (high-entropy OTK ⇒ SPAKE2 adds EC-correctness surface for zero gain; NIST SP 800-63B).
 - **TTL = 10 min, configurable**, hard-capped; shorter is safer (it's the leaked-QR window).

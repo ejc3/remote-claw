@@ -212,6 +212,9 @@ milestone, but must not be deleted merely to simplify the next tranche.
 
 - During implementation, run the smallest relevant tests. Run the full gate once after code and docs
   settle, and repeat it only when a later code change invalidates the result.
+- Start each tranche from current `origin/main`. Retired A1 branches, worktrees, and generalized runtime
+  designs are archival input; never merge or cherry-pick them wholesale. Reuse only a fragment that owns
+  a current surface or invariant and passes review as newly written code.
 - Parallelize only independent files or read-only investigation. Use one owner when a change genuinely
   crosses an API or storage boundary.
 - A new finding blocks the tranche only when it shows a reachable high-impact safety failure or loss of
@@ -221,6 +224,10 @@ milestone, but must not be deleted merely to simplify the next tranche.
   executable crash test.
 - Keep reviews bounded and evidence-led. Preserve concrete findings; stop rereading when it produces no
   new causal issue.
+- Merge a closed vertical when its user outcome, release-blocking safety invariants, scoped acceptance,
+  review, and CI are green. Route nonblocking polish to its owning later milestone. Do not reopen a
+  settled design without a new product requirement or concrete causal evidence; add the cheapest
+  faithful regression when the behavior is reproducible.
 
 For every retained module and gate, name the product surface or safety invariant it owns. Delete
 machinery with no such owner and record why Git history is sufficient. Every status claim must say

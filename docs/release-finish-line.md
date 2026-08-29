@@ -1,4 +1,4 @@
-# remote-claw product goal and release gates
+# remote-claw execution roadmap and release gates
 
 **Status: the full product is not implemented.** The shared crypto, broker, browser, and Claude
 private-relay path work. OpenCode, tmux, Bedrock, and accountless paths have useful implementations
@@ -52,6 +52,39 @@ available, but a shared pane keystream cannot honestly promise independent peer 
 delivery receipts. Its plain-Claude launch preserved provider-native collaboration in the bounded M0
 run; keep that result labeled as architecture evidence until M4 adds a maintained acceptance gate.
 
+### V1 release decisions
+
+These decisions close scope without weakening the security boundary:
+
+- **Trusted-machine/pass-holder beta:** one indefinite viewer pass grants read, control, and record-
+  forging authority for every retained route under the machine identity. Pass holders are mutually
+  trusted; there is no in-place per-viewer revocation, and resetting the current identity does not
+  revoke access to already retained old routes. V1 acceptance requires every credential-acquisition UI
+  and the documentation to present the pass as a full bearer credential rather than a room-scoped
+  invitation. Per-viewer identity, roles, individual revocation, and delegated authority are not V1
+  claims; adding them requires a separate authority milestone rather than an implicit schema expansion.
+- **Manual join:** manual viewer-pass entry is the supported V1 join path. One-time handoff stays
+  default-off and is not a release dependency; a deployment may enable it only after the documented
+  external per-IP rate limit is verified. Before an enabled handoff claims its destructive one-time link,
+  the pairing UI must state that “one-time” applies only to delivery and that the recovered pass grants
+  the same indefinite machine-wide authority.
+- **Text before controls:** each structured adapter graduates observation and non-empty, non-slash text
+  before permissions, questions, modes, attachments, or broad tool control. Unsupported controls stay
+  disabled rather than simulated.
+- **Honest restart:** restarting a native companion creates a fresh random remote-claw projection ID for
+  the same native conversation. A clean stop attempts to terminalize the old projection; if that publish
+  cannot complete, or after an unclean stop, its existing liveness rules make it stale. The new
+  projection backfills native history as observation, never consumes the retired projection's command
+  stream, and must never repeat a native mutation.
+  Stable same-row restart identity is deferred until a demonstrated user need justifies adapter-local
+  durable binding.
+- **Narrow support first:** an adapter may initially support one pinned native version, host platform,
+  and provider tuple. It must reject or label everything else truthfully. M1 may therefore ship Linux
+  first around the existing secure Claude credential source instead of blocking on cross-platform OAuth.
+
+A later requirement can change one of these decisions, but it becomes a named milestone with its own
+acceptance. It does not silently expand the active tranche.
+
 ## 2. Orthogonal axes
 
 Do not decompose the product by assuming one agent implies one model provider.
@@ -83,7 +116,45 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 The provider fixtures establish bounded facts about pinned versions. They are valuable adapter
 evidence, not a separate proof/receipt program and not a substitute for the user outcome.
 
-## 4. Milestone sequence
+## 4. Delivery roadmap
+
+The structured critical path is **M1 → M2 → M3**: prove Claude's native coexistence, use OpenCode to
+validate the adapter seam a second time, then build Codex on evidence from two production adapters.
+M4 is an independent lower-fidelity graduation and may merge after M1 when it remains a bounded,
+non-overlapping tranche. M5 qualification travels with each adapter instead of becoming a final
+Cartesian-product marathon.
+
+| Delivery | User-visible result | Why this order |
+| --- | --- | --- |
+| M0 — complete | Lower-fidelity topology decision | Already answered whether native/provider and remote-claw surfaces can remain live together |
+| M1 — next | Structured Claude text coexistence | Resolves the primary product and provider-boundary risk first |
+| M2 | Supported OpenCode text/interrupt adapter | Existing code makes this the cheapest second structured adapter and tests whether a shared seam is real |
+| M3a | Codex TUI plus remote-claw browsers | Converts pinned app-server evidence into product code without depending on provider Remote |
+| M3b | Codex/ChatGPT Remote coexistence | Ships only after a current supported provider boundary passes a bounded feasibility gate |
+| M4 — independent after M1 | Maintained, honest tmux fallback | Nearer to graduation, but deliberately outside the structured critical path |
+| M5 — incremental | Advertised inference/account tuples | Qualifies claims as they ship; the final pass only closes the published matrix |
+
+### Execution contract
+
+Every implementation tranche starts from current <code>origin/main</code> and freezes five things before
+coding: one durable user outcome, supported capability tuple, forbidden surfaces, owning files, and one
+real acceptance. Retired A1 branches, worktrees, and generalized runtime designs are archival input,
+not code to merge or cherry-pick wholesale. A retained fragment must map to a current product surface
+or safety invariant and survive ordinary review as if newly written.
+
+Use one integration owner for shared contracts. Parallel work is read-only or confined to frozen,
+non-overlapping files. Prefer the thinnest end-to-end vertical that a user can exercise; merge it once
+its causal tests, real acceptance, review, and CI are green. Do not hold a closed milestone for later
+capabilities, and do not reopen a merged decision without a new product requirement or concrete causal
+evidence. Add the cheapest faithful regression when the behavior is reproducible.
+
+A finding blocks the current tranche only when it demonstrates a reachable high-impact safety failure
+or loss of the promised user outcome with a concrete causal path. Fix that owner. Record unrelated
+hardening for its owning milestone instead of expanding the active one. During implementation run
+focused tests; after the bytes freeze, run the common gate once, the tranche's real acceptance once,
+independent review, CI, and the exact-SHA deployment smoke when deployment is in scope. If E2E discovers
+a recurring defect, move its detailed regression to the earliest faithful deterministic boundary and
+retain only the smallest cross-layer sentinel.
 
 ### M0 — retained tmux coexistence route (completed decision gate)
 
@@ -99,7 +170,8 @@ the Anthropic-side surface was the typed host client. M1 remains scoped to those
 
 ### M1 — structured Claude native coexistence
 
-Keep normal `claude --remote-control` connected to Anthropic. Add a small host bridge that:
+Keep normal `claude --remote-control` connected to Anthropic. Add a small, initially Linux and
+text-only host bridge that:
 
 1. waits until one exact native `cse_*` is selected and ready;
 2. reconciles ascending history with one live SSE reader;
@@ -108,24 +180,65 @@ Keep normal `claude --remote-control` connected to Anthropic. Add a small host b
 5. treats a potentially completed POST as outcome-unknown instead of issuing a fresh command.
 
 Acceptance: one local Claude TUI, the official Claude client, and two remote-claw browsers share one
-session; labeled text from every surface appears once; reconnect and bridge restart add no duplicate;
-broker loss leaves the native surfaces alive.
+session; labeled text from every surface appears once; browser reconnect on one projection adds no
+duplicate; companion restart creates a fresh random projection of the same native session, backfills
+history once, consumes no retired commands, and repeats no native mutation; broker loss leaves the
+native surfaces alive.
 
 This milestone needs a small readiness-gated bridge helper, not a generalized host coordinator. No
 presence or browser mutation is published before exact native identity, capture, and mutation
 prerequisites are ready. Cancellation must win over a late readiness transition.
 
+Use two closed merge points, each based on the previous merged <code>main</code>:
+
+1. **Coexistence text:** bind one exact native session, reconcile history/SSE, admit browser text with
+   one stable caller coordinate, stop writes on ambiguity, and prove the local TUI, official client,
+   and two browsers contribute exactly once.
+2. **Graduate:** prove fresh-projection companion restart, broker-loss isolation, credential/log
+   boundaries, installed-package use, and the exact-SHA deployed acceptance.
+
+Read-only binding/capture may be a bounded feasibility run inside the first slice, but it is not an
+announced product merge point: the current session contract has no truthful read-only capability.
+Do not add one merely to manufacture a PR boundary, and do not merge placeholder interfaces or
+provisional architecture merely to increase PR count.
+
 ### M2 — OpenCode production adapter
 
-Use the existing native HTTP/SSE seam. Close the documented TUI-coexistence, ambiguous-send,
-permission-race, and durable-recovery gaps. Gate against a pinned supported OpenCode version with the
-real TUI plus two browsers. Preserve any native collaboration exposed by that version.
+Use the existing native HTTP/SSE seam. Graduate text and interrupt first. Supported HTTP targets are
+loopback-only; a non-loopback target requires authenticated HTTPS with normal certificate validation
+before provider credentials or native control cross that boundary. Supply the native caller-message
+identity, reject blank and slash-prefixed browser text rather than invoking an ungraduated command such
+as <code>/compact</code>, and define truthful new-projection recovery. Gate against a pinned supported
+OpenCode version with the real TUI plus two browsers.
+
+Treat create, prompt, and interrupt as separate ambiguous POST boundaries. Fault-test each after native
+commit but before the response arrives: an uncertain create remains unannounced and is neither guessed
+nor recreated; an uncertain prompt or interrupt terminally fences the writable projection, is not
+replayed, and admits no later write.
+
+The supported M2 path does not mutate native permission policy by default and advertises structured
+permissions as false. The existing permission mirror becomes an explicit experimental opt-in until
+child-session and competing-local-answer races have a native, executable resolution. Permission work
+does not block the text/interrupt release. That capability means only that the browser cannot answer;
+M2 must label native-local permission handling truthfully and must not render an existing ask/deny
+policy as “permissions off” or “tools execute without asking.” If the pinned version cannot expose
+enough state for that claim, reject the interactive-policy tuple rather than guessing. Preserve any
+native collaboration exposed by the pinned version.
 
 ### M3 — Codex and provider-native remote coexistence
 
-Build from the pinned app-server multi-client evidence. First prove local Codex TUI plus multiple
-remote-claw browsers on one native thread. Then integrate Codex/ChatGPT Remote through the provider's
-supported boundary without inventing parity the current evidence does not establish.
+Treat this as two mergeable outcomes. **M3a** first recaptures the seam against a selected current Codex
+version, then proves local Codex TUI plus multiple remote-claw browsers on one exact native thread.
+Uniquely labeled text from the TUI and each browser must appear exactly once on every surface. **M3b**
+begins with a bounded feasibility test of the currently supported provider boundary and only then
+integrates Codex/ChatGPT Remote. Historical app-server evidence justifies trying the seam; it does not
+justify a compatibility claim, gateway, or parity the current provider does not expose.
+
+M3a also keeps browser approvals and questions disabled while one native approval and one native
+question are separately handled by the local TUI with the companion attached. For both families, the
+companion must not steal, answer, error, or strand the first-response-sensitive request. The viewer must
+label that posture as local/native rather than “permissions off”; reject the tuple if it cannot do so
+truthfully.
 
 ### M4 — tmux fallback contract
 
@@ -136,12 +249,24 @@ coexistence, retain and run the smallest opt-in real acceptance covering the loc
 client, two browsers, reload, and broker-loss isolation. The one-off M0 result selected the architecture;
 it is not a permanent regression gate.
 
+If M4 advertises Claude Remote Control coexistence, that acceptance uses the official Claude client UI;
+another host-side API client is insufficient. Otherwise the release explicitly declines the official-
+client claim.
+
+M4 has no dependency on the structured M1 bridge. After M1 freezes the shared session/capability
+contract, M4 may ship ahead of M2 if its remaining work stays driver-local and its maintained real
+acceptance is green. It must not interrupt the structured critical path or grow into a second protocol.
+
 ### M5 — inference and account matrix
 
-For each advertised agent/provider pair, run a credentialed smoke and document the exact support
-level. Model routing remains outside the collaboration adapter. Accountless acceptance proves no
-Anthropic account or credential was used while also proving the required AWS/Bedrock and remote-claw
-credentials were handled safely.
+For each exact advertised tuple—agent, provider, model, region where applicable, account mode, and
+capability set—run a credentialed smoke and document the support level. Model routing remains outside
+the collaboration adapter. Accountless acceptance proves no Anthropic account or credential was used
+while also proving the required AWS/Bedrock and remote-claw credentials were handled safely.
+
+Add each tuple's credentialed smoke when the adapter first advertises that tuple. M5 only closes the
+exact published ledger; it does not test every theoretical agent, model, region, and credential
+combination or invent a cross-adapter E2E without an advertised outcome.
 
 More actions—permissions, questions, interrupts, modes, attachments, and tool controls—graduate per
 adapter only after their native contract and failure states are captured.
@@ -204,7 +329,10 @@ firewall matrices.
 
 The full product is done when the Claude, OpenCode, Codex, and tmux acceptance scenarios above pass
 against the supported deployed broker, provider/inference claims have credentialed coverage, and the
-shared safety invariants have focused regression tests.
+shared safety invariants have focused regression tests. The installed package must also complete one
+documented V1 journey: launch a supported native version, join two trusted pass-holder browsers by
+manual pass, submit and reconcile supported actions, survive projection loss, and report unsupported
+versions and capabilities without guessing.
 
 Milestones may ship independently with truthful labels. M1 being green means Claude native
 coexistence is green; it does not mean Codex, OpenCode, tmux, Bedrock, or the full product is complete.

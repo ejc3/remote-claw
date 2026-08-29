@@ -201,8 +201,10 @@ conservative teardown. They require no real tmux or Claude.
 
 The 2026-08-24 M0 experiment was intentionally bounded and its temporary harness was removed after the
 architecture decision. Before tmux is advertised as a supported coexistence surface, M4 must add the
-smallest maintained opt-in real acceptance for local pane + provider client + two browsers + broker-loss
-isolation; unit tests cannot replace that cross-process outcome.
+smallest maintained opt-in real acceptance for local pane + two browsers + broker-loss isolation. Any
+claim that Claude Remote Control also coexists must use the official Claude client UI; another host-side
+API client is insufficient. Otherwise M4 explicitly declines that claim. Unit tests cannot replace the
+cross-process outcome.
 
 A manual run looks like:
 

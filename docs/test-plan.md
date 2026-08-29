@@ -230,15 +230,16 @@ The browser run retains no credential-bearing trace, screenshot, or video. A mis
 wrong SHA, wrong storage profile, absent bypass, or incomplete browser turn is a failure, not a
 successful receipt with caveats.
 
-### 5.6 Handoff WAF — conditional on enabling handoff
+### 5.6 Handoff enablement — disclosure plus WAF
 
 In-process route tests prove body limits, expiry, atomic single-use claim, and uniform misses; they
 cannot prove an edge provider's per-IP rule. Before setting
-<code>NEXT_PUBLIC_RC_HANDOFF_ENABLED=1</code>, run the outside-in bounded-burst procedure in
+<code>NEXT_PUBLIC_RC_HANDOFF_ENABLED=1</code>, require a browser test of the pre-claim authority disclosure
+and run the outside-in bounded-burst procedure in
 [Ephemeral one-time credential handoff §5](ephemeral-handoff.md#5-decisions-enabled-feature-must-haves-non-goals)
-from one external source IP and retain the provider rule identifier and telemetry. If that check is
-not green or cannot be repeated, leave handoff off. This conditional operational check is not part of
-ordinary CI and does not block manual-pass onboarding while the feature remains disabled.
+from one external source IP, retaining the provider rule identifier and telemetry. If either check is
+not green or cannot be repeated, leave handoff off. The conditional WAF check is not part of ordinary CI
+and does not block manual-pass onboarding while the feature remains disabled.
 
 ## 6. Security regression matrix
 
@@ -246,6 +247,7 @@ ordinary CI and does not block manual-pass onboarding while the feature remains 
 | --- | --- |
 | Secret file | Create atomically; reject symlink, non-file, insecure mode, malformed token |
 | CLI output | Root secret appears only on explicit create/reveal paths; passes and provider credentials never leak into diagnostics |
+| Viewer-pass UX | Manual join and any enabled pairing path label the pass as indefinite machine-identity-wide read/control/forge authority for mutually trusted holders, not a room-scoped or individually revocable invitation; pairing distinguishes the one-time link from the pass it recovers before claim |
 | Bearer routing | Recompute identity id; reject cross-identity and cross-session frames |
 | Wire intake | Snapshot only known own-data properties; ignore unknown extension fields; reject missing, noncanonical, oversized, and malformed known fields before decrypt or native mutation |
 | AEAD | Authenticate every visible header and chunk coordinate; tamper or wrong key fails |
@@ -254,7 +256,7 @@ ordinary CI and does not block manual-pass onboarding while the feature remains 
 | Ambiguous write | No automatic fresh-id retry; expose unknown outcome and reconcile |
 | Durable restart | Require both sequence and publish-order cursors; never replay old commands from zero |
 | Presence | Future-skew, stale, terminal, and unauthenticated records cannot enable controls |
-| Handoff | Bounded body, short TTL, single-use atomic claim, uniform miss, external per-IP rate limit |
+| Handoff | Default-off; bounded body, short TTL, single-use atomic claim, uniform miss, external per-IP rate limit, and pre-claim disclosure that the resulting pass remains indefinite and machine-wide |
 | Logging | Redact credential-shaped values; bound bodies; refuse unsafe trace-file targets |
 | Failure isolation | Remote projection can stop without killing the user's healthy local native session |
 
@@ -284,8 +286,9 @@ This is the outcome that decides whether the next milestone is finished:
 6. Verify all four observe the same provider-native order and each label exactly once.
 7. Disconnect browser A; verify the TUI, official client, and browser B remain live.
 8. Reconnect browser A; verify history reconciliation adds no duplicate.
-9. Restart only the remote-claw companion; verify native history restores the projection without a
-   repeated native mutation.
+9. Restart only the remote-claw companion; verify the old projection is terminal or becomes stale, a
+   fresh random projection binds the same native <code>cse_*</code>, history backfills once, no retired
+   command is consumed, and no native mutation is repeated. Stable same-row identity is not an M1 claim.
 10. Interrupt or fail the broker; verify the native TUI and official client remain usable.
 11. Confirm provider OAuth exists only on the host and broker records remain sealed.
 
@@ -302,10 +305,10 @@ The later milestones use the same shared security checks but keep product-specif
 
 | Surface | Required real outcome |
 | --- | --- |
-| OpenCode | Real local TUI plus two browsers on one native session; history/reconnect, permission race, and ambiguous-send behavior match the advertised capability set |
-| Codex | Real local TUI plus two browsers on one app-server thread, followed by Codex/ChatGPT Remote coexistence through the supported provider boundary |
-| tmux | Recoverable local pane plus two browsers, with conservative injection states and no claim of independent peer ordering or exactly-once native application |
-| Bedrock/accountless | Credentialed inference smoke for every advertised agent/model/region tuple; no Anthropic account/API when claimed, while AWS/Bedrock and remote-claw credential handling is verified |
+| OpenCode | Real local TUI plus two browsers on one native session; non-empty non-slash text/interrupt, origin trust, and history/reconnect match the advertised capability set; committed/response-lost faults prove create stays unannounced without guessing or recreation and prompt/interrupt fence the projection without replay or later writes; blank/slash text is rejected, the supported path does not mutate permission policy, structured permissions are false, and an existing native ask/deny policy is shown as local/native rather than “permissions off” or is rejected when its posture cannot be known |
+| Codex | M3a proves a current-version local TUI plus two browsers on one app-server thread; uniquely labeled text from the TUI and each browser appears exactly once everywhere; one native approval and one native question are separately answered in the local TUI while the companion emits no answer/error and neither steals nor strands them; the viewer labels that posture local/native or rejects the tuple; M3b separately proves Codex/ChatGPT Remote coexistence through a currently supported provider boundary |
+| tmux | Recoverable local pane plus two browsers, with conservative injection states and no claim of independent peer ordering or exactly-once native application; any advertised Claude Remote coexistence uses the official Claude client UI |
+| Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
 Passing one row does not turn an untested row green. Agent collaboration and inference routing are
 orthogonal, so a Bedrock model response does not prove OpenCode/Claude collaboration and vice versa.

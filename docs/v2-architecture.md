@@ -308,13 +308,13 @@ disabled instead of producing a false success indication.
 
 One-time pairing is implemented but default-off. The route, CLI producer, and browser consumer all
 require <code>NEXT_PUBLIC_RC_HANDOFF_ENABLED=1</code>. Operators may set that public deployment flag only
-after externally verifying the route-specific per-IP WAF rate limit described in
-<a href="ephemeral-handoff.md">ephemeral-handoff.md</a>; the flag is an attestation, not the rate limiter.
-Disabled deployments return an opaque 404 without reading a handoff body, do not upload or claim, and
-retain manual pass entry.
+after the pre-claim authority disclosure test is green and after externally verifying the route-specific
+per-IP WAF rate limit described in <a href="ephemeral-handoff.md">ephemeral-handoff.md</a>; the flag itself
+proves neither condition. Disabled deployments return an opaque 404 without reading a handoff body, do
+not upload or claim, and retain manual pass entry.
 
-When that gate is enabled, <code>--rc-pass --rc-qr --rc-app &lt;origin&gt;</code> avoids putting the
-long-lived pass in a QR:
+When those gates are satisfied and handoff is enabled,
+<code>--rc-pass --rc-qr --rc-app &lt;origin&gt;</code> avoids putting the long-lived pass in a QR:
 
 1. The host generates a 256-bit one-time key.
 2. It derives separate box-encryption and claim values.
@@ -323,7 +323,10 @@ long-lived pass in a QR:
 5. The browser proves possession, atomically consumes the row, and decrypts locally.
 
 An absent, expired, already-used, or wrongly proved row returns the same 404 result. Pairing does not
-change the authority of the resulting pass.
+change the authority of the resulting pass. Before the destructive claim, the pairing UI must make clear
+that the link is one-time but the recovered pass grants indefinite machine-wide read, control, and
+record-forging authority. The current pairing copy does not yet meet that disclosure gate, so handoff
+must remain disabled even where the external rate limit exists.
 
 ## 10. Current Claude modes
 
@@ -482,7 +485,9 @@ The acceptance scenario is:
 4. Submit labelled text from the local TUI, official client, browser A, and browser B.
 5. Verify every surface observes the same ordered native history and each labelled submission once.
 6. Disconnect each remote-claw browser in turn and verify the remaining surfaces stay live.
-7. Restart only the companion and verify reconciliation adds no duplicate native mutation.
+7. Restart only the companion; verify the old remote-claw projection is terminal or becomes stale, a
+   fresh random projection binds the same native session, backfills history once, consumes no retired
+   command, and repeats no native mutation. Stable same-row projection identity is not an M1 claim.
 
 Until that scenario passes against a deployed broker, the Claude native-coexistence milestone remains
 unfinished. Passing it will not complete the OpenCode, Codex, tmux, Bedrock/accountless, or full-product

@@ -169,10 +169,14 @@ any gap instead of inheriting a blanket guarantee from this list.
   effect.
 - Relay failure ends the affected projection without pretending a native action succeeded. Wherever
   the native surface permits it, the local agent and official provider collaboration remain usable.
-- A viewer pass grants read and control for all sessions under one machine identity. Pass holders are
-  mutually trusted; per-viewer roles and revocation are not implemented.
+- A viewer pass is an indefinite full bearer credential granting read, control, and record-forging
+  authority for all retained sessions under one machine identity; it is not a room-scoped invitation.
+  Pass holders are mutually trusted. V1 graduation requires every join or enabled pairing UI to say so;
+  a one-time handoff transfers this same indefinite credential. Per-viewer identity, roles, and revocation
+  are not implemented.
 - One-time handoff remains default-off. It may be enabled as a separate short-lived, single-use
-  capability only after the deployment's external per-IP rate limit is verified.
+  delivery path only after the pre-claim UI and browser test distinguish the one-time link from its
+  indefinite machine-wide pass and the deployment's external per-IP rate limit is verified.
 
 The zero-knowledge claim applies to the remote-claw broker. A selected inference or native
 collaboration provider necessarily sees the plaintext that its own API requires.
