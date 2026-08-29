@@ -171,15 +171,15 @@ test("a doc-reference link opens that doc in the viewer, not the raw markdown", 
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
 
-test("the default docs route opens the active product goal", async ({ page }) => {
+test("the default docs route opens the active execution roadmap", async ({ page }) => {
   await page.goto("/index.html");
   await expect(page.locator("article h1")).toContainText(
-    "remote-claw product goal and release gates",
+    "remote-claw execution roadmap and release gates",
     {
       timeout: 15000,
     },
   );
-  await expect(page.locator(".tab.active")).toHaveText("Product Goal & Gates");
+  await expect(page.locator(".tab.active")).toHaveText("Execution Roadmap & Gates");
   await expect(page).toHaveURL(/#release$/);
   expect(new URL(page.url()).pathname).toBe("/index.html");
 });
@@ -219,17 +219,17 @@ test("primary architecture diagrams fit the mobile code block without horizontal
   }
 });
 
-test("a composite doc-and-section hash loads and scrolls the active product goal", async ({
+test("a composite doc-and-section hash loads and scrolls the active execution roadmap", async ({
   page,
 }) => {
   await page.goto("/index.html#release:5-shared-safety-invariants");
   await expect(page.locator("article h1")).toContainText(
-    "remote-claw product goal and release gates",
+    "remote-claw execution roadmap and release gates",
     {
       timeout: 15000,
     },
   );
-  await expect(page.locator(".tab.active")).toHaveText("Product Goal & Gates");
+  await expect(page.locator(".tab.active")).toHaveText("Execution Roadmap & Gates");
   await expect(page).toHaveURL(/#release:5-shared-safety-invariants$/);
   await expect(page.locator('[id="5-shared-safety-invariants"]')).toBeInViewport();
 });

@@ -109,6 +109,23 @@ The first implementation should keep recovery simple:
 5. stop the writable path if ordering, identity, or cursor continuity cannot be established; and
 6. never use an uncertain read cursor as evidence that an uncertain write did not happen.
 
+An SSE reconnect inside one running companion retains that companion's projection and reconciles from
+provider history. A companion process restart is different: M1 creates a fresh random remote-claw
+projection ID for the same exact native <code>cse_*</code>, backfills its history as observation once,
+and attempts to leave the prior projection terminal after a clean stop. If terminal publication cannot
+complete, or after an unclean stop, the prior projection ages stale. The new process consumes no command
+from the retired projection and must not replay any prior browser mutation. Stable same-row identity
+across companion processes would require adapter-local durable binding and is deferred until a user
+requirement and crash test justify it.
+
+Fresh projection identity is required by the current lifecycle, not a cosmetic row choice: terminal is
+absorbing for a broker session ID, and reusing an old ID could create an unannounced command consumer
+known to an old viewer. Provider coordinates deduplicate history/SSE observation only; every new
+projection owns a fresh sequence/message-ID space, and only commands admitted on that projection may
+call <code>postEvent</code>. A provider acknowledgement ID may differ from the submitted caller UUID, so
+uncertain-write correlation must be demonstrated against native history; otherwise the result remains
+unknown and is not resent.
+
 Remote-claw's projected sequence is a viewer ordering coordinate, not a claim that Anthropic or Claude
 executed an event. Provider acknowledgement, provider history observation, and browser projection stay
 distinct facts.
@@ -125,6 +142,8 @@ following in one bounded run:
 - each submitted label appears exactly once in Anthropic history and both remote-claw views;
 - local-TUI and official-client submissions appear in both remote-claw views without being re-executed;
 - reload/reconnect catches up without gaps or duplicate projections;
+- restarting only the companion creates one fresh projection of the same native session, backfills once,
+  consumes no command from the retired projection, and repeats no native mutation;
 - disconnecting any one surface leaves the others alive; and
 - credentials and plaintext do not appear in broker storage or logs.
 
