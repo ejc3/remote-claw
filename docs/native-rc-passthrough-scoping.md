@@ -4,8 +4,8 @@
 Code 2.1.237; M1 remains incomplete. Bounded 2026-08-30 runs proved the local TUI, an authenticated
 Anthropic RC API client, two simultaneous remote-claw browsers, fresh-projection companion restart,
 broker-loss isolation, installed-package use, and a bounded exact-value/log and raw-storage scan on one
-native session. Literal official Claude app UI validation and the exact-SHA deployed Preview gate remain
-open.
+native session. The exact-SHA deployed Preview gate passed; literal official Claude app UI validation
+remains open.
 
 The product goal is one normal Anthropic-hosted `claude --remote-control` session that remains usable
 from the local TUI and official Claude client while remote-claw browsers observe the same history and
@@ -63,7 +63,7 @@ for official ordering, rendering, busy-state behavior, and local/official-client
 | --- | --- | --- |
 | `--rc-app` / `runRcLaunch` | A synthetic RC backend bridged to the encrypted broker; durable, text-only, fail-stop supported path | Anthropic registration and official-client coexistence |
 | `--rc-trace` / `runRcTrace` | Transparent pass-through to Anthropic with redacted protocol tracing | Projection to the broker and remote mutation |
-| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text with fail-stop writes | Literal official-app UI validation and the deployed exact-SHA gate |
+| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text with fail-stop writes | Literal official-app UI validation |
 | `--rc-app … --rc-driver=claude-native --rc-native-session <cse_…>` | Attach a fresh projection to one explicitly named, already-running native session without starting an interactive Claude session or proxy, forwarding Claude arguments, or discovering a session; the pinned-version probe still runs | Stable same-row identity; the caller must supply the exact native ID |
 | `--rc-driver=tmux` plus Claude's `--remote-control` | One bounded lower-fidelity run preserved the provider session while a local pane, Anthropic API client, and two browsers exchanged text | Structured event semantics, independent peer ordering, supported-version matrix, and official Claude app UI acceptance |
 | `AnthropicRcClient` | Typed session listing, bounded history with `next_cursor`/`resume_cursor`, client-side SSE readiness, and one-user-event POST | Cross-platform credential sources and any later control semantics |
@@ -160,33 +160,33 @@ in raw broker storage. Deterministic tests own retired-channel fencing, history/
 committed-but-response-lost no-repeat boundary. The packed install smoke separately checks that invalid
 attach input fails before identity, compatibility, proxy, or network work. A literal official Claude
 web/mobile UI still could not be exercised: the isolated browser reached Cloudflare without an
-authenticated Claude UI. The exact-SHA deployed Preview smoke also remains pending.
+authenticated Claude UI. Separately, trusted Preview run 33323332395 passed against exact deployed
+commit <code>bcab0c9c0fa6ad036f4996b9d0f0540aebec4d26</code> and its configured SQLite/Turso scope.
 
 Acceptance is cumulative by causal boundary; it is not another requirement to replay every green item
 in one marathon. The first two bounded runs plus deterministic tests own local/browser/API text,
 ordering, reload, fresh-projection restart, retired-channel fencing, broker-loss isolation,
 installed-package use, and the bounded exact-value/storage inspection described above.
 
-Two focused items remain:
+One focused item remains:
 
 1. In one normal Anthropic RC session, keep the local TUI and two remote-claw browsers live while a
    logged-in official Claude client observes and submits one uniquely labelled turn. Confirm that turn
    appears once in provider history and both remote-claw views, and that disconnecting the official
    client leaves the other surfaces live.
-2. Bind the existing deployed browser smoke to the immutable Graduate SHA and intended durable backend.
 
 Use deterministic transport tests for parsing, ordering, reconnect, duplicate, ambiguous-write, and
 retired-channel boundaries. Do not rerun a passed provider fault scenario unless later code changes its
 causal surface. User-enabled trace logs may contain conversation text by design; the confidentiality
 claim is that raw broker storage is sealed and credentials do not enter broker storage, broker logs, or
 normal CLI diagnostics. Do not build a receipt chain, scan provider fleets, attest host tools, or expand
-either remaining smoke into permissions and controls.
+the remaining UI smoke into permissions and controls.
 
 ## 6. Decision after the experiment
 
 The direct app-client path is the basis for the coexistence product; the current `--rc-app` replacement
 mode remains a separate private-relay option. Do not promote M1 to complete until the remaining
-acceptance items in §5 pass.
+acceptance item in §5 passes.
 
 Escalate to a larger outward-worker/coordinator architecture only if a demonstrated product requirement
 cannot be met through the normal Anthropic session. Examples might include a required action absent from

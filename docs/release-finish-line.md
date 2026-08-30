@@ -6,7 +6,7 @@ and evidence with narrower guarantees. M1's Linux/exact-2.1.237 structured text 
 same-native-session restart attachment are implemented. Bounded 2026-08-30 runs proved the local TUI,
 an authenticated Anthropic RC API client, two remote-claw browsers, fresh-projection restart,
 broker-loss isolation, installed-package use, and a bounded exact-value/log and raw-storage scan.
-Literal official-app UI validation and the exact-SHA deployed Preview gate remain open.
+The exact-SHA deployed Preview gate is green. Literal official-app UI validation remains open.
 
 The active milestone is finishing Claude native coexistence. It is not the entire product or a reason
 to discard the other surfaces.
@@ -106,10 +106,10 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 
 | Surface | Implemented now | Still required for its product outcome |
 | --- | --- | --- |
-| Shared broker/browser/security | Sealed frames, identity/pass derivation, durable replay, multi-viewer state, capability gating, and fail-stop behavior | Exercise the same boundaries through each production adapter |
+| Shared broker/browser/security | Sealed frames, identity/pass derivation, durable replay, multi-viewer state, capability gating, fail-stop behavior, and exact-SHA Preview evidence against the configured SQLite/Turso broker | Exercise the same boundaries through each production adapter |
 | Claude private relay | Real Claude behind a local RC façade; browser turns and native output cross the broker | It replaces Anthropic RC, so the official client cannot join |
 | Claude trace | Normal Anthropic RC and official-client control with protocol observation | It does not project to or accept commands from remote-claw browsers |
-| Claude native companion | Exact launch binding or explicit exact-ID attach-only restart, subscribe-before-history reconciliation, provider-ordered text projection/injection, host-only OAuth, two-browser capability gating, fail-stop ambiguity handling, broker-loss isolation, and installed-package evidence on Linux with exact Claude 2.1.237 | Literal official-app UI validation and deployed exact-SHA acceptance |
+| Claude native companion | Exact launch binding or explicit exact-ID attach-only restart, subscribe-before-history reconciliation, provider-ordered text projection/injection, host-only OAuth, two-browser capability gating, fail-stop ambiguity handling, broker-loss isolation, and installed-package evidence on Linux with exact Claude 2.1.237 | Literal official-app UI validation |
 | OpenCode | Experimental server adapter with history/SSE capture, text injection, permissions, and capability limits | Real TUI coexistence, durable binding/recovery, ambiguity handling, and supported release matrix |
 | Codex | Pinned evidence that multiple app-server clients can share one native thread | Product adapter, local TUI plus browser coexistence, and provider-native Codex/ChatGPT Remote integration |
 | tmux | Private pane, transcript capture, conservative input injection, optional permission mirroring, and one bounded Claude/Anthropic/two-browser coexistence run | Productize only its honest fallback contract; verify the official app separately and never claim native peer fidelity it cannot supply |
@@ -129,7 +129,7 @@ Cartesian-product marathon.
 | Delivery | User-visible result | Why this order |
 | --- | --- | --- |
 | M0 — complete | Lower-fidelity topology decision | Already answered whether native/provider and remote-claw surfaces can remain live together |
-| M1 — in progress | Structured Claude text coexistence | Text plus local Graduate acceptance are green; literal official-app UI and the exact-SHA deployed gate remain |
+| M1 — in progress | Structured Claude text coexistence | Text, local Graduate acceptance, and the separate exact-SHA deployed-broker gate are green; literal official-app UI remains |
 | M2 | Supported OpenCode text/interrupt adapter | Existing code makes this the cheapest second structured adapter and tests whether a shared seam is real |
 | M3a | Codex TUI plus remote-claw browsers | Converts pinned app-server evidence into product code without depending on provider Remote |
 | M3b | Codex/ChatGPT Remote coexistence | Ships only after a current supported provider boundary passes a bounded feasibility gate |
@@ -213,16 +213,20 @@ turns once; a broker kill failed only the companion, after which the native TUI 
 The bounded exact-value scan found no provider/root/pass/bypass value in owned logs or raw broker files,
 and raw broker storage contained none of the labelled plaintext.
 
-Use two closed merge points, each based on the previous merged <code>main</code>:
+The two code merge points are closed, each based on the previous merged <code>main</code>:
 
 1. **Coexistence text:** bind one exact native session, reconcile history/SSE, admit browser text with
    one stable caller coordinate, and stop writes on ambiguity. The implementation, local TUI, two-
    browser, and authenticated provider-client API path are green; a literal official Claude client UI
    run remains required before advertising this outcome as fully accepted.
 2. **Graduate:** fresh-projection companion restart, broker-loss isolation, installed-package use, and
-   the bounded credential/log/storage scan are green locally. Close this merge point with the exact-SHA
-   deployed Preview acceptance; do not conflate that remaining deployment gate with literal official-
-   client UI or rerun unrelated green gates.
+   the bounded credential/log/storage scan are green locally. The merge point landed in
+   [PR 215](https://github.com/ejc3/remote-claw/pull/215), and
+   [trusted Preview run 33323332395](https://github.com/ejc3/remote-claw/actions/runs/33323332395)
+   passed against exact deployed commit <code>bcab0c9c0fa6ad036f4996b9d0f0540aebec4d26</code>. The gate
+   attested the Preview runtime's exact SHA and default SQLite/Turso profile
+   (<code>pr-bcab0c9</code>), then passed browser discovery, host receipt, and reload replay. It did not
+   exercise live Claude or the official Claude UI; that separate acceptance remains above.
 
 ### M2 — OpenCode production adapter
 

@@ -6,7 +6,8 @@ tested, not that one script vouched for another script.
 
 The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text implementation,
 fresh-projection restart, broker-loss isolation, packed install, and bounded credential/storage checks
-are green locally; literal official Claude app UI and the exact-SHA deployed Preview remain red.
+are green locally, and the exact-SHA deployed Preview is green; literal official Claude app UI remains
+red.
 Maintained tmux support waits for M4. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
 
@@ -302,14 +303,17 @@ be repeated in one provider marathon. The two runs above plus deterministic test
 local/browser/API text, reload, restart, retired-channel fencing, broker-loss isolation, installed-
 package use, and the bounded credential/storage inspection.
 
-Two focused items remain:
+One focused item remains:
 
 1. Keep a normal Anthropic RC session, its local TUI, and two remote-claw browsers live while a logged-
    in official Claude client joins. Have the official client submit one uniquely labelled turn and
    observe one browser-submitted turn; verify provider history and both remote-claw views contain each
    once, then disconnect the official client and confirm the other surfaces remain live.
-2. Run the existing deployed browser discovery/send/reload smoke against the immutable Graduate SHA and
-   intended durable backend. This smoke needs no live Claude or provider credential.
+
+Trusted Preview run 33323332395 passed the separate deployment item against exact deployed commit
+<code>bcab0c9c0fa6ad036f4996b9d0f0540aebec4d26</code>. It bound the served runtime to that SHA and the
+configured default SQLite/Turso profile, then passed browser discovery, host receipt, and reload replay.
+It used no live Claude or provider credential.
 
 The initial launch must use
 <code>--rc-app &lt;origin&gt; --rc-driver=claude-native --remote-control</code>. Companion-only restart uses
@@ -318,7 +322,7 @@ forwarded Claude arguments. Neither may use the default <code>--rc-driver=mitm</
 <code>runRcLaunch</code> replacement path: it cannot satisfy official-client coexistence by design, and
 trace mode cannot connect remote-claw browsers.
 
-Until the remaining literal UI and exact-SHA deployed steps pass, CI green means the implemented local
+Until the remaining literal UI step passes, CI green means the implemented local
 slice is healthy. It does not mean M1 or the full product is complete.
 
 ## 8. Remaining adapter acceptance
