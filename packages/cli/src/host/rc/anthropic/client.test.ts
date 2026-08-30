@@ -158,6 +158,23 @@ describe("AnthropicRcClient list/history", () => {
       "/v1/code/sessions/cse%2Fa/events?sort_order=asc&cursor=history%2Fnext&limit=1",
     ]);
   });
+
+  it("preserves the resume cursor observed on ascending native history", async () => {
+    const transport = new FakeTransport(
+      json({
+        data: [event("evt_resume", "41")],
+        resume_cursor: "41",
+      }),
+    );
+
+    await expect(new AnthropicRcClient({ transport }).history("cse_resume")).resolves.toMatchObject(
+      {
+        nextCursor: null,
+        resumeCursor: "41",
+        data: [{ eventId: "evt_resume", sequenceNum: "41" }],
+      },
+    );
+  });
 });
 
 describe("AnthropicRcClient.postEvent", () => {
@@ -330,6 +347,58 @@ describe("AnthropicRcClient.postEvent", () => {
 });
 
 describe("AnthropicRcClient.streamEvents", () => {
+  it("calls onOpen only after a valid SSE response reader is ready", async () => {
+    const invalidResponses = [
+      new Response("unavailable", {
+        status: 503,
+        headers: { "content-type": "text/event-stream" },
+      }),
+      new Response(null, { headers: { "content-type": "text/event-stream" } }),
+      new Response("{}", { headers: { "content-type": "application/json" } }),
+    ];
+    const invalidReader = sse([]);
+    if (invalidReader.body === null) throw new Error("missing test body");
+    Object.defineProperty(invalidReader.body, "getReader", {
+      value: () => {
+        throw new Error("reader unavailable");
+      },
+    });
+    invalidResponses.push(invalidReader);
+
+    for (const response of invalidResponses) {
+      let opens = 0;
+      const client = new AnthropicRcClient({ transport: new FakeTransport(response) });
+      await expect(
+        collect(
+          client.streamEvents("cse_not_ready", {
+            signal: new AbortController().signal,
+            onOpen: () => {
+              opens += 1;
+            },
+          }),
+        ),
+      ).rejects.toBeDefined();
+      expect(opens).toBe(0);
+    }
+
+    const ready = sse([`data: ${JSON.stringify(event("evt_ready", "1"))}\n\n`]);
+    let bodyLockedAtOpen = false;
+    let opens = 0;
+    const items = await collect(
+      new AnthropicRcClient({ transport: new FakeTransport(ready) }).streamEvents("cse_ready", {
+        signal: new AbortController().signal,
+        onOpen: () => {
+          opens += 1;
+          bodyLockedAtOpen = ready.body?.locked === true;
+        },
+      }),
+    );
+
+    expect(opens).toBe(1);
+    expect(bodyLockedAtOpen).toBe(true);
+    expect(items).toMatchObject([{ kind: "event", event: { eventId: "evt_ready" } }]);
+  });
+
   it("skips standalone comments and parses CRLF, split chunks, multiline data, and SSE metadata", async () => {
     const wire = event("evt_sse", "17");
     const serialized = JSON.stringify(wire);

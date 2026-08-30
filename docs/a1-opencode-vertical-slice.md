@@ -11,6 +11,7 @@ authority, recovery, signing, or isolation claims from this retired document.
 
 OpenCode remains an intended product surface. Its next work begins with a user-visible vertical and
 its actual threat boundary; it must not restore the deleted platform foundations merely because they
-once existed. Structured Claude native coexistence is the next milestone after the completed M0 tmux
-decision experiment in the sequence documented by
+once existed. M1 structured Claude native-RC text coexistence is now implemented and has passed
+focused and authenticated provider-API-path acceptance. Literal official Claude UI proof and M1
+Graduate hardening remain open in the sequence documented by
 [Product goal and release gates](release-finish-line.md).

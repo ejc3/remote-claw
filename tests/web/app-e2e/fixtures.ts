@@ -31,10 +31,10 @@ export type SeedHost = (opts?: {
   askq?: boolean | "multi";
   /** Driver capability preset (RC_E2E_CAPS) for the capability-gated viewer (#149). Unset is the exact
    * stable Claude tuple; maximal native-RC plumbing is explicit compatibility coverage. */
-  caps?: "compat-mitm" | "tmux" | "opencode-skip";
-  /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164): "tmux" | "opencode" | undefined
-   *  (MITM native-RC). Controls only the announced label, independent of `caps`. */
-  harness?: string;
+  caps?: "compat-mitm" | "native-rc" | "tmux" | "opencode-skip";
+  /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164). Unset is the private MITM relay;
+   * `native-rc` is the companion attached to Anthropic's ordinary Remote Control session. */
+  harness?: "native-rc" | "tmux" | "opencode";
 }) => Promise<SeedResult>;
 
 /** Spawn one host-runner and resolve once it prints its `{pass,sessionId}` readiness line (or reject if it

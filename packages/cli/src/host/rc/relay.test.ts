@@ -12,6 +12,8 @@ import {
 import { securityProvider } from "../../security/provider.js";
 import type { Tracer } from "../../trace.js";
 import {
+  CLAUDE_NATIVE_CAPABILITIES,
+  CLAUDE_NATIVE_HARNESS,
   type DriverCapabilities,
   MITM_CAPABILITIES,
   MITM_HARNESS,
@@ -606,6 +608,17 @@ function relayOf(
   });
 }
 
+function nativeRelayOf(session: Session, client: FakeClient): HostRcRelay {
+  return new HostRcRelay({
+    client: client as unknown as BrokerClient,
+    identityId: ID,
+    sessionId: session.id,
+    session,
+    capabilities: CLAUDE_NATIVE_CAPABILITIES,
+    harness: CLAUDE_NATIVE_HARNESS,
+  });
+}
+
 const tick = () => new Promise((r) => setTimeout(r, 0));
 async function waitFor(pred: () => boolean, ms = 2000): Promise<void> {
   const end = Date.now() + ms;
@@ -792,6 +805,96 @@ describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
     const userTexts = client.content.filter((p) => p.recordKind === "user").map((p) => p.text);
     expect(userTexts).toContain("typed at the host TUI"); // local-origin prompt surfaced
     expect(userTexts.some((t) => t.includes("web echo"))).toBe(false); // normal upstream user text still dropped
+  });
+});
+
+describe("HostRcRelay Claude-native text boundary", () => {
+  it("waits for provider observation before assigning a browser user its canonical seq", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = nativeRelayOf(session, client);
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.streamStarts.length === 1);
+    client.pushInbound(inFrame("user", "native-in", "browser prompt", "browser-msg"));
+    await waitFor(() => pushUser.mock.calls.length === 1);
+
+    expect(pushUser).toHaveBeenCalledWith("browser prompt", { clientMsgId: "browser-msg" });
+    expect(client.content).toEqual([]);
+    expect(
+      client.posts
+        .filter(({ recordKind }) => recordKind === "accepted")
+        .map(({ text }) => JSON.parse(text)),
+    ).toEqual([{ client_msg_id: "browser-msg", native_pending: true }]);
+
+    session.pushUpstream(assistant("provider event before the user"));
+    session.pushUpstream({
+      type: "user",
+      local_prompt: true,
+      client_msg_id: "browser-msg",
+      message: { role: "user", content: "browser prompt" },
+    });
+    await waitFor(() => client.content.length === 2);
+    ac.abort();
+    await served;
+
+    expect(client.content).toEqual([
+      expect.objectContaining({
+        recordKind: "assistant",
+        seq: 0,
+        text: "provider event before the user",
+      }),
+      expect.objectContaining({ recordKind: "user", seq: 1, text: "browser prompt" }),
+    ]);
+    expect(
+      client.posts
+        .filter(({ recordKind }) => recordKind === "accepted")
+        .map(({ text }) => JSON.parse(text)),
+    ).toEqual([
+      { client_msg_id: "browser-msg", native_pending: true },
+      { client_msg_id: "browser-msg", seq: 1 },
+    ]);
+  });
+
+  it("suppresses every unsupported native control without creating transcript content", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = nativeRelayOf(session, client);
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.streamStarts.length === 1);
+    for (const kind of ["interrupt", "set_model", "set_mode", "end"]) {
+      client.pushInbound(
+        inFrame(
+          kind,
+          `native-${kind}`,
+          JSON.stringify({ model: "opus", mode: "plan", expiry: Date.now() + 60_000 }),
+        ),
+      );
+    }
+    await waitFor(() => client.opened.length === 4);
+    await tick();
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(client.content).toEqual([]);
+
+    session.pushUpstream(assistant("provider content still flows"));
+    await waitFor(() => client.content.length === 1);
+    ac.abort();
+    await served;
+
+    expect(client.content).toEqual([
+      expect.objectContaining({
+        recordKind: "assistant",
+        seq: 0,
+        text: "provider content still flows",
+      }),
+    ]);
   });
 });
 

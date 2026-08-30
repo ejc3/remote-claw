@@ -5,6 +5,7 @@ import {
   fitStaged,
   isStableClaudeSurface,
   remoteMutationEnabled,
+  reportsWorkerStatus,
   sendComposer,
   shouldClearOptimisticMode,
   stableTextBlockReason,
@@ -64,39 +65,53 @@ describe("sendComposer", () => {
 });
 
 describe("stable Claude mutation surface", () => {
-  const stableCaps = {
+  const textOnlyCaps = {
     structuredPermissions: false,
-    status: true,
     controls: { interrupt: false, setModel: false, setMode: false, end: false },
     attachments: false,
   };
+  const privateRelayCaps = { ...textOnlyCaps, status: true };
+  const nativeCompanionCaps = { ...textOnlyCaps, status: false };
 
-  it("recognizes only the exact claude-code/rc all-mutations-off tuple", () => {
-    expect(isStableClaudeSurface({ agent: "claude-code", mode: "rc" }, stableCaps)).toBe(true);
+  it("recognizes the exact private-relay and native-companion text-only tuples", () => {
+    expect(isStableClaudeSurface({ agent: "claude-code", mode: "rc" }, privateRelayCaps)).toBe(
+      true,
+    );
+    expect(
+      isStableClaudeSurface({ agent: "claude-code", mode: "native-rc" }, nativeCompanionCaps),
+    ).toBe(true);
+    expect(isStableClaudeSurface({ agent: "claude-code", mode: "rc" }, nativeCompanionCaps)).toBe(
+      false,
+    );
+    expect(
+      isStableClaudeSurface({ agent: "claude-code", mode: "native-rc" }, privateRelayCaps),
+    ).toBe(false);
     expect(
       isStableClaudeSurface(
         { agent: "claude-code", mode: "rc" },
-        { ...stableCaps, attachments: true },
+        { ...privateRelayCaps, attachments: true },
       ),
     ).toBe(false);
     expect(
       isStableClaudeSurface(
         { agent: "claude-code", mode: "rc" },
-        { ...stableCaps, structuredPermissions: true },
+        { ...privateRelayCaps, structuredPermissions: true },
       ),
-    ).toBe(false);
-    expect(
-      isStableClaudeSurface({ agent: "claude-code", mode: "rc" }, { ...stableCaps, status: false }),
     ).toBe(false);
     for (const control of ["interrupt", "setModel", "setMode", "end"] as const) {
       expect(
         isStableClaudeSurface(
-          { agent: "claude-code", mode: "rc" },
-          { ...stableCaps, controls: { ...stableCaps.controls, [control]: true } },
+          { agent: "claude-code", mode: "native-rc" },
+          {
+            ...nativeCompanionCaps,
+            controls: { ...nativeCompanionCaps.controls, [control]: true },
+          },
         ),
       ).toBe(false);
     }
-    expect(isStableClaudeSurface({ agent: "claude-code", mode: "tmux" }, stableCaps)).toBe(false);
+    expect(isStableClaudeSurface({ agent: "claude-code", mode: "tmux" }, privateRelayCaps)).toBe(
+      false,
+    );
     expect(isStableClaudeSurface({ agent: "claude-code", mode: "rc" }, undefined)).toBe(false);
   });
 
@@ -112,6 +127,12 @@ describe("stable Claude mutation surface", () => {
     expect(remoteMutationEnabled(true, true)).toBe(true);
     expect(remoteMutationEnabled(false, true)).toBe(false);
     expect(remoteMutationEnabled(true, false)).toBe(false);
+  });
+
+  it("suppresses worker-status claims only when the host explicitly lacks fidelity", () => {
+    expect(reportsWorkerStatus(nativeCompanionCaps)).toBe(false);
+    expect(reportsWorkerStatus(privateRelayCaps)).toBe(true);
+    expect(reportsWorkerStatus(undefined)).toBe(true);
   });
 });
 

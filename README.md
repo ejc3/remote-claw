@@ -5,9 +5,10 @@ conversation frames between the host and browser clients without receiving conte
 credentials.
 
 > **Status: developer beta, full goal incomplete.** Claude Code's private replacement relay works,
-> and experimental OpenCode, tmux, Bedrock, and accountless paths exist. A bounded 2026-08-24 run also
-> proved lower-fidelity tmux coexistence with Anthropic Remote Control and two remote-claw browsers.
-> The next milestone adds structured native fidelity and verifies the official Claude app UI. See
+> and the Linux/exact-2.1.237 `claude-native` companion now provides structured, provider-ordered text
+> projection while ordinary Anthropic Remote Control stays active. A bounded 2026-08-30 run proved the
+> local TUI, an authenticated Anthropic RC API client, and two remote-claw browsers on one session; a
+> literal official Claude web/mobile UI run and the M1 graduation gates remain open. See
 > [Product goal and release gates](docs/release-finish-line.md).
 
 ## Product goal
@@ -27,7 +28,7 @@ The intended surface matrix is:
 
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
-| Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; tmux plus Anthropic's Remote API coexisted in one bounded run, but structured and official-app acceptance remain incomplete |
+| Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; the exact-2.1.237 native companion now projects structured text to multiple browsers while Anthropic RC remains active, but literal official-app UI and graduation acceptance remain incomplete |
 | Codex | Codex TUI | Codex/ChatGPT Remote where supported | Multiple browsers | Research proves a pinned app-server multi-client seam; product adapter and official coexistence do not |
 | OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | Experimental HTTP/SSE driver; coexistence and durable recovery are incomplete |
 | tmux compatibility | Terminal pane | Plain Claude retains its own provider remote when requested | Multiple browsers | Experimental and deliberately lower fidelity; one Claude 2.1.237 coexistence run passed, but the official app UI was not exercised |
@@ -46,15 +47,17 @@ The implemented Claude modes are:
 
 | Mode | Current behavior |
 | --- | --- |
-| `--rc-app <origin>` | Runs real Claude Code behind a loopback TLS proxy, answers `/v1/code/sessions/**` locally, and relays through the E2E-encrypted broker. This replaces Anthropic Remote Control, so the official Claude client cannot join. |
+| `--rc-app <origin>` (default `--rc-driver=mitm`) | Runs real Claude Code behind a loopback TLS proxy, answers `/v1/code/sessions/**` locally, and relays through the E2E-encrypted broker. This replaces Anthropic Remote Control, so the official Claude client cannot join. |
 | `--rc-trace` | Passes traffic to Anthropic while recording bounded, redacted protocol diagnostics. The official client can drive the session, but remote-claw browsers cannot. |
+| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text to remote-claw. Linux and exact Claude 2.1.237 only; permissions, questions, interrupts, model/mode changes, attachments, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=tmux --remote-control [name]` | Runs plain Claude with its own Anthropic Remote Control intact while the lower-fidelity tmux adapter projects transcript and pane input to remote-claw. A bounded real run passed through the Anthropic API and two browsers; official-app UI acceptance is still pending. |
 
-The next milestone keeps that normal Anthropic-hosted session but replaces pane scraping/injection
-with a small structured bridge. It must wait until one exact native session is ready, reconcile history
-with live SSE, project supported events into the sealed broker, and submit one stable-UUID text event
-without automatically retrying an ambiguous POST. OAuth remains on the host. Its acceptance includes
-the real official Claude app UI, which the bounded tmux run did not exercise.
+The native companion waits for the exact successful bridge request from the Claude child, opens live
+SSE before bounded ascending history, and publishes no writable projection until reconciliation is
+ready. Browser text keeps one UUID/timestamp and is not automatically retried after an ambiguous POST;
+the canonical browser receipt and transcript row come only from provider history/SSE. OAuth remains on
+the host. The literal official Claude app UI remains the last Coexistence Text gate; companion
+restart/reattach and broker-loss/log/install/deployment proof form the separate Graduate merge point.
 
 Existing foundations:
 
@@ -63,7 +66,7 @@ Existing foundations:
 - **`apps/web`** — authenticated ciphertext broker, durable SQLite/libSQL storage, and the browser
   client. Vercel Workflows remains an experimental backend.
 - **`packages/cli`** — identity/pass custody, broker transport, Claude private RC façade and trace
-  inspector, the native Anthropic client, and experimental OpenCode/tmux/Bedrock adapters.
+  inspector, the native Anthropic companion/client, and experimental OpenCode/tmux/Bedrock adapters.
 - **Provider evidence** — bounded Claude/OpenCode/Codex fixtures and documented Bedrock live runs.
   They establish specific compatibility facts, not whole-product completion.
 
@@ -77,9 +80,9 @@ Ordinary OAuth and Anthropic inference pass through to Anthropic by default. The
 loopback. Browser turns and observed native output cross the sealed broker; local-only TUI prompt text
 is not guaranteed to appear in the browser.
 
-The stable private-RC path currently requires the exact reported Claude Code version
-`2.1.237 (Claude Code)`. This is a compatibility check, not launcher-file attestation. Strict runtime
-parsing and fail-closed mutation admission remain the protocol safety boundary.
+The stable private-RC path and the native companion currently require the exact reported Claude Code
+version `2.1.237 (Claude Code)`. This is a compatibility check, not launcher-file attestation. Strict
+runtime parsing and fail-closed mutation admission remain the protocol safety boundary.
 
 Experimental paths are real product work with narrower current claims:
 
@@ -136,6 +139,20 @@ conversation text and must be treated as sensitive. Trace mode does not use the 
 When launched from another Claude session, the wrapper scrubs `CLAUDE_CODE_CHILD_SESSION` and
 `CLAUDE_CODE_SESSION_ID` so the child is independent instead of a stub or resumed parent.
 
+### Run the native text companion
+
+On Linux with exact Claude Code 2.1.237, keep normal Anthropic Remote Control active while adding the
+remote-claw viewers:
+
+```bash
+node dist/remote-claw.js --rc-app https://your-app.example \
+  --rc-driver=claude-native --remote-control
+```
+
+Use a durable `sqlite`/Turso broker profile and the same backend in the viewer. This is a text-only
+developer-beta surface. Native/local UI owns every permission, question, interrupt, model/mode,
+attachment, and end action.
+
 ## Development gates
 
 After a change is frozen:
@@ -187,7 +204,8 @@ collaboration provider necessarily sees the plaintext that its own API requires.
   order, and proportionate gates.
 - [Architecture](docs/v2-architecture.md) and [Protocol](docs/protocol.md) — as-built shared system and
   current wire/runtime contracts.
-- [Native Claude coexistence](docs/native-rc-passthrough-scoping.md) — the next thin milestone.
+- [Native Claude coexistence](docs/native-rc-passthrough-scoping.md) — the implemented text slice and
+  remaining M1 graduation gates.
 - [Pluggable harness](docs/pluggable-harness.md) — adapter seam and honest capability model.
 - [OpenCode driver](docs/opencode-driver.md), [tmux driver](docs/tmux-driver.md), and
   [Bedrock routing](docs/bedrock-rc.md) — current alternate-surface truth and limits.

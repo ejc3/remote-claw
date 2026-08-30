@@ -6,19 +6,22 @@ multiple remote-claw browsers and preserves official provider collaboration wher
 Inference routing (Anthropic/OpenAI/Bedrock) is an orthogonal axis. “Accountless” means no Anthropic
 account, not no AWS/provider or remote-claw credentials.
 
-**Current truth:** the private Claude replacement relay and narrower OpenCode/tmux adapters work;
-simultaneous official-Claude-client coexistence and the production Codex adapter are not implemented.
-The supported durable broker is SQLite/libSQL (Turso in deployment); Vercel Workflows remains
-experimental. Design lives in `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI
-is `packages/cli`. Historical Claude RC observations are in `docs/phase0-findings.md` and
-`docs/v2-architecture.md` §17.
+**Current truth:** the private Claude replacement relay and narrower OpenCode/tmux adapters work. The
+Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to remote-claw while
+ordinary Anthropic Remote Control remains active; its local-TUI/two-browser/authenticated-provider-API
+run passed, while literal official-app UI validation and graduation evidence remain open. The
+production Codex adapter is not implemented. The supported durable broker is SQLite/libSQL (Turso in
+deployment); Vercel Workflows remains experimental. Design lives in `docs/v2-architecture.md`; the
+crypto core is `packages/clawsec`, the CLI is `packages/cli`. Historical Claude RC observations are in
+`docs/phase0-findings.md` and `docs/v2-architecture.md` §17.
 
 ## Driving a real claude through the wrapper (RC modes + the stub gotcha)
 
-`remote-claw` runs the **real** `claude` behind a local MITM proxy (`HTTPS_PROXY` +
-`NODE_EXTRA_CA_CERTS`). Two modes, picked by flag:
+For its three proxy-based Claude RC modes, `remote-claw` runs the **real** `claude` with
+`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`:
 
-- **`--rc-app <origin> [--rc-backend <b>]`** (`runRcLaunch`, `launch.ts`) — intercepts claude's RC
+- **`--rc-app <origin> [--rc-backend <b>]`** with the default `--rc-driver=mitm`
+  (`runRcLaunch`, `launch.ts`) — intercepts claude's RC
   endpoints (`/v1/code/sessions/**`) and bridges the session **to our broker**, E2E-encrypted.
   By default, `/v1/messages`, OAuth, telemetry, and unrelated traffic tunnel to Anthropic. With
   `--rc-inference=bedrock`, remote-claw translates inference to Bedrock and synthesizes the required
@@ -29,6 +32,11 @@ is `packages/cli`. Historical Claude RC observations are in `docs/phase0-finding
   through to real `api.anthropic.com`** and just traces RC both ways (nothing hits our broker). The
   session registers with Anthropic and **bridges** (`POST /v1/code/sessions/{id}/bridge` → a
   `worker_jwt`), so the **official Claude app / mobile app drives it** while we capture every frame.
+- **`--rc-app <origin> --rc-driver=claude-native --remote-control`**
+  (`runClaudeNativeDriverPath`, `run.ts`) — transparently forwards ordinary Anthropic Remote Control,
+  binds only the spawned child's successful bridge request, and projects provider-ordered text through
+  our encrypted broker. The local TUI and provider RC API remain live; remote-claw permissions,
+  questions, controls, attachments, and status are disabled. Linux and exact Claude 2.1.237 only.
 
 ### The CLAUDE_CODE_CHILD_SESSION stub gotcha (cost hours, twice)
 
@@ -41,7 +49,7 @@ spawning it — e.g. this harness), the launcher's session identity leaks into t
   never gets a `worker_jwt` (so the app can't drive it).
 - `CLAUDE_CODE_SESSION_ID` pins/resumes the parent's id instead of minting a fresh `cse_`.
 
-**Both `launch.ts` and `trace-run.ts` scrub these** from the child env (alongside
+**`launch.ts`, `trace-run.ts`, and `anthropic/driver.ts` scrub these** from the child env (alongside
 `REMOTE_CLAW_SECRET_FILE` / `VERCEL_AUTOMATION_BYPASS_SECRET`). Outside a claude session they're unset
 (no-op). When launching manually, also `unset` them in the launch shell as belt-and-suspenders.
 
@@ -56,8 +64,9 @@ spawning it — e.g. this harness), the launcher's session identity leaks into t
   Windows because Node cannot enforce the same owner/mode/no-follow contract. Trace bodies can contain
   conversation text despite credential redaction, so treat the file as sensitive.
 - **Verify it's real, not a stub:** the child claude env has **no** `CLAUDE_CODE_CHILD_SESSION`; and —
-  broker mode: a fresh `cse_<hex>` is "session created" + announces every ~20s; trace mode:
-  `POST …/bridge` returns a `worker_jwt`.
+  private MITM mode: a fresh local `cse_<hex>` is "session created" + announces every ~20s; trace or
+  native-companion mode: the forwarded `POST …/bridge` returns a `worker_jwt`, and the companion then
+  announces a distinct random projection ID.
 - **Stable Claude currently requires the exact tested version** `2.1.237 (Claude Code)`. The
   compatibility probe resolves `RC_CLAUDE_BIN` or `claude` on `PATH`, runs its scrubbed `--version`
   check, and fails closed before creating an identity when the version differs. The local OS,
@@ -270,15 +279,14 @@ faithful sentinel.
   the intended durable backend, the browser can discover and drive a real session, reconnect preserves
   the transcript, and fail-stop cases remain truthful. Security-sensitive crypto, auth, ambiguous-send,
   durability, and permission boundaries keep deterministic regression tests.
-- The full multi-agent product is **not implemented yet**. A bounded 2026-08-24 M0 run proved that the
-  existing lower-fidelity tmux driver can keep plain `claude --remote-control`, one local pane, the
-  Anthropic Remote API, and two remote-claw viewers live together; it did not exercise the official
-  Claude app UI. The next milestone is the structured path and official-app acceptance. Keep Anthropic
-  RC normal and use the existing host-side native client behind a small readiness-gated bridge: no
-  presence or mutation before one exact session and all prerequisites are ready; cancellation prevents
-  late publication. OAuth stays host-only, ambiguous sends fail closed, and Anthropic necessarily
-  receives plaintext. This milestone does not remove OpenCode, Codex, tmux, Bedrock, or accountless
-  from the product goal.
+- The full multi-agent product is **not implemented yet**. M0 retained the lower-fidelity tmux route.
+  The Linux/exact-2.1.237 `claude-native` companion now implements the structured text path: no presence
+  or mutation before the spawned child's exact bridge binding and capture prerequisites are ready;
+  provider history/SSE owns canonical order; OAuth stays host-only; and rejected or ambiguous sends
+  fence only the projection. Its 2026-08-30 local-TUI/two-browser/authenticated-provider-API run passed.
+  Literal official Claude app UI acceptance and Graduate restart, broker-loss, log, install, and
+  deployed exact-SHA gates remain open. This milestone does not remove OpenCode, Codex, tmux, Bedrock,
+  or accountless from the product goal.
 - TypeScript is strict: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and
   `verbatimModuleSyntax`. Root secrets and known credential material never go on argv or normal output,
   and credential-shaped trace values are redacted. `--rc-json`/`--rc-quiet` never print `S`; only

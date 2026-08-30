@@ -74,10 +74,19 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toContain("fails closed before discovery");
   });
 
-  it("does not present experimental drivers as native-coexistence alternatives", () => {
-    expect(RC_HELP).toContain("only supported private-relay driver");
-    expect(RC_HELP).toMatch(/retained experimental\/internal compatibility\s+drivers/);
-    expect(RC_HELP).toContain("tmux leaves Claude's own --remote-control untouched");
+  it("exposes the bounded Claude native companion separately from the private relay", () => {
+    expect(RC_HELP).toMatch(/mitm \| claude-native \| tmux \| opencode/);
+    expect(RC_HELP).toContain("Claude native companion (--rc-driver=claude-native)");
+    expect(RC_HELP).toContain("Linux/Claude 2.1.237 text-only companion");
+    expect(RC_HELP).toMatch(/Literal official-client UI acceptance remains pending/);
+    expect(RC_HELP).toContain("Only non-empty, non-slash text is supported");
+    expect(RC_HELP).toMatch(/--rc-inference, --rc-bedrock-\*, and --rc-accountless are rejected/);
+  });
+
+  it("keeps tmux and opencode outside the primary native-coexistence path", () => {
+    expect(RC_HELP).toContain(
+      "tmux and opencode remain experimental/internal compatibility drivers",
+    );
     expect(RC_HELP).toMatch(/outside the primary coexistence\s+path/);
   });
 

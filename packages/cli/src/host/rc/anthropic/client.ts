@@ -43,6 +43,8 @@ export interface AnthropicRcEvent {
 export interface RcEventPage {
   data: readonly AnthropicRcEvent[];
   nextCursor: string | null;
+  /** Ascending history has also been observed returning a polling-style resume_cursor. */
+  resumeCursor?: string | null;
 }
 
 export interface RcUserEventInput {
@@ -179,6 +181,7 @@ export class AnthropicRcClient {
     return {
       data: page.data.map((item, index) => parseEvent(item, operation, `data[${index}]`)),
       nextCursor: optionalNullableString(page.next_cursor, operation, "next_cursor"),
+      resumeCursor: optionalNullableString(page.resume_cursor, operation, "resume_cursor"),
     };
   }
 
@@ -191,7 +194,7 @@ export class AnthropicRcClient {
    */
   async *streamEvents(
     sessionId: string,
-    options: { signal: AbortSignal },
+    options: { signal: AbortSignal; onOpen?: () => void },
   ): AsyncGenerator<RcSseItem> {
     const operation = "streamEvents";
     const encodedSession = encodeSessionId(sessionId, operation);
@@ -247,12 +250,16 @@ export class AnthropicRcClient {
       cancelResponseBody(inspected.body);
       throw error;
     }
+    // The native projector must establish its live capture boundary before it backfills history and
+    // advertises a writable browser projection. Signal only after status/body/content-type/reader
+    // validation; no event body or credential is exposed through this lifecycle hook.
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let input = "";
     let frameLines: string[] = [];
     let frameChars = 0;
     let reachedEof = false;
     try {
+      options.onOpen?.();
       for (;;) {
         throwIfAborted(options.signal);
         let chunk: ReadableStreamReadResult<Uint8Array>;

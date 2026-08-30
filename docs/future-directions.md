@@ -7,11 +7,11 @@ The full target is Claude Code, Codex, OpenCode, and an honest tmux fallback, ea
 plus multiple remote-claw browsers and with provider-native collaboration preserved where available.
 [Product goal and release gates](release-finish-line.md) owns the sequence.
 
-M0 already proved a lower-fidelity version through the tmux adapter, the Anthropic Remote API, and two
-remote-claw browsers. The immediate milestone is deliberately narrower than the whole product but
-higher fidelity than M0: use the existing host-side native client and a small readiness-gated bridge,
-then verify one ordinary Anthropic-hosted session through the local TUI, official Claude app UI, and
-two remote-claw browsers. See [native coexistence](native-rc-passthrough-scoping.md).
+M0 proved a lower-fidelity version through the tmux adapter, the Anthropic Remote API, and two
+remote-claw browsers. The first structured M1 merge now implements the small readiness-gated native
+companion and has passed a local-TUI, two-browser, authenticated-provider-API run. Literal official
+Claude app UI validation and the Graduate restart, broker-loss, log, install, and deployment gates
+remain open. See [native coexistence](native-rc-passthrough-scoping.md).
 
 ## Sequencing rule
 
@@ -30,7 +30,9 @@ milestone as the entire product or delete working adapter foundations merely bec
 
 ### Claude Code
 
-Finish text-only native coexistence first. The structured critical path then moves to OpenCode and
+Finish Coexistence Text with one literal official-client UI run, then Graduate the implemented
+text-only native companion through restart, broker-loss, log, install, and deployment acceptance—without
+expanding it into controls or rich content. The structured critical path then moves to OpenCode and
 Codex; Claude permissions, questions, interrupts, modes, slash commands, and attachments may graduate
 later one family at a time without holding M1 open. Keep the private replacement relay as a separately
 labeled mode for environments that do not need the official client.

@@ -13,7 +13,7 @@ import type { GitInfo } from "./gitinfo.js";
 import type { Session } from "./session.js";
 
 /** The driver names the wrapper can dispatch on (`--rc-driver=<name>`, default "mitm"). */
-export type DriverName = "mitm" | "tmux" | "opencode";
+export type DriverName = "mitm" | "claude-native" | "tmux" | "opencode";
 
 /** Per-verb control support. Coarse "controlVerbs: boolean" couldn't say "interrupt works but set_mode
  *  doesn't", which made the viewer fabricate a confirmed mode/model for a driver that silently no-ops it
@@ -70,18 +70,34 @@ export const STABLE_MITM_CAPABILITIES: DriverCapabilities = {
   attachments: false,
 };
 
+/** The Anthropic app-client companion exposes provider-ordered text only. The client-side RC seam does
+ * not currently prove worker phase transitions, so `status` is deliberately false rather than inferred
+ * from transcript traffic. Permission prompts and every non-text mutation remain native/local. */
+export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
+  structuredPermissions: false,
+  status: false,
+  controls: { interrupt: false, setModel: false, setMode: false, end: false },
+  attachments: false,
+};
+
 /** Which harness a session runs, so the viewer's session list can show WHICH agent + mode it is (the
- *  three sessions look identical otherwise). `agent` is the product; `mode` is how we bridge it. Rides
+ * sessions look identical otherwise). `agent` is the product; `mode` is how we bridge it. Rides
  *  every session_announce alongside `capabilities`. */
 export interface HarnessDescriptor {
   /** The underlying agent product. */
   agent: "claude-code" | "opencode";
-  /** How the session is bridged: native RC (mitm), a tmux pane, or opencode's own server. */
-  mode: "rc" | "tmux" | "opencode";
+  /** How the session is bridged: private RC facade, provider-native RC companion, a tmux pane, or
+   * opencode's own server. */
+  mode: "rc" | "native-rc" | "tmux" | "opencode";
 }
 
 /** The MITM driver runs the real `claude` under native remote-control. */
 export const MITM_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "rc" };
+/** A sidecar client of Anthropic's ordinary Remote Control session; the official client remains live. */
+export const CLAUDE_NATIVE_HARNESS: HarnessDescriptor = {
+  agent: "claude-code",
+  mode: "native-rc",
+};
 /** The tmux driver runs a plain `claude` in a private tmux server, proved ready by SessionStart and
  * bridged through pane injection, transcript capture, and (by default) a permission hook. */
 export const TMUX_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "tmux" };

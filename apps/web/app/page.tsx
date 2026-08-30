@@ -142,17 +142,19 @@ export async function sendComposer(
   }
 }
 
-/** The one browser mutation surface supported by the private-relay beta. Compatibility hosts may still advertise
- * individual mutation capabilities, but the stable native-RC tuple is deliberately exact: Claude RC,
- * truthful status, and every browser mutation family except plain text disabled. */
+/** The stable Claude text-only surfaces. Both transports disable every browser mutation family except
+ * plain text. The private relay reports worker status; the native companion deliberately does not claim
+ * status fidelity. Compatibility hosts remain outside these exact tuples. */
 export function isStableClaudeSurface(
   harness: Harness | undefined,
   capabilities: Capabilities | undefined,
 ): boolean {
+  const exactTransportStatus =
+    (harness?.mode === "rc" && capabilities?.status === true) ||
+    (harness?.mode === "native-rc" && capabilities?.status === false);
   return (
     harness?.agent === "claude-code" &&
-    harness.mode === "rc" &&
-    capabilities?.status === true &&
+    exactTransportStatus &&
     capabilities.structuredPermissions === false &&
     capabilities.attachments === false &&
     capabilities.controls.interrupt === false &&
@@ -165,6 +167,12 @@ export function isStableClaudeSurface(
 /** Every remote mutation requires both fresh host presence and an advertised capability. */
 export function remoteMutationEnabled(connected: boolean, supported = true): boolean {
   return connected && supported;
+}
+
+/** Legacy hosts predate capability announcements and retain their existing status UI. An explicit false
+ * suppresses worker activity/needs claims while preserving host connection freshness. */
+export function reportsWorkerStatus(capabilities: Capabilities | undefined): boolean {
+  return capabilities?.status ?? true;
 }
 
 /** Classify text which the stable Claude composer must not publish. The caller separately accounts for
@@ -652,6 +660,7 @@ function presenceWord(s: Announce, now: number, reconnectingSince: number): stri
   const cs = connState(s.freshnessAt, now, reconnectingSince);
   if (cs === "disconnected") return relativeTime(s.freshnessAt, now);
   if (cs === "reconnecting") return "reconnecting…";
+  if (!reportsWorkerStatus(s.capabilities)) return "online";
   // NOT "needs you" here: the amber .needs-badge on the row-top already carries that (#design-pass) —
   // emitting it again in the sub-line read as a duplication bug and wasted the line before cwd.
   if (s.phase === "thinking") return "working…";
@@ -681,12 +690,12 @@ export function transcriptScrollAction(
   return contentGrew ? "show-pill" : "none";
 }
 
-/** The session-list label for a session's harness (#164): which agent + how it's bridged, so the three
- *  sessions (native-RC Claude Code, tmux Claude Code, opencode) don't look identical. A legacy host omits
- *  `harness` → treated as native-RC Claude Code (the only pre-#164 driver). opencode's mode is redundant
- *  with its agent name, so it shows just "opencode"; the two Claude Code variants show RC vs TX. */
+/** The session-list label for a session's harness (#164): which agent + how it's bridged. A legacy host
+ *  omits `harness` and falls back to the private-relay RC label. The native companion is named explicitly
+ *  so it cannot be mistaken for that replacement relay. */
 function harnessLabel(harness: Harness | undefined): string {
   if (harness?.agent === "opencode") return "opencode";
+  if (harness?.mode === "native-rc") return "Claude Code · Native RC";
   const mode = harness?.mode === "tmux" ? "TX" : "RC";
   return `Claude Code · ${mode}`;
 }
@@ -953,6 +962,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             const since = anchorFor(s);
             const cs = connState(s.freshnessAt, now, since);
             const connected = cs === "connected";
+            const reportsStatus = reportsWorkerStatus(s.capabilities);
             return (
               <button
                 type="button"
@@ -982,9 +992,9 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                     label={connStateLabel(cs)}
                   />
                   <span className="row-title">{s.title}</span>
-                  {connected && s.needs ? (
+                  {connected && reportsStatus && s.needs ? (
                     <Badge className="needs-badge" variant="warning" label="needs you" />
-                  ) : connected && s.phase === "thinking" ? (
+                  ) : connected && reportsStatus && s.phase === "thinking" ? (
                     <Working />
                   ) : null}
                 </span>
@@ -1061,8 +1071,9 @@ function Transcript(props: {
   // Thinking/needs are only meaningful while connected; a stale announce's phase says nothing.
   const cs = announce ? connState(announce.freshnessAt, now, reconnectingSince) : null;
   const connected = cs === "connected";
-  const phase = connected ? (announce?.phase ?? "idle") : "idle";
-  const needs = connected ? (announce?.needs ?? false) : false;
+  const reportsStatus = reportsWorkerStatus(announce?.capabilities);
+  const phase = connected && reportsStatus ? (announce?.phase ?? "idle") : "idle";
+  const needs = connected && reportsStatus ? (announce?.needs ?? false) : false;
 
   // Resolved permissions, folded from replayable permission_resolved frames (#56) — this is the source
   // of truth that survives a reload (PermissionRow's local optimistic decision does not). A durable
@@ -1115,6 +1126,7 @@ function Transcript(props: {
   // that control so it never shows a "✓" the worker never applied.
   const caps = announce?.capabilities;
   const stableClaude = isStableClaudeSurface(announce?.harness, caps);
+  const showPrivateRelayDisclosure = stableClaude && announce?.harness?.mode === "rc";
   const supportsSetMode = caps?.controls.setMode ?? true;
   const supportsSetModel = caps?.controls.setModel ?? true;
   const supportsInterrupt = caps?.controls.interrupt ?? true;
@@ -1539,7 +1551,7 @@ function Transcript(props: {
         />
       </div>
 
-      {stableClaude && (
+      {showPrivateRelayDisclosure && (
         <Banner
           className="local-input-disclosure"
           status="info"
