@@ -17,7 +17,7 @@ function renderBubble(
   opts: {
     canGrant?: boolean;
     permissionsLocal?: boolean;
-    permissionAgent?: "Claude" | "OpenCode";
+    permissionAgent?: "Claude" | "OpenCode" | "Codex";
     hostConnected?: boolean;
   } = {},
   resolved = new Map<string, "allow" | "deny">(),
@@ -98,6 +98,52 @@ describe("stable viewer surface", () => {
     expect(html).not.toContain("permissions off");
     expect(html).not.toContain(">Allow<");
     expect(html).not.toContain(">Deny<");
+  });
+
+  it("names both Codex approvals and questions as local native-TUI work", () => {
+    const approval: Message = {
+      kind: "permission_request",
+      seq: 4,
+      msgId: "permission-codex",
+      text: JSON.stringify({ request_id: "perm-codex", tool_name: "Shell", tool_input: {} }),
+    };
+    const question: Message = {
+      kind: "permission_request",
+      seq: 5,
+      msgId: "question-codex",
+      text: JSON.stringify({
+        request_id: "question-codex",
+        tool_name: "request_user_input",
+        tool_input: {
+          questions: [
+            {
+              question: "Choose a path",
+              header: "Path",
+              options: [{ label: "Alpha", description: "Use Alpha" }],
+              multiSelect: false,
+            },
+          ],
+        },
+      }),
+    };
+    const opts = {
+      canGrant: false,
+      permissionsLocal: true,
+      permissionAgent: "Codex" as const,
+      hostConnected: true,
+    };
+    const approvalHtml = renderBubble(approval, opts);
+    const questionHtml = renderBubble(question, opts);
+
+    expect(approvalHtml).toContain("Codex approval needed for Shell");
+    expect(questionHtml).toContain("Codex has a local question");
+    for (const html of [approvalHtml, questionHtml]) {
+      expect(html).toContain("Approvals and questions are local to Codex");
+      expect(html).toContain("Answer in the local Codex TUI");
+      expect(html).not.toContain(">Allow<");
+      expect(html).not.toContain(">Deny<");
+      expect(html).not.toContain("q-options");
+    }
   });
 
   it("keeps compatibility permission actions disabled whenever host presence is stale", () => {

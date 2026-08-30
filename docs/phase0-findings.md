@@ -8,7 +8,7 @@ focused compatibility tests.
 
 These findings matter because they identified both the working private replacement relay and the
 native client seam for structured coexistence. A later bounded M0 run first proved the cheaper
-lower-fidelity tmux route. The current M1/M2 evidence and later sequencing live in
+lower-fidelity tmux route. The current M1/M2/M3a evidence and later sequencing live in
 [Product goal and release gates](release-finish-line.md). This research is one part of the broader
 Claude/Codex/OpenCode/tmux product.
 
@@ -148,10 +148,10 @@ The client-side seam became the selected M1 structured milestone and is now comp
 5. submit one stable-identity text event without automatically retrying an ambiguous POST.
 
 See [Native Claude Remote coexistence](native-rc-passthrough-scoping.md). The later pinned OpenCode M2
-adapter reused the demonstrated small lifecycle and is also complete. Apply proven pieces selectively
-to Codex where its native seam needs them. Keep tmux explicitly lower fidelity. Do not recreate the
-retired generalized coordinator unless a concrete cross-adapter failure demonstrates that it is
-necessary.
+and Codex M3a adapters reused the demonstrated small lifecycle and are also complete at their exact
+boundaries. Codex/ChatGPT Remote coexistence remains M3b. Keep tmux explicitly lower fidelity. Do not
+recreate the retired generalized coordinator unless a concrete cross-adapter failure demonstrates that
+it is necessary.
 
 ## 8. Evidence limits
 

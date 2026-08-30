@@ -252,10 +252,10 @@ export function announceFreshnessAt(
 }
 
 /** Which harness a session runs (mirrors the host's HarnessDescriptor) — the viewer's session list
- *  labels private-relay Claude, native-companion Claude, tmux Claude, and opencode distinctly. */
+ *  labels private-relay Claude, native-companion Claude, tmux Claude, OpenCode, and Codex distinctly. */
 export interface Harness {
-  agent: "claude-code" | "opencode";
-  mode: "rc" | "native-rc" | "tmux" | "opencode";
+  agent: "claude-code" | "opencode" | "codex";
+  mode: "rc" | "native-rc" | "tmux" | "opencode" | "app-server";
 }
 
 /** Per-verb control support a driver declares (mirrors the host's ControlCapabilities). The viewer
@@ -312,6 +312,7 @@ const KNOWN_HARNESSES: readonly Harness[] = [
   { agent: "claude-code", mode: "native-rc" },
   { agent: "claude-code", mode: "tmux" },
   { agent: "opencode", mode: "opencode" },
+  { agent: "codex", mode: "app-server" },
 ];
 
 /** Defensively coerce an announce's `harness` into Harness|undefined. Decrypted-but-untrusted (AEAD

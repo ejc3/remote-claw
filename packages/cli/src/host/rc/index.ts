@@ -39,8 +39,36 @@ export type {
 } from "./anthropic/transport.js";
 export { type CertPaths, certPaths, ensureCerts, MITM_HOST } from "./certs.js";
 export {
+  assertCodexCompatibility,
+  CODEX_APP_SERVER_REQUIREMENT,
+  CODEX_APP_SERVER_VERSION,
+  CodexAppServerClient,
+  CodexAppServerError,
+  type CodexClient,
+  type CodexInbound,
+  type CodexInitializeResult,
+  type CodexItemsPage,
+  type CodexNotification,
+  type CodexResumeResult,
+  type CodexServerRequest,
+  type CodexThreadItem,
+  type CodexThreadStatus,
+  DEFAULT_CODEX_APP_SERVER_URL,
+  isCodexThreadId,
+  normalizeCodexAppServerUrl,
+  parseCodexStatus,
+} from "./codex/client.js";
+export {
+  CodexDriver,
+  type CodexDriverOptions,
+  CodexProjectionError,
+  runCodexDriver,
+} from "./codex/driver.js";
+export {
   CLAUDE_NATIVE_CAPABILITIES,
   CLAUDE_NATIVE_HARNESS,
+  CODEX_CAPABILITIES,
+  CODEX_HARNESS,
   type ContentBlock,
   type ControlCapabilities,
   type Driver,

@@ -17,7 +17,7 @@ reboot.
 ## What remains
 
 - Process-local driver lifecycle and conservative capability reporting remain in the active Claude,
-  tmux, and OpenCode adapters.
+  tmux, OpenCode, and Codex adapters.
 - The deployed broker still provides authenticated, encrypted, durable frame transport for the
   current remote-claw viewer.
 - Runtime protocol parsing, mutation admission, deduplication, ambiguous-send fail-stop behavior,
@@ -50,7 +50,7 @@ does not mirror the changing acceptance ledger; current evidence and remaining g
 [release roadmap](release-finish-line.md).
 
 This experiment deliberately does not resurrect the generalized runtime or remove broader OpenCode
-capability/tuple work, Codex, tmux, and provider work. If the provider-native API
+capability/tuple work, Codex M3b/later tuples, tmux, and provider work. If the provider-native API
 cannot meet a requirement, record the exact failure first and design only the missing mechanism.
 
 ## Safety rules for any future coordinator

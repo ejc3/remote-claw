@@ -4,13 +4,14 @@ remote-claw has one current adapter seam: every harness produces an in-memory `S
 `HostRcRelay` bridges that session to the same encrypted broker and viewer. This keeps native-agent
 details out of the wire protocol.
 
-Four drivers exist:
+Five drivers exist:
 
 - `mitm` — the default Claude Code Remote Control adapter;
 - `claude-native` — the Linux/exact-2.1.237 structured text companion for ordinary Anthropic Remote
   Control;
-- `tmux` — an experimental plain-Claude compatibility adapter; and
-- `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt companion.
+- `tmux` — an experimental plain-Claude compatibility adapter;
+- `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt companion; and
+- `codex` — the pinned Codex 0.151.0/Linux arm64 app-server text/status companion.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
 API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
@@ -18,9 +19,9 @@ deployed-broker gates; M1 is complete.
 OpenCode M2 also passed its real-TUI, two-browser, interrupt, reload, and fresh-projection restart
 acceptance for the exact pinned tuple, whose proved OpenCode server environment was
 `AWS_REGION=us-west-1` plus explicit temporary SigV4 credential values. Other regions or credential
-modes require their own gate. Tmux retains narrower experimental guarantees. Codex M3a follows after
-the existing app-server seam is turned into product code. Every current `Session` binding remains
-process-local.
+modes require their own gate. Tmux retains narrower experimental guarantees. Codex M3a passed its
+real-TUI, two-browser, text, status, and native-only approval/question acceptance; same-thread
+Codex/ChatGPT Remote coexistence remains M3b. Every current `Session` binding remains process-local.
 
 This adapter choice is independent of inference routing. Anthropic, OpenAI, or Bedrock selects where
 model work runs; it does not select browser identity, broker transport, readiness, or native
@@ -34,16 +35,17 @@ remote-claw credentials.
 Claude RC ─┐
 Provider RC├─ capture/inject adapter ─ Session ─ HostRcRelay ─ BrokerClient
 tmux pane ─┤
-OpenCode  ─┘
+OpenCode  ─┤
+Codex     ─┘
 ```
 
 `packages/cli/src/host/rc/driver.ts` defines the shared types. A driver owns:
 
-- native startup and readiness;
+- native attachment/readiness, plus startup only where that adapter contract grants it;
 - capture from its harness into canonical upstream payloads;
 - injection of downstream session events into its harness;
 - honest worker status and capability reporting; and
-- native teardown.
+- the lifecycle actions its adapter contract actually owns.
 
 The shared relay owns:
 
@@ -62,7 +64,7 @@ creates one `HostRcRelay` and owns no native protocol logic.
 ## 2. `Driver` and context
 
 The dispatcher accepts
-`DriverName = "mitm" | "claude-native" | "tmux" | "opencode"`. A driver implements:
+`DriverName = "mitm" | "claude-native" | "tmux" | "opencode" | "codex"`. A driver implements:
 
 ```ts
 interface Driver {
@@ -99,6 +101,7 @@ The harness descriptor is separate from capabilities:
 | `claude-native` | `{agent:"claude-code", mode:"native-rc"}` |
 | `tmux` | `{agent:"claude-code", mode:"tmux"}` |
 | `opencode` | `{agent:"opencode", mode:"opencode"}` |
+| `codex` | `{agent:"codex", mode:"app-server"}` |
 
 It labels the session in the viewer; it does not grant authority.
 
@@ -136,10 +139,11 @@ Current rendered blocks are:
 An assistant payload can produce several transcript frames. A user-role native payload normally
 produces only tool results. A compatibility driver may set `local_prompt:true` to surface text observed
 from a native local client; ordinary user echoes are otherwise dropped because the relay already
-published the browser prompt. Claude-native and OpenCode are deliberate exceptions: native history/SSE
-owns canonical prompt order, so both TUI and browser prompts publish only at native coordinates.
-Claude-native reconciles the browser coordinate at the provider sequence. OpenCode reconciles only an
-exact caller part marker plus the complete immutable native user text.
+published the browser prompt. Claude-native, OpenCode, and Codex are deliberate exceptions: native
+history/events own canonical prompt order, so TUI and browser prompts publish only at native
+coordinates. Claude-native reconciles the browser coordinate at the provider sequence. OpenCode
+reconciles only an exact caller part marker plus the complete immutable native user text. Codex
+reconciles the completed native item against the exact `clientUserMessageId` and text.
 
 ### Injection
 
@@ -155,9 +159,14 @@ OpenCode text acknowledges only after one native transport attempt and exact mar
 interrupt acknowledges only after native `/abort` returns literal `true`. These process-local
 acknowledgements suppress downstream replay but are not durable exactly-once claims.
 
-The Claude-native companion sends non-empty, non-slash text through one serialized provider writer with a
-stable UUID. It waits for the canonical provider history/SSE event before publishing the ordered user
+The Claude-native companion sends non-empty, non-slash text through one serialized provider writer with
+a stable UUID. It waits for the canonical provider history/SSE event before publishing the ordered user
 row. Any rejected or outcome-unknown POST permanently fences the projection and is not retried.
+
+The Codex companion waits for native idle, starts one turn with the broker event ID as
+`clientUserMessageId`, and acknowledges only after the matching completed native user item appears.
+The companion client exposes no app-server request-response method, so native approvals and questions
+cannot be answered or errored by remote-claw.
 
 The Claude MITM has a stronger pre-write replay fence described in
 [protocol.md](protocol.md#41-private-facade), but it likewise does not claim native
@@ -169,7 +178,8 @@ A driver updates `session.workerStatus` and calls `session.wake()` when it has a
 change. It advertises `status:true` only when that projection is a supported viewer contract. Tmux
 retains only inferred status and advertises false. OpenCode strictly re-proves exact native status for
 write admission at startup, idle, and reconnect, but also advertises false because that internal latch
-is not a viewer status surface.
+is not a viewer status surface. Codex status notifications are a supported viewer surface and
+advertise true.
 
 ## 4. Readiness and lifecycle
 
@@ -182,35 +192,39 @@ Every adapter uses the same small process-local lifecycle:
    only transition to `ready`, and only it starts `HostRcRelay` and publishes presence.
 4. On cancellation or failure, `close()` fences and closes the local compatibility `Session`, then the
    adapter joins bridge and native teardown under its bounded policy. For OpenCode, native teardown
-   never calls `/abort`; only an admitted authenticated browser interrupt does.
+   never calls `/abort`; only an admitted authenticated browser interrupt does. Codex teardown closes
+   only the companion socket and projection, never app-server, TUI, or thread.
 
 The helper prevents cancelled setup from racing a late ready announcement. It does **not** persist a
 binding, enumerate native sessions after process restart, refresh capabilities in place, provide a
-durable coordinator epoch, or reattach an old bridge. Claude-native and OpenCode can create a new
-projection only when the operator explicitly supplies the exact still-live native session ID.
+durable coordinator epoch, or reattach an old bridge. Claude-native and OpenCode create a new
+projection only when the operator supplies the exact still-live native session ID. Codex requires an
+exact supplied UUIDv7; `thread/resume` may load that stored thread, and the caller must keep a TUI
+attached for the projection lifetime.
 
 ## 5. Current adapters
 
-| Property | Claude `mitm` | Claude `claude-native` | Experimental `tmux` | Pinned OpenCode M2 |
-| --- | --- | --- | --- | --- |
-| Native connection | Claude RC HTTP/SSE through local MITM | transparent bridge observer or explicit-ID attach, plus Anthropic history/SSE client | private tmux pane + transcript files | OpenCode HTTP + server-wide SSE |
-| Native session choice | Claude creates a fresh `cse_*` in the local RC service | exact `cse_*` from the spawned child's successful bridge request or explicit `--rc-native-session` | fresh UUID unless user supplied resume/session flags | required exact existing root `ses_*`; never list, discover, or create that root; follow announced children |
-| Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts |
-| Remote text | Claude downstream SSE | serialized provider event POST | bracketed pane paste + Enter | `prompt_async` |
-| Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text |
-| Permission behavior | stable surface disabled | native/local; never projected or answered | PreToolUse mirror by default | native/local by default; positive mirroring opt-in is experimental |
-| Status advertised | yes | no | no | no |
-| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands |
+| Property | Claude `mitm` | Claude `claude-native` | Experimental `tmux` | Pinned OpenCode M2 | Pinned Codex M3a |
+| --- | --- | --- | --- | --- | --- |
+| Native connection | Claude RC HTTP/SSE through local MITM | transparent bridge observer or explicit-ID attach, plus Anthropic history/SSE client | private tmux pane + transcript files | OpenCode HTTP + server-wide SSE | caller-owned loopback app-server WebSocket |
+| Native session choice | Claude creates a fresh `cse_*` in the local RC service | exact `cse_*` from the spawned child's successful bridge request or explicit `--rc-native-session` | fresh UUID unless user supplied resume/session flags | required exact existing root `ses_*`; never list, discover, or create that root; follow announced children | required exact existing UUIDv7; resume/join only, never discover, select, create, delete, or stop |
+| Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts | resume subscription, bounded item history, then buffered/live notifications |
+| Remote text | Claude downstream SSE | serialized provider event POST | bracketed pane paste + Enter | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
+| Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at its native ID |
+| Permission behavior | stable surface disabled | native/local; never projected or answered | PreToolUse mirror by default | native/local by default; positive mirroring opt-in is experimental | approvals/questions solely owned by attached local TUI; companion cannot respond |
+| Status advertised | yes | no | no | no | yes |
+| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection; restart acceptance is not yet claimed |
 
 The exact advertised viewer capabilities are:
 
-| Driver | Permissions | Interrupt | Model | Mode | End | Attachments |
-| --- | --- | --- | --- | --- | --- | --- |
-| Stable `mitm` | no | no | no | no | no | no |
-| `claude-native` | no | no | no | no | no | no |
-| `tmux`, mirroring on | yes | yes | yes | no | no | yes |
-| Pinned `opencode`, default native/local permissions | no | yes | no | no | no | no |
-| `opencode`, experimental permission opt-in | yes | yes | no | no | no | no |
+| Driver | Permissions | Status | Interrupt | Model | Mode | End | Attachments |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Stable `mitm` | no | yes | no | no | no | no | no |
+| `claude-native` | no | no | no | no | no | no | no |
+| `tmux`, mirroring on | yes | no | yes | yes | no | no | yes |
+| Pinned `opencode`, default native/local permissions | no | no | yes | no | no | no | no |
+| `opencode`, experimental permission opt-in | yes | no | yes | no | no | no | no |
+| Pinned `codex` | no | yes | no | no | no | no | no |
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
 limitations.
@@ -220,15 +234,15 @@ limitations.
 `packages/cli/src/run.ts` resolves `--rc-driver`, then `RC_DRIVER`, then `mitm`. An unknown value exits
 with a usage error. Every driver requires `--rc-app` or `RC_APP` to relay. Without a broker origin,
 ordinary Claude launch forms warn and run plain Claude. An explicit `--rc-native-session` attach or any
-OpenCode driver/configuration intent instead fails with usage status so an attachment can never degrade
-into a new plain-Claude process.
+OpenCode or Codex driver/configuration intent instead fails with usage status so an attachment can
+never degrade into a new plain-Claude process.
 
 Common flags:
 
 ```text
 --rc-app <origin>
 --rc-backend <vercel|local|sqlite>
---rc-driver <mitm|claude-native|tmux|opencode>
+--rc-driver <mitm|claude-native|tmux|opencode|codex>
 ```
 
 Claude-native attach-only option:
@@ -257,13 +271,25 @@ OpenCode options:
 --rc-oc-mirror-permissions
 ```
 
+Codex options:
+
+```text
+--rc-codex-url <loopback-ws-origin>
+--rc-codex-thread <uuidv7>
+```
+
+`RC_CODEX_URL` and `RC_CODEX_THREAD` are the environment equivalents; the URL defaults to
+`ws://127.0.0.1:4500`, while the exact thread remains required.
+
 Driver-specific flags supplied to a different driver are reported as ignored, except that
 `--rc-native-session` is rejected on every other driver and `claude-native` rejects `--rc-inference`,
 `--rc-bedrock-*`, and `--rc-accountless` because it preserves Anthropic Remote Control. Non-reserved
 arguments are forwarded to Claude by the MITM, Claude-native launch, and tmux launch paths. The
-Claude-native attach-only form rejects them. OpenCode attaches to an existing server, rejects forwarded
-arguments, and uses only its explicit `--rc-oc-*` options. Any OpenCode driver/configuration intent
-without `--rc-app` fails instead of silently launching plain Claude.
+Claude-native attach-only form rejects them. OpenCode and Codex attach to existing native servers,
+reject forwarded arguments, and use only their explicit driver options. Any OpenCode or Codex
+driver/configuration intent without `--rc-app` fails instead of silently launching plain Claude. Codex
+accepts only an explicit-port `ws://127.0.0.1` or `ws://[::1]` origin with no credentials, path, query,
+or fragment, and requires the exact thread ID.
 
 ## 7. Safety rules for a driver change
 
@@ -282,9 +308,9 @@ A driver change must preserve these current boundaries:
    without risking duplicate native actions.
 7. Keep provider, OAuth, broker, and identity credentials out of argv, logs, child-only environments,
    and browser plaintext.
-8. Do not call the process-local readiness object durable or restart-safe. Explicit Claude-native or
-   OpenCode attachment creates a fresh bridge; it does not make the object or retired projection
-   durable.
+8. Do not call the process-local readiness object durable or restart-safe. Explicit Claude-native,
+   OpenCode, or Codex attachment creates a fresh bridge; it does not make the object or retired
+   projection durable.
 
 The appropriate proof is an executable adapter test for the behavior being changed plus the ordinary
 repository gate. It is not a second command ledger, schema, signer, or receipt protocol alongside the
@@ -301,8 +327,9 @@ active relay.
 - `packages/cli/src/host/rc/anthropic/driver.ts` — exact-binding native companion and reconciliation.
 - `packages/cli/src/host/rc/tmux/**` — tmux adapter and focused tests.
 - `packages/cli/src/host/rc/opencode/**` — OpenCode adapter and focused tests.
+- `packages/cli/src/host/rc/codex/**` — app-server client, Codex adapter, and focused tests.
 - `packages/cli/src/run.ts` and `packages/cli/src/args.ts` — dispatch and flags.
 
 The relay and browser tests remain driver-independent. Adapter tests use injected native clients,
-filesystem/tmux seams, clocks, and broker clients; the opt-in OpenCode e2e suite can exercise a live
-local `opencode serve`.
+filesystem/tmux seams, clocks, and broker clients. The opt-in OpenCode e2e suite can exercise a live
+local `opencode serve`; the M3a acceptance uses a real app-server/TUI and two browser contexts.

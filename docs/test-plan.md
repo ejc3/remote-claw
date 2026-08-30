@@ -7,8 +7,9 @@ tested, not that one script vouched for another script.
 The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text, literal official
 web UI coexistence on the user's phone, fresh-projection restart, broker-loss isolation, packed install,
 bounded credential/storage checks, and exact-SHA deployed Preview are green. The pinned OpenCode M2
-text/interrupt tuple and its real-TUI/two-browser acceptance are also green. Codex M3a is next;
-maintained tmux support waits for M4. See
+text/interrupt tuple and its real-TUI/two-browser acceptance are also green. Codex M3a's exact
+0.151.0/Linux arm64 app-server text/status tuple and real-TUI/two-browser acceptance are green; M3b
+provider-Remote coexistence is next, and maintained tmux support waits for M4. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
 
 ## 1. Gate policy
@@ -84,6 +85,7 @@ pnpm --filter @remote-claw/web run test:run
 | Claude private facade | <code>packages/cli/src/host/rc/mitm*.test.ts</code>, <code>session.test.ts</code>, <code>relay.test.ts</code>, <code>launch.test.ts</code> | Strict native intake, worker delivery, translation, fail-stop, and child isolation |
 | Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact launch/attach binding, subscribe/history reconciliation, provider-coordinate dedup, fresh-projection restart, conservative writes, and native/projection isolation |
 | Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest capabilities for the supported M2 tuple |
+| Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/viewer tests | Loopback URL, UUID/version/platform checks, subscribe/history/readiness, native item correlation and deadline, response-less server requests, disconnect/archive/revert fencing, teardown, dispatch intent, and honest M3a capabilities |
 | Experimental adapters and inference | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, <code>bedrock/*.test.ts</code> | Current adapter-local contracts and honest capability limits; not full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
 | HTTP routes | <code>apps/web/test/api/*.test.ts</code>, <code>auth.test.ts</code> | Bearer binding, route validation, error mapping, handoff semantics |
@@ -157,10 +159,11 @@ provider-native behavior must additionally run against a disposable real native 
 sanitized diagnostics.
 
 Retained Claude, OpenCode, and Codex fixtures are sanitized observations for exact historical versions
-and protocol claims. They guide intended product adapters, but do not make the products equivalent or
-satisfy an adapter's coexistence gate. They are research assets, not ordinary CI or the root
-Biome/test gate. The one-off capture programs and verifiers live in Git history; reintroduce a small
-purpose-specific capture only when a concrete compatibility claim requires it.
+and protocol claims. The retained Codex fixture remains 0.146.0 history; the supported 0.151.0 M3a
+claim comes from current deterministic tests plus the bounded real TUI/two-browser acceptance. Fixtures
+do not make products equivalent or satisfy a new coexistence gate. They are research assets, not
+ordinary CI or the root Biome/test gate. The one-off capture programs and verifiers live in Git history;
+reintroduce a small purpose-specific capture only when a concrete compatibility claim requires it.
 
 OpenCode's live driver suite is an explicit opt-in and must never probe a developer's port 4096 during
 ordinary tests:
@@ -331,10 +334,10 @@ forwarded Claude arguments. Neither may use the default <code>--rc-driver=mitm</
 <code>runRcLaunch</code> replacement path: it cannot satisfy official-client coexistence by design, and
 trace mode cannot connect remote-claw browsers.
 
-M1 is complete. CI green still does not mean Codex, broader OpenCode tuples, tmux,
-Bedrock/accountless, or the full product matrix is complete.
+M1 is complete. CI green alone still does not establish M3b, broader Codex/OpenCode tuples, tmux,
+Bedrock/accountless, or the full product matrix.
 
-## 8. OpenCode M2 and remaining adapter acceptance
+## 8. OpenCode M2, Codex M3a, and remaining adapter acceptance
 
 On 2026-08-30, the exact supported OpenCode 1.17.5/Linux arm64/Bedrock Sonnet tuple passed with the
 real TUI and two independent browser contexts. Its OpenCode server used `AWS_REGION=us-west-1` plus
@@ -347,12 +350,23 @@ every old command once. Deterministic tests own malformed or reused coordinates,
 FIFO and busy/retry admission, local-user exclusion, live-idle history/status reproof,
 reconnect-before-write, ambiguous writes, broker projection loss, and no teardown abort.
 
+The exact Codex 0.151.0/Linux arm64 M3a tuple also passed on 2026-08-30 with the production web build,
+durable SQLite broker, one attached real TUI, and two independent Chromium contexts on one exact
+app-server thread. Uniquely labelled TUI/A/B turns and replies appeared once in both browsers and the
+TUI. One native approval was declined only in the TUI with no side effect; one native question was
+answered only in the TUI. The companion returned neither a result nor error for those global first-
+response-wins requests and stayed live. Clean companion stop left app-server, TUI, and thread live.
+The real gate is retained because cross-process request fan-out and local TUI ownership cannot be
+faithfully established by a mock. It is a bounded acceptance outcome, not a permanent raw-probe suite.
+Focused tests own the deterministic boundaries listed in the ownership table. Restart/backfill and a
+live broker-loss run are not claimed.
+
 The later milestones use the same shared security checks but keep product-specific truth:
 
 | Surface | Required real outcome |
 | --- | --- |
 | OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
-| Codex | M3a proves a current-version local TUI plus two browsers on one app-server thread; uniquely labeled text from the TUI and each browser appears exactly once everywhere; one native approval and one native question are separately answered in the local TUI while the companion emits no answer/error and neither steals nor strands them; the viewer labels that posture local/native or rejects the tuple; M3b separately proves same-thread coexistence with the current Codex Remote topology |
+| Codex beyond M3a | M3b separately proves same-thread coexistence with the current Codex Remote topology; later versions, platforms, controls, attachments, and restart/backfill need their own bounded outcome without reopening M3a |
 | tmux | Recoverable local pane plus two browsers, with conservative injection states and no claim of independent peer ordering or exactly-once native application; any advertised Claude Remote coexistence uses the official Claude client UI |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
@@ -370,7 +384,8 @@ After the candidate bytes are frozen:
 2. Run the path-relevant conditional gates once.
 3. Obtain one independent code and documentation review.
 4. Require the ordinary path-scoped CI checks to be green.
-5. Run the exact-SHA deployed Preview smoke.
+5. Run the exact-SHA deployed Preview smoke only when deployment/broker routing changes or the release
+   claim depends on that deployment.
 6. Run the acceptance for each product surface whose support claim changes.
 
 A later code, schema, workflow, or deployment change invalidates only the gates whose tested surface

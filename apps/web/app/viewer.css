@@ -494,8 +494,8 @@ summary:focus-visible,
 }
 
 /* #164: which agent + bridge mode a session runs — labels the list row's sub-line and the chat header so
-   native-RC Claude Code, tmux Claude Code, and opencode don't look identical. opencode gets an accent
-   tint (via data-agent) so the different product stands out from the two Claude Code variants. */
+   native-RC Claude Code, tmux Claude Code, OpenCode, and Codex don't look identical. Non-Claude agents
+   use the contrast-tuned accent token rather than introducing product-specific hardcoded colours. */
 .agent-badge {
   display: inline-flex;
   align-items: center;
@@ -513,6 +513,11 @@ summary:focus-visible,
 .agent-badge[data-agent="opencode"] {
   color: var(--accent-text);
   border-color: color-mix(in srgb, var(--accent-text) 45%, transparent);
+}
+.agent-badge[data-agent="codex"] {
+  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--accent-text) 52%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 8%, transparent);
 }
 /* In the chat header the badge sits next to the (larger) title — nudge it to the baseline. */
 .chat-head .agent-badge {
@@ -593,14 +598,16 @@ summary:focus-visible,
 .local-input-disclosure {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
+  align-self: center;
   gap: 7px;
-  max-width: 100%;
-  margin: 0 0 10px;
+  max-width: calc(100% - 40px);
+  margin: 12px auto 8px;
   padding: 6px 9px;
   border: 1px solid var(--line-soft);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  /* This is a durable safety-posture label, not transcript content. It sits outside the scrollport so
+     follow-latest cannot hide it or let transcript rows bleed underneath it. */
+  background: var(--surface);
   color: var(--text-faint);
   font-size: 12px;
   line-height: 1.35;
@@ -1714,6 +1721,7 @@ summary:focus-visible,
     padding: 18px 16px;
   }
   .local-input-disclosure {
+    max-width: calc(100% - 32px);
     border-radius: 10px;
   }
   .perm {

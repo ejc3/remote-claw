@@ -744,11 +744,14 @@ export function transcriptScrollAction(
  *  omits `harness` and falls back to the private-relay RC label. The native companion is named explicitly
  *  so it cannot be mistaken for that replacement relay. */
 function harnessLabel(harness: Harness | undefined): string {
-  return harness?.agent === "opencode" ? "OpenCode" : "Claude Code";
+  if (harness?.agent === "opencode") return "OpenCode";
+  if (harness?.agent === "codex") return "Codex";
+  return "Claude Code";
 }
 
 function harnessDetail(harness: Harness | undefined): string {
   if (harness?.agent === "opencode") return "Native OpenCode session";
+  if (harness?.agent === "codex") return "Local app-server";
   if (harness?.mode === "native-rc") return "Anthropic remote control";
   if (harness?.mode === "tmux") return "Terminal bridge";
   return "Private relay";
@@ -1033,7 +1036,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                 data-state={cs}
                 // Full context on hover/long-press: the sub-line truncates the cwd, so reveal the whole
                 // path (+ branch) here so users can disambiguate sessions (#design-pass cwd-tooltip).
-                title={`${harnessLabel(s.harness)} · ${s.title}${s.git ? ` · ${s.git.branch}` : ""}${s.cwd ? ` · ${s.cwd}` : ""}`}
+                title={`${harnessLabel(s.harness)} · ${harnessDetail(s.harness)} · ${s.title}${s.git ? ` · ${s.git.branch}` : ""}${s.cwd ? ` · ${s.cwd}` : ""}`}
                 onClick={() => setSelected(s.sessionId)}
               >
                 <span className="row-top">
@@ -1188,29 +1191,39 @@ function Transcript(props: {
   const caps = announce?.capabilities;
   const stableClaude = isStableClaudeSurface(announce?.harness, caps);
   const openCode = announce?.harness?.agent === "opencode" && announce.harness.mode === "opencode";
+  const codex = announce?.harness?.agent === "codex" && announce.harness.mode === "app-server";
   const nativeOpenCode = isOpenCodeNativeTextSurface(announce?.harness, caps);
   const supportedOpenCode = isSupportedOpenCodeSurface(announce?.harness, caps);
-  const nativeTextOnly = stableClaude || nativeOpenCode;
-  const localInputDisclosure = supportedOpenCode
-    ? "Permission prompts stay in the OpenCode TUI."
-    : stableClaude && announce?.harness?.mode === "rc"
-      ? "Local terminal prompts may not appear here."
-      : null;
-  const supportsSetMode = caps?.controls.setMode ?? true;
-  const supportsSetModel = caps?.controls.setModel ?? true;
-  const supportsInterrupt = caps?.controls.interrupt ?? true;
-  const supportsAttachments = caps?.attachments ?? true;
-  const supportsRemotePermissions = caps?.structuredPermissions ?? true;
+  // Codex has no compatibility control surface: once the validated harness pair says app-server,
+  // fail closed to native text/local gates even if a future or malformed capability vector differs.
+  const nativeTextOnly = stableClaude || nativeOpenCode || codex;
+  const localInputDisclosure = codex
+    ? "Approvals and questions stay in the local Codex TUI."
+    : supportedOpenCode
+      ? "Permission prompts stay in the OpenCode TUI."
+      : stableClaude && announce?.harness?.mode === "rc"
+        ? "Local terminal prompts may not appear here."
+        : null;
+  const supportsSetMode = codex ? false : (caps?.controls.setMode ?? true);
+  const supportsSetModel = codex ? false : (caps?.controls.setModel ?? true);
+  const supportsInterrupt = codex ? false : (caps?.controls.interrupt ?? true);
+  const supportsAttachments = codex ? false : (caps?.attachments ?? true);
+  const supportsRemotePermissions = codex ? false : (caps?.structuredPermissions ?? true);
   const canSetMode = remoteMutationEnabled(connected, supportsSetMode);
   const canSetModel = remoteMutationEnabled(connected, supportsSetModel);
   const canInterrupt = remoteMutationEnabled(connected, supportsInterrupt);
   const canAttach = remoteMutationEnabled(connected, supportsAttachments);
   const canGrantPermissions = remoteMutationEnabled(connected, supportsRemotePermissions);
-  // `structuredPermissions:false` means only that the BROWSER cannot answer. Stable Claude and the exact
-  // supported OpenCode tuple keep gates in their native/local UI; an explicit compatibility bypass
-  // posture is a different claim.
-  const permissionsLocal = stableClaude || supportedOpenCode;
-  const permissionAgent: "Claude" | "OpenCode" = supportedOpenCode ? "OpenCode" : "Claude";
+  // `structuredPermissions:false` means only that the BROWSER cannot answer. Stable Claude, the exact
+  // supported OpenCode tuple, and Codex app-server keep gates in their native/local UI; an explicit
+  // compatibility bypass posture is a different claim.
+  const permissionsLocal = stableClaude || supportedOpenCode || codex;
+  const workerLabel: "Claude" | "OpenCode" | "Codex" = openCode
+    ? "OpenCode"
+    : codex
+      ? "Codex"
+      : "Claude";
+  const permissionAgent = workerLabel;
   const permsBypassed = caps?.structuredPermissions === false && !permissionsLocal;
   const textBlockReason = stableTextBlockReason(input, nativeTextOnly);
   const slashBlocked = textBlockReason === "slash";
@@ -1624,6 +1637,13 @@ function Transcript(props: {
         />
       </div>
 
+      {localInputDisclosure !== null && (
+        <div className="local-input-disclosure" role="note">
+          <UiIcon name="info" size={16} />
+          <span>{localInputDisclosure}</span>
+        </div>
+      )}
+
       {/* role=log + aria-live so a screen reader announces assistant turns / tool rows as they stream in
           (additions only — presence ticks don't re-read the whole log). Without this the transcript was
           silent to AT users while Claude responded. */}
@@ -1635,12 +1655,6 @@ function Transcript(props: {
         aria-live="polite"
         aria-relevant="additions"
       >
-        {localInputDisclosure !== null && (
-          <div className="local-input-disclosure" role="note">
-            <UiIcon name="info" size={16} />
-            <span>{localInputDisclosure}</span>
-          </div>
-        )}
         {showGapRecovery && gap !== null && (
           <GapRecovery gap={gap} retrying={gapRetrying} onRetry={() => void retryGap()} />
         )}
@@ -1679,7 +1693,7 @@ function Transcript(props: {
         needs={needs}
         interrupting={interrupting}
         permissionsLocal={permissionsLocal}
-        workerLabel={supportedOpenCode ? "OpenCode" : "Claude"}
+        workerLabel={workerLabel}
       />
       {/* Both this and .bus-error render CONDITIONALLY (on !== null), so Banner's internal isDismissed
           state can't leak across a re-open — a fresh error mounts a fresh Banner. If either is ever made
@@ -1727,7 +1741,7 @@ function Transcript(props: {
         {slashBlocked && (
           <p className="staged-notice" role="status">
             Slash commands aren’t available remotely. Use the local{" "}
-            {openCode ? "OpenCode TUI" : "Claude terminal"}.
+            {openCode ? "OpenCode TUI" : codex ? "Codex TUI" : "Claude terminal"}.
           </p>
         )}
         <div className="composer-shell">
@@ -1835,9 +1849,11 @@ function Transcript(props: {
             permsBypassed
               ? "Per-tool permissions are off"
               : permissionsLocal
-                ? supportedOpenCode
-                  ? "Permission prompts stay in OpenCode"
-                  : "Permission prompts stay in the local terminal"
+                ? codex
+                  ? "Approvals and questions stay in Codex"
+                  : supportedOpenCode
+                    ? "Permission prompts stay in OpenCode"
+                    : "Permission prompts stay in the local terminal"
                 : "Permission prompts can be answered here"
           }
           branch={announce?.git?.branch ?? null}
@@ -1898,7 +1914,7 @@ function StatusStrip({
   needs: boolean;
   interrupting: boolean;
   permissionsLocal: boolean;
-  workerLabel: "Claude" | "OpenCode";
+  workerLabel: "Claude" | "OpenCode" | "Codex";
 }) {
   // role="alert" (assertive) for states that need attention now; role="status" (polite) for ambient
   // activity — so a screen reader announces the flip to disconnected / needs-you / working (#58 a11y).
@@ -1937,7 +1953,11 @@ function StatusStrip({
         <UiIcon name="bell" size={17} />
         <span>
           {permissionsLocal
-            ? "Input needed in the local terminal"
+            ? workerLabel === "Codex"
+              ? "Input needed in the local Codex TUI"
+              : workerLabel === "OpenCode"
+                ? "Input needed in the local OpenCode TUI"
+                : "Input needed in the local terminal"
             : `${workerLabel} needs your input`}
         </span>
       </div>
@@ -2325,7 +2345,7 @@ export function Bubble({
   onGrant: GrantFn;
   canGrant: boolean;
   permissionsLocal: boolean;
-  permissionAgent?: "Claude" | "OpenCode";
+  permissionAgent?: "Claude" | "OpenCode" | "Codex";
   hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
@@ -2443,7 +2463,7 @@ function PermissionRow({
   onGrant: GrantFn;
   canGrant: boolean;
   permissionsLocal: boolean;
-  permissionAgent: "Claude" | "OpenCode";
+  permissionAgent: "Claude" | "OpenCode" | "Codex";
   hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
@@ -2486,22 +2506,28 @@ function PermissionRow({
   // A replayed compatibility frame must never resurrect remote Allow/Deny controls or present a
   // permission_resolved frame as a native answer.
   if (permissionsLocal) {
-    const localUi = permissionAgent === "OpenCode" ? "OpenCode TUI" : "Claude terminal";
+    const localUi = permissionAgent === "Claude" ? "Claude terminal" : `${permissionAgent} TUI`;
+    const localLabel =
+      permissionAgent === "Codex"
+        ? req.questions.length > 0
+          ? "Codex has a local question"
+          : `Codex approval needed for ${req.tool}`
+        : req.questions.length > 0
+          ? `${permissionAgent} has a local question`
+          : `${req.tool} needs local input`;
     return (
       <div className="perm perm-local-only">
         <div className="perm-head">
           <span className="perm-icon">
             <UiIcon name="shield" size={18} />
           </span>
-          <span className="perm-label">
-            {req.questions.length > 0
-              ? `${permissionAgent} has a local question`
-              : `${req.tool} needs local input`}
-          </span>
+          <span className="perm-label">{localLabel}</span>
         </div>
         {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
         <div className="perm-local-note">
-          Permission prompts are local to {permissionAgent}. Answer in the local {localUi}.
+          {permissionAgent === "Codex"
+            ? `Approvals and questions are local to Codex. Answer in the local ${localUi}.`
+            : `Permission prompts are local to ${permissionAgent}. Answer in the local ${localUi}.`}
         </div>
       </div>
     );

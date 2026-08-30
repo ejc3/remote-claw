@@ -13,8 +13,11 @@ browsers, and disconnected without breaking the remaining surfaces. M1 is comple
 The pinned OpenCode M2 text/interrupt adapter is also complete. Its 2026-08-30 acceptance used the
 real OpenCode TUI and two browsers, exercised native-ordered IDs, browser A/B turns, immutable reload,
 interrupt plus continuation, and a companion-only fresh-projection restart against the same exact
-native session. The next structured milestone is Codex M3a. A small viewer-parity lane may proceed in
-parallel without reopening M1 or claiming capabilities the adapters do not expose.
+native session. Codex M3a is complete for exact 0.151.0/Linux arm64: one real local TUI and two browsers
+shared an exact app-server thread, exchanged uniquely labelled text once, and kept one native approval
+and one native question solely in the TUI. M3b same-thread Codex/ChatGPT Remote coexistence is next. A
+small viewer-parity lane may proceed in parallel without reopening completed milestones or claiming
+capabilities the adapters do not expose.
 
 ## Decision policy
 
@@ -116,7 +119,7 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | Claude trace | Normal Anthropic RC and official-client control with protocol observation | It does not project to or accept commands from remote-claw browsers |
 | Claude native companion | M1 complete on Linux with exact Claude 2.1.237: exact launch/attach binding, provider-ordered text, host-only OAuth, local TUI, literal official web UI on the user's phone, two browsers, ambiguity fencing, fresh-projection restart, broker-loss isolation, packed install, and exact-SHA deployed-broker evidence | Later controls, platforms, and versions remain separate capability tranches, not M1 blockers |
 | OpenCode | M2 complete for Linux arm64, exact OpenCode 1.17.5, the pinned Bedrock Sonnet model, one explicit live session, non-empty non-slash text, interrupt, native/local permissions, and fresh-projection restart | Later versions, platforms, models, permission graduation, and richer controls are separate tranches |
-| Codex | Pinned evidence that multiple app-server clients can share one native thread; Codex Remote is a current ChatGPT product for paired Mac/Windows hosts and supports projects reached from the desktop app over SSH | Product adapter, local TUI plus browser coexistence, and same-thread Codex Remote coexistence |
+| Codex | M3a complete for exact 0.151.0/Linux arm64: caller-owned loopback app-server, explicit UUIDv7, local TUI plus two browsers, native-ordered text/status, local-only approvals/questions, and clean-stop lifecycle isolation | Companion restart/backfill, other tuples or controls, and same-thread Codex Remote coexistence remain separate results |
 | tmux | Private pane, transcript capture, conservative input injection, optional permission mirroring, and one bounded Claude/Anthropic/two-browser coexistence run | Productize only its honest fallback contract; verify the official app separately and never claim native peer fidelity it cannot supply |
 | Bedrock/accountless | Experimental inference translation and isolated no-Anthropic-account launch path | Credentialed compatibility matrix and coexistence gates for each agent adapter that advertises it |
 
@@ -125,17 +128,17 @@ evidence, not a separate proof/receipt program and not a substitute for the user
 
 ## 4. Delivery roadmap
 
-The structured critical path is **M1 → M2 → M3**. M1 and M2 are complete, so M3a is next: build Codex
-on evidence from two production adapters, then test same-thread Codex Remote coexistence in M3b. M4 is
-an independent lower-fidelity graduation when it remains a bounded, non-overlapping tranche. M5
-qualification travels with each adapter instead of becoming a final Cartesian-product marathon.
+The structured critical path is **M1 → M2 → M3**. M1, M2, and M3a are complete, so M3b is next:
+test same-thread Codex Remote coexistence through the supported product topology. M4 is an independent
+lower-fidelity graduation when it remains a bounded, non-overlapping tranche. M5 qualification travels
+with each adapter instead of becoming a final Cartesian-product marathon.
 
 | Delivery | User-visible result | Why this order |
 | --- | --- | --- |
 | M0 — complete | Lower-fidelity topology decision | Already answered whether native/provider and remote-claw surfaces can remain live together |
 | M1 — complete | Structured Claude text coexistence | Local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and the separate exact-SHA deployed-broker gate are green |
 | M2 — complete | Supported OpenCode text/interrupt adapter | The second structured adapter and its bounded real-user acceptance are green |
-| M3a | Codex TUI plus remote-claw browsers | Converts pinned app-server evidence into product code without depending on provider Remote |
+| M3a — complete | Codex TUI plus remote-claw browsers | Exact 0.151.0/Linux arm64 text/status companion and bounded real-user acceptance are green |
 | M3b | Codex Remote same-thread coexistence | Codex Remote exists today; this ships only after the remote-claw companion proves coexistence with that supported topology |
 | M4 — independent after M1 | Maintained, honest tmux fallback | Nearer to graduation, but deliberately outside the structured critical path |
 | M5 — incremental | Advertised inference/account tuples | Qualifies claims as they ship; the final pass only closes the published matrix |
@@ -349,22 +352,32 @@ and capability gating is inspiration, not parity.
 
 ### M3 — Codex and provider-native remote coexistence
 
-Treat this as two mergeable outcomes. **M3a** first recaptures the seam against a selected current Codex
-version, then proves local Codex TUI plus multiple remote-claw browsers on one exact native thread.
-Uniquely labeled text from the TUI and each browser must appear exactly once on every surface. **M3b**
-then tests same-thread coexistence with the current Codex Remote product. Official setup pairs a phone
-from the ChatGPT desktop app on macOS or Windows; that desktop app can attach projects on an SSH host,
-including a Linux development machine. The open question is coexistence with remote-claw on one native
-thread, not whether a provider product exists. See the official
-[Codex Remote overview](https://learn.chatgpt.com/docs/remote) and
-[Remote connections guide](https://learn.chatgpt.com/docs/remote-connections). Historical app-server
-evidence justifies trying the seam; it does not establish that coexistence result.
+M3 remains two independently mergeable outcomes.
 
-M3a also keeps browser approvals and questions disabled while one native approval and one native
-question are separately handled by the local TUI with the companion attached. For both families, the
-companion must not steal, answer, error, or strand the first-response-sensitive request. The viewer must
-label that posture as local/native rather than “permissions off”; reject the tuple if it cannot do so
-truthfully.
+**M3a is complete.** On 2026-08-30, exact Codex 0.151.0/Linux arm64 ran with the production web build,
+a durable SQLite broker, one real attached Codex TUI, and two independent Chromium browser contexts on
+one exact app-server thread. Uniquely labelled TUI, browser-A, and browser-B turns and replies appeared
+once in both browsers and the TUI. A native command approval was shown and declined only in the TUI;
+its side effect did not occur. A separate native question was answered only in the TUI. The companion
+returned neither result nor error for either global first-response-wins request and stayed live. A clean
+companion stop left app-server, TUI, and native thread live.
+
+The M3a release contract is intentionally narrow: caller-owned explicit-port loopback app-server,
+required exact UUIDv7, a broker with paired durable cursors, local-TUI attachment for the whole
+projection lifetime, non-empty non-slash text, real native status, and every browser
+control/attachment/permission answer disabled. Focused tests own URL/UUID/version/platform checks,
+subscribe/bounded-history/readiness ordering, history/live deduplication, exact item correlation and
+deadline, response-less request handling, disconnect/archive/revert and broker/projection fail-stop,
+companion-only teardown, dispatch, and capability gates. The live run does not claim companion
+restart/backfill or stable projection identity.
+
+**M3b remains open.** It tests same-thread coexistence with the current Codex Remote product. Official
+setup pairs a phone from ChatGPT desktop on macOS or Windows; that desktop app can attach projects on an
+SSH host, including a Linux development machine. The question is coexistence with remote-claw on one
+native thread, not whether a provider product exists. See the official
+[Codex app-server](https://learn.chatgpt.com/docs/app-server) and
+[Remote connections](https://learn.chatgpt.com/docs/remote-connections). M3a does not establish that
+provider-app result.
 
 ### M4 — tmux fallback contract
 
@@ -461,8 +474,8 @@ documented V1 journey: launch a supported native version, join two trusted pass-
 manual pass, submit and reconcile supported actions, survive projection loss, and report unsupported
 versions and capabilities without guessing.
 
-Milestones may ship independently with truthful labels. M1 being green means Claude native
-coexistence is green, and M2 being green means only the pinned OpenCode text/interrupt tuple is green;
-neither means Codex, broader OpenCode, tmux, Bedrock, or the full product is complete.
+Milestones may ship independently with truthful labels. M1 proves its Claude-native row, M2 proves its
+pinned OpenCode text/interrupt row, and M3a proves only its pinned Codex app-server text/status row.
+M3b, broader tuples and controls, tmux, Bedrock, and the full product remain separate outcomes.
 Line count, fixture count, and proof machinery are not success metrics. The metric is supported user
 surfaces working safely with the smallest maintainable implementation.

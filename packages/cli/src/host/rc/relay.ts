@@ -144,6 +144,24 @@ function isOpencodeNativeTextSurface(
   );
 }
 
+/** Codex app-server is the ordering authority for the exact text-only companion tuple. */
+function isCodexNativeTextSurface(
+  capabilities: DriverCapabilities,
+  harness: HarnessDescriptor,
+): boolean {
+  return (
+    harness.agent === "codex" &&
+    harness.mode === "app-server" &&
+    capabilities.status &&
+    !capabilities.structuredPermissions &&
+    !capabilities.attachments &&
+    !capabilities.controls.interrupt &&
+    !capabilities.controls.setModel &&
+    !capabilities.controls.setMode &&
+    !capabilities.controls.end
+  );
+}
+
 /** Out-post retry budget for a transient broker error (409 = the channel was disposed or replaced
  *  between resolve and publish). A `seq` is allocated BEFORE the post, so a dropped post would
  *  strand the viewer on a permanent gap; retrying the SAME frame (deterministic msg_id → viewer
@@ -1093,12 +1111,15 @@ export class HostRcRelay {
     this.#durabilityDiscovered = true;
     this.#durable = seqCursor.durable;
     if (!this.#durable) {
-      if (isStablePlainTextSurface(this.#capabilities, this.#harness)) {
-        const error = new Error("stable Claude remote control requires a durable broker backend");
+      if (
+        isStablePlainTextSurface(this.#capabilities, this.#harness) ||
+        isCodexNativeTextSurface(this.#capabilities, this.#harness)
+      ) {
+        const error = new Error("stable remote control requires a durable broker backend");
         this.#fatal = true;
         this.#fatalCause = error;
         this.#session.close();
-        this.#trace.error("non-durable broker rejected by stable Claude boundary");
+        this.#trace.error("non-durable broker rejected by stable text boundary");
         throw error;
       }
       this.#trace.debug("broker reported non-durable relay path");
@@ -1381,7 +1402,8 @@ export class HostRcRelay {
         const trimmed = text.trim();
         if (
           (isStablePlainTextSurface(this.#capabilities, this.#harness) ||
-            isOpencodeNativeTextSurface(this.#capabilities, this.#harness)) &&
+            isOpencodeNativeTextSurface(this.#capabilities, this.#harness) ||
+            isCodexNativeTextSurface(this.#capabilities, this.#harness)) &&
           (trimmed === "" || trimmed.startsWith("/"))
         ) {
           this.#trace.warn("unsupported text mutation suppressed by capability boundary");
@@ -1390,7 +1412,8 @@ export class HostRcRelay {
         }
         if (
           this.#harness.mode === "native-rc" ||
-          isOpencodeNativeTextSurface(this.#capabilities, this.#harness)
+          isOpencodeNativeTextSurface(this.#capabilities, this.#harness) ||
+          isCodexNativeTextSurface(this.#capabilities, this.#harness)
         ) {
           // Native history is the ordering authority for this companion. First prove the broker can
           // durably record a pre-mutation admission, then enqueue one immutable native UUID/timestamp.

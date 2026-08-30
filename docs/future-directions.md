@@ -10,8 +10,10 @@ plus multiple remote-claw browsers and with provider-native collaboration preser
 M0 proved a lower-fidelity version through the tmux adapter, the Anthropic Remote API, and two
 remote-claw browsers. M1 completed the small readiness-gated native companion, explicit exact-session
 fresh-projection restart, and literal official-client coexistence path. M2 completed the pinned
-OpenCode 1.17.5 text/interrupt adapter and its real-TUI, two-browser acceptance. To avoid duplicating
-volatile pass/fail lists here, current evidence and remaining gates live in
+OpenCode 1.17.5 text/interrupt adapter and its real-TUI, two-browser acceptance. M3a completed the exact
+Codex 0.151.0/Linux arm64 app-server text/status companion, including a local TUI, two browsers, and
+TUI-only approval/question handling. To avoid duplicating volatile pass/fail lists here, current
+evidence and remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
 
@@ -33,7 +35,7 @@ milestone as the entire product or delete working adapter foundations merely bec
 ### Claude Code
 
 M1 is complete. Do not reopen it by expanding the text-only native companion into controls or rich
-content. The structured critical path has moved to Codex; Claude permissions,
+content. The structured critical path remains outside Claude; Claude permissions,
 questions, interrupts, modes, slash commands, and attachments may graduate later one family at a time.
 Keep the private replacement relay as a separately labeled mode for environments that do not need the
 official client.
@@ -51,15 +53,16 @@ OpenCode-native collaboration surfaces need their own later gate; they do not re
 
 ### Codex
 
-Build from the retained app-server multi-client evidence in two outcomes. First recapture a current
-version and prove one local Codex TUI plus multiple remote-claw browsers submit labeled text exactly once
-on the same native thread. Codex Remote already exists: phone pairing starts in the ChatGPT desktop app
-on macOS or Windows, and that desktop app can run a project on a Linux/other SSH host. M3b is therefore
-a bounded same-thread coexistence feasibility gate, not hypothetical product discovery. While browser
-approvals remain disabled, separately
-prove that attaching the companion does not steal, answer, error, or strand one native approval and one
-native question handled by the local TUI. Label that posture local/native rather than “permissions off,”
-or reject the tuple. Historical evidence is a reason to test the seam, not proof of the final topology.
+M3a is complete for exact Codex 0.151.0 on Linux arm64. One local TUI and two browsers exchanged
+native-ordered text on one exact app-server thread; one approval and one question remained solely in the
+TUI while the structurally response-less companion stayed live. Keep that surface narrow: caller-owned
+loopback app-server, explicit UUIDv7, attached-TUI precondition, non-empty non-slash text, real status,
+and no other browser controls.
+
+Codex Remote already exists: phone pairing starts in the ChatGPT desktop app on macOS or Windows, and
+that desktop app can run a project on a Linux/other SSH host. M3b is now the bounded same-thread
+coexistence feasibility gate, not hypothetical product discovery. Historical and M3a evidence are
+reasons to test that supported topology, not proof of the final result.
 
 ### tmux compatibility
 

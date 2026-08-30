@@ -13,6 +13,12 @@ import { RC_HELP } from "./help.js";
 import { runClaudeNativeDriver } from "./host/rc/anthropic/driver.js";
 import { parseStripKeys } from "./host/rc/bedrock/translate.js";
 import {
+  DEFAULT_CODEX_APP_SERVER_URL,
+  isCodexThreadId,
+  normalizeCodexAppServerUrl,
+} from "./host/rc/codex/client.js";
+import { runCodexDriver } from "./host/rc/codex/driver.js";
+import {
   assertStableClaudeCompatibility,
   STABLE_CLAUDE_REQUIREMENT,
 } from "./host/rc/compatibility.js";
@@ -44,13 +50,14 @@ function signalExitCode(signal: NodeJS.Signals): number {
 
 /** Warning lines for reserved flags that belong to a DIFFERENT known driver than the selected one — a
  *  silent no-op otherwise. Pure (no I/O) so it's unit-tested directly; the caller emits each line via
- *  `warn`. Allowlist-gated to KNOWN drivers (mitm | tmux | opencode) so an UNKNOWN driver gets only its
+ *  `warn`. Allowlist-gated to KNOWN drivers so an UNKNOWN driver gets only its
  *  own "unknown --rc-driver" error, not a second misapplied-flag nag. A reserved VALUE flag counts as
  *  "passed" only when it carries a non-empty (trimmed) value — an empty/blank value is absent everywhere.
  *  Each group names the driver it DOES apply to:
  *    • tmux: --rc-session-hook / --rc-no-session-hook (ongoing transcript/rotation follow only) /
  *      --rc-tmux-skip-permissions
  *    • opencode: --rc-oc-url / --rc-oc-model / --rc-oc-session / --rc-oc-mirror-permissions
+ *    • codex: --rc-codex-url / --rc-codex-thread
  *    • mitm (inference): --rc-inference / --rc-bedrock-region / --rc-bedrock-model / --rc-accountless
  *      (tmux/opencode reach Bedrock via their own provider, NOT our MITM translation). */
 export function misappliedDriverFlagWarnings(
@@ -65,7 +72,12 @@ export function misappliedDriverFlagWarnings(
       `remote-claw: ${flags.join(" / ")} only appl${flags.length > 1 ? "y" : "ies"} to --rc-driver=${appliesTo}; ignored for ${driver}\n`,
     );
   };
-  if (driver === "mitm" || driver === "claude-native" || driver === "opencode") {
+  if (
+    driver === "mitm" ||
+    driver === "claude-native" ||
+    driver === "opencode" ||
+    driver === "codex"
+  ) {
     emit(
       [
         ...(rc["rc-session-hook"] === true ? ["--rc-session-hook"] : []),
@@ -75,7 +87,7 @@ export function misappliedDriverFlagWarnings(
       "tmux",
     );
   }
-  if (driver === "mitm" || driver === "claude-native" || driver === "tmux") {
+  if (driver === "mitm" || driver === "claude-native" || driver === "tmux" || driver === "codex") {
     emit(
       [
         ...(rc["rc-oc-mirror-permissions"] === true ? ["--rc-oc-mirror-permissions"] : []),
@@ -86,7 +98,7 @@ export function misappliedDriverFlagWarnings(
       "opencode",
     );
   }
-  if (driver === "tmux" || driver === "opencode") {
+  if (driver === "tmux" || driver === "opencode" || driver === "codex") {
     emit(
       [
         ...(has("rc-inference") ? ["--rc-inference"] : []),
@@ -95,6 +107,20 @@ export function misappliedDriverFlagWarnings(
         ...(rc["rc-accountless"] === true ? ["--rc-accountless"] : []),
       ],
       "mitm",
+    );
+  }
+  if (
+    driver === "mitm" ||
+    driver === "claude-native" ||
+    driver === "tmux" ||
+    driver === "opencode"
+  ) {
+    emit(
+      [
+        ...(has("rc-codex-url") ? ["--rc-codex-url"] : []),
+        ...(has("rc-codex-thread") ? ["--rc-codex-thread"] : []),
+      ],
+      "codex",
     );
   }
   return out;
@@ -126,12 +152,23 @@ const OPENCODE_CONFIG_ENV = [
   "OPENCODE_SERVER_PASSWORD",
 ] as const;
 
+const CODEX_CONFIG_FLAGS = ["rc-codex-url", "rc-codex-thread"] as const;
+const CODEX_CONFIG_ENV = ["RC_CODEX_URL", "RC_CODEX_THREAD"] as const;
+
 /** An OpenCode selection or any OpenCode-only configuration is an explicit attach request. */
 function hasOpencodeIntent(rc: Record<string, unknown>, driver: string): boolean {
   return (
     driver === "opencode" ||
     OPENCODE_CONFIG_FLAGS.some((name) => Object.hasOwn(rc, name)) ||
     OPENCODE_CONFIG_ENV.some((name) => process.env[name] !== undefined)
+  );
+}
+
+function hasCodexIntent(rc: Record<string, unknown>, driver: string): boolean {
+  return (
+    driver === "codex" ||
+    CODEX_CONFIG_FLAGS.some((name) => Object.hasOwn(rc, name)) ||
+    CODEX_CONFIG_ENV.some((name) => process.env[name] !== undefined)
   );
 }
 
@@ -151,13 +188,15 @@ export interface RunOptions {
   spawnRcEnv?: SpawnClaudeEnv;
   /** Injectable OpenCode driver boundary (tests). */
   runOpencodeDriver?: typeof runOpencodeDriver;
+  /** Injectable Codex driver boundary (tests). */
+  runCodexDriver?: typeof runCodexDriver;
   /** Injectable Claude native-companion boundary (tests). */
   runClaudeNativeDriver?: typeof runClaudeNativeDriver;
   /** Injectable tmux driver boundary (tests). */
   runTmuxDriver?: typeof runTmuxDriver;
   /** Injectable stable-Claude compatibility boundary (tests). Defaults to the fail-closed probe. */
   claudeCompatibilityCheck?: (claudeBin: string) => Promise<void>;
-  /** Narrow OpenCode release-platform seam (tests). Defaults to the current Node runtime. */
+  /** Narrow release-platform seam for pinned native companions (tests). */
   runtime?: Readonly<{ platform: NodeJS.Platform; arch: string }>;
 }
 
@@ -330,6 +369,8 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-oc-model" &&
       n !== "rc-oc-session" &&
       n !== "rc-oc-mirror-permissions" &&
+      n !== "rc-codex-url" &&
+      n !== "rc-codex-thread" &&
       n !== "rc-session-hook" &&
       n !== "rc-no-session-hook" &&
       n !== "rc-tmux-skip-permissions" &&
@@ -373,13 +414,19 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     );
     return 2;
   }
+  if (rcApp === "" && hasCodexIntent(rc, driver)) {
+    warn(
+      "remote-claw: Codex attach configuration requires --rc-app (or RC_APP); refusing to launch plain claude\n",
+    );
+    return 2;
+  }
   if (rcApp === "" && typeof rc["rc-native-session"] === "string" && !helpWanted) {
     // Unlike the legacy launch flags, an explicit attach request must not degrade to spawning a new
     // plain Claude when its broker origin is missing.
     warn("remote-claw: --rc-native-session requires --rc-app (or RC_APP)\n");
     return 2;
   }
-  if (rcApp !== "" && (!helpWanted || driver === "opencode")) {
+  if (rcApp !== "" && (!helpWanted || driver === "opencode" || driver === "codex")) {
     // Which capture/inject driver runs the harness: --rc-driver / RC_DRIVER, default "mitm" (the real
     // claude behind our MITM). tmux runs a PLAIN claude in a tmux pane and bridges via the transcript
     // (provider-agnostic, Bedrock-capable — no MITM); opencode peer-attaches to an opencode server. All
@@ -387,7 +434,7 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     if (
       typeof rc["rc-native-session"] === "string" &&
       driver !== "claude-native" &&
-      (driver === "mitm" || driver === "tmux" || driver === "opencode")
+      (driver === "mitm" || driver === "tmux" || driver === "opencode" || driver === "codex")
     ) {
       warn("remote-claw: --rc-native-session requires --rc-driver=claude-native\n");
       return 2;
@@ -405,11 +452,14 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     if (driver === "opencode") {
       return runOpencodeDriverPath(rcApp, rc, claudeArgs, opts, warn);
     }
+    if (driver === "codex") {
+      return runCodexDriverPath(rcApp, rc, claudeArgs, opts, warn);
+    }
     if (driver === "tmux") {
       return runTmuxDriverPath(rcApp, rc, claudeArgs, bin, opts, warn);
     }
     warn(
-      `remote-claw: unknown --rc-driver=${driver} (expected mitm | claude-native | tmux | opencode)\n`,
+      `remote-claw: unknown --rc-driver=${driver} (expected mitm | claude-native | tmux | opencode | codex)\n`,
     );
     return 2;
   }
@@ -711,6 +761,79 @@ async function runOpencodeDriverPath(
     }
   } catch (e) {
     warn(`remote-claw: could not start opencode driver: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
+}
+
+/**
+ * Attach one encrypted projection to an exact, caller-owned Codex app-server thread. The companion
+ * owns neither the app-server nor the native thread, so teardown closes only the projection.
+ */
+async function runCodexDriverPath(
+  brokerUrl: string,
+  rc: Record<string, unknown>,
+  claudeArgs: string[],
+  opts: RunOptions,
+  warn: (line: string) => void,
+): Promise<number> {
+  if (claudeArgs.length > 0) {
+    warn("remote-claw: --rc-driver=codex attaches a companion only; remove forwarded arguments\n");
+    return 2;
+  }
+
+  const runtime = opts.runtime ?? { platform: process.platform, arch: process.arch };
+  if (runtime.platform !== "linux" || runtime.arch !== "arm64") {
+    warn("remote-claw: --rc-driver=codex requires the supported Linux arm64 release tuple\n");
+    return 2;
+  }
+
+  const configuredUrl =
+    (typeof rc["rc-codex-url"] === "string" ? rc["rc-codex-url"] : undefined) ??
+    process.env.RC_CODEX_URL ??
+    DEFAULT_CODEX_APP_SERVER_URL;
+  let url: string;
+  try {
+    url = normalizeCodexAppServerUrl(configuredUrl);
+  } catch {
+    warn(
+      "remote-claw: --rc-codex-url / RC_CODEX_URL must be an explicit-port ws origin on 127.0.0.1 or [::1], with no credentials, path, query, or fragment\n",
+    );
+    return 2;
+  }
+
+  const threadId =
+    (typeof rc["rc-codex-thread"] === "string" ? rc["rc-codex-thread"] : undefined) ??
+    process.env.RC_CODEX_THREAD;
+  if (!isCodexThreadId(threadId)) {
+    warn(
+      "remote-claw: --rc-codex-thread (or RC_CODEX_THREAD) is required and must be a canonical Codex UUIDv7\n",
+    );
+    return 2;
+  }
+
+  try {
+    const ctx = await createDriverContext({
+      brokerUrl,
+      rc,
+      harnessArgs: [],
+      tracerTarget: "rc.codex",
+    });
+    const ac = new AbortController();
+    const onSignal = () => ac.abort();
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    try {
+      return await (opts.runCodexDriver ?? runCodexDriver)(ctx, ac.signal, {
+        url,
+        threadId,
+        runtime,
+      });
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+    }
+  } catch {
+    warn("remote-claw: could not start Codex companion\n");
     return 1;
   }
 }

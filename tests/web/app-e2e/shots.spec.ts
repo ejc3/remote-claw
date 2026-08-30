@@ -91,6 +91,25 @@ test("stable Claude: local-permission disclosure and text-only composer", async 
   await page.locator("section.chat").screenshot({ path: `${OUT()}/04a-stable-claude.png` });
 });
 
+test("Codex: first-class badge, local-input disclosure, and disabled controls", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ harness: "codex", caps: "codex" });
+  await connect(page, pass);
+  const row = page.locator("button.row", { hasText: "rc box" });
+  await expect(row.locator('.agent-badge[data-agent="codex"]')).toHaveText("Codex");
+  await page.screenshot({ path: `${OUT()}/02a-codex-session-list.png` });
+
+  await row.click();
+  const disclosure = page.locator(".local-input-disclosure");
+  await expect(disclosure).toContainText("Approvals and questions stay in the local Codex TUI.");
+  await expect(disclosure).toBeInViewport();
+  await expect(page.getByTestId("composer-mode")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
+  await page.screenshot({ path: `${OUT()}/04b-codex-text-only.png`, fullPage: true });
+});
+
 test("compatibility permission prompt", async ({ page, seedHost }) => {
   const { pass } = await seedHost({ perm: true, caps: "compat-mitm" });
   await connect(page, pass);

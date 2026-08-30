@@ -13,7 +13,7 @@ Use these current sources:
 - [Retired host-runtime decision](client-driven-host-runtime.md) for why the generalized coordinator
   was removed.
 
-OpenCode and tmux remain intended product adapters; the exact OpenCode M2 text/interrupt tuple is
-supported. Other OpenCode tuples are unsupported; only its positive permission-mirroring opt-in and
-the tmux adapter retain experimental guarantees. See their driver documents for what they actually do
-today. Codex has retained native seam evidence but no remote-claw adapter yet.
+The exact OpenCode M2 text/interrupt tuple and exact Codex M3a app-server text/status tuple are
+supported. Other OpenCode/Codex tuples are unsupported; only OpenCode's positive permission-mirroring
+opt-in and the tmux adapter retain experimental guarantees. Codex/ChatGPT Remote coexistence remains
+M3b. See the current architecture and driver documents for each exact boundary.
