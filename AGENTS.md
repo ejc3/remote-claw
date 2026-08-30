@@ -9,8 +9,10 @@ account, not no AWS/provider or remote-claw credentials.
 **Current truth:** the private Claude replacement relay and narrower OpenCode/tmux adapters work. The
 Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to remote-claw while
 ordinary Anthropic Remote Control remains active. Its packed-install restart, broker-loss, and
-credential/log checks passed. The Graduate commit's separate exact-SHA deployed-broker gate passed;
-literal official-app UI validation remains open. The production Codex adapter is not implemented. The
+credential/log checks passed. The literal logged-in official Claude web UI on the user's phone, the
+local TUI, and two remote-claw browsers then completed the bounded coexistence run, including liveness
+after the official client disconnected. The Graduate commit's separate exact-SHA deployed-broker gate
+passed. M1 is complete and OpenCode M2 is active. The production Codex adapter is not implemented. The
 supported durable broker is
 SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in
 `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI is `packages/cli`.
@@ -296,7 +298,8 @@ faithful sentinel.
   one explicitly named live native session with the local TUI, two browsers, and provider API; broker
   loss stopped only the companion, and bounded log/storage inspection found none of the tested
   credentials or plaintext labels. The Graduate commit's separate exact-SHA deployed-broker gate
-  passed; literal official Claude app UI acceptance remains open. Current evidence lives in
+  passed. A later bounded run added the literal logged-in official web UI on the user's phone and kept
+  both remote-claw browsers live after it disconnected, completing M1. Current evidence lives in
   `docs/release-finish-line.md`; this milestone
   does not remove OpenCode, Codex, tmux, Bedrock, or accountless from the product goal.
 - TypeScript is strict: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and

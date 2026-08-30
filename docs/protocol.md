@@ -13,8 +13,8 @@ official Claude app cannot attach. `--rc-trace` does the opposite—it passes Re
 Anthropic but does not bridge the session to remote-claw. The Linux/exact-2.1.237
 `--rc-driver=claude-native` path now keeps ordinary Anthropic Remote Control active while projecting
 provider-ordered text to remote-claw, including an explicit exact-session restart attachment. Literal
-official Claude app UI acceptance remains open; the Graduate commit's separate exact-SHA
-deployed-broker gate passed.
+official Claude web UI acceptance and the Graduate commit's separate exact-SHA deployed-broker
+gate passed.
 
 ## 1. Topology
 
@@ -385,16 +385,16 @@ does not claim durable exactly-once collaboration:
    sources.
 9. The default `--rc-driver=mitm` topology replaces Anthropic Remote Control. The native companion
    preserves that provider topology, and packed-install restart plus broker-loss isolation are locally
-   proven. The Graduate commit's separate exact-SHA deployed-broker gate passed; literal official
-   Claude app UI acceptance remains open.
+   proven. Literal official web UI coexistence and the Graduate commit's separate exact-SHA
+   deployed-broker gate passed.
 
 Broker-controlled HTTP rejection bodies/status text, SSE error data, malformed-frame parser details,
 and invalid-success parse details are discarded before errors reach normal relay logs. Successful
 publish and recovery-cursor bodies are shape-checked. The exact `410 + channel_storage_lost` pair
 remains the only typed permanent channel-loss response.
 
-These are product limits, not invitations to rebuild a second protocol stack. Finish the literal
-native-companion UI outcome before adding more protocol machinery.
+These are product limits, not invitations to rebuild a second protocol stack. M1 is complete; add more
+protocol machinery only for a concrete later capability failure.
 
 ## 13. Code and test map
 

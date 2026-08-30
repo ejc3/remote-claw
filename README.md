@@ -9,8 +9,11 @@ credentials.
 > projection while ordinary Anthropic Remote Control stays active. A bounded packed-install run kept
 > the exact Claude local TUI, an authenticated Anthropic RC API client, and two remote-claw browsers on
 > one native session across two fresh companion projections; broker loss stopped only the companion.
-> The Graduate commit's separate exact-SHA deployed-broker gate is green; literal official Claude
-> web/mobile UI validation remains open. See
+> A final bounded run added the literal logged-in official Claude web UI on the user's phone: it
+> observed the browser-labelled turn and submitted its own; both turns and their replies appeared once
+> in both remote-claw browsers, and a browser turn still completed after the official client
+> disconnected. The Graduate commit's separate
+> exact-SHA deployed-broker gate is also green. M1 is complete; OpenCode M2 is active. See
 > [Product goal and release gates](docs/release-finish-line.md).
 
 ## Product goal
@@ -30,9 +33,9 @@ The intended surface matrix is:
 
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
-| Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; the exact-2.1.237 native companion projects structured text to multiple browsers, can reattach a fresh projection to one explicitly named live native session, and preserves the native session on broker loss; the Graduate commit's separate exact-SHA deployed-broker gate passed, while literal official-app UI remains incomplete |
+| Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
 | Codex | Codex TUI | Codex/ChatGPT Remote where supported | Multiple browsers | Research proves a pinned app-server multi-client seam; product adapter and official coexistence do not |
-| OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | Experimental HTTP/SSE driver; coexistence and durable recovery are incomplete |
+| OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | Experimental HTTP/SSE driver; supported coexistence and fresh-projection recovery are incomplete |
 | tmux compatibility | Terminal pane | Plain Claude retains its own provider remote when requested | Multiple browsers | Experimental and deliberately lower fidelity; one Claude 2.1.237 coexistence run passed, but the official app UI was not exercised |
 
 Agent integration and inference routing are separate axes. Claude Code or OpenCode may route model
@@ -60,8 +63,8 @@ requires the exact native ID explicitly and creates a new projection instead of 
 or reusing the retired projection. Both open live SSE before bounded ascending history and publish no
 writable projection until reconciliation is ready. Browser text keeps one UUID/timestamp and is not
 automatically retried after an ambiguous POST; the canonical browser receipt and transcript row come
-only from provider history/SSE. OAuth remains on the host. The Graduate commit's separate exact-SHA
-deployed-broker gate is green; the literal official Claude app UI remains open. Current evidence is
+only from provider history/SSE. OAuth remains on the host. M1's literal official-client acceptance and
+the Graduate commit's separate exact-SHA deployed-broker gate are green. Current evidence is
 tracked in the [release roadmap](docs/release-finish-line.md).
 
 Existing foundations:
@@ -223,8 +226,8 @@ collaboration provider necessarily sees the plaintext that its own API requires.
   order, and proportionate gates.
 - [Architecture](docs/v2-architecture.md) and [Protocol](docs/protocol.md) — as-built shared system and
   current wire/runtime contracts.
-- [Native Claude coexistence](docs/native-rc-passthrough-scoping.md) — the implemented text slice and
-  current M1 evidence and remaining gates.
+- [Native Claude coexistence](docs/native-rc-passthrough-scoping.md) — the completed M1 text slice and
+  its bounded evidence.
 - [Pluggable harness](docs/pluggable-harness.md) — adapter seam and honest capability model.
 - [OpenCode driver](docs/opencode-driver.md), [tmux driver](docs/tmux-driver.md), and
   [Bedrock routing](docs/bedrock-rc.md) — current alternate-surface truth and limits.

@@ -31,7 +31,7 @@ What exists today:
 | Default <code>--rc-app &lt;origin&gt; --rc-driver=mitm</code> | Implemented private replacement mode; the official client cannot join |
 | <code>--rc-trace</code> | Implemented transparent inspector; the official client works, but no remote-claw browser is connected |
 | Direct Anthropic RC client | Implemented and wired into the Linux/exact-2.1.237 <code>claude-native</code> companion |
-| Claude native collaboration plus multiple remote-claw browsers | Structured provider-ordered text companion and local Graduate acceptance implemented; literal official-app UI remains open |
+| Claude native collaboration plus multiple remote-claw browsers | M1 complete on Linux/exact-2.1.237: structured provider-ordered text, local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and exact-SHA deployed-broker acceptance |
 | OpenCode server adapter and tmux fallback | Experimental implementations with documented limits |
 | Codex | Pinned app-server multi-client evidence; no product adapter yet |
 | Bedrock and no-Anthropic-account launch | Experimental inference/account paths, separate from adapter fidelity |
@@ -403,7 +403,7 @@ truthfully labeled guarantees and remain in the product plan.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart | Exact Linux/2.1.237 only; literal official-app UI remains open; no remote controls, permissions, attachments, or status |
+| Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart and literal official-client coexistence | Exact Linux/2.1.237 only; no remote controls, permissions, attachments, or status |
 | tmux | Experimental Claude compatibility driver | Transcript/pane correlation is weaker than native RC; permission mirroring uses hooks |
 | OpenCode | Experimental server driver | Partial history, bounded reconnect dedup, and no proven live reattach |
 | Codex | Research-backed future app-server adapter | Multi-client facts are pinned, but no broker adapter or official-remote coexistence exists |
@@ -456,7 +456,7 @@ The last item is unfinished product scope, not a declaration that parity is unwa
 thin adapter milestone at a time and extract a shared abstraction only after at least two real
 adapters require it.
 
-## 14. M1 status: the structured Claude native companion
+## 14. M1 complete: the structured Claude native companion
 
 M0 first tested the cheaper retained route. On 2026-08-24, plain Claude 2.1.237 under the tmux driver
 kept its Anthropic-hosted Remote Control session while a local pane, the host-side Anthropic API client,
@@ -527,13 +527,18 @@ On 2026-08-30, trusted Preview run 33323332395 passed against exact deployed com
 default SQLite/Turso profile, then passed browser discovery, host receipt, and reload replay. This
 deployment smoke used no live Claude or provider credential.
 
-The remaining M1 acceptance is:
+The final bounded M1 run used exact Claude 2.1.237, a production-built local SQLite broker, the real
+local TUI, two independent remote-claw Chromium contexts, and the literal logged-in official Claude web
+UI on the user's phone using one native session. A browser-labelled turn and its unique reply appeared
+once in both remote-claw views, and the official client displayed that browser turn. The official
+client submitted another labelled turn; it and its unique reply also appeared once in both views, while
+the local TUI visibly observed the official turn and answer. Those browser rows came from canonical
+provider history/SSE; a separate direct provider-history recount was unavailable under the current host
+credential and is not claimed. After the official client disconnected, another browser turn and reply
+appeared once in both views and the native TUI remained live.
 
-1. Run the same session through a literal logged-in official Claude web/mobile client, including one
-   labelled official-client submission observed by the local TUI and both remote-claw browsers.
-
-Until that item passes, the Claude native-coexistence milestone remains unfinished. Passing it will not
-complete the OpenCode, Codex, tmux, Bedrock/accountless, or full-product matrix.
+M1 is complete. This does not complete the OpenCode, Codex, tmux, Bedrock/accountless, or full-product
+matrix; the bounded OpenCode M2 text/interrupt adapter is next.
 
 ## 17. Claude Remote Control boundary
 

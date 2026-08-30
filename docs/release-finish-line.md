@@ -6,10 +6,12 @@ and evidence with narrower guarantees. M1's Linux/exact-2.1.237 structured text 
 same-native-session restart attachment are implemented. Bounded 2026-08-30 runs proved the local TUI,
 an authenticated Anthropic RC API client, two remote-claw browsers, fresh-projection restart,
 broker-loss isolation, installed-package use, and a bounded exact-value/log and raw-storage scan.
-The exact-SHA deployed Preview gate is green. Literal official-app UI validation remains open.
+The exact-SHA deployed Preview gate is green. The literal logged-in official Claude web UI on the
+user's phone then joined the same native session, exchanged labelled text alongside two remote-claw
+browsers, and disconnected without breaking the remaining surfaces. M1 is complete.
 
-The active milestone is finishing Claude native coexistence. It is not the entire product or a reason
-to discard the other surfaces.
+The active milestone is the bounded OpenCode M2 text/interrupt adapter. It is not the entire product or
+a reason to discard the other surfaces.
 
 ## Decision policy
 
@@ -109,8 +111,8 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | Shared broker/browser/security | Sealed frames, identity/pass derivation, durable replay, multi-viewer state, capability gating, fail-stop behavior, and exact-SHA Preview evidence against the configured SQLite/Turso broker | Exercise the same boundaries through each production adapter |
 | Claude private relay | Real Claude behind a local RC façade; browser turns and native output cross the broker | It replaces Anthropic RC, so the official client cannot join |
 | Claude trace | Normal Anthropic RC and official-client control with protocol observation | It does not project to or accept commands from remote-claw browsers |
-| Claude native companion | Exact launch binding or explicit exact-ID attach-only restart, subscribe-before-history reconciliation, provider-ordered text projection/injection, host-only OAuth, two-browser capability gating, fail-stop ambiguity handling, broker-loss isolation, and installed-package evidence on Linux with exact Claude 2.1.237 | Literal official-app UI validation |
-| OpenCode | Experimental server adapter with history/SSE capture, text injection, permissions, and capability limits | Real TUI coexistence, durable binding/recovery, ambiguity handling, and supported release matrix |
+| Claude native companion | M1 complete on Linux with exact Claude 2.1.237: exact launch/attach binding, provider-ordered text, host-only OAuth, local TUI, literal official web UI on the user's phone, two browsers, ambiguity fencing, fresh-projection restart, broker-loss isolation, packed install, and exact-SHA deployed-broker evidence | Later controls, platforms, and versions remain separate capability tranches, not M1 blockers |
+| OpenCode | Experimental server adapter with history/SSE capture, text injection, permissions, and capability limits | Real TUI coexistence, fresh-projection reattachment/recovery, ambiguity handling, and a supported release tuple |
 | Codex | Pinned evidence that multiple app-server clients can share one native thread | Product adapter, local TUI plus browser coexistence, and provider-native Codex/ChatGPT Remote integration |
 | tmux | Private pane, transcript capture, conservative input injection, optional permission mirroring, and one bounded Claude/Anthropic/two-browser coexistence run | Productize only its honest fallback contract; verify the official app separately and never claim native peer fidelity it cannot supply |
 | Bedrock/accountless | Experimental inference translation and isolated no-Anthropic-account launch path | Credentialed compatibility matrix and coexistence gates for each agent adapter that advertises it |
@@ -129,8 +131,8 @@ Cartesian-product marathon.
 | Delivery | User-visible result | Why this order |
 | --- | --- | --- |
 | M0 — complete | Lower-fidelity topology decision | Already answered whether native/provider and remote-claw surfaces can remain live together |
-| M1 — in progress | Structured Claude text coexistence | Text, local Graduate acceptance, and the separate exact-SHA deployed-broker gate are green; literal official-app UI remains |
-| M2 | Supported OpenCode text/interrupt adapter | Existing code makes this the cheapest second structured adapter and tests whether a shared seam is real |
+| M1 — complete | Structured Claude text coexistence | Local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and the separate exact-SHA deployed-broker gate are green |
+| M2 — active | Supported OpenCode text/interrupt adapter | Existing code makes this the cheapest second structured adapter and tests whether a shared seam is real |
 | M3a | Codex TUI plus remote-claw browsers | Converts pinned app-server evidence into product code without depending on provider Remote |
 | M3b | Codex/ChatGPT Remote coexistence | Ships only after a current supported provider boundary passes a bounded feasibility gate |
 | M4 — independent after M1 | Maintained, honest tmux fallback | Nearer to graduation, but deliberately outside the structured critical path |
@@ -168,7 +170,8 @@ duplicate, and killing the remote-claw broker left the wrapper, pane, and provid
 
 This establishes the honest lower-fidelity baseline without adding a companion adapter. It does not
 prove independent peer ordering, structured native delivery, or the official Claude web/mobile UI:
-the Anthropic-side surface was the typed host client. M1 remains scoped to those added guarantees.
+the Anthropic-side surface was the typed host client. M1 later closed those added guarantees through
+the structured native companion.
 
 ### M1 — structured Claude native coexistence
 
@@ -217,8 +220,7 @@ The two code merge points are closed, each based on the previous merged <code>ma
 
 1. **Coexistence text:** bind one exact native session, reconcile history/SSE, admit browser text with
    one stable caller coordinate, and stop writes on ambiguity. The implementation, local TUI, two-
-   browser, and authenticated provider-client API path are green; a literal official Claude client UI
-   run remains required before advertising this outcome as fully accepted.
+   browser, and authenticated provider-client API path are green.
 2. **Graduate:** fresh-projection companion restart, broker-loss isolation, installed-package use, and
    the bounded credential/log/storage scan are green locally. The merge point landed in
    [PR 215](https://github.com/ejc3/remote-claw/pull/215), and
@@ -226,30 +228,93 @@ The two code merge points are closed, each based on the previous merged <code>ma
    passed against exact deployed commit <code>bcab0c9c0fa6ad036f4996b9d0f0540aebec4d26</code>. The gate
    attested the Preview runtime's exact SHA and default SQLite/Turso profile
    (<code>pr-bcab0c9</code>), then passed browser discovery, host receipt, and reload replay. It did not
-   exercise live Claude or the official Claude UI; that separate acceptance remains above.
+   exercise live Claude or the official Claude UI; those boundaries were exercised separately.
+
+On 2026-08-30, the final bounded M1 run used exact Claude 2.1.237, a production-built local SQLite
+broker, the real local TUI, two independent remote-claw Chromium contexts, and the literal logged-in
+official Claude web UI on the user's phone using one ordinary Anthropic RC session. A
+browser-labelled turn and its unique reply appeared once in both remote-claw views, and the official
+client displayed that browser turn. The official client then submitted its own labelled turn; that
+turn and its unique reply also appeared once in both views, while the local TUI visibly observed the
+official turn and answer. Both browser assertions came from the companion's canonical provider
+history/SSE rows. A separate direct
+provider-history recount was unavailable under the host's current credential and is not claimed; the
+earlier API-path run already owns that transport read boundary. After the official client disconnected,
+a second browser-labelled turn and reply again appeared once in both views, and the native TUI remained
+live. This closes M1 without rerunning the already-green restart, broker-loss, credential/storage, or
+deployment boundaries.
 
 ### M2 — OpenCode production adapter
 
-Use the existing native HTTP/SSE seam. Graduate text and interrupt first. Supported HTTP targets are
-loopback-only; a non-loopback target requires authenticated HTTPS with normal certificate validation
-before provider credentials or native control cross that boundary. Supply the native caller-message
-identity, reject blank and slash-prefixed browser text rather than invoking an ungraduated command such
-as <code>/compact</code>, and define truthful new-projection recovery. Gate against a pinned supported
-OpenCode version with the real TUI plus two browsers.
+The supported M2 tuple is frozen: Linux arm64, exact OpenCode 1.17.5,
+<code>amazon-bedrock/global.anthropic.claude-sonnet-4-6</code>, one explicitly named live
+<code>ses_*</code>, a loopback HTTP server, and a fresh random remote-claw projection on every companion
+start. The release path is attach-only. It does not select a native session by discovery or create one.
+Its only mutable capabilities are non-empty non-slash text and interrupt; permissions, questions,
+status, model/mode changes, attachments, and end remain native/local and are advertised unsupported.
 
-Treat create, prompt, and interrupt as separate ambiguous POST boundaries. Fault-test each after native
-commit but before the response arrives: an uncertain create remains unannounced and is neither guessed
-nor recreated; an uncertain prompt or interrupt terminally fences the writable projection, is not
-replayed, and admits no later write.
+The bounded implementation owners are:
+
+- CLI argument, help, and run wiring plus their tests;
+- the OpenCode client/driver and focused client, driver, and live tests;
+- OpenCode text admission in the relay and its focused tests;
+- the viewer's permission label and composer/capability tests; and
+- the existing web host runner and viewer acceptance spec.
+
+Shared session contracts, broker storage/API, schemas, crypto, and other adapters are not owners unless
+the real acceptance demonstrates a concrete failure there.
+
+Use the existing native HTTP/SSE seam. After URL parsing and canonicalization, accept only
+<code>http://127.0.0.1:&lt;port&gt;/</code> or <code>http://[::1]:&lt;port&gt;/</code>; reject
+<code>localhost</code>, URL credentials, a non-root path, query, fragment, non-loopback hosts, and every
+redirect. Optional Basic authentication reads <code>OPENCODE_SERVER_USERNAME</code> (default
+<code>opencode</code>) and <code>OPENCODE_SERVER_PASSWORD</code>, preserves password bytes, and never
+logs them. Require exact 1.17.5 before presence.
+
+Each browser prompt supplies
+<code>msg_rc_&lt;RcEvent.eventId without hyphens&gt;</code> as the native caller identity; that
+<code>eventId</code> is the host-minted downstream UUID, not browser-controlled
+<code>client_msg_id</code>. Correlate the exact native echo by that identity plus immutable text. The ID
+is correlation, not an idempotency claim. Publish only the pending host-admission receipt before the
+POST, retain the authenticated frame's original <code>client_msg_id</code>, and attach that browser
+coordinate to the canonical echoed user row for optimistic-view reconciliation. Allocate the canonical
+user row and viewer sequence only when that exact OpenCode message appears in history/SSE. Reject when
+<code>text.trim()</code> is empty or starts with <code>/</code>; otherwise preserve the original accepted
+text bytes. Never invoke an ungraduated command such as <code>/compact</code>.
+
+Treat prompt and interrupt as separate ambiguous POST boundaries. Each gets one native attempt. A
+rejection, timeout, or response-unknown outcome terminally fences the writable projection, is not
+replayed, admits no later write, and does not abort the externally owned native session. Keep one
+focused create-ambiguity regression for the retained experimental create implementation, but creation
+is not an M2 release capability.
 
 The supported M2 path does not mutate native permission policy by default and advertises structured
-permissions as false. The existing permission mirror becomes an explicit experimental opt-in until
-child-session and competing-local-answer races have a native, executable resolution. Permission work
-does not block the text/interrupt release. That capability means only that the browser cannot answer;
-M2 must label native-local permission handling truthfully and must not render an existing ask/deny
-policy as “permissions off” or “tools execute without asking.” If the pinned version cannot expose
-enough state for that claim, reject the interactive-policy tuple rather than guessing. Preserve any
-native collaboration exposed by the pinned version.
+permissions as false. The existing permission mirror remains only behind the positive experimental
+<code>--rc-oc-mirror-permissions</code> / <code>RC_OC_MIRROR_PERMISSIONS=1</code> opt-in. Retire the old
+inverse <code>--rc-oc-skip-permissions</code> with a usage error explaining that no mutation is now the
+default. Child-session and competing-local-answer races do not block text/interrupt. Structured
+permissions false means only that the browser cannot answer; M2 labels permission handling as
+native/local and never renders it as “permissions off” or “tools execute without asking.”
+
+Before presence, one live SSE connection and one strict bounded history reconciliation must both be
+ready. On SSE loss, pause native mutation admission, reopen SSE, and strictly reconcile bounded history
+before reopening writes; terminally fence the projection if continuity or the bound cannot be
+established. Restart names the same exact <code>ses_*</code>, creates a fresh projection, backfills
+history as observation, and consumes no old projection commands. The companion calls native
+<code>/abort</code> only for an admitted authenticated browser interrupt; companion cancellation, broker
+loss, capture failure, restart, and ordinary teardown never cause it to abort the externally owned
+native run, session, or server.
+
+The one real acceptance uses the actual OpenCode TUI plus two independent browsers. Unique labels from
+the TUI and each browser appear once in native history/the TUI and both browsers; one browser reload
+adds no duplicate. A browser interrupts a genuinely running turn, a later text turn still succeeds,
+companion-only restart creates a fresh projection without repeating a native mutation, and broker loss
+leaves the native TUI/server alive.
+
+Forbidden M2 scope: broker schemas, stable same-row binding, coordinators, command ledgers, receipt or
+proof frameworks, default-path permission mutation or permission graduation, new control families,
+cross-platform/version matrices, and a new permanent browser harness. This adapter-only tranche does
+not rerun the Claude official-UI or exact-SHA deployment gates unless it changes those surfaces.
 
 ### M3 — Codex and provider-native remote coexistence
 

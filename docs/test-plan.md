@@ -4,10 +4,9 @@ This plan maps tests to product outcomes and safety boundaries. It is intentiona
 historical gate stack: a green result should mean that a user-facing path or a concrete invariant was
 tested, not that one script vouched for another script.
 
-The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text implementation,
-fresh-projection restart, broker-loss isolation, packed install, and bounded credential/storage checks
-are green locally, and the exact-SHA deployed Preview is green; literal official Claude app UI remains
-red.
+The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text, literal official
+web UI coexistence on the user's phone, fresh-projection restart, broker-loss isolation, packed install,
+bounded credential/storage checks, and exact-SHA deployed Preview are green. OpenCode M2 is active.
 Maintained tmux support waits for M4. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
 
@@ -275,7 +274,7 @@ value was the architecture decision, not a permanent new proof harness.
 This run did not exercise the official Claude web/mobile UI and does not promote tmux to structured or
 exactly-once peer collaboration.
 
-### M1 structured Claude native acceptance — implementation present, milestone incomplete
+### M1 structured Claude native acceptance — complete
 
 On 2026-08-30, a production-built local SQLite broker and exact Claude Code 2.1.237 exercised the
 implemented <code>claude-native</code> path. One local-TUI prompt and prompts from two simultaneous
@@ -285,9 +284,9 @@ same live session and was also rendered once in both browsers. Deterministic tes
 subscribe-before-history overlap, both client/worker echo orders, reconnect reconciliation, reused or
 regressing provider coordinates, unsupported controls, and ambiguous POST fencing.
 
-That run proves the structured provider API path and multiple-viewer outcome. It does **not** prove a
-literal official Claude web/mobile UI interaction: headless and Xvfb Chromium were redirected to
-<code>/login</code> behind Cloudflare and had no authenticated Claude web session.
+That run proved the structured provider API path and multiple-viewer outcome. It did not by itself
+prove a literal official Claude web/mobile UI interaction; that separate boundary was exercised in the
+final run below.
 
 A second bounded run used the packed-installed CLI and exact Claude version. Two attach-only companion
 processes successively projected the same explicitly named live native session into fresh remote-claw
@@ -299,16 +298,21 @@ provider/root/pass/bypass credentials, and raw broker storage contained none of 
 labels. Deterministic tests own the retired-channel and committed-but-response-lost no-repeat cases.
 
 Evidence is cumulative by causal boundary; M1 does not require every green failure and delivery case to
-be repeated in one provider marathon. The two runs above plus deterministic tests own launch binding,
+be repeated in one provider marathon. Those runs plus deterministic tests own launch binding,
 local/browser/API text, reload, restart, retired-channel fencing, broker-loss isolation, installed-
 package use, and the bounded credential/storage inspection.
 
-One focused item remains:
-
-1. Keep a normal Anthropic RC session, its local TUI, and two remote-claw browsers live while a logged-
-   in official Claude client joins. Have the official client submit one uniquely labelled turn and
-   observe one browser-submitted turn; verify provider history and both remote-claw views contain each
-   once, then disconnect the official client and confirm the other surfaces remain live.
+The final bounded run kept exact Claude 2.1.237, the real local TUI, two independent remote-claw
+Chromium contexts, and the literal logged-in official Claude web UI on the user's phone using one
+ordinary Anthropic RC session. A browser-labelled turn and reply appeared once in both browser views;
+the official client also displayed that browser turn, then submitted its own labelled turn and its
+reply, which appeared once in both views, while the local TUI visibly observed the official turn and
+answer. Those browser assertions were populated from canonical provider history/SSE. A separate direct
+provider-history recount was unavailable under the current host credential and is not claimed; the
+earlier API-path run owns that transport-read boundary. After the official client disconnected,
+another browser turn and reply appeared once in both views and the native TUI remained live. That
+closes the literal-client boundary without replaying the already-green restart, broker-loss,
+credential/storage, and deployment scenarios.
 
 Trusted Preview run 33323332395 passed the separate deployment item against exact deployed commit
 <code>bcab0c9c0fa6ad036f4996b9d0f0540aebec4d26</code>. It bound the served runtime to that SHA and the
@@ -322,8 +326,8 @@ forwarded Claude arguments. Neither may use the default <code>--rc-driver=mitm</
 <code>runRcLaunch</code> replacement path: it cannot satisfy official-client coexistence by design, and
 trace mode cannot connect remote-claw browsers.
 
-Until the remaining literal UI step passes, CI green means the implemented local
-slice is healthy. It does not mean M1 or the full product is complete.
+M1 is complete. CI green still does not mean the OpenCode, Codex, tmux, Bedrock/accountless, or full
+product matrix is complete.
 
 ## 8. Remaining adapter acceptance
 
@@ -331,10 +335,14 @@ The later milestones use the same shared security checks but keep product-specif
 
 | Surface | Required real outcome |
 | --- | --- |
-| OpenCode | Real local TUI plus two browsers on one native session; non-empty non-slash text/interrupt, origin trust, and history/reconnect match the advertised capability set; committed/response-lost faults prove create stays unannounced without guessing or recreation and prompt/interrupt fence the projection without replay or later writes; blank/slash text is rejected, the supported path does not mutate permission policy, structured permissions are false, and an existing native ask/deny policy is shown as local/native rather than “permissions off” or is rejected when its posture cannot be known |
+| OpenCode | Exact 1.17.5 local TUI plus two browsers on one explicitly named session; unique TUI/browser labels appear once in native history/TUI and both browsers; non-empty non-slash text, interrupt, literal-loopback origin trust, SSE/history reconnect, reload, fresh-projection restart, and broker-loss isolation match the advertised capability set; prompt/interrupt ambiguity fences without replay or later writes; the supported path does not mutate permission policy, structured permissions are false, and the viewer labels permission handling native/local rather than “permissions off” |
 | Codex | M3a proves a current-version local TUI plus two browsers on one app-server thread; uniquely labeled text from the TUI and each browser appears exactly once everywhere; one native approval and one native question are separately answered in the local TUI while the companion emits no answer/error and neither steals nor strands them; the viewer labels that posture local/native or rejects the tuple; M3b separately proves Codex/ChatGPT Remote coexistence through a currently supported provider boundary |
 | tmux | Recoverable local pane plus two browsers, with conservative injection states and no claim of independent peer ordering or exactly-once native application; any advertised Claude Remote coexistence uses the official Claude client UI |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
+
+OpenCode creation is not part of the M2 real outcome. One focused deterministic
+committed-but-response-lost regression retains the existing create implementation's fail-closed
+unannounced/no-guess/no-recreate boundary for future use.
 
 Passing one row does not turn an untested row green. Agent collaboration and inference routing are
 orthogonal, so a Bedrock model response does not prove OpenCode/Claude collaboration and vice versa.

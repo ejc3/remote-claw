@@ -8,9 +8,10 @@ plus multiple remote-claw browsers and with provider-native collaboration preser
 [Product goal and release gates](release-finish-line.md) owns the sequence.
 
 M0 proved a lower-fidelity version through the tmux adapter, the Anthropic Remote API, and two
-remote-claw browsers. M1 now has the small readiness-gated native companion and explicit exact-session,
-fresh-projection restart path. To avoid duplicating volatile pass/fail lists here, current evidence and
-remaining gates live in [native coexistence](native-rc-passthrough-scoping.md) and the
+remote-claw browsers. M1 completed the small readiness-gated native companion, explicit exact-session
+fresh-projection restart, and literal official-client coexistence path. To avoid duplicating volatile
+pass/fail lists here, current evidence and remaining gates live in
+[native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
 
 ## Sequencing rule
@@ -30,22 +31,21 @@ milestone as the entire product or delete working adapter foundations merely bec
 
 ### Claude Code
 
-Finish only the remaining M1 gates named in the release roadmap, without expanding the text-only
-native companion into controls or rich content. The structured critical path then moves to OpenCode
-and Codex; Claude permissions, questions, interrupts, modes, slash commands, and attachments may
-graduate later one family at a time without holding M1 open. Keep the private replacement relay as a
-separately labeled mode for environments that do not need the official client.
+M1 is complete. Do not reopen it by expanding the text-only native companion into controls or rich
+content. The structured critical path has moved to OpenCode and then Codex; Claude permissions,
+questions, interrupts, modes, slash commands, and attachments may graduate later one family at a time.
+Keep the private replacement relay as a separately labeled mode for environments that do not need the
+official client.
 
 ### OpenCode
 
-Productize the existing HTTP/SSE adapter non-empty non-slash text and interrupt path: prove real TUI
-coexistence, reject ungraduated slash commands, close ambiguous-send and origin-trust gaps, define
-truthful new-projection recovery, and pin a supported version matrix. The supported path does not mutate
-native permission policy by default and advertises structured permissions as false; the current mirror
-becomes an explicit experimental opt-in until child-session and competing-local-answer races have a
-native, executable resolution. It must label an existing native ask/deny posture as local/native, not
-“permissions off,” or reject that policy tuple when the posture cannot be known. Preserve native
-collaboration if a selected OpenCode version exposes one.
+Productize the existing HTTP/SSE adapter for exact OpenCode 1.17.5 on Linux arm64: attach to one
+explicit live session over literal loopback, graduate non-empty non-slash text and interrupt, close the
+ambiguous-send and origin-trust gaps, and use truthful fresh-projection recovery. The supported path
+does not mutate native permission policy and advertises structured permissions as false; the current
+mirror remains only behind the explicit positive experimental opt-in. The viewer labels permission
+handling local/native, not “permissions off.” Other versions and OpenCode collaboration surfaces need
+their own later gate.
 
 ### Codex
 
