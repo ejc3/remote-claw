@@ -123,18 +123,19 @@ describe("BrokerClient transport", () => {
     expect((failure as Error).message).toBe("broker 410: permanent channel storage loss");
     expect((failure as Error).message).not.toContain("secret-name");
 
+    const canary = "broker-error-credential-canary";
     const ordinaryGone = new BrokerClient({
       baseUrl: "http://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: (() =>
-        Promise.resolve(
-          Response.json({ error: "edge resource gone" }, { status: 410 }),
-        )) as typeof fetch,
+        Promise.resolve(Response.json({ error: canary }, { status: 410 }))) as typeof fetch,
     });
     const ordinary = await ordinaryGone.postFrame(header(id), utf8("{}")).catch((error) => error);
     expect(ordinary).toBeInstanceOf(BrokerError);
     expect(ordinary).not.toBeInstanceOf(BrokerPermanentStorageLossError);
     expect((ordinary as BrokerError).status).toBe(410);
+    expect((ordinary as Error).message).toBe("broker 410: request rejected");
+    expect(String(ordinary)).not.toContain(canary);
   });
 
   it("routes session_terminal on K_meta to the BUS and absorbs retry/live reordering", async () => {
@@ -270,6 +271,78 @@ describe("BrokerClient transport", () => {
       name: "BrokerError",
       status: 502,
       message: expect.stringContaining("broker stream ended unexpectedly"),
+    });
+  });
+
+  it("does not retain malformed broker frame data in its error", async () => {
+    const canary = "credential-canary";
+    const malformed = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: (() =>
+        Promise.resolve(
+          new Response(`: open\n\ndata: ${canary}\n\n`, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+        )) as typeof fetch,
+    });
+
+    const failure = await collect(malformed.streamFrames({ session: "s" })).catch((error) => error);
+    expect(failure).toMatchObject({
+      name: "BrokerError",
+      status: 502,
+      message: "broker 502: invalid broker frame",
+    });
+    expect(String(failure)).not.toContain(canary);
+  });
+
+  it.each([
+    "relay",
+    "seq",
+    "frame-count",
+  ] as const)("does not retain invalid successful %s response data in its error", async (route) => {
+    const canary = `successful-${route}-credential-canary`;
+    const malformed = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: (() =>
+        Promise.resolve(
+          new Response(canary, { status: 200, headers: { "content-type": "application/json" } }),
+        )) as typeof fetch,
+    });
+
+    const request =
+      route === "relay"
+        ? malformed.postFrame(header(id), utf8("{}"))
+        : route === "seq"
+          ? malformed.seqCursor("s")
+          : malformed.frameCountCursor("s");
+    const failure = await request.catch((error) => error);
+
+    expect(failure).toMatchObject({
+      name: "BrokerError",
+      status: 502,
+      message: "broker 502: invalid broker response",
+    });
+    expect(String(failure)).not.toContain(canary);
+  });
+
+  it.each([
+    ["seq", { maxSeq: "0", durable: true }],
+    ["frame-count", { frameCount: -1, durable: true }],
+  ] as const)("fails closed on an invalid successful %s cursor shape", async (route, body) => {
+    const malformed = new BrokerClient({
+      baseUrl: "http://broker.test",
+      provider: securityProvider("sealed", id),
+      fetchFn: (() => Promise.resolve(Response.json(body))) as typeof fetch,
+    });
+
+    const request = route === "seq" ? malformed.seqCursor("s") : malformed.frameCountCursor("s");
+    await expect(request).rejects.toMatchObject({
+      name: "BrokerError",
+      status: 502,
+      message: "broker 502: invalid broker response",
     });
   });
 

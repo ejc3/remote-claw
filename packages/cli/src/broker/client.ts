@@ -232,7 +232,17 @@ export class BrokerClient {
       ...(signal !== undefined ? { signal } : {}),
     });
     if (!res.ok) throw await brokerResponseError(res);
-    return (await res.json()) as RelayResult;
+    const body = await brokerSuccessJson(res);
+    if (
+      !isObject(body) ||
+      body.ok !== true ||
+      (body.channel !== "bus" && body.channel !== "session") ||
+      typeof body.runId !== "string" ||
+      typeof body.created !== "boolean"
+    ) {
+      throw new BrokerError(502, "invalid broker response");
+    }
+    return body as unknown as RelayResult;
   }
 
   /**
@@ -353,7 +363,15 @@ export class BrokerClient {
     // absent-channel result that resets the host relay's inbound failure circuit.
     if (res.body === null) throw new BrokerError(502, "broker stream ended unexpectedly");
     for await (const data of sseData(res.body, this.#streamIdleTimeoutMs, opts.signal)) {
-      yield decodeFrame(JSON.parse(data));
+      let frame: Frame;
+      try {
+        frame = decodeFrame(JSON.parse(data));
+      } catch {
+        // SSE data is broker-controlled. Keep parser/validator diagnostics (which may quote input)
+        // out of normal relay logs while retaining the useful transport disposition.
+        throw new BrokerError(502, "invalid broker frame");
+      }
+      yield frame;
     }
   }
 
@@ -378,14 +396,17 @@ export class BrokerClient {
           signal,
         });
         if (!res.ok) throw await brokerResponseError(res);
-        return (await res.json()) as { maxSeq?: unknown; durable?: unknown };
+        return brokerSuccessJson(res);
       },
       this.#cursorTimeoutMs,
       "broker seq cursor",
     );
-    const durable = body.durable === true;
+    if (!isCursorBody(body, "maxSeq")) {
+      throw new BrokerError(502, "invalid broker response");
+    }
+    const durable = body.durable;
     this.#serverDurable = durable;
-    return { maxSeq: typeof body.maxSeq === "number" ? body.maxSeq : null, durable };
+    return { maxSeq: body.maxSeq, durable };
   }
 
   async maxSeq(sessionId?: string): Promise<number | null> {
@@ -412,14 +433,17 @@ export class BrokerClient {
           signal,
         });
         if (!res.ok) throw await brokerResponseError(res);
-        return (await res.json()) as { frameCount?: unknown; durable?: unknown };
+        return brokerSuccessJson(res);
       },
       this.#cursorTimeoutMs,
       "broker frame-count cursor",
     );
-    const durable = body.durable === true;
+    if (!isCursorBody(body, "frameCount")) {
+      throw new BrokerError(502, "invalid broker response");
+    }
+    const durable = body.durable;
     this.#serverDurable = durable;
-    return { frameCount: typeof body.frameCount === "number" ? body.frameCount : null, durable };
+    return { frameCount: body.frameCount, durable };
   }
 
   async frameCount(sessionId?: string): Promise<number | null> {
@@ -485,23 +509,52 @@ async function withDeadline<T>(
 }
 
 /** Read a broker rejection once. Only the route's exact 410+code pair becomes permanent loss; a bare
- *  edge/proxy 410 remains an ordinary BrokerError. The typed error never includes the response body. */
+ *  edge/proxy 410 remains an ordinary BrokerError. Broker-controlled body/status text is discarded so
+ *  an exception reaching normal relay logs retains status/disposition but never response content. */
 async function brokerResponseError(res: Response): Promise<BrokerError> {
   try {
     const text = await res.text();
     try {
-      const j = JSON.parse(text) as { code?: unknown; error?: unknown };
-      if (res.status === 410 && j.code === "channel_storage_lost") {
+      const body: unknown = JSON.parse(text);
+      if (
+        res.status === 410 &&
+        typeof body === "object" &&
+        body !== null &&
+        !Array.isArray(body) &&
+        (body as { code?: unknown }).code === "channel_storage_lost"
+      ) {
         return new BrokerPermanentStorageLossError();
       }
-      if (typeof j.error === "string") return new BrokerError(res.status, j.error);
     } catch {
       /* not JSON */
     }
-    return new BrokerError(res.status, text.slice(0, 200));
   } catch {
-    return new BrokerError(res.status, res.statusText);
+    /* unreadable rejection body */
   }
+  return new BrokerError(res.status, "request rejected");
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function brokerSuccessJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    // JSON parse errors in Node may quote broker-controlled bytes. Replace them before they reach the
+    // relay's normal diagnostics.
+    throw new BrokerError(502, "invalid broker response");
+  }
+}
+
+function isCursorBody<K extends "maxSeq" | "frameCount">(
+  value: unknown,
+  field: K,
+): value is Record<K, number | null> & { durable: boolean } {
+  if (!isObject(value) || typeof value.durable !== "boolean") return false;
+  const cursor = value[field];
+  return cursor === null || (Number.isSafeInteger(cursor) && (cursor as number) >= 0);
 }
 
 /**
@@ -606,7 +659,10 @@ export async function* sseData(
           }
           disposition = "open";
         }
-        if (parsed.event === "error") throw new BrokerError(502, `stream error: ${parsed.data}`);
+        if (parsed.event === "error") {
+          // `data` is broker-controlled and may contain credentials or other opaque provider detail.
+          throw new BrokerError(502, "broker stream reported an error");
+        }
         if (parsed.data !== "") {
           if (disposition === "empty") {
             throw new BrokerError(502, "broker stream continued after empty marker");

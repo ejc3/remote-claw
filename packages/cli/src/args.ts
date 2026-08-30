@@ -42,6 +42,10 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // claude-native (ordinary Anthropic RC plus a structured app-client companion), tmux (plain claude
   // in a tmux pane), or opencode (`opencode serve`). Same sealed broker/viewer for all.
   "rc-driver": "value",
+  // Claude-native attach-only mode: project this exact, already-running Anthropic RC session without
+  // starting an interactive Claude session or binding proxy (the CLI still performs its version probe).
+  // Intentionally explicit: restart must name the exact session rather than discover/persist one.
+  "rc-native-session": "value",
   // OpenCode driver knobs (only meaningful with --rc-driver=opencode). The server origin
   // (default 127.0.0.1:4096, env OPENCODE_URL) and the model as "providerID/modelID" (default
   // amazon-bedrock/global.anthropic.claude-sonnet-4-6, env RC_OC_MODEL — a reliable tool-caller; the

@@ -55,10 +55,13 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      tmux and opencode remain experimental/internal compatibility drivers.
 
 Claude native companion (--rc-driver=claude-native):
-  Starts ordinary Claude behind a transparent session-binding observer, then mirrors the exact native
-  session through the sealed broker. Only non-empty, non-slash text is supported. Permissions,
+  Launch form starts ordinary Claude behind a transparent session-binding observer, then mirrors the
+  exact native session through the sealed broker. Only non-empty, non-slash text is supported. Permissions,
   questions, interrupts, model/mode changes, attachments, and end remain native/local and disabled in
   the viewer. --rc-inference, --rc-bedrock-*, and --rc-accountless are rejected for this driver.
+  --rc-native-session <cse_…>  attach a fresh remote-claw projection to this exact already-running
+                     Anthropic RC session. This form starts no interactive Claude session or proxy and
+                     accepts no forwarded Claude arguments; the required version probe still runs.
 
 Inference (mitm driver; the supported default is anthropic):
   --rc-inference <t> anthropic | bedrock (or set RC_INFERENCE; default anthropic = pass through).

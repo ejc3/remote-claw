@@ -157,6 +157,7 @@ class FakeBroker {
   readonly bus: Posted[] = [];
   readonly announcements: Array<Record<string, unknown>> = [];
   streamStarts = 0;
+  failContentPosts = false;
   #inbound: Frame[] = [];
   #wakes = new Set<() => void>();
 
@@ -173,6 +174,9 @@ class FakeBroker {
   }
 
   async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
+    if (this.failContentPosts && header.seq !== null) {
+      throw new Error("injected broker content loss");
+    }
     this.posts.push({ header, text: dec.decode(body) });
     return [{ ok: true, channel: "session", runId: "r", created: false }];
   }
@@ -331,6 +335,82 @@ async function startHarness(options: { projectionCoordinateCap?: number } = {}):
   };
 }
 
+interface AttachHarness {
+  native: FakeNativeClient;
+  broker: FakeBroker;
+  session: Session;
+  parent: AbortController;
+  run: Promise<number>;
+  ready(): Promise<void>;
+  unusedOwnerCalls(): { proxy: number; spawn: number };
+  stop(): Promise<number>;
+}
+
+async function startAttachHarness(options: {
+  native: FakeNativeClient;
+  broker: FakeBroker;
+  nativeSessionId: string;
+}): Promise<AttachHarness> {
+  const parent = new AbortController();
+  const announcementFloor = options.broker.announcements.length;
+  const streamFloor = options.broker.streamStarts;
+  let session: Session | null = null;
+  let proxyCalls = 0;
+  let spawnCalls = 0;
+  const context: DriverContext = {
+    harnessArgs: [],
+    harnessBin: "must-not-spawn",
+    identity: { identityId: ID } as DriverContext["identity"],
+    brokerUrl: "https://broker.test",
+    title: "native attachment",
+    cwd: "/repo",
+    git: null,
+    newClient: () => options.broker as unknown as BrokerClient,
+    onSession: (created) => {
+      session = created;
+    },
+  };
+  const driver = new ClaudeNativeDriver(context, {
+    nativeSessionId: options.nativeSessionId,
+    // These launch-only dependencies are traps: direct attachment must never touch any of them.
+    certsDir: "",
+    claudeBin: "must-not-spawn",
+    client: options.native,
+    reconnectDelayMs: 0,
+    proxyFactory: () => {
+      proxyCalls += 1;
+      throw new Error("attach-only mode created a proxy");
+    },
+    spawnClaude: async () => {
+      spawnCalls += 1;
+      throw new Error("attach-only mode spawned Claude");
+    },
+  });
+  const run = driver.run(parent.signal);
+  await waitFor(() => session !== null);
+  if (session === null) throw new Error("attach-only driver did not create a projection");
+
+  return {
+    native: options.native,
+    broker: options.broker,
+    session,
+    parent,
+    run,
+    async ready() {
+      await waitFor(
+        () =>
+          options.broker.announcements.length === announcementFloor + 1 &&
+          options.broker.streamStarts === streamFloor + 1,
+      );
+    },
+    unusedOwnerCalls: () => ({ proxy: proxyCalls, spawn: spawnCalls }),
+    async stop() {
+      parent.abort();
+      return run;
+    },
+  };
+}
+
 async function bindReady(harness: Harness, nativeId = "cse_provider"): Promise<void> {
   harness.proxy.bridge(nativeId);
   await waitFor(
@@ -433,7 +513,7 @@ function workerToolResult(
 }
 
 function inbound(
-  harness: Harness,
+  harness: { session: Session },
   recordKind: string,
   msgId: string,
   text: string,
@@ -462,6 +542,120 @@ function acceptedBodies(harness: Harness): Array<Record<string, unknown>> {
     .filter(({ header }) => header.recordKind === "accepted")
     .map(({ text }) => JSON.parse(text));
 }
+
+describe("ClaudeNativeDriver direct attachment lifecycle", () => {
+  it("reattaches one native session through a fresh isolated projection without repeating a prior write", async () => {
+    const nativeId = "cse_restart_exact";
+    const native = new FakeNativeClient();
+    const broker = new FakeBroker();
+    const initial = assistant("evt_initial", "1", "history once");
+    const lostResponse = Promise.withResolvers<RcPostAck>();
+    const secondHistory = Promise.withResolvers<RcEventPage>();
+    const secondHistoryStarted = Promise.withResolvers<void>();
+    let committed: AnthropicRcEvent | null = null;
+
+    native.historyImpl = async (_sessionId, _cursor, call) => {
+      if (call === 0) return { data: [initial], nextCursor: null };
+      secondHistoryStarted.resolve();
+      return secondHistory.promise;
+    };
+    native.postImpl = async (_sessionId, input, call) => {
+      if (call === 0) {
+        committed = userEvent(
+          "evt_committed",
+          "2",
+          input.uuid,
+          input.message.content,
+          nativeId,
+          "client",
+          input.timestamp,
+        );
+        return lostResponse.promise;
+      }
+      return { eventId: `evt_fresh_${call}`, sequenceNum: String(call + 2), duplicate: false };
+    };
+
+    const first = await startAttachHarness({ native, broker, nativeSessionId: nativeId });
+    let second: AttachHarness | undefined;
+    try {
+      await first.ready();
+      await waitFor(
+        () =>
+          broker.content.filter(({ header }) => header.sessionId === first.session.id).length === 1,
+      );
+      broker.push(inbound(first, "user", "first-command", "committed once", "first-client"));
+      await waitFor(() => native.postCalls.length === 1 && committed !== null);
+
+      expect(await first.stop()).toBe(0);
+      expect(
+        broker.bus.filter(
+          ({ header }) =>
+            header.recordKind === "session_terminal" && header.sessionId === first.session.id,
+        ),
+      ).toHaveLength(1);
+
+      native.streams.push(new NativeStream());
+      second = await startAttachHarness({ native, broker, nativeSessionId: nativeId });
+      await secondHistoryStarted.promise;
+      if (committed === null) throw new Error("provider mutation was not committed");
+      native.streams[1]?.push(committed);
+      secondHistory.resolve({ data: [initial, committed], nextCursor: null });
+      await second.ready();
+      await waitFor(
+        () =>
+          broker.content.filter(({ header }) => header.sessionId === second?.session.id).length ===
+          2,
+      );
+
+      expect(second.session.id).not.toBe(first.session.id);
+      expect(native.streams[0]?.sessionIds).toEqual([nativeId]);
+      expect(native.streams[1]?.sessionIds).toEqual([nativeId]);
+      expect(
+        broker.content
+          .filter(({ header }) => header.sessionId === second?.session.id)
+          .map(({ text }) => text),
+      ).toEqual(["history once", "committed once"]);
+
+      // A stale viewer may still publish to the retired channel. The fresh projection must skip it, then
+      // consume only a command addressed to its own new channel.
+      broker.push(inbound(first, "user", "retired-command", "must not repeat"));
+      broker.push(inbound(second, "user", "fresh-command", "new projection write"));
+      await waitFor(() => native.postCalls.length === 2);
+      expect(native.postCalls.map(({ input }) => input.message.content)).toEqual([
+        "committed once",
+        "new projection write",
+      ]);
+      expect(
+        native.postCalls.filter(({ input }) => input.message.content === "committed once"),
+      ).toHaveLength(1);
+      expect(first.unusedOwnerCalls()).toEqual({ proxy: 0, spawn: 0 });
+      expect(second.unusedOwnerCalls()).toEqual({ proxy: 0, spawn: 0 });
+    } finally {
+      secondHistory.resolve({ data: [], nextCursor: null });
+      lostResponse.resolve({ eventId: "evt_committed", sequenceNum: "2", duplicate: false });
+      if (!first.parent.signal.aborted) await first.stop();
+      if (second !== undefined && !second.parent.signal.aborted) await second.stop();
+    }
+  });
+
+  it("returns failure when broker loss ends an attach-only projection", async () => {
+    const native = new FakeNativeClient();
+    const broker = new FakeBroker();
+    const harness = await startAttachHarness({
+      native,
+      broker,
+      nativeSessionId: "cse_attach_broker_loss",
+    });
+
+    await harness.ready();
+    broker.failContentPosts = true;
+    native.streams[0]?.push(assistant("evt_attach_broker_loss", "1", "cannot publish"));
+
+    await expect(harness.run).resolves.toBe(1);
+    expect(harness.session.closed).toBe(true);
+    expect(harness.unusedOwnerCalls()).toEqual({ proxy: 0, spawn: 0 });
+  });
+});
 
 describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
   it("binds the exact native id to a distinct projection and scrubs the spawned child", async () => {
@@ -913,6 +1107,28 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     } finally {
       await harness.stop();
     }
+  });
+
+  it("isolates broker content loss from the transparent proxy and native child", async () => {
+    const harness = await startHarness();
+    try {
+      await bindReady(harness, "cse_broker_loss");
+      harness.broker.failContentPosts = true;
+      harness.native.streams[0]?.push(assistant("evt_broker_loss", "1", "cannot publish"));
+      await waitFor(() => harness.session.closed);
+
+      expect(
+        harness.broker.bus.some(
+          ({ header }) =>
+            header.recordKind === "session_terminal" && header.sessionId === harness.session.id,
+        ),
+      ).toBe(true);
+      expect(harness.proxy.closed).toBe(false);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+    expect(harness.proxy.closed).toBe(true);
   });
 
   it("does not POST unsupported downstream controls to Anthropic", async () => {

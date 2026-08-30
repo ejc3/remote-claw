@@ -95,6 +95,9 @@ export function misappliedDriverFlagWarnings(
   return out;
 }
 
+/** Anthropic's observed native route grammar: one path-safe, explicitly named cse_ identifier. */
+const CANONICAL_CLAUDE_SESSION_RE = /^cse_[A-Za-z0-9_-]+$/;
+
 /** True if `--help`/`-h` appears before the `--` escape (post-`--` tokens are opaque claude payload). */
 function wantsHelp(claudeArgs: readonly string[]): boolean {
   const end = claudeArgs.indexOf("--");
@@ -281,6 +284,7 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-app" &&
       n !== "rc-backend" &&
       n !== "rc-driver" &&
+      n !== "rc-native-session" &&
       n !== "rc-inference" &&
       n !== "rc-bedrock-region" &&
       n !== "rc-bedrock-model" &&
@@ -320,6 +324,12 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // short-circuits the launch: never create an identity or start a driver just to print claude's help —
   // fall through to a plain spawn.
   const rcApp = (typeof rc["rc-app"] === "string" ? rc["rc-app"] : "") || process.env.RC_APP || "";
+  if (rcApp === "" && typeof rc["rc-native-session"] === "string" && !helpWanted) {
+    // Unlike the legacy launch flags, an explicit attach request must not degrade to spawning a new
+    // plain Claude when its broker origin is missing.
+    warn("remote-claw: --rc-native-session requires --rc-app (or RC_APP)\n");
+    return 2;
+  }
   if (rcApp !== "" && !helpWanted) {
     // Which capture/inject driver runs the harness: --rc-driver / RC_DRIVER, default "mitm" (the real
     // claude behind our MITM). tmux runs a PLAIN claude in a tmux pane and bridges via the transcript
@@ -330,6 +340,14 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       (process.env.RC_DRIVER ?? "").trim() ||
       "mitm"
     ).toLowerCase();
+    if (
+      typeof rc["rc-native-session"] === "string" &&
+      driver !== "claude-native" &&
+      (driver === "mitm" || driver === "tmux" || driver === "opencode")
+    ) {
+      warn("remote-claw: --rc-native-session requires --rc-driver=claude-native\n");
+      return 2;
+    }
     // Warn (don't fail) when a flag that belongs to a DIFFERENT known driver was explicitly passed, so a
     // silent no-op (e.g. `--rc-driver=tmux --rc-inference=bedrock`, which is NOT zero-api.anthropic.com)
     // becomes visible. Pure + allowlist-gated (an unknown driver gets only its own error below).
@@ -480,6 +498,21 @@ async function runClaudeNativeDriverPath(
   opts: RunOptions,
   warn: (line: string) => void,
 ): Promise<number> {
+  const attachRequested = typeof rc["rc-native-session"] === "string";
+  const nativeSessionId = attachRequested ? (rc["rc-native-session"] as string).trim() : undefined;
+  if (
+    attachRequested &&
+    (nativeSessionId === undefined || !CANONICAL_CLAUDE_SESSION_RE.test(nativeSessionId))
+  ) {
+    warn("remote-claw: --rc-native-session must be a canonical cse_* session id\n");
+    return 2;
+  }
+  if (attachRequested && claudeArgs.length > 0) {
+    warn(
+      "remote-claw: --rc-native-session attaches a companion only; remove forwarded Claude arguments\n",
+    );
+    return 2;
+  }
   const incompatible = [
     ...(typeof rc["rc-inference"] === "string" && rc["rc-inference"].trim() !== ""
       ? ["--rc-inference"]
@@ -524,6 +557,7 @@ async function runClaudeNativeDriverPath(
         certsDir: join(dirname(secretPath), "mitm-certs"),
         claudeBin: bin,
         spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
+        ...(nativeSessionId === undefined ? {} : { nativeSessionId }),
       });
     } finally {
       process.removeListener("SIGINT", onSignal);

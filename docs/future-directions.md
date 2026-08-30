@@ -8,10 +8,10 @@ plus multiple remote-claw browsers and with provider-native collaboration preser
 [Product goal and release gates](release-finish-line.md) owns the sequence.
 
 M0 proved a lower-fidelity version through the tmux adapter, the Anthropic Remote API, and two
-remote-claw browsers. The first structured M1 merge now implements the small readiness-gated native
-companion and has passed a local-TUI, two-browser, authenticated-provider-API run. Literal official
-Claude app UI validation and the Graduate restart, broker-loss, log, install, and deployment gates
-remain open. See [native coexistence](native-rc-passthrough-scoping.md).
+remote-claw browsers. M1 now has the small readiness-gated native companion and explicit exact-session,
+fresh-projection restart path. To avoid duplicating volatile pass/fail lists here, current evidence and
+remaining gates live in [native coexistence](native-rc-passthrough-scoping.md) and the
+[release roadmap](release-finish-line.md).
 
 ## Sequencing rule
 
@@ -30,12 +30,11 @@ milestone as the entire product or delete working adapter foundations merely bec
 
 ### Claude Code
 
-Finish Coexistence Text with one literal official-client UI run, then Graduate the implemented
-text-only native companion through restart, broker-loss, log, install, and deployment acceptance—without
-expanding it into controls or rich content. The structured critical path then moves to OpenCode and
-Codex; Claude permissions, questions, interrupts, modes, slash commands, and attachments may graduate
-later one family at a time without holding M1 open. Keep the private replacement relay as a separately
-labeled mode for environments that do not need the official client.
+Finish only the remaining M1 gates named in the release roadmap, without expanding the text-only
+native companion into controls or rich content. The structured critical path then moves to OpenCode
+and Codex; Claude permissions, questions, interrupts, modes, slash commands, and attachments may
+graduate later one family at a time without holding M1 open. Keep the private replacement relay as a
+separately labeled mode for environments that do not need the official client.
 
 ### OpenCode
 

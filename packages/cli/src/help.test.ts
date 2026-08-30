@@ -33,6 +33,7 @@ describe("RC_HELP banner", () => {
       "--rc-bedrock-region",
       "--rc-bedrock-model",
       "--rc-accountless",
+      "--rc-native-session",
       "--rc-trace",
     ]) {
       expect(RC_HELP).toContain(f);
@@ -81,6 +82,9 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/Literal official-client UI acceptance remains pending/);
     expect(RC_HELP).toContain("Only non-empty, non-slash text is supported");
     expect(RC_HELP).toMatch(/--rc-inference, --rc-bedrock-\*, and --rc-accountless are rejected/);
+    expect(RC_HELP).toMatch(/--rc-native-session <cse_…>/);
+    expect(RC_HELP).toMatch(/starts no interactive Claude session or proxy/);
+    expect(RC_HELP).toMatch(/required version probe still runs/);
   });
 
   it("keeps tmux and opencode outside the primary native-coexistence path", () => {

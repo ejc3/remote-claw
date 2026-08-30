@@ -1,9 +1,11 @@
 # Native Claude Remote coexistence — smallest viable experiment
 
-**Status:** structured text slice implemented on Linux for exact Claude Code 2.1.237; M1 incomplete.
-The 2026-08-30 bounded run proved the local TUI, an authenticated Anthropic RC API client, and two
-simultaneous remote-claw browsers on one native session. Literal official Claude app UI validation and
-the Graduate restart/broker-loss/log/install/deployment gates remain open.
+**Status:** structured text and explicit restart attachment are implemented on Linux for exact Claude
+Code 2.1.237; M1 remains incomplete. Bounded 2026-08-30 runs proved the local TUI, an authenticated
+Anthropic RC API client, two simultaneous remote-claw browsers, fresh-projection companion restart,
+broker-loss isolation, installed-package use, and a bounded exact-value/log and raw-storage scan on one
+native session. Literal official Claude app UI validation and the exact-SHA deployed Preview gate remain
+open.
 
 The product goal is one normal Anthropic-hosted `claude --remote-control` session that remains usable
 from the local TUI and official Claude client while remote-claw browsers observe the same history and
@@ -61,15 +63,17 @@ for official ordering, rendering, busy-state behavior, and local/official-client
 | --- | --- | --- |
 | `--rc-app` / `runRcLaunch` | A synthetic RC backend bridged to the encrypted broker; durable, text-only, fail-stop supported path | Anthropic registration and official-client coexistence |
 | `--rc-trace` / `runRcTrace` | Transparent pass-through to Anthropic with redacted protocol tracing | Projection to the broker and remote mutation |
-| `--rc-app … --rc-driver=claude-native --remote-control` | Exact successful-bridge binding, live-SSE-before-history reconciliation, provider-ordered text projection/injection, fail-stop writes, and a truthful all-controls-off viewer tuple | Literal official-app UI validation plus Graduate restart/broker-loss/log/install/deployment evidence |
+| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text with fail-stop writes | Literal official-app UI validation and the deployed exact-SHA gate |
+| `--rc-app … --rc-driver=claude-native --rc-native-session <cse_…>` | Attach a fresh projection to one explicitly named, already-running native session without starting an interactive Claude session or proxy, forwarding Claude arguments, or discovering a session; the pinned-version probe still runs | Stable same-row identity; the caller must supply the exact native ID |
 | `--rc-driver=tmux` plus Claude's `--remote-control` | One bounded lower-fidelity run preserved the provider session while a local pane, Anthropic API client, and two browsers exchanged text | Structured event semantics, independent peer ordering, supported-version matrix, and official Claude app UI acceptance |
 | `AnthropicRcClient` | Typed session listing, bounded history with `next_cursor`/`resume_cursor`, client-side SSE readiness, and one-user-event POST | Cross-platform credential sources and any later control semantics |
 | OAuth source | Secure Linux read-only access to Claude's existing credential file; native Claude owns refresh | A supported cross-platform credential source |
 
 The client preserves unknown SSE records rather than inventing semantics, bounds response and event
-sizes, sanitizes errors, and marks a write as outcome-unknown when it may have crossed the network
-without a canonical acknowledgement. The companion uses those properties for the structured text
-path; they still do not prove the literal official-app outcome or Graduate recovery claims.
+sizes, and marks a write as outcome-unknown when it may have crossed the network without a canonical
+acknowledgement. Broker-controlled HTTP rejection text/status, SSE error data, malformed-frame parser
+details, and invalid-success parse details are collapsed to local status/disposition messages before
+normal relay logging. The companion still does not prove a literal official-app UI outcome.
 
 ## 3. Safety boundary
 
@@ -100,11 +104,11 @@ their native app-client semantics are captured and tested.
 
 ## 4. Session selection and reconciliation
 
-Session identity is explicit before the bridge publishes or writes. The transparent proxy binds only
-after the spawned child completes a successful canonical
-<code>POST /v1/code/sessions/{cse_*}/bridge</code>. It does not inspect the body/JWT and never chooses a
-session by newest timestamp, title, or transcript text. A second different successful bridge closes
-only the projection.
+Session identity is explicit before the bridge publishes or writes. Launch form binds only after the
+spawned child completes a successful canonical
+<code>POST /v1/code/sessions/{cse_*}/bridge</code>. Attach-only form requires that exact canonical ID in
+<code>--rc-native-session</code>. Neither form inspects a worker bearer or chooses a session by newest
+timestamp, title, or transcript text. A second different launch-form bridge closes only the projection.
 
 The current implementation keeps in-process recovery simple:
 
@@ -119,12 +123,13 @@ The current implementation keeps in-process recovery simple:
 6. never use an uncertain read cursor as evidence that an uncertain write did not happen.
 
 An SSE reconnect inside one running companion retains that companion's projection and reconciles from
-provider history. Companion process restart is a Graduate contract, not current behavior: a later
-process must create a fresh random remote-claw projection ID for the same exact native
-<code>cse_*</code>, backfill its history as observation once, and attempt to leave the prior projection
-terminal after a clean stop. If terminal publication cannot complete, or after an unclean stop, the
-prior projection ages stale. The new process must consume no retired-projection command or repeat any
-prior browser mutation. Stable same-row identity across companion processes remains deferred.
+provider history. A companion restart uses attach-only form with the same explicit native
+<code>cse_*</code>. Each process creates a fresh random remote-claw projection, backfills provider
+history as observation once, and attempts to leave its prior projection terminal after a clean stop.
+If terminal publication cannot complete, or after an unclean stop, the prior projection ages stale.
+The new projection starts at its own durable inbound floor, consumes no retired-projection command,
+and does not turn historical observation into a second native mutation. Stable same-row identity
+across companion processes remains deferred.
 
 Fresh projection identity is required by the current lifecycle, not a cosmetic row choice: terminal is
 absorbing for a broker session ID, and reusing an old ID could create an unannounced command consumer
@@ -140,31 +145,42 @@ distinct facts.
 
 ## 5. Acceptance test and current evidence
 
-The 2026-08-30 local production-build run passed the local TUI, two simultaneous browsers, browser A/B
-text, and authenticated provider-client API text on one exact native session. Each label was answered
-and rendered once in both browsers. A literal official Claude web/mobile UI was not authenticated in
-the isolated test browser, so that required claim remains open. Fresh-projection companion restart and
-the other Graduate items were not part of this first run.
+The first 2026-08-30 local production-build run passed the local TUI, two simultaneous browsers,
+browser A/B text, and authenticated provider-client API text on one exact native session. A second
+bounded run used the packed-installed CLI and the same exact Claude version: two successive attach-only
+companions created fresh projections of one still-live native session, the second backfilled the local,
+browser-A, browser-B, and API turns once, and a post-restart browser turn was applied once. Killing the
+local SQLite broker made the second companion exit with failure while the native TUI immediately
+submitted and completed another turn. Provider history contained one user event and one answer for
+each of the six labels.
 
-The experiment is successful only when one ordinary Anthropic RC session demonstrates all of the
-following in one bounded run:
+The inspection found no provider, root, pass, or deployment-bypass credential among fourteen exact
+credential needles in the owned mode-0600 companion logs or raw broker files, and no labelled plaintext
+in raw broker storage. Deterministic tests own retired-channel fencing, history/SSE overlap, and the
+committed-but-response-lost no-repeat boundary. The packed install smoke separately checks that invalid
+attach input fails before identity, compatibility, proxy, or network work. A literal official Claude
+web/mobile UI still could not be exercised: the isolated browser reached Cloudflare without an
+authenticated Claude UI. The exact-SHA deployed Preview smoke also remains pending.
 
-- the local TUI stays interactive;
-- the official Claude client can observe and submit;
-- two remote-claw browsers show the same ordered history;
-- each remote-claw browser can submit labeled text;
-- each submitted label appears exactly once in Anthropic history and both remote-claw views;
-- local-TUI and official-client submissions appear in both remote-claw views without being re-executed;
-- reload/reconnect catches up without gaps or duplicate projections;
-- restarting only the companion creates one fresh projection of the same native session, backfills once,
-  consumes no command from the retired projection, and repeats no native mutation;
-- disconnecting any one surface leaves the others alive; and
-- credentials and plaintext do not appear in broker storage or logs.
+Acceptance is cumulative by causal boundary; it is not another requirement to replay every green item
+in one marathon. The first two bounded runs plus deterministic tests own local/browser/API text,
+ordering, reload, fresh-projection restart, retired-channel fencing, broker-loss isolation,
+installed-package use, and the bounded exact-value/storage inspection described above.
 
-Use a deterministic fake transport for parsing, ordering, reconnect, duplicate, and ambiguous-write
-boundaries. Use one real logged-in Claude/official-client/browser smoke for the coexistence outcome.
-Bind a deployed smoke to the expected immutable SHA and intended durable backend. Do not build a receipt
-chain, scan provider fleets, attest host tools, or expand the first smoke into permissions and controls.
+Two focused items remain:
+
+1. In one normal Anthropic RC session, keep the local TUI and two remote-claw browsers live while a
+   logged-in official Claude client observes and submits one uniquely labelled turn. Confirm that turn
+   appears once in provider history and both remote-claw views, and that disconnecting the official
+   client leaves the other surfaces live.
+2. Bind the existing deployed browser smoke to the immutable Graduate SHA and intended durable backend.
+
+Use deterministic transport tests for parsing, ordering, reconnect, duplicate, ambiguous-write, and
+retired-channel boundaries. Do not rerun a passed provider fault scenario unless later code changes its
+causal surface. User-enabled trace logs may contain conversation text by design; the confidentiality
+claim is that raw broker storage is sealed and credentials do not enter broker storage, broker logs, or
+normal CLI diagnostics. Do not build a receipt chain, scan provider fleets, attest host tools, or expand
+either remaining smoke into permissions and controls.
 
 ## 6. Decision after the experiment
 
@@ -180,9 +196,7 @@ happens, record the concrete failure and design only the minimum additional stat
 ## 7. Remaining questions
 
 1. Can a literal logged-in official Claude web/mobile client complete the same four-surface run?
-2. What is the smallest attach or persistent-owner design that can create a fresh projection for the
-   same still-live native <code>cse_*</code> after companion restart without guessing a session?
-3. Which additional native action, if any, should graduate after text? No control is added until its
+2. Which additional native action, if any, should graduate after text? No control is added until its
    provider semantics and failure boundary are captured.
 
 The historical protocol endpoint map and original direct-client observation remain in

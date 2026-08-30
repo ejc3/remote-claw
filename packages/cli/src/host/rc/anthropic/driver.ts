@@ -54,6 +54,8 @@ export interface ClaudeNativeProxy {
 }
 
 export interface ClaudeNativeDriverOptions {
+  /** Attach to this exact existing Anthropic RC session without a proxy or interactive Claude child. */
+  nativeSessionId?: string;
   /** Wrapper cert directory beside the remote-claw secret. */
   certsDir: string;
   /** Real Claude executable (already compatibility-checked at the CLI boundary). */
@@ -348,6 +350,32 @@ export class ClaudeNativeDriver implements Driver {
       parentSignal,
     });
     const projectionSignal = bridge.signal;
+
+    if (this.#options.nativeSessionId !== undefined) {
+      let exitCode = 0;
+      try {
+        await this.#runProjection(
+          session,
+          bridge,
+          Promise.resolve(this.#options.nativeSessionId),
+          projectionSignal,
+        );
+        // Relay failures close the projection Session and are intentionally swallowed by the shared
+        // bridge after terminalization. In attach-only mode there is no native child whose exit code
+        // owns the process, so surface that unexpected end to service managers as a failed companion.
+        if (!parentSignal.aborted && session.closed) exitCode = 1;
+      } catch (error) {
+        if (!projectionSignal.aborted) {
+          exitCode = 1;
+          this.#trace.error("native projection stopped", { error: safeError(error) });
+        }
+      } finally {
+        await settleWithin(bridge.close("native companion exited"), TEARDOWN_WAIT_MS);
+        await Promise.allSettled([...terminalTasks]);
+      }
+      return exitCode;
+    }
+
     const binding = Promise.withResolvers<string>();
     let boundNativeId: string | null = null;
 

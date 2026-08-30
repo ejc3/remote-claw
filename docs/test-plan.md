@@ -4,9 +4,10 @@ This plan maps tests to product outcomes and safety boundaries. It is intentiona
 historical gate stack: a green result should mean that a user-facing path or a concrete invariant was
 tested, not that one script vouched for another script.
 
-The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text implementation
-and bounded local-TUI/provider-API/two-browser run are green; literal official Claude app UI and the
-Graduate recovery/deployment gates are still red. Maintained tmux support waits for M4. See
+The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text implementation,
+fresh-projection restart, broker-loss isolation, packed install, and bounded credential/storage checks
+are green locally; literal official Claude app UI and the exact-SHA deployed Preview remain red.
+Maintained tmux support waits for M4. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
 
 ## 1. Gate policy
@@ -80,7 +81,7 @@ pnpm --filter @remote-claw/web run test:run
 | CLI identity and install | <code>packages/cli/src/identity*.test.ts</code>, <code>store.test.ts</code>, <code>scripts/test-installed-cli.mjs</code> | Secret custody, output redaction, wrapper behavior, install artifact |
 | Broker transport | <code>packages/cli/src/broker/*.test.ts</code> | Authenticated HTTP/SSE, retries, ordering, and cursor handling |
 | Claude private facade | <code>packages/cli/src/host/rc/mitm*.test.ts</code>, <code>session.test.ts</code>, <code>relay.test.ts</code>, <code>launch.test.ts</code> | Strict native intake, worker delivery, translation, fail-stop, and child isolation |
-| Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact bridge binding, subscribe/history reconciliation, provider-coordinate dedup, conservative writes, and child/projection isolation |
+| Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact launch/attach binding, subscribe/history reconciliation, provider-coordinate dedup, fresh-projection restart, conservative writes, and native/projection isolation |
 | Alternate adapters and inference | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, <code>opencode/*.test.ts</code>, <code>bedrock/*.test.ts</code> | Current adapter-local contracts and honest capability limits; not full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
 | HTTP routes | <code>apps/web/test/api/*.test.ts</code>, <code>auth.test.ts</code> | Bearer binding, route validation, error mapping, handoff semantics |
@@ -256,7 +257,7 @@ and does not block manual-pass onboarding while the feature remains disabled.
 | Durable restart | Require both sequence and publish-order cursors; never replay old commands from zero |
 | Presence | Future-skew, stale, terminal, and unauthenticated records cannot enable controls |
 | Handoff | Default-off; bounded body, short TTL, single-use atomic claim, uniform miss, external per-IP rate limit, and pre-claim disclosure that the resulting pass remains indefinite and machine-wide |
-| Logging | Redact credential-shaped values; bound bodies; refuse unsafe trace-file targets |
+| Logging | Redact credential-shaped values; discard broker-controlled rejection/SSE/parser/invalid-success detail from normal errors; bound trace bodies; refuse unsafe trace-file targets |
 | Failure isolation | Remote projection can stop without killing the user's healthy local native session |
 
 ## 7. Claude native coexistence acceptance
@@ -285,32 +286,40 @@ regressing provider coordinates, unsupported controls, and ambiguous POST fencin
 
 That run proves the structured provider API path and multiple-viewer outcome. It does **not** prove a
 literal official Claude web/mobile UI interaction: headless and Xvfb Chromium were redirected to
-<code>/login</code> behind Cloudflare and had no authenticated Claude web session. It also does not
-close the Graduate restart, broker-loss, log/credential, packed-install, or deployed exact-SHA gates.
+<code>/login</code> behind Cloudflare and had no authenticated Claude web session.
 
-The complete milestone still requires:
+A second bounded run used the packed-installed CLI and exact Claude version. Two attach-only companion
+processes successively projected the same explicitly named live native session into fresh remote-claw
+rows. The second backfilled the first row's local, browser-A, browser-B, and API turns once, then applied
+one post-restart browser turn once. Killing the local SQLite broker made only the companion fail; the
+native TUI immediately completed another turn. Provider history held one user event and one answer for
+each label. Exact scans of owned mode-0600 logs and raw broker files found none of fourteen tested
+provider/root/pass/bypass credentials, and raw broker storage contained none of the six plaintext
+labels. Deterministic tests own the retired-channel and committed-but-response-lost no-repeat cases.
 
-1. Launch a normal Anthropic-hosted <code>claude --remote-control</code> session.
-2. Keep its local TUI interactive.
-3. Join the exact same session from the official Claude client.
-4. Join it from two independent remote-claw browser contexts.
-5. Submit uniquely labelled text from all four surfaces.
-6. Verify all four observe the same provider-native order and each label exactly once.
-7. Disconnect browser A; verify the TUI, official client, and browser B remain live.
-8. Reconnect browser A; verify history reconciliation adds no duplicate.
-9. Restart only the remote-claw companion; verify the old projection is terminal or becomes stale, a
-   fresh random projection binds the same native <code>cse_*</code>, history backfills once, no retired
-   command is consumed, and no native mutation is repeated. Stable same-row identity is not an M1 claim.
-10. Interrupt or fail the broker; verify the native TUI and official client remain usable.
-11. Confirm provider OAuth exists only on the host and broker records remain sealed.
+Evidence is cumulative by causal boundary; M1 does not require every green failure and delivery case to
+be repeated in one provider marathon. The two runs above plus deterministic tests own launch binding,
+local/browser/API text, reload, restart, retired-channel fencing, broker-loss isolation, installed-
+package use, and the bounded credential/storage inspection.
 
-The test must use
-<code>--rc-app &lt;origin&gt; --rc-driver=claude-native --remote-control</code>, not the default
-<code>--rc-driver=mitm</code> / <code>runRcLaunch</code> replacement path. The replacement path cannot
-satisfy step 3 by design, and trace mode cannot satisfy steps 4 through 6.
+Two focused items remain:
 
-Until the remaining UI and Graduate steps pass against the supported deployed durable broker, CI green
-means the implemented text slice is healthy. It does not mean M1 or the full product is complete.
+1. Keep a normal Anthropic RC session, its local TUI, and two remote-claw browsers live while a logged-
+   in official Claude client joins. Have the official client submit one uniquely labelled turn and
+   observe one browser-submitted turn; verify provider history and both remote-claw views contain each
+   once, then disconnect the official client and confirm the other surfaces remain live.
+2. Run the existing deployed browser discovery/send/reload smoke against the immutable Graduate SHA and
+   intended durable backend. This smoke needs no live Claude or provider credential.
+
+The initial launch must use
+<code>--rc-app &lt;origin&gt; --rc-driver=claude-native --remote-control</code>. Companion-only restart uses
+<code>--rc-app &lt;origin&gt; --rc-driver=claude-native --rc-native-session &lt;cse_...&gt;</code> with no
+forwarded Claude arguments. Neither may use the default <code>--rc-driver=mitm</code> /
+<code>runRcLaunch</code> replacement path: it cannot satisfy official-client coexistence by design, and
+trace mode cannot connect remote-claw browsers.
+
+Until the remaining literal UI and exact-SHA deployed steps pass, CI green means the implemented local
+slice is healthy. It does not mean M1 or the full product is complete.
 
 ## 8. Remaining adapter acceptance
 

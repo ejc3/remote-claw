@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,6 +79,51 @@ try {
 				signal: help.signal,
 				stdout: help.stdout.slice(0, 200),
 				stderr: help.stderr,
+			})}`,
+		);
+	}
+
+	// Exercise the packed artifact's Claude-native ATTACH dispatch at a boundary that must reject
+	// before identity creation, credential access, compatibility probing, broker I/O, proxy setup, or
+	// spawning Claude. This catches a bundle that advertises the flag in source/help but omits its parser
+	// or dispatch wiring, without turning the install smoke into a credentialed/networked integration test.
+	const nativeSecret = join(scratch, "native-attach-secret");
+	const nativeCerts = join(scratch, "mitm-certs");
+	const nativeAttach = spawnSync(
+		executable,
+		[
+			"--rc-app=https://broker.invalid",
+			"--rc-driver=claude-native",
+			"--rc-native-session=not-a-canonical-session",
+		],
+		{
+			cwd: scratch,
+			encoding: "utf8",
+			timeout: 5_000,
+			env: {
+				PATH: process.env.PATH ?? "",
+				CLAUDE_CONFIG_DIR: join(scratch, "empty-claude-config"),
+				RC_CLAUDE_BIN: join(scratch, "must-not-spawn-claude"),
+				REMOTE_CLAW_SECRET_FILE: nativeSecret,
+			},
+		},
+	);
+	if (
+		nativeAttach.status !== 2 ||
+		nativeAttach.stdout !== "" ||
+		nativeAttach.stderr !==
+			"remote-claw: --rc-native-session must be a canonical cse_* session id\n" ||
+		existsSync(nativeSecret) ||
+		existsSync(nativeCerts)
+	) {
+		throw new Error(
+			`installed Claude-native attach boundary mismatch: ${JSON.stringify({
+				status: nativeAttach.status,
+				signal: nativeAttach.signal,
+				stdout: nativeAttach.stdout,
+				stderr: nativeAttach.stderr,
+				identityCreated: existsSync(nativeSecret),
+				proxyMaterialCreated: existsSync(nativeCerts),
 			})}`,
 		);
 	}
